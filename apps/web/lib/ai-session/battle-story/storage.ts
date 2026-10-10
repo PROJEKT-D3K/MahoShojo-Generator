@@ -303,29 +303,56 @@ export const deleteBattleStorySession = async (
   });
 };
 
-export const putBattleStoryChapter = async (chapter: BattleStoryChapterRecord): Promise<void> => {
+// Keep the parent check and child writes under the same lock as whole-session deletion.
+// This does not make the surrounding legacy branch/rewrite phases atomic.
+const putBattleStoryChildren = async (
+  storeName: typeof AI_SESSION_STORE_NAMES.battleStoryChapters | typeof AI_SESSION_STORE_NAMES.battleStoryCheckpoints,
+  records: (BattleStoryChapterRecord | BattleStoryCheckpointRecord)[],
+): Promise<void> => {
   const db = await openAiSessionDb();
-  const transaction = db.transaction([AI_SESSION_STORE_NAMES.battleStoryChapters], 'readwrite');
-  transaction.objectStore(AI_SESSION_STORE_NAMES.battleStoryChapters).put(chapter);
-  await transactionToPromise(transaction);
+  const pendingRecords = records.map((record) => ({ record, sessionId: record.sessionId }));
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction([AI_SESSION_STORE_NAMES.battleStorySessions, storeName], 'readwrite');
+    const sessions = transaction.objectStore(AI_SESSION_STORE_NAMES.battleStorySessions);
+    const children = transaction.objectStore(storeName);
+    const sessionIds = [...new Set(pendingRecords.map((record) => record.sessionId))];
+    let remaining = sessionIds.length;
+    let failure: unknown;
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(failure ?? transaction.error ?? new Error('写入 battle story 子记录失败'));
+    transaction.onerror = () => { failure ??= transaction.error; };
+    for (const sessionId of sessionIds) {
+      const request = sessions.getKey(sessionId);
+      request.onsuccess = () => {
+        try {
+          if (request.result === undefined) throw new Error(`未找到 battle story session: ${sessionId}`);
+          remaining -= 1;
+          if (remaining === 0) {
+            if (pendingRecords.some(({ record, sessionId }) => record.sessionId !== sessionId)) {
+              throw new Error('battle story 子记录所属会话已变化，未写入');
+            }
+            pendingRecords.forEach(({ record }) => children.put(record));
+          }
+        } catch (error) {
+          failure = error;
+          transaction.abort();
+        }
+      };
+    }
+  });
+};
+
+export const putBattleStoryChapter = async (chapter: BattleStoryChapterRecord): Promise<void> => {
+  await putBattleStoryChildren(AI_SESSION_STORE_NAMES.battleStoryChapters, [chapter]);
 };
 
 export const putBattleStoryCheckpoint = async (checkpoint: BattleStoryCheckpointRecord): Promise<void> => {
-  const db = await openAiSessionDb();
-  const transaction = db.transaction([AI_SESSION_STORE_NAMES.battleStoryCheckpoints], 'readwrite');
-  transaction.objectStore(AI_SESSION_STORE_NAMES.battleStoryCheckpoints).put(checkpoint);
-  await transactionToPromise(transaction);
+  await putBattleStoryChildren(AI_SESSION_STORE_NAMES.battleStoryCheckpoints, [checkpoint]);
 };
 
 export const putBattleStoryCheckpoints = async (checkpoints: BattleStoryCheckpointRecord[]): Promise<void> => {
   if (!Array.isArray(checkpoints) || checkpoints.length === 0) return;
-  const db = await openAiSessionDb();
-  const transaction = db.transaction([AI_SESSION_STORE_NAMES.battleStoryCheckpoints], 'readwrite');
-  const store = transaction.objectStore(AI_SESSION_STORE_NAMES.battleStoryCheckpoints);
-  checkpoints.forEach((checkpoint) => {
-    store.put(checkpoint);
-  });
-  await transactionToPromise(transaction);
+  await putBattleStoryChildren(AI_SESSION_STORE_NAMES.battleStoryCheckpoints, checkpoints);
 };
 
 export const getBattleStoryChapter = async (chapterId: string): Promise<BattleStoryChapterRecord | null> => {

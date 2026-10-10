@@ -566,6 +566,76 @@ describe('actual pending outcome panel and legacy write boundaries', () => {
     expect(roles).toHaveBeenCalledTimes(1); expect(fixture.download).toHaveBeenCalledTimes(1);
     expect(fixture.dispatch).toHaveBeenCalledTimes(2);
   });
+
+  it.each(['branch-session', 'branch-checkpoints', 'rewrite-superseded', 'rewrite-checkpoint'] as const)(
+    '%s: deletion between real IndexedDB phases cannot recreate orphan children', async (phase) => {
+      fixture.state.settings.writeCurrentState = true;
+      const roles = vi.fn().mockImplementation(roleSuccess); vi.stubGlobal('fetch', roles);
+      await mount(); const first = await start(); await finish(first.pending, '# 保留的原章节');
+      const originalSession = session.activeSession!;
+      const originalChapter = session.selectedChapter!;
+      const originalCheckpoints = await storage.listBattleStoryCheckpointsBySession(originalSession.id);
+      let deletedId: string | null = null;
+      const deleteBetweenPhases = async (id: string) => {
+        await storage.deleteBattleStorySession(id);
+        deletedId = id;
+      };
+      if (phase === 'branch-session') {
+        const original = storage.putBattleStorySession;
+        vi.spyOn(storage, 'putBattleStorySession').mockImplementationOnce(async (record) => {
+          await original(record); await deleteBetweenPhases(record.id);
+        });
+      } else if (phase === 'branch-checkpoints') {
+        const original = storage.putBattleStoryCheckpoints;
+        vi.spyOn(storage, 'putBattleStoryCheckpoints').mockImplementationOnce(async (records) => {
+          await deleteBetweenPhases(records[0]!.sessionId); await original(records);
+        });
+      } else if (phase === 'rewrite-superseded') {
+        const original = storage.markBattleStoryChapterSuperseded;
+        vi.spyOn(storage, 'markBattleStoryChapterSuperseded').mockImplementationOnce(async (input) => {
+          const record = await original(input); await deleteBetweenPhases(record.sessionId); return record;
+        });
+      } else {
+        const original = storage.putBattleStoryCheckpoint;
+        vi.spyOn(storage, 'putBattleStoryCheckpoint').mockImplementationOnce(async (record) => {
+          await deleteBetweenPhases(record.sessionId); await original(record);
+        });
+      }
+      const lateWrites: string[] = [];
+      const put = IDBObjectStore.prototype.put;
+      vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function(this: IDBObjectStore, ...args) {
+        if (deletedId) lateWrites.push(this.name);
+        return put.apply(this, args);
+      });
+      const branch = phase.startsWith('branch');
+      let pending!: Promise<void>;
+      await act(async () => { pending = branch ? session.handleBranchSession() : session.handleRewriteLastChapter(); });
+      await completeForRoles('# 删除期间仍保留的完整正文'); await act(async () => pending);
+      expect(deletedId).not.toBeNull();
+      expect(lateWrites).toEqual([]);
+      expect(await storage.getBattleStorySession(deletedId!)).toBeNull();
+      expect(await storage.listBattleStoryChaptersBySession(deletedId!, { includeSuperseded: true })).toEqual([]);
+      expect(await storage.listBattleStoryCheckpointsBySession(deletedId!)).toEqual([]);
+      expect(session.pendingRoleOutcome?.legacySaveState).toBe('unknown');
+      expect(session.pendingRoleOutcome?.role.status).toBe('accepted');
+      expect(session.pendingRoleOutcome?.output.markdown).toBe('# 删除期间仍保留的完整正文');
+      expect(session.actionError).toContain('未找到 battle story session');
+      await act(async () => {
+        await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles();
+        await session.handleRetrySaveChapter(); await session.handleBranchSession(); await session.handleRewriteLastChapter();
+        session.handleExportCompletedOutput();
+      });
+      expect(roles).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+      const blob = fixture.download.mock.calls[0]![0] as Blob;
+      const exported = await new Promise<string>((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsText(blob); });
+      expect(exported).toBe('# 删除期间仍保留的完整正文');
+      if (branch) {
+        expect(await storage.getBattleStorySession(originalSession.id)).toEqual(originalSession);
+        expect(await storage.getBattleStoryChapter(originalChapter.id)).toEqual(originalChapter);
+        expect(await storage.listBattleStoryCheckpointsBySession(originalSession.id)).toEqual(originalCheckpoints);
+      }
+    },
+  );
 });
 
 it('a late generation response cannot overwrite a newer anonymous actor; completed output remains exportable', async () => {
