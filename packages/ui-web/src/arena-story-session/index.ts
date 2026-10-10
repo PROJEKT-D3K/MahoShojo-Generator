@@ -16,3 +16,5 @@ export type {
 export { BattleStoryContentPreview, BATTLE_STORY_CONTENT_PREVIEW_CHARACTERS } from './content-preview';
 export type { BattleStoryContentPreviewProps } from './content-preview';
 export { formatBattleStoryDisplayTitle } from './display-title';
+export { BattleStoryPendingOutcome } from './pending-outcome';
+export type { BattleStoryPendingOutcomeProps } from './pending-outcome';

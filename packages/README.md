@@ -80,3 +80,7 @@ Web 旧 key、migration、hydration 和实际写入仍留宿主。此片不开�
 由 Web 两页共用的 `useBattleStorySession` 真实装配；只注入四个读取端口、恢复偏好与快照发布，
 不定义完整存储 schema、不序列化/裁剪记录、不拥有生成或多实体写事务。列表刷新与详情选择
 各自排序，恢复意图及卸载隔离共源；后继 Desktop 仍需自己的持久化与完整旅程接线。
+
+Web 完成章角色未决修复：`domain/arena-story-completed-output` 为角色判别值/许可纯规则，
+`ui-web/arena-story-session` 的 `BattleStoryPendingOutcome` 是两宿主可控的正文/角色/保存结果区段。
+Web 已实际消费；其完成候选仅内存，Desktop 耐久恢复仍由后继 owner 接线，本包不增加存储或权威。

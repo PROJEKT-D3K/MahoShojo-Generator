@@ -8,7 +8,7 @@ const domain = path.join(root, 'packages/domain');
 const manifest = JSON.parse(readFileSync(path.join(domain, 'package.json'), 'utf8'));
 
 describe('story export shared leaf entrypoints', () => {
-  it.each(['arena-story-export', 'arena-adjudication-markdown'])('%s is explicitly exported and browser-runtime independent', async (name) => {
+  it.each(['arena-story-export', 'arena-adjudication-markdown', 'arena-story-completed-output'])('%s is explicitly exported and browser-runtime independent', async (name) => {
     expect(manifest.exports[`./${name}`]).toBe(`./src/${name}.ts`);
     const bundled = await build({
       entryPoints: [path.join(domain, manifest.exports[`./${name}`])],

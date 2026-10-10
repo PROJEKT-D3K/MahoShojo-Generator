@@ -256,7 +256,8 @@
     "./arena-story-commit": "./src/arena-story-commit.ts",
     "./arena-battle-story-request": "./src/arena-battle-story-request.ts",
     "./arena-adjudication-markdown": "./src/arena-adjudication-markdown.ts",
-    "./arena-story-export": "./src/arena-story-export.ts"
+    "./arena-story-export": "./src/arena-story-export.ts",
+    "./arena-story-completed-output": "./src/arena-story-completed-output.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

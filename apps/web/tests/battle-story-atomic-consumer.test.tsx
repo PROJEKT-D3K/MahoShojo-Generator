@@ -10,11 +10,18 @@ import { BattleStorySessionPanel } from '@/components/arena/components/BattleSto
 import { __resetAiSessionDbForTest } from '@/lib/ai-session/storage';
 import { AI_SESSION_DB_NAME, AI_SESSION_STORE_NAMES } from '@/lib/ai-session/types';
 import * as storage from '@/lib/ai-session/battle-story/storage';
+import { createGenerationApiIntentLatch, type GenerationApiIntentDependencies } from '@/lib/hono-api-client';
+import { honoApiConfig } from '@/config/hono-api';
+import { selectHostedDrPlacement } from '@/lib/hosted-dr/client-preflight';
 
 const fixture = vi.hoisted(() => ({
   dispatch: vi.fn(),
+  acquire: vi.fn(),
+  latchDependencies: null as GenerationApiIntentDependencies | null,
   startCooldown: vi.fn(),
   download: vi.fn(),
+  authHeader: vi.fn(),
+  activityHeaders: vi.fn(),
   state: {
     combatants: [{ type: 'magical-girl', data: { codename: '测试角色' }, isValid: true }],
     battleMode: 'daily', scenario: { content: null, fileName: '' }, userProviderConfig: null,
@@ -33,10 +40,10 @@ vi.mock('@/components/arena/hooks/useBattleActions', () => ({
   useBattleActions: () => ({ handleResolveRandomPlaceholders: async () => {} }),
 }));
 vi.mock('@/lib/use-generation-api-intent-latch', () => ({
-  useGenerationApiIntentLatch: () => ({ tryAcquire: () => ({ dispatch: fixture.dispatch }) }),
+  useGenerationApiIntentLatch: (dependencies: GenerationApiIntentDependencies) => { fixture.latchDependencies = dependencies; return { tryAcquire: fixture.acquire }; },
 }));
 vi.mock('@/lib/auth', () => ({ authStorage: {
-  getAuthHeader: async () => null, getActivityHeaders: async () => ({}),
+  getAuthHeader: fixture.authHeader, getActivityHeaders: fixture.activityHeaders,
 } }));
 vi.mock('@/components/stream/StreamingBattleReportCard', () => ({ default: (props: { content: string }) => <article>{props.content}</article> }));
 vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: fixture.download }));
@@ -44,6 +51,7 @@ vi.mock('@/lib/cooldown', () => ({ getProviderCooldownNoticeText: () => null, us
   isCooldown: false, remainingTime: 0, otherRemainingTime: 0, startCooldown: fixture.startCooldown,
 }) }));
 
+const originalHonoConfig = { ...honoApiConfig };
 let session: ReturnType<typeof useBattleStorySession>;
 let container: HTMLDivElement;
 let root: Root;
@@ -85,6 +93,9 @@ beforeEach(async () => {
     request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
   });
   fixture.dispatch.mockReset(); fixture.download.mockReset();
+  fixture.acquire.mockReset().mockImplementation(() => ({ dispatch: fixture.dispatch }));
+  fixture.authHeader.mockReset().mockResolvedValue(null); fixture.activityHeaders.mockReset().mockResolvedValue({});
+  fixture.state.settings.writeArenaHistory = false; fixture.state.settings.writeCurrentState = false;
   fixture.state.combatants = [{ type: 'magical-girl', data: { codename: '测试角色' }, isValid: true }];
   localStorage.clear(); scroll.mockClear();
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: 2000 } as DOMRect);
@@ -104,14 +115,34 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   vi.restoreAllMocks(); vi.unstubAllGlobals();
+  Object.assign(honoApiConfig, originalHonoConfig);
   await __resetAiSessionDbForTest();
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
 
 
+function installRealLatch(extra: GenerationApiIntentDependencies = {}) {
+  honoApiConfig.enabled = false; honoApiConfig.routingMode = 'static-next';
+  const onSettled = vi.fn();
+  const latch = createGenerationApiIntentLatch({ ...fixture.latchDependencies!, observe: vi.fn(), ...extra, onSettled });
+  fixture.acquire.mockImplementation(() => latch.tryAcquire());
+  return { onSettled };
+}
+
 async function finish(pending: Promise<void>, markdown = '# 完成章\n正文') {
   await act(async () => { send(event('markdown', { chunk: markdown }) + event('done', { ok: true })); stream.close(); await pending; });
 }
+
+it('normal first anonymous header initialization still dispatches one generation and saves', async () => {
+  expect(localStorage.getItem('mahoshojo_auth')).toBeNull();
+  expect(localStorage.getItem('mahoshojo:arena:generation-actor:v1')).toBeNull();
+  await mount(); const { pending } = await start(); await finish(pending, '# 匿名首章');
+  const headers = new Headers(fixture.dispatch.mock.calls[0]![1].headers);
+  expect(headers.has('Authorization')).toBe(false);
+  expect(headers.get('X-Mahoshojo-Generation-Actor-Token')).toMatch(/^bootstrap\./u);
+  expect(session.selectedChapter?.markdown).toBe('# 匿名首章');
+  expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+});
 
 describe('real story hook + IndexedDB completed result persistence', () => {
   it('首章事务 abort 后保留全部生成结果，原包本地重试，模型仅调用一次', async () => {
@@ -326,15 +357,430 @@ describe('real story hook + IndexedDB completed result persistence', () => {
     vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockRejectedValueOnce(new storage.BattleStoryCommitNotSavedError(new Error('known fault')));
     const button = (text: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === text)!;
     const { pending } = await start(); await finish(pending, '# UI待保存章\n正文');
-    expect(container.textContent).toContain('生成完成，本章尚未保存');
+    expect(container.textContent).toContain('正文已完成，尚未保存');
     expect(button('新建连续战报').disabled).toBe(true);
     expect(button('重试保存').disabled).toBe(false);
     await act(async () => button('导出本章').click()); expect(fixture.download).toHaveBeenCalledTimes(1);
     await act(async () => button('重试保存').click());
     await vi.waitFor(async () => { await act(async () => {}); expect(session.pendingCompletedChapter).toBeNull(); });
-    expect(container.textContent).not.toContain('生成完成，本章尚未保存');
+    expect(container.textContent).not.toContain('正文已完成，尚未保存');
     expect(container.textContent).toContain('UI待保存章');
     expect(fixture.dispatch).toHaveBeenCalledTimes(1);
   });
 
+});
+
+const roleSuccess = () => Response.json({ success: true, updatedCombatants: [
+  { combatantIndex: 0, data: { codename: '同步后的角色', signature: 'opaque-server-field' }, isNative: false },
+], warnings: [] });
+async function completeForRoles(markdown = '# 保留正文\n完整结尾') {
+  await act(async () => {
+    send(event('session_meta', { generationId: 'generation-original-1' })
+      + event('markdown', { chunk: markdown }) + event('done', { ok: true })); stream.close();
+  });
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(session.isGenerating).toBe(false);
+    expect(session.pendingRoleOutcome?.roleBusy).not.toBe(true);
+  });
+}
+
+describe('completed story body survives unresolved headerless Web roles', () => {
+  it('network failure retains body before role, retries only frozen generation/input and preserves current draft', async () => {
+    fixture.state.settings.writeCurrentState = true;
+    const roles = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementationOnce(roleSuccess);
+    vi.stubGlobal('fetch', roles);
+    await mount(); const { pending } = await start();
+    fixture.state.combatants[0]!.data.codename = '编辑态新名字';
+    await completeForRoles();
+    expect(session.isGenerating).toBe(false);
+    expect(session.pendingRoleOutcome?.role.status).toBe('unresolved');
+    expect(session.pendingRoleOutcome?.output.markdown).toBe('# 保留正文\n完整结尾');
+    expect(await storage.listBattleStorySessions()).toEqual([]);
+    await act(async () => session.handleExportCompletedOutput());
+    expect(fixture.download).toHaveBeenCalledTimes(1);
+    const firstBody = roles.mock.calls[0]![1].body;
+    expect(JSON.parse(firstBody)).toMatchObject({ generationId: 'generation-original-1', combatants: [{ data: { codename: '测试角色' } }] });
+    await act(async () => { await session.handleStartSession(); await session.handleBranchSession(); });
+    const unload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(unload); expect(unload.defaultPrevented).toBe(true);
+    await act(async () => { await session.handleRetryStoryRoles(); await pending; });
+    expect(roles).toHaveBeenCalledTimes(2);
+    expect(roles.mock.calls[1]![1].body).toBe(firstBody);
+    expect(new Headers(roles.mock.calls[1]![1].headers).has('X-Mahoshojo-Arena-Reconciliation-Protocol')).toBe(false);
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+    expect(session.pendingRoleOutcome).toBeNull();
+    expect(session.activeSession!.workingCombatants[0]).toMatchObject({ data: { codename: '同步后的角色' }, isNative: false });
+    expect(fixture.state.combatants[0]!.data.codename).toBe('编辑态新名字');
+    await act(async () => session.handleRetryStoryRoles()); expect(roles).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['invalid JSON', () => new Response('{')],
+    ['missing success and updates', () => Response.json({})],
+    ['bad update', () => Response.json({ success: true, updatedCombatants: [{ combatantIndex: 0, data: null, isNative: true }] })],
+    ['duplicate update', () => Response.json({ success: true, updatedCombatants: [0, 0].map((combatantIndex) => ({ combatantIndex, data: {}, isNative: false })) })],
+  ])('%s stays unresolved; explicit original-role choice saves once without another model or role call', async (_label, response) => {
+    fixture.state.settings.writeCurrentState = true;
+    const roles = vi.fn().mockImplementation(response); vi.stubGlobal('fetch', roles);
+    await mount(); const { pending } = await start(); await completeForRoles();
+    expect(session.pendingRoleOutcome?.role.status).toBe('unresolved');
+    expect(await storage.listBattleStorySessions()).toHaveLength(0);
+    await act(async () => { session.handleKeepOriginalStoryRoles(); session.handleKeepOriginalStoryRoles(); await pending; });
+    expect(session.selectedChapter?.markdown).toContain('完整结尾');
+    expect(session.activeSession!.workingCombatants[0]).toMatchObject({ data: { codename: '测试角色' } });
+    expect(session.notice).toContain('保留原角色');
+    expect(roles).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('explicit HTTP failure and missing generationId retain legacy old-role auto-save behavior', async () => {
+    fixture.state.settings.writeArenaHistory = true;
+    const roles = vi.fn().mockResolvedValue(new Response('bad gateway', { status: 502 })); vi.stubGlobal('fetch', roles);
+    await mount(); const first = await start(); await completeForRoles(); await act(async () => first.pending);
+    expect(session.pendingRoleOutcome).toBeNull(); expect(session.chapters).toHaveLength(1);
+    expect(session.notice).toContain('同步失败');
+    const second = await start(); await finish(second.pending);
+    expect(session.pendingRoleOutcome).toBeNull(); expect(session.notice).toContain('generationId');
+    expect(roles).toHaveBeenCalledTimes(1);
+  });
+
+  it('role retry double click is single flight; accepted frozen save failure never permits another role POST', async () => {
+    fixture.state.settings.writeCurrentState = true;
+    let resolveRole!: (response: Response) => void;
+    const roles = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRole = resolve; }));
+    vi.stubGlobal('fetch', roles);
+    await mount(); const { pending } = await start(); await completeForRoles();
+    let retry!: Promise<void>;
+    await act(async () => { retry = session.handleRetryStoryRoles(); void session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles(); });
+    expect(roles).toHaveBeenCalledTimes(2);
+    vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockRejectedValueOnce(new storage.BattleStoryCommitNotSavedError('local write refused'));
+    await act(async () => { resolveRole(roleSuccess()); await retry; await pending; });
+    expect(session.pendingCompletedChapter?.markdown).toContain('完整结尾'); expect(session.pendingRoleOutcome).toBeNull();
+    await act(async () => { await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles(); });
+    expect(roles).toHaveBeenCalledTimes(2);
+    await act(async () => session.handleRetrySaveChapter()); expect(session.pendingCompletedChapter).toBeNull();
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['before retry', 'during retry'])('actor changes %s make completed output read-only and ignore late success', async (when) => {
+    fixture.state.settings.writeCurrentState = true;
+    let resolveRole!: (response: Response) => void;
+    const roles = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRole = resolve; }));
+    vi.stubGlobal('fetch', roles);
+    await mount(); const { pending } = await start(); await completeForRoles();
+    let retry!: Promise<void>;
+    if (when === 'before retry') localStorage.setItem('mahoshojo_auth', 'new-account-generation');
+    await act(async () => { retry = session.handleRetryStoryRoles(); });
+    if (when === 'during retry') {
+      localStorage.setItem('mahoshojo_auth', 'new-account-generation');
+      await act(async () => { resolveRole(roleSuccess()); await retry; });
+    } else await act(async () => retry);
+    expect(session.pendingRoleOutcome?.canResolveRoles).toBe(false);
+    await act(async () => { session.handleKeepOriginalStoryRoles(); await session.handleRetryStoryRoles(); });
+    expect(await storage.listBattleStorySessions()).toHaveLength(0);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await act(async () => { session.handleDiscardCompletedOutput(); await pending; });
+    expect(session.pendingRoleOutcome).toBeNull(); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['continue', 'branch', 'rewrite'] as const)('%s recovers the original action without regenerating or using later draft', async (action) => {
+    fixture.state.settings.writeCurrentState = true;
+    const roles = vi.fn().mockRejectedValueOnce(new Error('offline')); vi.stubGlobal('fetch', roles);
+    await mount(); const first = await start(); await finish(first.pending, '# 原首章'); // legacy missing generation
+    const originalId = session.activeSession!.id;
+    let pending!: Promise<void>;
+    await act(async () => { pending = action === 'continue' ? session.handleContinueSession() : action === 'branch' ? session.handleBranchSession() : session.handleRewriteLastChapter(); });
+    await completeForRoles(`# ${action}完整正文`);
+    expect(session.pendingRoleOutcome?.action).toBe(action);
+    fixture.state.settings.userGuidance = '之后才修改的草稿';
+    await act(async () => { session.handleKeepOriginalStoryRoles(); await pending; });
+    expect(session.selectedChapter?.action).toBe(action);
+    expect(session.selectedChapter?.markdown).toContain(`${action}完整正文`);
+    expect(session.activeSession!.id === originalId).toBe(action !== 'branch');
+    expect(fixture.dispatch).toHaveBeenCalledTimes(2); expect(roles).toHaveBeenCalledTimes(1);
+    fixture.state.settings.userGuidance = '';
+  });
+
+  it('navigation while roles are pending does not let a late save reselect the old result', async () => {
+    fixture.state.settings.writeCurrentState = true;
+    const roles = vi.fn().mockRejectedValueOnce(new Error('offline')); vi.stubGlobal('fetch', roles);
+    await mount(); const first = await start(); await finish(first.pending, '# 原会话');
+    const originalId = session.activeSession!.id;
+    const second = await start(); await completeForRoles('# 新会话完成正文');
+    await act(async () => session.handleSelectSession(originalId));
+    await act(async () => { session.handleKeepOriginalStoryRoles(); await second.pending; });
+    expect(session.activeSession!.id).toBe(originalId);
+    expect(session.selectedChapter?.markdown).toBe('# 原会话');
+    expect(session.hasUnreadSavedChapter).toBe(true);
+  });
+
+  it('discard cancel preserves body; unmount fences a late role response from every storage write', async () => {
+    fixture.state.settings.writeCurrentState = true;
+    let resolveRole!: (response: Response) => void;
+    const roles = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRole = resolve; }));
+    vi.stubGlobal('fetch', roles);
+    await mount(); const { pending } = await start(); await completeForRoles();
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await act(async () => session.handleDiscardCompletedOutput()); expect(session.pendingRoleOutcome).not.toBeNull();
+    let retry!: Promise<void>; await act(async () => { retry = session.handleRetryStoryRoles(); });
+    await act(async () => { root.render(null); });
+    await act(async () => pending);
+    await act(async () => { resolveRole(roleSuccess()); await retry; });
+    expect(await storage.listBattleStorySessions()).toHaveLength(0);
+  });
+});
+
+describe('actual pending outcome panel and legacy write boundaries', () => {
+  it('Panel renders unresolved completed body and drives the shared retry/keep/export controls', async () => {
+    fixture.state.settings.writeCurrentState = true;
+    const roles = vi.fn().mockRejectedValue(new Error('role network unavailable')); vi.stubGlobal('fetch', roles);
+    const useOriginal = storyHook.useBattleStorySession;
+    vi.spyOn(storyHook, 'useBattleStorySession').mockImplementation(function useObservedSession() {
+      const value = useOriginal(); useLayoutEffect(() => { session = value; }); return value;
+    });
+    await act(async () => root.render(<BattleStorySessionPanel />));
+    await vi.waitFor(async () => { await act(async () => {}); expect(session.isReady).toBe(true); });
+    const { pending } = await start(); await completeForRoles('# Panel完整正文');
+    const button = (text: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === text)!;
+    expect(container.querySelector('[data-story-pending-outcome]')?.textContent).toContain('Panel完整正文');
+    expect(container.textContent).toContain('正文已完成，尚未保存');
+    expect(button('新建连续战报').disabled).toBe(true);
+    expect(button('重试角色同步').disabled).toBe(false);
+    await act(async () => button('导出本章').click()); expect(fixture.download).toHaveBeenCalledTimes(1);
+    await act(async () => { button('保留旧角色保存本章').click(); await pending; });
+    expect(session.selectedChapter?.markdown).toBe('# Panel完整正文');
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(roles).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['branch', 'rewrite'] as const)('%s partial write failure retains export without replay or another role request', async (action) => {
+    fixture.state.settings.writeCurrentState = true;
+    const roles = vi.fn().mockImplementation(roleSuccess); vi.stubGlobal('fetch', roles);
+    await mount(); const first = await start(); await finish(first.pending, '# 第一章');
+    const write = vi.spyOn(storage, 'putBattleStoryChapter').mockRejectedValueOnce(new Error('legacy write failed'));
+    let pending!: Promise<void>;
+    await act(async () => { pending = action === 'branch' ? session.handleBranchSession() : session.handleRewriteLastChapter(); });
+    await completeForRoles('# 已完成但旧保存失败'); await act(async () => pending);
+    expect(session.pendingRoleOutcome?.legacySaveState).toBe('unknown');
+    expect(session.pendingRoleOutcome?.role.status).toBe('accepted');
+    await act(async () => { await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles(); session.handleExportCompletedOutput(); });
+    expect(write).toHaveBeenCalledTimes(action === 'branch' ? 2 : 1);
+    expect(roles).toHaveBeenCalledTimes(1); expect(fixture.download).toHaveBeenCalledTimes(1);
+    expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+  });
+});
+
+it('a late generation response cannot overwrite a newer anonymous actor; completed output remains exportable', async () => {
+  fixture.state.settings.writeCurrentState = true;
+  const roles = vi.fn(); vi.stubGlobal('fetch', roles);
+  let resolveResponse!: (response: Response) => void;
+  fixture.dispatch.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveResponse = resolve; }));
+  await mount(); const { pending } = await start();
+  const actorKey = 'mahoshojo:arena:generation-actor:v1';
+  localStorage.setItem(actorKey, 'new-actor-token');
+  await act(async () => resolveResponse(new Response(
+    event('session_meta', { generationId: 'generation-original-1' }) + event('markdown', { chunk: '# 迟到完整正文' }) + event('done', { ok: true }),
+    { headers: { 'content-type': 'text/event-stream', 'X-Mahoshojo-Generation-Actor-Token': 'old-response-token' } },
+  )));
+  await vi.waitFor(async () => { await act(async () => {}); expect(session.pendingRoleOutcome?.role.status).toBe('unresolved'); });
+  expect(localStorage.getItem(actorKey)).toBe('new-actor-token');
+  expect(session.pendingRoleOutcome?.canResolveRoles).toBe(false);
+  expect(roles).not.toHaveBeenCalled();
+  await act(async () => { session.stopGeneration(); session.handleExportCompletedOutput(); });
+  expect(session.pendingRoleOutcome?.output.markdown).toBe('# 迟到完整正文');
+  expect(fixture.download).toHaveBeenCalledTimes(1);
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  await act(async () => { session.handleDiscardCompletedOutput(); await pending; });
+  expect(await storage.listBattleStorySessions()).toHaveLength(0);
+});
+
+it('a changed-then-restored identity generation stays detached rather than reusing old actor headers', async () => {
+  fixture.state.settings.writeCurrentState = true;
+  const roles = vi.fn().mockRejectedValue(new Error('offline')); vi.stubGlobal('fetch', roles);
+  await mount(); const { pending } = await start(); await completeForRoles();
+  await act(async () => {
+    window.dispatchEvent(new StorageEvent('storage', { key: 'mahoshojo_auth', oldValue: null, newValue: 'different-login' }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'mahoshojo_auth', oldValue: 'different-login', newValue: null }));
+  });
+  expect(session.pendingRoleOutcome?.canResolveRoles).toBe(false);
+  await act(async () => { await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles(); });
+  expect(roles).toHaveBeenCalledTimes(1);
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  await act(async () => { session.handleDiscardCompletedOutput(); await pending; });
+  expect(await storage.listBattleStorySessions()).toHaveLength(0);
+});
+
+it.each(['session', 'chapter', 'no-later-navigation'] as const)('explicit save-as-new captures its own selection epoch: %s', async (navigation) => {
+  await mount();
+  const original = storage.commitCompletedBattleStoryChapter;
+  const save = vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockImplementationOnce(async (commit) => {
+    await original(commit); throw new Error('lost receipt');
+  });
+  const first = await start(); await finish(first.pending, '# 待另存的原正文');
+  const originalId = session.pendingCompletedChapter!.sessionId;
+  await storage.deleteBattleStorySession(originalId);
+  await act(async () => session.handleRetrySaveChapter());
+  expect(session.pendingSaveAsNewSession).toBe(true);
+
+  const addHistory = async (title: string) => {
+    const record = storage.createBattleStorySessionRecord({
+      title, source: { mode: 'daily', language: 'zh-CN', storyLength: 'standard', generationMode: 'stream' },
+      seed: { combatants: [], settings: { readArenaHistory: false, writeArenaHistory: false, readCurrentState: false, writeCurrentState: false, readNarrativeHistory: false, writeNarrativeHistory: false } },
+      workingCombatants: [],
+    });
+    const chapters = [1, 2].map((index) => storage.createBattleStoryChapterRecord({
+      sessionId: record.id, index, action: index === 1 ? 'start' : 'continue', title: `${title}-${index}`,
+      markdown: `${title}正文${index}`, reportJson: {}, deterministicDigest: { chapterTitle: `${title}-${index}`, bodyExcerpt: '' },
+    }));
+    record.chapterCount = 2; record.lastChapterId = chapters[1]!.id;
+    await storage.putBattleStorySession(record);
+    for (const chapter of chapters) await storage.putBattleStoryChapter(chapter);
+    return { record, chapters };
+  };
+  const history = await addHistory('历史会话');
+  const other = await addHistory('另一会话');
+  // Navigation before the explicit save is allowed; the save intent gets a fresh epoch.
+  await act(async () => session.handleSelectSession(history.record.id));
+  let releaseSave!: () => void;
+  const writeGate = new Promise<void>((resolve) => { releaseSave = resolve; });
+  save.mockImplementationOnce(async (commit) => { await writeGate; return original(commit); });
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  let saving!: Promise<void>;
+  await act(async () => { saving = session.handleSavePendingAsNewSession(); });
+  expect(session.isSavingChapter).toBe(true);
+  const savedSessionId = session.pendingCompletedChapter!.sessionId;
+  if (navigation === 'session') await act(async () => session.handleSelectSession(other.record.id));
+  if (navigation === 'chapter') await act(async () => session.setSelectedChapterId(history.chapters[0]!.id));
+  await act(async () => { releaseSave(); await saving; });
+  expect(session.pendingCompletedChapter).toBeNull();
+  expect(session.activeSession!.id).toBe(navigation === 'session' ? other.record.id : navigation === 'chapter' ? history.record.id : savedSessionId);
+  if (navigation === 'chapter') expect(session.selectedChapter?.id).toBe(history.chapters[0]!.id);
+  expect(session.hasUnreadSavedChapter).toBe(navigation !== 'no-later-navigation');
+  expect((await storage.listBattleStoryChaptersBySession(savedSessionId))[0]?.markdown).toBe('# 待另存的原正文');
+  expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(save).toHaveBeenCalledTimes(2);
+});
+
+it.each(['session', 'chapter'] as const)('reload-saved action respects later %s selection while its list read is pending', async (navigation) => {
+  const realList = storage.listBattleStorySessions;
+  const list = vi.spyOn(storage, 'listBattleStorySessions').mockImplementation(realList);
+  await mount(); const first = await start(); await finish(first.pending, '# 已存在的会话');
+  const historyId = session.activeSession!.id;
+  const historyChapterId = session.selectedChapter!.id;
+  list.mockRejectedValueOnce(new Error('readback failed after commit'));
+  const second = await start(); await finish(second.pending, '# 保存成功等待读取');
+  expect(session.hasUnreadSavedChapter).toBe(true);
+  let releaseList!: () => void;
+  const listGate = new Promise<void>((resolve) => { releaseList = resolve; });
+  list.mockImplementationOnce(async (options) => { await listGate; return realList(options); });
+  let reload!: Promise<void>;
+  await act(async () => { reload = session.handleReloadSavedChapter(); });
+  if (navigation === 'session') await act(async () => session.handleSelectSession(historyId));
+  else await act(async () => session.setSelectedChapterId(historyChapterId));
+  await act(async () => { releaseList(); await reload; });
+  expect(session.activeSession!.id).toBe(historyId);
+  expect(session.selectedChapter?.id).toBe(historyChapterId);
+  expect(session.hasUnreadSavedChapter).toBe(true);
+  expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+});
+
+it.each(['switch-to-B', 'logout-then-same-A'] as const)('identity change during asynchronous auth-header preparation blocks dispatch: %s', async (change) => {
+  localStorage.setItem('mahoshojo_auth', 'stored-A');
+  fixture.authHeader.mockResolvedValue('Bearer credential-A');
+  let releaseActivity!: (headers: Record<string, string>) => void;
+  fixture.activityHeaders.mockImplementationOnce(() => new Promise<Record<string, string>>((resolve) => { releaseActivity = resolve; }));
+  const roles = vi.fn();
+  vi.stubGlobal('fetch', (url: string, init: RequestInit) => url.includes('generate-next') ? fixture.dispatch(url, init) : roles(url, init));
+  await mount();
+  const { onSettled } = installRealLatch();
+  let pending!: Promise<void>;
+  await act(async () => { pending = session.handleStartSession(); });
+  expect(fixture.authHeader).toHaveBeenCalledTimes(1);
+  expect(fixture.activityHeaders).toHaveBeenCalledTimes(1);
+  expect(fixture.dispatch).not.toHaveBeenCalled();
+  await act(async () => { void session.handleStartSession(); });
+  expect(fixture.activityHeaders).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    localStorage.removeItem('mahoshojo_auth');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'mahoshojo_auth', oldValue: 'stored-A', newValue: null }));
+    localStorage.setItem('mahoshojo_auth', change === 'switch-to-B' ? 'stored-B' : 'stored-A');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'mahoshojo_auth', oldValue: null, newValue: change === 'switch-to-B' ? 'stored-B' : 'stored-A' }));
+    releaseActivity({ 'x-mahoshojo-user-id': change === 'switch-to-B' ? '2' : '1' });
+    await pending;
+  });
+  expect(fixture.dispatch).not.toHaveBeenCalled(); expect(roles).not.toHaveBeenCalled();
+  expect(session.actionError).toContain('本次未发起生成');
+  expect(fixture.acquire).not.toHaveBeenCalled();
+  expect(onSettled).not.toHaveBeenCalled();
+  expect(fixture.state.combatants[0]!.data.codename).toBe('测试角色');
+  expect(await storage.listBattleStorySessions()).toHaveLength(0);
+  fixture.authHeader.mockResolvedValue(change === 'switch-to-B' ? 'Bearer credential-B' : 'Bearer credential-A');
+  const retry = await start(); await finish(retry.pending, '# 明确重试的新请求');
+  expect(fixture.acquire).toHaveBeenCalledTimes(1);
+  expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  expect(session.selectedChapter?.markdown).toBe('# 明确重试的新请求');
+  expect(onSettled).toHaveBeenCalledTimes(1);
+});
+
+it('real latch rejects an actor change during internal placement await before any model network call, then settles for retry', async () => {
+  localStorage.setItem('mahoshojo_auth', 'stored-A');
+  fixture.authHeader.mockResolvedValue('Bearer credential-A');
+  fixture.activityHeaders.mockResolvedValue({ 'x-mahoshojo-user-id': '1', 'x-mahoshojo-activity-token': 'activity-A' });
+  const network = vi.fn((url: string, init: RequestInit) => fixture.dispatch(url, init)); vi.stubGlobal('fetch', network);
+  await mount();
+  let releasePlacement!: () => void;
+  const placementGate = new Promise<void>((resolve) => { releasePlacement = resolve; });
+  const selectPlacement = vi.fn(async (input: Parameters<typeof selectHostedDrPlacement>[0]) => {
+    await placementGate; return selectHostedDrPlacement(input);
+  });
+  const { onSettled } = installRealLatch({ selectPlacement });
+  honoApiConfig.enabled = true; honoApiConfig.routingMode = 'client-preflight'; honoApiConfig.origin = 'https://homura.colanns.me';
+  let pending!: Promise<void>;
+  await act(async () => { pending = session.handleStartSession(); });
+  expect(selectPlacement).toHaveBeenCalledTimes(1); expect(fixture.acquire).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    localStorage.setItem('mahoshojo_auth', 'stored-B');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'mahoshojo_auth', oldValue: 'stored-A', newValue: 'stored-B' }));
+    releasePlacement(); await pending;
+  });
+  expect(network).not.toHaveBeenCalled(); expect(onSettled).toHaveBeenCalledTimes(1);
+  expect(session.actionError).toContain('本次未发起生成');
+  fixture.authHeader.mockResolvedValue('Bearer credential-B');
+  fixture.activityHeaders.mockResolvedValue({ 'x-mahoshojo-user-id': '2', 'x-mahoshojo-activity-token': 'activity-B' });
+  const retry = await start(); await finish(retry.pending, '# 已重新确认身份');
+  expect(onSettled).toHaveBeenCalledTimes(2); expect(network).toHaveBeenCalledTimes(1);
+  const headers = new Headers(network.mock.calls[0]![1].headers);
+  expect(headers.get('Authorization')).toBe('Bearer credential-B');
+  expect(headers.get('x-mahoshojo-user-id')).toBe('2');
+  expect(headers.get('x-mahoshojo-activity-token')).toBe('activity-B');
+  expect(headers.get('Accept')).toBe('text/event-stream');
+  expect(headers.has('X-Mahoshojo-Arena-Story-Protocol')).toBe(false);
+  expect(JSON.parse(String(network.mock.calls[0]![1].body))).toMatchObject({
+    action: 'start', chapterIndex: 1, chapterContext: { recentChapters: [] },
+    seed: { mode: 'daily', language: 'zh-CN' },
+  });
+  expect(fixture.authHeader).toHaveBeenCalledTimes(2); expect(fixture.activityHeaders).toHaveBeenCalledTimes(2);
+});
+
+it.each(['sync-throw', 'async-reject'] as const)('real latch releases after dispatch %s and admits only a later explicit generation', async (failure) => {
+  const network = vi.fn((url: string, init: RequestInit) => fixture.dispatch(url, init));
+  if (failure === 'sync-throw') network.mockImplementationOnce(() => { throw new Error('transport failure'); });
+  else network.mockRejectedValueOnce(new Error('transport failure'));
+  vi.stubGlobal('fetch', network);
+  await mount(); const { onSettled } = installRealLatch();
+  await act(async () => { await session.handleStartSession(); });
+  expect(onSettled).toHaveBeenCalledTimes(1); expect(network).toHaveBeenCalledTimes(1);
+  expect(session.isGenerating).toBe(false); expect(session.pendingRoleOutcome).toBeNull();
+  const retry = await start(); await finish(retry.pending, '# 显式新请求');
+  expect(onSettled).toHaveBeenCalledTimes(2); expect(network).toHaveBeenCalledTimes(2);
+  expect(fixture.acquire).toHaveBeenCalledTimes(2);
+  expect(session.selectedChapter?.markdown).toBe('# 显式新请求');
+});
+
+it('real latch remains unused when auth preparation throws and the next explicit attempt is admitted', async () => {
+  const network = vi.fn((url: string, init: RequestInit) => fixture.dispatch(url, init)); vi.stubGlobal('fetch', network);
+  await mount(); const { onSettled } = installRealLatch();
+  fixture.authHeader.mockRejectedValueOnce(new Error('auth preparation failed'));
+  await act(async () => session.handleStartSession());
+  expect(fixture.acquire).not.toHaveBeenCalled(); expect(onSettled).not.toHaveBeenCalled(); expect(network).not.toHaveBeenCalled();
+  const retry = await start(); await finish(retry.pending, '# 认证准备恢复');
+  expect(fixture.acquire).toHaveBeenCalledTimes(1); expect(onSettled).toHaveBeenCalledTimes(1);
+  expect(session.selectedChapter?.markdown).toBe('# 认证准备恢复');
 });

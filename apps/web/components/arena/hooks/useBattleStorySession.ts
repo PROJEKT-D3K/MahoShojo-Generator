@@ -1,5 +1,8 @@
 'use client';
 
+import { canResolveBattleStoryRoles, type BattleStoryCompletedOutput } from '@mahoshojo/domain/arena-story-completed-output';
+import { resolveWebBattleStoryRoles, type WebBattleStoryRoleResult } from '../utils/battleStoryRoleResolution';
+
 import { advanceBattleStorySaveEvidence, type BattleStorySaveEvidence, buildCompletedBattleStoryCommit, captureBattleStoryCommitExpected, digestBattleStoryCommitValue, createBattleStoryCommitReceipt, freezeBattleStoryCommit } from '@mahoshojo/domain/arena-story-commit';
 
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -55,6 +58,7 @@ import type {
   BattleStorySessionSource,
 } from '@/lib/ai-session/battle-story/types';
 import { authStorage } from '@/lib/auth';
+import { getAuthSnapshot, subscribeAuthSnapshot } from '@/lib/auth-client-store';
 import { secureRandomUUID } from '@/lib/crypto';
 import { useGenerationApiIntentLatch } from '@/lib/use-generation-api-intent-latch';
 import { readJsonOrTextFromResponse, resolveApiErrorMessage } from '@/lib/client/apiError';
@@ -62,6 +66,8 @@ import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import { useProviderModeCooldown } from '@/lib/cooldown';
 import {
+  ARENA_GENERATION_ACTOR_TOKEN_HEADER,
+  ARENA_GENERATION_ACTOR_TOKEN_KEY,
   captureArenaGenerationActorToken,
   withArenaGenerationActorToken,
 } from '@/lib/arena/resumable-generation-client';
@@ -85,7 +91,6 @@ import {
   buildBattleStorySessionSeedSnapshot,
   cloneBattleStoryActiveChaptersForNewSession,
   cloneBattleStoryCheckpointsForNewSession,
-  mergeUpdatedCombatantsIntoWorkingCombatants,
   parseBattleStoryStreamMetaHeader,
   remapBattleStorySummaryMeta,
   resolveBattleStoryRequestCooldownMs,
@@ -105,6 +110,29 @@ type PendingCompletedChapter = {
   warning?: string;
   saveEvidence?: BattleStorySaveEvidence;
   requiresNewSession?: boolean;
+  selectionEpoch?: number;
+};
+
+type CompletedStoryGeneration = {
+  markdown: string;
+  reportJson: Record<string, unknown>;
+  digest: BattleStoryDeterministicDigest;
+  chapterIndex: number;
+  generationId: string | null;
+  cardSnapshot: BattleStoryChapterCardSnapshot | null;
+  nextWorkingCombatants: Array<Record<string, unknown>>;
+  warning?: string;
+  selectionEpoch: number;
+};
+type PendingRoleOutcome = BattleStoryCompletedOutput<CompletedStoryGeneration> & {
+  source: BattleStorySessionSource;
+  action: BattleStorySessionAction;
+  roleBusy: boolean;
+  contextCurrent: boolean;
+  legacySaveState?: 'saving' | 'unknown';
+  resolveRoles: () => Promise<WebBattleStoryRoleResult>;
+  isActorCurrent: () => boolean;
+  settle: (value: CompletedStoryGeneration | { aborted: true }) => void;
 };
 
 const normalizeErrorMessage = (error: unknown, fallback: string): string => {
@@ -341,7 +369,20 @@ const extractChapterGuidancesFromWorkingCombatants = (
 };
 
 export function useBattleStorySession() {
-  const generationApiIntentLatch = useGenerationApiIntentLatch();
+  const generationDispatchGuardRef = useRef<{ isCurrent: () => boolean; blocked: boolean } | null>(null);
+  const generationApiIntentLatch = useGenerationApiIntentLatch({
+    // This owner already prepares the complete auth headers for the frozen actor.
+    // The generic dispatcher must not supplement them with a later account's headers.
+    auth: { getAuthHeader: async () => null, getActivityHeaders: async () => ({}) },
+    fetcher: async (url, init) => {
+      const guard = generationDispatchGuardRef.current;
+      if (!guard?.isCurrent()) {
+        if (guard) guard.blocked = true;
+        throw new Error('登录身份已变化，本次未发起生成。');
+      }
+      return fetch(url, init);
+    },
+  });
   const useBattleSelector = <T,>(selector: (state: BattleStoreState) => T) => useBattleStore(selector);
   const combatants = useBattleSelector((state) => state.combatants);
   const battleMode = useBattleSelector((state) => state.battleMode);
@@ -363,6 +404,11 @@ export function useBattleStorySession() {
   const [unreadSavedSessionId, setUnreadSavedSessionId] = useState<string | null>(null);
   const pendingCompletedChapterRef = useRef<PendingCompletedChapter | null>(null);
   const chapterOperationBusyRef = useRef(false);
+  const [pendingRoleOutcome, setPendingRoleOutcome] = useState<PendingRoleOutcome | null>(null);
+  const pendingRoleOutcomeRef = useRef<PendingRoleOutcome | null>(null);
+  const viewEpochRef = useRef(0);
+  const mountedRef = useRef(true);
+  const actorEpochRef = useRef(0);
   const legacyDeletionCountRef = useRef(0);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -744,89 +790,114 @@ export function useBattleStorySession() {
     [buildRequestHeaders, customProviderPayload, refreshSessionList]
   );
 
-  const applyWorkingCombatantUpdates = useCallback(
-    async (input: {
-      markdown: string;
-      digest: BattleStoryDeterministicDigest;
-      mode: BattleStorySessionSource['mode'];
-      seed: BattleStorySessionSeed;
-      workingCombatants: Array<Record<string, unknown>>;
-    userGuidance: string;
-    generationId: string | null;
-    meta?: Record<string, unknown> | null;
-    }): Promise<{ workingCombatants: Array<Record<string, unknown>>; warning?: string }> => {
-      if (!input.seed.settings.writeArenaHistory && !input.seed.settings.writeCurrentState) {
-        return { workingCombatants: input.workingCombatants };
+  const clearPendingRoleOutcome = useCallback(() => {
+    pendingRoleOutcomeRef.current = null;
+    setPendingRoleOutcome(null);
+  }, []);
+
+  const markLegacyCompletedSave = useCallback((state: 'saving' | 'unknown') => {
+    const pending = pendingRoleOutcomeRef.current;
+    if (!pending || (state === 'unknown' && pending.legacySaveState !== 'saving')) return;
+    pending.legacySaveState = state;
+    setPendingRoleOutcome({ ...pending });
+  }, []);
+
+  const handleRetryStoryRoles = useCallback(async () => {
+    const pending = pendingRoleOutcomeRef.current;
+    if (!pending || !canResolveBattleStoryRoles({ ...pending, commitFrozen: Boolean(pendingCompletedChapterRef.current) })) return;
+    const stillOwned = () => mountedRef.current && pendingRoleOutcomeRef.current === pending;
+    if (!pending.isActorCurrent()) {
+      pending.contextCurrent = false;
+      pending.role = { status: 'unresolved', message: '登录身份已变化，本章仅可阅读或导出。' };
+      setPendingRoleOutcome({ ...pending });
+      return;
+    }
+    pending.roleBusy = true;
+    setPendingRoleOutcome({ ...pending });
+    try {
+      const result = await pending.resolveRoles();
+      if (!stillOwned()) return;
+      if (!pending.isActorCurrent()) {
+        pending.contextCurrent = false;
+        throw new Error('登录身份已变化，本章仅可阅读或导出。');
       }
-      if (!input.generationId) {
-        return {
-          workingCombatants: input.workingCombatants,
-          warning: '⚠️ 本章正文已保存，但缺少服务器 generationId，角色状态未同步到连续会话。',
-        };
+      pending.role = result.role;
+      pending.settle({ ...pending.output, nextWorkingCombatants: result.workingCombatants, warning: result.warning });
+    } catch (error) {
+      if (stillOwned()) {
+        if (!pending.isActorCurrent()) pending.contextCurrent = false;
+        pending.role = { status: 'unresolved', message: normalizeErrorMessage(error, '角色同步结果未确认，完整正文仍保留。') };
       }
-
-      const reconciliationPayload = await buildArenaReconciliationRetryPayload(
-        input.generationId,
-        input.workingCombatants as ArenaReconciliationRetryCombatant[],
-      );
-      const response = await fetch('/api/arena/update-combatants-after-stream', {
-        method: 'POST',
-        headers: withArenaGenerationActorToken(await buildRequestHeaders(false)),
-        body: JSON.stringify(reconciliationPayload),
-      });
-
-      if (!response.ok) {
-        const { payload } = await readJsonOrTextFromResponse(response);
-        const payloadRecord = payload && typeof payload === 'object' && !Array.isArray(payload)
-          ? payload as Record<string, unknown>
-          : null;
-        const details = Array.isArray(payloadRecord?.errors)
-          ? payloadRecord.errors.flatMap((value) => {
-            if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-            const message = (value as { message?: unknown }).message;
-            return typeof message === 'string' && message.trim() ? [message.trim()] : [];
-          })
-          : [];
-        const baseMessage = resolveApiErrorMessage({
-          payload,
-          fallback: '角色更新失败',
-        });
-        return {
-          workingCombatants: input.workingCombatants,
-          warning: `⚠️ 本章正文已保存，但角色状态同步失败：${[
-            baseMessage,
-            ...details,
-          ].join('；')}`,
-        };
+    } finally {
+      if (stillOwned()) {
+        pending.roleBusy = false;
+        setPendingRoleOutcome({ ...pending });
       }
+    }
+  }, []);
 
-      const payload = (await response.json()) as {
-        updatedCombatants?: Array<{
-          combatantIndex: number;
-          data: Record<string, unknown>;
-          isNative: boolean;
-        }>;
-        warnings?: Array<{ message?: unknown }>;
-      };
+  const handleKeepOriginalStoryRoles = useCallback(() => {
+    const pending = pendingRoleOutcomeRef.current;
+    if (!pending || !canResolveBattleStoryRoles({ ...pending, commitFrozen: Boolean(pendingCompletedChapterRef.current) })) return;
+    if (!pending.isActorCurrent()) {
+      pending.contextCurrent = false;
+      pending.role = { status: 'unresolved', message: '登录身份已变化，本章仅可阅读或导出。' };
+      setPendingRoleOutcome({ ...pending });
+      return;
+    }
+    const warning = '⚠️ 本章按你的选择保留原角色状态。';
+    pending.role = { status: 'user-kept-original', warning };
+    setPendingRoleOutcome({ ...pending });
+    pending.settle({ ...pending.output, warning });
+  }, []);
 
-      const warningMessage = Array.isArray(payload.warnings)
-        ? payload.warnings.flatMap((warning) => (
-          typeof warning?.message === 'string' && warning.message.trim()
-            ? [warning.message.trim()]
-            : []
-        )).join('；')
-        : '';
+  const handleExportCompletedOutput = useCallback(() => {
+    const pending = pendingRoleOutcomeRef.current;
+    if (!pending) return;
+    downloadBlob(new Blob([pending.output.markdown], { type: 'text/markdown;charset=utf-8' }),
+      `${pending.output.digest.chapterTitle || '已完成章节'}_${pending.legacySaveState === 'unknown' ? '保存待确认' : '未保存'}.md`);
+  }, []);
 
-      return {
-        workingCombatants: mergeUpdatedCombatantsIntoWorkingCombatants(
-          input.workingCombatants,
-          Array.isArray(payload.updatedCombatants) ? payload.updatedCombatants : []
-        ),
-        ...(warningMessage ? { warning: `⚠️ ${warningMessage}` } : {}),
-      };
-    },
-    [buildRequestHeaders]
-  );
+  const handleDiscardCompletedOutput = useCallback(() => {
+    const pending = pendingRoleOutcomeRef.current;
+    if (!pending || (pending.roleBusy && pending.contextCurrent) || (pending.role.status !== 'unresolved' && chapterOperationBusyRef.current)) return;
+    if (!window.confirm('丢弃尚未保存的章节？请先导出需要保留的正文。')) return;
+    clearPendingRoleOutcome();
+    pending.settle({ aborted: true });
+    setPendingStartSession(null);
+    setActionError(null);
+  }, [clearPendingRoleOutcome]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const identity = () => { const auth = getAuthSnapshot(); return `${auth.user?.id ?? 'anonymous'}:${auth.authSource ?? ''}`; };
+    let currentIdentity = identity();
+    const detachActor = () => {
+      actorEpochRef.current += 1;
+      const pending = pendingRoleOutcomeRef.current;
+      if (!pending || pending.role.status !== 'unresolved') return;
+      pending.contextCurrent = false;
+      pending.role = { status: 'unresolved', message: '登录身份已变化，本章仅可阅读或导出。' };
+      setPendingRoleOutcome({ ...pending });
+    };
+    const unsubscribeAuth = subscribeAuthSnapshot(() => {
+      const nextIdentity = identity();
+      if (nextIdentity !== currentIdentity) { currentIdentity = nextIdentity; detachActor(); }
+    });
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === 'mahoshojo_auth' || event.key === ARENA_GENERATION_ACTOR_TOKEN_KEY) detachActor();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      unsubscribeAuth();
+      window.removeEventListener('storage', onStorage);
+      mountedRef.current = false;
+      generationAbortControllerRef.current?.abort(STREAM_ABORT_REASON_USER);
+      const pending = pendingRoleOutcomeRef.current;
+      pendingRoleOutcomeRef.current = null;
+      pending?.settle({ aborted: true });
+    };
+  }, []);
 
   const runGeneration = useCallback(
     async (input: {
@@ -841,26 +912,14 @@ export function useBattleStorySession() {
       recentChapters: ReturnType<typeof buildChapterRequestWindow>;
       chapterIndexHint?: number;
       userGuidance: string;
-    }): Promise<
-      | {
-          aborted: true;
-        }
-      | {
-          aborted?: false;
-          markdown: string;
-          reportJson: Record<string, unknown>;
-          digest: BattleStoryDeterministicDigest;
-          chapterIndex: number;
-          generationId?: string | null;
-          cardSnapshot: BattleStoryChapterCardSnapshot | null;
-          nextWorkingCombatants: Array<Record<string, unknown>>;
-          warning?: string;
-        }
-    > => {
+    }): Promise<({ aborted: true } | (CompletedStoryGeneration & { aborted?: false }))> => {
       if (isCooldown) {
         throw new Error(`冷却中，请等待 ${remainingTime} 秒后再继续。`);
       }
 
+      // Detach every retry input from editable arena/session state before dispatch.
+      input = freezeBattleStoryCommit(structuredClone(input));
+      const selectionEpoch = viewEpochRef.current;
       setActionError(null);
       setNotice(null);
       setIsGenerating(true);
@@ -883,44 +942,72 @@ export function useBattleStorySession() {
       let requestAccepted = false;
       let cooldownHandled = false;
       let revealGeneratedResult: ReturnType<typeof beginResultNavigation> | null = null;
+      let dispatchGuard: { isCurrent: () => boolean; blocked: boolean } | null = null;
 
       try {
+        const originalAuth = readLocalStorageString('mahoshojo_auth');
+        const originalActorEpoch = actorEpochRef.current;
+        const preparedHeaders = await buildRequestHeaders(true);
+        if (!mountedRef.current || generationController.signal.aborted) return { aborted: true };
+        if (actorEpochRef.current !== originalActorEpoch || readLocalStorageString('mahoshojo_auth') !== originalAuth) {
+          throw new Error('登录身份在准备请求时发生变化，本次未发起生成。请确认当前身份后重试。');
+        }
+        const originalHeaders = withArenaGenerationActorToken(preparedHeaders);
+        const requestBody = JSON.stringify({
+          sessionId: input.sessionId,
+          generationRequestId: secureRandomUUID(),
+          action: input.action,
+          ...(input.sourceChapterId ? { sourceChapterId: input.sourceChapterId } : {}),
+          ...(typeof input.chapterIndexHint === 'number' ? { chapterIndex: input.chapterIndexHint } : {}),
+          ...(input.chapterPlan ? { chapterPlan: { totalChapters: input.chapterPlan.totalChapters } } : {}),
+          chapterContext: {
+            sessionSummary: input.sessionSummary,
+            recentChapters: input.recentChapters,
+            workingCombatants: input.workingCombatants,
+          },
+          seed: {
+            combatants: input.seed.combatants,
+            scenario: input.seed.scenario ?? null,
+            auxScenarios: input.seed.auxScenarios ?? [],
+            materials: input.seed.materials ?? [],
+            questionnaires: input.seed.questionnaires ?? [],
+            mode: input.source.mode,
+            storyLength: input.source.storyLength,
+            customStoryLength: input.source.customStoryLength,
+            language: input.source.language,
+            settings: input.seed.settings,
+          },
+          userGuidance: input.userGuidance,
+          ...(customProviderPayload ? { customProvider: customProviderPayload } : {}),
+        });
+        // Complete fallible local construction before acquiring the single-use dispatch lease.
+        revealGeneratedResult = beginResultNavigation(generationController, generationController.signal);
+        const preparedActor = originalHeaders.get(ARENA_GENERATION_ACTOR_TOKEN_HEADER);
+        dispatchGuard = {
+          blocked: false,
+          isCurrent: () => mountedRef.current && !generationController.signal.aborted
+            && actorEpochRef.current === originalActorEpoch && readLocalStorageString('mahoshojo_auth') === originalAuth
+            && withArenaGenerationActorToken({}, { createIfMissing: false }).get(ARENA_GENERATION_ACTOR_TOKEN_HEADER) === preparedActor,
+        };
         const generationIntent = generationApiIntentLatch.tryAcquire();
         if (!generationIntent) throw new Error('已有生成请求正在处理中，请勿重复提交。');
-        revealGeneratedResult = beginResultNavigation(generationIntent, generationController.signal);
+        generationDispatchGuardRef.current = dispatchGuard;
         const response = await generationIntent.dispatch('/api/arena/session/generate-next', {
-          method: 'POST',
-          headers: withArenaGenerationActorToken(await buildRequestHeaders(true)),
-          signal: generationController.signal,
-          body: JSON.stringify({
-            sessionId: input.sessionId,
-            generationRequestId: secureRandomUUID(),
-            action: input.action,
-            ...(input.sourceChapterId ? { sourceChapterId: input.sourceChapterId } : {}),
-            ...(typeof input.chapterIndexHint === 'number' ? { chapterIndex: input.chapterIndexHint } : {}),
-            ...(input.chapterPlan ? { chapterPlan: { totalChapters: input.chapterPlan.totalChapters } } : {}),
-            chapterContext: {
-              sessionSummary: input.sessionSummary,
-              recentChapters: input.recentChapters,
-              workingCombatants: input.workingCombatants,
-            },
-            seed: {
-              combatants: input.seed.combatants,
-              scenario: input.seed.scenario ?? null,
-              auxScenarios: input.seed.auxScenarios ?? [],
-              materials: input.seed.materials ?? [],
-              questionnaires: input.seed.questionnaires ?? [],
-              mode: input.source.mode,
-              storyLength: input.source.storyLength,
-              customStoryLength: input.source.customStoryLength,
-              language: input.source.language,
-              settings: input.seed.settings,
-            },
-            userGuidance: input.userGuidance,
-            ...(customProviderPayload ? { customProvider: customProviderPayload } : {}),
-          }),
+          method: 'POST', headers: originalHeaders, signal: generationController.signal, body: requestBody,
         });
-        captureArenaGenerationActorToken(response);
+        const actorBeforeResponse = withArenaGenerationActorToken({}, { createIfMissing: false }).get(ARENA_GENERATION_ACTOR_TOKEN_HEADER);
+        if (mountedRef.current && actorEpochRef.current === originalActorEpoch && readLocalStorageString('mahoshojo_auth') === originalAuth
+          && actorBeforeResponse === originalHeaders.get(ARENA_GENERATION_ACTOR_TOKEN_HEADER)) {
+          captureArenaGenerationActorToken(response);
+        }
+        // Keep this response's actor locally even when a newer identity owns the global adapter.
+        const roleHeaders = new Headers(originalHeaders);
+        const returnedActor = response.headers.get(ARENA_GENERATION_ACTOR_TOKEN_HEADER)?.trim();
+        if (returnedActor) roleHeaders.set(ARENA_GENERATION_ACTOR_TOKEN_HEADER, returnedActor);
+        roleHeaders.delete('Accept');
+        const originalActor = roleHeaders.get(ARENA_GENERATION_ACTOR_TOKEN_HEADER);
+        const isActorCurrent = () => actorEpochRef.current === originalActorEpoch && readLocalStorageString('mahoshojo_auth') === originalAuth
+          && withArenaGenerationActorToken({}, { createIfMissing: false }).get(ARENA_GENERATION_ACTOR_TOKEN_HEADER) === originalActor;
         responseStatus = response.status;
 
         if (response.status === 429) {
@@ -1123,31 +1210,47 @@ export function useBattleStorySession() {
           ...(Array.isArray(metaImpacts) ? { impacts: metaImpacts } : {}),
         };
 
-        const updateResult = await applyWorkingCombatantUpdates({
-          markdown,
-          digest,
-          mode: input.source.mode,
-          seed: input.seed,
-          workingCombatants: input.workingCombatants,
-          userGuidance: input.userGuidance,
+        const completed: CompletedStoryGeneration = freezeBattleStoryCommit({
+          markdown, reportJson, digest, chapterIndex, selectionEpoch,
           generationId: responseGenerationId ?? readStringField(sessionMeta, 'generationId'),
-          meta: metaPayload,
+          cardSnapshot: Object.keys(latestCardSnapshot).length > 0 ? latestCardSnapshot : null,
+          nextWorkingCombatants: input.workingCombatants,
         });
-
+        if (!mountedRef.current || generationController.signal.aborted) return { aborted: true };
+        // Retain the full body before any role payload preparation, network, or JSON parsing.
+        let settle!: PendingRoleOutcome['settle'];
+        const decision = new Promise<CompletedStoryGeneration | { aborted: true }>((resolve) => { settle = resolve; });
+        let roleBody: string | undefined;
+        const pending: PendingRoleOutcome = {
+          output: completed, source: input.source, action: input.action,
+          role: { status: 'unresolved' }, roleBusy: false, contextCurrent: true,
+          isActorCurrent, settle,
+          resolveRoles: async () => {
+            roleBody ??= JSON.stringify(await buildArenaReconciliationRetryPayload(
+              completed.generationId!, input.workingCombatants as ArenaReconciliationRetryCombatant[]));
+            if (!isActorCurrent()) throw new Error('登录身份已变化，本章仅可阅读或导出。');
+            return resolveWebBattleStoryRoles({ body: roleBody, headers: roleHeaders, workingCombatants: input.workingCombatants });
+          },
+        };
+        pendingRoleOutcomeRef.current = pending;
+        setPendingRoleOutcome(pending);
+        setIsGenerating(false);
+        setGeneratingAction(null);
+        generationAbortControllerRef.current = null;
         startCooldown();
         cooldownHandled = true;
-
-        return {
-          markdown,
-          reportJson,
-          digest,
-          chapterIndex,
-          generationId: responseGenerationId ?? readStringField(sessionMeta, 'generationId'),
-          cardSnapshot:
-            Object.keys(latestCardSnapshot).length > 0 ? latestCardSnapshot : null,
-          nextWorkingCombatants: updateResult.workingCombatants,
-          ...(updateResult.warning ? { warning: updateResult.warning } : {}),
-        };
+        if (!input.seed.settings.writeArenaHistory && !input.seed.settings.writeCurrentState) {
+          pending.role = { status: 'not-requested' };
+          settle(completed);
+        } else if (!completed.generationId) {
+          const warning = '⚠️ 本章缺少服务器 generationId，已保留原角色状态。';
+          pending.role = { status: 'legacy-no-generation', warning };
+          settle({ ...completed, warning });
+        } else {
+          void handleRetryStoryRoles();
+        }
+        const resolved = await decision;
+        return mountedRef.current && pendingRoleOutcomeRef.current === pending ? resolved : { aborted: true };
       } catch (error) {
         // 同批次终态失败会在定位 effect 提交前移除实时卡片。
         // 只撤销定位通知，避免滚向旧章节；不改变生成请求的取消语义。
@@ -1162,6 +1265,9 @@ export function useBattleStorySession() {
           );
           return { aborted: true };
         }
+        if (dispatchGuard?.blocked) {
+          throw new Error('登录身份在准备请求时发生变化，本次未发起生成。请确认当前身份后重试。');
+        }
         const errorMessage = error instanceof Error ? error.message.trim() : '';
         const isLocalCooldownError = Boolean(errorMessage) && errorMessage.includes('冷却中');
         if (!isLocalCooldownError && !cooldownHandled) {
@@ -1175,18 +1281,21 @@ export function useBattleStorySession() {
         }
         throw error;
       } finally {
+        if (generationDispatchGuardRef.current === dispatchGuard) generationDispatchGuardRef.current = null;
         if (generationAbortControllerRef.current === generationController) {
           generationAbortControllerRef.current = null;
         }
-        setIsGenerating(false);
-        setGeneratingAction(null);
-        setStreamSoftTimeoutWarning(null);
+        if (mountedRef.current) {
+          setIsGenerating(false);
+          setGeneratingAction(null);
+          setStreamSoftTimeoutWarning(null);
+        }
       }
     },
     [
       generationApiIntentLatch,
       beginResultNavigation,
-      applyWorkingCombatantUpdates,
+      handleRetryStoryRoles,
       buildRequestHeaders,
       cooldownMs,
       customProviderPayload,
@@ -1222,8 +1331,11 @@ export function useBattleStorySession() {
       setPendingCompletedChapter(null);
       setPendingStartSession(null);
       await refreshSessionList();
-      await loadSession(pending.commit.session.id);
-      setUnreadSavedSessionId(null);
+      if (pending.selectionEpoch === undefined || pending.selectionEpoch === viewEpochRef.current) {
+        await loadSession(pending.commit.session.id);
+        setUnreadSavedSessionId(pending.selectionEpoch === undefined || pending.selectionEpoch === viewEpochRef.current
+          ? null : pending.commit.session.id);
+      } else setUnreadSavedSessionId(pending.commit.session.id);
       if (pending.warning) setNotice(pending.warning);
       void refreshSummaryIfNeeded(pending.commit.session, pending.chapters);
     } catch (error) {
@@ -1247,12 +1359,16 @@ export function useBattleStorySession() {
 
   const handleReloadSavedChapter = useCallback(async () => {
     if (!unreadSavedSessionId) return;
+    const selectionEpoch = viewEpochRef.current;
+    const stillSelected = () => mountedRef.current && selectionEpoch === viewEpochRef.current;
     try {
       await refreshSessionList();
+      if (!stillSelected()) return;
       await loadSession(unreadSavedSessionId);
+      if (!stillSelected()) return;
       setUnreadSavedSessionId(null);
       setActionError(null);
-    } catch { setActionError('本章已保存，但暂时无法读取，请稍后再试。'); }
+    } catch { if (stillSelected()) setActionError('本章已保存，但暂时无法读取，请稍后再试。'); }
   }, [loadSession, refreshSessionList, unreadSavedSessionId]);
 
   const retainCompletedChapter = useCallback((pending: PendingCompletedChapter) => {
@@ -1260,7 +1376,8 @@ export function useBattleStorySession() {
     pendingCompletedChapterRef.current = pending;
     setPendingCompletedChapter(pending);
     freezeBattleStoryCommit(pending.commit);
-  }, []);
+    clearPendingRoleOutcome();
+  }, [clearPendingRoleOutcome]);
 
   const handleRetrySaveChapter = useCallback(async () => {
     const pending = pendingCompletedChapterRef.current;
@@ -1287,7 +1404,9 @@ export function useBattleStorySession() {
           ...(checkpoint.chapterId ? { chapterId } : {}),
         })),
       };
-      const next: PendingCompletedChapter = { commit, chapters: [commit.chapter], warning: pending.warning };
+      const next: PendingCompletedChapter = {
+        commit, chapters: [commit.chapter], warning: pending.warning, selectionEpoch: viewEpochRef.current,
+      };
       retainCompletedChapter(next);
       await persistCompletedChapter(next);
     } catch (error) { setActionError(normalizeErrorMessage(error, '另存为新会话失败，原章节仍保留。')); } finally { chapterOperationBusyRef.current = false; }
@@ -1310,14 +1429,14 @@ export function useBattleStorySession() {
   }, []);
 
   useEffect(() => {
-    if (!pendingCompletedChapter) return;
+    if (!pendingCompletedChapter && !pendingRoleOutcome) return;
     const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
     window.addEventListener('beforeunload', beforeUnload);
     return () => window.removeEventListener('beforeunload', beforeUnload);
-  }, [pendingCompletedChapter]);
+  }, [pendingCompletedChapter, pendingRoleOutcome]);
 
   const handleStartSession = useCallback(async () => {
-    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current) return;
+    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
     if (!startSessionCheck.canStart) {
       setActionError(startSessionCheck.reason);
       return;
@@ -1378,12 +1497,12 @@ export function useBattleStorySession() {
         operationId: secureRandomUUID(), checkpointId: secureRandomUUID(), initialCheckpointId: secureRandomUUID(),
         now: Date.now(), source: snapshot.source, inputCombatants: snapshot.workingCombatants, generated,
       });
-      const pending = { commit, chapters: [commit.chapter], warning: generated.warning };
+      const pending = { commit, chapters: [commit.chapter], warning: generated.warning, selectionEpoch: generated.selectionEpoch };
       retainCompletedChapter(pending);
       await persistCompletedChapter(pending);
     } catch (error) {
       setActionError(normalizeErrorMessage(error, '创建连续战报会话失败。'));
-      if (!pendingCompletedChapterRef.current) setPendingStartSession(null);
+      if (!pendingCompletedChapterRef.current && !pendingRoleOutcomeRef.current) setPendingStartSession(null);
     } finally {
       chapterOperationBusyRef.current = false;
     }
@@ -1393,9 +1512,9 @@ export function useBattleStorySession() {
   ]);
 
   const handleContinueSession = useCallback(async () => {
-    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current) return;
-    const sessionRecord = activeSessionRef.current;
-    const activeChapters = getActiveBattleStoryChapters(chaptersRef.current);
+    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
+    const sessionRecord = activeSessionRef.current ? structuredClone(activeSessionRef.current) : null;
+    const activeChapters = getActiveBattleStoryChapters(structuredClone(chaptersRef.current));
     const latestChapter = getLatestBattleStoryChapter(activeChapters);
     if (!sessionRecord || activeChapters.length === 0) {
       setActionError('当前没有可续写的连续战报会话。');
@@ -1446,7 +1565,7 @@ export function useBattleStorySession() {
         operationId: secureRandomUUID(), checkpointId: secureRandomUUID(), now: Date.now(),
         source: nextSource, inputCombatants: previousWorkingCombatants, generated,
       });
-      const pending = { commit, chapters: sortBattleStoryChapters([...activeChapters, commit.chapter]), warning: generated.warning };
+      const pending = { commit, chapters: sortBattleStoryChapters([...activeChapters, commit.chapter]), warning: generated.warning, selectionEpoch: generated.selectionEpoch };
       retainCompletedChapter(pending);
       await persistCompletedChapter(pending);
     } catch (error) {
@@ -1458,10 +1577,10 @@ export function useBattleStorySession() {
   ]);
 
   const handleBranchFromChapter = useCallback(async (targetChapterId?: string | null) => {
-    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current) return;
-    const sessionRecord = activeSessionRef.current;
-    const activeChapters = getActiveBattleStoryChapters(chaptersRef.current);
-    const checkpointRecords = sortBattleStoryCheckpoints(checkpointsRef.current);
+    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
+    const sessionRecord = activeSessionRef.current ? structuredClone(activeSessionRef.current) : null;
+    const activeChapters = getActiveBattleStoryChapters(structuredClone(chaptersRef.current));
+    const checkpointRecords = sortBattleStoryCheckpoints(structuredClone(checkpointsRef.current));
     const latestChapter = getLatestBattleStoryChapter(activeChapters);
     const targetChapter = targetChapterId
       ? activeChapters.find((chapter) => chapter.id === targetChapterId) ?? null
@@ -1493,6 +1612,7 @@ export function useBattleStorySession() {
     }
 
     chapterOperationBusyRef.current = true;
+    let committedSessionId: string | null = null;
     try {
       const nextSource = buildProviderSource(sessionRecord.source, customProviderPayload);
       const prefixChapters = activeChapters.filter((chapter) => chapter.index <= targetChapter.index);
@@ -1601,6 +1721,7 @@ export function useBattleStorySession() {
         updatedAt: Date.now(),
       };
 
+      markLegacyCompletedSave('saving');
       await putBattleStorySession(branchSession);
       await Promise.all([
         ...clonedChapters.map((chapter) => putBattleStoryChapter(chapter)),
@@ -1610,18 +1731,27 @@ export function useBattleStorySession() {
 
       const nextChapters = sortBattleStoryChapters([...clonedChapters, branchChapter]);
       delete summaryRetryAtRef.current[branchSession.id];
+      committedSessionId = branchSession.id;
+      clearPendingRoleOutcome();
       await refreshSessionList();
-      await loadSession(branchSession.id);
+      if (generated.selectionEpoch === viewEpochRef.current) await loadSession(branchSession.id);
+      else setUnreadSavedSessionId(branchSession.id);
       if (generated.warning) {
         setNotice(generated.warning);
       }
       void refreshSummaryIfNeeded(branchSession, nextChapters);
     } catch (error) {
+      if (committedSessionId) {
+        setUnreadSavedSessionId(committedSessionId);
+        setActionError('本章已保存，但暂时无法读取。请点击重新读取，无需重新生成。');
+        return;
+      }
+      markLegacyCompletedSave('unknown');
       setActionError(normalizeErrorMessage(error, '创建分支会话失败。'));
     } finally {
       chapterOperationBusyRef.current = false;
     }
-  }, [customProviderPayload, loadSession, refreshSessionList, refreshSummaryIfNeeded, runGeneration]);
+  }, [clearPendingRoleOutcome, markLegacyCompletedSave, customProviderPayload, loadSession, refreshSessionList, refreshSummaryIfNeeded, runGeneration]);
 
   const handleBranchSession = useCallback(async () => {
     const latestChapter = getLatestBattleStoryChapter(getActiveBattleStoryChapters(chaptersRef.current));
@@ -1633,10 +1763,10 @@ export function useBattleStorySession() {
   }, [handleBranchFromChapter, selectedChapterId]);
 
   const handleRewriteChapter = useCallback(async (targetChapterId?: string | null) => {
-    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current) return;
-    const sessionRecord = activeSessionRef.current;
-    const activeChapters = getActiveBattleStoryChapters(chaptersRef.current);
-    const checkpointRecords = sortBattleStoryCheckpoints(checkpointsRef.current);
+    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
+    const sessionRecord = activeSessionRef.current ? structuredClone(activeSessionRef.current) : null;
+    const activeChapters = getActiveBattleStoryChapters(structuredClone(chaptersRef.current));
+    const checkpointRecords = sortBattleStoryCheckpoints(structuredClone(checkpointsRef.current));
     const latestChapter = getLatestBattleStoryChapter(activeChapters);
     const targetChapter = targetChapterId
       ? activeChapters.find((chapter) => chapter.id === targetChapterId) ?? null
@@ -1659,6 +1789,7 @@ export function useBattleStorySession() {
     }
 
     chapterOperationBusyRef.current = true;
+    let committedSessionId: string | null = null;
     try {
       const nextSource = buildProviderSource(sessionRecord.source, customProviderPayload);
       const anchoredChapters = activeChapters.filter((chapter) => chapter.index <= targetChapter.index);
@@ -1698,6 +1829,7 @@ export function useBattleStorySession() {
         generationId: generated.generationId ?? undefined,
       });
 
+      markLegacyCompletedSave('saving');
       await markBattleStoryChapterSuperseded({
         chapterId: targetChapter.id,
         supersededByChapterId: rewrittenChapter.id,
@@ -1740,18 +1872,27 @@ export function useBattleStorySession() {
       ]);
 
       delete summaryRetryAtRef.current[sessionRecord.id];
+      committedSessionId = sessionRecord.id;
+      clearPendingRoleOutcome();
       await refreshSessionList();
-      await loadSession(sessionRecord.id);
+      if (generated.selectionEpoch === viewEpochRef.current) await loadSession(sessionRecord.id);
+      else setUnreadSavedSessionId(sessionRecord.id);
       if (generated.warning) {
         setNotice(generated.warning);
       }
       void refreshSummaryIfNeeded(nextSession, nextChapters);
     } catch (error) {
+      if (committedSessionId) {
+        setUnreadSavedSessionId(committedSessionId);
+        setActionError('本章已保存，但暂时无法读取。请点击重新读取，无需重新生成。');
+        return;
+      }
+      markLegacyCompletedSave('unknown');
       setActionError(normalizeErrorMessage(error, '重写章节失败。'));
     } finally {
       chapterOperationBusyRef.current = false;
     }
-  }, [customProviderPayload, loadSession, refreshSessionList, refreshSummaryIfNeeded, runGeneration]);
+  }, [clearPendingRoleOutcome, markLegacyCompletedSave, customProviderPayload, loadSession, refreshSessionList, refreshSummaryIfNeeded, runGeneration]);
 
   const handleRewriteLastChapter = useCallback(async () => {
     const latestChapter = getLatestBattleStoryChapter(getActiveBattleStoryChapters(chaptersRef.current));
@@ -1763,7 +1904,7 @@ export function useBattleStorySession() {
   }, [handleRewriteChapter, selectedChapterId]);
 
   const handleDeleteSelectedChapter = useCallback(async () => {
-    if (chapterOperationBusyRef.current || pendingCompletedChapterRef.current) return;
+    if (chapterOperationBusyRef.current || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
     const reloadSelection = sessionReaderRef.current?.captureSelection();
     const sessionRecord = activeSessionRef.current;
     const activeChapters = getActiveBattleStoryChapters(chaptersRef.current);
@@ -1879,6 +2020,8 @@ export function useBattleStorySession() {
 
   const handleSelectSession = useCallback(
     async (sessionId: string) => {
+      viewEpochRef.current += 1;
+      setPendingStartSession(null);
       setActionError(null);
       setNotice(null);
       await loadSession(sessionId, (error) => {
@@ -1890,7 +2033,7 @@ export function useBattleStorySession() {
 
   const handleDeleteSession = useCallback(
     async (sessionId?: string) => {
-      if (chapterOperationBusyRef.current || pendingCompletedChapterRef.current) return;
+      if (chapterOperationBusyRef.current || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
       const reloadSelection = sessionReaderRef.current?.captureSelection();
       const targetId =
         typeof sessionId === 'string' && sessionId.trim()
@@ -1956,6 +2099,16 @@ export function useBattleStorySession() {
 
   return {
     isReady,
+    pendingRoleOutcome: pendingRoleOutcome ? {
+      output: pendingRoleOutcome.output, role: pendingRoleOutcome.role, source: pendingRoleOutcome.source,
+      action: pendingRoleOutcome.action, roleBusy: pendingRoleOutcome.roleBusy, legacySaveState: pendingRoleOutcome.legacySaveState,
+      canResolveRoles: canResolveBattleStoryRoles({ ...pendingRoleOutcome, commitFrozen: Boolean(pendingCompletedChapter) }),
+      canDiscard: (!pendingRoleOutcome.roleBusy || !pendingRoleOutcome.contextCurrent) && (pendingRoleOutcome.role.status === 'unresolved' || !chapterOperationBusyRef.current),
+    } : null,
+    handleRetryStoryRoles,
+    handleKeepOriginalStoryRoles,
+    handleExportCompletedOutput,
+    handleDiscardCompletedOutput,
     pendingCompletedChapter: pendingCompletedChapter?.commit.chapter ?? null,
     isSavingChapter,
     hasUnreadSavedChapter: Boolean(unreadSavedSessionId),
@@ -1976,7 +2129,7 @@ export function useBattleStorySession() {
     selectedChapter: displaySelectedChapter,
     selectedChapterIsLatest,
     selectedChapterId,
-    setSelectedChapterId,
+    setSelectedChapterId: (id: string | null) => { viewEpochRef.current += 1; sessionReaderRef.current?.invalidate(); setSelectedChapterId(id); },
     isGenerating,
     generatingAction,
     streamingMarkdown,
