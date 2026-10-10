@@ -52,6 +52,11 @@ export const normalizeArenaHostedBridgeFailure = (cause: unknown): ArenaHostedBr
   const parsed = DesktopArenaHostedErrorSchema.safeParse(cause);
   return parsed.success ? new ArenaHostedBridgeError(parsed.data.code, parsed.data.dispatchState, parsed.data.intentOwnership) : new ArenaHostedBridgeError('transport');
 };
+// The Native completion fence captures this check from the exact invocation arguments. Response
+// consumption can end at C0's done event, so reader completion cannot stand in for IPC framing.
+const streamCompletionChecks = new WeakMap<object, () => ArenaHostedBridgeError | null>();
+export const getArenaHostedStreamCompletionCheck = (args: unknown): (() => ArenaHostedBridgeError | null) | undefined =>
+  args !== null && typeof args === 'object' ? streamCompletionChecks.get(args) : undefined;
 const abortError = () => new DOMException('已停止本机订阅；服务器终态仍需确认。', 'AbortError');
 
 /** Detach is local only. It never substitutes for the server stop operation. */
@@ -95,6 +100,8 @@ export const openArenaHostedStream = (
   const encoder = new TextEncoder();
   let nextSequence = 0, fragmentBytes = 0, fragment = '';
   let responded = false, acceptsSse = false, ended = false, detached = false;
+  let nativeSettled = false, channelEnded = false, completedTerminal = false;
+  let completionError: ArenaHostedBridgeError | null = null;
   let streamController: ReadableStreamDefaultController<Uint8Array>;
   let resolveResponse!: (response: Response) => void, rejectResponse!: (error: unknown) => void;
   const result = new Promise<Response>((resolve, reject) => { resolveResponse = resolve; rejectResponse = reject; });
@@ -103,6 +110,7 @@ export const openArenaHostedStream = (
     void detachArenaHosted(invoke, { product: request.product, requestId: request.requestId }).catch(() => undefined);
   };
   const finish = (error?: unknown) => {
+    if (error) completionError ??= error instanceof ArenaHostedBridgeError ? error : new ArenaHostedBridgeError('transport');
     if (ended) return;
     ended = true; fragment = ''; fragmentBytes = 0;
     options.signal?.removeEventListener('abort', onAbort);
@@ -115,8 +123,12 @@ export const openArenaHostedStream = (
     cancel() { detach(); finish(); },
   });
   const channel = options.createChannel?.() ?? new Channel<unknown>();
+  const invocationArgs = { request, onEvent: channel };
+  streamCompletionChecks.set(invocationArgs, () => completionError ?? (nativeSettled && responded && channelEnded && (!acceptsSse || completedTerminal)
+    ? null : new ArenaHostedBridgeError('protocol')));
   channel.onmessage = (raw) => {
-    if (ended) return;
+    if (nativeSettled || completionError) return;
+    if (channelEnded) { detach(); finish(new ArenaHostedBridgeError('protocol')); return; }
     const parsed = DesktopArenaHostedChannelEventSchema.safeParse(raw);
     if (!parsed.success || parsed.data.requestId !== request.requestId || parsed.data.sequence !== nextSequence) {
       detach(); finish(new ArenaHostedBridgeError('protocol')); return;
@@ -140,25 +152,29 @@ export const openArenaHostedStream = (
         acceptsSse = success && responseBody !== null;
         responded = true; resolveResponse(response);
       } else if (event.kind === 'sse-fragment') {
-        if (!responded || !acceptsSse) throw new ArenaHostedBridgeError('protocol');
+        if (!responded || !acceptsSse || completedTerminal) throw new ArenaHostedBridgeError('protocol');
         fragmentBytes += encoder.encode(event.text).byteLength;
         if (fragmentBytes > DESKTOP_ARENA_HOSTED_LIMITS.eventWireBytes) throw new ArenaHostedBridgeError('protocol');
         fragment += event.text;
         if (event.final) {
-          if (!parseDesktopArenaHostedSseBlock(fragment)) throw new ArenaHostedBridgeError('protocol');
-          streamController.enqueue(encoder.encode(fragment)); fragment = ''; fragmentBytes = 0;
+          const parsed = parseDesktopArenaHostedSseBlock(fragment);
+          if (parsed.event === 'done' && parsed.data.status === 'completed' && parsed.data.ok) completedTerminal = true;
+          // A cancelled reader stops local delivery only. Validate all remaining Channel frames
+          // until the original invoke settles, including the explicit stream-end and its sequence.
+          if (!ended) streamController.enqueue(encoder.encode(fragment)); fragment = ''; fragmentBytes = 0;
         }
       } else {
         if (!responded || fragment) throw new ArenaHostedBridgeError('protocol');
+        channelEnded = true;
         finish();
       }
     } catch { detach(); finish(new ArenaHostedBridgeError('protocol')); }
   };
   options.signal?.addEventListener('abort', onAbort, { once: true });
   if (options.signal?.aborted) { onAbort(); return result; }
-  void invoke(ARENA_HOSTED_STREAM_COMMAND, { request, onEvent: channel }).then(
-    () => { if (!ended) finish(new ArenaHostedBridgeError('protocol')); },
-    (cause: unknown) => { if (!ended) finish(normalizeArenaHostedBridgeFailure(cause)); },
+  void invoke(ARENA_HOSTED_STREAM_COMMAND, invocationArgs).then(
+    () => { nativeSettled = true; if (!channelEnded) finish(new ArenaHostedBridgeError('protocol')); },
+    (cause: unknown) => { nativeSettled = true; finish(normalizeArenaHostedBridgeFailure(cause)); },
   );
   return result;
 };

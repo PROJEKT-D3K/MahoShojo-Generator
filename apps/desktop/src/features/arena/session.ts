@@ -1,3 +1,4 @@
+import { createArenaHostedNativeSettle } from '../../platform/arena-hosted-settle';
 import { applyArenaReconciliationUpdates, buildArenaReconciliationRetryPayload, projectArenaReconciliationCombatants } from '@mahoshojo/domain/arena-reconciliation';
 import { reconcileArenaHosted } from '../../platform/arena-reconciliation-bridge';
 import type { LocalCardProvenance } from '@mahoshojo/local-library/record';
@@ -270,23 +271,8 @@ export class DesktopArenaSession {
       if (!this.current(scope, epoch) || controller.signal.aborted) return;
       this.publish({ ...value, draftSaved: false }); if (!this.draftTimer) this.draftTimer = setTimeout(() => this.retryDraftSave(), 1000);
     };
-    // C0 may finish on its SSE terminal event before Tauri has returned and released its Native
-    // SubscriptionGuard. Fence that original invoke; a second operation must never rely on IPC timing.
-    const nativePending = new Set<Promise<unknown>>();
-    const nativeOptions = { ...options, invoke: (command: string, args?: Record<string, unknown>) => {
-      const pending = Promise.resolve(options.invoke(command, args));
-      if (command === 'arena_hosted_stream') {
-        nativePending.add(pending);
-        void pending.finally(() => nativePending.delete(pending)).catch(() => undefined);
-      }
-      return pending;
-    } };
-    const settleNative = () => new Promise<void>(resolve => {
-      const finish = () => { controller.signal.removeEventListener('abort', finish); resolve(); };
-      controller.signal.addEventListener('abort', finish, { once: true });
-      if (controller.signal.aborted) finish();
-      else void Promise.allSettled([...nativePending]).then(finish);
-    });
+    const native = createArenaHostedNativeSettle(options.invoke);
+    const nativeOptions = { ...options, invoke: native.invoke };
     this.retryDraftSave();
     try {
       const outcome: ArenaHostedOutcome = pointer
@@ -303,10 +289,17 @@ export class DesktopArenaSession {
         && outcome.hosted.serverStatus === 'completed' && outcome.hosted.companion && 'report' in outcome.hosted.companion.body
         && outcome.hosted.companion.body.generationId === outcome.generationId;
       if (!streamCompleted && !jsonCompleted) throw new Error('服务器终态不合法。');
+      // Channel delivery is not Native completion, including SSE recovery of an original JSON
+      // task. Do not expose history/save/role authority until the final invoke has succeeded.
+      const settled = await native.settle(controller.signal);
+      if (!this.current(scope, epoch)) return;
+      if (settled.status === 'aborted' || controller.signal.aborted) {
+        this.publish({ phase: 'cancelled', message: '本机订阅已停止；服务器停止/完成状态尚需按原请求确认。' }); return;
+      }
+      if (settled.status === 'failed') throw settled.error;
       this.publish({ phase: 'completed', report: outcome.report, renderSnapshot: outcome.renderSnapshot ?? null,
         message: outcome.hosted.validationMessage ?? '服务器生成完成。本地保存需单独操作。' });
       if (frozen?.settings.writeNarrativeHistory && outcome.canAppendHistory) this.appendHostedHistory();
-      await settleNative();
       if (!this.current(scope, epoch) || controller.signal.aborted) return;
       const completedPointer = this.hostedRecovery.getSnapshot().pointer;
       if (completedPointer?.requestId === requestId && outcome.generationId && completedPointer.version === 3

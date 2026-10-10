@@ -27,6 +27,8 @@ export const openArenaHostedJson = (
     signal?: AbortSignal;
     onResponse?: (response: ArenaHostedJsonHandshake) => void;
     onActivity?: () => void;
+    /** A complete checked original for export only; invoke success is still required for authority. */
+    onDelivered?: (reply: ArenaHostedJsonReply) => void;
     createChannel?: () => ArenaHostedChannel;
   } = {},
 ): Promise<ArenaHostedJsonReply> => {
@@ -34,7 +36,7 @@ export const openArenaHostedJson = (
   const abortError = () => new DOMException('已停止本机接收；服务器终态仍需按原请求确认。', 'AbortError');
   if (options.signal?.aborted) return Promise.reject(abortError());
   const encoder = new TextEncoder();
-  let sequence = 0, wireBytes = 0, ended = false, detached = false;
+  let sequence = 0, wireBytes = 0, ended = false, detached = false, delivered = false;
   let fragments: string[] = [];
   let response: ArenaHostedJsonHandshake | undefined;
   let envelope: ArenaCompanionEnvelope | undefined;
@@ -50,7 +52,7 @@ export const openArenaHostedJson = (
     if (ended) return;
     ended = true; fragments = []; wireBytes = 0;
     options.signal?.removeEventListener('abort', onAbort);
-    if (error || !response || !envelope) {
+    if (error || !delivered || !response || !envelope) {
       envelope = undefined;
       reject(error ?? new ArenaHostedBridgeError('protocol'));
     } else {
@@ -62,6 +64,7 @@ export const openArenaHostedJson = (
   const channel = options.createChannel?.() ?? new Channel<unknown>();
   channel.onmessage = (raw) => {
     if (ended) return;
+    if (delivered) { detach(); finish(new ArenaHostedBridgeError('protocol')); return; }
     const parsed = DesktopArenaHostedJsonChannelEventSchema.safeParse(raw);
     if (!parsed.success || parsed.data.requestId !== request.requestId || parsed.data.sequence !== sequence) {
       detach(); finish(new ArenaHostedBridgeError('protocol')); return;
@@ -90,7 +93,8 @@ export const openArenaHostedJson = (
         }
       } else {
         if (!response || !envelope || fragments.length) throw new ArenaHostedBridgeError('protocol');
-        finish();
+        delivered = true;
+        options.onDelivered?.({ response, envelope });
       }
     } catch { detach(); finish(new ArenaHostedBridgeError('protocol')); }
   };
@@ -98,7 +102,7 @@ export const openArenaHostedJson = (
   if (options.signal?.aborted) { onAbort(); return result; }
   try {
     void invoke(ARENA_HOSTED_STREAM_COMMAND, { request, onEvent: channel }).then(
-      () => { if (!ended) finish(new ArenaHostedBridgeError('protocol')); },
+      () => { if (!ended) finish(delivered ? undefined : new ArenaHostedBridgeError('protocol')); },
       (cause: unknown) => { if (!ended) finish(normalizeArenaHostedBridgeFailure(cause)); },
     );
   } catch (cause) { finish(normalizeArenaHostedBridgeFailure(cause)); }

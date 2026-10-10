@@ -3,15 +3,14 @@ import { DesktopArenaHostedJsonCreateRequestSchema } from '@mahoshojo/contracts/
 import { runArenaHostedJson } from './hosted-json';
 import { validateHostedOutput, sameHostedPackageRef as sameRef } from './hosted-output';
 import { DesktopArenaHostedAnyRecoveryPointerSchema as DesktopArenaHostedRecoveryPointerSchema, type DesktopArenaHostedAnyRecoveryPointer as DesktopArenaHostedRecoveryPointer } from '@mahoshojo/contracts/desktop-arena-hosted-json';
-import { createStreamReadWithTimeout, buildStreamSoftTimeoutMessage, DEFAULT_STREAM_READ_IDLE_TIMEOUT_MS, DEFAULT_STREAM_READ_TOTAL_TIMEOUT_MS } from '@mahoshojo/ai-core/stream-timeout';
+import { collectArenaHostedStreamOutput, createArenaHostedStreamOutput } from './hosted-stream-output';
 import {
   buildArenaGenerationInputSnapshot, extractTitleFromBattleMarkdown, StreamUpdateMetaSchema,
   parseArenaStructuredReportJson, type ArenaBattleReport, type ArenaGenerationInputSnapshot,
 } from '@mahoshojo/ai-core/arena-generation';
 import {
-  DESKTOP_ARENA_HOSTED_LIMITS, DESKTOP_ARENA_HOSTED_PROTOCOL_VERSION,
+  DESKTOP_ARENA_HOSTED_PROTOCOL_VERSION,
   DesktopArenaHostedCreateRequestSchema, DesktopArenaHostedHeaderMetaSchema, DesktopArenaHostedSseEventSchema, DesktopArenaHostedTelemetrySchema,
-  parseDesktopArenaHostedSseBlock,
   type DesktopArenaHostedActor,
   type DesktopArenaHostedControlRequest,
   type DesktopArenaHostedSseEvent,
@@ -166,13 +165,13 @@ const runHosted = async (
   let explicitRestoreLookup = !create && !automaticRecovery;
   const nonStream = pointer.version !== 1 && pointer.delivery === 'non-stream';
   const scope = { product: pointer.product, requestId: pointer.requestId, actor: pointer.actor };
-  let markdown = '', reasoning = '', generationId = pointer.generationId ?? null;
-  let usage: AiExecutionUsage | undefined;
+  let generationId = pointer.generationId ?? null;
+  const output = createArenaHostedStreamOutput();
   let details: ArenaHostedDetails = { connectionState: create ? 'connecting' : 'resuming', serverStatus: null, telemetry: null,
     metadataState: 'missing', headerMeta: null, recoveryCredentialState: 'stored', metaEvent: null, terminal: null,
     outputValidation: 'pending', validationMessage: null, restored: !create && !automaticRecovery,
     ...(nonStream ? { delivery: 'non-stream', companionState: 'recovered-model-only', companion: null } as const : {}) };
-  const partial = (): ArenaHostedPartial => ({ rawText: markdown, markdown, reasoning, usage, hosted: { ...details } });
+  const partial = (): ArenaHostedPartial => ({ rawText: output.markdown, markdown: output.markdown, reasoning: output.reasoning, usage: output.usage, hosted: { ...details } });
   const common = (): Common => ({ ...partial(), hosted: { ...details, softTimeoutWarning: null }, requestId: pointer.requestId, scopeKey: context.scopeKey, generationId, mode: 'hosted' });
   const isCurrent = () => context.isCurrent?.() !== false;
   const assertCurrent = () => { if (!isCurrent()) throw new ArenaHostedBridgeError('scope-changed', 'not-dispatched'); };
@@ -203,7 +202,6 @@ const runHosted = async (
     // Force the first explicit restore through a same-actor Native rebind before any resume.
     generationId: null, lastEventId: null, state: 'unknown', updatedAt: pointer.updatedAt, routePin: { placement: 'hono-primary' },
   };
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
     const response = await openArenaGenerationStreamClient({ endpoint, bodyHash: pointer.bodyHash,
       generationRequestId: pointer.requestId, signal, maxReconnectAttempts: context.maxReconnectAttempts,
@@ -248,39 +246,16 @@ const runHosted = async (
           ...(id ? { generationId: id } : {}), reason }, operationSignal),
       },
     });
-    if (!response.ok || !response.body) throw new Error('服务器暂未提供可读取的战报，请稍后按原请求恢复。');
-    const readWithTimeout = createStreamReadWithTimeout({ mode: 'soft', label: '战报流式生成',
-      idleTimeoutMs: DEFAULT_STREAM_READ_IDLE_TIMEOUT_MS, totalTimeoutMs: DEFAULT_STREAM_READ_TOTAL_TIMEOUT_MS,
-      onSoftTimeout: (event) => {
+    await collectArenaHostedStreamOutput(response, { output, signal, userStopReason: ARENA_HOSTED_USER_STOP, assertCurrent,
+      onEvent: (_event, value) => {
+        details = { ...details, serverStatus: value.serverStatus, telemetry: value.telemetry, metaEvent: value.metaEvent, terminal: value.terminal }; publish();
+      },
+      onSoftTimeout: (message) => {
         if (!isCurrent() || signal.aborted) return;
-        details = { ...details, softTimeoutWarning: buildStreamSoftTimeoutMessage(event) }; publish();
-      } });
-    reader = response.body.getReader(); const decoder = new TextDecoder('utf-8', { fatal: true }); let buffer = '';
-    while (true) {
-      const next = await readWithTimeout(reader); assertCurrent(); if (next.done) break;
-      // C0 closes explicit-stop streams only after its bounded server acknowledgement.
-      if (signal.aborted) { if (signal.reason === ARENA_HOSTED_USER_STOP) continue; break; }
-      buffer += decoder.decode(next.value, { stream: true });
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary >= 0) {
-        const block = buffer.slice(0, boundary + 2); buffer = buffer.slice(boundary + 2);
-        const event = parseDesktopArenaHostedSseBlock(block);
-        if (event.event === 'markdown') markdown += event.data.chunk;
-        else if (event.event === 'reasoning') reasoning += event.data.chunk;
-        else if (event.event === 'snapshot') { markdown = event.data.markdown; reasoning = event.data.reasoning; details = { ...details, serverStatus: event.data.status }; }
-        else if (event.event === 'meta' || event.event === 'meta_error') details = { ...details, metaEvent: event };
-        else if (event.event === 'done' || event.event === 'error') details = { ...details, terminal: event, serverStatus: event.data.status };
-        const telemetry = event.event === 'telemetry' ? event.data : event.event === 'snapshot' ? event.data.telemetry : null;
-        if (event.event === 'telemetry' || event.event === 'snapshot') {
-          details = { ...details, telemetry: telemetry ?? null };
-          usage = telemetry && 'usage' in telemetry && telemetry.usage
-            ? Object.fromEntries(Object.entries(telemetry.usage).filter(([, value]) => typeof value === 'number')) : undefined;
-        }
-        if (encoder.encode(markdown).byteLength + encoder.encode(reasoning).byteLength > DESKTOP_ARENA_HOSTED_LIMITS.outputContentBytes) throw new Error('战报正文超过 4 MiB 原输出预算。');
-        publish(); boundary = buffer.indexOf('\n\n');
-      }
-      if (encoder.encode(buffer).byteLength > DESKTOP_ARENA_HOSTED_LIMITS.eventWireBytes) throw new Error('生成事件超过协议预算。');
-    }
+        details = { ...details, softTimeoutWarning: message }; publish();
+      },
+    });
+    const { markdown } = output;
     if (signal.aborted) return { ...common(), status: 'cancelled', message: signal.reason === ARENA_HOSTED_USER_STOP
       ? details.connectionState === 'cancelled' ? '服务器已受理停止请求，最终状态仍以恢复查询为准。' : '停止尚未确认，服务器仍可能运行；可按原请求恢复。'
       : '已停止本机订阅，服务器仍可能运行；可按原请求恢复。' };
@@ -314,5 +289,5 @@ const runHosted = async (
   } catch (cause) {
     if (signal.aborted) return { ...common(), status: 'cancelled', message: '本机订阅已停止；服务器停止/完成状态尚需按原请求确认。' };
     return { ...common(), status: 'failed', message: cause instanceof ArenaHostedBridgeError ? cause.message : '连接或战报校验未完成，收到的原文仍可导出或按原请求恢复。' };
-  } finally { if (reader) { await reader.cancel().catch(() => undefined); reader.releaseLock(); } }
+  }
 };

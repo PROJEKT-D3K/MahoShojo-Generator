@@ -72,6 +72,17 @@ export const runArenaHostedJson = async (
       onSoftTimeout: event => { if (!current() || signal.aborted) return; details = { ...details, softTimeoutWarning: buildStreamSoftTimeoutMessage(event) }; publish(); } });
     const pending = openArenaHostedJson(invoke, create, { signal, createChannel: context.createChannel,
       onActivity: () => { lastActivity = Date.now(); },
+      onDelivered: reply => {
+        assertCurrent(); signal.throwIfAborted(); checkedReply = true;
+        // A fully checked original remains exportable if the Native invoke later rejects, but
+        // cannot grant report/history/role authority or trigger an automatic recovery attempt.
+        details = { ...details, companion: reply.envelope, companionState: 'unavailable' };
+        const report = projectArenaCompanionReportForView(reply.envelope);
+        if (report && 'report' in reply.envelope.body) {
+          markdown = report.article.body; reasoning = reply.envelope.body.report.aiReasoning?.text ?? '';
+        }
+        publish();
+      },
       onResponse: response => {
         assertCurrent(); signal.throwIfAborted();
         generationId = response.generationId ?? null;

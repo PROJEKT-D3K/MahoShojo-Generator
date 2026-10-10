@@ -8,6 +8,11 @@ import {
 } from '../src/platform/arena-hosted-bridge';
 import { openArenaHostedJson } from '../src/platform/arena-hosted-json-bridge';
 
+vi.mock('@mahoshojo/contracts/arena-companion', async importOriginal => {
+  const actual = await importOriginal<typeof import('@mahoshojo/contracts/arena-companion')>();
+  return { ...actual, ARENA_COMPANION_JSON_LIMITS: { ...actual.ARENA_COMPANION_JSON_LIMITS, wireBytes: 2048 } };
+});
+
 const fixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-arena-hosted.json', import.meta.url), 'utf8'));
 const request = DesktopArenaHostedJsonCreateRequestSchema.parse({ ...fixture.validOperations[0], operation: 'create-json' });
 const generationId = `arena_${'a'.repeat(64)}`;
@@ -25,10 +30,10 @@ function harness() {
   let resolve!: () => void, reject!: (value: unknown) => void;
   const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
   const invoke = vi.fn(async (command: string) => command === ARENA_HOSTED_STREAM_COMMAND ? pending : undefined);
-  const onResponse = vi.fn();
-  const start = (signal?: AbortSignal) => openArenaHostedJson(invoke, request, { signal, onResponse, createChannel: () => channel });
+  const onResponse = vi.fn(), onDelivered = vi.fn();
+  const start = (signal?: AbortSignal) => openArenaHostedJson(invoke, request, { signal, onResponse, onDelivered, createChannel: () => channel });
   const send = (sequence: number, value: Record<string, unknown>) => channel.onmessage({ requestId: request.requestId, sequence, ...value });
-  return { invoke, start, send, resolve, reject, channel, onResponse };
+  return { invoke, start, send, resolve, reject, channel, onResponse, onDelivered };
 }
 
 describe('complete Arena companion Native bridge', () => {
@@ -40,7 +45,9 @@ describe('complete Arena companion Native bridge', () => {
     await Promise.resolve(); expect(observed).not.toHaveBeenCalled(); expect(h.onResponse).toHaveBeenCalledOnce();
     h.send(2, { kind: 'json-fragment', text: raw.slice(43), final: true });
     await Promise.resolve(); expect(observed).not.toHaveBeenCalled();
-    h.send(3, { kind: 'json-end' }); h.resolve();
+    h.send(3, { kind: 'json-end' });
+    await Promise.resolve(); expect(observed).not.toHaveBeenCalled();
+    expect(h.onDelivered).toHaveBeenCalledWith({ response, envelope: source }); h.resolve();
     const value = await promise; expect(value.envelope).toEqual(source);
     expect(Object.keys(value)).toEqual(['response', 'envelope']);
     expect(h.invoke.mock.calls.map(([command]) => command)).toEqual([ARENA_HOSTED_STREAM_COMMAND]);
@@ -110,5 +117,40 @@ describe('complete Arena companion Native bridge', () => {
       expect(error.intentOwnership).toBe(cause instanceof Error ? 'unknown' : 'prior-retained');
       expect(error.dispatchState).toBe(cause instanceof Error ? 'unknown' : 'not-dispatched');
     }
+  });
+  it('rejects a late Native failure after complete JSON without losing the original-only delivery', async () => {
+    const h = harness(), observed = vi.fn(), promise = h.start(); void promise.then(observed, () => undefined);
+    h.channel.onmessage(response); h.send(1, { kind: 'json-fragment', text: JSON.stringify(envelope()), final: true });
+    h.send(2, { kind: 'json-end' }); await Promise.resolve(); expect(observed).not.toHaveBeenCalled();
+    const rejected = expect(promise).rejects.toMatchObject({ code: 'transport' }); h.reject(new Error('secret-canary')); await rejected;
+    expect(h.onDelivered).toHaveBeenCalledOnce(); expect(h.onDelivered.mock.calls[0]![0].envelope).toEqual(envelope());
+    expect(h.invoke.mock.calls.map(([command]) => command)).toEqual([ARENA_HOSTED_STREAM_COMMAND]);
+  });
+  it.each(['resolve', 'reject'] as const)('never accepts a missing end or late callbacks after early invoke %s', async settlement => {
+    const h = harness(), promise = h.start(), rejected = expect(promise).rejects.toMatchObject({ code: settlement === 'resolve' ? 'protocol' : 'transport' });
+    h.channel.onmessage(response); h.send(1, { kind: 'json-fragment', text: JSON.stringify(envelope()), final: true });
+    if (settlement === 'resolve') h.resolve(); else h.reject(new Error('early failure'));
+    await rejected; h.send(2, { kind: 'json-end' });
+    expect(h.onDelivered).not.toHaveBeenCalled(); expect(h.invoke).toHaveBeenCalledOnce();
+  });
+  it('rejects a duplicate end while Native is still pending', async () => {
+    const h = harness(), promise = h.start(), rejected = expect(promise).rejects.toMatchObject({ code: 'protocol' });
+    h.channel.onmessage(response); h.send(1, { kind: 'json-fragment', text: JSON.stringify(envelope()), final: true });
+    h.send(2, { kind: 'json-end' }); h.send(3, { kind: 'json-end' }); await rejected; h.resolve();
+    expect(h.onDelivered).toHaveBeenCalledOnce();
+  });
+  it('keeps a complete original but refuses success on abort before Native settles', async () => {
+    const h = harness(), controller = new AbortController(), promise = h.start(controller.signal);
+    const rejected = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    h.channel.onmessage(response); h.send(1, { kind: 'json-fragment', text: JSON.stringify(envelope()), final: true });
+    h.send(2, { kind: 'json-end' }); controller.abort(); await rejected; h.resolve();
+    expect(h.onDelivered.mock.calls[0]![0].envelope).toEqual(envelope());
+    expect(h.invoke.mock.calls.map(([command]) => command)).toEqual([ARENA_HOSTED_STREAM_COMMAND, ARENA_HOSTED_DETACH_COMMAND]);
+  });
+  it('retains the cumulative UTF-8 envelope wire budget without a large fixture', async () => {
+    const h = harness(), promise = h.start(), rejected = expect(promise).rejects.toMatchObject({ code: 'protocol' });
+    h.channel.onmessage(response); h.send(1, { kind: 'json-fragment', text: '字'.repeat(400), final: false });
+    h.send(2, { kind: 'json-fragment', text: '字'.repeat(400), final: false }); await rejected; h.resolve();
+    expect(h.onDelivered).not.toHaveBeenCalled();
   });
 });

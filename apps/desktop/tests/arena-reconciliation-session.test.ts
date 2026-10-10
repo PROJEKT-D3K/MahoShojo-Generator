@@ -7,22 +7,24 @@ import { ARENA_HOSTED_RECOVERY_KEYS } from '../src/features/arena/hosted-recover
 const generationId = `arena_${'e'.repeat(64)}`, requestId = 'role-request-123', now = '2026-10-10T10:00:00.000Z';
 const card = { name: '甲', content: 'original', signature: 'original-signature' };
 const report = { headline: '报告', reporterInfo: { name: '记者', publication: '刊物' }, mode: 'daily', article: { body: '报告原文', analysis: '分析' }, officialReport: { winner: '甲', conclusion: '结论' } };
+const companion = { version: 'arena-companion-v1', body: { report, updatedCombatants: [], generationId }, metadata: { reportFormat: 'markdown', outputContract: 'structured-report', mode: 'daily' } };
 const initial = createInitialArenaDraft();
-function fixture(product: 'battle' | 'arena' = 'battle', delivery: 'stream' | 'non-stream' = 'stream', values = new Map<string, string>()) {
-  let held = false, holdNative = false, holdRoleNative = false, generationActive = false, releaseNative: (() => void) | undefined, releaseRoleNative: (() => void) | undefined, release: (() => void) | undefined, failure: string | undefined, terminalFailure = false, invalid = false, saveFailure = false;
+function fixture(product: 'battle' | 'arena' = 'battle', delivery: 'stream' | 'non-stream' = 'stream', values = new Map<string, string>(), recoverFirstCreate = false) {
+  let held = false, holdNative = false, holdRoleNative = false, generationActive = false, releaseNative: (() => void) | undefined, releaseRoleNative: (() => void) | undefined, release: (() => void) | undefined, failure: string | undefined, terminalFailure = false, generationFailure = false, streamFault: 'missing-end' | 'wrong-sequence' | 'malformed' | 'duplicate-end' | null = null, invalid = false, saveFailure = false;
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, raw: string) => { values.set(key, raw); }, removeItem: (key: string) => { values.delete(key); } };
   const records = new Map<string, LocalCardRecordV1>();
   const repository = { get: async (id: string) => records.get(id) ?? null, putIfAbsent: vi.fn(async (value: LocalCardRecordV1) => {
     if (saveFailure) throw new Error('disk-full'); if (records.has(value.id)) return { alreadyPresent: true }; records.set(value.id, value); return { written: true };
   }) } as unknown as CardRepository;
   const session = new DesktopArenaSession({ product, storage, repository, requestId: () => requestId, now: () => now,
-    hostedTestPorts: { createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: 0 } }); session.setScope('account-A:epoch-1');
+    hostedTestPorts: { createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: recoverFirstCreate ? 2 : 0 } }); session.setScope('account-A:epoch-1');
   const draft: ArenaDraft = { ...initial, generationMode: delivery, battleMode: 'daily', combatants: [{ type: 'general-character', isValid: true, isPreset: false, filename: '甲.json', data: structuredClone(card) }] };
   const requests: Record<string, any>[] = []; let writes = { writeArenaHistory: false, writeCurrentState: false };
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') { release?.(); return; }
     const request = args!.request as Record<string, any>; requests.push(request);
     if (request.operation === 'lookup-request') return { status: 200, recoveryCredentialState: 'stored', body: { generationId, generationRequestId: requestId, status: 'completed' } };
+    if (recoverFirstCreate && request.operation === 'create-stream') throw new Error('synthetic lost create response');
     const channel = args!.onEvent as { onmessage(value: unknown): void }; let sequence = 0;
     const send = (value: Record<string, unknown>) => channel.onmessage({ requestId, sequence: sequence++, ...value });
     const json = (value: unknown, status = 200) => {
@@ -44,16 +46,20 @@ function fixture(product: 'battle' | 'arena' = 'battle', delivery: 'stream' | 'n
     }
     if (request.operation === 'create-stream' || request.operation === 'create-json') writes = { writeArenaHistory: request.body.writeArenaHistory, writeCurrentState: request.body.writeCurrentState };
     generationActive = true;
-    if (request.operation === 'create-json') { json({ version: 'arena-companion-v1', body: { report, updatedCombatants: [], generationId }, metadata: { reportFormat: 'markdown', outputContract: 'structured-report', mode: 'daily' } }); if (holdNative) await new Promise<void>(done => { releaseNative = done; }); generationActive = false; return; }
+    if (request.operation === 'create-json') { json(companion); if (holdNative) await new Promise<void>(done => { releaseNative = done; }); generationActive = false; if (generationFailure) throw new Error('late Native failure'); return; }
     send({ kind: 'response', status: 200, generationId, generationRequestId: requestId, metadataState: 'missing', recoveryCredentialState: 'stored' });
     const markdown = delivery === 'stream' ? '报告原文' : JSON.stringify(report);
     send({ kind: 'sse-fragment', final: true, text: `id: 1-0\nevent: markdown\ndata: ${JSON.stringify({ chunk: markdown })}\n\n` });
-    send({ kind: 'sse-fragment', final: true, text: 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); send({ kind: 'stream-end' }); if (holdNative) await new Promise<void>(done => { releaseNative = done; }); generationActive = false;
+    send({ kind: 'sse-fragment', final: true, text: 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); if (!streamFault || streamFault === 'duplicate-end') send({ kind: 'stream-end' }); if (holdNative) await new Promise<void>(done => { releaseNative = done; }); generationActive = false;
+    if (streamFault === 'wrong-sequence') send({ kind: 'stream-end', sequence: 90 });
+    else if (streamFault === 'malformed') send({ kind: 'invalid-ipc' });
+    else if (streamFault === 'duplicate-end') send({ kind: 'stream-end' });
+    if (generationFailure) throw new Error('late Native failure');
   });
   const run = async (input = draft, account = false, preset = false) => { session.updateDraft(input); await session.generateHosted({ invoke }, input,
     { mode: 'hosted', generationMode: delivery, modelId: 'default', ...(preset ? { presetConfig: { providerId: 'openai', modelId: 'gpt-4o' } } : { systemConfig: {} }) },
     account ? { kind: 'account', expectedUserId: 123 } : { kind: 'anonymous' }); };
-  return { session, draft, invoke, run, requests, values, records, holdNative: () => { holdNative = true; }, releaseNative: () => releaseNative?.(), holdRoleNative: () => { holdRoleNative = true; }, releaseRoleNative: () => releaseRoleNative?.(), hold: () => { held = true; }, release: () => release?.(), fail: (code?: string) => { failure = code; }, invalid: () => { invalid = true; }, failAfterRoleEnd: () => { terminalFailure = true; }, failSave: (value: boolean) => { saveFailure = value; } };
+  return { session, draft, invoke, run, requests, values, records, holdNative: () => { holdNative = true; }, releaseNative: () => releaseNative?.(), holdRoleNative: () => { holdRoleNative = true; }, releaseRoleNative: () => releaseRoleNative?.(), hold: () => { held = true; }, release: () => release?.(), fail: (code?: string) => { failure = code; }, invalid: () => { invalid = true; }, failAfterRoleEnd: () => { terminalFailure = true; }, failAfterGenerationEnd: () => { generationFailure = true; }, breakStream: (fault: NonNullable<typeof streamFault>) => { streamFault = fault; }, failSave: (value: boolean) => { saveFailure = value; } };
 }
 const matrix = (['battle', 'arena'] as const).flatMap(product => (['stream', 'non-stream'] as const).flatMap(delivery => [false, true].flatMap(account => [false, true].flatMap(preset => [false, true].flatMap(history => [false, true].map(state => ({ product, delivery, account, preset, history, state })))))));
 describe('new Hosted roles freeze original policy and preserve independent report completion', () => {
@@ -88,7 +94,8 @@ describe('new Hosted roles freeze original policy and preserve independent repor
   });
   it.each(['stream', 'non-stream'] as const)('waits for actual %s Native invocation settlement after terminal IPC before automatic reconciliation', async delivery => {
     const f = fixture('battle', delivery); f.holdNative(); const running = f.run();
-    await vi.waitFor(() => expect(f.session.getSnapshot().phase).toBe('completed'));
+    await vi.waitFor(() => expect(f.session.getSnapshot().rawText).toBe('报告原文'));
+    expect(f.session.getSnapshot().phase).toBe('generating');
     expect(f.session.isBusy()).toBe(true); expect(f.requests.filter(request => request.operation === 'reconcile')).toHaveLength(0);
     await f.session.retryHostedRoleUpdates({ invoke: f.invoke }); expect(f.requests).toHaveLength(1);
     f.releaseNative(); await running; expect(f.session.getSnapshot().roleUpdates.status).toBe('completed'); expect(f.requests).toHaveLength(2); f.session.dispose();
@@ -105,9 +112,75 @@ describe('new Hosted roles freeze original policy and preserve independent repor
     expect(f.session.getSnapshot().draft.combatants[0]!.data).toEqual(card); expect(await f.session.save('characters')).toBe(false);
     expect(f.requests.filter(request => request.operation.startsWith('create'))).toHaveLength(1); f.session.dispose();
   });
-  it('cancel while waiting for the previous Native guard preserves the completed report and never launches reconciliation', async () => {
-    const f = fixture(); f.holdNative(); const running = f.run(); await vi.waitFor(() => expect(f.session.getSnapshot().phase).toBe('completed'));
-    f.session.cancel(); await running; expect(f.session.getSnapshot().phase).toBe('completed'); expect(f.requests).toHaveLength(1); f.releaseNative(); f.session.dispose();
+  it('cancel while waiting for the final Native SSE guard preserves originals without granting completion', async () => {
+    const f = fixture(); f.holdNative(); const running = f.run(); await vi.waitFor(() => expect(f.session.getSnapshot().rawText).toBe('报告原文'));
+    expect(f.session.getSnapshot().phase).toBe('generating'); f.session.cancel(); await running;
+    expect(f.session.getSnapshot()).toMatchObject({ phase: 'cancelled', rawText: '报告原文', report: null });
+    expect(f.requests).toHaveLength(1); f.releaseNative(); f.session.dispose();
+  });
+  it.each((['stream', 'non-stream'] as const).flatMap(delivery => (['resolve', 'reject'] as const).map(settlement => ({ delivery, settlement }))))('does not grant fresh success before the original $delivery Native invoke $settlement', async ({ delivery, settlement }) => {
+    const f = fixture('battle', delivery); f.holdNative(); if (settlement === 'reject') f.failAfterGenerationEnd();
+    const input = { ...f.draft, settings: { ...f.draft.settings, writeNarrativeHistory: true } }, running = f.run(input, true);
+    await vi.waitFor(() => expect(f.session.getSnapshot().rawText).toBe('报告原文'));
+    expect(f.session.getSnapshot()).toMatchObject({ phase: 'generating', rawText: '报告原文', report: null });
+    expect(f.session.canAppendHostedHistory()).toBe(false); expect(f.session.canRetryHostedRoleUpdates()).toBe(false);
+    f.session.appendHostedHistory(); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(0);
+    expect(await f.session.save('characters')).toBe(false); expect(await f.session.save('history')).toBe(false);
+    expect(f.requests.filter(request => request.operation === 'reconcile')).toHaveLength(0);
+    f.releaseNative(); await running;
+    if (settlement === 'resolve') {
+      expect(f.session.getSnapshot().phase).toBe('completed'); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1);
+      expect(f.requests.filter(request => request.operation === 'reconcile')).toHaveLength(1);
+    } else {
+      expect(f.session.getSnapshot()).toMatchObject({ phase: 'failed', rawText: '报告原文', report: null });
+      expect(JSON.parse(f.session.exportDocument()).result.rawText).toBe('报告原文');
+      expect(f.session.canAppendHostedHistory()).toBe(false); expect(f.session.canRetryHostedRoleUpdates()).toBe(false);
+      expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(0);
+      expect(await f.session.save('characters')).toBe(false); expect(await f.session.save('history')).toBe(false);
+      expect(f.requests).toHaveLength(1); expect(f.records.size).toBe(0);
+      if (delivery === 'non-stream') {
+        expect(f.session.getSnapshot().hosted?.companion).toEqual(companion);
+        expect(JSON.parse(f.session.exportDocument()).result.hosted.companion).toEqual(companion);
+      }
+    }
+    f.session.dispose();
+  });
+  it.each((['stream', 'non-stream'] as const).flatMap(delivery => (['resolve', 'reject'] as const).map(settlement => ({ delivery, settlement }))))('drops the original actor $delivery Native $settlement after an account switch', async ({ delivery, settlement }) => {
+    const f = fixture('battle', delivery); f.holdNative(); if (settlement === 'reject') f.failAfterGenerationEnd();
+    const input = { ...f.draft, settings: { ...f.draft.settings, writeNarrativeHistory: true } }, running = f.run(input, true);
+    await vi.waitFor(() => expect(f.session.getSnapshot().rawText).toBe('报告原文'));
+    f.session.setScope('account-B:epoch-2'); await running; f.releaseNative(); await Promise.resolve();
+    expect(f.session.getSnapshot()).toMatchObject({ phase: 'cancelled', rawText: '报告原文', report: null });
+    expect(JSON.parse(f.session.exportDocument()).result.rawText).toBe('报告原文');
+    if (delivery === 'non-stream') expect(JSON.parse(f.session.exportDocument()).result.hosted.companion).toEqual(companion);
+    expect(f.session.canAppendHostedHistory()).toBe(false); expect(f.session.canRetryHostedRoleUpdates()).toBe(false);
+    expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(0); expect(f.records.size).toBe(0);
+    expect(f.requests.filter(request => request.operation === 'reconcile')).toHaveLength(0); f.session.dispose();
+  });
+  it.each(['resolve', 'reject'] as const)('uses the final resumed Native %s after a failed create and real C0 lookup/resume', async settlement => {
+    const f = fixture('battle', 'stream', new Map(), true); f.holdNative(); if (settlement === 'reject') f.failAfterGenerationEnd();
+    const input = { ...f.draft, settings: { ...f.draft.settings, writeNarrativeHistory: true } }, running = f.run(input, true);
+    await vi.waitFor(() => expect(f.session.getSnapshot().rawText).toBe('报告原文'));
+    expect(f.requests.map(request => request.operation)).toEqual(['create-stream', 'lookup-request', 'resume']);
+    expect(f.session.getSnapshot().phase).toBe('generating'); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(0);
+    f.releaseNative(); await running;
+    expect(f.session.getSnapshot().phase).toBe(settlement === 'resolve' ? 'completed' : 'failed');
+    expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(settlement === 'resolve' ? 1 : 0);
+    expect(f.requests.filter(request => request.operation === 'reconcile')).toHaveLength(settlement === 'resolve' ? 1 : 0);
+    expect(f.session.getSnapshot().rawText).toBe('报告原文');
+    expect(f.requests.filter(request => request.operation === 'create-stream')).toHaveLength(1); f.session.dispose();
+  });
+  it.each(['missing-end', 'wrong-sequence', 'malformed', 'duplicate-end'] as const)('refuses %s after C0 consumed done even when Native resolves successfully', async fault => {
+    const f = fixture(); f.holdNative(); f.breakStream(fault);
+    const input = { ...f.draft, settings: { ...f.draft.settings, writeNarrativeHistory: true } }, running = f.run(input, true);
+    await vi.waitFor(() => expect(f.session.getSnapshot().hosted?.outputValidation).toBe('valid'));
+    expect(f.session.getSnapshot().phase).toBe('generating'); f.releaseNative(); await running;
+    expect(f.session.getSnapshot()).toMatchObject({ phase: 'failed', rawText: '报告原文', report: null });
+    expect(JSON.parse(f.session.exportDocument()).result.rawText).toBe('报告原文');
+    expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(0);
+    expect(f.session.canAppendHostedHistory()).toBe(false); expect(f.session.canRetryHostedRoleUpdates()).toBe(false);
+    expect(await f.session.save('characters')).toBe(false); expect(await f.session.save('history')).toBe(false);
+    expect(f.requests.map(request => request.operation)).toEqual(['create-stream']); expect(f.records.size).toBe(0); f.session.dispose();
   });
   it('discards a role reply after roster reorder/edit instead of applying by a changed index', async () => {
     const f = fixture(); f.hold(); const running = f.run(); await vi.waitFor(() => expect(f.session.getSnapshot().roleUpdates.status).toBe('updating'));
