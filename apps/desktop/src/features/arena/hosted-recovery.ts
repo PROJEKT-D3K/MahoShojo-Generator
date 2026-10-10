@@ -77,6 +77,18 @@ export class DesktopArenaHostedRecovery {
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
 
+  /** A story owner may have released this shared public slot in the same window.
+   * Re-read with the same bounded constructor checks; never clear or replace bytes.
+   * An unchanged original does not reset an active single-report recovery decision. */
+  refreshFromStorage() {
+    const refreshed = new DesktopArenaHostedRecovery(this.storage, this.product);
+    if (refreshed.persistedRaw === this.persistedRaw) return;
+    this.persistedRaw = refreshed.persistedRaw;
+    this.readOnlyOriginal = refreshed.readOnlyOriginal;
+    this.preparedBackup = null;
+    this.publish(refreshed.getSnapshot());
+  }
+
   captureReplacement(): ArenaHostedRecoveryReplacement { return { expectedPreviousRequestId: this.state.pointer?.requestId ?? null, revision: this.revision }; }
   isReplacementCurrent(value: ArenaHostedRecoveryReplacement): boolean {
     return value.revision === this.revision && value.expectedPreviousRequestId === (this.state.pointer?.requestId ?? null);

@@ -365,3 +365,42 @@ describe('pending local exit contracts', () => {
     }
   });
 });
+
+
+describe('pending local assembly intent', () => {
+  const plan = { totalChapters: 7, source: 'scenario' as const, locked: true };
+  it('preserves missing legacy intent, explicit no-plan and every local plan field', () => {
+    const legacy = StoryPendingManifestSchema.parse(manifest());
+    expect(Object.prototype.hasOwnProperty.call(legacy, 'localAssembly')).toBe(false);
+    for (const chapterPlan of [null, plan, { totalChapters: 1, source: 'user', locked: false }, { ...plan, totalChapters: 20 }]) {
+      const value = { ...manifest(), localAssembly: { version: 1, chapterPlan } };
+      expect(StoryPendingManifestSchema.parse(value)).toEqual(value);
+      expect(StoryPendingManifestSchema.parse(JSON.parse(JSON.stringify(value)))).toEqual(value);
+    }
+    expect(StoryPendingManifestSchema.parse({ ...frozen(), localAssembly: { version: 1, chapterPlan: plan } }).version).toBe(1);
+  });
+  it.each([
+    null, undefined, false, [], 'plan', {}, { version: 1 }, { version: 2, chapterPlan: null },
+    { version: '1', chapterPlan: null }, { version: 1, chapterPlan: undefined },
+    { version: 1, chapterPlan: false }, { version: 1, chapterPlan: [] },
+    { version: 1, chapterPlan: { ...plan, totalChapters: 0 } },
+    { version: 1, chapterPlan: { ...plan, totalChapters: 21 } },
+    { version: 1, chapterPlan: { ...plan, totalChapters: 1.5 } },
+    { version: 1, chapterPlan: { ...plan, totalChapters: '7' } },
+    { version: 1, chapterPlan: { ...plan, source: 'inferred' } },
+    { version: 1, chapterPlan: { ...plan, locked: 1 } },
+    { version: 1, chapterPlan: { ...plan, extra: true } },
+    { version: 1, chapterPlan: null, snapshot: {} },
+  ])('rejects malformed, unversioned or open local intent %#', (localAssembly) => {
+    expect(StoryPendingManifestSchema.safeParse({ ...manifest(), localAssembly }).success).toBe(false);
+  });
+  it('keeps local assembly out of network input and payload parts with all budgets unchanged', () => {
+    const localAssembly = { version: 1, chapterPlan: plan };
+    expect(ArenaStoryCreateRequestSchema.safeParse({ ...input(), localAssembly }).success).toBe(false);
+    expect(StoryPendingManifestSchema.safeParse({ ...manifest(), localAssembly,
+      parts: [part('input'), { ...part('session'), kind: 'localAssembly' }] }).success).toBe(false);
+    expect(STORY_PENDING_LIMITS.metadataBytes).toBe(64 * 1024);
+    expect(STORY_PENDING_LIMITS.slotBytes).toBe(128 * 1024 * 1024);
+    expect(STORY_PENDING_LIMITS.activeSlots * STORY_PENDING_LIMITS.slotBytes + STORY_PENDING_LIMITS.sharedUploadBytes).toBe(384 * 1024 * 1024);
+  });
+});

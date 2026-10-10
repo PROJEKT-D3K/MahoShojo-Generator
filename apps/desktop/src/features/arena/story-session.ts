@@ -21,9 +21,12 @@ import {
 } from '../../platform/arena-story-storage';
 import { executeArenaDirect, type ArenaDirectIntent, type ArenaDirectPartial } from './direct';
 import { createInitialArenaDraft, type ArenaDraft, type DesktopArenaProduct } from './session';
+import { DesktopHostedStorySession, type DesktopHostedStoryState, type HostedStoryExecutionTarget } from './hosted-story-session';
+import type { DesktopArenaHostedActor } from '@mahoshojo/contracts/desktop-arena-hosted';
+import type { StoryPendingSnapshot, StoryPendingInput, StoryReceipt } from '@mahoshojo/contracts/desktop-arena-story';
 import { captureDesktopStorySeed, completeDesktopStoryRecords, type StorySessionSnapshot } from './story-snapshot';
 
-export type StoryExecutionTarget = { options: DesktopAiExecutionOptions; intent: Omit<ArenaDirectIntent, 'requestId' | 'generationMode'> };
+export type StoryExecutionTarget = { mode?: never; options: DesktopAiExecutionOptions; intent: Omit<ArenaDirectIntent, 'requestId' | 'generationMode'> } | HostedStoryExecutionTarget;
 /** Host resolves the CURRENT selected target and credentials. Stored source is display only. */
 export type PrepareStoryExecution = (run: (target: StoryExecutionTarget) => Promise<void>) => Promise<void>;
 export type StoryChapterSelection =
@@ -34,11 +37,12 @@ export type StoryChapterSelection =
 export type StoryExportProgress = { phase: 'counting' | 'writing'; bytes: number };
 export type StoryExportResult = { absolutePath: string; byteLength: number };
 export type DesktopStoryState = {
+  hosted: DesktopHostedStoryState | null;
   sessions: StorySessionHead[]; sessionCursor: StorySessionPage['nextCursor']; listLoading: boolean; listError: string | null;
   active: StorySessionHead | null; chapters: StoryChapterHead[]; chapterCursor: StoryChapterPage['nextCursor']; chaptersLoading: boolean; chaptersError: string | null;
   selected: StoryChapterSelection;
   phase: 'idle' | 'preparing' | 'generating' | 'completed' | 'cancelled' | 'failed';
-  result: ArenaDirectPartial | null; resultChapterIndex: number | null; resultSaved: boolean;
+  resultSource: 'direct' | 'hosted' | null; result: ArenaDirectPartial | null; resultChapterIndex: number | null; resultSaved: boolean;
   saving: boolean; pending: { title: string; evidence: BattleStorySaveEvidence; retryable: boolean; tooLarge: boolean } | null;
   savedUnread: StorySessionHead | null; message: string | null;
   exporting: boolean; exportProgress: StoryExportProgress | null; exportResult: StoryExportResult | null; exportError: string | null;
@@ -46,9 +50,10 @@ export type DesktopStoryState = {
 type PendingCommit = { prepared: PreparedStoryCommit; selection: BattleStoryReadToken; evidence: BattleStorySaveEvidence };
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : '操作未完成，请保留现有内容后重试。';
 const emptyState = (): DesktopStoryState => ({
+  hosted: null,
   sessions: [], sessionCursor: null, listLoading: false, listError: null,
   active: null, chapters: [], chapterCursor: null, chaptersLoading: false, chaptersError: null, selected: { status: 'unloaded' },
-  phase: 'idle', result: null, resultChapterIndex: null, resultSaved: false, saving: false, pending: null,
+  phase: 'idle', resultSource: null, result: null, resultChapterIndex: null, resultSaved: false, saving: false, pending: null,
   savedUnread: null, message: null, exporting: false, exportProgress: null, exportResult: null, exportError: null,
 });
 
@@ -65,19 +70,72 @@ export class DesktopArenaStorySession {
   private pending: PendingCommit | null = null;
   private executionScope = '';
   private executionEpoch = 0;
+  readonly hosted: DesktopHostedStorySession | null;
   constructor(private readonly dependencies: {
     port: StoryNativePort; execute?: typeof executeArenaDirect; id?: () => string; now?: () => number; random?: () => number;
     prepareCommit?: typeof prepareStoryStorageCommit;
+    hosted?: Omit<ConstructorParameters<typeof DesktopHostedStorySession>[0], 'onState' | 'onResult' | 'onSaved' | 'captureSelection' | 'loadBaseline'>;
     exportMarkdown: (head: StorySessionHead, signal: AbortSignal, onProgress: (value: StoryExportProgress) => void) => Promise<StoryExportResult>;
-  }) {}
+  }) {
+    this.hosted = dependencies.hosted ? new DesktopHostedStorySession({ ...dependencies.hosted,
+      onState: hosted => this.publish({ hosted }),
+      onResult: (result, resultChapterIndex, phase) => this.publish({ resultSource: 'hosted', result, resultChapterIndex, phase, resultSaved: false }),
+      captureSelection: () => this.captureSelection(),
+      loadBaseline: (snapshot, input) => this.loadHostedBaseline(snapshot, input),
+      onSaved: (receipt, head, selection) => this.acceptHostedReceipt(receipt, head, selection),
+    }) : null;
+  }
+  private captureSelection(): BattleStoryReadToken {
+    const session = this.fence.capture('session'), chapter = this.fence.capture('chapter');
+    return { isCurrent: () => session.isCurrent() && chapter.isCurrent(), isInScope: () => session.isInScope() && chapter.isInScope() };
+  }
+  private async loadHostedBaseline(snapshot: StoryPendingSnapshot, input: StoryPendingInput): Promise<StorySessionSnapshot> {
+    const { manifest } = snapshot;
+    if (manifest.localAssembly === undefined) throw new Error('旧候选缺少原本地组装依据，保留原件但不能猜测组装；可读取、回放、导出或明确放弃。');
+    const source = StorySourceSchema.parse({ mode: input.seed.mode, language: input.seed.language, storyLength: input.seed.storyLength,
+      ...(input.seed.customStoryLength !== undefined ? { customStoryLength: input.seed.customStoryLength } : {}), generationMode: 'stream' });
+    if (input.action === 'start') {
+      const { mode: _mode, language: _language, storyLength: _length, customStoryLength: _custom, ...seed } = input.seed;
+      return { id: manifest.sessionId, title: '未命名连续战报', createdAt: manifest.createdAt, updatedAt: manifest.createdAt,
+        source, seed, workingCombatants: input.chapterContext.workingCombatants, chapterCount: 0,
+        ...(manifest.localAssembly?.chapterPlan ? { chapterPlan: manifest.localAssembly.chapterPlan } : {}) };
+    }
+    let cursor: StorySessionPage['nextCursor'] = null, head: StorySessionHead | undefined;
+    do { const page = await listStorySessions(this.dependencies.port, cursor); head = page.rows.find(row => row.id === manifest.sessionId); cursor = page.nextCursor; } while (!head && cursor);
+    if (!head || head.revision !== manifest.expectedRevision || head.lastChapterId !== manifest.expectedLastChapterId) throw new Error('原故事基线已变化或无法读取；保留候选，不能追加到新的章节头。');
+    const value = await readStoryContinueState(this.dependencies.port, head);
+    const summaryMeta = value.session.summaryMeta as StorySessionSnapshot['summaryMeta'];
+    if (summaryMeta !== undefined && (!summaryMeta || summaryMeta.mode !== 'deterministic-fallback' || summaryMeta.coveredUntilChapterIndex !== head.chapterCount || !Array.isArray(summaryMeta.coveredChapterIds) || summaryMeta.coveredChapterIds.some(id => typeof id !== 'string') || !Number.isSafeInteger(summaryMeta.refreshedAt))) throw new Error('原故事摘要覆盖记录无效');
+    return { ...value.session, source: StorySourceSchema.parse(value.session.source), seed: BattleStoryArenaSeedSchema.parse({ ...value.seed,
+      mode: source.mode, language: source.language, storyLength: source.storyLength, customStoryLength: source.customStoryLength }),
+      workingCombatants: value.checkpoint.combatants, summaryMeta };
+  }
+  private async acceptHostedReceipt(receipt: StoryReceipt, knownHead: StorySessionHead | null, selection: BattleStoryReadToken) {
+    this.publish({ pending: null, resultSaved: true, message: '完整章节已保存到本机故事。' });
+    await this.refreshSessions();
+    let head = knownHead ?? this.state.sessions.find(row => row.id === receipt.sessionId && row.lastChapterId === receipt.chapterId) ?? null;
+    if (!head) {
+      let cursor = this.state.sessionCursor;
+      while (cursor && !head) { const page = await listStorySessions(this.dependencies.port, cursor); head = page.rows.find(row => row.id === receipt.sessionId && row.lastChapterId === receipt.chapterId) ?? null; cursor = page.nextCursor; }
+    }
+    if (!head) { this.publish({ message: '完整章节已保存，但目录暂未读回。请刷新故事目录；不会重新生成或保存。' }); return; }
+    this.publish({ savedUnread: head });
+    if (selection.isCurrent()) {
+      await this.selectSession(head);
+      if (this.state.selected.status === 'loaded' && this.state.selected.chapterId === receipt.chapterId) this.publish({ savedUnread: null });
+    } else if (this.state.active?.id === head.id) {
+      this.publish({ active: head }); await this.loadChapters(head, this.fence.capture('session'), false);
+    }
+  }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
   private publish(patch: Partial<DesktopStoryState>) { if (this.disposed) return; this.state = { ...this.state, ...patch }; for (const listener of this.listeners) listener(); }
   private id = () => (this.dependencies.id ?? (() => crypto.randomUUID()))();
   private now = () => (this.dependencies.now ?? Date.now)();
-  isBusy = () => Boolean(this.runController) || this.state.saving || this.state.exporting;
-  hasUnsavedResult = () => !!this.state.pending || (!!this.state.result && !this.state.resultSaved && !!(this.state.result.rawText || this.state.result.reasoning));
-  setExecutionScope(scope: string) {
+  isBusy = () => Boolean(this.runController) || this.state.saving || this.state.exporting || Boolean(this.hosted?.isBusy());
+  hasUnsavedResult = () => !!this.hosted?.hasCandidate() || !!this.state.pending || (!!this.state.result && !this.state.resultSaved && !!(this.state.result.rawText || this.state.result.reasoning));
+  setExecutionScope(scope: string, actor: DesktopArenaHostedActor | null = null) {
+    this.hosted?.setContext(scope, actor);
     if (scope === this.executionScope) return;
     this.executionScope = scope; this.executionEpoch += 1;
     // The last accepted partial and any completed save candidate remain device-owned.
@@ -100,7 +158,7 @@ export class DesktopArenaStorySession {
   }
   async initialize() {
     const selection = this.fence.capture('session');
-    await this.refreshSessions();
+    await Promise.all([this.refreshSessions(), this.hosted?.discover()]);
     if (selection.isCurrent() && !this.state.active && this.state.sessions[0]) await this.selectSession(this.state.sessions[0]);
   }
   async selectSession(head: StorySessionHead) {
@@ -211,16 +269,28 @@ export class DesktopArenaStorySession {
       userGuidance: input.userGuidance,
     });
     let dispatched = false;
-    await prepare(async ({ options, intent }) => {
+    await prepare(async (target) => {
+      if (target.mode === 'hosted') {
+        if (this.disposed || controller.signal.aborted || input.epoch !== this.executionEpoch) return;
+        if (dispatched) throw new Error('本章已准备一次生成请求，不能重复创建。');
+        if (!this.hosted) throw new Error('故事 Hosted 接线尚未就绪');
+        dispatched = true;
+        await this.hosted.generate({ session, story, product: this.dependencies.hosted!.product,
+          requestId, operationId, checkpointId, initialCheckpointId, expectedRevision: input.expectedRevision,
+          lastInputCheckpointId: input.lastInputCheckpointId, selection: input.selection }, target, controller.signal);
+        if (this.state.phase === 'preparing') this.publish({ phase: controller.signal.aborted ? 'cancelled' : 'failed', message: this.hosted.getSnapshot().message });
+        return;
+      }
+      const { options, intent } = target;
       if (this.disposed || controller.signal.aborted || input.epoch !== this.executionEpoch) return;
       if (dispatched) throw new Error('本章已提交一次生成请求，不能自动重复。');
       dispatched = true;
-      if (intent.mode !== 'direct-local' && intent.mode !== 'direct-remote') throw new Error('连续故事目前仅支持客户端 Direct。');
+      if (intent.mode !== 'direct-local' && intent.mode !== 'direct-remote') throw new Error('客户端生成目标无效。');
       const source = StorySourceSchema.parse({ ...session.source, providerMode: intent.mode,
         providerId: options.providerTarget?.kind === 'preset' ? options.providerTarget.providerId : options.profileId, modelId: intent.modelId });
       const events = AdjudicatorEventSchema.array().parse(story.seed.adjudicationEvents ?? []);
       const adjudicationResults = resolveAdjudicationEvents(events, this.dependencies.random ?? (() => crypto.getRandomValues(new Uint32Array(1))[0]! / 0x1_0000_0000)) as unknown as AdjudicationResult[];
-      this.publish({ phase: 'generating', resultChapterIndex: chapterIndex, result: { rawText: '', markdown: '', reasoning: '' } });
+      this.publish({ resultSource: 'direct', phase: 'generating', resultChapterIndex: chapterIndex, result: { rawText: '', markdown: '', reasoning: '' } });
       const scopeKey = `desktop-story:${session.id}:${requestId}`;
       const outcome = await (this.dependencies.execute ?? executeArenaDirect)(options, createInitialArenaDraft(), { ...intent, requestId, generationMode: 'stream' },
         { scopeKey, reporterInfo: { name: '记者', publication: '魔法少女速报' }, adjudicationResults, story }, controller.signal,
@@ -281,8 +351,8 @@ export class DesktopArenaStorySession {
     } finally { this.publish({ saving: false }); }
   }
   async readSavedResult() { if (this.state.savedUnread) { const head = this.state.savedUnread; await this.selectSession(head); if (this.state.selected.status === 'loaded' && this.state.selected.chapterId === head.lastChapterId) this.publish({ savedUnread: null }); } }
-  discardResult() { if (this.isBusy()) return; this.pending = null; this.publish({ result: null, pending: null, phase: 'idle', resultSaved: false, resultChapterIndex: null, message: null }); }
-  cancel() { this.runController?.abort(); }
+  discardResult() { if (this.isBusy()) return; if (this.hosted?.hasCandidate()) { this.publish({ message: '请先导出或明确放弃原 Hosted 候选；清除预览不会释放候选。' }); return; } this.pending = null; this.publish({ resultSource: null, result: null, pending: null, phase: 'idle', resultSaved: false, resultChapterIndex: null, message: null }); }
+  cancel() { if (this.hosted?.getSnapshot().busy === 'model') { void this.hosted.requestServerStop(); return; } this.runController?.abort(); }
   async exportSelectedStory() {
     const head = this.state.active;
     if (this.disposed || !head || this.isBusy()) return;
@@ -296,7 +366,7 @@ export class DesktopArenaStorySession {
     } catch (cause) { this.publish({ exportError: controller.signal.aborted ? '导出已取消，未发布不完整文件。' : errorText(cause) }); }
     finally { if (this.exportController === controller) this.exportController = null; this.publish({ exporting: false }); }
   }
-  cancelExport() { this.exportController?.abort(); }
-  detach() { this.cancel(); this.cancelExport(); this.readController?.abort(); }
-  dispose() { this.detach(); this.disposed = true; this.fence.dispose(); this.listeners.clear(); }
+  cancelExport() { this.exportController?.abort(); this.hosted?.cancelExport(); }
+  detach() { this.hosted?.detach(); this.runController?.abort(); this.cancelExport(); this.readController?.abort(); }
+  dispose() { this.detach(); this.hosted?.dispose(); this.disposed = true; this.fence.dispose(); this.listeners.clear(); }
 }

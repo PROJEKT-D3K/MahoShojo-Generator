@@ -10,6 +10,7 @@ fn fixture(markdown: &str) -> (tempfile::TempDir, LocalLibrary, PendingManifest,
     // Opaque user data, Unicode escapes and whitespace must remain original bytes.
     let input = r#" {"version":1,"sessionId":"pending-story","generationRequestId":"pending-request-1","action":"start","chapterIndex":1,"chapterContext":{"recentWindow":[],"workingCombatants":[{"data":{"name":"角色\ud800","x":1,"x":2}}]},"seed":{"combatants":[{"data":{"name":"角色\ud800","x":1,"x":2}}],"mode":"classic","storyLength":"default","language":"zh-CN","settings":{"readArenaHistory":false,"writeArenaHistory":false,"readCurrentState":true,"writeCurrentState":false,"readNarrativeHistory":false,"writeNarrativeHistory":false}}} "#.to_string();
     let manifest = PendingManifest {
+        local_assembly: None,
         version: 1,
         product: Product::Battle,
         request_id: "pending-request-1".into(),

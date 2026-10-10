@@ -6,7 +6,7 @@ import {
 import { createBattleStoryByteDigest } from '@mahoshojo/domain/arena-story-commit';
 import type { StoryPendingNativePort, StoryPendingExportPort } from '../src/platform/arena-story-pending-native';
 import {
-  describeStoryPending, readStoryPendingPartText, prepareStoryPendingUpload, publishStoryPending,
+  StoryPendingPublishError, describeStoryPending, readStoryPendingPartText, prepareStoryPendingUpload, publishStoryPending,
   prepareStoryPendingReceiptExpectation, queryStoryPendingReceipt, createStoryPendingSaveAttempt,
   abandonStoryPending, exportStoryPendingOriginal, exportAllStoryPendingOriginals, storyPendingKey,
 } from '../src/platform/arena-story-pending-storage';
@@ -104,6 +104,55 @@ describe('pending originals reader', () => {
 });
 
 describe('pending publisher bounded exact recovery', () => {
+  it('explicit upload retry first accepts an already-sealed exact active without another write', async () => {
+    const value = fixture(), port = mockPort(value.snapshot);
+    const prepared = await prepareStoryPendingUpload(value.manifest, value.sources);
+    expect(await publishStoryPending(port, prepared, null, undefined, {})).toEqual(value.snapshot);
+    expect(port.begin).not.toHaveBeenCalled(); expect(port.queryUpload).not.toHaveBeenCalled();
+    expect(port.append).not.toHaveBeenCalled(); expect(port.seal).not.toHaveBeenCalled();
+  });
+  it('explicit upload retry uses only its known original token and verified offsets', async () => {
+    const value = fixture(), { port } = uploadPort(value);
+    const prepared = await prepareStoryPendingUpload(value.manifest, value.sources);
+    expect(await publishStoryPending(port, prepared, null, undefined, { token })).toEqual(value.snapshot);
+    expect(port.begin).not.toHaveBeenCalled(); expect(port.queryUpload.mock.calls[0]).toEqual([token]);
+    expect(port.append).toHaveBeenCalledTimes(1); expect(port.seal).toHaveBeenCalledTimes(1);
+  });
+  it.each(['query-failure', 'missing-token', 'missing-upload', 'active-query-failure'] as const)('explicit upload retry %s never begins, appends or seals', async (failure) => {
+    const value = fixture(), { port } = uploadPort(value);
+    if (failure === 'query-failure') port.queryUpload.mockRejectedValue(new Error('unknown'));
+    if (failure === 'missing-upload') port.queryUpload.mockResolvedValue(null);
+    if (failure === 'active-query-failure') port.describe.mockRejectedValue(new Error('unknown active'));
+    const prepared = await prepareStoryPendingUpload(value.manifest, value.sources);
+    await expect(publishStoryPending(port, prepared, null, undefined, failure === 'missing-token' ? {} : { token })).rejects.toThrow();
+    expect(port.begin).not.toHaveBeenCalled(); expect(port.append).not.toHaveBeenCalled(); expect(port.seal).not.toHaveBeenCalled();
+  });
+  it('explicit upload retry can retain the known token after an uncertain seal, only in its thrown error', async () => {
+    const value = fixture(), { port } = uploadPort(value);
+    port.seal.mockRejectedValue(new Error('lost seal')); port.queryUpload.mockRejectedValueOnce(new Error('query failed'));
+    const prepared = await prepareStoryPendingUpload(value.manifest, value.sources);
+    const failure = await publishStoryPending(port, prepared, null).catch(cause => cause);
+    expect(failure).toBeInstanceOf(StoryPendingPublishError); expect(failure.token).toBe(token);
+    expect(value.manifest).not.toHaveProperty('token');
+  });
+
+  it('rejects adding, removing or changing frozen localAssembly before upload begins', async () => {
+    for (const [before, after] of [
+      [undefined, { version: 1 as const, chapterPlan: null }],
+      [{ version: 1 as const, chapterPlan: null }, undefined],
+      [{ version: 1 as const, chapterPlan: { totalChapters: 2, source: 'user' as const, locked: false } },
+        { version: 1 as const, chapterPlan: { totalChapters: 2, source: 'scenario' as const, locked: false } }],
+    ] as const) {
+      const value = fixture(), port = mockPort(value.snapshot);
+      if (before !== undefined) value.manifest.localAssembly = before;
+      const next = { ...value.manifest, pendingRevision: 2 };
+      if (after === undefined) delete next.localAssembly; else next.localAssembly = after;
+      const prepared = await prepareStoryPendingUpload(next, value.sources);
+      await expect(publishStoryPending(port, prepared, value.snapshot)).rejects.toThrow('原身份');
+      expect(port.begin).not.toHaveBeenCalled();
+    }
+  });
+
   it('retains opaque original bytes and handles a lost begin acknowledgement with one exact begin retry', async () => {
     const raw = encoder.encode('{ "opaque": "\\ud800雪", "duplicate":1,"duplicate":2 }');
     const value = fixture({ meta: raw }), { port } = uploadPort(value);

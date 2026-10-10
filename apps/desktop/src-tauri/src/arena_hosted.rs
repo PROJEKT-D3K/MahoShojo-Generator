@@ -565,6 +565,31 @@ impl ArenaState {
         })
     }
     #[cfg(test)]
+    pub(crate) fn with_story_loopback_origins(
+        stories: Arc<StoryStore>,
+        origin: &str,
+        reconciliation_origin: &str,
+    ) -> Result<Self, ArenaError> {
+        for candidate in [origin, reconciliation_origin] {
+            let url = url::Url::parse(candidate).map_err(|_| invalid())?;
+            if url.scheme() != "http"
+                || url.host_str() != Some("127.0.0.1")
+                || url.port().is_none_or(|port| port == 0)
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(invalid());
+            }
+        }
+        let mut state = Self::new(stories)?;
+        state.origin = origin.trim_end_matches('/').to_string();
+        state.reconciliation_origin = reconciliation_origin.trim_end_matches('/').to_string();
+        Ok(state)
+    }
+    #[cfg(test)]
     fn isolated() -> Self {
         let root = tempfile::tempdir().unwrap();
         let library = crate::library::LocalLibrary::open(root.path()).unwrap();

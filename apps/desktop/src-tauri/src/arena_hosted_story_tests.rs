@@ -41,6 +41,7 @@ fn candidate(
     Vec<(pending::PendingKind, String)>,
 ) {
     let manifest = pending::PendingManifest {
+        local_assembly: None,
         version: 1,
         product: story::product(product),
         request_id: RID.into(),
@@ -1570,3 +1571,44 @@ async fn story_real_process_exit_before_post_or_headers_is_durable_and_404_never
 
 #[path = "arena_hosted_story_abandon_tests.rs"]
 mod abandon_tests;
+
+#[test]
+fn story_loopback_factory_keeps_shared_store_and_rejects_non_loopback_destinations() {
+    let root = tempfile::tempdir().unwrap();
+    let library = LocalLibrary::open(root.path()).unwrap();
+    let stories = library.shared_stories();
+    let state = ArenaState::with_story_loopback_origins(
+        stories.clone(),
+        "http://127.0.0.1:12345",
+        "http://127.0.0.1:23456/",
+    )
+    .unwrap();
+    assert!(Arc::ptr_eq(&state.stories, &stories));
+    assert_eq!(state.origin, "http://127.0.0.1:12345");
+    assert_eq!(state.reconciliation_origin, "http://127.0.0.1:23456");
+    for invalid in [
+        "https://127.0.0.1:12345",
+        "http://127.0.0.1",
+        "http://127.0.0.1:0",
+        "http://localhost:12345",
+        "http://127.0.0.2:12345",
+        "http://example.com:12345",
+        "http://user@127.0.0.1:12345",
+        "http://127.0.0.1:12345/path",
+        "http://127.0.0.1:12345/?query",
+        "http://127.0.0.1:12345/#fragment",
+    ] {
+        assert!(ArenaState::with_story_loopback_origins(
+            stories.clone(),
+            invalid,
+            "http://127.0.0.1:23456"
+        )
+        .is_err());
+        assert!(ArenaState::with_story_loopback_origins(
+            stories.clone(),
+            "http://127.0.0.1:12345",
+            invalid
+        )
+        .is_err());
+    }
+}

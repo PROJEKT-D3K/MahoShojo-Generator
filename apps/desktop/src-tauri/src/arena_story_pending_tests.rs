@@ -45,6 +45,7 @@ fn candidate(product: Product, frozen: bool) -> (PendingManifest, Vec<(PendingKi
         );
     }
     let manifest = PendingManifest {
+        local_assembly: None,
         version: 1,
         product,
         request_id: request.into(),
@@ -1220,6 +1221,7 @@ fn golden_candidates() -> Vec<(PendingManifest, Vec<(PendingKind, String)>)> {
             .unwrap();
             let state: RoleState = serde_json::from_value(case["roleState"].clone()).unwrap();
             let mut m = PendingManifest {
+                local_assembly: None,
                 version: 1,
                 product: Product::Battle,
                 request_id: input["generationRequestId"].as_str().unwrap().into(),
@@ -2412,3 +2414,6 @@ fn raw_role_projection_keeps_selected_bytes_and_uses_json_parse_member_semantics
 
 #[path = "arena_story_pending_abandon_tests.rs"]
 mod abandon_tests;
+
+#[path = "arena_story_pending_assembly_tests.rs"]
+mod assembly;

@@ -3,7 +3,7 @@ import {
   type BattleStoryChapterPlan,
 } from '@mahoshojo/domain/arena-battle-story-session';
 import type { BattleStoryArenaSeed } from '@mahoshojo/domain/arena-battle-story-request';
-import { buildCompletedBattleStoryRecords, freezeBattleStoryCommit, type BattleStoryCommitSession } from '@mahoshojo/domain/arena-story-commit';
+import { buildCompletedBattleStoryRecords, freezeBattleStoryCommit, projectHostedStoryPendingContent, type BattleStoryCommitSession } from '@mahoshojo/domain/arena-story-commit';
 import { getArenaPostBattleWorldLineIndices } from '@mahoshojo/domain/arena-post-battle';
 import { planUnsignedArenaPostBattleCandidates } from '@mahoshojo/domain/arena-post-battle-candidates';
 import type { AdjudicationResult } from '@mahoshojo/domain/arena-types';
@@ -89,4 +89,40 @@ export const completeDesktopStoryRecords = (input: {
     },
   });
   return freezeBattleStoryCommit(records);
+};
+
+/** Hosted consumes checked server-role originals. It never invokes the unsigned
+ * Direct role-effect producer and never saves display-only usage projections. */
+export const completeHostedStoryRecords = (input: {
+  session: StorySessionSnapshot; source: StorySource;
+  manifest: import('@mahoshojo/contracts/desktop-arena-story').StoryPendingManifest;
+  originals: {
+    input: import('@mahoshojo/contracts/desktop-arena-story').StoryPendingInput; markdown: string; reasoning: string;
+    meta?: import('@mahoshojo/contracts/desktop-arena-story').StoryPendingMeta;
+    header?: import('@mahoshojo/contracts/desktop-arena-story').StoryPendingHeader;
+    telemetry?: import('@mahoshojo/contracts/desktop-arena-story').StoryPendingTelemetry;
+    roleResponse?: import('@mahoshojo/contracts/desktop-arena-story').StoryPendingRoleResponse;
+  };
+  generationId: string | null; roleState: 'not-requested' | 'accepted' | 'old-roles';
+  fallbackReason?: 'http-failure' | 'user-kept-original';
+}) => {
+  const { session, originals, manifest } = input;
+  // Native binds the chapter timestamp to the original pending identity. Cold
+  // assembly and role retries must not create a different chapter time.
+  const now = manifest.createdAt;
+  const combatants = originals.input.chapterContext.workingCombatants.map(object);
+  const projection = projectHostedStoryPendingContent({ inputUserGuidance: originals.input.userGuidance,
+    reasoning: originals.reasoning, meta: originals.meta, header: originals.header, telemetry: originals.telemetry,
+    roleState: input.roleState, roleResponse: originals.roleResponse, fallbackReason: input.fallbackReason,
+    workingCombatants: combatants });
+  const digest = buildBattleStoryDeterministicDigest({ markdown: originals.markdown, reportJson: projection.reportJson,
+    chapterIndex: originals.input.chapterIndex });
+  const sessionSummary = buildBattleStorySummaryFallback({ previousSummary: session.sessionSummary, digests: [{ ...digest, index: originals.input.chapterIndex }] });
+  return freezeBattleStoryCommit(buildCompletedBattleStoryRecords({ action: originals.input.action,
+    session: { ...session, sessionSummary, summaryMeta: { coveredUntilChapterIndex: originals.input.chapterIndex,
+      coveredChapterIds: [...(session.summaryMeta?.coveredChapterIds ?? []), manifest.operationId], refreshedAt: now, mode: 'deterministic-fallback' as const } },
+    source: input.source, operationId: manifest.operationId, checkpointId: manifest.outputCheckpointId,
+    ...(manifest.initialCheckpointId ? { initialCheckpointId: manifest.initialCheckpointId } : {}), now, inputCombatants: combatants,
+    generated: { chapterIndex: originals.input.chapterIndex, markdown: originals.markdown, digest,
+      generationId: input.generationId, ...projection } }));
 };

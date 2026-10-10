@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-10 Desktop Hosted 连续故事两页：[接线 ADR](./decisions/2026-10-10_191200_DesktopHosted连续故事两页接线决策.md) / DESK-103 已接受 owner/UI 窄后继，源码实现与定向/Native/真实pipe验证通过，修后新owner/UI独审和冻结完整CI通过（受测2b6164d4）。保同页框 Direct 与原 C0，完整正文先保窗口，必须等 Native invoke 成功 settle 且原 actor 世代有效才 durable→role→freeze→一次保存；双槽原页恢复、只读围栏、原件导出与明确放弃一起接线。[本片验收记录](./reports/2026-10-10_191300_DesktopHosted连续故事两页接线验收.md)分列本片实际证据与剩余门禁，不借前片通过冒称已交付；下方 DESK-100/101/102 的范围和结果保留历史含义，无真实外部或发布。[Windows 有限验收](./runbooks/2026-10-10_200900_DesktopHosted连续故事Windows有限验收.md)仍需隔离双mock harness，当前普通dev不可直接替代。
+
 2026-10-10 Web 连续故事：[完成正文与角色未决 ADR](./decisions/2026-10-10_184600_Web连续故事完成正文保留与角色未决决策.md) / DESK-102 接受先保完整输出、原 generation 角色重试与显式保留旧角色；Web 实际回用小型共享视图/纯规则，候选仍仅内存。本地定向验证与修订后独审通过，组合完整 CI 已通过（受测8aa484dd，首轮门禁失败及修复保留）；不开放 Desktop Hosted 页面。
 
 2026-10-10 Hosted 故事本地出口：[候选出口 ADR](./decisions/2026-10-10_184000_Hosted连续故事候选本地出口决策.md) 与 DESK-101 已接受 schema8 耐久清理位、exact 本机放弃、原件流式导出及高级本地原语；源码、定向、独审及真实 TS→Native pipe 通过，[验收记录](./reports/2026-10-10_190000_Hosted连续故事候选本地出口验收.md)保留分轮失败与修复，正式组合完整 CI 通过（受测8aa484dd，不代验中间树）；不开放两页 UI，不宣称服务器停止或允许 unknown 重存。

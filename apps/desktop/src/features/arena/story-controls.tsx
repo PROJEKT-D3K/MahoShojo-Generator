@@ -1,6 +1,6 @@
 import { useRef, useState, useSyncExternalStore } from 'react';
 import {
-  BattleStoryActions, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, formatBattleStoryDisplayTitle,
+  BattleStoryActions, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
   type BattleStoryChapterReadViewState,
 } from '@mahoshojo/ui-web/arena-story-session';
 import { StreamingBattleReportCard, type StreamingBattleReportCardProps, type BattleReportHostPorts } from '@mahoshojo/ui-web/arena-report';
@@ -14,6 +14,7 @@ import {
 } from '@mahoshojo/domain/arena-battle-story-session';
 import type { ArenaDraft } from './session';
 import { DesktopArenaStorySession } from './story-session';
+import type { DesktopHostedStorySession, DesktopHostedStoryState } from './hosted-story-session';
 
 const secondary = generationActionClassNames.secondary;
 const record = (value: unknown): Record<string, unknown> | null => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -35,8 +36,100 @@ const cardProps = (value: unknown): Partial<StreamingBattleReportCardProps> => {
     }) } : {}),
   };
 };
+type StoryProduct = 'battle' | 'arena';
+const productTitle = (product: StoryProduct) => product === 'battle' ? '简洁版 /battle' : '高级版 /arena';
+
+/** This is a controlled view of Native candidate evidence. Only the confirmation
+ * disclosure is local UI state; all recovery, role and persistence decisions stay
+ * with the Hosted owner and the shared pending-outcome view. */
+function HostedStoryPendingControls(props: {
+  owner: DesktopHostedStorySession; state: DesktopHostedStoryState; disabled: boolean;
+  hasWindowBody: boolean; hasWindowReasoning: boolean; exportWindowBody(): void;
+}) {
+  const { owner, state, disabled } = props;
+  const [confirmAbandon, setConfirmAbandon] = useState(false);
+  const active = state.active;
+  if (!active) return null;
+  const sealedBody = active.manifest.parts.some(part => part.kind === 'markdown');
+  const queryOnly = state.evidence === 'unknown' || !!active.saveAttemptId || active.restored;
+  const readonly = active.restored || active.abandonRequested;
+  const allOriginalsExported = state.exportResults.length === active.manifest.parts.length + 1 && !state.exportError && state.busy !== 'export';
+  const nativeExports = <>
+    <button type="button" className={secondary} disabled={disabled} onClick={() => void owner.exportOriginals()}>导出全部已封存原件</button>
+    {sealedBody ? <button type="button" className={secondary} disabled={disabled} onClick={() => void owner.exportOriginals('markdown')}>导出已封存完整正文</button> : null}
+    {!state.outputDurable && props.hasWindowBody ? <button type="button" className={secondary} onClick={props.exportWindowBody}>导出当前窗口完整正文</button> : null}
+    {state.busy === 'export' ? <button type="button" className={secondary} onClick={() => owner.cancelExport()}>取消原件导出</button> : null}
+  </>;
+  const canShowRole = state.hydrated && state.outputDurable && !readonly && !queryOnly;
+  return <BattleStoryPendingOutcome
+    heading={state.busy === 'save' ? '正在核对或保存原章节…' : queryOnly ? 'Hosted 章节保存状态待确认'
+      : state.outputDurable ? 'Hosted 正文已封存，尚未保存到故事' : 'Hosted 候选保留，最新正文与推理尚未耐久封存'}
+    detail={<>
+      <p>{state.outputDurable ? '完成原件已保存在本机候选中。角色处理与章节保存分别核对，不会重新创建模型任务。'
+        : '最新正文与推理仅保留在当前窗口，关闭后可能丢失。Native 已封存原件可能只有输入，导出这些原件不包含尚未封存的最新输出；请分别导出当前窗口完整正文与推理原文。'}</p>
+      {active.restored ? <p>这是备份恢复作品：只能读取、原账号回放原请求、查询原保存回执、导出或明确放弃，不能重新保存或同步角色。</p> : null}
+      {queryOnly ? <p>只能查询原保存操作回执；没有回执不代表未保存，不授权重试保存、另存或重新生成。</p> : null}
+      {!state.actorCurrent ? <p>当前账号与原请求不一致。原件仍可在本机读取、导出或明确放弃；恢复与角色处理须使用原账号。</p> : null}
+      {!active.createClaim ? <p>此候选没有创建 claim；不能补发旧请求。可保留、导出，或明确放弃后由你新建。</p> : null}
+      {state.role && 'warning' in state.role && state.role.warning ? <p>{state.role.warning}</p> : null}
+    </>}
+    roleResolution={canShowRole ? state.role ?? undefined : undefined} roleBusy={state.busy === 'role'}
+    canRetryRole={!disabled && owner.canResolveRoles()} canKeepOriginal={!disabled && owner.canKeepOriginalRoles()}
+    onRetryRole={canShowRole ? () => void owner.retryRoles() : undefined}
+    onKeepOriginal={canShowRole ? () => void owner.keepOriginalRoles() : undefined}
+    exportAction={nativeExports}
+    saveActions={queryOnly
+      ? active.manifest.commitManifest && state.hydrated && !active.abandonRequested
+        ? <button type="button" className={secondary} disabled={disabled} onClick={() => void owner.queryReceipt()}>查询原保存回执</button> : null
+      : !readonly && state.localRetry
+        ? <button type="button" className={secondary} disabled={disabled || !state.actorCurrent} onClick={() => void owner.retryLocal()}>{state.localRetry === 'seal' ? '重试原件本地封存' : state.localRetry === 'freeze' ? '重试本地组装保存' : '重试原本地保存'}</button> : null}>
+    {active.abandonRequested ? <div className="mt-3 space-y-2">
+      <p>原放弃意图已确认，清理尚未完成。候选及恢复入口仍可能保留，不能保证已经可以新建。</p>
+      <button type="button" className={secondary} disabled={disabled} onClick={() => void owner.abandonConfirmed()}>继续清理原本机候选</button>
+    </div> : confirmAbandon ? <div className="mt-3 space-y-2" role="group" aria-label="确认放弃本机候选">
+      <p>放弃会移除此本机候选及原恢复入口。保存状态未知时，本机故事库可能已有本章；不会删除已保存章节或回执，也不保证服务器停止或退费。之后新建须由你再次操作，并使用全新任务。</p>
+      {!state.outputDurable && (props.hasWindowBody || props.hasWindowReasoning) ? <p>当前窗口的最新正文与推理尚未耐久封存，请先分别导出；导出已封存原件不能保全这些最新输出。</p> : null}
+      {allOriginalsExported ? <p>全部已封存原件及清单已有成功导出回执。导出不会自动放弃候选。</p> : null}
+      <BattleStoryActions>
+        <button type="button" className={secondary} disabled={disabled} onClick={() => void owner.exportOriginals()}>先导出全部原件</button>
+        <button type="button" className={secondary} autoFocus onClick={() => setConfirmAbandon(false)}>返回保留</button>
+        <button type="button" className={secondary} disabled={disabled} onClick={() => { setConfirmAbandon(false); void owner.abandonConfirmed(); }}>{allOriginalsExported ? '已导出封存原件，确认放弃本机候选' : '确认不导出并放弃本机候选'}</button>
+      </BattleStoryActions>
+    </div> : <div className="mt-3"><button type="button" className={secondary} disabled={disabled} onClick={() => setConfirmAbandon(true)}>放弃本机候选…</button></div>}
+  </BattleStoryPendingOutcome>;
+}
+
+function HostedStoryInputPendingControls(props: {
+  owner: DesktopHostedStorySession; disabled: boolean;
+  download(fileName: string, text: string, mimeType: string): void;
+}) {
+  const exporting = useRef(false);
+  const [exportState, setExportState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  const exportInput = async () => {
+    if (exporting.current) return;
+    exporting.current = true; setExportState({ busy: true, error: null });
+    try {
+      const text = await props.owner.readWindowInputOriginal();
+      if (text === null) throw new Error('当前窗口已没有可核对的原冻结输入，请保留原状态并查询候选。');
+      props.download('未封存故事输入.json', text, 'application/json');
+      setExportState({ busy: false, error: null });
+    } catch (cause) { setExportState({ busy: false, error: cause instanceof Error ? cause.message : '原冻结输入导出失败，请保留当前窗口后重试。' }); }
+    finally { exporting.current = false; }
+  };
+  return <BattleStoryPendingOutcome heading="原输入封存未证实，尚未调用模型"
+    detail={<>
+      <p>原冻结输入仍保留在当前窗口。只能查询或恢复同一份原件的原封存操作；成功后不会自动创建模型请求，请继续读取、导出或明确放弃原候选。</p>
+      <p>首次上传回执未给出 token 时，只能查询已封存候选；无法安全重传或定位清理暂存上传，请保留当前窗口、导出输入并返回。</p>
+    </>}
+    exportAction={<button type="button" className={secondary} disabled={props.disabled || exportState.busy} onClick={() => void exportInput()}>导出当前窗口冻结输入</button>}
+    saveActions={<button type="button" className={secondary} disabled={props.disabled || exportState.busy || !props.owner.canRetryLocal()} onClick={() => void props.owner.retryLocal()}>查询或恢复原件封存</button>}>
+    {exportState.error ? <p role="alert" className="mt-3">{exportState.error}</p> : null}
+  </BattleStoryPendingOutcome>;
+}
+
 export function DesktopArenaStoryControls(props: {
   owner: DesktopArenaStorySession; draft: ArenaDraft; disabled: boolean; unavailableReason: string | null;
+  product?: StoryProduct; onNavigateStoryProduct?(product: StoryProduct): void;
   onStart(plan?: BattleStoryChapterPlan): void; onContinue(userGuidance: string): void;
   download(fileName: string, text: string, mimeType: string): void;
   onNavigateExternal: BattleReportHostPorts['onNavigateExternal'];
@@ -54,7 +147,14 @@ export function DesktopArenaStoryControls(props: {
   const fixed = plan?.locked === true;
   const planError = !fixed && planMode === 'custom' && !normalizeBattleStoryTotalChapters(planInput);
   const busy = props.disabled || owner.isBusy();
-  const canGenerate = !busy && !state.pending && !props.unavailableReason;
+  const product = props.product ?? 'battle';
+  const hosted = state.hosted, hostedOwner = owner.hosted;
+  const hostedResult = state.resultSource === 'hosted';
+  const candidate = hosted?.active;
+  const hasUnsealedWindowResult = !!(state.result?.markdown || state.result?.reasoning || state.result?.rawText) && !state.resultSaved && (!hostedResult || !hosted?.outputDurable);
+  const blockedByCandidate = !!hostedOwner?.hasCandidate() || !!hosted && Object.keys(hosted.discoveryErrors).length > 0;
+  const canGenerate = !busy && !state.pending && !props.unavailableReason && !blockedByCandidate;
+  const otherStoryCandidate = !!state.active && Object.values(hosted?.slots ?? {}).some(slot => slot?.manifest.sessionId === state.active?.id);
   const reached = !!state.active && isBattleStoryChapterPlanLimitReached({ chapterPlan: state.active.chapterPlan, completedChapterCount: state.active.chapterCount });
   const ports: BattleReportHostPorts = { mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: props.onNavigateExternal,
     downloadMarkdown: (text, fileName) => props.download(fileName, text, 'text/markdown;charset=utf-8') };
@@ -71,11 +171,12 @@ export function DesktopArenaStoryControls(props: {
     } : selection.status === 'loading' ? { status: 'loading', identity: { sessionId: selection.sessionId, chapterId: selection.chapterId } }
       : { status: 'error', identity: { sessionId: selection.sessionId, chapterId: selection.chapterId }, message: selection.message };
   const exportResult = () => { if (state.result) props.download(state.resultSaved ? '本次章节.md' : '未保存章节.md', state.result.markdown, 'text/markdown;charset=utf-8'); };
+  const exportWindowReasoning = () => { if (state.result?.reasoning) props.download('未封存推理原文.txt', state.result.reasoning, 'text/plain;charset=utf-8'); };
   const exportRaw = () => { if (state.result) props.download('连续故事原始输出.json', JSON.stringify({ rawText: state.result.rawText, reasoning: state.result.reasoning, usage: state.result.usage }, null, 2), 'application/json'); };
   return <section aria-label="连续战报会话" className="mt-6 space-y-4 rounded-2xl border border-gray-200 bg-white p-4 sm:p-6">
     <div><h2 className="text-xl font-semibold text-gray-900">连续战报会话</h2>
-      <p className="mt-1 text-sm text-gray-600">简洁版与高级版共用本机故事。首章冻结当前页配置；续写沿用故事种子与章末角色，并使用当前显式选择的 Direct 模型。</p>
-      <p className="mt-1 text-xs text-gray-500">仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。Hosted、分支、重写和删除暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。</p>
+      <p className="mt-1 text-sm text-gray-600">{hostedOwner ? '简洁版与高级版共用本机故事。首章冻结当前页配置；续写沿用故事种子与章末角色，并使用当前显式选择的执行位置与模型。' : '简洁版与高级版共用本机故事。首章冻结当前页配置；续写沿用故事种子与章末角色，并使用当前显式选择的 Direct 模型。'}</p>
+      <p className="mt-1 text-xs text-gray-500">{hostedOwner ? '仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。分支、重写和删除暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。' : '仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。Hosted、分支、重写和删除暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。'}</p>
       <p className="mt-1 text-xs text-gray-500">当前连续请求沿用 Web 的种子字段：分队显示名称、活动历史及历史引用不会额外注入章节。读取／写入角色历战与当前状态按冻结设置生效。</p>
     </div>
     <div className="grid gap-3 sm:grid-cols-2">
@@ -95,14 +196,46 @@ export function DesktopArenaStoryControls(props: {
     </label>
     <BattleStoryActions>
       <button className={secondary} type="button" disabled={!canGenerate || !!planError} title={props.unavailableReason ?? undefined} onClick={() => props.onStart(plan ?? undefined)}>新建连续战报</button>
-      <button className={secondary} type="button" disabled={!canGenerate || !state.active || reached} title={props.unavailableReason ?? undefined} onClick={() => props.onContinue(guidance)}>继续续写</button>
+      <button className={secondary} type="button" disabled={!canGenerate || !state.active || reached || otherStoryCandidate} title={props.unavailableReason ?? undefined} onClick={() => props.onContinue(guidance)}>继续续写</button>
       <button className={secondary} type="button" disabled={!state.active || busy} onClick={() => void owner.exportSelectedStory()}>导出完整 Markdown</button>
-      {generating ? <button className={secondary} type="button" onClick={() => owner.cancel()}>停止章节生成</button> : null}
+      {generating && !hostedResult && !hosted?.busy ? <button className={secondary} type="button" onClick={() => owner.cancel()}>停止章节生成</button> : null}
       {state.exporting ? <button className={secondary} type="button" onClick={() => owner.cancelExport()}>取消故事导出</button> : null}
     </BattleStoryActions>
     {props.unavailableReason ? <p role="status">{props.unavailableReason} 已保存故事仍可阅读和导出。</p> : null}
     {reached ? <p role="status">已完成本故事的显式章节计划。</p> : null}
     {state.message ? <p role="status" className="text-sm text-amber-800">{state.message}</p> : null}
+    {hosted && hostedOwner ? <section aria-label="Hosted 本机待处理候选" className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">Hosted 本机待处理候选</h3>
+        <button type="button" className={secondary} disabled={busy} onClick={() => void hostedOwner.discover()}>刷新本机候选</button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">{(['battle', 'arena'] as const).map(slotProduct => {
+        const slot = hosted.slots[slotProduct];
+        const alreadyRead = hosted.hydrated && candidate?.manifest.requestId === slot?.manifest.requestId
+          && candidate?.manifest.pendingRevision === slot?.manifest.pendingRevision;
+        return <section key={slotProduct} aria-label={`${productTitle(slotProduct)}原候选`} className="space-y-2 rounded-lg border border-gray-200 p-3">
+          <h4 className="font-semibold">{productTitle(slotProduct)} 原候选</h4>
+          {hosted.discoveryErrors[slotProduct] ? <p role="alert">{hosted.discoveryErrors[slotProduct]}</p> : slot ? <>
+            <p className="break-all text-xs">原请求：{slot.manifest.requestId}｜{slot.restored ? '备份恢复，只读' : slot.abandonRequested ? '原放弃清理待完成' : slot.manifest.modelCompleted ? '完成原件已封存' : '尚未完成封存'}</p>
+            {slotProduct === product ? <BattleStoryActions>
+              <button type="button" className={secondary} disabled={busy || hasUnsealedWindowResult || alreadyRead} title={hasUnsealedWindowResult ? '当前窗口仍有未保存正文或推理，请先导出并处理原结果' : alreadyRead ? '本候选原件已读取；请继续处理当前原件' : undefined} onClick={() => void hostedOwner.openCandidate()}>读取原件（本地）</button>
+              <button type="button" className={secondary} disabled={busy || !hosted.hydrated || !hosted.actorCurrent || !candidate?.createClaim || candidate.manifest.requestId !== slot.manifest.requestId || !!candidate.abandonRequested || !candidate.restored && (hosted.evidence === 'unknown' || !!candidate.saveAttemptId)}
+                onClick={() => void hostedOwner.recover()}>恢复原请求</button>
+            </BattleStoryActions> : <button type="button" className={secondary} disabled={!props.onNavigateStoryProduct} onClick={() => props.onNavigateStoryProduct?.(slotProduct)}>前往{productTitle(slotProduct)}处理原候选</button>}
+          </> : <p className="text-xs text-gray-500">本产品暂无本机候选</p>}
+        </section>;
+      })}</div>
+      {!candidate?.restored && (hosted.busy === 'model' || candidate?.createClaim && hosted.actorCurrent && !candidate.abandonRequested) ? <BattleStoryActions>
+        <button type="button" className={secondary} disabled={hosted.stopping || hosted.busy !== 'model' && busy} onClick={() => void hostedOwner.requestServerStop()}>请求服务器停止</button>
+      </BattleStoryActions> : null}
+      {hosted.busy === 'model' ? <p role="status">正在读取原请求。离开页面或账号变化只会脱离本机订阅，不代表服务器停止；请求停止也不保证退费。</p> : null}
+      {candidate ? <HostedStoryPendingControls key={`${candidate.manifest.product}:${candidate.manifest.requestId}:${candidate.manifest.inputDigest}`}
+        owner={hostedOwner} state={hosted} disabled={busy} hasWindowBody={hostedResult && !!state.result?.markdown} hasWindowReasoning={hostedResult && !!state.result?.reasoning} exportWindowBody={exportResult} /> : null}
+      {!candidate && hosted.localRetry === 'seal' ? <HostedStoryInputPendingControls owner={hostedOwner} disabled={busy} download={props.download} /> : null}
+      {hosted.message ? <p role="status" className="text-sm text-amber-800">{hosted.message}</p> : null}
+      {hosted.pointerError ? <p role="alert">原恢复入口仍保留：{hosted.pointerError}</p> : null}
+      {hosted.exportError ? <p role="alert">{hosted.exportError}</p> : null}
+      {hosted.exportResults.length ? <ul aria-label="原件导出成功回执" className="space-y-1 text-xs">{hosted.exportResults.map(result => <li key={result.token} className="break-all">已导出：{result.absolutePath}（{result.byteLength} 字节）｜{result.digest}</li>)}</ul> : null}
+    </section> : null}
     {state.pending ? <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4" role="status">
       <p className="font-semibold">{state.saving ? '正在保存已完成章节…' : state.pending.evidence === 'unknown' ? '生成完成，保存状态待确认' : '生成完成，未保存到会话'}</p>
       <p className="text-sm">完整结果只保留在当前窗口，关闭后可能丢失。先导出正文和原始输出可保留本次结果。</p>
@@ -133,11 +266,15 @@ export function DesktopArenaStoryControls(props: {
             <p className="font-semibold">本次第 {state.resultChapterIndex} 章 · {state.resultSaved ? '已保存' : generating ? '生成中' : '尚未保存'}</p>
             <BattleStoryContentPreview key={state.resultChapterIndex} characterCount={state.result.markdown.length}
               exportAction={<button type="button" className={secondary} onClick={exportResult}>导出当前完整正文</button>}>
-              <StreamingBattleReportCard content={state.result.markdown} isStreaming={state.phase === 'generating'} onStopGeneration={() => owner.cancel()}
+              <StreamingBattleReportCard content={state.result.markdown} isStreaming={state.phase === 'generating'} onStopGeneration={hostedResult ? undefined : () => owner.cancel()}
                 aiReasoning={state.result.reasoning ? { status: generating ? 'thinking' : 'done', source: 'provider', text: state.result.reasoning } : null} ports={ports} />
             </BattleStoryContentPreview>
-            <details><summary>完整原始输出</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all">{state.result.rawText}</pre></details>
-            <BattleStoryActions><button type="button" className={secondary} onClick={exportRaw}>导出完整原始输出</button>{!state.pending && !generating ? <button type="button" className={secondary} disabled={owner.isBusy()} onClick={() => { if (!owner.hasUnsavedResult() || window.confirm('清除当前未保存原文？请先导出。')) owner.discardResult(); }}>清除本次预览</button> : null}</BattleStoryActions>
+            {hostedResult && !state.resultSaved && !hosted?.outputDurable ? <p role="status">当前窗口原文，尚未耐久封存。正文与推理仅在当前窗口，请分别导出完整正文与推理原文；本机已封存的输入原件不包含这些最新输出。</p> : null}
+            {hostedResult && !state.resultSaved && !hosted?.outputDurable && state.result.reasoning ? <BattleStoryActions>
+              <button type="button" className={secondary} onClick={exportWindowReasoning}>导出当前窗口推理原文</button>
+            </BattleStoryActions> : null}
+            {!hostedResult ? <><details><summary>完整原始输出</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all">{state.result.rawText}</pre></details>
+            <BattleStoryActions><button type="button" className={secondary} onClick={exportRaw}>导出完整原始输出</button>{!state.pending && !generating ? <button type="button" className={secondary} disabled={owner.isBusy()} onClick={() => { if (!owner.hasUnsavedResult() || window.confirm('清除当前未保存原文？请先导出。')) owner.discardResult(); }}>清除本次预览</button> : null}</BattleStoryActions></> : null}
           </section> : null}
         </div>
         <BattleStoryChapterReader state={readState} description="按需读取所选章节全文；目录页数不会限制完整故事导出。" emptyContent={<p>选择故事后可阅读任意章节。</p>}

@@ -117,6 +117,7 @@ const assertReplacement = (previous: StoryPendingSnapshot | null, next: StoryPen
   const fields = ['product', 'requestId', 'actor', 'sessionId', 'operationId', 'outputCheckpointId', 'initialCheckpointId',
     'createdAt', 'expectedRevision', 'expectedLastChapterId', 'lastInputCheckpointId', 'inputDigest', 'writeOptions'] as const;
   if (next.pendingRevision !== old.pendingRevision + 1 || fields.some((key) => !same(old[key], next[key]))
+    || !same(old.localAssembly ?? null, next.localAssembly ?? null)
     || (old.modelCompleted && !next.modelCompleted)
     || (old.roleInputDigest !== null && old.roleInputDigest !== next.roleInputDigest)
     || (old.roleState === 'unresolved' && next.roleState === 'not-requested')
@@ -124,7 +125,7 @@ const assertReplacement = (previous: StoryPendingSnapshot | null, next: StoryPen
     || old.parts.some((part) => !next.parts.some((candidate) => same(part, candidate)))) throw new Error('故事候选替换改变了原身份或不可变原件');
 };
 export class StoryPendingPublishError extends Error {
-  constructor(readonly phase: 'begin' | 'append' | 'seal', readonly cause?: unknown) {
+  constructor(readonly phase: 'begin' | 'append' | 'seal', readonly cause?: unknown, readonly token?: string) {
     super('故事候选封存尚未证实，请保留原件；此结果不允许重新生成或角色同步'); this.name = 'StoryPendingPublishError';
   }
 }
@@ -134,6 +135,7 @@ const bufferedKinds = new Set<StoryPendingPartKind>(['input', 'meta', 'header', 
 export const publishStoryPending = async (
   port: StoryPendingNativePort, prepared: PreparedStoryPendingUpload, previous: StoryPendingSnapshot | null,
   signal?: AbortSignal,
+  resume?: { token?: string },
 ): Promise<StoryPendingSnapshot> => {
   const manifest = freezeBattleStoryCommit(StoryPendingManifestSchema.parse(prepared.manifest));
   previous = previous === null ? null : checkedSnapshot(previous);
@@ -147,7 +149,10 @@ export const publishStoryPending = async (
     return current;
   }
   if (!same(current, previous)) throw new Error('故事候选上传基线已变化');
-  let token: string | undefined, phase: 'begin' | 'append' | 'seal' = 'begin';
+  // An explicit retry first reads the exact active above, then ONLY queries the
+  // known original upload. Missing token/failed lookup never authorizes another begin.
+  if (resume && !resume.token) throw new StoryPendingPublishError('begin', new Error('尚未取得原上传 token，只能重读已封存候选；不能证实安全重试。'));
+  let token = resume?.token, phase: 'begin' | 'append' | 'seal' = token ? 'append' : 'begin';
   const query = async () => {
     const upload = StoryPendingUploadSchema.parse(await port.queryUpload(token!));
     if (upload.token !== token || !same(upload.manifest, manifest)) throw new Error('故事候选上传查询身份不符');
@@ -161,14 +166,16 @@ export const publishStoryPending = async (
   };
   try {
     signal?.throwIfAborted();
-    let begun: unknown;
-    try { begun = await port.begin(manifest); }
-    catch (cause) {
-      if (StoryNativeFailureSchema.safeParse(cause).success) throw cause;
-      signal?.throwIfAborted(); begun = await port.begin(manifest);
-    }
-    const result = StoryPendingBeginOutcomeSchema.parse(begun); token = result.token;
-    if (result.totalBytes !== prepared.byteLength) throw new Error('故事候选上传声明回执不符');
+    if (!resume) {
+      let begun: unknown;
+      try { begun = await port.begin(manifest); }
+      catch (cause) {
+        if (StoryNativeFailureSchema.safeParse(cause).success) throw cause;
+        signal?.throwIfAborted(); begun = await port.begin(manifest);
+      }
+      const result = StoryPendingBeginOutcomeSchema.parse(begun); token = result.token;
+      if (result.totalBytes !== prepared.byteLength) throw new Error('故事候选上传声明回执不符');
+    } else token = StoryPendingBeginOutcomeSchema.shape.token.parse(resume.token);
     const upload = await query(); phase = 'append';
     for (const [index, part] of manifest.parts.entries()) {
       let offset = 0, known = upload.receivedBytes[index]!.receivedBytes;
@@ -203,7 +210,7 @@ export const publishStoryPending = async (
       if (pending.receivedBytes.some((part, i) => part.receivedBytes !== manifest.parts[i]!.byteLength)) throw cause;
       signal?.throwIfAborted(); return sealed(await port.seal(token));
     }
-  } catch (cause) { throw new StoryPendingPublishError(phase, cause); }
+  } catch (cause) { throw new StoryPendingPublishError(phase, cause, token); }
   // An unresolved upload is retained for inspection, never automatically aborted.
 };
 
@@ -238,24 +245,41 @@ export const queryStoryPendingReceipt = async (
  * A restored/attempted/abandoning snapshot has only the receipt path. */
 export const createStoryPendingSaveAttempt = async (
   port: StoryPendingNativePort, original: StoryPendingSnapshot, chapterIndex: number,
+  options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ) => {
   const snapshot = checkedSnapshot(original), key = storyPendingKey(snapshot.manifest);
   const expected = await prepareStoryPendingReceiptExpectation(snapshot, chapterIndex);
   const queryReceipt = () => queryStoryPendingReceipt(port, expected);
   let promise: Promise<StoryReceipt> | undefined;
+  const assertAuthorization = () => {
+    try { options.signal?.throwIfAborted(); options.assertCurrent?.(); }
+    catch (cause) { throw new StorySaveError('原保存世代已失效；未继续派发保存操作', 'not-written', cause); }
+  };
   const save = async (): Promise<StoryReceipt> => {
-    const receipt = await queryReceipt(); if (receipt) return receipt;
+    assertAuthorization();
+    const receipt = await queryReceipt(); assertAuthorization(); if (receipt) return receipt;
     if (snapshot.restored || snapshot.abandonRequested || snapshot.saveAttemptId !== null) throw new StorySaveError('原候选只允许查询保存回执', 'unknown');
     await assertCurrent(port, snapshot);
+    assertAuthorization();
     // Check chapter identity against exact hashed input, not a mutable UI index.
-    const input = JSON.parse(await readStoryPendingPartText(port, snapshot, 'input')) as unknown;
+    let originalInput: string;
+    try { originalInput = await readStoryPendingPartText(port, snapshot, 'input', options.signal); }
+    catch (cause) { assertAuthorization(); throw cause; }
+    assertAuthorization();
+    const input = JSON.parse(originalInput) as unknown;
     const checked = StoryPendingInputSchema.parse(input);
     if (checked.chapterIndex !== chapterIndex || checked.sessionId !== snapshot.manifest.sessionId
       || checked.generationRequestId !== snapshot.manifest.requestId) throw new Error('故事候选输入与保存身份不符');
-    let saveInvoked = false;
+    let saveInvoked = false, preparationConfirmed = false;
+    // Before prepare, invalidation proves this attempt has made no write. Once
+    // prepare is dispatched, even a lost/aborted ACK is conservatively unknown.
+    assertAuthorization();
     try {
       const prepared = StoryPendingSavePreparationSchema.parse(await port.prepareSave(key, expected.wireDigest));
+      preparationConfirmed = true;
+      assertAuthorization();
       const durable = checkedSnapshot(await port.describe(key.product));
+      assertAuthorization();
       if (!same(durable, { ...snapshot, saveAttemptId: prepared.attemptId })) throw new Error('故事候选保存尝试回执不符');
       saveInvoked = true;
       return exactReceipt(await port.save(key, expected.wireDigest, prepared.attemptId), expected);
@@ -266,7 +290,9 @@ export const createStoryPendingSaveAttempt = async (
       if (saveInvoked && failure.success && failure.data.writeEvidence === 'not-written') {
         try { exactSnapshot(await port.describe(key.product), snapshot); rolledBack = true; } catch { /* an attempt may still be durable */ }
       }
-      throw new StorySaveError(rolledBack ? '本次保存已回滚，保留原候选' : '保存结果待确认，只能查询原操作回执', rolledBack ? 'not-written' : 'unknown', cause);
+      throw new StorySaveError(rolledBack ? '本次保存已回滚，保留原候选' : saveInvoked ? '保存结果待确认，只能查询原操作回执'
+        : preparationConfirmed ? '原保存尝试已领取，但尚未派发章节保存；只能查询原回执或导出、明确放弃，不能重新领取或保存。'
+        : '原保存准备结果待确认，尚未派发章节保存；只能查询原回执或导出、明确放弃，不能重新领取或保存。', rolledBack ? 'not-written' : 'unknown', cause);
     }
   };
   return Object.freeze({ expected, queryReceipt, saveOnce: (): Promise<StoryReceipt> => { promise ??= save(); return promise; } });

@@ -43,9 +43,12 @@ export const StoryBeginOutcomeSchema = z.object({ token: z.string().regex(/^[a-f
 export const StoryAppendOutcomeSchema = z.object({ token: z.string(), kind: StoryPartKindSchema, receivedBytes: integer }).strict();
 export const StorySessionCursorSchema = z.object({ updatedAt: integer, id }).strict();
 export const StoryChapterCursorSchema = z.object({ index: integer.min(1), id }).strict();
+export const StoryChapterPlanSchema = z.object({
+  totalChapters: integer.min(1).max(20), source: z.enum(['user', 'scenario']), locked: z.boolean(),
+}).strict();
 export const StorySessionHeadSchema = z.object({
   id, revision: integer.min(1), titlePreview: preview, titleTruncated: z.boolean(),
-  mode: z.enum(['classic', 'kizuna', 'daily', 'scenario']), chapterPlan: z.object({ totalChapters: integer.min(1).max(20), source: z.enum(['user', 'scenario']), locked: z.boolean() }).strict().optional(), createdAt: integer, updatedAt: integer,
+  mode: z.enum(['classic', 'kizuna', 'daily', 'scenario']), chapterPlan: StoryChapterPlanSchema.optional(), createdAt: integer, updatedAt: integer,
   chapterCount: integer.min(1), lastChapterId: id,
 }).strict();
 export const StoryChapterHeadSchema = z.object({
@@ -186,6 +189,13 @@ export type StoryPendingPartKind = z.infer<typeof StoryPendingPartKindSchema>;
 export const StoryPendingPartSchema = z.object({
   kind: StoryPendingPartKindSchema, byteLength: integer.min(1).max(STORY_PENDING_LIMITS.slotBytes), digest,
 }).strict();
+/** Local assembly intent only. Missing means an older candidate has unknown intent;
+ * chapterPlan: null explicitly means no plan. It is immutable across revisions and
+ * never belongs to the Hosted request DTO or a new pending payload part. */
+export const StoryPendingLocalAssemblySchema = z.object({
+  version: z.literal(1), chapterPlan: StoryChapterPlanSchema.nullable(),
+}).strict();
+export type StoryPendingLocalAssembly = z.infer<typeof StoryPendingLocalAssemblySchema>;
 export const StoryPendingManifestSchema = z.object({
   version: z.literal(1), product: DesktopArenaHostedProductSchema,
   requestId: DesktopArenaHostedRequestIdSchema, actor: DesktopArenaHostedActorSchema,
@@ -200,8 +210,12 @@ export const StoryPendingManifestSchema = z.object({
   roleInputDigest: digest.nullable(),
   parts: z.array(StoryPendingPartSchema).min(1).max(StoryPendingPartKindSchema.options.length),
   commitManifest: StoryCommitManifestSchema.nullable(),
+  localAssembly: StoryPendingLocalAssemblySchema.optional(),
 }).strict().superRefine((value, context) => {
   const reject = (message: string): void => { context.addIssue({ code: 'custom', message }); };
+  if (Object.prototype.hasOwnProperty.call(value, 'localAssembly') && value.localAssembly === undefined) {
+    reject('Local assembly must be explicit or absent');
+  }
   const kinds = value.parts.map((part) => part.kind);
   const order = kinds.map((kind) => StoryPendingPartKindSchema.options.indexOf(kind));
   if (kinds[0] !== 'input' || order.some((position, i) => i > 0 && position <= order[i - 1]!)) {

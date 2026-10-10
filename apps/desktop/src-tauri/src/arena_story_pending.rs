@@ -152,6 +152,83 @@ pub enum RoleState {
     Accepted,
     OldRoles,
 }
+// Closed local-only assembly intent. Absence is historical/unknown, whereas an
+// explicit chapterPlan: null means no plan. Never serialize a missing extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LocalChapterPlanSource {
+    User,
+    Scenario,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalChapterPlan {
+    pub total_chapters: u64,
+    pub source: LocalChapterPlanSource,
+    pub locked: bool,
+}
+impl<'de> Deserialize<'de> for LocalChapterPlan {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Box::<RawValue>::deserialize(deserializer)?;
+        if !raw.get().starts_with('{') {
+            return Err(serde::de::Error::custom(
+                "local chapter plan must be an object",
+            ));
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Fields {
+            #[serde(deserialize_with = "local_chapter_count")]
+            total_chapters: u64,
+            source: LocalChapterPlanSource,
+            locked: bool,
+        }
+        let fields: Fields = serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            total_chapters: fields.total_chapters,
+            source: fields.source,
+            locked: fields.locked,
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalAssembly {
+    #[serde(deserialize_with = "local_assembly_version")]
+    pub version: u32,
+    #[serde(deserialize_with = "required_nullable")]
+    pub chapter_plan: Option<LocalChapterPlan>,
+}
+fn local_assembly_version<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    match u32::deserialize(deserializer)? {
+        1 => Ok(1),
+        _ => Err(serde::de::Error::custom(
+            "unsupported local assembly version",
+        )),
+    }
+}
+fn local_chapter_count<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let count = u64::deserialize(deserializer)?;
+    if !(1..=20).contains(&count) {
+        return Err(serde::de::Error::custom("invalid local chapter count"));
+    }
+    Ok(count)
+}
+fn present_local_assembly<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<LocalAssembly>, D::Error> {
+    // Option's normal deserializer would incorrectly merge explicit null with
+    // a missing old field. A present extension must be a full versioned object.
+    let raw = Box::<RawValue>::deserialize(deserializer)?;
+    if !raw.get().starts_with('{') {
+        return Err(serde::de::Error::custom("local assembly must be an object"));
+    }
+    serde_json::from_str(raw.get())
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PendingManifest {
@@ -179,6 +256,12 @@ pub struct PendingManifest {
     pub parts: Vec<PendingPart>,
     #[serde(deserialize_with = "required_commit_manifest")]
     pub commit_manifest: Option<CommitManifest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_local_assembly"
+    )]
+    pub local_assembly: Option<LocalAssembly>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -263,6 +346,13 @@ impl PendingManifest {
             return Err(StoryError::TooLarge);
         }
         if self.version != 1
+            || self.local_assembly.as_ref().is_some_and(|assembly| {
+                assembly.version != 1
+                    || assembly
+                        .chapter_plan
+                        .as_ref()
+                        .is_some_and(|plan| !(1..=20).contains(&plan.total_chapters))
+            })
             || !request_id(&self.request_id)
             || !(1..=MAX_SAFE_INTEGER).contains(&self.pending_revision)
             || self.created_at > MAX_SAFE_INTEGER
@@ -515,6 +605,7 @@ fn compatible(old: &PendingSnapshot, next: &PendingManifest) -> Result<(), Story
         || m.last_input_checkpoint_id != next.last_input_checkpoint_id
         || m.input_digest != next.input_digest
         || m.write_options != next.write_options
+        || m.local_assembly != next.local_assembly
         || (m.model_completed && !next.model_completed)
         || (m.role_input_digest.is_some() && m.role_input_digest != next.role_input_digest)
         || (m.role_state == RoleState::Unresolved && next.role_state == RoleState::NotRequested)
@@ -986,6 +1077,7 @@ impl StoryStore {
         }
         let result = (|| {
             no_space(&self.staging_root, m.validate()?)?;
+            validate_local_assembly(&connection, &row)?;
             validate_content_coverage(&connection, &row)?;
             let validated = validate_documents(m, &mut |kind| {
                 read_blob(&connection, &token, PendingKind::from_commit(kind))
@@ -1205,12 +1297,25 @@ fn validate_input(bytes: &[u8], m: &PendingManifest) -> Result<(), StoryError> {
         return Err(StoryError::Invalid);
     }
     text_field(&map, "userGuidance")?;
-    if let Some(plan) = map.get("chapterPlan") {
-        let p = object(plan, &["totalChapters"], &["totalChapters"])?;
-        let total = integer(field(&p, "totalChapters")?)?;
-        if !(1..=20).contains(&total) || m.expected_revision + 1 > total {
-            return Err(StoryError::Invalid);
-        }
+    let input_chapter_count = map
+        .get("chapterPlan")
+        .map(|plan| {
+            let p = object(plan, &["totalChapters"], &["totalChapters"])?;
+            let total = integer(field(&p, "totalChapters")?)?;
+            if !(1..=20).contains(&total) || m.expected_revision + 1 > total {
+                return Err(StoryError::Invalid);
+            }
+            Ok(total)
+        })
+        .transpose()?;
+    if m.local_assembly.as_ref().is_some_and(|assembly| {
+        input_chapter_count
+            != assembly
+                .chapter_plan
+                .as_ref()
+                .map(|plan| plan.total_chapters)
+    }) {
+        return Err(StoryError::Invalid);
     }
     let context = object(
         field(&map, "chapterContext")?,
@@ -1637,6 +1742,44 @@ fn validate_claim_generation(connection: &Connection, row: &Stored) -> Result<()
     }
     Ok(())
 }
+fn validate_local_assembly(connection: &Connection, row: &Stored) -> Result<(), StoryError> {
+    let m = &row.snapshot.manifest;
+    let Some(assembly) = &m.local_assembly else {
+        return Ok(()); // Historical candidates cannot acquire inferred intent.
+    };
+    if m.expected_revision > 0 {
+        // Read only the bounded plan projection, never another full snapshot.
+        let stored: Option<Option<String>> = connection.query_row(
+            "SELECT CASE WHEN chapter_plan IS NULL OR length(CAST(chapter_plan AS BLOB))<=512 THEN chapter_plan ELSE 'invalid' END FROM arena_story_session WHERE id=?1",
+            [&m.session_id], |r| r.get(0),
+        ).optional().map_err(|_| StoryError::Corrupt)?;
+        let plan = stored
+            .ok_or(StoryError::Missing)?
+            .as_deref()
+            .map(serde_json::from_str::<LocalChapterPlan>)
+            .transpose()
+            .map_err(|_| StoryError::Corrupt)?;
+        if plan != assembly.chapter_plan {
+            return Err(StoryError::Invalid);
+        }
+    }
+    if m.commit_manifest.is_some() {
+        let document = read_blob(connection, &row.token, PendingKind::Session)?;
+        let session = parse_raw(&document)?;
+        // The typed session index is permissive for business extensions. This
+        // local intent is closed and compares all plan fields before sealing.
+        let fields = raw_projection_fields(session, &["chapterPlan"])?;
+        let plan = fields
+            .get("chapterPlan")
+            .map(|raw| serde_json::from_str::<LocalChapterPlan>(raw.get()))
+            .transpose()
+            .map_err(|_| StoryError::Invalid)?;
+        if plan != assembly.chapter_plan {
+            return Err(StoryError::Invalid);
+        }
+    }
+    Ok(())
+}
 fn validate_payload(connection: &Connection, row: &Stored) -> Result<(), StoryError> {
     let m = &row.snapshot.manifest;
     for p in &m.parts {
@@ -1663,6 +1806,7 @@ fn validate_payload(connection: &Connection, row: &Stored) -> Result<(), StoryEr
         return Err(StoryError::Corrupt);
     }
     validate_claim_generation(connection, row)?;
+    validate_local_assembly(connection, row)?;
     if let Some(commit) = &m.commit_manifest {
         validate_content_coverage(connection, row)?;
         let validated = validate_documents(commit, &mut |kind| {

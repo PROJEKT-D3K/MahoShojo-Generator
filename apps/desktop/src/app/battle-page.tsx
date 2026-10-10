@@ -41,6 +41,7 @@ import { navigateByProductHref, resolveInternalHrefForHashHistory } from './hash
 import { useLeaveGuard } from './useLeaveGuard';
 import { DesktopArenaStorySession, type PrepareStoryExecution } from '../features/arena/story-session';
 import { DesktopArenaStoryControls } from '../features/arena/story-controls';
+import { createIpcStoryPendingPort, createIpcStoryPendingExportPort } from '../platform/arena-story-pending-native';
 import { createIpcStoryNativePort, createIpcStoryMarkdownExportPort } from '../platform/arena-story-native';
 import { exportCommittedStoryMarkdown } from '../platform/arena-story-storage';
 import type { BattleStoryChapterPlan } from '@mahoshojo/domain/arena-battle-story-session';
@@ -56,9 +57,9 @@ const createWebPackages = () => {
     write: async (record, archive) => ({ repaired: (await repository.putWithOutcome(record, archive)).blobOutcome === 'repaired' }) });
 };
 
-const createStorySession = () => {
+const createStorySession = (product: DesktopArenaProduct) => {
   const port = createIpcStoryNativePort(invoke), sink = createIpcStoryMarkdownExportPort(invoke);
-  return new DesktopArenaStorySession({ port, exportMarkdown: (head, signal, onProgress) => exportCommittedStoryMarkdown(port, sink, head, { signal, onProgress }) });
+  return new DesktopArenaStorySession({ port, hosted: { product, invoke, storage: window.localStorage, port: createIpcStoryPendingPort(invoke), sink: createIpcStoryPendingExportPort(invoke) }, exportMarkdown: (head, signal, onProgress) => exportCommittedStoryMarkdown(port, sink, head, { signal, onProgress }) });
 };
 
 /** Desktop owns session/IO only. The actual Web controls, layout and report are shared. */
@@ -70,6 +71,9 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const packageOwner = useMemo(() => webPackages ?? createWebPackages(), [webPackages]);
   const packageState = useSyncExternalStore(packageOwner.subscribe, packageOwner.getSnapshot);
   const recovery = useSyncExternalStore(session.hostedRecovery.subscribe, session.hostedRecovery.getSnapshot);
+  useEffect(() => {
+    if (!storyState.hosted?.active && !storyState.hosted?.busy) session.hostedRecovery.refreshFromStorage();
+  }, [session, storyState.hosted?.active, storyState.hosted?.busy, storyState.hosted?.abandonment]);
   useEffect(() => () => { if (!webPackages) packageOwner.dispose(); }, [packageOwner, webPackages]);
   const { state: aiState, store: aiStore } = useDesktopAiConfig();
   const { state: cloudState, store: cloudStore } = useDesktopCloudSession();
@@ -108,19 +112,22 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   // Do not include credential presence probes or preparing-state changes: they do not change target identity.
   const scope = JSON.stringify({ account: cloudState.account?.userId ?? null, credentialEpoch: cloudStore.getCredentialEpoch(), selection: aiState.selection,
     profiles: aiState.profiles, models: aiState.modelsByProfileId, presets: aiState.presetsByProviderId, overrides: aiState.generationOverrides });
-  useLayoutEffect(() => { ownerEpoch.current += 1; session.setScope(scope); storyOwner.setExecutionScope(scope); packageOwner.setScope(scope); aiStore.cancelPreparingGeneration(); setError(null); setImportWarnings([]); setRecoveryHint(null); diagnosisFlight.current = null; setDiagnosing(false); }, [scope, session, aiStore, packageOwner, storyOwner]);
+  useLayoutEffect(() => { ownerEpoch.current += 1; session.setScope(scope); packageOwner.setScope(scope); aiStore.cancelPreparingGeneration(); setError(null); setImportWarnings([]); setRecoveryHint(null); diagnosisFlight.current = null; setDiagnosing(false); }, [scope, session, aiStore, packageOwner]);
+  // Resolving an initially anonymous account updates the Hosted actor without
+  // cancelling unrelated Direct credential preparation at the same target scope.
+  useLayoutEffect(() => { storyOwner.setExecutionScope(scope, cloudState.bootstrapped ? cloudState.account ? { kind: 'account', expectedUserId: cloudState.account.userId } : { kind: 'anonymous' } : null); }, [scope, cloudState.bootstrapped, cloudState.account?.userId, storyOwner]);
   useEffect(() => () => { ownerEpoch.current += 1; diagnosisFlight.current = null; aiStore.cancelPreparingGeneration(); }, [aiStore]);
   const guard = useLeaveGuard(
     () => storyOwner.isBusy() || storyOwner.hasUnsavedResult() || Boolean(diagnosisFlight.current) || session.isBusy() || packageOwner.isBusy() || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current || packageOwner.getSnapshot().temporary.length > 0 || session.hasUnsavedDraft() || Object.values(dirtyControls.current).some(Boolean),
     '当前生成、读取或保存尚未完成，或仍有未保存的内容。',
     '窗口关闭保护初始化失败，生成、导入与保存暂不可用，请重新打开页面。',
     () => {
-      if (storyOwner.getSnapshot().saving || storyOwner.getSnapshot().exporting || storyOwner.getSnapshot().phase === 'preparing' || diagnosisFlight.current || packageOwner.isBusy() || session.getSnapshot().saving || session.getSnapshot().importing || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current) return false;
-      if (!window.confirm(session.getSnapshot().hosted || session.getSnapshot().generation?.intent.mode === 'hosted' ? '确认离开？只停止本机订阅，服务器可能继续生成；原请求可从此页面恢复。未保存内容可能丢失。' : '确认离开？正在生成的请求会取消，未保存的输入或原文可能丢失。')) return false;
+      if (storyOwner.getSnapshot().hosted?.busy && storyOwner.getSnapshot().hosted?.busy !== 'model' || storyOwner.getSnapshot().saving || storyOwner.getSnapshot().exporting || storyOwner.getSnapshot().phase === 'preparing' || diagnosisFlight.current || packageOwner.isBusy() || session.getSnapshot().saving || session.getSnapshot().importing || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current) return false;
+      if (!window.confirm(storyOwner.hosted?.hasCandidate() || session.getSnapshot().hosted || session.getSnapshot().generation?.intent.mode === 'hosted' ? '确认离开？只停止本机订阅，服务器可能继续生成；已封存原件可从原页面恢复，尚未封存的最新正文仅在当前窗口，请先导出。' : '确认离开？正在生成的请求会取消，未保存的输入或原文可能丢失。')) return false;
       storyOwner.detach(); session.detach(); return true;
     },
   );
-  const busy = storyState.saving || storyState.exporting || storyState.phase === 'preparing' || storyState.phase === 'generating' || diagnosing || state.roleUpdates.status === 'updating' || state.phase === 'generating' || state.saving || state.importing || aiState.generationActive || advancedBusy || packageState.busy;
+  const busy = Boolean(storyState.hosted?.stopping) || Boolean(storyState.hosted?.busy) || storyState.saving || storyState.exporting || storyState.phase === 'preparing' || storyState.phase === 'generating' || diagnosing || state.roleUpdates.status === 'updating' || state.phase === 'generating' || state.saving || state.importing || aiState.generationActive || advancedBusy || packageState.busy;
   const disabled = !guard.ready || busy || state.pendingRestore;
   const update = (patch: Partial<ArenaDraft>) => { if (!disabled) session.updateDraft({ ...session.getSnapshot().draft, ...patch }); };
   const resultRef = useRef<HTMLDivElement>(null);
@@ -232,6 +239,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const currentHint = recoveryHint?.epoch === ownerEpoch.current && session.hostedRecovery.isReplacementCurrent(recoveryHint.repair) ? recoveryHint : null;
   const repairHint = currentHint && (currentHint.value.state === 'available' || currentHint.value.state === 'expired') ? currentHint : null;
   const generate = () => {
+    if (storyOwner.hosted?.hasCandidate() || storyState.hosted?.slots[product]) { setError('本产品有待处理的 Hosted 故事候选，请先处理原候选。'); return; }
     if (disabled || diagnosisFlight.current || preparing.current || session.isBusy() || packageOwner.isBusy()) return;
     if (!target.modelId || !target.providerTarget || target.unavailableReason || hostedUnavailable) { setError(hostedUnavailable ?? target.unavailableReason ?? '请选择受支持的 AI 目标。'); return; }
     const actor = cloudState.account ? { kind: 'account' as const, expectedUserId: cloudState.account.userId } : { kind: 'anonymous' as const };
@@ -261,14 +269,29 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           temperature: prepared.generationOverrides?.temperature, maxOutputTokens: prepared.generationOverrides?.maxOutputTokens });
     }).catch((cause: unknown) => { if (epoch === ownerEpoch.current) reportError(cause); }).finally(() => { preparing.current = false; });
   };
-  const prepareStoryExecution: PrepareStoryExecution = (run) => aiStore.withPreparedGeneration(async (prepared) => {
-    if (prepared.location === 'server' || !prepared.mode || !prepared.modelId || !prepared.providerTarget || prepared.providerTarget.kind === 'system') throw new Error('连续故事仅支持当前选择的客户端 Direct 模型。');
-    await run({ options: { invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget },
-      intent: { mode: prepared.mode, modelId: prepared.modelId, temperature: prepared.generationOverrides?.temperature, maxOutputTokens: prepared.generationOverrides?.maxOutputTokens } });
-  });
+  const prepareStoryExecution: PrepareStoryExecution = (run) => {
+    const epoch = ownerEpoch.current;
+    const actor = cloudState.account ? { kind: 'account' as const, expectedUserId: cloudState.account.userId } : { kind: 'anonymous' as const };
+    return aiStore.withPreparedGeneration(async (prepared) => {
+      if (epoch !== ownerEpoch.current) return;
+      if (!prepared.modelId || !prepared.providerTarget) throw new Error('请选择可用的模型。');
+      if (prepared.location === 'server') {
+        if (!cloudState.bootstrapped || prepared.providerTarget.kind === 'custom') throw new Error('服务器故事目标或账号身份尚未就绪。');
+        const funding = prepared.providerTarget.kind === 'preset'
+          ? { presetConfig: { providerId: prepared.providerTarget.providerId, modelId: prepared.modelId, generationOverrides: prepared.generationOverrides } }
+          : { systemConfig: { ...(prepared.modelId !== 'default' ? { modelId: prepared.modelId } : {}), generationOverrides: prepared.generationOverrides } };
+        await run({ mode: 'hosted', invoke, actor, modelId: prepared.modelId, ...funding });
+        return;
+      }
+      if (!prepared.mode || prepared.providerTarget.kind === 'system') throw new Error('客户端模型目标无效。');
+      await run({ options: { invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget },
+        intent: { mode: prepared.mode, modelId: prepared.modelId, temperature: prepared.generationOverrides?.temperature, maxOutputTokens: prepared.generationOverrides?.maxOutputTokens } });
+    });
+  };
   const allowStoryGeneration = () => {
     if (!guard.ready || busy || diagnosisFlight.current || preparing.current || session.isBusy() || packageOwner.isBusy() || storyOwner.isBusy()) return false;
-    if (hostedTarget || !target.modelId || !target.providerTarget || target.unavailableReason) { setError(hostedTarget ? '连续故事目前仅支持客户端 Direct，服务器单次生成仍可照常使用。' : target.unavailableReason ?? '请选择可用的 Direct 模型。'); return false; }
+    if (!target.modelId || !target.providerTarget || target.unavailableReason || hostedUnavailable) { setError(hostedUnavailable ?? target.unavailableReason ?? '请选择可用的模型。'); return false; }
+    if (storyOwner.hosted?.hasCandidate()) { setError('此产品仍有原 Hosted 故事候选，请先读取、导出或明确放弃。'); return false; }
     if (storyOwner.hasUnsavedResult()) { if (!window.confirm('开始新章节会清除当前未保存原文，请先导出。继续？')) return false; storyOwner.discardResult(); }
     return true;
   };
@@ -365,7 +388,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         actions: <>
           {state.pendingRestore ? <p role="status">发现本机草稿。<button type="button" className={secondary} onClick={() => session.restoreDraft()}>恢复草稿</button><button type="button" className={secondary} onClick={() => { if (window.confirm('清除旧草稿？此操作不会删除本地库。')) session.discardDraft(); }}>清除草稿</button></p> : null}
           <button type="button" className={generationSubmitClassName} disabled={disabled || !!hostedUnavailable || !!target.unavailableReason || !!readinessMessage || (hostedTarget && recovery.blocked && !repairHint)} onClick={generate}>生成战报</button>
-          {busy ? <button type="button" className={secondary} disabled={state.saving || packageState.busy} onClick={() => { aiStore.cancelPreparingGeneration(); ownerEpoch.current += 1; session.cancel(); }}>{state.generation?.intent.mode === 'hosted' || state.hosted ? '请求服务器停止' : '取消生成'}</button> : null}
+          {busy && (!storyOwner.isBusy() || !storyState.hosted?.busy || storyState.hosted.busy === 'model') ? <button type="button" className={secondary} disabled={state.saving || packageState.busy} onClick={() => { aiStore.cancelPreparingGeneration(); ownerEpoch.current += 1; if (storyOwner.isBusy()) storyOwner.cancel(); else session.cancel(); }}>{storyOwner.isBusy() ? storyState.hosted?.busy === 'model' ? '请求服务器停止' : '取消生成' : state.generation?.intent.mode === 'hosted' || state.hosted ? '请求服务器停止' : '取消生成'}</button> : null}
           {recovery.pointer ? <section aria-label="服务器恢复记录" className="space-y-2"><p>原服务器请求：{recovery.pointer.requestId} · {recovery.pointer.actor.kind === 'anonymous' ? '原匿名身份' : `账号 ${recovery.pointer.actor.expectedUserId}`} · {recovery.pointer.state}</p>
             <button type="button" className={secondary} disabled={disabled || !cloudState.bootstrapped} onClick={restoreHosted}>恢复原服务器战报</button>
 </section> : null}
@@ -383,7 +406,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           {error || guard.message ? <p role="alert">{error ?? guard.message}</p> : null}
           {state.message ? <p role="status">{state.message}</p> : null}
         </>,
-        community: null, result, storySession: <DesktopArenaStoryControls owner={storyOwner} draft={draft} disabled={!guard.ready || busy} unavailableReason={hostedTarget ? '当前选择为服务器生成，连续故事仅支持客户端 Direct。' : target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的 Direct 模型。' : null)} onStart={startStory} onContinue={continueStory} download={download} onNavigateExternal={openContent} />,
+        community: null, result, storySession: <DesktopArenaStoryControls owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} onStart={startStory} onContinue={continueStory} download={download} onNavigateExternal={openContent} />,
         homeLink: <BackHomeLink href="#/" onNavigate={() => navigateByProductHref(router, '/')} />,
         footer: <ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />,
   };
@@ -416,7 +439,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
 function DesktopArenaHost({ product }: { product: DesktopArenaProduct }) {
   const repository = useMemo(() => new IpcLocalCardRepository((command, args) => invoke(command, args as never)), []);
   const [owners, setOwners] = useState<{ session: DesktopArenaSession; packages: DesktopArenaWebPackages; story: DesktopArenaStorySession } | null>(null);
-  useEffect(() => { const packages = createWebPackages(); const session = new DesktopArenaSession({ product, repository, storage: window.localStorage, resolveWebPackage: packages.resolveExact }); const story = createStorySession(); setOwners({ session, packages, story }); return () => { session.dispose(); packages.dispose(); story.dispose(); }; }, [repository, product]);
+  useEffect(() => { const packages = createWebPackages(); const session = new DesktopArenaSession({ product, repository, storage: window.localStorage, resolveWebPackage: packages.resolveExact }); const story = createStorySession(product); setOwners({ session, packages, story }); return () => { session.dispose(); packages.dispose(); story.dispose(); }; }, [repository, product]);
   return owners ? <DesktopBattleForm session={owners.session} webPackages={owners.packages} story={owners.story} repository={repository} product={product} /> : <p role="status">正在读取本机草稿…</p>;
 }
 

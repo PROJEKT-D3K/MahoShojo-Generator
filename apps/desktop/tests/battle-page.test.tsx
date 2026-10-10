@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 /** Real Desktop route/shared views/session/B1 adapter; simulated IPC and loopback fixture, not OS/Tauri acceptance. */
+import { TextEncoder as NodeTextEncoder } from 'node:util';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
@@ -8,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import { DesktopArenaHostedRecoveryPointerSchema } from '@mahoshojo/contracts/desktop-arena-hosted';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { builtinWebPackageSource, BUILTIN_WEB_PACKAGE_PRESETS, packWebPackageZip, unpackWebPackageZip } from '@mahoshojo/web-package';
 import type { LocalWebPackageRecordV1 } from '@mahoshojo/local-library/web-package-record';
@@ -17,7 +19,11 @@ import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop
 import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { arenaWebPackageFixture, wrappedArenaWebPackageFile } from './fixtures/arena-web-package';
 import { createDesktopRouter } from '../src/app/router';
-import { installStoryCrypto, StoryFixturePort, storyFixtureInvoke } from './helpers/story-fixture';
+import { deferred, installStoryCrypto, StoryFixturePort, storyFixtureInvoke } from './helpers/story-fixture';
+import { HostedStoryFixture } from './helpers/hosted-story-fixture';
+import { STORY_PENDING_IPC } from '../src/platform/arena-story-pending-native';
+import { ARENA_HOSTED_RECOVERY_KEYS } from '../src/features/arena/hosted-recovery';
+import { getDesktopCloudSessionStore, resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
 installStoryCrypto();
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), download: vi.fn(), downloadBinary: vi.fn(), profile: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, isTauri: () => true, Channel: class { onmessage?: (value: unknown) => void; } }));
@@ -27,6 +33,9 @@ vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileI
 let root: Root, container: HTMLDivElement, server: Server, endpoint: string;
 let activeCloseHandles = 0;
 let storyPort: StoryFixturePort, storyIpc: ReturnType<typeof storyFixtureInvoke>;
+let hostedStory: HostedStoryFixture, hostedCapabilityAvailable: boolean;
+let cloudAccount: { userId: number; username: string } | null;
+const pendingCommands = new Set<string>(Object.values(STORY_PENDING_IPC));
 let markdownSuffix = '';
 let webTextOverride: string | null = null;
 let packageDocs: Map<string, LocalWebPackageRecordV1>, packageBytes: Map<string, Uint8Array>;
@@ -76,11 +85,21 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks(); localStorage.clear(); storyPort = new StoryFixturePort(); storyIpc = storyFixtureInvoke(storyPort); received = []; docs = new Map(); hold = false; failSave = false; eof = false; release = undefined; activeCloseHandles = 0; markdownSuffix = ''; webTextOverride = null; packageDocs = new Map(); packageBytes = new Map();
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'client', clientConnectionId: 'loopback' }, hiddenPresetIds: [] }));
-  resetDesktopAiConfigStoreForTests();
+  resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
+  hostedStory = new HostedStoryFixture(); hostedCapabilityAvailable = true; cloudAccount = null;
   mocks.profile.mockResolvedValue({ id: 'loopback', name: 'Loopback', adapter: 'openai-compatible', baseUrl: endpoint.replace('/chat/completions', ''), modelId: 'fixture-model' });
   mocks.listen.mockImplementation(async () => { activeCloseHandles += 1; return vi.fn(() => { activeCloseHandles -= 1; }); }); mocks.download.mockResolvedValue(undefined);
   mocks.invoke.mockImplementation(async (command: string, raw?: Record<string, unknown> | Uint8Array, options?: { headers: Record<string, string> }) => {
+    // Pending discovery is separate; the Direct record fixture must not swallow it.
+    if (pendingCommands.has(command)) return hostedStory.invoke(command, raw, options);
     if (command.includes('_arena_story_')) return storyIpc.invoke(command, raw, options);
+    if (command === 'cloud_cached_account') return cloudAccount ? { account: cloudAccount } : null;
+    if (command === 'cloud_auth_status') return cloudAccount ? { state: 'active', account: cloudAccount } : { state: 'signed-out' };
+    if (['arena_hosted_stream', 'arena_hosted_control', 'arena_hosted_detach'].includes(command)) {
+      if (!hostedCapabilityAvailable && command === 'arena_hosted_stream' && (raw as { request?: { operation: string } })?.request?.operation === 'create-story-stream')
+        throw { code: 'capability-unavailable', message: 'synthetic capability unavailable', dispatchState: 'not-dispatched', intentOwnership: 'current-owned' };
+      return hostedStory.invoke(command, raw, options);
+    }
     const args = raw as Record<string, unknown> | undefined;
     if (command === 'list_local_cards') { const request = args!.request as { cardTypes: string[] }; return { documents: [...docs.values()].filter((card) => !request.cardTypes.length || request.cardTypes.includes(card.cardType)).map((card) => JSON.stringify(card)) }; }
     if (command === 'get_local_card') return docs.has(args!.id as string) ? JSON.stringify(docs.get(args!.id as string)) : null;
@@ -548,6 +567,32 @@ describe('Desktop two-route continuous story through actual default binder', () 
     storyPort.hideReceipts = false; await click('查询原保存结果'); await vi.waitFor(() => expect(container.textContent).toContain('完整章节已保存到本机故事'));
     expect(received).toHaveLength(1); expect(storyPort.begin).toHaveBeenCalledTimes(1);
   });
+  it.each(['single', 'story'] as const)('delayed anonymous bootstrap preserves in-flight Direct %s credential preparation', async flow => {
+    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5,
+      selection: { executionPreference: 'client', clientTarget: { kind: 'preset', providerId: 'deepseek' }, serverTarget: { kind: 'system' } },
+      hiddenPresetIds: [], presetsByProviderId: { deepseek: { selectedModelId: 'deepseek-chat', generationOverrides: {} } } }));
+    const bootstrap = deferred<null>(), credential = deferred<boolean>(), originalInvoke = mocks.invoke.getMockImplementation()!;
+    let holdCredential = false;
+    mocks.invoke.mockImplementation((command, args, options) => command === 'cloud_cached_account' ? bootstrap.promise
+      : command === 'has_provider_secret' && holdCredential ? credential.promise : originalInvoke(command, args, options));
+    release = () => { bootstrap.resolve(null); credential.resolve(true); };
+    saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿');
+    expect(getDesktopCloudSessionStore().getSnapshot().bootstrapped).toBe(false);
+    holdCredential = true;
+    await click(flow === 'single' ? '生成战报' : '新建连续战报');
+    expect(getDesktopAiConfigStore().isPreparingGeneration()).toBe(true); expect(calls()).toHaveLength(0);
+    const cancelPreparing = vi.spyOn(getDesktopAiConfigStore(), 'cancelPreparingGeneration');
+    await act(async () => bootstrap.resolve(null)); await settle();
+    expect(getDesktopCloudSessionStore().getSnapshot()).toMatchObject({ bootstrapped: true, account: null });
+    expect(cancelPreparing).not.toHaveBeenCalled(); expect(getDesktopAiConfigStore().isPreparingGeneration()).toBe(true);
+    await act(async () => credential.resolve(true)); await settle();
+    if (flow === 'story') await vi.waitFor(() => expect(storyPort.heads()[0]?.chapterCount).toBe(1));
+    else await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
+    expect(calls()).toHaveLength(1); expect(calls()[0]).toMatchObject(['stream_target_ai', { target: { kind: 'preset', providerId: 'deepseek' } }]);
+    expect(received).toHaveLength(1); expect(hostedStory.streams).toHaveLength(0); expect(hostedStory.slots.size).toBe(0);
+    expect(getDesktopAiConfigStore().isPreparingGeneration()).toBe(false);
+  });
+
   it('stops a real in-flight Direct chapter, preserves received prose and leaves the stored chain intact', async () => {
     saveDraft(draft('daily','stream')); await mount(); await click('恢复草稿'); await click('新建连续战报');
     await vi.waitFor(() => expect(storyPort.heads()[0]?.chapterCount).toBe(1)); await settle();hold = true;
@@ -557,10 +602,269 @@ describe('Desktop two-route continuous story through actual default binder', () 
     await click('导出完整原始输出'); expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).rawText).toContain(text);
     expect(scopeClose().preventDefault).toHaveBeenCalled();
   });
-  it('keeps Hosted single-shot usable while the same real story controls explicitly reject Hosted generation', async () => {
-    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'loopback' }, hiddenPresetIds: [] }));
-    saveDraft(draft('daily','non-stream')); await mount(); await click('恢复草稿');
-    expect(button('生成战报').disabled).toBe(false);expect(button('新建连续战报').disabled).toBe(true);
-    expect(container.querySelector('[aria-label="连续战报会话"]')?.textContent).toContain('当前选择为服务器生成');expect(received).toHaveLength(0);
+});
+
+
+// Actual RouterProvider → DesktopBattleForm → owner → default IPC binders.
+// Native IPC and saved-credential presence are synthetic, never real keys/accounts.
+describe('Desktop Hosted story routes through prepared targets and default binders', () => {
+  const enableHosted = () => {
+    // Match browser TextEncoder byte realm; Node's encoder otherwise fails IPC instanceof guards in jsdom.
+    vi.stubGlobal('TextEncoder', class extends NodeTextEncoder { encode(input?: string) { return Uint8Array.from(super.encode(input)); } });
+    storyPort = hostedStory.records; storyIpc = hostedStory.recordInvoke;
+    // Native independently checks the public prewrite in the real page's localStorage.
+    vi.spyOn(hostedStory.pointers, 'get').mockImplementation(key => localStorage.getItem(key) ?? undefined);
+  };
+  const mountProduct = async (product: 'battle' | 'arena') => {
+    localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'non-stream') }));
+    window.location.hash = `#/${product}`;
+    const router = await mount(); await click('恢复草稿'); return router;
+  };
+  const chooseHosted = async (funding: 'system' | 'preset') => {
+    await click('服务器');
+    if (funding === 'preset') {
+      const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')!;
+      await act(async () => trigger.click()); await settle();
+      const option = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.querySelector('span')?.textContent?.trim() === 'DeepSeek')!;
+      expect(option).toBeTruthy(); await act(async () => option.click()); await settle();
+      const modelTrigger = document.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]')[1]!;
+      await act(async () => modelTrigger.click()); await settle();
+      const model = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.querySelector('span')?.textContent?.trim() === 'DeepSeek-V3.2')!;
+      expect(model).toBeTruthy(); await act(async () => model.click()); await settle();
+    }
+    expect(getDesktopAiConfigStore().getSnapshot().selection).toMatchObject({ executionPreference: 'server', serverTarget: funding === 'system' ? { kind: 'system' } : { kind: 'preset', providerId: 'deepseek' } });
+  };
+  const requests = (operation: string) => hostedStory.streams.filter(request => request.operation === operation);
+  const streamCommands = (operation: string) => mocks.invoke.mock.calls.filter(([command, args]) => command === 'arena_hosted_stream' && args.request.operation === operation);
+  const settledChapter = async (count: number) => {
+    await vi.waitFor(() => expect(storyPort.heads()[0]?.chapterCount, container.textContent ?? '').toBe(count)); await settle();
+    expect(container.querySelector('[aria-label="连续战报会话"]')?.textContent).toContain(`共 ${count} 章`);
+  };
+  for (const product of ['battle', 'arena'] as const) it.each(['system', 'preset'] as const)(`${product}/%s selects the real prepared Hosted target, saves one start and continuation, then reads the directory`, async funding => {
+    enableHosted(); const router = await mountProduct(product); await chooseHosted(funding);
+    const prepared = vi.spyOn(getDesktopAiConfigStore(), 'withPreparedGeneration');
+    expect(button('生成战报').disabled).toBe(false); expect(button('新建连续战报').disabled).toBe(false);
+    await click('新建连续战报'); await settledChapter(1);
+    expect(prepared).toHaveBeenCalledTimes(1); expect(requests('create-story-stream')).toHaveLength(1); expect(requests('reconcile-story')).toHaveLength(1);
+    expect(hostedStory.commands(STORY_PENDING_IPC.prepareSave)).toHaveLength(1); expect(hostedStory.commands(STORY_PENDING_IPC.save)).toHaveLength(1);
+    const sessionId = storyPort.heads()[0]!.id;
+    await change('textarea[aria-label="下一章故事引导"]', '沿原 Hosted 故事续写'); await click('继续续写'); await settledChapter(2);
+    expect(prepared).toHaveBeenCalledTimes(2); expect(requests('create-story-stream')).toHaveLength(2); expect(requests('reconcile-story')).toHaveLength(2);
+    expect(hostedStory.commands(STORY_PENDING_IPC.prepareSave)).toHaveLength(2); expect(hostedStory.commands(STORY_PENDING_IPC.save)).toHaveLength(2);
+    expect(hostedStory.attempts.size).toBe(0); expect(storyPort.heads()).toHaveLength(1); expect(storyPort.heads()[0]!.id).toBe(sessionId);
+    for (const request of requests('create-story-stream')) {
+      expect(request).toMatchObject({ product, actor: { kind: 'anonymous' }, ...(funding === 'system' ? { systemConfig: {} } : { presetConfig: { providerId: 'deepseek', modelId: 'deepseek-chat' } }) });
+      expect(request).not.toHaveProperty(funding === 'system' ? 'presetConfig' : 'systemConfig'); expect(request).not.toHaveProperty('body');
+      expect(request).not.toHaveProperty('apiKey'); expect(request).not.toHaveProperty('combatants');
+    }
+    const second = hostedStory.sealed.find(item => item.snapshot.manifest.expectedRevision === 1)!;
+    const input = JSON.parse(new TextDecoder().decode(second.bytes.get('input')));
+    expect(input).toMatchObject({ action: 'continue', userGuidance: '沿原 Hosted 故事续写', chapterIndex: 2 });
+    expect(input.chapterContext.workingCombatants[0]).toMatchObject({ data: { name: '甲', signature: 'server-signed-fixture' }, isNative: true });
+    expect(JSON.parse(localStorage.getItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY)!).draft.combatants).toEqual(draft('daily', 'non-stream').combatants);
+    expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS[product])).toBeNull(); expect(hostedStory.slots.size).toBe(0);
+    expect(received).toHaveLength(0); expect(calls()).toHaveLength(0);
+    await click('导出完整 Markdown'); await vi.waitFor(() => expect(container.textContent).toContain('完整故事已导出'));
+    expect(storyIpc.exported).toContain('章节数：2 章'); expect(storyIpc.exported).toContain(hostedStory.markdown.trim());
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await act(async () => router.navigate({ to: product === 'battle' ? '/arena' : '/battle' })); await settle();
+    await vi.waitFor(() => expect(container.querySelector('[data-story-read-status="loaded"]')).not.toBeNull());
+    expect(container.querySelector('[data-story-read-status="loaded"]')?.textContent).toContain('合成故事');
+    expect(container.querySelector('[aria-label="连续战报会话"]')?.textContent).toContain('共 2 章');
+    expect(requests('create-story-stream')).toHaveLength(2); expect(activeCloseHandles).toBe(1);
   });
+  it.each(['battle', 'arena'] as const)('%s Native-only candidate opens its original product from the other route and restores without a fresh create', async product => {
+    enableHosted(); hostedStory.roleMode = 'network'; const router = await mountProduct(product); await chooseHosted('system');
+    await click('新建连续战报'); await vi.waitFor(() => expect(container.textContent).toContain('Hosted 正文已封存，尚未保存到故事')); await settle();
+    const original = structuredClone(hostedStory.slots.get(product)!.snapshot);
+    expect(requests('create-story-stream')).toHaveLength(1); expect(hostedStory.commands(STORY_PENDING_IPC.save)).toHaveLength(0);
+    localStorage.removeItem(ARENA_HOSTED_RECOVERY_KEYS[product]);
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await act(async () => router.navigate({ to: product === 'battle' ? '/arena' : '/battle' })); await settle();
+    const foreign = document.querySelector(`[aria-label="${product === 'battle' ? '简洁版 /battle' : '高级版 /arena'}原候选"]`)!;
+    expect(foreign.textContent).toContain(original.manifest.requestId); expect(button('读取原件（本地）', foreign)).toBeUndefined();
+    await click(`前往${product === 'battle' ? '简洁版 /battle' : '高级版 /arena'}处理原候选`, foreign);
+    expect(window.location.hash).toBe(`#/${product}`); await click('读取原件（本地）'); await settle();
+    expect(hostedStory.slots.get(product)!.snapshot.manifest).toEqual(original.manifest);
+    expect(button('恢复原请求').disabled).toBe(false); expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS[product])).toBeNull();
+    hostedCapabilityAvailable = false;
+    await click('恢复原请求'); await vi.waitFor(() => expect(requests('resume')).toHaveLength(1)); await settle();
+    expect(hostedStory.controls.at(-1)).toEqual({ operation: 'lookup-request', product, requestId: original.manifest.requestId, actor: original.manifest.actor, restoreSession: true });
+    expect(requests('resume')[0]).not.toHaveProperty('after'); expect(streamCommands('create-story-stream')).toHaveLength(1);
+    expect(requests('reconcile-story')).toHaveLength(1); expect(hostedStory.commands(STORY_PENDING_IPC.save)).toHaveLength(0);
+    expect(JSON.parse(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS[product])!)).toMatchObject({ version: 4, purpose: 'story', product, requestId: original.manifest.requestId });
+    expect(received).toHaveLength(0);
+  });
+  it('a proven capability rejection gates create only, keeps the no-claim original readable, and never falls back', async () => {
+    enableHosted(); hostedCapabilityAvailable = false; await mountProduct('battle'); await chooseHosted('system'); await click('新建连续战报');
+    await vi.waitFor(() => expect(container.textContent).toContain('服务器尚未声明所选生成方式及身份保护所需协议'));
+    expect(streamCommands('create-story-stream')).toHaveLength(1); expect(hostedStory.streams).toHaveLength(0); expect(hostedStory.controls).toHaveLength(0);
+    expect(hostedStory.slots.get('battle')!.snapshot.createClaim).toBeNull(); expect(hostedStory.commands(STORY_PENDING_IPC.save)).toHaveLength(0);
+    expect(button('新建连续战报').disabled).toBe(true); expect(button('恢复原请求').disabled).toBe(true);
+    await click('导出全部已封存原件'); expect(hostedStory.exports.length).toBeGreaterThan(0);
+    expect(calls()).toHaveLength(0); expect(received).toHaveLength(0);
+  });
+  it('account scope changes during real preset preparation prevent any candidate or create', async () => {
+    enableHosted(); cloudAccount = { userId: 7, username: 'fixture-user-seven' };
+    await mountProduct('battle'); await chooseHosted('preset');
+    const gate = deferred<boolean>(), originalInvoke = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => command === 'has_provider_secret' ? gate.promise : originalInvoke(command, args, options));
+    release = () => gate.resolve(true);
+    await click('新建连续战报'); expect(getDesktopAiConfigStore().isPreparingGeneration()).toBe(true);
+    cloudAccount = { userId: 8, username: 'fixture-user-eight' };
+    await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+    await act(async () => gate.resolve(true)); await settle();
+    expect(getDesktopAiConfigStore().isPreparingGeneration()).toBe(false);
+    expect(hostedStory.slots.size).toBe(0); expect(hostedStory.streams).toHaveLength(0);
+    expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBeNull();
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'set_provider_secret')).toBe(false);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it('a delayed anonymous bootstrap activates the Hosted actor after the AI target is already ready', async () => {
+    enableHosted(); const gate = deferred<null>(), originalInvoke = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => command === 'cloud_cached_account' ? gate.promise : originalInvoke(command, args, options));
+    release = () => gate.resolve(null);
+    await mountProduct('battle'); await chooseHosted('system');
+    expect(button('新建连续战报').disabled).toBe(true); expect(container.textContent).toContain('正在确认本机账号身份');
+    await act(async () => gate.resolve(null)); await settle();
+    expect(button('新建连续战报').disabled).toBe(false);
+    await click('新建连续战报'); await settledChapter(1);
+    expect(requests('create-story-stream')[0]).toMatchObject({ actor: { kind: 'anonymous' } });
+  });
+
+  it.each([{ ending: 'leave', phase: 'model' }, { ending: 'account', phase: 'model' }, { ending: 'account', phase: 'role' }] as const)('$ending fences late $phase settlement before accepting roles or saving', async ({ ending, phase }) => {
+    enableHosted(); cloudAccount = { userId: 7, username: 'fixture-user-seven' }; const gate = deferred<void>();
+    if (phase === 'model') hostedStory.beforeModelSettles = () => gate.promise; else hostedStory.beforeRoleSettles = () => gate.promise;
+    release = () => gate.resolve();
+    const router = await mountProduct('battle'); await chooseHosted('system'); await click('新建连续战报');
+    await vi.waitFor(() => expect(phase === 'model' ? hostedStory.trace.includes('model:c0-completed') : requests('reconcile-story').length === 1).toBe(true));
+    expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('合成故事');
+    expect(requests('create-story-stream')[0]).toMatchObject({ actor: { kind: 'account', expectedUserId: 7 } });
+    if (ending === 'leave') {
+      vi.mocked(window.confirm).mockReturnValue(true);
+      await act(async () => router.navigate({ to: '/arena' })); await settle(); expect(window.location.hash).toBe('#/arena');
+      expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('只停止本机订阅'));
+    } else {
+      cloudAccount = { userId: 8, username: 'fixture-user-eight' };
+      await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+      expect(container.textContent).toContain('当前账号与原请求不一致');
+    }
+    gate.resolve(); await settle(); await vi.waitFor(() => expect(hostedStory.trace).toContain(`${phase}:invoke-settled`)); await settle();
+    expect(requests('create-story-stream')).toHaveLength(1); expect(requests('reconcile-story')).toHaveLength(phase === 'model' ? 0 : 1);
+    expect(hostedStory.sealed.some(item => item.snapshot.manifest.roleState === 'accepted')).toBe(false);
+    expect(hostedStory.commands(STORY_PENDING_IPC.prepareSave)).toHaveLength(0); expect(hostedStory.commands(STORY_PENDING_IPC.save)).toHaveLength(0);
+    expect(hostedStory.slots.get('battle')!.snapshot.manifest).toMatchObject({ actor: { kind: 'account', expectedUserId: 7 }, modelCompleted: phase === 'role' });
+    expect(storyPort.heads()).toHaveLength(0); expect(calls()).toHaveLength(0);
+    if (ending === 'leave') expect(container.querySelector('[aria-label="本次章节结果"]')).toBeNull();
+  });
+
+  const coldPendingStory = async (product: 'battle' | 'arena' = 'battle') => {
+    enableHosted(); hostedStory.roleMode = 'network';
+    const router = await mountProduct(product); await chooseHosted('system'); await click('新建连续战报');
+    await vi.waitFor(() => expect(container.textContent).toContain('Hosted 正文已封存，尚未保存到故事')); await settle();
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await act(async () => router.navigate({ to: product === 'battle' ? '/arena' : '/battle' })); await settle();
+    await act(async () => router.navigate({ to: `/${product}` })); await settle();
+    if (button('恢复草稿')) await click('恢复草稿');
+    expect(container.textContent).toContain('此恢复记录属于连续故事');
+    await click('读取原件（本地）'); await settle();
+  };
+  const finishColdPending = async (outcome: 'save' | 'abandon') => {
+    if (outcome === 'save') {
+      hostedStory.roleMode = 'accepted'; await click('重试角色同步');
+      await vi.waitFor(() => expect(storyPort.heads()[0]?.chapterCount).toBe(1));
+    } else {
+      await click('放弃本机候选…'); await click('确认不导出并放弃本机候选');
+    }
+    await vi.waitFor(() => expect(hostedStory.slots.size).toBe(0)); await settle();
+  };
+  const rejectFreshOrdinaryCreate = () => {
+    const originalInvoke = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => {
+      if (command === 'arena_hosted_stream' && ['create-json', 'create-stream'].includes(args.request.operation))
+        throw { code: 'capability-unavailable', message: 'synthetic ordinary create boundary', dispatchState: 'not-dispatched', intentOwnership: 'current-owned' };
+      return originalInvoke(command, args, options);
+    });
+  };
+  for (const product of ['battle', 'arena'] as const) it.each(['save', 'abandon'] as const)(`${product} cold story %s releases the same-page ordinary Hosted preparation and Native dispatch`, async outcome => {
+    await coldPendingStory(product); await finishColdPending(outcome);
+    expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS[product])).toBeNull();
+    expect(container.textContent).not.toContain('此恢复记录属于连续故事');
+    expect(button('生成战报').disabled).toBe(false); rejectFreshOrdinaryCreate();
+    await click('生成战报'); await vi.waitFor(() => expect(streamCommands('create-json')).toHaveLength(1)); await settle();
+    const next = JSON.parse(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS[product])!);
+    expect(next).toMatchObject({ version: 3, product, actor: { kind: 'anonymous' } });
+    expect(next).not.toHaveProperty('purpose');
+    expect(streamCommands('create-json')[0]![1].request).toMatchObject({ product, requestId: next.requestId });
+    expect(requests('create-story-stream')).toHaveLength(1); expect(calls()).toHaveLength(0);
+  });
+
+  it.each(['save', 'abandon'] as const)('cold story %s preserves a concurrently replaced public pointer and exposes its original ordinary restore', async outcome => {
+    await coldPendingStory();
+    const original = DesktopArenaHostedRecoveryPointerSchema.parse({ version: 1, protocolVersion: 'arena-hosted-sse-v1', product: 'battle',
+      requestId: 'concurrent-ordinary-request', actor: { kind: 'anonymous' }, bodyHash: 'c'.repeat(64), format: 'markdown', battleMode: 'daily',
+      state: 'unknown', updatedAt: '2026-10-10T05:00:00.000Z' });
+    const raw = JSON.stringify(original, null, 2), originalInvoke = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation(async (command, args, options) => {
+      const result = await originalInvoke(command, args, options);
+      if (command === (outcome === 'save' ? STORY_PENDING_IPC.save : STORY_PENDING_IPC.abandon)) localStorage.setItem(ARENA_HOSTED_RECOVERY_KEYS.battle, raw);
+      if (command === 'arena_hosted_control' && args.request.requestId === original.requestId)
+        return { status: 404, body: { code: 'NOT_FOUND' }, recoveryCredentialState: 'stored' };
+      return result;
+    });
+    await finishColdPending(outcome);
+    expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBe(raw);
+    expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).toContain(original.requestId);
+    expect(button('恢复原服务器战报').disabled).toBe(false);
+    vi.mocked(window.confirm).mockReturnValue(false); await click('生成战报');
+    expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('已有服务器恢复记录'));
+    expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBe(raw); expect(streamCommands('create-json')).toHaveLength(0);
+    vi.mocked(window.confirm).mockReturnValue(true); await click('恢复原服务器战报');
+    expect(mocks.invoke.mock.calls.filter(([command, args]) => command === 'arena_hosted_control' && args.request.operation === 'lookup-request')).toEqual([
+      ['arena_hosted_control', { request: { operation: 'lookup-request', product: 'battle', requestId: original.requestId, actor: original.actor, restoreSession: true } }],
+    ]);
+    expect(streamCommands('create-json')).toHaveLength(0); expect(requests('create-story-stream')).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)!)).toMatchObject({ requestId: original.requestId, actor: original.actor });
+  });
+
+  it('foreign-retained abandonment keeps the original diagnosis route without silently authorizing replacement', async () => {
+    await coldPendingStory(); const originalInvoke = mocks.invoke.getMockImplementation()!;
+    const originalRequestId = 'native-retained-ordinary-request';
+    mocks.invoke.mockImplementation(async (command, args, options) => {
+      if (command === 'arena_hosted_recovery_hint') return { product: 'battle', state: 'available', requestId: originalRequestId, actorKind: 'anonymous' };
+      const result = await originalInvoke(command, args, options);
+      return command === STORY_PENDING_IPC.abandon ? { ...result, flight: 'foreign-retained', secret: 'foreign-retained' } : result;
+    });
+    await finishColdPending('abandon');
+    expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBeNull();
+    expect(container.textContent).toContain('原生槽仍保留另一恢复身份'); expect(container.textContent).toContain('不能保证本产品已可新建');
+    expect(streamCommands('create-json')).toHaveLength(0); expect(requests('create-story-stream')).toHaveLength(1);
+    expect(button('检查本机恢复身份').disabled).toBe(false); await click('检查本机恢复身份');
+    expect(container.querySelector('[aria-label="本机恢复身份诊断"]')?.textContent).toContain(originalRequestId);
+    vi.mocked(window.confirm).mockReturnValue(false); await click('生成战报');
+    expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining(originalRequestId));
+    expect(streamCommands('create-json')).toHaveLength(0); expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBeNull();
+  });
+
+  it.each(['hosted', 'direct'] as const)('the top-page stop control cancels the actual %s story owner before any role or save', async location => {
+    enableHosted(); const gate = deferred<void>();
+    if (location === 'hosted') hostedStory.beforeModelSettles = () => gate.promise; else hold = true;
+    const releaseDirect = () => release?.();
+    await mountProduct('battle'); if (location === 'hosted') await chooseHosted('system');
+    await click('新建连续战报');
+    if (location === 'hosted') { release = () => gate.resolve(); await vi.waitFor(() => expect(hostedStory.trace).toContain('model:c0-completed')); }
+    else await vi.waitFor(() => expect(received).toHaveLength(1));
+    const stop = button('生成战报').nextElementSibling as HTMLButtonElement;
+    expect(stop.tagName).toBe('BUTTON'); expect(stop.disabled).toBe(false);
+    expect(stop.textContent).toBe(location === 'hosted' ? '请求服务器停止' : '取消生成');
+    await act(async () => stop.click()); await settle();
+    if (location === 'hosted') gate.resolve(); else releaseDirect();
+    await settle();
+    expect(storyPort.heads()).toHaveLength(0); expect(hostedStory.commands(STORY_PENDING_IPC.save)).toHaveLength(0);
+    expect(requests('reconcile-story')).toHaveLength(0); expect(storyPort.begin).not.toHaveBeenCalled();
+    expect(hostedStory.controls.filter(request => request.operation === 'stop')).toHaveLength(location === 'hosted' ? 1 : 0);
+    expect(location === 'hosted' ? requests('create-story-stream') : received).toHaveLength(1);
+  });
+
 });
