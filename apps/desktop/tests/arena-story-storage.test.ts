@@ -38,7 +38,7 @@ const portFor = (commit: PreparedStoryCommit): StoryNativePort => ({
   begin: vi.fn(async (manifest: StoryCommitManifest) => ({ token, totalBytes: manifest.parts.reduce((sum, part) => sum + part.byteLength, 0) })),
   append: vi.fn(async (_token, kind, offset, bytes) => ({ token: _token, kind, receivedBytes: offset + bytes.length })),
   end: vi.fn(async () => receipt(commit)), abort: vi.fn(async () => {}), receipt: vi.fn(async () => null),
-  listSessions: vi.fn(), listChapters: vi.fn(), describe: vi.fn(), read: vi.fn(), continueState: vi.fn(),
+  listSessions: vi.fn(), listChapters: vi.fn(), describe: vi.fn(), read: vi.fn(), continueState: vi.fn(), deleteSession: vi.fn(),
 });
 
 describe('internal story storage candidate', () => {

@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import {
   BattleStoryActions,
+  BattleStoryDeleteSessionControls,
   BattleStoryPendingOutcome,
   BattleStoryChapterDirectory,
   BattleStoryChapterReader,
@@ -257,6 +258,10 @@ export function BattleStorySessionPanel(props: {
     handleDeleteSelectedChapter,
     handleSelectSession,
     handleDeleteSession,
+    deleteSessionTarget, deleteSessionPreparing, deleteSessionBusy, deleteSessionMode, deleteSessionMessage,
+    deleteSessionDialogOpen, deleteSessionNotice, deleteSessionBlocksActive,
+    handleCancelDeleteSession, handleConfirmDeleteSession, handleObserveDeleteSession, handleExportDeleteSession,
+    handleRefreshSessionDirectory,
     handleExportMarkdown,
   } = useBattleStorySession();
 
@@ -305,7 +310,7 @@ export function BattleStorySessionPanel(props: {
         <button
           type="button"
           onClick={() => void handleBranchSelectedChapter()}
-          disabled={Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !selectedChapter || Boolean(selectedBranchDisabledReason)}
+          disabled={deleteSessionBlocksActive || Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !selectedChapter || Boolean(selectedBranchDisabledReason)}
           className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
           title={
             isCooldown
@@ -320,7 +325,7 @@ export function BattleStorySessionPanel(props: {
         <button
           type="button"
           onClick={() => void handleRewriteSelectedChapter()}
-          disabled={Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !selectedChapter || Boolean(selectedRewriteDisabledReason)}
+          disabled={deleteSessionBlocksActive || Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !selectedChapter || Boolean(selectedRewriteDisabledReason)}
           className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
           title={
             isCooldown
@@ -335,7 +340,7 @@ export function BattleStorySessionPanel(props: {
         <button
           type="button"
           onClick={() => void handleDeleteSelectedChapter()}
-          disabled={Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || !selectedChapter || Boolean(selectedDeleteDisabledReason)}
+          disabled={deleteSessionBlocksActive || Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || !selectedChapter || Boolean(selectedDeleteDisabledReason)}
           className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
           title={selectedDeleteDisabledReason ?? '删除当前所选章节；若不是最后一章，会同时删除其后续章节'}
         >
@@ -506,7 +511,7 @@ export function BattleStorySessionPanel(props: {
             <button
               type="button"
               onClick={() => void handleContinueSession()}
-              disabled={Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !activeSession || !latestActiveChapter || hasReachedActiveChapterPlanLimit}
+              disabled={deleteSessionBlocksActive || Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !activeSession || !latestActiveChapter || hasReachedActiveChapterPlanLimit}
               className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
               title={
                 isCooldown
@@ -521,7 +526,7 @@ export function BattleStorySessionPanel(props: {
             <button
               type="button"
               onClick={() => void handleBranchSession()}
-              disabled={Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !activeSession || !latestActiveChapter || hasReachedActiveChapterPlanLimit}
+              disabled={deleteSessionBlocksActive || Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !activeSession || !latestActiveChapter || hasReachedActiveChapterPlanLimit}
               className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
               title={
                 isCooldown
@@ -536,7 +541,7 @@ export function BattleStorySessionPanel(props: {
             <button
               type="button"
               onClick={() => void handleRewriteLastChapter()}
-              disabled={Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !activeSession || !latestActiveChapter}
+              disabled={deleteSessionBlocksActive || Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !activeSession || !latestActiveChapter}
               className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
               title={
                 isCooldown
@@ -556,15 +561,14 @@ export function BattleStorySessionPanel(props: {
             >
               导出 Markdown
             </button>
-            <button
-              type="button"
-              onClick={() => void handleDeleteSession(activeSession?.id)}
-              disabled={Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || !activeSession}
-              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-              title={activeSession ? '删除当前选中的连续战报会话及其全部章节' : '请先选择一个会话'}
-            >
-              {isDeletingSession ? '正在删除会话...' : '删除当前会话'}
-            </button>
+            <BattleStoryDeleteSessionControls
+              target={deleteSessionTarget ? { sessionId: deleteSessionTarget.id, title: formatBattleStoryDisplayTitle(deleteSessionTarget.title), chapterCount: deleteSessionTarget.chapterCount } : null}
+              disabledReason={pendingCompletedChapter || pendingRoleOutcome ? '请先处理或导出未保存的作品' : isSavingChapter || isGenerating ? '请等待当前生成或保存完成' : !activeSession ? '请先选择一个本机会话' : null}
+              open={deleteSessionDialogOpen}
+              preparing={deleteSessionPreparing} busy={deleteSessionBusy} mode={deleteSessionMode} message={deleteSessionMessage}
+              onRequest={() => void handleDeleteSession(activeSession?.id)} onCancel={handleCancelDeleteSession}
+              onConfirm={() => void handleConfirmDeleteSession()} onObserve={() => void handleObserveDeleteSession()}
+              onExport={() => void handleExportDeleteSession()} />
             {isGenerating ? (
               <StreamStopButton
                 onClick={stopGeneration}
@@ -631,6 +635,8 @@ export function BattleStorySessionPanel(props: {
           {actionError ? (
             <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{actionError}</div>
           ) : null}
+
+          {deleteSessionNotice ? <div role="status" className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-700">{deleteSessionNotice}</div> : null}
 
           {notice ? (
             <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-700">{notice}</div>
@@ -735,6 +741,7 @@ export function BattleStorySessionPanel(props: {
 
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
                 <BattleStorySessionDirectory
+                  footer={<button type="button" className="mt-3 rounded-lg border px-3 py-2 text-sm" onClick={() => void handleRefreshSessionDirectory()}>刷新故事目录</button>}
                   rows={sessions.map((session) => ({
                     id: session.id,
                     title: formatBattleStoryDisplayTitle(session.title),

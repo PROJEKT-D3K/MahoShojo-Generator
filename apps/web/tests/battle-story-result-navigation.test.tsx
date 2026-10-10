@@ -13,6 +13,7 @@ const fixture = vi.hoisted(() => ({
   chapters: new Map<string, BattleStoryChapterRecord>(),
   checkpoints: new Map<string, BattleStoryCheckpointRecord>(),
   dispatch: vi.fn(),
+  download: vi.fn(),
   startCooldown: vi.fn(),
   state: {
     combatants: [{ type: 'magical-girl', data: { codename: '测试角色' }, isValid: true }],
@@ -37,6 +38,7 @@ vi.mock('@/lib/use-generation-api-intent-latch', () => ({
 vi.mock('@/lib/auth', () => ({ authStorage: {
   getAuthHeader: async () => null, getActivityHeaders: async () => ({}),
 } }));
+vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: fixture.download }));
 vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({
   isCooldown: false, remainingTime: 0, otherRemainingTime: 0, startCooldown: fixture.startCooldown,
 }) }));
@@ -54,7 +56,7 @@ vi.mock('@/lib/ai-session/battle-story/storage', async (importOriginal) => {
     getBattleStorySession: vi.fn(async (id: string) => fixture.sessions.get(id) ?? null),
     listBattleStoryChaptersBySession: vi.fn(async (id: string) => [...fixture.chapters.values()].filter((item) => item.sessionId === id)),
     listBattleStoryCheckpointsBySession: vi.fn(async (id: string) => [...fixture.checkpoints.values()].filter((item) => item.sessionId === id)),
-    deleteBattleStorySession: vi.fn(async (id: string) => { fixture.sessions.delete(id); }),
+    deleteBattleStorySession: vi.fn(async (id: string) => { fixture.sessions.delete(id); return { status: 'deleted' as const, deletedSession: true, deletedChapterCount: 2, deletedCheckpointCount: 0 }; }),
     updateBattleStorySession: vi.fn(async (id: string, update: (record: BattleStorySessionRecord) => BattleStorySessionRecord) => {
       const next = update(fixture.sessions.get(id)!); fixture.sessions.set(id, next); return next;
     }),
@@ -93,6 +95,11 @@ function Harness() {
   </div>;
 }
 
+async function deleteConfirmed(id: string) {
+  await session.handleDeleteSession(id);
+  await session.handleConfirmDeleteSession();
+}
+
 async function mount() {
   await act(async () => root.render(<Harness />));
   expect(session.isReady).toBe(true);
@@ -127,6 +134,7 @@ function addHistory(title = '历史会话') {
 
 beforeEach(() => {
   fixture.sessions.clear(); fixture.chapters.clear(); fixture.checkpoints.clear(); fixture.dispatch.mockReset();
+  vi.mocked(storage.deleteBattleStorySession).mockReset().mockImplementation(async (id) => { fixture.sessions.delete(id); return { status: 'deleted', deletedSession: true, deletedChapterCount: 2, deletedCheckpointCount: 0 }; });
   vi.mocked(storage.listBattleStorySessions).mockReset().mockImplementation(async () => [...fixture.sessions.values()]);
   vi.mocked(storage.getBattleStorySession).mockReset().mockImplementation(async (id) => fixture.sessions.get(id) ?? null);
   vi.mocked(storage.listBattleStoryChaptersBySession).mockReset().mockImplementation(async (id) => [...fixture.chapters.values()].filter((item) => item.sessionId === id));
@@ -354,7 +362,7 @@ describe('Battle story storage reads through the real React session hook', () =>
     vi.mocked(storage.listBattleStorySessions).mockImplementationOnce(() => list.promise);
     await act(async () => root.render(<Harness />));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await act(async () => session.handleDeleteSession(removed.id));
+    await act(async () => deleteConfirmed(removed.id));
     const detail = deferred<BattleStorySessionRecord | null>();
     vi.mocked(storage.getBattleStorySession).mockImplementationOnce(() => detail.promise);
     const choosing = await select(b.id);
@@ -370,11 +378,11 @@ describe('Battle story storage reads through the real React session hook', () =>
     vi.mocked(storage.getBattleStorySession).mockImplementationOnce(() => detail.promise);
     const choosing = await select(b.id);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await act(async () => session.handleDeleteSession(removed.id));
+    await act(async () => deleteConfirmed(removed.id));
     expect(session.sessions).toEqual([a, b]); expectActive(a);
     await act(async () => { detail.resolve(b); await choosing.pending; }); expectActive(b);
     vi.mocked(storage.listBattleStorySessions).mockRejectedValueOnce(new Error('列表读取失败'));
-    await act(async () => session.handleDeleteSession(a.id));
+    await act(async () => deleteConfirmed(a.id));
     expect(session.sessions).toEqual([a, b]); expectActive(b); expect(session.actionError).toBe('列表读取失败');
   });
 
@@ -445,21 +453,22 @@ describe('Battle story storage reads through the real React session hook', () =>
     expect(storage.getBattleStorySession).toHaveBeenLastCalledWith(a.id);
     expect(session.chapters).toEqual([first]); expect(session.selectedChapterId).toBe(first.id);
     expect(session.activeSession?.workingCombatants).toEqual(a.lastChapterInputCombatants);
-    await act(async () => session.handleDeleteSelectedChapter()); expectActive(b);
+    await act(async () => { await session.handleDeleteSelectedChapter(); await session.handleConfirmDeleteSession(); }); expectActive(b);
     expect(fixture.dispatch).not.toHaveBeenCalled(); expect(scroll).not.toHaveBeenCalled();
   });
 
-  it('活动删除后的列表即便被无关刷新 supersede，仍按原成功结果 fallback', async () => {
+  it('活动删除单飞，后续另一个删除意图不覆盖原目标', async () => {
     const a = addHistory('A'); const b = addHistory('B'); const c = addHistory('C'); await mount();
     await act(async () => session.handleSelectSession(b.id));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const olderList = deferred<BattleStorySessionRecord[]>();
     vi.mocked(storage.listBattleStorySessions).mockImplementationOnce(() => olderList.promise);
     let deleting!: Promise<void>;
-    await act(async () => { deleting = session.handleDeleteSession(b.id); });
-    await act(async () => session.handleDeleteSession(c.id));
-    expect(session.sessions).toEqual([a]);
-    await act(async () => { olderList.resolve([a]); await deleting; }); expectActive(a);
+    await act(async () => { deleting = deleteConfirmed(b.id); });
+    await act(async () => deleteConfirmed(c.id));
+    expect(storage.deleteBattleStorySession).toHaveBeenCalledTimes(1);
+    expect(fixture.sessions.has(c.id)).toBe(true);
+    await act(async () => { olderList.resolve([a, c]); await deleting; }); expectActive(a);
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
@@ -470,7 +479,7 @@ describe('Battle story storage reads through the real React session hook', () =>
     const list = deferred<BattleStorySessionRecord[]>();
     vi.mocked(storage.listBattleStorySessions).mockImplementationOnce(() => list.promise);
     let deleting!: Promise<void>;
-    await act(async () => { deleting = session.handleDeleteSession(b.id); });
+    await act(async () => { deleting = deleteConfirmed(b.id); });
     const detail = deferred<BattleStorySessionRecord | null>();
     vi.mocked(storage.getBattleStorySession).mockImplementationOnce(() => detail.promise);
     const selecting = await select(c.id);
@@ -482,10 +491,114 @@ describe('Battle story storage reads through the real React session hook', () =>
   it('删除活动会话仍刷新列表并 fallback，再删最后会话清空', async () => {
     const a = addHistory('A'); const b = addHistory('B'); await mount();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await act(async () => session.handleDeleteSession(a.id)); expectActive(b);
-    await act(async () => session.handleDeleteSession(b.id));
+    await act(async () => deleteConfirmed(a.id)); expectActive(b);
+    await act(async () => deleteConfirmed(b.id));
     expect(session.sessions).toEqual([]); expect(session.activeSession).toBeNull();
     expect(session.chapters).toEqual([]); expect(localStorage.getItem(ACTIVE_KEY)).toBeNull();
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
+});
+
+describe('explicit whole-session deletion through the real Web owner', () => {
+  it('captures A before a fresh read, then selection B does not retarget confirmation or late success', async () => {
+    const a = addHistory('A'); const b = addHistory('B'); await mount();
+    const fresh = deferred<BattleStorySessionRecord | null>();
+    vi.mocked(storage.getBattleStorySession).mockImplementationOnce(() => fresh.promise);
+    let preparing!: Promise<void>; await act(async () => { preparing = session.handleDeleteSession(a.id); });
+    await act(async () => session.handleSelectSession(b.id));
+    await act(async () => { fresh.resolve(a); await preparing; });
+    expect(session.deleteSessionTarget?.id).toBe(a.id); expect(storage.deleteBattleStorySession).not.toHaveBeenCalled();
+    await act(async () => session.handleConfirmDeleteSession());
+    expect(storage.deleteBattleStorySession).toHaveBeenCalledExactlyOnceWith(a.id, a); expectActive(b);
+  });
+  it('cancel and double request produce no delete or model; confirmation is single-flight', async () => {
+    const a = addHistory('A'); const b = addHistory('B'); await mount();
+    await act(async () => { await session.handleDeleteSession(a.id); await session.handleDeleteSession(b.id); });
+    expect(session.deleteSessionTarget?.id).toBe(a.id);
+    await act(async () => session.handleCancelDeleteSession()); expect(storage.deleteBattleStorySession).not.toHaveBeenCalled();
+    await act(async () => session.handleDeleteSession(a.id));
+    const result = deferred<storage.BattleStorySessionDeleteOutcome>();
+    vi.mocked(storage.deleteBattleStorySession).mockImplementationOnce(() => result.promise);
+    let saving!: Promise<void>; await act(async () => { saving = session.handleConfirmDeleteSession(); });
+    await act(async () => { await session.handleConfirmDeleteSession(); session.handleCancelDeleteSession(); });
+    expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce(); expect(session.deleteSessionTarget?.id).toBe(a.id);
+    await act(async () => { result.resolve({ status: 'conflict', deletedSession: false, deletedChapterCount: 0, deletedCheckpointCount: 0 }); await saving; });
+    expect(session.deleteSessionTarget).toBeNull(); expect(session.actionError).toContain('会话已变化'); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+  it.each(['missing', 'unchanged', 'changed', 'error'] as const)('unknown ACK observes %s without another delete or generation', async (observation) => {
+    const a = addHistory('A'); await mount(); await act(async () => session.handleDeleteSession(a.id));
+    vi.mocked(storage.deleteBattleStorySession).mockRejectedValueOnce(new Error('ACK lost'));
+    await act(async () => session.handleConfirmDeleteSession()); expect(session.deleteSessionMode).toBe('unknown');
+    await act(async () => session.handleConfirmDeleteSession()); expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce();
+    if (observation === 'missing') fixture.sessions.delete(a.id);
+    if (observation === 'changed') fixture.sessions.set(a.id, { ...a, title: 'A新版', updatedAt: a.updatedAt + 1 });
+    if (observation === 'error') vi.mocked(storage.getBattleStorySession).mockRejectedValueOnce(new Error('IO unavailable'));
+    await act(async () => session.handleObserveDeleteSession());
+    expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce(); expect(fixture.dispatch).not.toHaveBeenCalled();
+    if (observation === 'missing') { expect(session.deleteSessionNotice).toContain('目前已确认'); expect(session.activeSession).toBeNull(); }
+    if (observation === 'unchanged') expect(session.deleteSessionNotice).toContain('原会话仍在');
+    if (observation === 'changed') expect(session.deleteSessionNotice).toContain('已经变化');
+    if (observation === 'error') { expect(session.deleteSessionTarget?.id).toBe(a.id); expect(session.deleteSessionMessage).toContain('IO unavailable'); }
+  });
+  it('success plus directory failure closes delete intent and a later refresh is read-only', async () => {
+    const a = addHistory('A'); await mount(); await act(async () => session.handleDeleteSession(a.id));
+    vi.mocked(storage.listBattleStorySessions).mockRejectedValueOnce(new Error('directory IO'));
+    await act(async () => session.handleConfirmDeleteSession());
+    expect(session.deleteSessionNotice).toContain('已删除'); expect(session.deleteSessionNotice).toContain('目录刷新失败'); expect(session.deleteSessionTarget).toBeNull();
+    expect(session.activeSession).toBeNull(); expect(session.chapters).toEqual([]);
+    await act(async () => session.handleContinueSession()); expect(fixture.dispatch).not.toHaveBeenCalled();
+    await act(async () => session.handleRefreshSessionDirectory());
+    expect(session.sessions).toEqual([]); expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce(); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+  it('known transaction rollback closes intent and requires a fresh confirmation', async () => {
+    const a = addHistory('A'); await mount(); await act(async () => session.handleDeleteSession(a.id));
+    vi.mocked(storage.deleteBattleStorySession).mockRejectedValueOnce(new storage.BattleStoryDeleteNotWrittenError('已回滚'));
+    await act(async () => session.handleConfirmDeleteSession()); expect(session.deleteSessionTarget).toBeNull();
+    await act(async () => session.handleConfirmDeleteSession()); expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce(); expect(fixture.sessions.has(a.id)).toBe(true);
+  });
+});
+
+it('pre-delete export reads all original A chapters after choosing B and never deletes either', async () => {
+  const a = addHistory('A'); const b = addHistory('B'); await mount();
+  await act(async () => session.handleDeleteSession(a.id)); await act(async () => session.handleSelectSession(b.id));
+  await act(async () => session.handleExportDeleteSession());
+  expect(storage.listBattleStoryChaptersBySession).toHaveBeenLastCalledWith(a.id, { limit: Number.MAX_SAFE_INTEGER, includeSuperseded: false, direction: 'next' });
+  expect(fixture.download).toHaveBeenCalledExactlyOnceWith(expect.any(Blob), 'A.md');
+  expect(session.deleteSessionTarget).toBeNull(); expectActive(b); expect(storage.deleteBattleStorySession).not.toHaveBeenCalled(); expect(fixture.dispatch).not.toHaveBeenCalled();
+});
+
+it('known absence during prepare clears only original A and never leaves a deleted generation target', async () => {
+  const a = addHistory('A'); await mount(); fixture.sessions.delete(a.id);
+  await act(async () => session.handleDeleteSession(a.id));
+  expect(session.activeSession).toBeNull(); expect(session.sessions).toEqual([]); expect(session.deleteSessionTarget).toBeNull();
+  await act(async () => session.handleContinueSession()); expect(fixture.dispatch).not.toHaveBeenCalled(); expect(storage.deleteBattleStorySession).not.toHaveBeenCalled();
+});
+
+it('fallback detail failure after successful deletion clears A before any new model request', async () => {
+  const a = addHistory('A'); addHistory('B'); await mount(); await act(async () => session.handleDeleteSession(a.id));
+  vi.mocked(storage.listBattleStoryChaptersBySession).mockRejectedValueOnce(new Error('fallback chapters unavailable'));
+  await act(async () => session.handleConfirmDeleteSession());
+  expect(session.activeSession).toBeNull(); expect(session.chapters).toEqual([]); expect(session.deleteSessionNotice).toContain('已删除');
+  await act(async () => session.handleContinueSession()); expect(fixture.dispatch).not.toHaveBeenCalled(); expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce();
+});
+it('a failed post-delete fallback does not clear a newer C selection', async () => {
+  const a = addHistory('A'); addHistory('B'); const c = addHistory('C'); await mount(); await act(async () => session.handleDeleteSession(a.id));
+  const chapters = deferred<BattleStoryChapterRecord[]>(); vi.mocked(storage.listBattleStoryChaptersBySession).mockReturnValueOnce(chapters.promise);
+  let deleting!: Promise<void>; await act(async () => { deleting = session.handleConfirmDeleteSession(); });
+  await act(async () => session.handleSelectSession(c.id));
+  await act(async () => { chapters.reject(new Error('old fallback unavailable')); await deleting; }); expectActive(c);
+});
+it('closed unknown A keeps an A-only read-only fence while B continuation remains usable', async () => {
+  const a = addHistory('A'); const b = addHistory('B'); await mount(); await act(async () => session.handleDeleteSession(a.id));
+  vi.mocked(storage.deleteBattleStorySession).mockRejectedValueOnce(new Error('ACK lost'));
+  await act(async () => session.handleConfirmDeleteSession()); await act(async () => session.handleCancelDeleteSession());
+  expect(session.deleteSessionDialogOpen).toBe(false); expect(session.deleteSessionTarget?.id).toBe(a.id); expect(session.deleteSessionBlocksActive).toBe(true);
+  await act(async () => { await session.handleContinueSession(); await session.handleBranchSession(); await session.handleRewriteLastChapter(); });
+  expect(fixture.dispatch).not.toHaveBeenCalled(); expect(session.deleteSessionNotice).toContain('只读核对');
+  await act(async () => session.handleSelectSession(b.id)); expect(session.deleteSessionBlocksActive).toBe(false); expect(session.isDeletingSession).toBe(false);
+  let generation!: Promise<void>; await act(async () => { generation = session.handleContinueSession(); });
+  expect(fixture.dispatch).toHaveBeenCalledOnce(); await act(async () => { session.stopGeneration(); await generation; });
+  await act(async () => session.handleDeleteSession(b.id)); expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce(); expect(session.deleteSessionNotice).toContain('上一个删除');
+  await act(async () => session.handleSelectSession(a.id)); expect(session.deleteSessionBlocksActive).toBe(true);
+  await act(async () => session.handleObserveDeleteSession()); expect(session.deleteSessionTarget).toBeNull(); expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce();
 });

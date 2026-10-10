@@ -8,6 +8,8 @@ import {
   type StorySessionPage, type StoryChapterPage,
   StoryMarkdownExportManifestSchema, StoryMarkdownExportBeginSchema, StoryMarkdownExportAppendSchema, StoryMarkdownExportOutcomeSchema,
   type StoryMarkdownExportManifest, type StoryMarkdownExportOutcome,
+  StorySessionDeleteTargetSchema, StorySessionDeleteOutcomeSchema,
+  type StorySessionDeleteTarget, type StorySessionDeleteOutcome,
 } from '@mahoshojo/contracts/desktop-arena-story';
 import {
   advanceBattleStorySaveEvidence, BattleStoryCommitByteLimitError, digestBattleStoryCommitValue, createBattleStoryByteDigest,
@@ -34,6 +36,7 @@ export interface StoryNativePort {
   describe(sessionId: string, revision: number, kind: StoryRecordKind, recordId: string): Promise<unknown>;
   read(descriptor: StoryRecordDescriptor, offset: number, length: number): Promise<Uint8Array>;
   continueState(sessionId: string, revision: number, expectedHead: string): Promise<unknown>;
+  deleteSession(target: StorySessionDeleteTarget): Promise<unknown>;
 }
 
 type PreparedJson = ReturnType<typeof prepareBattleStoryCommitJson>;
@@ -227,6 +230,52 @@ const boundedPage = <T>(value: T): T => {
 export const listStorySessions = async (port: StoryNativePort, cursor: StorySessionPage['nextCursor'] = null): Promise<StorySessionPage> => (
   boundedPage(StorySessionPageSchema.parse(await port.listSessions(cursor, 25)))
 );
+/** Capture the clicked generation, never retarget a stale confirmation to its successor. */
+export const prepareStorySessionDeletion = async (port: StoryNativePort, head: StorySessionHead): Promise<StorySessionDeleteTarget> => {
+  const { id, revision, lastChapterId, chapterCount } = head;
+  const session = StoryRecordDescriptorSchema.parse(await port.describe(id, revision, 'session', id));
+  if (session.sessionId !== id || session.recordId !== id || session.revision !== revision || session.kind !== 'session') throw new Error('删除目标身份不符');
+  return freezeBattleStoryCommit(StorySessionDeleteTargetSchema.parse({ session, expectedLastChapterId: lastChapterId, expectedChapterCount: chapterCount }));
+};
+export class StoryDeleteError extends Error {
+  constructor(message: string, readonly evidence: 'unknown' | 'not-written', readonly cause?: unknown) { super(message); this.name = 'StoryDeleteError'; }
+}
+const sameDeletionTarget = (left: StorySessionDeleteTarget, right: StorySessionDeleteTarget): boolean => (
+  left.expectedLastChapterId === right.expectedLastChapterId && left.expectedChapterCount === right.expectedChapterCount
+  && sameSessionDescriptor(left.session, right.session)
+);
+const sameSessionDescriptor = (left: StoryRecordDescriptor, right: StoryRecordDescriptor): boolean => (
+  left.instance === right.instance && left.sessionId === right.sessionId && left.recordId === right.recordId
+  && left.revision === right.revision && left.kind === right.kind && left.byteLength === right.byteLength && left.digest === right.digest
+);
+/** Exactly one mutation dispatch. A missing response is not proof that deletion failed. */
+export const deleteStorySession = async (port: StoryNativePort, target: StorySessionDeleteTarget): Promise<StorySessionDeleteOutcome> => {
+  let dispatched = false;
+  try {
+    const checked = freezeBattleStoryCommit(StorySessionDeleteTargetSchema.parse(target));
+    dispatched = true;
+    const outcome = StorySessionDeleteOutcomeSchema.parse(await port.deleteSession(checked));
+    if (!sameDeletionTarget(checked, outcome.target)) throw new Error('删除响应目标身份不符');
+    return outcome;
+  } catch (cause) {
+    const failure = StoryNativeFailureSchema.safeParse(cause);
+    const evidence = !dispatched || failure.success && failure.data.writeEvidence === 'not-written' ? 'not-written' : 'unknown';
+    throw new StoryDeleteError(evidence === 'unknown' ? '本机会话删除结果待确认，请只读核对当前状态' : '本次未删除会话，请重新核对目标后确认', evidence, cause);
+  }
+};
+/** Current-state observation, not proof of a particular operation or permission to retry. */
+export const observeStorySessionDeletion = async (port: StoryNativePort, target: StorySessionDeleteTarget): Promise<'currently-absent' | 'unchanged' | 'changed' | 'unknown'> => {
+  try {
+    const checked = StorySessionDeleteTargetSchema.parse(target), original = checked.session;
+    const current = StoryRecordDescriptorSchema.parse(await port.describe(original.sessionId, original.revision, 'session', original.sessionId));
+    return sameSessionDescriptor(original, current) ? 'unchanged' : 'changed';
+  } catch (cause) {
+    const failure = StoryNativeFailureSchema.safeParse(cause);
+    if (failure.success && failure.data.code === 'story-missing') return 'currently-absent';
+    if (failure.success && failure.data.code === 'story-stale') return 'changed';
+    return 'unknown';
+  }
+};
 export const listStoryChapters = async (port: StoryNativePort, head: StorySessionHead, cursor: StoryChapterPage['nextCursor'] = null): Promise<StoryChapterPage> => {
   const page = boundedPage(StoryChapterPageSchema.parse(await port.listChapters(head.id, head.revision, cursor, 25)));
   if (page.sessionId !== head.id || page.revision !== head.revision) throw new Error('章节目录已过时');

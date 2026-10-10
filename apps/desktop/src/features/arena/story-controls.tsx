@@ -1,6 +1,6 @@
 import { useRef, useState, useSyncExternalStore } from 'react';
 import {
-  BattleStoryActions, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
+  BattleStoryActions, BattleStoryDeleteSessionControls, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
   type BattleStoryChapterReadViewState,
 } from '@mahoshojo/ui-web/arena-story-session';
 import { StreamingBattleReportCard, type StreamingBattleReportCardProps, type BattleReportHostPorts } from '@mahoshojo/ui-web/arena-report';
@@ -176,7 +176,7 @@ export function DesktopArenaStoryControls(props: {
   return <section aria-label="连续战报会话" className="mt-6 space-y-4 rounded-2xl border border-gray-200 bg-white p-4 sm:p-6">
     <div><h2 className="text-xl font-semibold text-gray-900">连续战报会话</h2>
       <p className="mt-1 text-sm text-gray-600">{hostedOwner ? '简洁版与高级版共用本机故事。首章冻结当前页配置；续写沿用故事种子与章末角色，并使用当前显式选择的执行位置与模型。' : '简洁版与高级版共用本机故事。首章冻结当前页配置；续写沿用故事种子与章末角色，并使用当前显式选择的 Direct 模型。'}</p>
-      <p className="mt-1 text-xs text-gray-500">{hostedOwner ? '仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。分支、重写和删除暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。' : '仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。Hosted、分支、重写和删除暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。'}</p>
+      <p className="mt-1 text-xs text-gray-500">{hostedOwner ? '仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。分支和重写暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。' : '仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。Hosted、分支和重写暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。'}</p>
       <p className="mt-1 text-xs text-gray-500">当前连续请求沿用 Web 的种子字段：分队显示名称、活动历史及历史引用不会额外注入章节。读取／写入角色历战与当前状态按冻结设置生效。</p>
     </div>
     <div className="grid gap-3 sm:grid-cols-2">
@@ -196,11 +196,23 @@ export function DesktopArenaStoryControls(props: {
     </label>
     <BattleStoryActions>
       <button className={secondary} type="button" disabled={!canGenerate || !!planError} title={props.unavailableReason ?? undefined} onClick={() => props.onStart(plan ?? undefined)}>新建连续战报</button>
-      <button className={secondary} type="button" disabled={!canGenerate || !state.active || reached || otherStoryCandidate} title={props.unavailableReason ?? undefined} onClick={() => props.onContinue(guidance)}>继续续写</button>
+      <button className={secondary} type="button" disabled={!canGenerate || !state.active || reached || otherStoryCandidate || owner.hasUnconfirmedDeletion()} title={props.unavailableReason ?? undefined} onClick={() => props.onContinue(guidance)}>继续续写</button>
       <button className={secondary} type="button" disabled={!state.active || busy} onClick={() => void owner.exportSelectedStory()}>导出完整 Markdown</button>
       {generating && !hostedResult && !hosted?.busy ? <button className={secondary} type="button" onClick={() => owner.cancel()}>停止章节生成</button> : null}
       {state.exporting ? <button className={secondary} type="button" onClick={() => owner.cancelExport()}>取消故事导出</button> : null}
     </BattleStoryActions>
+    <BattleStoryDeleteSessionControls
+      target={state.deletion?.phase === 'preparing' ? null : state.deletion?.target ?? null}
+      open={state.deletion?.dialogOpen}
+      disabledReason={props.disabled ? '请等待当前操作完成后再删除。' : owner.deleteSessionDisabledReason()}
+      preparing={state.deletion?.phase === 'preparing'}
+      busy={state.deletion?.phase === 'deleting' || state.deletion?.phase === 'observing'}
+      mode={state.deletion?.phase === 'unknown' || state.deletion?.phase === 'observing' ? 'unknown' : 'confirm'}
+      message={state.deletion?.message}
+      onRequest={() => void owner.requestDeleteSession()} onCancel={() => owner.cancelDeleteSession()}
+      onConfirm={() => void owner.confirmDeleteSession()} onExport={() => void owner.exportDeleteTarget()}
+      onObserve={() => void owner.observeDeleteSession()} />
+    {state.deletionNotice ? <p role="status" className="text-sm text-amber-800">{state.deletionNotice}</p> : null}
     {props.unavailableReason ? <p role="status">{props.unavailableReason} 已保存故事仍可阅读和导出。</p> : null}
     {reached ? <p role="status">已完成本故事的显式章节计划。</p> : null}
     {state.message ? <p role="status" className="text-sm text-amber-800">{state.message}</p> : null}

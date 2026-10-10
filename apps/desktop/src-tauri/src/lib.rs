@@ -1083,6 +1083,15 @@ fn query_arena_story_receipt(
     library.stories().receipt(&session_id, &operation_id)
 }
 #[tauri::command(async)]
+fn delete_arena_story_session(
+    library: State<'_, LocalLibrary>,
+    target: arena_story::delete::SessionDeleteTarget,
+) -> Result<arena_story::delete::SessionDeleteOutcome, arena_story::StoryError> {
+    library
+        .stories()
+        .delete_session(&target, std::time::Instant::now())
+}
+#[tauri::command(async)]
 fn list_arena_story_sessions(
     library: State<'_, LocalLibrary>,
     cursor: Option<arena_story::read::SessionCursor>,
@@ -1883,6 +1892,7 @@ pub fn run() {
             abort_arena_story_commit,
             query_arena_story_receipt,
             list_arena_story_sessions,
+            delete_arena_story_session,
             list_arena_story_chapters,
             describe_arena_story_record,
             read_arena_story_record_chunk,

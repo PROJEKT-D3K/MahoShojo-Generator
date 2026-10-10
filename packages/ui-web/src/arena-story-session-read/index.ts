@@ -30,7 +30,7 @@ export type BattleStorySessionReader<S> = {
   refreshList(): Promise<S[] | null>;
   select(id: string | null, onError?: (error: unknown) => void): Promise<void>;
   /** Capture eligibility for a post-delete reload; later selection intents take precedence. */
-  captureSelection(): (id: string | null) => Promise<void>;
+  captureSelection(options?: { clearOnError?: boolean }): (id: string | null) => Promise<void>;
   restore(callbacks: { onError(error: unknown): void; onReady(): void }): Promise<void>;
   invalidate(): void;
   dispose(): void;
@@ -99,12 +99,19 @@ export function createBattleStorySessionReader<S extends SessionKeys, C extends 
       const token = fence.begin('selection');
       return token ? readSelection(id, token, onError) : Promise.resolve();
     },
-    captureSelection: () => {
+    captureSelection: (options) => {
       const captured = fence.capture('selection');
       return (id) => {
         if (!captured.isCurrent()) return Promise.resolve();
         const token = fence.begin('selection');
-        return token ? readSelection(id, token) : Promise.resolve();
+        return token ? readSelection(id, token, options?.clearOnError ? (error) => {
+          // Used only after the original selection has been irreversibly deleted.
+          // readSelection invokes this inside the same token fence, so a newer
+          // manual selection is never cleared by a failed fallback read.
+          publish.selection({ session: null, chapters: [], checkpoints: [], selectedChapterId: null });
+          ports.writePreferredId(null);
+          throw error;
+        } : undefined) : Promise.resolve();
       };
     },
     restore: async ({ onError, onReady }) => {

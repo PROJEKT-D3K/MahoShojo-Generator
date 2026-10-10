@@ -2,7 +2,7 @@ import { createBattleStoryReadFence, type BattleStoryReadToken } from '@mahoshoj
 import { ARENA_CANONICAL_RESOURCE_LIMITS, ARENA_CANONICAL_CAPABILITIES, evaluateArenaBasicGenerationReadiness } from '@mahoshojo/contracts/arena-capabilities';
 import {
   StorySessionHeadSchema, StorySourceSchema,
-  type StoryChapterDocument, type StoryChapterHead, type StoryChapterPage, type StorySessionHead, type StorySessionPage,
+  type StoryChapterDocument, type StoryChapterHead, type StoryChapterPage, type StorySessionHead, type StorySessionPage, type StorySessionDeleteTarget,
 } from '@mahoshojo/contracts/desktop-arena-story';
 import {
   type BattleStoryChapterPlan, type BattleStoryPromptWindowItem,
@@ -17,6 +17,7 @@ import type { DesktopAiExecutionOptions } from '../../platform/desktop-ai-execut
 import {
   listStorySessions, listStoryChapters, readSelectedStoryChapter, readStoryContinueState,
   prepareStoryStorageCommit, savePreparedStoryCommit, queryStoryCommitReceipt, StorySaveError,
+  prepareStorySessionDeletion, deleteStorySession, observeStorySessionDeletion, StoryDeleteError,
   type PreparedStoryCommit, type StoryNativePort,
 } from '../../platform/arena-story-storage';
 import { executeArenaDirect, type ArenaDirectIntent, type ArenaDirectPartial } from './direct';
@@ -36,8 +37,15 @@ export type StoryChapterSelection =
   | { status: 'loaded'; sessionId: string; chapterId: string; chapter: StoryChapterDocument };
 export type StoryExportProgress = { phase: 'counting' | 'writing'; bytes: number };
 export type StoryExportResult = { absolutePath: string; byteLength: number };
+export type DesktopStoryDeletion = {
+  target: { sessionId: string; title: string; chapterCount: number };
+  phase: 'preparing' | 'confirm' | 'deleting' | 'unknown' | 'observing';
+  dialogOpen: boolean;
+  message: string | null;
+};
 export type DesktopStoryState = {
   hosted: DesktopHostedStoryState | null;
+  deletion: DesktopStoryDeletion | null; deletionNotice: string | null;
   sessions: StorySessionHead[]; sessionCursor: StorySessionPage['nextCursor']; listLoading: boolean; listError: string | null;
   active: StorySessionHead | null; chapters: StoryChapterHead[]; chapterCursor: StoryChapterPage['nextCursor']; chaptersLoading: boolean; chaptersError: string | null;
   selected: StoryChapterSelection;
@@ -47,10 +55,11 @@ export type DesktopStoryState = {
   savedUnread: StorySessionHead | null; message: string | null;
   exporting: boolean; exportProgress: StoryExportProgress | null; exportResult: StoryExportResult | null; exportError: string | null;
 };
+type PendingDeletion = { head: StorySessionHead; selection: BattleStoryReadToken; target: StorySessionDeleteTarget | null };
 type PendingCommit = { prepared: PreparedStoryCommit; selection: BattleStoryReadToken; evidence: BattleStorySaveEvidence };
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : '操作未完成，请保留现有内容后重试。';
 const emptyState = (): DesktopStoryState => ({
-  hosted: null,
+  hosted: null, deletion: null, deletionNotice: null,
   sessions: [], sessionCursor: null, listLoading: false, listError: null,
   active: null, chapters: [], chapterCursor: null, chaptersLoading: false, chaptersError: null, selected: { status: 'unloaded' },
   phase: 'idle', resultSource: null, result: null, resultChapterIndex: null, resultSaved: false, saving: false, pending: null,
@@ -68,6 +77,8 @@ export class DesktopArenaStorySession {
   private runController: AbortController | null = null;
   private exportController: AbortController | null = null;
   private pending: PendingCommit | null = null;
+  // Ephemeral confirmation only: never serialize or replay deletion intent.
+  private deletion: PendingDeletion | null = null;
   private executionScope = '';
   private executionEpoch = 0;
   readonly hosted: DesktopHostedStorySession | null;
@@ -132,8 +143,11 @@ export class DesktopArenaStorySession {
   private publish(patch: Partial<DesktopStoryState>) { if (this.disposed) return; this.state = { ...this.state, ...patch }; for (const listener of this.listeners) listener(); }
   private id = () => (this.dependencies.id ?? (() => crypto.randomUUID()))();
   private now = () => (this.dependencies.now ?? Date.now)();
-  isBusy = () => Boolean(this.runController) || this.state.saving || this.state.exporting || Boolean(this.hosted?.isBusy());
-  hasUnsavedResult = () => !!this.hosted?.hasCandidate() || !!this.state.pending || (!!this.state.result && !this.state.resultSaved && !!(this.state.result.rawText || this.state.result.reasoning));
+  private deletionBlocksWork = () => Boolean(this.deletion) && this.state.deletion?.phase !== 'unknown' && this.state.deletion?.phase !== 'observing';
+  hasUnconfirmedDeletion = (sessionId = this.state.active?.id) => !!sessionId && this.deletion?.head.id === sessionId
+    && (this.state.deletion?.phase === 'unknown' || this.state.deletion?.phase === 'observing');
+  isBusy = () => this.deletionBlocksWork() || Boolean(this.runController) || this.state.saving || this.state.exporting || Boolean(this.hosted?.isBusy());
+  hasUnsavedResult = () => !!this.hosted?.hasCandidate() || !!this.state.pending || (!!this.state.result && !this.state.resultSaved && !!(this.state.result.rawText || this.state.result.markdown || this.state.result.reasoning));
   setExecutionScope(scope: string, actor: DesktopArenaHostedActor | null = null) {
     this.hosted?.setContext(scope, actor);
     if (scope === this.executionScope) return;
@@ -153,7 +167,8 @@ export class DesktopArenaStorySession {
       if (new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error('会话目录已变化，请刷新目录。');
       if (page.nextCursor && cursor && page.nextCursor.id === cursor.id && page.nextCursor.updatedAt === cursor.updatedAt) throw new Error('会话目录未前进');
       this.publish({ sessions: rows, sessionCursor: page.nextCursor });
-    } catch (cause) { if (token.isCurrent()) this.publish({ listError: errorText(cause) }); }
+      return true;
+    } catch (cause) { if (token.isCurrent()) { this.publish({ listError: errorText(cause) }); return false; } }
     finally { if (token.isCurrent()) this.publish({ listLoading: false }); }
   }
   async initialize() {
@@ -199,6 +214,122 @@ export class DesktopArenaStorySession {
       if (selection.isCurrent() && token.isCurrent() && !controller.signal.aborted) this.publish({ selected: { status: 'error', sessionId: head.id, chapterId, message: errorText(cause) } });
     } finally { if (this.readController === controller) this.readController = null; }
   }
+  deleteSessionDisabledReason(head = this.deletion?.head ?? this.state.active): string | null {
+    if (this.state.deletion?.phase === 'unknown' || this.state.deletion?.phase === 'observing') return '请先只读核对上一个删除的当前状态，再开始另一次删除。';
+    if (!head) return '请先选择一个本机故事会话。';
+    if (this.disposed) return '故事页面已关闭，请重新打开后操作。';
+    if (this.runController || this.state.saving || this.state.exporting || this.hosted?.isBusy()) return '请等待当前生成、保存或导出完成后再删除。';
+    if (this.hasUnsavedResult()) return '请先导出并处理当前未保存作品或本机候选。';
+    const hosted = this.hosted?.getSnapshot();
+    if (hosted && Object.keys(hosted.discoveryErrors).length) return '本机候选状态尚未读清，请刷新候选后再删除。';
+    if (hosted && Object.values(hosted.slots).some(slot => slot?.manifest.sessionId === head.id)) return '另一故事页仍有本会话的待处理候选，请先前往原页面处理。';
+    return null;
+  }
+  async requestDeleteSession() {
+    if (this.deletion) {
+      if (!this.deletionBlocksWork()) this.publish({ deletionNotice: '请先只读核对上一个删除的当前状态，再开始另一次删除。' });
+      return;
+    }
+    const reason = this.deleteSessionDisabledReason();
+    if (reason) { this.publish({ deletionNotice: reason }); return; }
+    // Capture the clicked head and selection BEFORE describe. A later B selection
+    // must not redirect the confirmation, export, deletion, or late cleanup of A.
+    const head = freezeBattleStoryCommit(StorySessionHeadSchema.parse(this.state.active));
+    const pending: PendingDeletion = { head, selection: this.fence.capture('session'), target: null };
+    this.deletion = pending;
+    const target = freezeBattleStoryCommit({ sessionId: head.id, title: `${head.titlePreview}${head.titleTruncated ? '…' : ''}`, chapterCount: head.chapterCount });
+    this.publish({ deletion: { target, phase: 'preparing', dialogOpen: false, message: null }, deletionNotice: null });
+    try {
+      const identity = await prepareStorySessionDeletion(this.dependencies.port, head);
+      if (this.disposed || this.deletion !== pending) return;
+      const blocked = this.deleteSessionDisabledReason(head);
+      if (blocked) { this.clearDeletion(); this.publish({ deletionNotice: blocked }); return; }
+      pending.target = identity;
+      this.publish({ deletion: { target, phase: 'confirm', dialogOpen: true, message: null } });
+    } catch (cause) {
+      if (this.disposed || this.deletion !== pending) return;
+      this.clearDeletion();
+      this.publish({ deletionNotice: `删除目标未能核对，尚未执行删除。请刷新故事目录后重新选择：${errorText(cause)}` });
+    }
+  }
+  private clearDeletion() { this.deletion = null; this.publish({ deletion: null }); }
+  cancelDeleteSession() {
+    const state = this.state.deletion;
+    if (state?.phase === 'deleting') return;
+    if (state?.phase === 'unknown' || state?.phase === 'observing') {
+      this.publish({ deletion: { ...state, dialogOpen: false } }); return;
+    }
+    this.clearDeletion();
+  }
+  async confirmDeleteSession() {
+    const pending = this.deletion, state = this.state.deletion;
+    if (this.disposed || !pending?.target || state?.phase !== 'confirm') return;
+    const blocked = this.deleteSessionDisabledReason(pending.head);
+    if (blocked) { this.clearDeletion(); this.publish({ deletionNotice: blocked }); return; }
+    this.publish({ deletion: { ...state, phase: 'deleting', message: null } });
+    try {
+      const outcome = await deleteStorySession(this.dependencies.port, pending.target);
+      if (this.deletion !== pending || this.disposed) return;
+      await this.acceptDeletedSession(pending, outcome.status);
+    } catch (cause) {
+      if (this.deletion !== pending || this.disposed) return;
+      if (cause instanceof StoryDeleteError && cause.evidence === 'not-written') {
+        this.clearDeletion();
+        this.publish({ deletionNotice: `本次未删除会话。请处理阻碍并刷新目录后重新确认：${errorText(cause)}` });
+      } else {
+        this.publish({ deletion: { ...state, phase: 'unknown', message: '删除结果待确认。核实前不能继续原会话；其它故事和新建不受影响。只读核对不会自动重删、保存或调用模型。' } });
+      }
+    }
+  }
+  async observeDeleteSession() {
+    const pending = this.deletion, state = this.state.deletion;
+    if (this.disposed || !pending?.target || state?.phase !== 'unknown') return;
+    this.publish({ deletion: { ...state, phase: 'observing' } });
+    try {
+      const observed = await observeStorySessionDeletion(this.dependencies.port, pending.target);
+      if (this.deletion !== pending || this.disposed) return;
+      if (observed === 'currently-absent') { await this.acceptDeletedSession(pending, observed); return; }
+      if (observed === 'unchanged' || observed === 'changed') {
+        this.clearDeletion();
+        this.publish({ deletionNotice: observed === 'unchanged'
+          ? '原会话目前仍在，未确认删除。若仍要删除，请重新点击并确认当前目标。'
+          : '本机会话身份或版本已变化，未确认删除。请刷新目录，重新读取并确认当前目标。' });
+        return;
+      }
+      this.publish({ deletion: { ...state, phase: 'unknown', dialogOpen: this.state.deletion?.dialogOpen ?? state.dialogOpen, message: '仍无法确认本机会话当前状态，请保留现状后重试读取；不会自动重删。' } });
+    } catch {
+      if (this.deletion === pending && !this.disposed) this.publish({ deletion: { ...state, phase: 'unknown', dialogOpen: this.state.deletion?.dialogOpen ?? state.dialogOpen, message: '仍无法确认本机会话当前状态，请保留现状后重试读取；不会自动重删。' } });
+    }
+  }
+  private async acceptDeletedSession(pending: PendingDeletion, status: 'deleted' | 'currently-absent') {
+    const sameSelection = pending.selection.isCurrent() && this.state.active?.id === pending.head.id;
+    if (sameSelection) {
+      // Clear known-absent A even when a newer start still displays it. Preserve
+      // that generation's session/chapter tokens so its successful B save can
+      // select B; separately invalidate A's directory and abort its body read.
+      if (!this.runController && !this.state.saving && !this.hosted?.isBusy()) {
+        this.fence.begin('session'); this.fence.begin('chapter');
+      }
+      this.fence.begin('chapters'); this.readController?.abort();
+      this.publish({ active: null, chapters: [], chapterCursor: null, chaptersLoading: false, chaptersError: null, selected: { status: 'unloaded' } });
+    }
+    this.publish({ sessions: this.state.sessions.filter(head => head.id !== pending.head.id),
+      ...(this.state.savedUnread?.id === pending.head.id ? { savedUnread: null } : {}) });
+    const message = status === 'deleted' ? '已删除本机会话及其全部章节和状态快照。' : '目前已确认本机会话不存在；这不证明先前删除操作的执行结果。';
+    this.publish({ deletionNotice: message });
+    const refreshed = await this.refreshSessions();
+    if (this.deletion !== pending || this.disposed) return;
+    this.clearDeletion();
+    this.publish({ deletionNotice: refreshed === false ? `${message}目录刷新失败，请仅刷新故事目录。` : message });
+  }
+  async exportDeleteTarget() {
+    const pending = this.deletion;
+    if (!pending?.target || this.state.deletion?.phase !== 'confirm') return;
+    const head = pending.head;
+    this.clearDeletion();
+    // Export exactly the frozen target without changing a newer selection.
+    await this.exportStory(head);
+  }
   private beginGeneration() {
     if (this.disposed || this.isBusy() || this.hasUnsavedResult() || !this.executionScope) return null;
     const controller = new AbortController(); this.runController = controller;
@@ -231,6 +362,7 @@ export class DesktopArenaStorySession {
   async continue(userGuidance: string, prepare: PrepareStoryExecution) {
     const head = this.state.active;
     if (!head) return;
+    if (this.hasUnconfirmedDeletion(head.id)) { this.publish({ deletionNotice: '此会话的删除结果尚未核实，请先只读核对当前状态；不会启动续写。' }); return; }
     if (isBattleStoryChapterPlanLimitReached({ chapterPlan: head.chapterPlan, completedChapterCount: head.chapterCount })) {
       this.publish({ message: '本故事已完成显式章节计划。未设置计划的故事没有总章节数上限。' }); return;
     }
@@ -324,7 +456,7 @@ export class DesktopArenaStorySession {
   }
   async savePending() {
     const pending = this.pending;
-    if (this.disposed || !pending || this.state.saving) return;
+    if (this.disposed || !pending || this.state.saving || this.deletionBlocksWork()) return;
     this.publish({ saving: true, message: pending.evidence === 'unknown' ? '正在查询原保存操作…' : '正在保存完整章节…' });
     try {
       const receipt = pending.evidence === 'unknown'
@@ -355,7 +487,10 @@ export class DesktopArenaStorySession {
   cancel() { if (this.hosted?.getSnapshot().busy === 'model') { void this.hosted.requestServerStop(); return; } this.runController?.abort(); }
   async exportSelectedStory() {
     const head = this.state.active;
-    if (this.disposed || !head || this.isBusy()) return;
+    if (head) await this.exportStory(head);
+  }
+  private async exportStory(head: StorySessionHead) {
+    if (this.disposed || this.isBusy()) return;
     const controller = new AbortController(); this.exportController = controller;
     this.publish({ exporting: true, exportProgress: null, exportResult: null, exportError: null });
     try {
@@ -367,6 +502,11 @@ export class DesktopArenaStorySession {
     finally { if (this.exportController === controller) this.exportController = null; this.publish({ exporting: false }); }
   }
   cancelExport() { this.exportController?.abort(); this.hosted?.cancelExport(); }
-  detach() { this.hosted?.detach(); this.runController?.abort(); this.cancelExport(); this.readController?.abort(); }
+  detach() {
+    // Leaving can dismiss an unsubmitted confirmation, never release an already
+    // dispatched deletion flight or make the same owner dispatch it a second time.
+    this.cancelDeleteSession();
+    this.hosted?.detach(); this.runController?.abort(); this.cancelExport(); this.readController?.abort();
+  }
   dispose() { this.detach(); this.hosted?.dispose(); this.disposed = true; this.fence.dispose(); this.listeners.clear(); }
 }

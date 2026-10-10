@@ -61,6 +61,19 @@ export const StoryRecordDescriptorSchema = z.object({
   instance: z.string().regex(/^[a-f0-9]{32}$/u), sessionId: id, recordId: id, revision: integer.min(1),
   kind: StoryRecordKindSchema, byteLength: integer.min(1).max(STORY_CANDIDATE_COMMIT_BYTES), digest,
 }).strict();
+/** One explicitly confirmed local session generation. No deletion ledger or replay token. */
+export const StorySessionDeleteTargetSchema = z.object({
+  session: StoryRecordDescriptorSchema.extend({ kind: z.literal('session') }),
+  expectedLastChapterId: id, expectedChapterCount: integer.min(1),
+}).strict().refine((value) => value.session.recordId === value.session.sessionId);
+export const StorySessionDeleteOutcomeSchema = z.object({
+  target: StorySessionDeleteTargetSchema, status: z.enum(['deleted', 'currently-absent']),
+  deletedChapterCount: integer, deletedCheckpointCount: integer,
+}).strict().refine((value) => value.status === 'currently-absent'
+  ? value.deletedChapterCount === 0 && value.deletedCheckpointCount === 0
+  : value.deletedChapterCount === value.target.expectedChapterCount && value.deletedCheckpointCount >= 1);
+export type StorySessionDeleteTarget = z.infer<typeof StorySessionDeleteTargetSchema>;
+export type StorySessionDeleteOutcome = z.infer<typeof StorySessionDeleteOutcomeSchema>;
 export const StoryContinueDescriptorsSchema = z.object({
   session: StoryRecordDescriptorSchema, seed: StoryRecordDescriptorSchema, checkpoint: StoryRecordDescriptorSchema,
   recentChapters: z.array(StoryRecordDescriptorSchema).min(1).max(12), head: StorySessionHeadSchema,

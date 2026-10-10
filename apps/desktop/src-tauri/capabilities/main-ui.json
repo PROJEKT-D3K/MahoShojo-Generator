@@ -55,6 +55,7 @@
     "allow-abort-arena-story-commit",
     "allow-query-arena-story-receipt",
     "allow-list-arena-story-sessions",
+    "allow-delete-arena-story-session",
     "allow-list-arena-story-chapters",
     "allow-describe-arena-story-record",
     "allow-read-arena-story-record-chunk",

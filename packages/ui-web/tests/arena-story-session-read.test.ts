@@ -131,3 +131,19 @@ describe('restore and captured reload ordering', () => {
     session.reject(new Error('stale')); await old; expect(onError).not.toHaveBeenCalled();
   });
 });
+
+it('post-delete fallback failure clears the original deleted selection only within its own token', async () => {
+  const f = fixture(); await f.reader.select('A');
+  const reload = f.reader.captureSelection({ clearOnError: true });
+  f.ports.listChapters.mockRejectedValueOnce(new Error('fallback failed'));
+  await expect(reload('B')).rejects.toThrow('fallback failed');
+  expect(f.publish.selection).toHaveBeenLastCalledWith({ session: null, chapters: [], checkpoints: [], selectedChapterId: null });
+  expect(f.ports.writePreferredId).toHaveBeenLastCalledWith(null);
+});
+it('a stale failed post-delete fallback cannot clear a newer manual selection', async () => {
+  const f = fixture(); await f.reader.select('A'); const reload = f.reader.captureSelection({ clearOnError: true });
+  const gate = deferred<typeof f.chapters>(); f.ports.listChapters.mockReturnValueOnce(gate.promise);
+  const fallback = reload('B'); await f.reader.select('C'); const last = f.publish.selection.mock.calls.at(-1);
+  gate.reject(new Error('old fallback failed')); await fallback;
+  expect(f.publish.selection.mock.calls.at(-1)).toBe(last); expect(f.ports.writePreferredId).not.toHaveBeenLastCalledWith(null);
+});

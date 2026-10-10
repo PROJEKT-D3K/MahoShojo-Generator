@@ -11,6 +11,7 @@ export const STORY_IPC = {
   abort: 'abort_arena_story_commit', receipt: 'query_arena_story_receipt',
   sessions: 'list_arena_story_sessions', chapters: 'list_arena_story_chapters',
   describe: 'describe_arena_story_record', read: 'read_arena_story_record_chunk', continueState: 'read_arena_story_continue_state',
+  deleteSession: 'delete_arena_story_session',
   exportBegin: 'begin_arena_story_markdown_export', exportAppend: 'append_arena_story_markdown_export',
   exportEnd: 'end_arena_story_markdown_export', exportAbort: 'abort_arena_story_markdown_export',
 } as const;
@@ -46,6 +47,7 @@ export const createIpcStoryNativePort = (invoke: StoryInvoke = tauriInvoke): Sto
     return new Uint8Array(bytes);
   },
   continueState: (sessionId, revision, expectedHead) => invoke(STORY_IPC.continueState, { sessionId, revision, expectedHead }),
+  deleteSession: (target) => invoke(STORY_IPC.deleteSession, { target }),
 });
 
 export const createIpcStoryMarkdownExportPort = (invoke: StoryInvoke = tauriInvoke): StoryMarkdownExportPort => ({

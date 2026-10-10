@@ -24,6 +24,7 @@ import {
   deleteBattleStoryChaptersFromIndex,
   deleteBattleStoryCheckpointsFromBoundary,
   deleteBattleStorySession,
+  BattleStoryDeleteNotWrittenError,
   getBattleStorySession,
   listBattleStoryChaptersBySession,
   listBattleStoryCheckpointsBySession,
@@ -421,6 +422,20 @@ export function useBattleStorySession() {
   const [streamChapterIndex, setStreamChapterIndex] = useState<number | null>(null);
   const [isRefreshingSummary, setIsRefreshingSummary] = useState(false);
   const [isDeletingSession, setIsDeletingSession] = useState(false);
+  const [deleteSessionTarget, setDeleteSessionTarget] = useState<BattleStorySessionRecord | null>(null);
+  const [deleteSessionPreparing, setDeleteSessionPreparing] = useState(false);
+  const [deleteSessionBusy, setDeleteSessionBusy] = useState(false);
+  const [deleteSessionDialogOpen, setDeleteSessionDialogOpen] = useState(false);
+  const [deleteSessionNotice, setDeleteSessionNotice] = useState<string | null>(null);
+  const [deleteSessionMode, setDeleteSessionMode] = useState<'confirm' | 'unknown'>('confirm');
+  const [deleteSessionMessage, setDeleteSessionMessage] = useState<string | null>(null);
+  const deleteSessionRef = useRef<{
+    session: BattleStorySessionRecord | null;
+    busy: boolean;
+    reserved: boolean;
+    mode: 'confirm' | 'unknown';
+    reloadSelection?: (id: string | null) => Promise<void>;
+  } | null>(null);
   const [draftChapterPlanMode, setDraftChapterPlanMode] = useState<BattleStoryDraftChapterPlanMode>('auto');
   const [draftChapterPlanInput, setDraftChapterPlanInput] = useState('');
 
@@ -892,6 +907,7 @@ export function useBattleStorySession() {
       unsubscribeAuth();
       window.removeEventListener('storage', onStorage);
       mountedRef.current = false;
+      deleteSessionRef.current = null;
       generationAbortControllerRef.current?.abort(STREAM_ABORT_REASON_USER);
       const pending = pendingRoleOutcomeRef.current;
       pendingRoleOutcomeRef.current = null;
@@ -1512,6 +1528,9 @@ export function useBattleStorySession() {
   ]);
 
   const handleContinueSession = useCallback(async () => {
+    if (deleteSessionRef.current?.mode === 'unknown' && deleteSessionRef.current.session?.id === activeSessionRef.current?.id) {
+      setDeleteSessionNotice('请先只读核对本机会话的删除状态，再继续操作这个会话。'); return;
+    }
     if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
     const sessionRecord = activeSessionRef.current ? structuredClone(activeSessionRef.current) : null;
     const activeChapters = getActiveBattleStoryChapters(structuredClone(chaptersRef.current));
@@ -1577,6 +1596,9 @@ export function useBattleStorySession() {
   ]);
 
   const handleBranchFromChapter = useCallback(async (targetChapterId?: string | null) => {
+    if (deleteSessionRef.current?.mode === 'unknown' && deleteSessionRef.current.session?.id === activeSessionRef.current?.id) {
+      setDeleteSessionNotice('请先只读核对本机会话的删除状态，再继续操作这个会话。'); return;
+    }
     if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
     const sessionRecord = activeSessionRef.current ? structuredClone(activeSessionRef.current) : null;
     const activeChapters = getActiveBattleStoryChapters(structuredClone(chaptersRef.current));
@@ -1763,6 +1785,9 @@ export function useBattleStorySession() {
   }, [handleBranchFromChapter, selectedChapterId]);
 
   const handleRewriteChapter = useCallback(async (targetChapterId?: string | null) => {
+    if (deleteSessionRef.current?.mode === 'unknown' && deleteSessionRef.current.session?.id === activeSessionRef.current?.id) {
+      setDeleteSessionNotice('请先只读核对本机会话的删除状态，再继续操作这个会话。'); return;
+    }
     if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
     const sessionRecord = activeSessionRef.current ? structuredClone(activeSessionRef.current) : null;
     const activeChapters = getActiveBattleStoryChapters(structuredClone(chaptersRef.current));
@@ -1903,8 +1928,134 @@ export function useBattleStorySession() {
     await handleRewriteChapter(selectedChapterId);
   }, [handleRewriteChapter, selectedChapterId]);
 
+  const clearDeleteSession = useCallback(() => {
+    const deletion = deleteSessionRef.current;
+    if (!deletion || deletion.busy) return;
+    deleteSessionRef.current = null;
+    setDeleteSessionTarget(null); setDeleteSessionMessage(null); setDeleteSessionPreparing(false); setDeleteSessionDialogOpen(false);
+    if (deletion.reserved) legacyDeletionCountRef.current -= 1;
+    setIsDeletingSession(legacyDeletionCountRef.current > 0);
+  }, []);
+
+  const handleCancelDeleteSession = useCallback(() => {
+    const deletion = deleteSessionRef.current;
+    if (!deletion || deletion.busy) return;
+    if (deletion.mode === 'unknown') { setDeleteSessionDialogOpen(false); return; }
+    clearDeleteSession();
+  }, [clearDeleteSession]);
+
+  const handleDeleteSession = useCallback(async (sessionId?: string) => {
+    if (deleteSessionRef.current) { setDeleteSessionNotice('请先只读核对上一个删除状态，再删除其它会话。'); return; }
+    if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0
+      || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
+    // Capture the click before any I/O. A later selected B must not replace target A.
+    const targetId = sessionId?.trim() || activeSessionRef.current?.id;
+    if (!targetId) { setActionError('当前没有可删除的连续战报会话。'); return; }
+    const deletion = { session: null as BattleStorySessionRecord | null, busy: false, reserved: true, mode: 'confirm' as const,
+      reloadSelection: sessionReaderRef.current?.captureSelection({ clearOnError: true }) };
+    deleteSessionRef.current = deletion;
+    legacyDeletionCountRef.current += 1;
+    setIsDeletingSession(true); setDeleteSessionPreparing(true); setActionError(null); setDeleteSessionNotice(null);
+    try {
+      const fresh = await getBattleStorySession(targetId);
+      if (deleteSessionRef.current !== deletion || !mountedRef.current) return;
+      if (!fresh) {
+        if (activeSessionRef.current?.id === targetId) await deletion.reloadSelection?.(null);
+        clearDeleteSession(); setDeleteSessionNotice('目前已确认本机会话不存在。');
+        try { await refreshSessionList(); } catch (error) { setActionError(normalizeErrorMessage(error, '目录刷新失败，请只刷新故事目录。')); }
+        return;
+      }
+      if (fresh.id !== targetId) throw new Error('读取的会话身份不匹配');
+      deletion.session = freezeBattleStoryCommit(fresh);
+      setDeleteSessionTarget(deletion.session); setDeleteSessionDialogOpen(true); setDeleteSessionMode('confirm'); setDeleteSessionMessage(null);
+    } catch (error) {
+      clearDeleteSession(); setActionError(normalizeErrorMessage(error, '无法核对删除目标，请重新读取。'));
+    } finally { if (mountedRef.current) setDeleteSessionPreparing(false); }
+  }, [clearDeleteSession, refreshSessionList]);
+
+  const finishSessionDeletion = useCallback(async (deletion: NonNullable<typeof deleteSessionRef.current>, absent: boolean) => {
+    if (!mountedRef.current || deleteSessionRef.current !== deletion) return;
+    const target = deletion.session!;
+    const message = absent ? '目前已确认本机会话不存在。' : `已删除连续战报会话《${formatBattleStoryDisplayTitle(target.title)}》。`;
+    delete summaryRetryAtRef.current[target.id];
+    try {
+      const nextSessions = await refreshSessionList();
+      if (nextSessions && activeSessionRef.current?.id === target.id) await deletion.reloadSelection?.(nextSessions[0]?.id ?? null);
+      setDeleteSessionNotice(message);
+    } catch (error) {
+      // The deletion is known successful even if listing failed. Clear only the
+      // original still-current selection so cached deleted prose cannot generate.
+      if (activeSessionRef.current?.id === target.id) {
+        try { await deletion.reloadSelection?.(null); } catch { /* pointer write failure cannot undo the confirmed deletion */ }
+      }
+      setDeleteSessionNotice(`${message}目录刷新失败，请只刷新故事目录。`);
+      setActionError(normalizeErrorMessage(error, '目录刷新失败'));
+    }
+  }, [refreshSessionList]);
+
+  const handleConfirmDeleteSession = useCallback(async () => {
+    const deletion = deleteSessionRef.current;
+    if (!deletion?.session || deletion.busy || deletion.mode !== 'confirm'
+      || chapterOperationBusyRef.current || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
+    deletion.busy = true; setDeleteSessionBusy(true);
+    try {
+      const outcome = await deleteBattleStorySession(deletion.session.id, deletion.session);
+      if (!mountedRef.current || deleteSessionRef.current !== deletion) return;
+      if (outcome.status === 'conflict') { setActionError('会话已变化，未删除。请重新读取并确认当前会话。'); }
+      else await finishSessionDeletion(deletion, outcome.status === 'currently-absent');
+      deletion.busy = false; clearDeleteSession();
+    } catch (error) {
+      if (error instanceof BattleStoryDeleteNotWrittenError) {
+        deletion.busy = false; clearDeleteSession();
+        setActionError(normalizeErrorMessage(error, '删除未写入，请重新读取并确认。'));
+      } else {
+        deletion.mode = 'unknown'; setDeleteSessionMode('unknown');
+        if (deletion.reserved) { deletion.reserved = false; legacyDeletionCountRef.current -= 1; setIsDeletingSession(legacyDeletionCountRef.current > 0); }
+        setDeleteSessionMessage('删除结果尚未确认。可只读核对当前状态，不会自动再次删除。');
+      }
+    } finally { deletion.busy = false; if (mountedRef.current) setDeleteSessionBusy(false); }
+  }, [finishSessionDeletion, clearDeleteSession]);
+
+  const handleObserveDeleteSession = useCallback(async () => {
+    const deletion = deleteSessionRef.current;
+    if (!deletion?.session || deletion.busy || deletion.mode !== 'unknown') return;
+    deletion.busy = true; setDeleteSessionBusy(true);
+    try {
+      const current = await getBattleStorySession(deletion.session.id);
+      if (!mountedRef.current || deleteSessionRef.current !== deletion) return;
+      if (!current) await finishSessionDeletion(deletion, true);
+      else setDeleteSessionNotice(digestBattleStoryCommitValue(current) === digestBattleStoryCommitValue(deletion.session)
+        ? '原会话仍在，未确认删除。若仍要删除，请重新打开确认。'
+        : '会话已经变化，未继续删除。请重新读取并确认。');
+      deletion.busy = false; clearDeleteSession();
+    } catch (error) {
+      setDeleteSessionMessage(normalizeErrorMessage(error, '当前状态仍待确认，请稍后只读核对。'));
+    } finally { deletion.busy = false; if (mountedRef.current) setDeleteSessionBusy(false); }
+  }, [finishSessionDeletion, clearDeleteSession]);
+
+  const handleExportDeleteSession = useCallback(async () => {
+    const deletion = deleteSessionRef.current;
+    if (!deletion?.session || deletion.busy || deletion.mode !== 'confirm') return;
+    deletion.busy = true; setDeleteSessionBusy(true);
+    try {
+      const target = deletion.session;
+      const chapterRecords = await listBattleStoryChaptersBySession(target.id, { limit: Number.MAX_SAFE_INTEGER, includeSuperseded: false, direction: 'next' });
+      const current = await getBattleStorySession(target.id);
+      if (!current || digestBattleStoryCommitValue(current) !== digestBattleStoryCommitValue(target)) throw new Error('会话已变化，未导出旧确认目标。请重新读取。');
+      if (!mountedRef.current || deleteSessionRef.current !== deletion) return;
+      const content = buildBattleStoryExportMarkdown(target, chapterRecords);
+      downloadBlob(new Blob([content], { type: 'text/markdown;charset=utf-8' }), `${target.title || 'battle-story-session'}.md`);
+      deletion.busy = false; clearDeleteSession();
+      setDeleteSessionNotice('已导出原确认目标，请再次明确选择是否删除。');
+    } catch (error) { setDeleteSessionMessage(normalizeErrorMessage(error, '导出失败，未删除会话。')); }
+    finally { deletion.busy = false; if (mountedRef.current) setDeleteSessionBusy(false); }
+  }, [clearDeleteSession]);
+
   const handleDeleteSelectedChapter = useCallback(async () => {
-    if (chapterOperationBusyRef.current || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
+    if (deleteSessionRef.current?.mode === 'unknown' && deleteSessionRef.current.session?.id === activeSessionRef.current?.id) {
+      setDeleteSessionNotice('请先只读核对本机会话的删除状态，再继续操作这个会话。'); return;
+    }
+    if (legacyDeletionCountRef.current > 0 || chapterOperationBusyRef.current || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
     const reloadSelection = sessionReaderRef.current?.captureSelection();
     const sessionRecord = activeSessionRef.current;
     const activeChapters = getActiveBattleStoryChapters(chaptersRef.current);
@@ -1919,33 +2070,11 @@ export function useBattleStorySession() {
       return;
     }
 
+    if (targetChapter.index === 1) { await handleDeleteSession(sessionRecord.id); return; }
     const remainingCount = Math.max(0, latestChapter.index - targetChapter.index + 1);
-    if (typeof window !== 'undefined') {
-      const confirmed = window.confirm(
-        targetChapter.index === 1
-          ? `确定删除第 1 章并清空整个会话吗？这会移除当前会话下的全部章节，本地章节会被删除，但服务端历史战报记录不会删除。`
-          : `确定删除第 ${targetChapter.index} 章及其后续 ${remainingCount - 1} 章吗？当前会话会回退到第 ${targetChapter.index - 1} 章结束状态。本地章节会被删除，但服务端历史战报记录不会删除。`
-      );
-      if (!confirmed) return;
-    }
-
-    if (targetChapter.index === 1) {
-      legacyDeletionCountRef.current += 1;
-      setIsDeletingSession(true);
-      try {
-        await deleteBattleStorySession(sessionRecord.id);
-        delete summaryRetryAtRef.current[sessionRecord.id];
-        const nextSessions = await refreshSessionList();
-        if (nextSessions) await reloadSelection?.(nextSessions[0]?.id ?? null);
-        setNotice(`已删除连续战报会话《${formatBattleStoryDisplayTitle(sessionRecord.title || '未命名连续战报')}》。`);
-      } catch (error) {
-        setActionError(normalizeErrorMessage(error, '删除连续战报会话失败。'));
-      } finally {
-        legacyDeletionCountRef.current -= 1;
-        setIsDeletingSession(legacyDeletionCountRef.current > 0);
-      }
-      return;
-    }
+    if (typeof window !== 'undefined' && !window.confirm(
+      `确定删除第 ${targetChapter.index} 章及其后续 ${remainingCount - 1} 章吗？当前会话会回退到第 ${targetChapter.index - 1} 章结束状态。本地章节会被删除，但服务端历史战报记录不会删除。`
+    )) return;
 
     const revertCombatants = resolveChapterInputCombatants({
       session: sessionRecord,
@@ -2016,7 +2145,7 @@ export function useBattleStorySession() {
       legacyDeletionCountRef.current -= 1;
       setIsDeletingSession(legacyDeletionCountRef.current > 0);
     }
-  }, [refreshSessionList, refreshSummaryIfNeeded, selectedChapterId]);
+  }, [handleDeleteSession, refreshSessionList, refreshSummaryIfNeeded, selectedChapterId]);
 
   const handleSelectSession = useCallback(
     async (sessionId: string) => {
@@ -2029,55 +2158,6 @@ export function useBattleStorySession() {
       });
     },
     [loadSession]
-  );
-
-  const handleDeleteSession = useCallback(
-    async (sessionId?: string) => {
-      if (chapterOperationBusyRef.current || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
-      const reloadSelection = sessionReaderRef.current?.captureSelection();
-      const targetId =
-        typeof sessionId === 'string' && sessionId.trim()
-          ? sessionId.trim()
-          : activeSessionRef.current?.id ?? null;
-      if (!targetId) {
-        setActionError('当前没有可删除的连续战报会话。');
-        return;
-      }
-
-      const targetSession =
-        sessions.find((session) => session.id === targetId) ??
-        (activeSessionRef.current?.id === targetId ? activeSessionRef.current : null);
-      const targetTitle = targetSession?.title?.trim() || '未命名连续战报';
-      if (typeof window !== 'undefined') {
-        const confirmed = window.confirm(
-          `确定删除《${targetTitle}》吗？这会一并删除该会话下的全部章节，且无法恢复。`
-        );
-        if (!confirmed) return;
-      }
-
-      setActionError(null);
-      setNotice(null);
-      legacyDeletionCountRef.current += 1;
-      setIsDeletingSession(true);
-
-      try {
-        await deleteBattleStorySession(targetId);
-        delete summaryRetryAtRef.current[targetId];
-
-        const nextSessions = await refreshSessionList();
-        if (nextSessions && activeSessionRef.current?.id === targetId) {
-          await reloadSelection?.(nextSessions[0]?.id ?? null);
-        }
-
-        setNotice(`已删除连续战报会话《${formatBattleStoryDisplayTitle(targetTitle)}》。`);
-      } catch (error) {
-        setActionError(normalizeErrorMessage(error, '删除连续战报会话失败。'));
-      } finally {
-        legacyDeletionCountRef.current -= 1;
-        setIsDeletingSession(legacyDeletionCountRef.current > 0);
-      }
-    },
-    [refreshSessionList, sessions]
   );
 
   const handleExportMarkdown = useCallback(() => {
@@ -2169,6 +2249,14 @@ export function useBattleStorySession() {
     handleDeleteSelectedChapter,
     handleSelectSession,
     handleDeleteSession,
+    deleteSessionTarget, deleteSessionPreparing, deleteSessionBusy, deleteSessionMode, deleteSessionMessage,
+    deleteSessionDialogOpen, deleteSessionNotice,
+    deleteSessionBlocksActive: deleteSessionMode === 'unknown' && !!deleteSessionTarget && deleteSessionTarget.id === displayActiveSession?.id,
+    handleCancelDeleteSession, handleConfirmDeleteSession, handleObserveDeleteSession, handleExportDeleteSession,
+    handleRefreshSessionDirectory: async () => {
+      try { await refreshSessionList(); setActionError(null); }
+      catch (error) { setActionError(normalizeErrorMessage(error, '目录刷新失败，请稍后重读。')); }
+    },
     handleExportMarkdown,
   };
 }

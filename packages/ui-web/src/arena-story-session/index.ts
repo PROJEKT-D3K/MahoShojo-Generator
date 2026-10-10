@@ -18,3 +18,5 @@ export type { BattleStoryContentPreviewProps } from './content-preview';
 export { formatBattleStoryDisplayTitle } from './display-title';
 export { BattleStoryPendingOutcome } from './pending-outcome';
 export type { BattleStoryPendingOutcomeProps } from './pending-outcome';
+export { BattleStoryDeleteSessionControls } from './delete-session-controls';
+export type { BattleStoryDeleteSessionControlsProps, BattleStoryDeleteSessionTargetView } from './delete-session-controls';

@@ -234,71 +234,82 @@ export const listBattleStorySessions = async (options?: BattleStorySessionListOp
   return result;
 };
 
-export const deleteBattleStorySession = async (
-  sessionId: string
-): Promise<{ deletedSession: boolean; deletedChapterCount: number }> => {
-  const db = await openAiSessionDb();
+export class BattleStoryDeleteNotWrittenError extends Error {
+  readonly evidence = 'not-written';
+}
+export type BattleStorySessionDeleteOutcome = {
+  status: 'deleted' | 'currently-absent' | 'conflict';
+  deletedSession: boolean;
+  deletedChapterCount: number;
+  deletedCheckpointCount: number;
+};
 
-  return await new Promise<{ deletedSession: boolean; deletedChapterCount: number }>((resolve, reject) => {
-    const transaction = db.transaction(
-      [
+/** expectedSession is a frozen confirmation snapshot, compared inside the same transaction. */
+export const deleteBattleStorySession = async (
+  sessionId: string,
+  expectedSession?: BattleStorySessionRecord,
+): Promise<BattleStorySessionDeleteOutcome> => {
+  let expectedDigest: string | undefined;
+  let db: IDBDatabase;
+  try {
+    if (expectedSession && expectedSession.id !== sessionId) throw new Error('删除目标身份不匹配');
+    expectedDigest = expectedSession ? digestBattleStoryCommitValue(expectedSession) : undefined;
+    db = await openAiSessionDb();
+  } catch (error) {
+    throw new BattleStoryDeleteNotWrittenError(error instanceof Error ? error.message : '无法读取本机会话');
+  }
+  return await new Promise<BattleStorySessionDeleteOutcome>((resolve, reject) => {
+    let transaction: IDBTransaction;
+    try {
+      transaction = db.transaction([
         AI_SESSION_STORE_NAMES.battleStorySessions,
         AI_SESSION_STORE_NAMES.battleStoryChapters,
         AI_SESSION_STORE_NAMES.battleStoryCheckpoints,
-      ],
-      'readwrite'
-    );
-    const sessionStore = transaction.objectStore(AI_SESSION_STORE_NAMES.battleStorySessions);
-    const chapterStore = transaction.objectStore(AI_SESSION_STORE_NAMES.battleStoryChapters);
-    const checkpointStore = transaction.objectStore(AI_SESSION_STORE_NAMES.battleStoryCheckpoints);
-    const chapterIndex = chapterStore.index('by_session_index');
-    const checkpointIndex = checkpointStore.index('by_session_boundary');
-    const chapterCursorRequest = chapterIndex.openCursor(buildSessionRange(sessionId), 'next');
-
-    let deletedChapterCount = 0;
-    let deletedSession = false;
-    let deletedCheckpoints = false;
-
-    transaction.oncomplete = () => resolve({ deletedSession, deletedChapterCount });
-    transaction.onabort = () => reject(transaction.error ?? new Error('删除 battle story session 失败'));
-    transaction.onerror = () => reject(transaction.error ?? new Error('删除 battle story session 失败'));
-
-    chapterCursorRequest.onsuccess = () => {
-      const cursor = chapterCursorRequest.result;
-      if (!cursor) {
-        if (!deletedCheckpoints) {
-          deletedCheckpoints = true;
-          const checkpointCursorRequest = checkpointIndex.openCursor(buildCheckpointRange(sessionId), 'next');
-          checkpointCursorRequest.onsuccess = () => {
-            const checkpointCursor = checkpointCursorRequest.result;
-            if (!checkpointCursor) {
-              const deleteSessionRequest = sessionStore.delete(sessionId);
-              deleteSessionRequest.onsuccess = () => {
-                deletedSession = true;
-              };
-              deleteSessionRequest.onerror = () => {
-                reject(deleteSessionRequest.error ?? new Error('删除 battle story session 失败'));
-              };
-              return;
-            }
-            checkpointStore.delete(checkpointCursor.primaryKey);
-            checkpointCursor.continue();
-          };
-          checkpointCursorRequest.onerror = () => {
-            reject(checkpointCursorRequest.error ?? new Error('删除 battle story checkpoint 失败'));
-          };
+      ], 'readwrite');
+    } catch (error) {
+      reject(new BattleStoryDeleteNotWrittenError(error instanceof Error ? error.message : '无法开始删除事务'));
+      return;
+    }
+    const outcome: BattleStorySessionDeleteOutcome = { status: 'currently-absent', deletedSession: false, deletedChapterCount: 0, deletedCheckpointCount: 0 };
+    let failure: unknown;
+    const abort = (error: unknown) => { failure = error; transaction.abort(); };
+    transaction.oncomplete = () => resolve(outcome);
+    // Request success is never a commit acknowledgement. Only a completed abort proves no write.
+    transaction.onabort = () => reject(new BattleStoryDeleteNotWrittenError(
+      failure instanceof Error ? failure.message : transaction.error?.message ?? '删除事务已回滚，原会话未修改',
+    ));
+    transaction.onerror = () => { failure ??= transaction.error; };
+    const sessions = transaction.objectStore(AI_SESSION_STORE_NAMES.battleStorySessions);
+    const chapters = transaction.objectStore(AI_SESSION_STORE_NAMES.battleStoryChapters);
+    const checkpoints = transaction.objectStore(AI_SESSION_STORE_NAMES.battleStoryCheckpoints);
+    const request = sessions.get(sessionId);
+    request.onsuccess = () => {
+      try {
+        const current = request.result as BattleStorySessionRecord | undefined;
+        if (!current) return;
+        if (expectedDigest && digestBattleStoryCommitValue(current) !== expectedDigest) {
+          outcome.status = 'conflict';
           return;
+        }
+        const chapterCursor = chapters.index('by_session_index').openCursor(buildSessionRange(sessionId), 'next');
+        chapterCursor.onsuccess = () => {
+          try {
+            const cursor = chapterCursor.result;
+            if (cursor) {
+              cursor.delete(); outcome.deletedChapterCount += 1; cursor.continue(); return;
+            }
+            const checkpointCursor = checkpoints.index('by_session_boundary').openCursor(buildCheckpointRange(sessionId), 'next');
+            checkpointCursor.onsuccess = () => {
+              try {
+                const cursor = checkpointCursor.result;
+                if (cursor) { cursor.delete(); outcome.deletedCheckpointCount += 1; cursor.continue(); return; }
+                sessions.delete(sessionId);
+                outcome.status = 'deleted'; outcome.deletedSession = true;
+              } catch (error) { abort(error); }
+            };
+          } catch (error) { abort(error); }
         };
-        return;
-      }
-
-      chapterStore.delete(cursor.primaryKey);
-      deletedChapterCount += 1;
-      cursor.continue();
-    };
-
-    chapterCursorRequest.onerror = () => {
-      reject(chapterCursorRequest.error ?? new Error('删除 battle story chapter 失败'));
+      } catch (error) { abort(error); }
     };
   });
 };

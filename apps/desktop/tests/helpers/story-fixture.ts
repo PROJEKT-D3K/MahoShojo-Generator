@@ -2,7 +2,7 @@ import { createHash, webcrypto } from 'node:crypto';
 import { vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
-import { StorySessionHeadSchema, type StoryCommitManifest, type StoryPartKind, type StoryRecordDescriptor, type StoryChapterDocument } from '@mahoshojo/contracts/desktop-arena-story';
+import { StorySessionHeadSchema, type StoryCommitManifest, type StoryPartKind, type StoryRecordDescriptor, type StoryChapterDocument, type StorySessionDeleteTarget } from '@mahoshojo/contracts/desktop-arena-story';
 import { storyWireDigest, type StoryNativePort } from '../../src/platform/arena-story-storage';
 import { createInitialArenaDraft } from '../../src/features/arena/session';
 import type { PrepareStoryExecution } from '../../src/features/arena/story-session';
@@ -24,6 +24,10 @@ export class StoryFixturePort implements StoryNativePort {
   hideReceipts = false;
   loseEndReply = false;
   failBegin = false;
+  instance = 'a'.repeat(32);
+  loseDeleteReply = false;
+  beforeDelete?: () => Promise<void>;
+  beforeDescribe?: (sessionId: string, kind: StoryRecordDescriptor['kind']) => Promise<void>;
   beforeRead?: (descriptor: StoryRecordDescriptor) => Promise<void>;
   beforeEnd?: () => Promise<void>;
   heads = () => [...this.documents.entries()].filter(([key]) => key.endsWith(':session')).map(([, doc]) => headOf(doc.value)).sort((a,b) => b.updatedAt-a.updatedAt || b.id.localeCompare(a.id));
@@ -66,8 +70,34 @@ export class StoryFixturePort implements StoryNativePort {
     return {sessionId,revision,rows,nextCursor:last&&last.index<all.length?{id:last.id,index:last.index}:null};
   });
   describe = vi.fn(async (sessionId:string,revision:number,kind:StoryRecordDescriptor['kind'],recordId:string) => {
-    const doc=this.documents.get(`${sessionId}:${kind==='session'||kind==='seed'?kind:recordId}`); if(!doc)throw new Error('missing');
-    return {instance:'a'.repeat(32),sessionId,revision,kind,recordId,byteLength:doc.bytes.byteLength,digest:sha(doc.bytes)};
+    await this.beforeDescribe?.(sessionId, kind);
+    const session=this.documents.get(`${sessionId}:session`);
+    if(!session)throw {code:'story-missing',message:'missing session',writeEvidence:'not-written'};
+    if(session.value.revision!==revision)throw {code:'story-stale',message:'stale session',writeEvidence:'not-written'};
+    const doc=this.documents.get(`${sessionId}:${kind==='session'||kind==='seed'?kind:recordId}`);
+    if(!doc)throw {code:'story-missing',message:'missing record',writeEvidence:'not-written'};
+    return {instance:this.instance,sessionId,revision,kind,recordId,byteLength:doc.bytes.byteLength,digest:sha(doc.bytes)};
+  });
+  deleteSession = vi.fn(async (target: StorySessionDeleteTarget) => {
+    await this.beforeDelete?.();
+    const { session: expected } = target, session = this.documents.get(`${expected.sessionId}:session`);
+    if (expected.instance !== this.instance) throw { code: 'story-stale', message: 'instance changed', writeEvidence: 'not-written' };
+    if (!session) return { target, status: 'currently-absent', deletedChapterCount: 0, deletedCheckpointCount: 0 };
+    if (expected.kind !== 'session' || expected.recordId !== expected.sessionId || session.value.revision !== expected.revision
+      || session.bytes.byteLength !== expected.byteLength || sha(session.bytes) !== expected.digest
+      || session.value.lastChapterId !== target.expectedLastChapterId || session.value.chapterCount !== target.expectedChapterCount) {
+      throw { code: 'story-conflict', message: 'confirmed target changed', writeEvidence: 'not-written' };
+    }
+    let deletedChapterCount = 0, deletedCheckpointCount = 0;
+    for (const [key, doc] of this.documents) {
+      if (!key.startsWith(`${expected.sessionId}:`)) continue;
+      if (typeof doc.value.index === 'number') deletedChapterCount += 1;
+      if (typeof doc.value.boundaryIndex === 'number') deletedCheckpointCount += 1;
+      this.documents.delete(key);
+    }
+    for (const key of this.receipts.keys()) if (key.startsWith(`${expected.sessionId}:`)) this.receipts.delete(key);
+    if (this.loseDeleteReply) throw new Error('delete reply lost');
+    return { target, status: 'deleted', deletedChapterCount, deletedCheckpointCount };
   });
   read = vi.fn(async (descriptor:StoryRecordDescriptor,offset:number,length:number) => {
     await this.beforeRead?.(descriptor); const doc=this.documents.get(`${descriptor.sessionId}:${descriptor.kind==='session'||descriptor.kind==='seed'?descriptor.kind:descriptor.recordId}`)!;
@@ -112,6 +142,7 @@ export const storyFixtureInvoke = (port: StoryFixturePort) => {
       case 'query_arena_story_receipt':return port.receipt(String(args.sessionId),String(args.operationId));
       case 'list_arena_story_sessions':return port.listSessions(args.cursor as {id:string;updatedAt:number}|null,Number(args.limit));
       case 'list_arena_story_chapters':return port.listChapters(String(args.sessionId),Number(args.revision),args.cursor as {id:string;index:number}|null,Number(args.limit));
+      case 'delete_arena_story_session':return port.deleteSession(args.target as StorySessionDeleteTarget);
       case 'describe_arena_story_record':return port.describe(String(args.sessionId),Number(args.revision),args.kind as StoryRecordDescriptor['kind'],String(args.recordId));
       case 'read_arena_story_record_chunk':return Uint8Array.from(await port.read(args.descriptor as StoryRecordDescriptor,Number(args.offset),Number(args.length))).buffer;
       case 'read_arena_story_continue_state':return port.continueState(String(args.sessionId),Number(args.revision),String(args.expectedHead));

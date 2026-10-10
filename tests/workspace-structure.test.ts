@@ -704,6 +704,7 @@ describe('desktop workspace app ownership', () => {
       'abort_arena_story_commit',
       'query_arena_story_receipt',
       'list_arena_story_sessions',
+      'delete_arena_story_session',
       'list_arena_story_chapters',
       'describe_arena_story_record',
       'read_arena_story_record_chunk',

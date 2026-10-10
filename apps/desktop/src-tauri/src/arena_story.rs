@@ -1069,6 +1069,8 @@ pub(crate) fn audit_relations(connection: &Connection) -> Result<(), StoryError>
     Ok(())
 }
 
+#[path = "arena_story_delete.rs"]
+pub mod delete;
 #[path = "arena_story_read.rs"]
 pub mod read;
 #[cfg(test)]

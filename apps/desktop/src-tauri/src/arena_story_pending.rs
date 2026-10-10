@@ -576,6 +576,30 @@ pub(super) fn upload_reservations(connection: &Connection) -> Result<(usize, u64
         )
         .map_err(|_| StoryError::Io)
 }
+/// Deletion examines both products and unpublished uploads, not a renderer cache.
+/// Every reference must be understood before concluding that it is unrelated.
+pub(super) fn assert_session_unreferenced(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<(), StoryError> {
+    let mut statement = connection.prepare("SELECT CASE WHEN length(token)<=128 THEN token ELSE NULL END,CASE WHEN length(product)<=6 THEN product ELSE NULL END,CASE WHEN length(request_id)<=128 THEN request_id ELSE NULL END,revision FROM arena_story_pending").map_err(|_| StoryError::Corrupt)?;
+    let mut rows = statement.query([]).map_err(|_| StoryError::Corrupt)?;
+    while let Some(row) = rows.next().map_err(|_| StoryError::Corrupt)? {
+        let token: String = row.get(0).map_err(|_| StoryError::Corrupt)?;
+        let stored = load(connection, &token).map_err(|_| StoryError::Corrupt)?;
+        let manifest = stored.snapshot.manifest;
+        if manifest.product.sql() != row.get::<_, String>(1).map_err(|_| StoryError::Corrupt)?
+            || manifest.request_id != row.get::<_, String>(2).map_err(|_| StoryError::Corrupt)?
+            || manifest.pending_revision != row.get::<_, u64>(3).map_err(|_| StoryError::Corrupt)?
+        {
+            return Err(StoryError::Corrupt);
+        }
+        if manifest.session_id == session_id {
+            return Err(StoryError::Busy);
+        }
+    }
+    Ok(())
+}
 pub(super) fn recover_uploads(connection: &Connection) -> Result<(), StoryError> {
     connection
         .execute("DELETE FROM arena_story_pending WHERE active=0", [])
