@@ -9,7 +9,8 @@ pub(super) const PROTOCOL_HEADER: &str = "x-mahoshojo-arena-story-protocol";
 pub(super) const PROTOCOL_VERSION: &str = "arena-story-v1";
 pub(super) const CREATE_PATH: &str = "/api/arena/session/generate-next";
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Binding {
     pub attempt_id: String,
     pub input_digest: String,
@@ -52,7 +53,7 @@ pub(super) fn storage_error(value: StoryError) -> ArenaError {
         _ => storage(),
     }
 }
-fn hex(value: &str) -> bool {
+pub(super) fn hex(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -152,6 +153,9 @@ pub(super) fn admit(
         .map_err(storage_error)?;
     match pending {
         Some(snapshot) => {
+            if snapshot.abandon_requested {
+                return Err(storage_error(StoryError::Conflict));
+            }
             if matches!(
                 request,
                 ArenaRequest::CreateStream { .. }
@@ -216,6 +220,15 @@ pub(super) fn bind_existing(
         exact_snapshot(&snapshot, request)?;
         let claim = snapshot.create_claim.ok_or_else(stale)?;
         let mut f = flight.lock().map_err(|_| stale())?;
+        if f.anonymous
+            .as_ref()
+            .and_then(|record| record.story_binding.as_ref())
+            .is_some_and(|binding| {
+                binding.attempt_id != claim.attempt_id || binding.input_digest != claim.input_digest
+            })
+        {
+            return Err(stale());
+        }
         if f.story.as_ref().is_some_and(|b| {
             b.attempt_id != claim.attempt_id || b.input_digest != claim.input_digest
         }) {
@@ -466,6 +479,7 @@ fn reserve_preflight<'a>(
     }
     let token = Arc::new(CancellationToken::new());
     let flight = Arc::new(Mutex::new(Flight {
+        revoked: false,
         story: None,
         request_id: id.into(),
         actor: a.clone(),
@@ -627,7 +641,16 @@ pub(super) async fn prepare(
                 flights.remove(p);
             }
         }
-        let flight = state.prepare_unchecked(request, cloud, secrets)?;
+        let (attempt_id, input_digest) = permit.identity();
+        let flight = state.prepare_unchecked(
+            request,
+            cloud,
+            secrets,
+            Some(Binding {
+                attempt_id: attempt_id.into(),
+                input_digest: input_digest.into(),
+            }),
+        )?;
         flight.lock().map_err(|_| stale())?.subscription = Some(preflight.token.clone());
         check_actor(cloud, secrets, a, &epoch)?;
         if flight.lock().map_err(|_| stale())?.account_fingerprint != epoch {
@@ -741,6 +764,9 @@ pub(super) fn observe(
     {
         return Err(stale());
     }
+    if snapshot.abandon_requested {
+        return Err(stale());
+    }
     if snapshot.restored || snapshot.save_attempt_id.is_some() {
         if snapshot
             .create_claim
@@ -778,7 +804,8 @@ pub(super) struct RoleInput {
     pub accepted: Option<String>,
 }
 fn role_ready(snapshot: &story_pending::PendingSnapshot) -> Result<(), ArenaError> {
-    if snapshot.restored
+    if snapshot.abandon_requested
+        || snapshot.restored
         || snapshot.save_attempt_id.is_some()
         || snapshot.manifest.commit_manifest.is_some()
         || !snapshot.manifest.model_completed

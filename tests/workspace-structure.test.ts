@@ -632,6 +632,19 @@ describe('desktop workspace app ownership', () => {
     }
   });
 
+  it('binds local pending exits to the same Native library without a renderer secret or file selector', () => {
+    const source = readFileSync(path.join(tauriDirectory, 'src', 'lib.rs'), 'utf8');
+    const abandon = source.slice(source.indexOf('fn abandon_arena_story_pending('), source.indexOf('fn begin_arena_story_pending_export('));
+    expect(abandon).toContain("State<'_, arena_hosted::ArenaState>");
+    expect(abandon).toContain('request: arena_story::pending::AbandonRequest');
+    expect(abandon).toMatch(/arena_hosted::abandon_story_pending\([\s\S]*library\.stories\(\)/u);
+    expect(abandon).not.toMatch(/secret_ref|path:|product: String|cloud:/u);
+    const exports = source.slice(source.indexOf('fn begin_arena_story_pending_export('), source.indexOf('// Dedicated story commands.'));
+    expect(exports).toContain('source: arena_story::markdown_export::StoryPendingExportSource');
+    expect(exports).toContain('.advance_pending_export(&token, offset, std::time::Instant::now())');
+    expect(exports).not.toMatch(/InvokeBody|absolute_path:|filename:|bytes:/u);
+  });
+
   it('exposes no plaintext secret read surface on the Rust command set', () => {
     const libSource = readFileSync(path.join(tauriDirectory, 'src', 'lib.rs'), 'utf8');
     const handler = libSource.match(/generate_handler!\[([\s\S]*?)\]/);
@@ -680,6 +693,11 @@ describe('desktop workspace app ownership', () => {
       'read_arena_story_pending_chunk',
       'prepare_arena_story_pending_save',
       'save_arena_story_pending',
+      'abandon_arena_story_pending',
+      'begin_arena_story_pending_export',
+      'advance_arena_story_pending_export',
+      'end_arena_story_pending_export',
+      'abort_arena_story_pending_export',
       'begin_arena_story_commit',
       'append_arena_story_part',
       'end_arena_story_commit',

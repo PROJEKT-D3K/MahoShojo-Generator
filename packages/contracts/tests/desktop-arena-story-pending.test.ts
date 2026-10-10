@@ -4,6 +4,7 @@ import {
   StoryPendingSnapshotSchema, StoryPendingBeginOutcomeSchema, StoryPendingAppendOutcomeSchema,
   StoryPendingUploadSchema, StoryPendingSavePreparationSchema, StoryPendingSaveRequestSchema,
   StoryPendingSaveAttemptRequestSchema, StoryNativeFailureSchema,
+  StoryPendingAbandonRequestSchema, StoryPendingAbandonOutcomeSchema, StoryPendingExportSourceSchema,
   StoryPendingHeaderSchema, StoryPendingMetaSchema, StoryPendingRoleResponseSchema, StoryPendingRoleSyncSchema, StoryPendingTelemetrySchema, StoryPendingCreateClaimSnapshotSchema,
   type StoryPendingManifest, type StoryPendingPartKind,
 } from '../src/desktop-arena-story';
@@ -155,7 +156,7 @@ describe('durable story pending closed contracts', () => {
     expect(StoryPendingKeySchema.parse(key)).toEqual(key);
     expect(StoryPendingKeySchema.safeParse({ ...key, pendingRevision: 0 }).success).toBe(false);
     expect(StoryPendingKeySchema.safeParse({ ...key, actor: value.actor }).success).toBe(false);
-    expect(StoryPendingSnapshotSchema.parse({ manifest: value, saveAttemptId: token, restored: true, createClaim: null }).saveAttemptId).toBe(token);
+    expect(StoryPendingSnapshotSchema.parse({ manifest: value, saveAttemptId: token, restored: true, abandonRequested: false, createClaim: null }).saveAttemptId).toBe(token);
     expect(StoryPendingSnapshotSchema.safeParse({ manifest: value, saveAttemptId: null }).success).toBe(false);
     expect(StoryPendingSavePreparationSchema.parse({ attemptId: token })).toEqual({ attemptId: token });
     expect(StoryPendingSavePreparationSchema.safeParse({ attemptId: 'reusable' }).success).toBe(false);
@@ -316,7 +317,7 @@ describe('read-only Native create claim evidence', () => {
     const value = claim();
     expect(StoryPendingCreateClaimSnapshotSchema.parse(value)).toEqual(value);
     expect(Object.isFrozen(StoryPendingCreateClaimSnapshotSchema.parse(value))).toBe(true);
-    expect(StoryPendingSnapshotSchema.parse({ manifest: manifest(), saveAttemptId: null, restored: false, createClaim: value }).createClaim).toEqual(value);
+    expect(StoryPendingSnapshotSchema.parse({ manifest: manifest(), saveAttemptId: null, restored: false, abandonRequested: false, createClaim: value }).createClaim).toEqual(value);
     expect(StoryPendingCreateClaimSnapshotSchema.parse({ ...value, observedGeneration: { generationId: `arena_${'c'.repeat(64)}`, serverPayloadHash: null } }).observedGeneration?.serverPayloadHash).toBe(null);
     expect(StoryPendingManifestSchema.safeParse({ ...manifest(), createClaim: value }).success).toBe(false);
   });
@@ -331,6 +332,36 @@ describe('read-only Native create claim evidence', () => {
       { observedGeneration: { generationId: `arena_${'c'.repeat(64)}`, serverPayloadHash: null, completed: true } }]) {
       expect(StoryPendingCreateClaimSnapshotSchema.safeParse({ ...claim(), ...patch }).success).toBe(false);
     }
-    expect(StoryPendingSnapshotSchema.safeParse({ manifest: manifest(), saveAttemptId: null, restored: false, createClaim: { ...claim(), inputDigest: otherDigest } }).success).toBe(false);
+    expect(StoryPendingSnapshotSchema.safeParse({ manifest: manifest(), saveAttemptId: null, restored: false, abandonRequested: false, createClaim: { ...claim(), inputDigest: otherDigest } }).success).toBe(false);
+  });
+});
+
+
+describe('pending local exit contracts', () => {
+  const value = manifest(), key = { product: value.product, requestId: value.requestId, pendingRevision: 1 };
+  const request = { key, inputDigest: value.inputDigest, actor: value.actor };
+  it('requires the Native abandonment bit but never accepts it in renderer upload manifests', () => {
+    const snapshot = { manifest: value, restored: false, createClaim: null, saveAttemptId: null };
+    expect(StoryPendingSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    expect(StoryPendingSnapshotSchema.parse({ ...snapshot, abandonRequested: false }).abandonRequested).toBe(false);
+    expect(StoryPendingManifestSchema.safeParse({ ...value, abandonRequested: false }).success).toBe(false);
+  });
+  it('closes abandon scope and only marks proven cleanup as abandoned', () => {
+    expect(StoryPendingAbandonRequestSchema.parse(request)).toEqual(request);
+    expect(StoryPendingAbandonRequestSchema.safeParse({ ...request, clearAllSecrets: true }).success).toBe(false);
+    const outcome = { ...request, state: 'abandoned', candidate: 'removed', flight: 'released', secret: 'cleared' };
+    expect(StoryPendingAbandonOutcomeSchema.parse(outcome)).toEqual(outcome);
+    for (const patch of [{ candidate: 'unknown' }, { candidate: 'retained' }, { flight: 'unresolved' }, { secret: 'unresolved' }]) {
+      expect(StoryPendingAbandonOutcomeSchema.safeParse({ ...outcome, ...patch }).success).toBe(false);
+      expect(StoryPendingAbandonOutcomeSchema.safeParse({ ...outcome, ...patch, state: 'cleanup-pending' }).success).toBe(true);
+    }
+  });
+  it('only exports exact sealed parts or a small non-secret manifest', () => {
+    const source = { scope: 'pending-part', key, inputDigest: digest, kind: 'input', digest, byteLength: 1 };
+    expect(StoryPendingExportSourceSchema.parse(source)).toEqual(source);
+    expect(StoryPendingExportSourceSchema.parse({ scope: 'pending-manifest', key, inputDigest: digest })).toEqual({ scope: 'pending-manifest', key, inputDigest: digest });
+    for (const patch of [{ path: '/file' }, { scope: 'session' }, { byteLength: 0 }, { digest: 'bad' }, { kind: 'secret' }]) {
+      expect(StoryPendingExportSourceSchema.safeParse({ ...source, ...patch }).success).toBe(false);
+    }
   });
 });

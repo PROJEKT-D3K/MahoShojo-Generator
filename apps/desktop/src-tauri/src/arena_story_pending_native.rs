@@ -239,6 +239,11 @@ pub(crate) struct CreatePermit {
     input_digest: String,
     attempt_id: String,
 }
+impl CreatePermit {
+    pub(crate) fn identity(&self) -> (&str, &str) {
+        (&self.attempt_id, &self.input_digest)
+    }
+}
 #[derive(Debug)]
 pub(crate) struct NativeInput {
     pub snapshot: PendingSnapshot,
@@ -300,6 +305,9 @@ fn checked(
     let row = exact(connection, key)?;
     if row.snapshot.manifest.actor != *actor || row.snapshot.manifest.input_digest != input_digest {
         return Err(StoryError::Stale);
+    }
+    if row.snapshot.abandon_requested {
+        return Err(StoryError::Conflict);
     }
     if row.snapshot.restored || row.snapshot.save_attempt_id.is_some() {
         return Err(StoryError::CommitUnknown);

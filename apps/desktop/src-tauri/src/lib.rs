@@ -938,6 +938,76 @@ fn save_arena_story_pending(
         .pending_save(&key, &wire_digest, &attempt_id)
 }
 
+// Explicit local-only cleanup. Identity is checked against the durable row;
+// renderer cannot select a credential reference or request global sign-out.
+#[tauri::command(async)]
+fn abandon_arena_story_pending(
+    library: State<'_, LocalLibrary>,
+    arena: State<'_, arena_hosted::ArenaState>,
+    secrets: State<'_, SharedSecretStore>,
+    request: arena_story::pending::AbandonRequest,
+) -> Result<arena_story::pending::AbandonOutcome, arena_story::StoryError> {
+    arena_hosted::abandon_story_pending(
+        &arena,
+        library.stories(),
+        secrets.inner().as_ref(),
+        request,
+    )
+}
+#[tauri::command(async)]
+fn begin_arena_story_pending_export(
+    app: tauri::AppHandle,
+    library: State<'_, LocalLibrary>,
+    source: arena_story::markdown_export::StoryPendingExportSource,
+) -> Result<arena_story::markdown_export::StoryPendingExportBegin, arena_story::StoryError> {
+    let begun = library
+        .stories()
+        .begin_pending_export(source, std::time::Instant::now())?;
+    let token = begun.token.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let remaining = app
+                .state::<LocalLibrary>()
+                .stories()
+                .expire_markdown_export(&token, std::time::Instant::now());
+            match remaining {
+                Ok(Some(delay)) => tokio::time::sleep(delay).await,
+                _ => break,
+            }
+        }
+    });
+    Ok(begun)
+}
+#[tauri::command(async)]
+fn advance_arena_story_pending_export(
+    library: State<'_, LocalLibrary>,
+    token: String,
+    offset: u64,
+) -> Result<arena_story::markdown_export::StoryMarkdownExportAppend, arena_story::StoryError> {
+    arena_story::ipc::token(Some(&token))?;
+    library
+        .stories()
+        .advance_pending_export(&token, offset, std::time::Instant::now())
+}
+#[tauri::command(async)]
+fn end_arena_story_pending_export(
+    library: State<'_, LocalLibrary>,
+    token: String,
+) -> Result<arena_story::markdown_export::StoryPendingExportEnd, arena_story::StoryError> {
+    arena_story::ipc::token(Some(&token))?;
+    library
+        .stories()
+        .end_pending_export(&token, std::time::Instant::now())
+}
+#[tauri::command(async)]
+fn abort_arena_story_pending_export(
+    library: State<'_, LocalLibrary>,
+    token: String,
+) -> Result<(), arena_story::StoryError> {
+    arena_story::ipc::token(Some(&token))?;
+    library.stories().abort_pending_export(&token)
+}
+
 // Dedicated story commands. All disk/connection waits run off the UI thread. The
 // app manifest grants these exact operations only to the main-ui webview.
 #[tauri::command(async)]
@@ -1802,6 +1872,11 @@ pub fn run() {
             read_arena_story_pending_chunk,
             prepare_arena_story_pending_save,
             save_arena_story_pending,
+            abandon_arena_story_pending,
+            begin_arena_story_pending_export,
+            advance_arena_story_pending_export,
+            end_arena_story_pending_export,
+            abort_arena_story_pending_export,
             begin_arena_story_commit,
             append_arena_story_part,
             end_arena_story_commit,

@@ -3,7 +3,7 @@ use crate::arena_story::{digest, CommitManifest, PartDeclaration, PartKind};
 use crate::library::LocalLibrary;
 use serde_json::{json, Value};
 
-fn library() -> (tempfile::TempDir, LocalLibrary) {
+pub(super) fn library() -> (tempfile::TempDir, LocalLibrary) {
     let root = tempfile::tempdir().unwrap();
     let library = LocalLibrary::open(root.path()).unwrap();
     commit(library.stories(), 1, json!({}));
@@ -92,7 +92,7 @@ fn manifest(bytes: &[u8], index: u64) -> StoryMarkdownExportManifest {
     }
 }
 
-fn begin(store: &StoryStore, bytes: &[u8], now: Instant) -> String {
+pub(super) fn begin(store: &StoryStore, bytes: &[u8], now: Instant) -> String {
     store
         .begin_markdown_export(manifest(bytes, 1), now)
         .unwrap()

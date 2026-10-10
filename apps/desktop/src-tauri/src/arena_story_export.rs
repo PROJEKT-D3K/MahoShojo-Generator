@@ -1,7 +1,9 @@
-//! Dedicated full-story Markdown sink. The shared TypeScript writer owns rendering;
-//! native owns scope, bounded raw writes, integrity and no-clobber publication.
+//! Dedicated full-story Markdown and sealed pending-original sinks. The shared
+//! TypeScript writer renders committed stories; pending bytes never cross IPC.
+//! Native owns closed scopes, bounded writes, integrity and no-clobber publication.
 //!
-//! Lock order is export mutex -> short write permit -> connection. Traversal and
+//! Lock order is export mutex -> pending admission (when applicable) -> short
+//! write permit -> connection. Abandon never takes the export mutex. Traversal and
 //! upload never hold a maintenance permit. Only the final scope check + publication
 //! excludes maintenance, after the potentially slow file sync has finished.
 
@@ -16,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
+use super::pending::{export as pending_export, PendingKey, PendingKind, Product};
 use super::{
     random_id, valid_digest, valid_id, StoryError, StoryStore, CANDIDATE_FRAME_BYTES,
     MAX_SAFE_INTEGER,
@@ -59,9 +62,112 @@ pub struct StoryMarkdownExportEnd {
     pub byte_length: u64,
 }
 
+/// Additive closed source: a pending part is never a synthetic saved chapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum StoryPendingExportSource {
+    #[serde(rename = "pending-part", rename_all = "camelCase")]
+    Part {
+        key: PendingKey,
+        input_digest: String,
+        kind: PendingKind,
+        digest: String,
+        byte_length: u64,
+    },
+    #[serde(rename = "pending-manifest", rename_all = "camelCase")]
+    Manifest {
+        key: PendingKey,
+        input_digest: String,
+    },
+}
+impl StoryPendingExportSource {
+    pub(crate) fn key(&self) -> &PendingKey {
+        match self {
+            Self::Part { key, .. } | Self::Manifest { key, .. } => key,
+        }
+    }
+    pub(crate) fn input_digest(&self) -> &str {
+        match self {
+            Self::Part { input_digest, .. } | Self::Manifest { input_digest, .. } => input_digest,
+        }
+    }
+    fn filename_suffix(&self) -> &'static str {
+        match self {
+            Self::Part { kind, .. } => match kind {
+                PendingKind::Input => "input.json",
+                PendingKind::Markdown => "markdown.md",
+                PendingKind::Reasoning => "reasoning.txt",
+                PendingKind::Meta => "meta.json",
+                PendingKind::Header => "header.json",
+                PendingKind::RoleResponse => "role-response.json",
+                PendingKind::Telemetry => "telemetry.json",
+                PendingKind::Session => "session.json",
+                PendingKind::Seed => "seed.json",
+                PendingKind::Chapter => "chapter.json",
+                PendingKind::Checkpoint0 => "checkpoint-0.json",
+                PendingKind::Checkpoint1 => "checkpoint-1.json",
+            },
+            Self::Manifest { .. } => "manifest.json",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoryPendingExportBegin {
+    pub token: String,
+    pub expected_byte_length: u64,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoryPendingExportEnd {
+    pub token: String,
+    pub absolute_path: String,
+    pub byte_length: u64,
+    pub digest: String,
+}
+
+enum ExportScope {
+    Story(StoryMarkdownExportManifest),
+    Pending {
+        source: StoryPendingExportSource,
+        prepared: pending_export::Prepared,
+    },
+}
+impl ExportScope {
+    fn expected_byte_length(&self) -> u64 {
+        match self {
+            Self::Story(manifest) => manifest.expected_byte_length,
+            Self::Pending { prepared, .. } => prepared.byte_length,
+        }
+    }
+    fn pending_product(&self) -> Option<Product> {
+        match self {
+            Self::Story(_) => None,
+            Self::Pending { source, .. } => Some(source.key().product),
+        }
+    }
+    fn assert_scope(&self, connection: &Connection) -> Result<(), StoryError> {
+        match self {
+            Self::Story(manifest) => assert_scope(connection, manifest),
+            Self::Pending { source, prepared } => {
+                pending_export::assert_scope(
+                    connection,
+                    source,
+                    &prepared.sealed_token,
+                    prepared.manifest_bytes.as_deref(),
+                )?;
+                Ok(())
+            }
+        }
+    }
+}
+
 struct ExportSession {
     token: String,
-    manifest: StoryMarkdownExportManifest,
+    scope: ExportScope,
     temporary: NamedTempFile,
     target: PathBuf,
     received: u64,
@@ -242,6 +348,34 @@ enum IoPoint {
     Persist,
 }
 
+fn write_frame(
+    session: &mut ExportSession,
+    bytes: &[u8],
+    now: Instant,
+    hook: &mut impl FnMut(IoPoint, &mut File) -> Result<(), StoryError>,
+) -> Result<(), StoryError> {
+    if bytes.is_empty()
+        || bytes.len() > CANDIDATE_FRAME_BYTES
+        || bytes.len() as u64
+            > session
+                .scope
+                .expected_byte_length()
+                .saturating_sub(session.received)
+    {
+        return Err(StoryError::TooLarge);
+    }
+    hook(IoPoint::Write, session.temporary.as_file_mut())?;
+    session
+        .temporary
+        .as_file_mut()
+        .write_all(bytes)
+        .map_err(|_| StoryError::Io)?;
+    session.hash.update(bytes);
+    session.received += bytes.len() as u64;
+    session.last_progress = now.max(session.last_progress);
+    Ok(())
+}
+
 impl StoryStore {
     pub fn begin_markdown_export(
         &self,
@@ -274,36 +408,173 @@ impl StoryStore {
             return Err(StoryError::TooLarge);
         }
         drop(connection);
+        let export = self.new_export_session(ExportScope::Story(manifest), now, available_space)?;
+        let result = StoryMarkdownExportBegin {
+            token: export.token.clone(),
+            expected_byte_length: export.scope.expected_byte_length(),
+        };
+        *session = Some(export);
+        Ok(result)
+    }
+
+    fn new_export_session(
+        &self,
+        scope: ExportScope,
+        now: Instant,
+        available_space: &mut impl FnMut(&Path) -> Result<u64, StoryError>,
+    ) -> Result<ExportSession, StoryError> {
         require_directory(self.markdown_export.paths.root())?;
-        if available_space(self.markdown_export.paths.root())? < manifest.expected_byte_length {
+        if available_space(self.markdown_export.paths.root())? < scope.expected_byte_length() {
             return Err(StoryError::ExportNoSpace);
         }
         let nonce = random_id()?;
         let token = format!("{}-{nonce}", self.instance);
-        let target = self
-            .markdown_export
-            .paths
-            .root()
-            .join(format!("story-markdown-{nonce}.md"));
+        let name = match &scope {
+            ExportScope::Story(_) => format!("story-markdown-{nonce}.md"),
+            ExportScope::Pending { source, .. } => {
+                format!("story-pending-{nonce}-{}", source.filename_suffix())
+            }
+        };
+        let target = self.markdown_export.paths.root().join(name);
         let temporary = tempfile::Builder::new()
             .prefix(TEMP_PREFIX)
             .suffix(TEMP_SUFFIX)
             .tempfile_in(self.markdown_export.paths.root())
             .map_err(|_| StoryError::Io)?;
-        let expected_byte_length = manifest.expected_byte_length;
-        *session = Some(ExportSession {
-            token: token.clone(),
-            manifest,
+        Ok(ExportSession {
+            token,
+            scope,
             temporary,
             target,
             received: 0,
             hash: Sha256::new(),
             last_progress: now,
-        });
-        Ok(StoryMarkdownExportBegin {
+        })
+    }
+
+    pub fn begin_pending_export(
+        &self,
+        source: StoryPendingExportSource,
+        now: Instant,
+    ) -> Result<StoryPendingExportBegin, StoryError> {
+        self.begin_pending_export_with_space(source, now, &mut |root| {
+            fs4::available_space(root).map_err(|_| StoryError::Io)
+        })
+    }
+
+    fn begin_pending_export_with_space(
+        &self,
+        source: StoryPendingExportSource,
+        now: Instant,
+        available_space: &mut impl FnMut(&Path) -> Result<u64, StoryError>,
+    ) -> Result<StoryPendingExportBegin, StoryError> {
+        let mut session = self
+            .markdown_export
+            .session
+            .lock()
+            .map_err(|_| StoryError::Io)?;
+        expire(&mut session, now);
+        if session.is_some() {
+            return Err(StoryError::Busy);
+        }
+        let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
+        let prepared = pending_export::prepare(&connection, &source)?;
+        drop(connection);
+        let expected_byte_length = prepared.byte_length;
+        let digest = prepared.digest.clone();
+        let export = self.new_export_session(
+            ExportScope::Pending { source, prepared },
+            now,
+            available_space,
+        )?;
+        let token = export.token.clone();
+        *session = Some(export);
+        Ok(StoryPendingExportBegin {
             token,
             expected_byte_length,
+            digest,
         })
+    }
+
+    /// Copy one bounded sealed frame directly from Native storage into its private
+    /// temp. Offset is an acknowledgement fence, never an arbitrary file offset.
+    pub fn advance_pending_export(
+        &self,
+        token: &str,
+        offset: u64,
+        now: Instant,
+    ) -> Result<StoryMarkdownExportAppend, StoryError> {
+        self.advance_pending_export_with_hook(token, offset, now, &mut |_, _| Ok(()))
+    }
+
+    fn advance_pending_export_with_hook(
+        &self,
+        token: &str,
+        offset: u64,
+        now: Instant,
+        hook: &mut impl FnMut(IoPoint, &mut File) -> Result<(), StoryError>,
+    ) -> Result<StoryMarkdownExportAppend, StoryError> {
+        let mut guard = self
+            .markdown_export
+            .session
+            .lock()
+            .map_err(|_| StoryError::Io)?;
+        require_token(&guard, token)?;
+        expire(&mut guard, now);
+        let session = guard.as_mut().ok_or(StoryError::Stale)?;
+        let ExportScope::Pending { source, prepared } = &session.scope else {
+            return Err(StoryError::Invalid);
+        };
+        if offset != session.received || offset >= prepared.byte_length {
+            return Err(StoryError::Invalid);
+        }
+        let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
+        let bytes = pending_export::read_frame(
+            &connection,
+            source,
+            &prepared.sealed_token,
+            prepared.manifest_bytes.as_deref(),
+            offset,
+        );
+        drop(connection);
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                guard.take();
+                return Err(error);
+            }
+        };
+        if let Err(error) = write_frame(session, &bytes, now, hook) {
+            guard.take();
+            return Err(error);
+        }
+        Ok(StoryMarkdownExportAppend {
+            token: token.to_owned(),
+            received_bytes: session.received,
+        })
+    }
+
+    pub fn end_pending_export(
+        &self,
+        token: &str,
+        now: Instant,
+    ) -> Result<StoryPendingExportEnd, StoryError> {
+        self.end_export_with_hook(token, None, now, &mut |_, _| Ok(()))
+    }
+
+    pub fn abort_pending_export(&self, token: &str) -> Result<(), StoryError> {
+        let mut guard = self
+            .markdown_export
+            .session
+            .lock()
+            .map_err(|_| StoryError::Io)?;
+        if let Some(session) = guard.as_ref().filter(|session| session.token == token) {
+            if !matches!(session.scope, ExportScope::Pending { .. }) {
+                return Err(StoryError::Invalid);
+            }
+            guard.take();
+        }
+        Ok(())
     }
 
     pub fn append_markdown_export(
@@ -333,24 +604,22 @@ impl StoryStore {
         require_token(&guard, token)?;
         expire(&mut guard, now);
         let session = guard.as_mut().ok_or(StoryError::Stale)?;
+        if !matches!(session.scope, ExportScope::Story(_)) {
+            return Err(StoryError::Invalid);
+        }
         if bytes.is_empty() || bytes.len() > CANDIDATE_FRAME_BYTES {
             return Err(StoryError::TooLarge);
         }
         if offset != session.received {
             return Err(StoryError::Invalid);
         }
-        if bytes.len() as u64 > session.manifest.expected_byte_length - session.received {
+        if bytes.len() as u64 > session.scope.expected_byte_length() - session.received {
             return Err(StoryError::TooLarge);
         }
-        if hook(IoPoint::Write, session.temporary.as_file_mut()).is_err()
-            || session.temporary.as_file_mut().write_all(bytes).is_err()
-        {
+        if let Err(error) = write_frame(session, bytes, now, hook) {
             guard.take();
-            return Err(StoryError::Io);
+            return Err(error);
         }
-        session.hash.update(bytes);
-        session.received += bytes.len() as u64;
-        session.last_progress = now.max(session.last_progress);
         Ok(StoryMarkdownExportAppend {
             token: token.to_owned(),
             received_bytes: session.received,
@@ -408,6 +677,21 @@ impl StoryStore {
         now: Instant,
         hook: &mut impl FnMut(IoPoint, &mut File) -> Result<(), StoryError>,
     ) -> Result<StoryMarkdownExportEnd, StoryError> {
+        let result = self.end_export_with_hook(token, Some(expected_digest), now, hook)?;
+        Ok(StoryMarkdownExportEnd {
+            token: result.token,
+            absolute_path: result.absolute_path,
+            byte_length: result.byte_length,
+        })
+    }
+
+    fn end_export_with_hook(
+        &self,
+        token: &str,
+        story_digest: Option<&str>,
+        now: Instant,
+        hook: &mut impl FnMut(IoPoint, &mut File) -> Result<(), StoryError>,
+    ) -> Result<StoryPendingExportEnd, StoryError> {
         let mut guard = self
             .markdown_export
             .session
@@ -416,10 +700,15 @@ impl StoryStore {
         require_token(&guard, token)?;
         expire(&mut guard, now);
         let session = guard.as_mut().ok_or(StoryError::Stale)?;
-        if !valid_digest(expected_digest) {
+        let expected_digest = match (&session.scope, story_digest) {
+            (ExportScope::Story(_), Some(digest)) => digest.to_owned(),
+            (ExportScope::Pending { prepared, .. }, None) => prepared.digest.clone(),
+            _ => return Err(StoryError::Invalid),
+        };
+        if !valid_digest(&expected_digest) {
             return Err(StoryError::Invalid);
         }
-        if session.received != session.manifest.expected_byte_length {
+        if session.received != session.scope.expected_byte_length() {
             return Err(StoryError::Incomplete);
         }
         let prepare = (|| {
@@ -454,12 +743,25 @@ impl StoryStore {
         }
         // A maintenance refusal leaves the fully synced private temp retryable.
         // No maintenance permit is held during traversal, upload or fsync.
-        let permit = self
-            .gate
-            .enter_write()
-            .map_err(|_| StoryError::Maintenance)?;
+        // Same per-product fence as seal/save/abandon. If abandonment deletes the
+        // exact row first, no later end can publish. If this publication wins the
+        // guard first, its per-file receipt truthfully records that completed file.
+        let pending_admission = session
+            .scope
+            .pending_product()
+            .map(|product| self.pending_admission(product))
+            .transpose()?;
+        let permit = if pending_admission.is_none() {
+            Some(
+                self.gate
+                    .enter_write()
+                    .map_err(|_| StoryError::Maintenance)?,
+            )
+        } else {
+            None
+        };
         let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
-        if let Err(error) = assert_scope(&connection, &session.manifest) {
+        if let Err(error) = session.scope.assert_scope(&connection) {
             guard.take();
             return Err(error);
         }
@@ -483,13 +785,15 @@ impl StoryStore {
             })?;
         drop(connection);
         drop(permit);
+        drop(pending_admission);
         // Match archive export's best-effort directory durability. After publication
         // never return failure claiming no output; file content was already synced.
         sync_parent_dir(self.markdown_export.paths.root());
-        Ok(StoryMarkdownExportEnd {
+        Ok(StoryPendingExportEnd {
             token: session.token,
             absolute_path,
             byte_length: session.received,
+            digest: expected_digest,
         })
     }
 }
@@ -506,3 +810,7 @@ fn sync_parent_dir(_parent: &Path) {}
 #[cfg(test)]
 #[path = "arena_story_export_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "arena_story_pending_export_tests.rs"]
+mod pending_tests;

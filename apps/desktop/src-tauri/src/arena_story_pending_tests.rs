@@ -2409,3 +2409,6 @@ fn raw_role_projection_keeps_selected_bytes_and_uses_json_parse_member_semantics
         "closed authority parsing must still reject duplicate keys"
     );
 }
+
+#[path = "arena_story_pending_abandon_tests.rs"]
+mod abandon_tests;

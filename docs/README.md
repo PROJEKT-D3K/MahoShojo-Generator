@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-10 Hosted 故事本地出口：[候选出口 ADR](./decisions/2026-10-10_184000_Hosted连续故事候选本地出口决策.md) 与 DESK-101 已接受 schema8 耐久清理位、exact 本机放弃、原件流式导出及高级本地原语；源码、定向、独审及真实 TS→Native pipe 通过，[验收记录](./reports/2026-10-10_190000_Hosted连续故事候选本地出口验收.md)保留分轮失败与修复，正式组合完整 CI 通过（受测8aa484dd，不代验中间树）；不开放两页 UI，不宣称服务器停止或允许 unknown 重存。
+
 2026-10-10 Hosted 故事 Native 后继：[传输与创建围栏 ADR](./decisions/2026-10-10_180600_Hosted连续故事Native传输与创建围栏决策.md) 与 DESK-100 已接受同一 command 的故事 create/reconcile、schema7 单 create_claim、同 product 准入、v4 pointer 与窄 telemetry 原件。本片底座定向验证、独审与正式完整 CI 通过，分轮结果、失败留痕及修复见[验收报告](./reports/2026-10-10_182000_Hosted连续故事Native传输与创建围栏验收.md)，待发布，不代表两页 Hosted 用户旅程已可用；不接两页 owner/UI capability，不新增 active discard，Hosted 待处理作品导出仍待接线；未做真实外部或发布。claim 后即使 POST 前失败也只查原 request；完整旅程仍留后继。
 
 2026-10-10 Hosted故事存储后继：[非秘密耐久候选底座](./reports/2026-10-10_164500_Hosted连续故事耐久候选存储底座.md)对应DESK-099，新增原product两槽SQLite BLOB、共享上传预算、save-attempt/receipt和旧备份恢复围栏；当前定向验证和独审通过、完整CI待统一执行，未接Hosted网络/两页UI，未发布。

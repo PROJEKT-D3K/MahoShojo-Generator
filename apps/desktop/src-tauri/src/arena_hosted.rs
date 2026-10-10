@@ -408,8 +408,11 @@ struct AnonymousRecord {
     first_dispatched_at: u64,
     token: Option<String>,
     token_expires_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    story_binding: Option<story::Binding>,
 }
 struct Flight {
+    revoked: bool,
     story: Option<story::Binding>,
     request_id: String,
     actor: Actor,
@@ -597,7 +600,8 @@ impl ArenaState {
         let fingerprint = cloud::arena_account_snapshot(cloud, secrets)
             .map_err(|_| stale())?
             .fingerprint;
-        if flight.lock().map_err(|_| stale())?.account_fingerprint != fingerprint {
+        let f = flight.lock().map_err(|_| stale())?;
+        if f.revoked || f.account_fingerprint != fingerprint {
             return Err(stale());
         }
         Ok(())
@@ -614,7 +618,7 @@ impl ArenaState {
             .pending_admission(story::product(product))
             .map_err(story::storage_error)?;
         story::admit(self, &guard, request, false)?;
-        let flight = self.prepare_unchecked(request, cloud, secrets)?;
+        let flight = self.prepare_unchecked(request, cloud, secrets, None)?;
         story::bind_existing(self, &guard, request, &flight)?;
         Ok(flight)
     }
@@ -623,6 +627,7 @@ impl ArenaState {
         request: &ArenaRequest,
         cloud: &CloudState,
         secrets: &dyn SecretStore,
+        story_binding: Option<story::Binding>,
     ) -> Result<Arc<Mutex<Flight>>, ArenaError> {
         request.validate()?;
         let (product, request_id, actor) = request.scope();
@@ -643,6 +648,9 @@ impl ArenaState {
         let mut flights = self.flights.lock().map_err(|_| stale())?;
         if let Some(prior) = flights.get(&product) {
             let old = prior.lock().map_err(|_| stale())?;
+            if old.revoked {
+                return Err(stale());
+            }
             if old.request_id == request_id {
                 if old.actor != *actor {
                     return Err(stale());
@@ -679,6 +687,7 @@ impl ArenaState {
                         secrets_to_redact.push(cookie.clone());
                     }
                     let next = Arc::new(Mutex::new(Flight {
+                        revoked: false,
                         story: old.story.clone(),
                         request_id: old.request_id.clone(),
                         actor: old.actor.clone(),
@@ -794,6 +803,7 @@ impl ArenaState {
                     first_dispatched_at: now_ms(),
                     token: None,
                     token_expires_at: None,
+                    story_binding: story_binding.clone(),
                 };
                 save_anonymous(&record, secrets)?;
                 Some(record)
@@ -822,7 +832,8 @@ impl ArenaState {
             }))
             .collect();
         let flight = Arc::new(Mutex::new(Flight {
-            story: None,
+            revoked: false,
+            story: story_binding,
             request_id: request_id.to_string(),
             actor: actor.clone(),
             account_fingerprint: snapshot.fingerprint,
@@ -949,6 +960,9 @@ impl ArenaState {
         flight: &Arc<Mutex<Flight>>,
     ) -> Result<reqwest::RequestBuilder, ArenaError> {
         let f = flight.lock().map_err(|_| stale())?;
+        if f.revoked {
+            return Err(stale());
+        }
         let mut builder = self.http.request(method, format!("{}{path}", self.origin));
         match &f.actor {
             Actor::Account { expected_user_id } => {
@@ -1063,6 +1077,13 @@ fn load_anonymous(
             || uuid.as_bytes()[14] != b'4'
             || !b"89abAB".contains(&uuid.as_bytes()[19])
             || record.token.is_some() != record.token_expires_at.is_some()
+            || record.story_binding.as_ref().is_some_and(|binding| {
+                crate::arena_story::ipc::token(Some(&binding.attempt_id)).is_err()
+                    || !binding
+                        .input_digest
+                        .strip_prefix("sha256:")
+                        .is_some_and(story::hex)
+            })
         {
             return Err(storage());
         }
@@ -1093,6 +1114,9 @@ fn capture_token(
     flight: &Arc<Mutex<Flight>>,
     secrets: &dyn SecretStore,
 ) -> Result<(), ArenaError> {
+    if flight.lock().map_err(|_| stale())?.revoked {
+        return Err(stale());
+    }
     let Some(raw) = headers.get(ACTOR_HEADER) else {
         return Ok(());
     };
@@ -1108,6 +1132,9 @@ fn capture_token(
     let decoded = URL_SAFE_NO_PAD.decode(token).map_err(|_| protocol())?;
     let value: Value = serde_json::from_slice(&decoded).map_err(|_| protocol())?;
     let mut f = flight.lock().map_err(|_| stale())?;
+    if f.revoked {
+        return Err(stale());
+    }
     let Some(record) = f.anonymous.as_mut() else {
         return Err(protocol());
     };
@@ -1395,22 +1422,23 @@ async fn read_json(response: reqwest::Response, max: usize) -> Result<Value, Are
     Ok(value)
 }
 fn reject_secret_echo(value: &str, flight: &Arc<Mutex<Flight>>) -> Result<(), ArenaError> {
-    if flight
-        .lock()
-        .map_err(|_| stale())?
-        .secrets_to_redact
-        .iter()
-        .any(|s| {
-            !s.is_empty()
-                && (value.contains(s)
-                    || serde_json::to_string(s)
-                        .is_ok_and(|escaped| value.contains(&escaped[1..escaped.len() - 1])))
-        })
-    {
+    // Revocation and secret erasure use this same lock. A late callback must not
+    // interpret the deliberately erased redaction list as permission to publish.
+    let f = flight.lock().map_err(|_| stale())?;
+    if f.revoked {
+        return Err(stale());
+    }
+    if f.secrets_to_redact.iter().any(|s| {
+        !s.is_empty()
+            && (value.contains(s)
+                || serde_json::to_string(s)
+                    .is_ok_and(|escaped| value.contains(&escaped[1..escaped.len() - 1])))
+    }) {
         return Err(protocol());
     }
     Ok(())
 }
+
 fn public_control(value: Value, flight: &Arc<Mutex<Flight>>) -> Result<Value, ArenaError> {
     let map = value.as_object().ok_or_else(protocol)?;
     let mut out = serde_json::Map::new();
@@ -1500,6 +1528,9 @@ fn terminal_status(s: &str) -> bool {
 }
 fn accept_control_identity(value: &Value, flight: &Arc<Mutex<Flight>>) -> Result<(), ArenaError> {
     let mut f = flight.lock().map_err(|_| stale())?;
+    if f.revoked {
+        return Err(stale());
+    }
     if value
         .get("generationRequestId")
         .and_then(Value::as_str)
@@ -2579,6 +2610,9 @@ async fn stream_inner(
     let token = preflight_token.unwrap_or_else(|| Arc::new(CancellationToken::new()));
     {
         let mut f = flight.lock().map_err(|_| stale())?;
+        if f.revoked {
+            return Err(stale());
+        }
         if f.subscription
             .as_ref()
             .is_some_and(|active| !Arc::ptr_eq(active, &token))
@@ -2955,4 +2989,15 @@ pub(crate) fn seal_story_pending(
     token: &str,
 ) -> Result<story_pending::PendingSnapshot, crate::arena_story::StoryError> {
     story::seal_pending(state, stories, token)
+}
+
+#[path = "arena_hosted_story_abandon.rs"]
+mod story_abandon;
+pub(crate) fn abandon_story_pending(
+    state: &ArenaState,
+    stories: &StoryStore,
+    secrets: &dyn SecretStore,
+    request: story_pending::AbandonRequest,
+) -> Result<story_pending::AbandonOutcome, crate::arena_story::StoryError> {
+    story_abandon::abandon_story_pending(state, stories, secrets, request)
 }

@@ -2,12 +2,13 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import {
   STORY_CANDIDATE_FRAME_BYTES, StoryBeginOutcomeSchema, StoryPendingKeySchema,
   StoryPendingManifestSchema, StoryPendingPartKindSchema, StoryPendingSaveRequestSchema,
-  StoryPendingSaveAttemptRequestSchema, StoryReceiptSchema,
+  StoryPendingSaveAttemptRequestSchema, StoryReceiptSchema, StoryPendingAbandonRequestSchema,
+  StoryPendingExportSourceSchema, type StoryPendingAbandonRequest, type StoryPendingExportSource,
   type StoryPendingKey, type StoryPendingManifest, type StoryPendingPartKind,
 } from '@mahoshojo/contracts/desktop-arena-story';
 import { STORY_IPC, STORY_KIND_HEADER, STORY_OFFSET_HEADER, STORY_TOKEN_HEADER, type StoryInvoke } from './arena-story-native';
 
-/** Storage-only operations. No model/role transport, active-slot discard or implicit
+/** Storage-only operations. No model/role transport or implicit
  * retry is exposed here. Saving consumes an explicit durable, single-use attempt;
  * an uncertain result is reconciled only through an exact receipt lookup. */
 export const STORY_PENDING_IPC = {
@@ -15,7 +16,9 @@ export const STORY_PENDING_IPC = {
   queryUpload: 'query_arena_story_pending_upload', seal: 'seal_arena_story_pending',
   abortUpload: 'abort_arena_story_pending_upload', describe: 'describe_arena_story_pending',
   read: 'read_arena_story_pending_chunk', prepareSave: 'prepare_arena_story_pending_save',
-  save: 'save_arena_story_pending',
+  save: 'save_arena_story_pending', abandon: 'abandon_arena_story_pending',
+  exportBegin: 'begin_arena_story_pending_export', exportAdvance: 'advance_arena_story_pending_export',
+  exportEnd: 'end_arena_story_pending_export', exportAbort: 'abort_arena_story_pending_export',
 } as const;
 
 /** Structured replies remain unknown until the caller validates the corresponding
@@ -32,6 +35,7 @@ export interface StoryPendingNativePort {
   prepareSave(key: StoryPendingKey, wireDigest: string): Promise<unknown>;
   save(key: StoryPendingKey, wireDigest: string, attemptId: string): Promise<unknown>;
   receipt(sessionId: string, operationId: string): Promise<unknown>;
+  abandon(request: StoryPendingAbandonRequest): Promise<unknown>;
 }
 
 const tokenSchema = StoryBeginOutcomeSchema.shape.token;
@@ -66,7 +70,26 @@ export const createIpcStoryPendingPort = (invoke: StoryInvoke = tauriInvoke): St
   },
   prepareSave: (key, wireDigest) => invoke(STORY_PENDING_IPC.prepareSave, StoryPendingSaveRequestSchema.parse({ key, wireDigest })),
   save: (key, wireDigest, attemptId) => invoke(STORY_PENDING_IPC.save, StoryPendingSaveAttemptRequestSchema.parse({ key, wireDigest, attemptId })),
+  abandon: (request) => invoke(STORY_PENDING_IPC.abandon, { request: StoryPendingAbandonRequestSchema.parse(request) }),
   receipt: (sessionId, operationId) => invoke(STORY_IPC.receipt, {
     sessionId: StoryReceiptSchema.shape.sessionId.parse(sessionId), operationId: StoryReceiptSchema.shape.operationId.parse(operationId),
   }),
+});
+
+
+export interface StoryPendingExportPort {
+  begin(source: StoryPendingExportSource): Promise<unknown>;
+  advance(token: string, offset: number): Promise<unknown>;
+  end(token: string): Promise<unknown>;
+  abort(token: string): Promise<void>;
+}
+/** Native reads only the exact sealed original into its quarantined temporary file. */
+export const createIpcStoryPendingExportPort = (invoke: StoryInvoke = tauriInvoke): StoryPendingExportPort => ({
+  begin: (source) => invoke(STORY_PENDING_IPC.exportBegin, { source: StoryPendingExportSourceSchema.parse(source) }),
+  advance: (token, offset) => {
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('故事候选导出位置无效');
+    return invoke(STORY_PENDING_IPC.exportAdvance, { token: tokenSchema.parse(token), offset });
+  },
+  end: (token) => invoke(STORY_PENDING_IPC.exportEnd, { token: tokenSchema.parse(token) }),
+  abort: async (token) => { await invoke(STORY_PENDING_IPC.exportAbort, { token: tokenSchema.parse(token) }); },
 });

@@ -270,7 +270,7 @@ export const StoryPendingCreateClaimSnapshotSchema = z.object({
 export type StoryPendingCreateClaimSnapshot = z.infer<typeof StoryPendingCreateClaimSnapshotSchema>;
 export const StoryPendingSnapshotSchema = z.object({
   manifest: StoryPendingManifestSchema, saveAttemptId: StoryBeginOutcomeSchema.shape.token.nullable(), restored: z.boolean(),
-  createClaim: StoryPendingCreateClaimSnapshotSchema.nullable(),
+  createClaim: StoryPendingCreateClaimSnapshotSchema.nullable(), abandonRequested: z.boolean(),
 }).strict().refine((value) => value.createClaim === null || value.createClaim.inputDigest === value.manifest.inputDigest,
   'Create claim must match its original pending input');
 export type StoryPendingSnapshot = z.infer<typeof StoryPendingSnapshotSchema>;
@@ -300,3 +300,40 @@ export const StoryPendingSaveAttemptRequestSchema = StoryPendingSaveRequestSchem
 export const StoryPendingSavePreparationSchema = z.object({ attemptId: StoryBeginOutcomeSchema.shape.token }).strict();
 export type StoryPendingSaveRequest = z.infer<typeof StoryPendingSaveRequestSchema>;
 export type StoryPendingSaveAttemptRequest = z.infer<typeof StoryPendingSaveAttemptRequestSchema>;
+
+
+/** Native-only durable abandonment intent is read back in the snapshot, never
+ * supplied in an upload manifest. Local exit cannot cancel billing or grant save authority. */
+export const StoryPendingAbandonRequestSchema = z.object({
+  key: StoryPendingKeySchema, inputDigest: digest, actor: DesktopArenaHostedActorSchema,
+}).strict();
+export const StoryPendingAbandonOutcomeSchema = StoryPendingAbandonRequestSchema.extend({
+  state: z.enum(['abandoned', 'cleanup-pending']),
+  flight: z.enum(['released', 'foreign-retained', 'unresolved']),
+  secret: z.enum(['cleared', 'absent', 'foreign-retained', 'not-applicable', 'unresolved']),
+  candidate: z.enum(['removed', 'retained', 'unknown']),
+}).strict().refine((value) => (value.state === 'abandoned')
+  === (value.candidate === 'removed' && value.flight !== 'unresolved' && value.secret !== 'unresolved'),
+  'Abandoned requires proven candidate removal and resolved local cleanup');
+export type StoryPendingAbandonRequest = z.infer<typeof StoryPendingAbandonRequestSchema>;
+export type StoryPendingAbandonOutcome = z.infer<typeof StoryPendingAbandonOutcomeSchema>;
+
+/** Closed Native-to-file export sources. No path, SQL, credential, execute or import carrier. */
+export const StoryPendingExportSourceSchema = z.discriminatedUnion('scope', [
+  z.object({ scope: z.literal('pending-part'), key: StoryPendingKeySchema, inputDigest: digest,
+    kind: StoryPendingPartKindSchema, digest, byteLength: integer.min(1).max(STORY_PENDING_LIMITS.slotBytes),
+  }).strict(),
+  z.object({ scope: z.literal('pending-manifest'), key: StoryPendingKeySchema, inputDigest: digest }).strict(),
+]);
+export const StoryPendingExportBeginSchema = z.object({
+  token: StoryBeginOutcomeSchema.shape.token, expectedByteLength: integer.min(1).max(STORY_PENDING_LIMITS.slotBytes), digest,
+}).strict();
+export const StoryPendingExportAdvanceSchema = z.object({
+  token: StoryBeginOutcomeSchema.shape.token, receivedBytes: integer.max(STORY_PENDING_LIMITS.slotBytes),
+}).strict();
+export const StoryPendingExportOutcomeSchema = z.object({
+  token: StoryBeginOutcomeSchema.shape.token, absolutePath: z.string().min(1),
+  byteLength: integer.min(1).max(STORY_PENDING_LIMITS.slotBytes), digest,
+}).strict();
+export type StoryPendingExportSource = z.infer<typeof StoryPendingExportSourceSchema>;
+export type StoryPendingExportOutcome = z.infer<typeof StoryPendingExportOutcomeSchema>;

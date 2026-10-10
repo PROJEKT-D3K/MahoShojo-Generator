@@ -13,6 +13,17 @@ mod native;
 pub(crate) use native::{AdmissionGuard, CreatePermit};
 pub use native::{CreateClaim, FundingMode, NativeFunding};
 
+#[path = "arena_story_pending_abandon.rs"]
+mod abandon;
+pub use abandon::{
+    AbandonCandidate, AbandonFlight, AbandonOutcome, AbandonRequest, AbandonSecret, AbandonState,
+};
+#[path = "arena_story_pending_export.rs"]
+pub(crate) mod export;
+
+pub(crate) const MIGRATION_8: &str =
+    "ALTER TABLE arena_story_pending ADD COLUMN abandon_requested INTEGER NOT NULL DEFAULT 0 CHECK(abandon_requested IN (0,1));";
+
 pub(crate) const MIGRATION_7: &str =
     "ALTER TABLE arena_story_pending ADD COLUMN create_claim TEXT;";
 
@@ -182,6 +193,7 @@ pub struct PendingSnapshot {
     pub manifest: PendingManifest,
     pub save_attempt_id: Option<String>,
     pub restored: bool,
+    pub abandon_requested: bool,
     #[serde(deserialize_with = "required_nullable")]
     pub create_claim: Option<CreateClaim>,
 }
@@ -377,7 +389,15 @@ fn schema_version(connection: &Connection) -> Result<i64, StoryError> {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|_| StoryError::Corrupt)
 }
-type StoredRow = (String, bool, u64, Option<String>, bool, Option<String>);
+type StoredRow = (
+    String,
+    bool,
+    u64,
+    Option<String>,
+    bool,
+    Option<String>,
+    bool,
+);
 fn load(connection: &Connection, token: &str) -> Result<Stored, StoryError> {
     // Historical v6 backups have this table but not create_claim. Never select
     // a column absent from the version we are auditing.
@@ -386,7 +406,12 @@ fn load(connection: &Connection, token: &str) -> Result<Stored, StoryError> {
     } else {
         "NULL"
     };
-    let sql = format!("SELECT CASE WHEN length(CAST(metadata AS BLOB))+coalesce(length(CAST({claim_column} AS BLOB)),0)<=65536 THEN metadata ELSE NULL END,active,total_bytes,save_attempt,restored,{claim_column} FROM arena_story_pending WHERE token=?1");
+    let abandon_column = if schema_version(connection)? >= 8 {
+        "abandon_requested"
+    } else {
+        "0"
+    };
+    let sql = format!("SELECT CASE WHEN length(CAST(metadata AS BLOB))+coalesce(length(CAST({claim_column} AS BLOB)),0)<=65536 THEN metadata ELSE NULL END,active,total_bytes,save_attempt,restored,{claim_column},{abandon_column} FROM arena_story_pending WHERE token=?1");
     let row: Option<StoredRow> = connection
         .query_row(&sql, [token], |r| {
             Ok((
@@ -396,12 +421,16 @@ fn load(connection: &Connection, token: &str) -> Result<Stored, StoryError> {
                 r.get(3)?,
                 r.get(4)?,
                 r.get(5)?,
+                r.get(6)?,
             ))
         })
         .optional()
         .map_err(|_| StoryError::Corrupt)?;
-    let (document, active, total, save_attempt_id, restored, claim_document) =
+    let (document, active, total, save_attempt_id, restored, claim_document, abandon_requested) =
         row.ok_or(StoryError::Stale)?;
+    if abandon_requested && !active {
+        return Err(StoryError::Corrupt);
+    }
     let manifest: PendingManifest =
         serde_json::from_str(&document).map_err(|_| StoryError::Corrupt)?;
     if manifest.validate()? != total {
@@ -423,6 +452,7 @@ fn load(connection: &Connection, token: &str) -> Result<Stored, StoryError> {
             manifest,
             save_attempt_id,
             restored,
+            abandon_requested,
             create_claim,
         },
         active,
@@ -464,6 +494,9 @@ pub(super) fn recover_uploads(connection: &Connection) -> Result<(), StoryError>
 }
 fn compatible(old: &PendingSnapshot, next: &PendingManifest) -> Result<(), StoryError> {
     let m = &old.manifest;
+    if old.abandon_requested {
+        return Err(StoryError::Conflict);
+    }
     if old.restored || old.save_attempt_id.is_some() {
         return Err(StoryError::CommitUnknown);
     }
@@ -570,6 +603,10 @@ impl StoryStore {
         stages.retain(|_, s| s.created_at.elapsed() < STAGE_LIFETIME);
         let mut connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
         let metadata = serde_json::to_string(&manifest).map_err(|_| StoryError::Invalid)?;
+        if active(&connection, manifest.product)?.is_some_and(|row| row.snapshot.abandon_requested)
+        {
+            return Err(StoryError::Conflict);
+        }
         let existing: Option<String> = connection
             .query_row(
                 "SELECT token FROM arena_story_pending WHERE active=0 AND metadata=?1",
@@ -647,6 +684,11 @@ impl StoryStore {
         let row = load(&connection, token)?;
         if row.active {
             return Err(StoryError::Stale);
+        }
+        if active(&connection, row.snapshot.manifest.product)?
+            .is_some_and(|active| active.snapshot.abandon_requested)
+        {
+            return Err(StoryError::Conflict);
         }
         let (id, length, received, _) = part_row(&connection, token, kind)?;
         let end = offset
@@ -788,8 +830,16 @@ impl StoryStore {
         let mut connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
         let mut row = load(&connection, token)?;
         guard.check(self, row.snapshot.manifest.product)?;
+        if row.snapshot.abandon_requested {
+            return Err(StoryError::Conflict);
+        }
         if row.active {
             return Ok(row.snapshot);
+        }
+        if row.snapshot.manifest.role_state == RoleState::OldRoles
+            && row.snapshot.manifest.commit_manifest.is_none()
+        {
+            return Err(StoryError::Incomplete);
         }
         check_candidate(&connection, &row.snapshot.manifest)?;
         let claim_document: Option<String> = connection
@@ -869,6 +919,9 @@ impl StoryStore {
         let mut attempts = self.pending_attempts.lock().map_err(|_| StoryError::Io)?;
         let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
         let row = exact(&connection, key)?;
+        if row.snapshot.abandon_requested {
+            return Err(StoryError::Conflict);
+        }
         if row.snapshot.restored || row.snapshot.save_attempt_id.is_some() {
             return Err(StoryError::CommitUnknown);
         }
@@ -916,6 +969,7 @@ impl StoryStore {
         let mut connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
         let row = exact(&connection, key)?;
         if row.token != token
+            || row.snapshot.abandon_requested
             || row.snapshot.restored
             || row.snapshot.save_attempt_id.as_deref() != Some(attempt_id)
         {
@@ -1641,6 +1695,12 @@ fn validate_payload(connection: &Connection, row: &Stored) -> Result<(), StoryEr
 /// Audit active works without repairing them. Unpublished upload holes remain
 /// structurally checked, never become a recovered work, and are reclaimed at open.
 pub(crate) fn audit(connection: &Connection) -> Result<(), StoryError> {
+    if schema_version(connection)? >= 8 {
+        let invalid: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM arena_story_pending WHERE abandon_requested NOT IN (0,1) OR (active=0 AND abandon_requested!=0))", [], |r| r.get(0)).map_err(|_| StoryError::Corrupt)?;
+        if invalid {
+            return Err(StoryError::Corrupt);
+        }
+    }
     let invalid:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM arena_story_pending WHERE product NOT IN ('battle','arena') OR active NOT IN (0,1) OR restored NOT IN(0,1) OR length(CAST(metadata AS BLOB))>65536 OR total_bytes NOT BETWEEN 1 AND 134217728 OR (active=0 AND (save_attempt IS NOT NULL OR restored!=0)))",[],|r|r.get(0)).map_err(|_|StoryError::Corrupt)?;
     if invalid {
         return Err(StoryError::Corrupt);

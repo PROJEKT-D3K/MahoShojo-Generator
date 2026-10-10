@@ -1567,3 +1567,6 @@ async fn story_real_process_exit_before_post_or_headers_is_durable_and_404_never
         eprintln!("STORY_PROCESS_HTTP parent_pid={} first_mode={first_mode} requests={} total_post_count={} lookup_404_count=2 durable_claim_after_reopen=true trace=[{}]", std::process::id(), requests.len(), requests.iter().filter(|r| r.method == "POST").count(), request_trace(&requests));
     }
 }
+
+#[path = "arena_hosted_story_abandon_tests.rs"]
+mod abandon_tests;

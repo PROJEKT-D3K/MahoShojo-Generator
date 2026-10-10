@@ -620,6 +620,21 @@ fn verify_sqlite(connection: &Connection) -> Result<i64, BackupError> {
             return Err(BackupError::Corrupt);
         }
     }
+    // v8 keeps the same pending table; historical v1–v7 backups must never
+    // read or be required to contain its Native-only cleanup intent column.
+    if version >= 6 {
+        let abandon_column: Option<(String, bool)> = connection.query_row(
+            r#"SELECT type, "notnull" FROM pragma_table_info('arena_story_pending') WHERE name='abandon_requested'"#,
+            [], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional().map_err(|_| BackupError::Corrupt)?;
+        if if version >= 8 {
+            abandon_column != Some(("INTEGER".into(), true))
+        } else {
+            abandon_column.is_some()
+        } {
+            return Err(BackupError::Corrupt);
+        }
+    }
     let integrity = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map_err(|_| BackupError::Corrupt)?;

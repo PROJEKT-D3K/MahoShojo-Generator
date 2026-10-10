@@ -118,6 +118,9 @@ fn authenticated(
     flight: &Arc<Mutex<Flight>>,
 ) -> Result<reqwest::RequestBuilder, ArenaError> {
     let f = flight.lock().map_err(|_| stale())?;
+    if f.revoked {
+        return Err(stale());
+    }
     let builder = state
         .http
         .post(format!("{}{PATH}", state.reconciliation_origin))
@@ -379,6 +382,9 @@ pub(super) async fn run(
     let token = Arc::new(CancellationToken::new());
     {
         let mut f = flight.lock().map_err(|_| stale())?;
+        if f.revoked {
+            return Err(stale());
+        }
         if f.subscription.is_some() {
             return Err(error("subscription-in-progress", "此请求已有本机订阅"));
         }

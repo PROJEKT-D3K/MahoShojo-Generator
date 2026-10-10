@@ -219,6 +219,9 @@ pub(super) fn reject_json_secret_echo(
 ) -> Result<(), ArenaError> {
     let mut patterns: Vec<SecretMatcher> = {
         let f = flight.lock().map_err(|_| stale())?;
+        if f.revoked {
+            return Err(stale());
+        }
         let mut values: Vec<&str> = f.secrets_to_redact.iter().map(String::as_str).collect();
         // The cookie value and bootstrap UUID are independently usable credentials too.
         if let Some(cookie) = &f.cookie {

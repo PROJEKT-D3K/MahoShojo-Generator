@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { STORY_CANDIDATE_FRAME_BYTES, StoryPendingSnapshotSchema, type StoryPendingKey, type StoryPendingManifest, type StoryPendingPartKind } from '@mahoshojo/contracts/desktop-arena-story';
-import { createIpcStoryPendingPort, STORY_PENDING_IPC } from '../src/platform/arena-story-pending-native';
+import { createIpcStoryPendingPort, createIpcStoryPendingExportPort, STORY_PENDING_IPC } from '../src/platform/arena-story-pending-native';
 import { STORY_IPC, type StoryInvoke } from '../src/platform/arena-story-native';
 
 const token = `${'a'.repeat(32)}-${'b'.repeat(32)}`;
@@ -16,7 +16,7 @@ const manifest: StoryPendingManifest = {
   parts: [{ kind: 'input', byteLength: 3, digest }], commitManifest: null,
 };
 
-const snapshot = StoryPendingSnapshotSchema.parse({ manifest, saveAttemptId: null, restored: false, createClaim: null });
+const snapshot = StoryPendingSnapshotSchema.parse({ manifest, saveAttemptId: null, restored: false, abandonRequested: false, createClaim: null });
 
 const rawCarriers = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-story-pending-content.json', import.meta.url), 'utf8')) as {
   invalidRawCarriers: Array<{ name: string; kind: StoryPendingPartKind; document: string }>;
@@ -61,7 +61,7 @@ describe('storage-only durable pending raw IPC bridge', () => {
       [STORY_PENDING_IPC.save, { key, wireDigest: digest, attemptId: token }],
       [STORY_IPC.receipt, { sessionId: 'session', operationId: 'chapter' }],
     ]);
-    expect(Object.keys(port)).toEqual(['begin', 'append', 'queryUpload', 'seal', 'abortUpload', 'describe', 'read', 'prepareSave', 'save', 'receipt']);
+    expect(Object.keys(port)).toEqual(['begin', 'append', 'queryUpload', 'seal', 'abortUpload', 'describe', 'read', 'prepareSave', 'save', 'abandon', 'receipt']);
     expect(invoke.mock.calls.some(([command]) => [STORY_IPC.begin, STORY_IPC.append, STORY_IPC.end].includes(command as typeof STORY_IPC.begin))).toBe(false);
   });
   it.each([null, {
@@ -157,5 +157,28 @@ describe('storage-only durable pending raw IPC bridge', () => {
       expect(await port.receipt('session', 'chapter')).toBe(response);
     }
     expect(invoke.mock.calls).toEqual(Array.from({ length: 3 }, () => [STORY_IPC.receipt, { sessionId: 'session', operationId: 'chapter' }]));
+  });
+});
+
+
+describe('pending exits fixed IPC', () => {
+  it('sends only exact local abandon scope and exposes no credential deletion controls', async () => {
+    const invoke = vi.fn<StoryInvoke>(async () => ({})), port = createIpcStoryPendingPort(invoke);
+    const request = { key, inputDigest: digest, actor: manifest.actor };
+    await port.abandon(request);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(STORY_PENDING_IPC.abandon, { request });
+    expect(() => port.abandon({ ...request, clearSecret: true } as typeof request)).toThrow();
+    expect(() => port.abandon({ ...request, cloud: {} } as typeof request)).toThrow();
+  });
+  it('uses Native source-bound exports without copying renderer bytes or exposing paths', async () => {
+    const invoke = vi.fn<StoryInvoke>(async () => ({})), sink = createIpcStoryPendingExportPort(invoke);
+    const source = { scope: 'pending-part' as const, key, inputDigest: digest, kind: 'input' as const, digest, byteLength: 3 };
+    await sink.begin(source); await sink.advance(token, 0); await sink.end(token); await sink.abort(token);
+    expect(invoke.mock.calls).toEqual([
+      [STORY_PENDING_IPC.exportBegin, { source }], [STORY_PENDING_IPC.exportAdvance, { token, offset: 0 }],
+      [STORY_PENDING_IPC.exportEnd, { token }], [STORY_PENDING_IPC.exportAbort, { token }],
+    ]);
+    expect(() => sink.begin({ ...source, absolutePath: '/arbitrary' } as typeof source)).toThrow();
+    expect(() => sink.advance(token, -1)).toThrow(); expect(() => sink.end('bad-token')).toThrow();
   });
 });
