@@ -2611,3 +2611,165 @@ fn closed_and_hosted_decoded_duplicate_policies_remain_distinct() {
         r#"{"x":1,"x":2}"#
     );
 }
+
+fn history_candidate(
+    frozen: bool,
+    input_index: u64,
+) -> (PendingManifest, Vec<(PendingKind, String)>) {
+    let (mut m, mut parts) = candidate(Product::Battle, frozen);
+    m.expected_revision = 4;
+    m.created_at = 104;
+    m.expected_last_chapter_id = Some("rewritten-tail".into());
+    m.initial_checkpoint_id = None;
+    m.last_input_checkpoint_id = "cp-rewritten-tail".into();
+    m.operation_id = "continued-chapter".into();
+    m.output_checkpoint_id = "continued-cp".into();
+    if let Some(commit) = &mut m.commit_manifest {
+        commit.expected_revision = 4;
+        commit.expected_last_chapter_id = m.expected_last_chapter_id.clone();
+        commit.operation_id = m.operation_id.clone();
+    }
+    parts.retain(|(kind, _)| !matches!(kind, PendingKind::Seed | PendingKind::Checkpoint0));
+    for (kind, raw) in &mut parts {
+        if matches!(
+            kind,
+            PendingKind::Input
+                | PendingKind::Session
+                | PendingKind::Chapter
+                | PendingKind::Checkpoint1
+        ) {
+            let mut value: serde_json::Value = serde_json::from_str(raw).unwrap();
+            match kind {
+                PendingKind::Input => {
+                    value["action"] = json!("continue");
+                    value["chapterIndex"] = json!(input_index);
+                    value["sourceChapterId"] = json!("rewritten-tail");
+                    value["chapterPlan"] = json!({"totalChapters":3});
+                    value["chapterContext"]["recentWindow"] = json!([{"chapterId":"rewritten-tail","chapterIndex":input_index-1,"title":"","mode":"full","text":"original tail","truncated":false}]);
+                }
+                PendingKind::Session => {
+                    value["revision"] = json!(5);
+                    value["updatedAt"] = json!(104);
+                    value["chapterCount"] = json!(3);
+                    value["lastChapterId"] = json!("continued-chapter");
+                    value["workingCheckpointId"] = json!("continued-cp");
+                    value["lastInputCheckpointId"] = json!("cp-rewritten-tail");
+                }
+                PendingKind::Chapter => {
+                    value["index"] = json!(3);
+                    value["createdAt"] = json!(104);
+                    value["action"] = json!("continue");
+                    value["sourceChapterId"] = json!("rewritten-tail");
+                    value["id"] = json!("continued-chapter");
+                }
+                PendingKind::Checkpoint1 => {
+                    value["id"] = json!("continued-cp");
+                    value["boundaryIndex"] = json!(3);
+                    value["createdAt"] = json!(104);
+                    value["chapterId"] = json!("continued-chapter");
+                }
+                _ => unreachable!(),
+            }
+            *raw = value.to_string();
+        }
+    }
+    refresh(&mut m, &parts);
+    (m, parts)
+}
+
+#[test]
+fn history_pending_input_keeps_revision_separate_through_seal_native_claim_and_audit() {
+    let (_root, lib) = fixture();
+    let (mut m, parts) = history_candidate(false, 3);
+    m.model_completed = false;
+    assert!(validate_input(parts[0].1.as_bytes(), &m).is_err());
+    {
+        let c = lock_connection(lib.connection()).unwrap();
+        assert!(
+            validate_carrier_versioned(&c, parts[0].1.as_bytes(), PendingKind::Input, &m).is_err()
+        );
+        crate::store::migrate_history_candidate_for_test(&c).unwrap();
+    }
+    let token = upload(lib.stories(), &m, &parts);
+    lib.stories().pending_seal(&token).unwrap();
+    let guard = lib.stories().pending_admission(m.product).unwrap();
+    assert_eq!(
+        lib.stories()
+            .pending_native_input(&guard, &m.key(), &m.actor, &m.input_digest)
+            .unwrap()
+            .input,
+        parts[0].1
+    );
+    let permit = lib
+        .stories()
+        .pending_claim_create(
+            &guard,
+            &m.key(),
+            &m.actor,
+            &m.input_digest,
+            &"a".repeat(64),
+            native_funding(),
+        )
+        .unwrap();
+    lib.stories()
+        .pending_consume_create(&guard, &m.key(), &m.actor, &m.input_digest, permit)
+        .unwrap();
+    drop(guard);
+    audit(&lock_connection(lib.connection()).unwrap()).unwrap();
+}
+
+#[test]
+fn history_pending_frozen_coverage_binds_input_index_to_the_committed_chapter() {
+    for input_index in [2, 3] {
+        let (_root, lib) = fixture();
+        crate::store::migrate_history_candidate_for_test(
+            &lock_connection(lib.connection()).unwrap(),
+        )
+        .unwrap();
+        let (m, parts) = history_candidate(true, input_index);
+        let token = upload(lib.stories(), &m, &parts);
+        let result = lib.stories().pending_seal(&token);
+        if input_index == 3 {
+            result.unwrap();
+            audit(&lock_connection(lib.connection()).unwrap()).unwrap();
+        } else {
+            assert_eq!(result, Err(StoryError::OriginalsUncovered));
+        }
+    }
+}
+
+#[test]
+fn history_pending_save_commits_revision_five_as_third_active_chapter() {
+    let (_root, lib) = fixture();
+    let store = lib.stories();
+    let now = Instant::now();
+    for index in 1..=2 {
+        let parts = crate::arena_story::tests::fixture("story", index);
+        let m = crate::arena_story::tests::manifest("story", index, &parts);
+        let token = store.begin(m, now).unwrap().token;
+        for (kind, body) in parts {
+            store.append(&token, kind, 0, body.as_bytes(), now).unwrap();
+        }
+        store.end(&token, now).unwrap();
+    }
+    {
+        let c = lock_connection(lib.connection()).unwrap();
+        crate::store::migrate_history_candidate_for_test(&c).unwrap();
+        crate::arena_story::branch::history::tests::rewrite_tail(&c, "story", "first-rewrite");
+        crate::arena_story::branch::history::tests::rewrite_tail(&c, "story", "rewritten-tail");
+    }
+    let (m, parts) = history_candidate(true, 3);
+    let token = upload(store, &m, &parts);
+    store.pending_seal(&token).unwrap();
+    let wire = m.commit_manifest.as_ref().unwrap().wire_digest().unwrap();
+    let attempt = store.pending_prepare_save(&m.key(), &wire).unwrap();
+    let receipt = store
+        .pending_save(&m.key(), &wire, &attempt.attempt_id)
+        .unwrap();
+    assert_eq!((receipt.revision, receipt.chapter_index), (5, 3));
+    crate::arena_story::branch::history::audit_relations(
+        &lock_connection(lib.connection()).unwrap(),
+    )
+    .unwrap();
+    assert!(store.pending_describe(m.product).unwrap().is_none());
+}

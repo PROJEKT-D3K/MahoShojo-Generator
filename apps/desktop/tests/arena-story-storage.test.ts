@@ -251,3 +251,12 @@ describe('double-pass complete Markdown export', () => {
     await expect(exportCommittedStoryMarkdown(port, sink, head)).rejects.toThrow('未读取完整'); expect(sink.end).not.toHaveBeenCalled(); expect(sink.abort).toHaveBeenCalledWith(token);
   });
 });
+
+it('reads historical superseded originals by ID but never exports them as active chapters', async () => {
+  const { port, head, all, docs } = reader(1);
+  head.revision = 3;
+  const historical = { ...all[0], status: 'superseded', supersededByChapterId: 'replacement', extension: { retained: true } };
+  docs.set(all[0]!.id, Buffer.concat([...prepareBattleStoryCommitJson(historical, 100_000).chunks()]));
+  expect(await readSelectedStoryChapter(port, head, all[0]!.id)).toEqual(historical);
+  await expect((async () => { for await (const chapter of readAllCommittedStoryChapters(port, head)) void chapter; })()).rejects.toThrow('完整导出章节身份不符');
+});

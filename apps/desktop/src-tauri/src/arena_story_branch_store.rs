@@ -69,7 +69,7 @@ impl BranchManifest {
         }
         if s.session.record_id != s.session.session_id
             || s.seed.record_id != s.session.session_id
-            || s.session.revision != s.expected_chapter_count
+            || s.session.revision < s.expected_chapter_count
         {
             return Err(StoryError::Invalid);
         }
@@ -339,12 +339,14 @@ pub(super) fn read_branch_receipt(
             "SELECT EXISTS(SELECT 1 FROM arena_story_chapter c JOIN arena_story_checkpoint a ON a.session_id=c.session_id AND a.boundary_index=c.chapter_index AND a.chapter_id=c.id JOIN arena_story_checkpoint p ON p.session_id=c.session_id AND p.boundary_index=?3 AND p.chapter_id=?4 WHERE c.session_id=?1 AND c.chapter_index=?2 AND c.id=?5 AND a.id=?6 AND p.id=?7)",
             params![session,receipt.prefix_end_index,index,id,receipt.anchor_chapter_id,receipt.anchor_checkpoint_id,receipt.checkpoint_id], |r|r.get(0)).map_err(|_|StoryError::Corrupt)?;
         if !matches { return Err(StoryError::Corrupt); }
+        if super::history::enabled(connection)? { super::history::match_revision(connection,session,&id,receipt.revision)?; }
         Ok(receipt)
     }).transpose()
 }
 
 fn check_source(connection: &Connection, m: &BranchManifest) -> Result<(), StoryError> {
     let s = &m.source;
+    super::history::reject_rewrite_branch_source(connection, &s.session.session_id)?;
     let exists: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM arena_story_session WHERE id=?1)",
@@ -645,6 +647,14 @@ fn write_branch(
     let c = &v.chapter;
     let document = stage_document(stage, PartKind::Chapter)?;
     connection.execute("INSERT INTO arena_story_chapter (id,session_id,chapter_index,action,source_chapter_id,title_preview,title_truncated,created_at,markdown_bytes,document,document_bytes,document_digest,operation_id,operation_digest,receipt) VALUES (?1,?2,?3,'branch',?4,?5,?6,?7,?8,?9,?10,?11,?1,?12,?13)",params![c.id,c.session_id,c.index,c.source_chapter_id,c.title_preview,c.title_truncated,c.created_at,c.markdown_byte_length,document,document.len() as u64,digest(document.as_bytes()),v.receipt.request_digest,v.receipt.encode()?]).map_err(|_|StoryError::Io)?;
+    if super::history::enabled(connection)? {
+        connection
+            .execute(
+                "UPDATE arena_story_chapter SET committed_revision=?2 WHERE id=?1",
+                params![c.id, v.receipt.revision],
+            )
+            .map_err(|_| StoryError::Io)?;
+    }
     drop(document);
     hook("chapter")?;
     let p = &v.checkpoint;

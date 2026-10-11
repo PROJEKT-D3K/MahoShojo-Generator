@@ -105,6 +105,19 @@ impl StoryStore {
             {
                 return Err(StoryError::Stale);
             }
+            let historical_count: u64 = tx
+                .query_row(
+                    "SELECT count(*) FROM arena_story_chapter WHERE session_id=?1",
+                    [&target.session.session_id],
+                    |r| r.get(0),
+                )
+                .map_err(|_| StoryError::Corrupt)?;
+            if historical_count < chapter_count
+                || historical_count > MAX_SAFE_INTEGER
+                || (!super::branch::history::enabled(&tx)? && historical_count != chapter_count)
+            {
+                return Err(StoryError::Corrupt);
+            }
             hook("before-checkpoints")?;
             let deleted_checkpoint_count = tx
                 .execute(
@@ -130,7 +143,7 @@ impl StoryStore {
                 .map_err(|_| StoryError::Io)?;
             hook("after-session")?;
             if deleted_session_count != 1
-                || deleted_chapter_count != chapter_count
+                || deleted_chapter_count != historical_count
                 || deleted_checkpoint_count == 0
                 || deleted_checkpoint_count > MAX_SAFE_INTEGER
             {

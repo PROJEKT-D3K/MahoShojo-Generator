@@ -52,7 +52,7 @@ export const StorySessionHeadSchema = z.object({
   chapterCount: integer.min(1), lastChapterId: id,
 }).strict();
 export const StoryChapterHeadSchema = z.object({
-  id, index: integer.min(1), action: z.enum(['start', 'continue', 'branch']), status: z.literal('active'), titlePreview: preview, titleTruncated: z.boolean(),
+  id, index: integer.min(1), action: z.enum(['start', 'continue', 'branch', 'rewrite']), status: z.literal('active'), titlePreview: preview, titleTruncated: z.boolean(),
   createdAt: integer, markdownByteLength: integer,
 }).strict();
 export const StorySessionPageSchema = z.object({ rows: z.array(StorySessionHeadSchema).max(50), nextCursor: StorySessionCursorSchema.nullable() }).strict();
@@ -71,7 +71,7 @@ export const StorySessionDeleteOutcomeSchema = z.object({
   deletedChapterCount: integer, deletedCheckpointCount: integer,
 }).strict().refine((value) => value.status === 'currently-absent'
   ? value.deletedChapterCount === 0 && value.deletedCheckpointCount === 0
-  : value.deletedChapterCount === value.target.expectedChapterCount && value.deletedCheckpointCount >= 1);
+  : value.deletedChapterCount >= value.target.expectedChapterCount && value.deletedCheckpointCount >= 1);
 export type StorySessionDeleteTarget = z.infer<typeof StorySessionDeleteTargetSchema>;
 export type StorySessionDeleteOutcome = z.infer<typeof StorySessionDeleteOutcomeSchema>;
 export const StoryContinueDescriptorsSchema = z.object({
@@ -93,10 +93,10 @@ export const StorySessionDocumentSchema = StorySessionHeadSchema.extend({
   seed: z.never().optional(), workingCombatants: z.never().optional(), lastChapterInputCombatants: z.never().optional(),
 }).passthrough();
 export const StoryChapterDocumentSchema = StoryChapterHeadSchema.extend({
-  sessionId: id, status: z.literal('active'), sourceChapterId: id.nullable().optional(), generationId: z.string().nullable().optional(),
+  sessionId: id, status: z.enum(['active', 'superseded']), supersededByChapterId: id.nullable().optional(), sourceChapterId: id.nullable().optional(), generationId: z.string().nullable().optional(),
   title: z.string(), markdown: z.string(), reportJson: z.record(z.string(), z.unknown()),
   deterministicDigest: z.object({ chapterTitle: z.string(), winner: z.string().optional(), officialConclusion: z.string().optional(), bodyExcerpt: z.string().optional(), impactDigest: z.array(z.object({characterName:z.string(),impact:z.string().optional(),currentStateSummary:z.string().optional()}).passthrough()).optional() }).passthrough(), cardSnapshot: z.record(z.string(), z.unknown()).optional(),
-}).passthrough();
+}).passthrough().refine(value => value.status === 'active' ? value.supersededByChapterId == null : value.supersededByChapterId != null);
 export const StoryCheckpointDocumentSchema = z.object({
   id, sessionId: id, boundaryIndex: integer, chapterId: id.nullable().optional(), combatants: z.array(z.unknown()), createdAt: integer,
 }).passthrough();

@@ -51,7 +51,7 @@ export async function readStoryBranchSource(port: Pick<StoryNativePort, 'read'>,
   for (const descriptor of recentChapters) {
     const chapter = original(StoryChapterDocumentSchema, await readStoryRecord(port, descriptor, signal));
     const index = request.anchorIndex - recentChapters.length + recentWindow.length + 1;
-    if (chapter.id !== descriptor.recordId || chapter.sessionId !== request.sessionId || chapter.index !== index
+    if (chapter.status !== 'active' || chapter.action === 'rewrite' || chapter.id !== descriptor.recordId || chapter.sessionId !== request.sessionId || chapter.index !== index
       || (index === 1 && (chapter.action !== 'start' || chapter.sourceChapterId != null))
       || (index > 1 && (chapter.action === 'start' || !chapter.sourceChapterId))
       || (previousId !== undefined && chapter.sourceChapterId !== previousId)

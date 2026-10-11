@@ -104,6 +104,30 @@ pub fn scalar_i64(connection: &Connection, sql: &str) -> Result<i64, StoreError>
 /// 本地卡、Web 包与 blob 同属一台设备上的用户资产，分库会让备份、迁移与"重开应用"各自多一套路径。
 pub const SCHEMA_VERSION: i64 = 10;
 
+pub(crate) fn supported_schema_version() -> i64 {
+    #[cfg(test)]
+    if CANDIDATE_HISTORY_SCHEMA.get() {
+        return 11;
+    }
+    SCHEMA_VERSION
+}
+#[cfg(test)]
+thread_local! { static CANDIDATE_HISTORY_SCHEMA: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+/// Explicit synthetic-library test scope. Release builds contain neither this
+/// switch nor an environment/IPC override; ordinary open continues to reject 11.
+#[cfg(test)]
+pub(crate) fn with_history_schema_for_test<T>(run: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CANDIDATE_HISTORY_SCHEMA.set(self.0);
+        }
+    }
+    let _reset = Reset(CANDIDATE_HISTORY_SCHEMA.replace(true));
+    run()
+}
+
 /// 单条文档的 UTF-8 字节上限。
 ///
 /// Provider Profile 契约本身有 64 KiB 上限；这里留出余量，使"契约合法但文档过大"这种
@@ -229,7 +253,12 @@ pub fn applied_migrations(connection: &Connection) -> Result<Vec<i64>, StoreErro
 ///
 /// 迁移只向前。已应用的版本不会重复执行，因此重复打开同一个数据库是安全的。
 pub fn migrate(connection: &Connection) -> Result<(), StoreError> {
-    apply_steps(connection, MIGRATION_STEPS)
+    apply_steps(connection, MIGRATION_STEPS)?;
+    #[cfg(test)]
+    if supported_schema_version() == 11 && user_version(connection)? < 11 {
+        migrate_history_candidate_for_test(connection)?;
+    }
+    Ok(())
 }
 
 const MIGRATION_STEPS: &[MigrationStep] = &[
@@ -291,7 +320,7 @@ pub(crate) fn migrate_to_version_for_test(connection: &Connection, version: i64)
 /// 拆出来是为了让测试能传入**故意失败**的步骤；生产路径只有 `migrate` 一个调用方。
 fn apply_steps(connection: &Connection, steps: &[MigrationStep]) -> Result<(), StoreError> {
     let current = user_version(connection)?;
-    if current > SCHEMA_VERSION {
+    if current > supported_schema_version() {
         return Err(StoreError::Unavailable);
     }
     for step in steps.iter().filter(|step| step.version > current) {
@@ -353,6 +382,14 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
         .map_err(|_| StoreError::Failure)?;
 
     let outcome = (|| {
+        if step.version == 11 {
+            crate::arena_story::branch::history::verify_schema(connection, 10)
+                .map_err(|_| StoreError::InvalidDocument)?;
+            crate::arena_story::branch::audit::audit_relations(connection)
+                .map_err(|_| StoreError::InvalidDocument)?;
+            crate::arena_story::pending::audit(connection)
+                .map_err(|_| StoreError::InvalidDocument)?;
+        }
         connection
             .execute_batch(step.sql)
             .map_err(|_| StoreError::Failure)?;
@@ -365,20 +402,67 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
         connection
             .execute_batch(&format!("PRAGMA user_version = {}", step.version))
             .map_err(|_| StoreError::Failure)?;
+        if step.version == 11 {
+            crate::arena_story::branch::history::verify_schema(connection, 11)
+                .map_err(|_| StoreError::InvalidDocument)?;
+            crate::arena_story::branch::history::audit_relations(connection)
+                .map_err(|_| StoreError::InvalidDocument)?;
+            let invalid: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|_| StoreError::Failure)?;
+            if invalid {
+                return Err(StoreError::InvalidDocument);
+            }
+        }
         Ok(())
     })();
 
     if let Err(error) = outcome {
-        let _ = connection.execute_batch("ROLLBACK");
+        rollback_migration(connection)?;
         return Err(error);
     }
     if connection.execute_batch("COMMIT").is_err() {
         // Deferred FK or disk failures can surface only at COMMIT. Do not leave
         // the migration transaction active with a misleading new user_version.
-        let _ = connection.execute_batch("ROLLBACK");
+        rollback_migration(connection)?;
         return Err(StoreError::Failure);
     }
     Ok(())
+}
+
+fn rollback_migration(connection: &Connection) -> Result<(), StoreError> {
+    if !connection.is_autocommit() {
+        connection
+            .execute_batch("ROLLBACK")
+            .map_err(|_| StoreError::TransactionUnresolved)?;
+    }
+    if connection.is_autocommit() {
+        Ok(())
+    } else {
+        Err(StoreError::TransactionUnresolved)
+    }
+}
+
+/// Candidate-only entry. Normal open remains at schema 10 until compatibility
+/// tests and activation review are complete; never accepts a user-supplied SQL step.
+#[cfg(test)]
+pub(crate) fn migrate_history_candidate_for_test(
+    connection: &Connection,
+) -> Result<(), StoreError> {
+    if user_version(connection)? != 10 {
+        return Err(StoreError::Unavailable);
+    }
+    apply_step(
+        connection,
+        &MigrationStep {
+            version: 11,
+            sql: crate::arena_story::branch::schema::MIGRATION_11,
+        },
+    )
 }
 
 /// 迁移步骤。抽出结构是为了让测试能注入一个**故意失败**的步骤，

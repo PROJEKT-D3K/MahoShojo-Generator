@@ -640,13 +640,16 @@ fn read_receipt(
     row.map(|(stored_session, document, chapter_id, index, wire_digest)| {
         if stored_session != session_id { return Err(StoryError::OperationMismatch); }
         let receipt:StoryReceipt=serde_json::from_str(&document.ok_or(StoryError::Corrupt)?).map_err(|_|StoryError::Corrupt)?;
-        let mut statement=connection.prepare("SELECT id FROM arena_story_checkpoint WHERE session_id=?1 AND (boundary_index=?2 OR (?2=1 AND boundary_index=0)) ORDER BY boundary_index").map_err(|_|StoryError::Corrupt)?;
-        let checkpoint_ids=statement.query_map(params![session_id,index],|row|row.get::<_,String>(0)).map_err(|_|StoryError::Corrupt)?.collect::<Result<Vec<_>,_>>().map_err(|_|StoryError::Corrupt)?;
+        let history=branch::history::enabled(connection)?;
+        let cp_sql=if history {"SELECT id FROM arena_story_checkpoint WHERE session_id=?1 AND ((chapter_id=?3 AND boundary_index=?2) OR (?2=1 AND boundary_index=0 AND chapter_id IS NULL)) ORDER BY boundary_index"} else {"SELECT id FROM arena_story_checkpoint WHERE session_id=?1 AND (boundary_index=?2 OR (?2=1 AND boundary_index=0)) AND ?3 IS NOT NULL ORDER BY boundary_index"};
+        let mut statement=connection.prepare(cp_sql).map_err(|_|StoryError::Corrupt)?;
+        let checkpoint_ids=statement.query_map(params![session_id,index,chapter_id],|row|row.get::<_,String>(0)).map_err(|_|StoryError::Corrupt)?.collect::<Result<Vec<_>,_>>().map_err(|_|StoryError::Corrupt)?;
         if receipt.version!=1 || receipt.operation_id!=operation_id || receipt.session_id!=session_id
             || receipt.chapter_id!=chapter_id || chapter_id!=operation_id || receipt.chapter_index!=index
-            || receipt.revision!=index || receipt.chapter_count!=index || receipt.wire_digest!=wire_digest
+            || (!history && receipt.revision!=index) || receipt.chapter_count!=index || receipt.wire_digest!=wire_digest
             || !valid_digest(&wire_digest) || checkpoint_ids.len()!=if index==1 {2}else{1}
             || receipt.checkpoint_ids!=checkpoint_ids {return Err(StoryError::Corrupt);}
+        if history { branch::history::match_revision(connection,session_id,&chapter_id,receipt.revision)?; }
         Ok(receipt)
     }).transpose()
 }
@@ -1016,6 +1019,14 @@ fn write_documents(
                     serde_json::to_string(&validated.receipt).map_err(|_| StoryError::Invalid)?;
                 connection.execute("INSERT INTO arena_story_chapter (id,session_id,chapter_index,action,source_chapter_id,title_preview,title_truncated,created_at,markdown_bytes,document,document_bytes,document_digest,operation_id,operation_digest,receipt) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
                     params![c.id,c.session_id,c.index,c.action,c.source_chapter_id,c.title_preview,c.title_truncated,c.created_at,c.markdown_byte_length,document,bytes,digest,validated.receipt.operation_id,validated.receipt.wire_digest,receipt]).map_err(|_| StoryError::Io)?;
+                if branch::history::enabled(connection)? {
+                    connection
+                        .execute(
+                            "UPDATE arena_story_chapter SET committed_revision=?2 WHERE id=?1",
+                            params![c.id, validated.receipt.revision],
+                        )
+                        .map_err(|_| StoryError::Io)?;
+                }
                 let actual_markdown_bytes:u64=connection.query_row("SELECT length(CAST(json_extract(document,'$.markdown') AS BLOB)) FROM arena_story_chapter WHERE id=?1",[&c.id],|row|row.get(0)).map_err(|_|StoryError::Invalid)?;
                 if actual_markdown_bytes != c.markdown_byte_length {
                     return Err(StoryError::Invalid);

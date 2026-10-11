@@ -280,8 +280,9 @@ fn derived_byte_bound(
         return Err(StoryError::Corrupt);
     }
     let mut bound = add_bound(actual, 4096);
+    let active = super::branch::history::active_filter(connection)?;
     let mut chapters = connection.prepare(
-        "SELECT id,chapter_index,document_bytes,length(CAST(document AS BLOB)),json_valid(document) FROM arena_story_chapter WHERE session_id=?1 ORDER BY chapter_index,id",
+        &format!("SELECT id,chapter_index,document_bytes,length(CAST(document AS BLOB)),json_valid(document) FROM arena_story_chapter WHERE session_id=?1 AND {active} ORDER BY chapter_index,id"),
     ).map_err(|_| StoryError::Io)?;
     let mut rows = chapters
         .query([&manifest.session_id])

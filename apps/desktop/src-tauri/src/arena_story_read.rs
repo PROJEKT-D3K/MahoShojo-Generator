@@ -305,13 +305,15 @@ impl StoryStore {
             || !valid_id(&request.expected_last_chapter_id)
             || !valid_id(&request.anchor_chapter_id)
             || !(1..=super::MAX_SAFE_INTEGER).contains(&request.revision)
-            || request.expected_chapter_count != request.revision
+            || !(1..=super::MAX_SAFE_INTEGER).contains(&request.expected_chapter_count)
+            || request.revision < request.expected_chapter_count
             || !(1..super::MAX_SAFE_INTEGER).contains(&request.anchor_index)
             || request.anchor_index > request.expected_chapter_count
         {
             return Err(StoryError::Invalid);
         }
         let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
+        super::branch::history::reject_rewrite_branch_source(&connection, &request.session_id)?;
         let current: Option<(u64, u64, String)> = connection
             .query_row(
                 "SELECT revision,chapter_count,CASE WHEN length(last_chapter_id)<=128 THEN last_chapter_id END FROM arena_story_session WHERE id=?1",
@@ -487,7 +489,8 @@ impl StoryStore {
         }
         let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
         assert_revision(&connection, session_id, revision)?;
-        let mut statement = connection.prepare("SELECT id,chapter_index,action,title_preview,title_truncated,created_at,markdown_bytes FROM arena_story_chapter WHERE session_id=?1 AND (?2 IS NULL OR chapter_index>?2 OR (chapter_index=?2 AND id>?3)) ORDER BY chapter_index ASC,id ASC LIMIT ?4").map_err(|_| StoryError::Io)?;
+        let active = super::branch::history::active_filter(&connection)?;
+        let mut statement = connection.prepare(&format!("SELECT id,chapter_index,action,title_preview,title_truncated,created_at,markdown_bytes FROM arena_story_chapter WHERE session_id=?1 AND {active} AND (?2 IS NULL OR chapter_index>?2 OR (chapter_index=?2 AND id>?3)) ORDER BY chapter_index ASC,id ASC LIMIT ?4")).map_err(|_| StoryError::Io)?;
         let mut rows = statement
             .query_map(
                 params![
@@ -630,7 +633,8 @@ impl StoryStore {
                 digest,
             })
         };
-        let mut statement = connection.prepare("SELECT id FROM arena_story_chapter WHERE session_id=?1 ORDER BY chapter_index DESC LIMIT 12").map_err(|_|StoryError::Io)?;
+        let active = super::branch::history::active_filter(&connection)?;
+        let mut statement = connection.prepare(&format!("SELECT id FROM arena_story_chapter WHERE session_id=?1 AND {active} ORDER BY chapter_index DESC LIMIT 12")).map_err(|_|StoryError::Io)?;
         let ids = statement
             .query_map([session_id], |row| row.get::<_, String>(0))
             .map_err(|_| StoryError::Io)?

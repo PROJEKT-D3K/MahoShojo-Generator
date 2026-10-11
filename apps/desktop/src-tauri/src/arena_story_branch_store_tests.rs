@@ -1300,3 +1300,47 @@ mod contract_goldens;
 
 #[path = "arena_story_branch_completion_pipe_tests.rs"]
 mod completion_pipe;
+
+#[test]
+fn candidate_history_schema_runs_real_linear_and_branch_writers() {
+    crate::store::with_history_schema_for_test(|| {
+        let (_root, lib) = library();
+        let store = lib.stories();
+        for index in 1..=3 {
+            commit(store, "source", index);
+        }
+        let (manifest, parts) = fixture(store, "source", 3, 2, "target");
+        let mut impossible = manifest.clone();
+        impossible.source.expected_chapter_count = 4;
+        assert!(impossible.linear_carrier().is_err());
+        let receipt = branch(store, manifest.clone(), &parts);
+        {
+            let c = lock_connection(&store.connection).unwrap();
+            assert_eq!(c.query_row("SELECT count(*) FROM arena_story_chapter WHERE session_id='target' AND committed_revision IS NULL",[],|r|r.get::<_,u64>(0)).unwrap(),2);
+            assert_eq!(
+                c.query_row(
+                    "SELECT committed_revision FROM arena_story_chapter WHERE id=?1",
+                    [&receipt.chapter_id],
+                    |r| r.get::<_, u64>(0)
+                )
+                .unwrap(),
+                3
+            );
+            super::super::history::audit_relations(&c).unwrap();
+        }
+        delete(store, "source", 3);
+        commit(store, "target", 4);
+        assert_eq!(
+            store
+                .branch_receipt(
+                    "target",
+                    &manifest.operation_id,
+                    &manifest.request_digest().unwrap()
+                )
+                .unwrap(),
+            Some(receipt)
+        );
+        super::super::history::audit_relations(&lock_connection(&store.connection).unwrap())
+            .unwrap();
+    });
+}

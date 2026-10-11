@@ -23,7 +23,7 @@ export const StoryBranchSourceSchema = z.object({
 }).strict().superRefine((value, context) => {
   if (value.session.recordId !== value.session.sessionId
     || value.seed.recordId !== value.session.sessionId
-    || value.session.revision !== value.expectedChapterCount
+    || value.session.revision < value.expectedChapterCount
     || value.anchorIndex > value.expectedChapterCount
     || [value.seed, value.anchor, value.checkpoint].some((descriptor) =>
       descriptor.sessionId !== value.session.sessionId
@@ -38,7 +38,7 @@ export type StoryBranchSource = z.infer<typeof StoryBranchSourceSchema>;
 export const StoryBranchAnchorRequestSchema = z.object({
   sessionId: id, revision: integer, expectedLastChapterId: id, expectedChapterCount: integer,
   anchorChapterId: id, anchorIndex: integer.max(Number.MAX_SAFE_INTEGER - 1),
-}).strict().refine(value => value.revision === value.expectedChapterCount && value.anchorIndex <= value.expectedChapterCount);
+}).strict().refine(value => value.revision >= value.expectedChapterCount && value.anchorIndex <= value.expectedChapterCount);
 export type StoryBranchAnchorRequest = z.infer<typeof StoryBranchAnchorRequestSchema>;
 export const StoryBranchAnchorDescriptorsSchema = z.object({
   source: StoryBranchSourceSchema,

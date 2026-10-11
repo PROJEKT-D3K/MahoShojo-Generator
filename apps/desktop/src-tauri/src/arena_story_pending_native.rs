@@ -390,7 +390,11 @@ impl StoryStore {
         // restored/save/frozen states; accepted roles remain readable in all three.
         validate_claim_generation(&connection, &row)?;
         let input = read_blob(&connection, &row.token, PendingKind::Input)?;
-        validate_input(input.as_bytes(), &row.snapshot.manifest)?;
+        validate_input_versioned(
+            input.as_bytes(),
+            &row.snapshot.manifest,
+            super::super::branch::history::enabled(&connection)?,
+        )?;
         let role_response = if row.snapshot.manifest.role_state == RoleState::Accepted {
             let raw = read_blob(&connection, &row.token, PendingKind::RoleResponse)?;
             validate_carrier(
@@ -425,7 +429,11 @@ impl StoryStore {
             return Err(StoryError::Conflict);
         }
         let input = read_blob(&connection, &row.token, PendingKind::Input)?;
-        validate_input(input.as_bytes(), &row.snapshot.manifest)?;
+        validate_input_versioned(
+            input.as_bytes(),
+            &row.snapshot.manifest,
+            super::super::branch::history::enabled(&connection)?,
+        )?;
         let claim = CreateClaim {
             version: 1,
             attempt_id: format!("{}-{}", self.instance, random_id()?),

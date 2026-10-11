@@ -16,7 +16,9 @@ use sha2::{Digest, Sha256};
 use crate::blob::{blob_path, parse_digest, BlobPaths};
 use crate::library::LocalLibrary;
 use crate::maintenance::MaintenancePermit;
-use crate::store::{lock_connection, SCHEMA_VERSION};
+use crate::store::lock_connection;
+#[cfg(test)]
+use crate::store::SCHEMA_VERSION;
 
 const BACKUPS_DIRECTORY: &str = "backups";
 const DATABASE_FILE: &str = "library.sqlite";
@@ -404,7 +406,7 @@ fn build_backup(
     }
 
     let snapshot = open_immutable_database(&database_temp_path)?;
-    verify_sqlite(&snapshot)?;
+    let snapshot_schema = verify_sqlite(&snapshot)?;
     let blobs = read_blob_rows(&snapshot)?;
     verify_no_package_without_reference(&snapshot)?;
     let (database_bytes, database_digest) = digest_file(&database_temp_path)?;
@@ -446,7 +448,7 @@ fn build_backup(
     // final completion marker. verify_backup also compares the metadata table to manifest.
     let manifest = BackupManifest {
         format_version: MANIFEST_VERSION,
-        schema_version: Some(SCHEMA_VERSION),
+        schema_version: Some(snapshot_schema),
         backup_id: backup_id.clone(),
         created_at: created_at.clone(),
         database: ManifestFile {
@@ -553,10 +555,16 @@ pub(crate) fn verified_blob_names(
 }
 
 fn verify_sqlite(connection: &Connection) -> Result<i64, BackupError> {
+    verify_sqlite_supported(connection, crate::store::supported_schema_version())
+}
+fn verify_sqlite_supported(
+    connection: &Connection,
+    maximum_version: i64,
+) -> Result<i64, BackupError> {
     let version = connection
         .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
         .map_err(|_| BackupError::Corrupt)?;
-    if !(1..=SCHEMA_VERSION).contains(&version) {
+    if !(1..=maximum_version).contains(&version) {
         return Err(BackupError::UnsupportedVersion);
     }
     let mut statement = connection
@@ -648,7 +656,14 @@ fn verify_sqlite(connection: &Connection) -> Result<i64, BackupError> {
     if rows.next().map_err(|_| BackupError::Corrupt)?.is_some() {
         return Err(BackupError::Corrupt);
     }
-    if version >= 9 {
+    if version >= 5 {
+        crate::arena_story::branch::history::verify_schema(connection, version)
+            .map_err(|_| BackupError::Corrupt)?;
+    }
+    if version == 11 {
+        crate::arena_story::branch::history::audit_relations(connection)
+            .map_err(|_| BackupError::Corrupt)?;
+    } else if (9..=10).contains(&version) {
         crate::arena_story::branch::audit::audit_relations(connection)
             .map_err(|_| BackupError::Corrupt)?;
     } else if version >= 5 {

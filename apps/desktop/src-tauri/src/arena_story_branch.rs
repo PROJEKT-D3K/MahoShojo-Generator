@@ -336,3 +336,6 @@ pub(crate) use storage::{BranchManifest, BranchSource};
 pub(crate) mod audit;
 #[path = "arena_story_branch_schema.rs"]
 pub(crate) mod schema;
+
+#[path = "arena_story_history.rs"]
+pub(crate) mod history;

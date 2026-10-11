@@ -855,7 +855,7 @@ impl StoryStore {
                 });
             }
             owned = inputs.remove(&(token.into(), kind)).ok_or(StoryError::Io)?;
-            validate_carrier(&owned, kind, &row.snapshot.manifest)?;
+            validate_carrier_versioned(&connection, &owned, kind, &row.snapshot.manifest)?;
             (0, owned.as_slice())
         } else {
             if received != offset {
@@ -1330,6 +1330,13 @@ fn json_object(raw: &RawValue) -> Result<(), StoryError> {
     Ok(())
 }
 fn validate_input(bytes: &[u8], m: &PendingManifest) -> Result<(), StoryError> {
+    validate_input_versioned(bytes, m, false)
+}
+fn validate_input_versioned(
+    bytes: &[u8],
+    m: &PendingManifest,
+    history: bool,
+) -> Result<(), StoryError> {
     if bytes.len() as u64 > INPUT_BYTES {
         return Err(StoryError::TooLarge);
     }
@@ -1358,10 +1365,17 @@ fn validate_input(bytes: &[u8], m: &PendingManifest) -> Result<(), StoryError> {
             "seed",
         ],
     )?;
+    let chapter_index = integer(field(&map, "chapterIndex")?)?;
+    if chapter_index == 0
+        || chapter_index > m.expected_revision + 1
+        || (!history && chapter_index != m.expected_revision + 1)
+        || (m.expected_revision == 0) != (chapter_index == 1)
+    {
+        return Err(StoryError::Invalid);
+    }
     if integer(field(&map, "version")?)? != 1
         || string(field(&map, "sessionId")?)? != m.session_id
         || string(field(&map, "generationRequestId")?)? != m.request_id
-        || integer(field(&map, "chapterIndex")?)? != m.expected_revision + 1
         || string(field(&map, "action")?)?
             != if m.expected_revision == 0 {
                 "start"
@@ -1378,7 +1392,7 @@ fn validate_input(bytes: &[u8], m: &PendingManifest) -> Result<(), StoryError> {
         .map(|plan| {
             let p = object(plan, &["totalChapters"], &["totalChapters"])?;
             let total = integer(field(&p, "totalChapters")?)?;
-            if !(1..=20).contains(&total) || m.expected_revision + 1 > total {
+            if !(1..=20).contains(&total) || chapter_index > total {
                 return Err(StoryError::Invalid);
             }
             Ok(total)
@@ -1436,7 +1450,7 @@ fn validate_input(bytes: &[u8], m: &PendingManifest) -> Result<(), StoryError> {
         text_field(&r, "text")?;
         boolean(field(&r, "truncated")?)?;
     }
-    if last != m.expected_revision || head != m.expected_last_chapter_id {
+    if last != chapter_index - 1 || head != m.expected_last_chapter_id {
         return Err(StoryError::Invalid);
     }
     let seed = object(
@@ -1558,6 +1572,17 @@ fn telemetry_integer(raw: &RawValue) -> Result<f64, StoryError> {
         return Err(StoryError::Invalid);
     }
     Ok(value)
+}
+fn validate_carrier_versioned(
+    connection: &Connection,
+    bytes: &[u8],
+    kind: PendingKind,
+    m: &PendingManifest,
+) -> Result<(), StoryError> {
+    if kind == PendingKind::Input {
+        return validate_input_versioned(bytes, m, super::branch::history::enabled(connection)?);
+    }
+    validate_carrier(bytes, kind, m)
 }
 fn validate_carrier(
     bytes: &[u8],
@@ -1866,7 +1891,7 @@ fn validate_payload(connection: &Connection, row: &Stored) -> Result<(), StoryEr
         hash_blob(connection, id, length, &d)?;
         if buffered(p.kind) {
             let raw = read_blob(connection, &row.token, p.kind)?;
-            validate_carrier(raw.as_bytes(), p.kind, m)?;
+            validate_carrier_versioned(connection, raw.as_bytes(), p.kind, m)?;
         } else if matches!(p.kind, PendingKind::Markdown | PendingKind::Reasoning) {
             read_blob(connection, &row.token, p.kind)?;
         }
@@ -2029,7 +2054,8 @@ pub(crate) fn audit(connection: &Connection) -> Result<(), StoryError> {
                 if received == length {
                     hash_blob(connection, id, length, &d)?;
                     if buffered(p.kind) {
-                        validate_carrier(
+                        validate_carrier_versioned(
+                            connection,
                             read_blob(connection, &token, p.kind)?.as_bytes(),
                             p.kind,
                             m,
@@ -2263,6 +2289,9 @@ fn validate_content_coverage(connection: &Connection, row: &Stored) -> Result<()
     let snapshot = needed(chapter, "cardSnapshot")?;
     let input_document = read_blob(connection, &row.token, PendingKind::Input)?;
     let input = parse_raw(&input_document)?;
+    if integer(needed(input, "chapterIndex")?)? != integer(needed(chapter, "index")?)? {
+        return Err(StoryError::OriginalsUncovered);
+    }
     let has = |kind| m.parts.iter().any(|p| p.kind == kind);
     if has(PendingKind::Reasoning) {
         let expected = read_blob(connection, &row.token, PendingKind::Reasoning)?;

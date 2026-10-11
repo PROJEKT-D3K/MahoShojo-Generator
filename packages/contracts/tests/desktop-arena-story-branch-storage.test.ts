@@ -192,3 +192,10 @@ describe('closed Native branch v2 storage contract', () => {
       sourceChapterId: 'anchor', requestDigest: digest }).success).toBe(false);
   });
 });
+
+it('keeps source revision independent from the active chapter count', () => {
+  const value = manifest();
+  for (const key of ['session', 'seed', 'anchor', 'checkpoint'] as const) value.source[key].revision = 4;
+  expect(StoryBranchManifestSchema.parse(value).source.expectedChapterCount).toBe(2);
+  expect(StoryBranchManifestSchema.parse(value).source.session.revision).toBe(4);
+});

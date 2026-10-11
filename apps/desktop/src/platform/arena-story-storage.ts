@@ -308,7 +308,7 @@ export const readStoryContinueState = async (port: StoryNativePort, head: StoryS
   for (const descriptor of result.recentChapters) {
     if (descriptor.kind !== 'chapter') throw new Error('续写章节类型不符');
     const chapter = validateOriginal(StoryChapterDocumentSchema, await readStoryRecord(port, descriptor, signal));
-    if (chapter.sessionId !== head.id || chapter.id !== descriptor.recordId || chapter.index !== head.chapterCount - result.recentChapters.length + recentWindow.length + 1) throw new Error('续写章节序列不符');
+    if (chapter.status !== 'active' || chapter.sessionId !== head.id || chapter.id !== descriptor.recordId || chapter.index !== head.chapterCount - result.recentChapters.length + recentWindow.length + 1) throw new Error('续写章节序列不符');
     recentWindow.push(projectBattleStoryPromptWindowItem(chapter, recentWindow.length < result.recentChapters.length - 2 ? 'digest' : 'full', 6000));
   }
   if (recentWindow.at(-1)?.chapterId !== head.lastChapterId) throw new Error('续写末章不符');
@@ -328,7 +328,7 @@ export async function* readAllCommittedStoryChapters(port: StoryNativePort, head
     for (const row of page.rows) {
       if (row.index !== count + 1 || count >= head.chapterCount) throw new Error('完整导出章节序列不符');
       const chapter = await readSelectedStoryChapter(port, head, row.id, signal);
-      if (chapter.index !== row.index) throw new Error('完整导出章节身份不符');
+      if (chapter.status !== 'active' || chapter.index !== row.index) throw new Error('完整导出章节身份不符');
       yield chapter; count += 1; lastId = chapter.id;
     }
     if (page.nextCursor && (page.nextCursor.index !== count || page.nextCursor.id !== lastId)) throw new Error('章节目录游标不符');
