@@ -205,6 +205,7 @@ struct StagePart {
 struct Stage {
     manifest: CommitManifest,
     branch: Option<branch::BranchManifest>,
+    tail_rewrite: Option<branch::tail_rewrite::TailRewriteManifest>,
     parts: Vec<StagePart>,
     current: usize,
     created_at: Instant,
@@ -212,16 +213,20 @@ struct Stage {
 }
 // Unknown writes outlive upload files. All admission, end and abort paths hold
 // the same lock, so replacing uploads with one fence cannot race another writer.
-struct BranchUnknown {
+struct OperationUnknown {
     session_id: String,
     request_digest: String,
     // At most MAX_STAGES pre-existing tokens; these permit receipt-only end replay.
     tokens: Vec<String>,
 }
+#[cfg(test)]
+type BranchUnknown = OperationUnknown;
 #[derive(Default)]
 struct StagingState {
     uploads: HashMap<String, Stage>,
-    branch_unknown: HashMap<String, BranchUnknown>,
+    // Shared by branch and tail rewrite; the historical name keeps existing
+    // branch/pending callers on the same admission and uncertainty fence.
+    branch_unknown: HashMap<String, OperationUnknown>,
 }
 impl std::ops::Deref for StagingState {
     type Target = HashMap<String, Stage>;
@@ -239,14 +244,21 @@ impl StagingState {
         self.uploads.len() + self.branch_unknown.len()
     }
     fn fence_branch(&mut self, manifest: &branch::BranchManifest, request_digest: String) {
+        self.fence_operation(&manifest.operation_id, &manifest.session_id, request_digest);
+    }
+    fn fence_operation(&mut self, operation: &str, session: &str, request_digest: String) {
         let mut tokens = Vec::new();
         self.uploads.retain(|token, stage| {
-            let same_operation = stage.manifest.operation_id == manifest.operation_id;
+            let same_operation = stage.manifest.operation_id == operation;
             if same_operation
-                && stage.branch.as_ref().is_some_and(|m| {
-                    m.session_id == manifest.session_id
-                        && m.request_digest().as_ref() == Ok(&request_digest)
-                })
+                && stage.manifest.session_id == session
+                && stage
+                    .branch
+                    .as_ref()
+                    .map(|m| m.request_digest())
+                    .or_else(|| stage.tail_rewrite.as_ref().map(|m| m.request_digest()))
+                    .as_ref()
+                    .is_some_and(|digest| digest.as_ref() == Ok(&request_digest))
             {
                 tokens.push(token.clone());
             }
@@ -255,9 +267,9 @@ impl StagingState {
         // Never expire or capacity-evict uncertainty, even after exact success.
         // The receipt/target can later be deleted; a query cannot regrant writes.
         self.branch_unknown.insert(
-            manifest.operation_id.clone(),
-            BranchUnknown {
-                session_id: manifest.session_id.clone(),
+            operation.to_owned(),
+            OperationUnknown {
+                session_id: session.to_owned(),
                 request_digest,
                 tokens,
             },
@@ -434,12 +446,13 @@ impl StoryStore {
         manifest: CommitManifest,
         now: Instant,
     ) -> Result<BeginOutcome, StoryError> {
-        self.begin_stage(manifest, None, now)
+        self.begin_stage(manifest, None, None, now)
     }
     fn begin_stage(
         &self,
         manifest: CommitManifest,
         branch: Option<branch::BranchManifest>,
+        tail_rewrite: Option<branch::tail_rewrite::TailRewriteManifest>,
         now: Instant,
     ) -> Result<BeginOutcome, StoryError> {
         let total = manifest.validate()?;
@@ -447,10 +460,14 @@ impl StoryStore {
         stages.retain(|_, stage| now.saturating_duration_since(stage.created_at) < STAGE_LIFETIME);
         if let Some(fence) = stages.branch_unknown.get(&manifest.operation_id) {
             return Err(
-                if branch.as_ref().is_some_and(|branch| {
-                    fence.session_id == branch.session_id
-                        && branch.request_digest().as_ref() == Ok(&fence.request_digest)
-                }) {
+                if fence.session_id == manifest.session_id
+                    && branch
+                        .as_ref()
+                        .map(|m| m.request_digest())
+                        .or_else(|| tail_rewrite.as_ref().map(|m| m.request_digest()))
+                        .as_ref()
+                        .is_some_and(|digest| digest.as_ref() == Ok(&fence.request_digest))
+                {
                     StoryError::CommitUnknown
                 } else {
                     StoryError::OperationMismatch
@@ -483,6 +500,7 @@ impl StoryStore {
             Stage {
                 manifest,
                 branch,
+                tail_rewrite,
                 parts,
                 current: 0,
                 created_at: now,
@@ -569,7 +587,7 @@ impl StoryStore {
         if stage.current != stage.parts.len() {
             return Err(StoryError::Incomplete);
         }
-        if stage.branch.is_some() {
+        if stage.branch.is_some() || stage.tail_rewrite.is_some() {
             return Err(StoryError::Invalid);
         }
         let validated = validate_stage(stage)?;

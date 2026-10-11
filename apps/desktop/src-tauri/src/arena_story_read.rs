@@ -271,7 +271,7 @@ fn assert_revision(
         None => Err(StoryError::Missing),
     }
 }
-fn record_metadata(
+pub(super) fn record_metadata(
     connection: &Connection,
     session_id: &str,
     record_id: &str,

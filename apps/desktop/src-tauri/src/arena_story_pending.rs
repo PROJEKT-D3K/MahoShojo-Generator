@@ -2229,7 +2229,7 @@ fn raw_get<'a>(raw: &'a RawValue, key: &str) -> Result<Option<&'a RawValue>, Sto
 fn needed<'a>(raw: &'a RawValue, key: &str) -> Result<&'a RawValue, StoryError> {
     raw_get(raw, key)?.ok_or(StoryError::OriginalsUncovered)
 }
-fn equivalent(a: &RawValue, b: &RawValue) -> Result<bool, StoryError> {
+pub(super) fn equivalent(a: &RawValue, b: &RawValue) -> Result<bool, StoryError> {
     if a.get() == b.get() {
         return Ok(true);
     }

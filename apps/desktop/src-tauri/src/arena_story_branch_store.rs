@@ -106,7 +106,7 @@ impl StoryStore {
         now: Instant,
     ) -> Result<BeginOutcome, StoryError> {
         let carrier = manifest.linear_carrier()?;
-        self.begin_stage(carrier, Some(manifest), now)
+        self.begin_stage(carrier, Some(manifest), None, now)
     }
     pub(crate) fn branch_receipt(
         &self,
@@ -530,7 +530,7 @@ fn validate_branch_stage(
 }
 
 // Identifiers here are internal fixed literals only, never command input.
-fn read_document<T>(
+pub(super) fn read_document<T>(
     connection: &Connection,
     table: &str,
     column: &str,

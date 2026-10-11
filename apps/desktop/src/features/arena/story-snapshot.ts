@@ -5,6 +5,8 @@ import {
 import type { BattleStoryArenaSeed } from '@mahoshojo/domain/arena-battle-story-request';
 import { buildCompletedBattleStoryRecords, freezeBattleStoryCommit, projectHostedStoryPendingContent, type BattleStoryCommitSession } from '@mahoshojo/domain/arena-story-commit';
 import { buildCompletedBattleStoryBranchRecords, buildBattleStoryBranchLabel } from '@mahoshojo/domain/arena-story-branch';
+import { buildCompletedBattleStoryTailRewriteRecords } from '@mahoshojo/domain/arena-story-tail-rewrite';
+import type { StoryTailRewriteSourceSnapshot } from '../../platform/arena-story-tail-rewrite-source';
 import type { StoryBranchSourceSnapshot } from '../../platform/arena-story-branch-source';
 import { branchCopyId } from '../../platform/arena-story-branch-storage';
 import { getArenaPostBattleWorldLineIndices } from '@mahoshojo/domain/arena-post-battle';
@@ -122,6 +124,21 @@ export const completeDesktopBranchRecords = (input: {
     operationId: input.operationId, checkpointId: input.checkpointId, now, source: input.source,
     inputCombatants: snapshot.workingCombatants, generated,
     mapChapterId: id => Object.hasOwn(input.summaryIds, id) ? input.summaryIds[id] : undefined,
+  }));
+};
+
+/** Tail replacement consumes the same effects producer and shared Web projection. */
+export const completeDesktopTailRewriteRecords = (input: {
+  snapshot: StoryTailRewriteSourceSnapshot; session: StorySessionSnapshot;
+  operationId: string; checkpointId: string; now: number; source: StorySource; userGuidance: string;
+  outcome: Extract<ArenaDirectOutcome, { status: 'completed' }>; adjudicationResults: AdjudicationResult[];
+}) => {
+  const generated = buildDesktopStoryGeneratedContent({ ...input, chapterIndex: input.snapshot.target.index,
+    workingCombatants: input.snapshot.workingCombatants });
+  return freezeBattleStoryCommit(buildCompletedBattleStoryTailRewriteRecords({
+    session: input.session, targetChapter: input.snapshot.target, operationId: input.operationId,
+    checkpointId: input.checkpointId, now: input.now, source: { ...input.snapshot.session.source, ...input.source },
+    inputCombatants: input.snapshot.workingCombatants, generated,
   }));
 };
 

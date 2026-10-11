@@ -128,7 +128,13 @@
     },
     "./desktop-arena-story-transport": "./src/desktop-arena-story-transport.ts",
     "./fixtures/desktop-story-branch-copy.json": "./fixtures/desktop-story-branch-copy.json",
+    "./desktop-arena-story-tail-rewrite": {
+      "types": "./src/desktop-arena-story-tail-rewrite.ts",
+      "import": "./src/desktop-arena-story-tail-rewrite.ts",
+      "default": "./src/desktop-arena-story-tail-rewrite.ts"
+    },
     "./desktop-arena-story-branch": "./src/desktop-arena-story-branch.ts",
+    "./fixtures/desktop-story-tail-rewrite-storage.json": "./fixtures/desktop-story-tail-rewrite-storage.json",
     "./fixtures/desktop-story-branch-storage.json": "./fixtures/desktop-story-branch-storage.json"
   },
   "scripts": {

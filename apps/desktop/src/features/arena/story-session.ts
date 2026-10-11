@@ -16,7 +16,7 @@ import type { AdjudicationResult } from '@mahoshojo/domain/arena-types';
 import type { DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
 import {
   listStorySessions, listStoryChapters, readSelectedStoryChapter, readStoryContinueState,
-  prepareStoryStorageCommit, savePreparedStoryCommit, queryStoryCommitReceipt, StorySaveError,
+  storySourceWithoutSecrets, prepareStoryStorageCommit, savePreparedStoryCommit, queryStoryCommitReceipt, StorySaveError,
   prepareStorySessionDeletion, deleteStorySession, observeStorySessionDeletion, StoryDeleteError,
   type PreparedStoryCommit, type StoryNativePort,
 } from '../../platform/arena-story-storage';
@@ -26,13 +26,19 @@ import {
 } from '../../platform/arena-story-branch-storage';
 import { readStoryBranchSource, readStoryBranchSummaryIds, type StoryBranchSourcePort } from '../../platform/arena-story-branch-source';
 import type { StoryBranchAnchorRequest, StoryBranchSource } from '@mahoshojo/contracts/desktop-arena-story-branch';
+import {
+  freezeStoryTailRewriteIdentity, prepareStoryTailRewriteCommit, savePreparedStoryTailRewriteCommit, queryStoryTailRewriteReceipt, isPreparedStoryTailRewriteCommit,
+  type StoryTailRewriteNativePort, type PreparedStoryTailRewriteCommit,
+} from '../../platform/arena-story-tail-rewrite-storage';
+import { readStoryTailRewriteSource, type StoryTailRewriteSourcePort } from '../../platform/arena-story-tail-rewrite-source';
+import type { StoryTailRewriteSourceRequest } from '@mahoshojo/contracts/desktop-arena-story-tail-rewrite';
 import { executeArenaDirect, type ArenaDirectIntent, type ArenaDirectPartial } from './direct';
 import { createInitialArenaDraft, type ArenaDraft, type DesktopArenaProduct } from './session';
 import { DesktopStoryBranchReader } from './story-branch-reader';
 import { DesktopHostedStorySession, type DesktopHostedStoryState, type HostedStoryExecutionTarget } from './hosted-story-session';
 import type { DesktopArenaHostedActor } from '@mahoshojo/contracts/desktop-arena-hosted';
 import type { StoryPendingSnapshot, StoryPendingInput, StoryReceipt } from '@mahoshojo/contracts/desktop-arena-story';
-import { captureDesktopStorySeed, completeDesktopStoryRecords, completeDesktopBranchRecords, type StorySessionSnapshot } from './story-snapshot';
+import { captureDesktopStorySeed, completeDesktopStoryRecords, completeDesktopBranchRecords, completeDesktopTailRewriteRecords, type StorySessionSnapshot } from './story-snapshot';
 
 export type StoryExecutionTarget = { mode?: never; options: DesktopAiExecutionOptions; intent: Omit<ArenaDirectIntent, 'requestId' | 'generationMode'> } | HostedStoryExecutionTarget;
 /** Host resolves the CURRENT selected target and credentials. Stored source is display only. */
@@ -66,6 +72,7 @@ type PendingDeletion = { head: StorySessionHead; selection: BattleStoryReadToken
 type PendingCommit = { selection: BattleStoryReadToken; evidence: BattleStorySaveEvidence } & (
   | { kind: 'linear'; prepared: PreparedStoryCommit }
   | { kind: 'branch'; prepared: PreparedStoryBranchCommit; executionEpoch: number; autoSelect: boolean }
+  | { kind: 'tail-rewrite'; prepared: PreparedStoryTailRewriteCommit; executionEpoch: number; autoSelect: boolean }
 );
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : '操作未完成，请保留现有内容后重试。';
 const emptyState = (): DesktopStoryState => ({
@@ -103,6 +110,7 @@ export class DesktopArenaStorySession {
     port: StoryNativePort; execute?: typeof executeArenaDirect; id?: () => string; now?: () => number; random?: () => number;
     prepareCommit?: typeof prepareStoryStorageCommit;
     branch?: { port: StoryBranchNativePort; prepareCommit?: typeof prepareStoryBranchCommit; source?: StoryBranchSourcePort };
+    tailRewrite?: { port: StoryTailRewriteNativePort; source: StoryTailRewriteSourcePort; prepareCommit?: typeof prepareStoryTailRewriteCommit };
     hosted?: Omit<ConstructorParameters<typeof DesktopHostedStorySession>[0], 'onState' | 'onResult' | 'onSaved' | 'captureSelection' | 'loadBaseline'>;
     exportMarkdown: (head: StorySessionHead, signal: AbortSignal, onProgress: (value: StoryExportProgress) => void) => Promise<StoryExportResult>;
   }) {
@@ -531,6 +539,82 @@ export class DesktopArenaStorySession {
       if (!dispatched) completion.cancel();
     } catch (cause) { completion.fail(cause); }
   }
+  /** Internal opt-in Direct producer. No page or default binder grants this capability. */
+  async generateTailRewrite(input: { mode: 'direct' | 'hosted'; target: StoryTailRewriteSourceRequest; userGuidance: string }, prepare: PrepareStoryExecution) {
+    if (!this.dependencies.tailRewrite || input.mode !== 'direct') throw new Error('此入口未开放尾章重写；Hosted 重写不受支持');
+    const frozen = freezeBattleStoryCommit(structuredClone(input));
+    if (this.hasUnconfirmedDeletion(frozen.target.sessionId)) throw new Error('源会话删除状态待确认，不能重写尾章');
+    const run = this.beginGeneration(); if (!run) return;
+    const generationId = this.id(), operationId = this.id(), checkpointId = this.id();
+    let dispatched = false, completed = false, terminal = false;
+    const ownsRun = () => !this.disposed && this.runController === run.controller;
+    const ready = () => ownsRun() && !run.controller.signal.aborted && run.epoch === this.executionEpoch && run.selection.isCurrent();
+    const release = () => { if (this.runController === run.controller) { this.runController = null; this.publish({}); } };
+    const cancelled = () => { if (!completed) { this.generationFailure(new Error('尾章重写已取消'), run.controller); release(); } };
+    run.controller.signal.addEventListener('abort', cancelled, { once: true });
+    try {
+      if (this.branchOperations.has(operationId) || this.branchGenerations.has(generationId)) throw new Error('原生成身份已消费，不能重新准备');
+      this.branchOperations.add(operationId); this.branchGenerations.add(generationId);
+      if (this.hosted && !await this.hosted.discover()) throw new Error('原 Hosted 候选读取已变化，请重试核对');
+      if (!ready()) throw new Error('尾章重写准备已取消或选择已变化');
+      this.assertNoBranchCandidate(frozen.target.sessionId);
+      const snapshot = await readStoryTailRewriteSource(this.dependencies.port, this.dependencies.tailRewrite.source, frozen.target, run.controller.signal);
+      if (!ready()) throw new Error('尾章重写源读取已取消或选择已变化');
+      const identity = freezeStoryTailRewriteIdentity({ operationId, sessionId: frozen.target.sessionId, source: snapshot.source });
+      const originalSource = StorySourceSchema.parse(storySourceWithoutSecrets(snapshot.session.source));
+      const seed = BattleStoryArenaSeedSchema.parse({ ...snapshot.seed, mode: originalSource.mode, language: originalSource.language,
+        storyLength: originalSource.storyLength, customStoryLength: originalSource.customStoryLength });
+      const session = freezeBattleStoryCommit({ ...snapshot.session, seed,
+        workingCombatants: snapshot.workingCombatants } as StorySessionSnapshot);
+      const story: BattleStoryArenaRequestInput = freezeBattleStoryCommit({ action: 'rewrite', chapterIndex: snapshot.target.index,
+        sourceChapterId: snapshot.target.id, chapterPlan: session.chapterPlan, seed,
+        chapterContext: { workingCombatants: snapshot.workingCombatants, sessionSummary: snapshot.sessionSummary, recentWindow: snapshot.recentWindow },
+        userGuidance: frozen.userGuidance });
+      await prepare(async target => {
+        if (!ready()) throw new Error('尾章重写准备已取消或选择已变化');
+        this.assertNoBranchCandidate(frozen.target.sessionId);
+        if (dispatched) throw new Error('本次尾章重写已提交生成请求，不能自动重复');
+        if (target.mode === 'hosted') throw new Error('Hosted 重写不受支持');
+        const { options, intent } = target;
+        if (intent.mode !== 'direct-local' && intent.mode !== 'direct-remote') throw new Error('客户端生成目标无效');
+        const source = StorySourceSchema.parse({ ...originalSource, providerMode: intent.mode,
+          providerId: options.providerTarget?.kind === 'preset' ? options.providerTarget.providerId : options.profileId, modelId: intent.modelId });
+        const events = AdjudicatorEventSchema.array().parse(seed.adjudicationEvents ?? []);
+        const adjudicationResults = resolveAdjudicationEvents(events, this.dependencies.random ?? (() => crypto.getRandomValues(new Uint32Array(1))[0]! / 0x1_0000_0000)) as unknown as AdjudicationResult[];
+        dispatched = true;
+        this.publish({ resultSource: 'direct', phase: 'generating', message: null, resultChapterIndex: snapshot.target.index,
+          result: { rawText: '', markdown: '', reasoning: '' } });
+        const scopeKey = `desktop-story:${session.id}:${generationId}`;
+        const outcome = await (this.dependencies.execute ?? executeArenaDirect)(options, createInitialArenaDraft(),
+          { ...intent, requestId: generationId, generationMode: 'stream' },
+          { scopeKey, reporterInfo: { name: '记者', publication: '魔法少女速报' }, adjudicationResults, story }, run.controller.signal,
+          partial => { if (!terminal && ownsRun() && !run.controller.signal.aborted && run.epoch === this.executionEpoch) this.publish({ result: partial }); });
+        terminal = true;
+        if (!ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
+        if (outcome.requestId !== generationId || outcome.scopeKey !== scopeKey) throw new Error('生成结果身份不匹配，未保存尾章');
+        this.publish({ result: { rawText: outcome.rawText, markdown: outcome.markdown, reasoning: outcome.reasoning, usage: outcome.usage } });
+        if (outcome.status !== 'completed') { this.generationFailure(new Error(`${'message' in outcome ? outcome.message : '生成已取消'} 收到的原文仍保留，可导出。`), run.controller); return; }
+        completed = true;
+        // Prose survives effects, projection and byte/schema failures. The source is never renewed.
+        this.publish({ phase: 'completed', pending: { title: outcome.report.headline, evidence: 'not-written', retryable: false, tooLarge: false },
+          message: '尾章重写完成，正在准备本地保存。' });
+        try {
+          const records = completeDesktopTailRewriteRecords({ snapshot, session, operationId, checkpointId, now: this.now(),
+            source, userGuidance: frozen.userGuidance, outcome, adjudicationResults });
+          const prepared = (this.dependencies.tailRewrite!.prepareCommit ?? prepareStoryTailRewriteCommit)(identity, records);
+          if (!ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
+          this.pending = { kind: 'tail-rewrite', prepared, selection: run.selection, evidence: 'not-written', executionEpoch: run.epoch, autoSelect: true };
+          this.publish({ pending: { title: records.chapter.title, evidence: 'not-written', retryable: true, tooLarge: false } });
+          await this.savePending();
+        } catch (cause) {
+          if (ownsRun()) this.publish({ pending: { title: outcome.report.headline, evidence: 'not-written', retryable: false,
+            tooLarge: cause instanceof BattleStoryCommitByteLimitError }, message: `尾章完成章未保存：${errorText(cause)} 原文保留，可导出；不会重新调用模型。` });
+        }
+      });
+      if (!dispatched && ownsRun()) this.publish({ phase: 'cancelled', message: '生成准备已取消，未调用模型。' });
+    } catch (cause) { this.generationFailure(cause, run.controller); }
+    finally { run.controller.signal.removeEventListener('abort', cancelled); release(); }
+  }
   private assertNoBranchCandidate(sourceSessionId: string) {
     const hosted = this.hosted?.getSnapshot();
     if (this.hosted?.hasCandidate() || hosted && (Object.keys(hosted.discoveryErrors).length > 0
@@ -645,14 +729,33 @@ export class DesktopArenaStorySession {
     });
   }
 
+  /** Receipt-only recovery of an original frozen handle into a fresh owner. This
+   * internal seam creates no persistent recovery format and never renews authority. */
+  async recoverTailRewriteReceipt(prepared: PreparedStoryTailRewriteCommit, result: ArenaDirectPartial) {
+    if (!this.dependencies.tailRewrite || !isPreparedStoryTailRewriteCommit(prepared)) throw new Error('缺少原尾章冻结保存包');
+    const operationId = prepared.manifest.operationId;
+    if (this.branchOperations.has(operationId)) throw new Error('原尾章恢复身份已消费');
+    if (this.disposed || this.isBusy() || this.hasUnsavedResult()) throw new Error('当前故事仍有待处理操作');
+    this.branchOperations.add(operationId);
+    this.pending = { kind: 'tail-rewrite', prepared, selection: this.captureSelection(), evidence: 'unknown',
+      executionEpoch: this.executionEpoch, autoSelect: false };
+    this.publish({ phase: 'completed', resultSource: 'direct', result: { ...result }, resultChapterIndex: prepared.manifest.source.expectedChapterCount,
+      resultSaved: false, savedUnread: null, pending: { title: prepared.head.titlePreview, evidence: 'unknown', retryable: true, tooLarge: false } });
+    await this.savePending();
+  }
+
   async savePending() {
     const pending = this.pending;
     if (this.disposed || !pending || this.state.saving || this.deletionBlocksWork()) return;
-    const saveController = pending.kind === 'branch' ? this.runController ?? new AbortController() : null;
+    const saveController = pending.kind !== 'linear' ? this.runController ?? new AbortController() : null;
     if (saveController) this.branchSaveController = saveController;
     this.publish({ saving: true, message: pending.evidence === 'unknown' ? '正在查询原保存操作…' : '正在保存完整章节…' });
     try {
-      const receipt = pending.kind === 'branch'
+      const receipt = pending.kind === 'tail-rewrite'
+        ? pending.evidence === 'unknown'
+          ? await queryStoryTailRewriteReceipt(this.dependencies.tailRewrite!.port, pending.prepared)
+          : await savePreparedStoryTailRewriteCommit(this.dependencies.tailRewrite!.port, pending.prepared, pending.evidence, saveController?.signal)
+        : pending.kind === 'branch'
         ? pending.evidence === 'unknown'
           ? await queryStoryBranchReceipt(this.dependencies.branch!.port, pending.prepared)
           : await savePreparedStoryBranchCommit(this.dependencies.branch!.port, pending.prepared, pending.evidence, saveController?.signal)
@@ -660,13 +763,18 @@ export class DesktopArenaStorySession {
           ? await queryStoryCommitReceipt(this.dependencies.port, pending.prepared)
           : await savePreparedStoryCommit(this.dependencies.port, pending.prepared, pending.evidence);
       if (!receipt) throw new StorySaveError('尚无可核对的原操作回执，保存状态仍待确认。请保留原文或导出。', 'unknown');
-      const stored = pending.prepared.parts.find((part) => part.kind === 'session')!.prepared.value as Record<string, unknown>;
-      let head = StorySessionHeadSchema.parse(Object.fromEntries(['id','revision','titlePreview','titleTruncated','mode','chapterPlan','createdAt','updatedAt','chapterCount','lastChapterId'].filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]])));
+      // Exact success is terminal write evidence before any fallible directory/read work.
       this.pending = null; this.savedResultChapterId = receipt.chapterId;
-      this.publish({ pending: null, resultSaved: true, savedUnread: head, message: '完整章节已保存到本机故事。' });
-      if (await this.refreshSessions()) {
+      this.publish({ pending: null, resultSaved: true, message: '完整章节已保存到本机故事。' });
+      const stored = pending.prepared.parts.find((part) => part.kind === 'session')!.prepared.value as Record<string, unknown>;
+      let head = pending.kind === 'tail-rewrite' ? pending.prepared.head : StorySessionHeadSchema.parse(Object.fromEntries(['id','revision','titlePreview','titleTruncated','mode','chapterPlan','createdAt','updatedAt','chapterCount','lastChapterId'].filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]])));
+      this.publish({ savedUnread: head, message: '完整章节已保存到本机故事。' });
+      const refreshed = await this.refreshSessions();
+      if (refreshed) {
         head = await this.currentSavedHead(head);
         this.publish({ savedUnread: head });
+      } else if (pending.kind === 'tail-rewrite') {
+        this.publish({ message: '尾章已保存，目录暂未读回；请稍后读取已保存章节，不会重新生成或保存。' }); return;
       }
       if (pending.selection.isCurrent() && (pending.kind === 'linear' || pending.autoSelect && !saveController?.signal.aborted && pending.executionEpoch === this.executionEpoch)) {
         await this.openSavedChapter(head, receipt.chapterId);
@@ -678,6 +786,9 @@ export class DesktopArenaStorySession {
         await this.loadChapters(head, this.fence.capture('session'), false);
       }
     } catch (cause) {
+      if (this.pending !== pending) {
+        this.publish({ message: `章节已保存，读取暂未完成：${errorText(cause)}` }); return;
+      }
       if (cause instanceof StorySaveError && cause.evidence === 'unknown') pending.evidence = 'unknown';
       this.publish({ pending: this.state.pending ? { ...this.state.pending, evidence: pending.evidence } : null, message: errorText(cause) });
     } finally {
@@ -715,7 +826,7 @@ export class DesktopArenaStorySession {
   discardResult() { if (this.isBusy()) return; if (this.hosted?.hasCandidate()) { this.publish({ message: '请先导出或明确放弃原 Hosted 候选；清除预览不会释放候选。' }); return; } this.pending = null; this.publish({ resultSource: null, result: null, pending: null, phase: 'idle', resultSaved: false, resultChapterIndex: null, message: null }); }
   cancel() {
     if (this.hosted?.getSnapshot().busy === 'model') { void this.hosted.requestServerStop(); return; }
-    if (this.pending?.kind === 'branch') this.pending.autoSelect = false;
+    if (this.pending && this.pending.kind !== 'linear') this.pending.autoSelect = false;
     this.runController?.abort(); this.branchSaveController?.abort();
   }
   async exportSelectedStory() {
@@ -740,7 +851,7 @@ export class DesktopArenaStorySession {
     // Leaving can dismiss an unsubmitted confirmation, never release an already
     // dispatched deletion flight or make the same owner dispatch it a second time.
     this.cancelDeleteSession();
-    if (this.pending?.kind === 'branch') this.pending.autoSelect = false;
+    if (this.pending && this.pending.kind !== 'linear') this.pending.autoSelect = false;
     this.hosted?.detach(); this.runController?.abort(); this.branchSaveController?.abort(); this.cancelExport(); this.readController?.abort();
   }
   dispose() { this.detach(); this.branchReader.dispose(); this.hosted?.dispose(); this.disposed = true; this.fence.dispose(); this.listeners.clear(); }

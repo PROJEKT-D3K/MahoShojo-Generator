@@ -1,8 +1,8 @@
 //! Schema 11 tail-only history relationships. No rewrite producer or IPC is exposed here.
 //! Historical receipt identity never depends on the current head or active status.
 use super::super::{valid_digest, valid_id, StoryError, MAX_SAFE_INTEGER};
+use super::tail_rewrite::{TailRewriteKind, TailRewriteReceipt};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Deserialize;
 
 /// New-shaped tables must not masquerade as a historical schema. Check partial
 /// indexes as well as columns: a full index would silently prohibit history.
@@ -165,23 +165,6 @@ pub(super) fn audit_graph(c: &Connection, session: Option<&str>) -> Result<(), S
     Ok(())
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RewriteReceipt {
-    version: u32,
-    kind: String,
-    operation_id: String,
-    session_id: String,
-    chapter_id: String,
-    chapter_index: u64,
-    revision: u64,
-    chapter_count: u64,
-    target_chapter_id: String,
-    input_checkpoint_id: String,
-    checkpoint_id: String,
-    request_digest: String,
-}
-
 pub(super) fn audit_rewrite_receipt(
     c: &Connection,
     session: &str,
@@ -191,9 +174,9 @@ pub(super) fn audit_rewrite_receipt(
     digest: &str,
     document: &str,
 ) -> Result<(), StoryError> {
-    let r: RewriteReceipt = serde_json::from_str(document).map_err(|_| StoryError::Corrupt)?;
+    let r = TailRewriteReceipt::decode(document)?;
     if r.version != 3
-        || r.kind != "tail-rewrite"
+        || r.kind != TailRewriteKind::TailRewrite
         || action != "rewrite"
         || r.operation_id != id
         || r.chapter_id != id

@@ -3,6 +3,11 @@
 //! The domain projection chooses the prefix and business state. This module only
 //! verifies an indexed, hashed Native record and changes its physical identities.
 //! The caller must recheck the complete source CAS inside its write transaction.
+
+// Candidate only: no command, ACL, UI factory or production schema activation.
+#[allow(dead_code, reason = "internal schema-11 tail rewrite candidate")]
+#[path = "arena_story_tail_rewrite.rs"]
+pub(crate) mod tail_rewrite;
 use std::collections::BTreeMap;
 
 use serde_json::value::RawValue;

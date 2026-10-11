@@ -1,0 +1,704 @@
+{
+  "version": 3,
+  "sourceCommits": [
+    {
+      "manifest": {
+        "version": 1,
+        "operationId": "source-c1",
+        "sessionId": "golden-source",
+        "expectedRevision": 0,
+        "expectedLastChapterId": null,
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 672,
+            "digest": "sha256:1b3fdadf0ebccd3ddcee1f3688f4ebef6a1081a3461ed082b0acc51678352058"
+          },
+          {
+            "kind": "seed",
+            "byteLength": 66,
+            "digest": "sha256:445a4a61c7ca1c0dac2ea8888d83809794f7bfac2edf1d8e9833d628f1c600a0"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 426,
+            "digest": "sha256:0092870be17c77fc41615929b742a63c7dd1dd7b59f92f4c8bcd125287c46811"
+          },
+          {
+            "kind": "checkpoint0",
+            "byteLength": 232,
+            "digest": "sha256:407af0db4cfaeeb59b55687af0c0d8fc255ef20421bd6dbe8022826bef354626"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 256,
+            "digest": "sha256:d0370c4cd9a59ad411dcdb573bb9fc57ddccb9863c52d3c53dff89e6ca367530"
+          }
+        ]
+      },
+      "wireDigest": "sha256:a43630414e121653b359041b04b0dcce8f6616f892be34804fe8c397c4ad2146",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"chapterCount\":1,\"createdAt\":1,\"id\":\"golden-source\",\"lastChapterId\":\"source-c1\",\"lastInputCheckpointId\":\"source-p0\",\"mode\":\"classic\",\"revision\":1,\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"updatedAt\":1,\"workingCheckpointId\":\"source-p1\",\"opaque\":1e+02,\"opaque\":{\"lone\":\"\\ud800\"},\"opaque\":{\"escaped\":\"\\u4e2d\",\"duplicate\":1,\"duplicate\":2},\"sessionSummary\":\"第 1 章摘要\",\"summaryMeta\":{\"coveredUntilChapterIndex\":1,\"coveredChapterIds\":[\"source-c1\"],\"refreshedAt\":1,\"mode\":\"deterministic-fallback\",\"extension\":{\"keep\":\"保留\"}}}"
+        },
+        {
+          "kind": "seed",
+          "document": "{\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}]}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"start\",\"createdAt\":1,\"deterministicDigest\":{\"chapterTitle\":\"源章1\"},\"generationId\":\"historical-generation-1\",\"id\":\"source-c1\",\"index\":1,\"markdown\":\"源章1\\n\",\"markdownByteLength\":8,\"reportJson\":{\"historical\":1},\"sessionId\":\"golden-source\",\"status\":\"active\",\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        },
+        {
+          "kind": "checkpoint0",
+          "document": "{\"boundaryIndex\":0,\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}],\"createdAt\":1,\"id\":\"source-p0\",\"sessionId\":\"golden-source\",\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":1,\"chapterId\":\"source-c1\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}],\"createdAt\":1,\"id\":\"source-p1\",\"sessionId\":\"golden-source\",\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        }
+      ]
+    },
+    {
+      "manifest": {
+        "version": 1,
+        "operationId": "source-c2",
+        "sessionId": "golden-source",
+        "expectedRevision": 1,
+        "expectedLastChapterId": "source-c1",
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 672,
+            "digest": "sha256:f0de52727028d84edd028434aa5352d0df43c76cbb80a03dcf54aaf236239433"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 459,
+            "digest": "sha256:e2bbec37a84485366451d5093917cb2f671ebc184aee0235403a2ec3acc94013"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 256,
+            "digest": "sha256:30a7ab90ab14f2fed195ffdcd4cbe4afdf66ab79e08813b7f96685c642353060"
+          }
+        ]
+      },
+      "wireDigest": "sha256:4ca20c9b5a1c19c281b4c6b3f8573be0771c6fe1f64a8ab9f3b19bcb7bb6140c",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"chapterCount\":2,\"createdAt\":1,\"id\":\"golden-source\",\"lastChapterId\":\"source-c2\",\"lastInputCheckpointId\":\"source-p1\",\"mode\":\"classic\",\"revision\":2,\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"updatedAt\":2,\"workingCheckpointId\":\"source-p2\",\"opaque\":1e+02,\"opaque\":{\"lone\":\"\\ud800\"},\"opaque\":{\"escaped\":\"\\u4e2d\",\"duplicate\":1,\"duplicate\":2},\"sessionSummary\":\"第 1 章摘要\",\"summaryMeta\":{\"coveredUntilChapterIndex\":1,\"coveredChapterIds\":[\"source-c1\"],\"refreshedAt\":1,\"mode\":\"deterministic-fallback\",\"extension\":{\"keep\":\"保留\"}}}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"continue\",\"createdAt\":2,\"deterministicDigest\":{\"chapterTitle\":\"源章2\"},\"generationId\":\"historical-generation-2\",\"id\":\"source-c2\",\"index\":2,\"markdown\":\"源章2\\n\",\"markdownByteLength\":8,\"reportJson\":{\"historical\":2},\"sessionId\":\"golden-source\",\"sourceChapterId\":\"source-c1\",\"status\":\"active\",\"title\":\"源章2\",\"titlePreview\":\"源章2\",\"titleTruncated\":false,\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":2,\"chapterId\":\"source-c2\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}],\"createdAt\":2,\"id\":\"source-p2\",\"sessionId\":\"golden-source\",\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        }
+      ]
+    },
+    {
+      "manifest": {
+        "version": 1,
+        "operationId": "source-c3",
+        "sessionId": "golden-source",
+        "expectedRevision": 2,
+        "expectedLastChapterId": "source-c2",
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 672,
+            "digest": "sha256:db3c17c9e1c9a893742d48163ea6282286cc313b890a71f7c34e448f2d039594"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 459,
+            "digest": "sha256:93c392eb216132e272df2207a6d47de770eff36013a79ae93baad20ede7bd4be"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 256,
+            "digest": "sha256:3161ba37b1bac590aa810bddb293223334ff25eba979770ce9c13d2f274028f2"
+          }
+        ]
+      },
+      "wireDigest": "sha256:c4b8f99d2affd5b223889889486acc8f87c0ee3275566ac0e1263e2fdf96e260",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"chapterCount\":3,\"createdAt\":1,\"id\":\"golden-source\",\"lastChapterId\":\"source-c3\",\"lastInputCheckpointId\":\"source-p2\",\"mode\":\"classic\",\"revision\":3,\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"updatedAt\":3,\"workingCheckpointId\":\"source-p3\",\"opaque\":1e+02,\"opaque\":{\"lone\":\"\\ud800\"},\"opaque\":{\"escaped\":\"\\u4e2d\",\"duplicate\":1,\"duplicate\":2},\"sessionSummary\":\"第 1 章摘要\",\"summaryMeta\":{\"coveredUntilChapterIndex\":1,\"coveredChapterIds\":[\"source-c1\"],\"refreshedAt\":1,\"mode\":\"deterministic-fallback\",\"extension\":{\"keep\":\"保留\"}}}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"continue\",\"createdAt\":3,\"deterministicDigest\":{\"chapterTitle\":\"源章3\"},\"generationId\":\"historical-generation-3\",\"id\":\"source-c3\",\"index\":3,\"markdown\":\"源章3\\n\",\"markdownByteLength\":8,\"reportJson\":{\"historical\":3},\"sessionId\":\"golden-source\",\"sourceChapterId\":\"source-c2\",\"status\":\"active\",\"title\":\"源章3\",\"titlePreview\":\"源章3\",\"titleTruncated\":false,\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":3,\"chapterId\":\"source-c3\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}],\"createdAt\":3,\"id\":\"source-p3\",\"sessionId\":\"golden-source\",\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "name": "first-tail-invalidates-summary",
+      "sourceCommitCount": 1,
+      "assembly": {
+        "session": {
+          "chapterCount": 1,
+          "createdAt": 1,
+          "id": "golden-source",
+          "lastChapterId": "source-c1",
+          "lastInputCheckpointId": "source-p0",
+          "mode": "classic",
+          "revision": 1,
+          "source": {
+            "generationMode": "stream",
+            "language": "zh-CN",
+            "mode": "classic",
+            "providerMode": "direct",
+            "storyLength": "short"
+          },
+          "title": "源章1",
+          "titlePreview": "源章1",
+          "titleTruncated": false,
+          "updatedAt": 1,
+          "workingCheckpointId": "source-p1",
+          "opaque": {
+            "escaped": "中",
+            "duplicate": 2
+          },
+          "sessionSummary": "第 1 章摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "source-c1"
+            ],
+            "refreshedAt": 1,
+            "mode": "deterministic-fallback",
+            "extension": {
+              "keep": "保留"
+            }
+          },
+          "seed": {
+            "combatants": [
+              {
+                "extension": {
+                  "retained": "中😀"
+                },
+                "name": "星"
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "extension": {
+                "retained": "中😀"
+              },
+              "name": "星"
+            }
+          ]
+        },
+        "targetChapter": {
+          "id": "source-c1",
+          "index": 1
+        },
+        "operationId": "rewrite-1",
+        "checkpointId": "rewrite-p1",
+        "now": 21,
+        "source": {
+          "generationMode": "stream",
+          "language": "zh-CN",
+          "mode": "classic",
+          "providerMode": "direct",
+          "storyLength": "short"
+        },
+        "inputCombatants": [
+          {
+            "extension": {
+              "retained": "中😀"
+            },
+            "name": "星"
+          }
+        ],
+        "generated": {
+          "chapterIndex": 1,
+          "markdown": "# 第 1 章重写\n\n保留完整正文与扩展 😀",
+          "reportJson": {
+            "headline": "第 1 章重写",
+            "opaque": {
+              "keep": "中"
+            }
+          },
+          "digest": {
+            "chapterTitle": "第 1 章重写",
+            "bodyExcerpt": "正文摘录"
+          },
+          "generationId": "rewrite-generation-1",
+          "nextWorkingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "重写后"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "session": {
+          "chapterCount": 1,
+          "createdAt": 1,
+          "id": "golden-source",
+          "lastChapterId": "rewrite-1",
+          "lastInputCheckpointId": "source-p0",
+          "mode": "classic",
+          "revision": 1,
+          "source": {
+            "generationMode": "stream",
+            "language": "zh-CN",
+            "mode": "classic",
+            "providerMode": "direct",
+            "storyLength": "short"
+          },
+          "title": "源章1",
+          "titlePreview": "源章1",
+          "titleTruncated": false,
+          "updatedAt": 21,
+          "workingCheckpointId": "source-p1",
+          "opaque": {
+            "escaped": "中",
+            "duplicate": 2
+          },
+          "seed": {
+            "combatants": [
+              {
+                "extension": {
+                  "retained": "中😀"
+                },
+                "name": "星"
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "重写后"
+            }
+          ],
+          "lastChapterInputCombatants": [
+            {
+              "extension": {
+                "retained": "中😀"
+              },
+              "name": "星"
+            }
+          ]
+        },
+        "chapter": {
+          "id": "rewrite-1",
+          "sessionId": "golden-source",
+          "index": 1,
+          "action": "rewrite",
+          "status": "active",
+          "sourceChapterId": "source-c1",
+          "generationId": "rewrite-generation-1",
+          "title": "第 1 章重写",
+          "markdown": "# 第 1 章重写\n\n保留完整正文与扩展 😀",
+          "reportJson": {
+            "headline": "第 1 章重写",
+            "opaque": {
+              "keep": "中"
+            }
+          },
+          "deterministicDigest": {
+            "chapterTitle": "第 1 章重写",
+            "bodyExcerpt": "正文摘录"
+          },
+          "createdAt": 21
+        },
+        "checkpoint": {
+          "id": "rewrite-p1",
+          "sessionId": "golden-source",
+          "boundaryIndex": 1,
+          "chapterId": "rewrite-1",
+          "combatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "重写后"
+            }
+          ],
+          "createdAt": 21
+        }
+      },
+      "manifest": {
+        "version": 3,
+        "kind": "tail-rewrite",
+        "operationId": "rewrite-1",
+        "sessionId": "golden-source",
+        "source": {
+          "expectedInstance": "00000000000000000000000000000000",
+          "expectedRevision": 1,
+          "expectedChapterCount": 1,
+          "targetChapterId": "source-c1",
+          "inputCheckpointId": "source-p0",
+          "session": {
+            "byteLength": 672,
+            "digest": "sha256:1b3fdadf0ebccd3ddcee1f3688f4ebef6a1081a3461ed082b0acc51678352058"
+          },
+          "chapter": {
+            "byteLength": 426,
+            "digest": "sha256:0092870be17c77fc41615929b742a63c7dd1dd7b59f92f4c8bcd125287c46811"
+          },
+          "inputCheckpoint": {
+            "byteLength": 232,
+            "digest": "sha256:407af0db4cfaeeb59b55687af0c0d8fc255ef20421bd6dbe8022826bef354626"
+          }
+        },
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 423,
+            "digest": "sha256:8f502875c2b79fc64fdcf541c3bc9a2dfdc6df15355391e04057ee4fbc3e5ece"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 503,
+            "digest": "sha256:26330d106e784b9bc4e70c22371993f9eb6b72e51844d26a7af6cf380688b509"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 189,
+            "digest": "sha256:b4c2a71a33c182d8b4a53cd7aa72095ea9d4e0427962cccf461fa402bf8bfbbf"
+          }
+        ]
+      },
+      "manifestJson": "{\"version\":3,\"kind\":\"tail-rewrite\",\"operationId\":\"rewrite-1\",\"sessionId\":\"golden-source\",\"source\":{\"expectedInstance\":\"00000000000000000000000000000000\",\"expectedRevision\":1,\"expectedChapterCount\":1,\"targetChapterId\":\"source-c1\",\"inputCheckpointId\":\"source-p0\",\"session\":{\"byteLength\":672,\"digest\":\"sha256:1b3fdadf0ebccd3ddcee1f3688f4ebef6a1081a3461ed082b0acc51678352058\"},\"chapter\":{\"byteLength\":426,\"digest\":\"sha256:0092870be17c77fc41615929b742a63c7dd1dd7b59f92f4c8bcd125287c46811\"},\"inputCheckpoint\":{\"byteLength\":232,\"digest\":\"sha256:407af0db4cfaeeb59b55687af0c0d8fc255ef20421bd6dbe8022826bef354626\"}},\"parts\":[{\"kind\":\"session\",\"byteLength\":423,\"digest\":\"sha256:8f502875c2b79fc64fdcf541c3bc9a2dfdc6df15355391e04057ee4fbc3e5ece\"},{\"kind\":\"chapter\",\"byteLength\":503,\"digest\":\"sha256:26330d106e784b9bc4e70c22371993f9eb6b72e51844d26a7af6cf380688b509\"},{\"kind\":\"checkpoint1\",\"byteLength\":189,\"digest\":\"sha256:b4c2a71a33c182d8b4a53cd7aa72095ea9d4e0427962cccf461fa402bf8bfbbf\"}]}",
+      "requestDigest": "sha256:4424ad2b15f6cf4f7caf473c901f83f698a9e8e2fec2f98240eb79402ad83240",
+      "receipt": {
+        "version": 3,
+        "kind": "tail-rewrite",
+        "operationId": "rewrite-1",
+        "sessionId": "golden-source",
+        "chapterId": "rewrite-1",
+        "chapterIndex": 1,
+        "revision": 2,
+        "chapterCount": 1,
+        "targetChapterId": "source-c1",
+        "inputCheckpointId": "source-p0",
+        "checkpointId": "rewrite-p1",
+        "requestDigest": "sha256:4424ad2b15f6cf4f7caf473c901f83f698a9e8e2fec2f98240eb79402ad83240"
+      },
+      "receiptJson": "{\"version\":3,\"kind\":\"tail-rewrite\",\"operationId\":\"rewrite-1\",\"sessionId\":\"golden-source\",\"chapterId\":\"rewrite-1\",\"chapterIndex\":1,\"revision\":2,\"chapterCount\":1,\"targetChapterId\":\"source-c1\",\"inputCheckpointId\":\"source-p0\",\"checkpointId\":\"rewrite-p1\",\"requestDigest\":\"sha256:4424ad2b15f6cf4f7caf473c901f83f698a9e8e2fec2f98240eb79402ad83240\"}",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"chapterCount\":1,\"createdAt\":1,\"id\":\"golden-source\",\"lastChapterId\":\"rewrite-1\",\"lastInputCheckpointId\":\"source-p0\",\"mode\":\"classic\",\"opaque\":{\"duplicate\":2,\"escaped\":\"中\"},\"revision\":2,\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"updatedAt\":21,\"workingCheckpointId\":\"rewrite-p1\"}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"rewrite\",\"createdAt\":21,\"deterministicDigest\":{\"bodyExcerpt\":\"正文摘录\",\"chapterTitle\":\"第 1 章重写\"},\"generationId\":\"rewrite-generation-1\",\"id\":\"rewrite-1\",\"index\":1,\"markdown\":\"# 第 1 章重写\\n\\n保留完整正文与扩展 😀\",\"markdownByteLength\":51,\"reportJson\":{\"headline\":\"第 1 章重写\",\"opaque\":{\"keep\":\"中\"}},\"sessionId\":\"golden-source\",\"sourceChapterId\":\"source-c1\",\"status\":\"active\",\"title\":\"第 1 章重写\",\"titlePreview\":\"第 1 章重写\",\"titleTruncated\":false}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":1,\"chapterId\":\"rewrite-1\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\",\"state\":\"重写后\"}],\"createdAt\":21,\"id\":\"rewrite-p1\",\"sessionId\":\"golden-source\"}"
+        }
+      ]
+    },
+    {
+      "name": "third-tail-keeps-anchored-summary",
+      "sourceCommitCount": 3,
+      "assembly": {
+        "session": {
+          "chapterCount": 3,
+          "createdAt": 1,
+          "id": "golden-source",
+          "lastChapterId": "source-c3",
+          "lastInputCheckpointId": "source-p2",
+          "mode": "classic",
+          "revision": 3,
+          "source": {
+            "generationMode": "stream",
+            "language": "zh-CN",
+            "mode": "classic",
+            "providerMode": "direct",
+            "storyLength": "short"
+          },
+          "title": "源章1",
+          "titlePreview": "源章1",
+          "titleTruncated": false,
+          "updatedAt": 3,
+          "workingCheckpointId": "source-p3",
+          "opaque": {
+            "escaped": "中",
+            "duplicate": 2
+          },
+          "sessionSummary": "第 1 章摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "source-c1"
+            ],
+            "refreshedAt": 1,
+            "mode": "deterministic-fallback",
+            "extension": {
+              "keep": "保留"
+            }
+          },
+          "seed": {
+            "combatants": [
+              {
+                "extension": {
+                  "retained": "中😀"
+                },
+                "name": "星"
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "extension": {
+                "retained": "中😀"
+              },
+              "name": "星"
+            }
+          ]
+        },
+        "targetChapter": {
+          "id": "source-c3",
+          "index": 3
+        },
+        "operationId": "rewrite-3",
+        "checkpointId": "rewrite-p3",
+        "now": 23,
+        "source": {
+          "generationMode": "stream",
+          "language": "zh-CN",
+          "mode": "classic",
+          "providerMode": "direct",
+          "storyLength": "short"
+        },
+        "inputCombatants": [
+          {
+            "extension": {
+              "retained": "中😀"
+            },
+            "name": "星"
+          }
+        ],
+        "generated": {
+          "chapterIndex": 3,
+          "markdown": "# 第 3 章重写\n\n保留完整正文与扩展 😀",
+          "reportJson": {
+            "headline": "第 3 章重写",
+            "opaque": {
+              "keep": "中"
+            }
+          },
+          "digest": {
+            "chapterTitle": "第 3 章重写",
+            "bodyExcerpt": "正文摘录"
+          },
+          "generationId": "rewrite-generation-3",
+          "nextWorkingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "重写后"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "session": {
+          "chapterCount": 3,
+          "createdAt": 1,
+          "id": "golden-source",
+          "lastChapterId": "rewrite-3",
+          "lastInputCheckpointId": "source-p2",
+          "mode": "classic",
+          "revision": 3,
+          "source": {
+            "generationMode": "stream",
+            "language": "zh-CN",
+            "mode": "classic",
+            "providerMode": "direct",
+            "storyLength": "short"
+          },
+          "title": "源章1",
+          "titlePreview": "源章1",
+          "titleTruncated": false,
+          "updatedAt": 23,
+          "workingCheckpointId": "source-p3",
+          "opaque": {
+            "escaped": "中",
+            "duplicate": 2
+          },
+          "sessionSummary": "第 1 章摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "source-c1"
+            ],
+            "refreshedAt": 1,
+            "mode": "deterministic-fallback",
+            "extension": {
+              "keep": "保留"
+            }
+          },
+          "seed": {
+            "combatants": [
+              {
+                "extension": {
+                  "retained": "中😀"
+                },
+                "name": "星"
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "重写后"
+            }
+          ],
+          "lastChapterInputCombatants": [
+            {
+              "extension": {
+                "retained": "中😀"
+              },
+              "name": "星"
+            }
+          ]
+        },
+        "chapter": {
+          "id": "rewrite-3",
+          "sessionId": "golden-source",
+          "index": 3,
+          "action": "rewrite",
+          "status": "active",
+          "sourceChapterId": "source-c3",
+          "generationId": "rewrite-generation-3",
+          "title": "第 3 章重写",
+          "markdown": "# 第 3 章重写\n\n保留完整正文与扩展 😀",
+          "reportJson": {
+            "headline": "第 3 章重写",
+            "opaque": {
+              "keep": "中"
+            }
+          },
+          "deterministicDigest": {
+            "chapterTitle": "第 3 章重写",
+            "bodyExcerpt": "正文摘录"
+          },
+          "createdAt": 23
+        },
+        "checkpoint": {
+          "id": "rewrite-p3",
+          "sessionId": "golden-source",
+          "boundaryIndex": 3,
+          "chapterId": "rewrite-3",
+          "combatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "重写后"
+            }
+          ],
+          "createdAt": 23
+        }
+      },
+      "manifest": {
+        "version": 3,
+        "kind": "tail-rewrite",
+        "operationId": "rewrite-3",
+        "sessionId": "golden-source",
+        "source": {
+          "expectedInstance": "00000000000000000000000000000000",
+          "expectedRevision": 3,
+          "expectedChapterCount": 3,
+          "targetChapterId": "source-c3",
+          "inputCheckpointId": "source-p2",
+          "session": {
+            "byteLength": 672,
+            "digest": "sha256:db3c17c9e1c9a893742d48163ea6282286cc313b890a71f7c34e448f2d039594"
+          },
+          "chapter": {
+            "byteLength": 459,
+            "digest": "sha256:93c392eb216132e272df2207a6d47de770eff36013a79ae93baad20ede7bd4be"
+          },
+          "inputCheckpoint": {
+            "byteLength": 256,
+            "digest": "sha256:30a7ab90ab14f2fed195ffdcd4cbe4afdf66ab79e08813b7f96685c642353060"
+          }
+        },
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 615,
+            "digest": "sha256:ab774cdb35ef93ef9a40564b38b97f7b4d3f28f796d1935336f834e78f6eb875"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 503,
+            "digest": "sha256:8f40faa2e648a277509b9817ee6c9a4c1f4ff8b540b816cf5c5e87252dfba649"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 189,
+            "digest": "sha256:c31342a48ff3d5aff0e9921d521d8c9ea684bc1069bd9e45b7086a989ef592b4"
+          }
+        ]
+      },
+      "manifestJson": "{\"version\":3,\"kind\":\"tail-rewrite\",\"operationId\":\"rewrite-3\",\"sessionId\":\"golden-source\",\"source\":{\"expectedInstance\":\"00000000000000000000000000000000\",\"expectedRevision\":3,\"expectedChapterCount\":3,\"targetChapterId\":\"source-c3\",\"inputCheckpointId\":\"source-p2\",\"session\":{\"byteLength\":672,\"digest\":\"sha256:db3c17c9e1c9a893742d48163ea6282286cc313b890a71f7c34e448f2d039594\"},\"chapter\":{\"byteLength\":459,\"digest\":\"sha256:93c392eb216132e272df2207a6d47de770eff36013a79ae93baad20ede7bd4be\"},\"inputCheckpoint\":{\"byteLength\":256,\"digest\":\"sha256:30a7ab90ab14f2fed195ffdcd4cbe4afdf66ab79e08813b7f96685c642353060\"}},\"parts\":[{\"kind\":\"session\",\"byteLength\":615,\"digest\":\"sha256:ab774cdb35ef93ef9a40564b38b97f7b4d3f28f796d1935336f834e78f6eb875\"},{\"kind\":\"chapter\",\"byteLength\":503,\"digest\":\"sha256:8f40faa2e648a277509b9817ee6c9a4c1f4ff8b540b816cf5c5e87252dfba649\"},{\"kind\":\"checkpoint1\",\"byteLength\":189,\"digest\":\"sha256:c31342a48ff3d5aff0e9921d521d8c9ea684bc1069bd9e45b7086a989ef592b4\"}]}",
+      "requestDigest": "sha256:15553be5c1f4eaa5069808237594cd4d6aac6aa8744c390a4e5877f38a742716",
+      "receipt": {
+        "version": 3,
+        "kind": "tail-rewrite",
+        "operationId": "rewrite-3",
+        "sessionId": "golden-source",
+        "chapterId": "rewrite-3",
+        "chapterIndex": 3,
+        "revision": 4,
+        "chapterCount": 3,
+        "targetChapterId": "source-c3",
+        "inputCheckpointId": "source-p2",
+        "checkpointId": "rewrite-p3",
+        "requestDigest": "sha256:15553be5c1f4eaa5069808237594cd4d6aac6aa8744c390a4e5877f38a742716"
+      },
+      "receiptJson": "{\"version\":3,\"kind\":\"tail-rewrite\",\"operationId\":\"rewrite-3\",\"sessionId\":\"golden-source\",\"chapterId\":\"rewrite-3\",\"chapterIndex\":3,\"revision\":4,\"chapterCount\":3,\"targetChapterId\":\"source-c3\",\"inputCheckpointId\":\"source-p2\",\"checkpointId\":\"rewrite-p3\",\"requestDigest\":\"sha256:15553be5c1f4eaa5069808237594cd4d6aac6aa8744c390a4e5877f38a742716\"}",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"chapterCount\":3,\"createdAt\":1,\"id\":\"golden-source\",\"lastChapterId\":\"rewrite-3\",\"lastInputCheckpointId\":\"source-p2\",\"mode\":\"classic\",\"opaque\":{\"duplicate\":2,\"escaped\":\"中\"},\"revision\":4,\"sessionSummary\":\"第 1 章摘要\",\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"summaryMeta\":{\"coveredChapterIds\":[\"source-c1\"],\"coveredUntilChapterIndex\":1,\"extension\":{\"keep\":\"保留\"},\"mode\":\"deterministic-fallback\",\"refreshedAt\":1},\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"updatedAt\":23,\"workingCheckpointId\":\"rewrite-p3\"}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"rewrite\",\"createdAt\":23,\"deterministicDigest\":{\"bodyExcerpt\":\"正文摘录\",\"chapterTitle\":\"第 3 章重写\"},\"generationId\":\"rewrite-generation-3\",\"id\":\"rewrite-3\",\"index\":3,\"markdown\":\"# 第 3 章重写\\n\\n保留完整正文与扩展 😀\",\"markdownByteLength\":51,\"reportJson\":{\"headline\":\"第 3 章重写\",\"opaque\":{\"keep\":\"中\"}},\"sessionId\":\"golden-source\",\"sourceChapterId\":\"source-c3\",\"status\":\"active\",\"title\":\"第 3 章重写\",\"titlePreview\":\"第 3 章重写\",\"titleTruncated\":false}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":3,\"chapterId\":\"rewrite-3\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\",\"state\":\"重写后\"}],\"createdAt\":23,\"id\":\"rewrite-p3\",\"sessionId\":\"golden-source\"}"
+        }
+      ]
+    }
+  ]
+}
