@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-11 Native分支生命周期后继：[强退与WAL读者探针](./reports/2026-10-11_063000_Native分支强退与WAL读者探针.md)仅新增真实SIGKILL三边界与有界WAL旧读者测试、runner及文档，四个私有8MiB章原件小库串行；不改生产逻辑或预算，不开放IPC/两页。真实四case、冻结Native597项/9ignored、clippy与独审通过；本轮受测2e472fec于06:39:59–06:48:49Z原完整ci:verify exit0（10,699 passed executions/21条件skip）；CI后仅docs收尾，非docs mode/blob同源，未重跑Native/pipe，尚未远端发布。OS ENOSPC/fsync、精确锁、真实取消、短章/IPC RSS、Windows及完整owner仍待验。
+
 2026-10-11 Native分支解析后继：[借用解析与键比较](./reports/2026-10-11_054500_Native分支借用解析与键比较.md)仅将branch authority改为流式借用成员及无分配键比较，保RawValue/hash/CAS/audit、三种重复语义与原预算。终版18case/90阶段及2组新鲜基线10阶段、Native597项/clippy与独审通过；累积受测1c4ca07于06:08:36–06:17:33Z原完整ci:verify真exit0（10,699 passed executions/21条件skip），不是基线独立CI。CI后仅docs收尾、非docs mode/blob同源；观测资源收益不称稳定性能率，不关闭资源/owner门或开放IPC/两页。
 
 2026-10-11 Native分支资源计量：[长记录/JSON形状探针](./reports/2026-10-11_045500_Native分支长记录形状资源探针.md)仅新增测试/runner/文档；2/8/16MiB完整矩阵与32/64MiB重复键、长key哨兵共38case/190独立阶段通过，冻结Native592项/clippy通过。64MiB重复键章end约76.409秒、观测VmHWM最大257.34MiB；分离fixture/branch/验证，不把end称锁时间。近128MiB、精确锁/取消/OS ENOSPC及完整owner仍待验，不开放branch IPC或两页，不新增历史cap；最小流式scanner后继仅只读建议，完整workspace CI本片未跑。
