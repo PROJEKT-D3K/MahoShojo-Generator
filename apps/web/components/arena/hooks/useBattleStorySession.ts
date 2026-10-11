@@ -4,8 +4,12 @@ import {
   buildCompletedBattleStoryBranchRecords,
   resolveAnchoredSummaryState,
   resolveBattleStoryChapterOutputCombatants as resolveChapterOutputCombatants,
-  toBattleStoryRecordCombatants as toRecordCombatantArray,
 } from '@mahoshojo/domain/arena-story-branch';
+
+import {
+  buildCompletedBattleStoryTailRewriteRecords,
+  resolveBattleStoryChapterInputCombatants as resolveChapterInputCombatants,
+} from '@mahoshojo/domain/arena-story-tail-rewrite';
 
 import { canResolveBattleStoryRoles, type BattleStoryCompletedOutput } from '@mahoshojo/domain/arena-story-completed-output';
 import { resolveWebBattleStoryRoles, type WebBattleStoryRoleResult } from '../utils/battleStoryRoleResolution';
@@ -20,6 +24,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { buildCustomProviderRequestPayload } from '@/lib/ai/custom-provider';
 import {
+  commitCompletedBattleStoryTailRewrite,
+  readBattleStoryTailRewriteSource,
+  captureBattleStoryTailRewriteExpected,
+  createBattleStoryTailRewriteReceipt,
+  getBattleStoryTailRewriteOperationReceipt,
+  type WebBattleStoryTailRewriteCommit,
   commitCompletedBattleStoryBranch,
   readBattleStoryBranchSource,
   captureBattleStoryBranchExpected,
@@ -117,7 +127,8 @@ const ACTIVE_SESSION_STORAGE_KEY = 'arena.battleStory.activeSessionId';
 const PENDING_CHAPTER_PLAN_STORAGE_KEY = 'arena.battleStory.pendingChapterPlan.v1';
 const SUMMARY_REFRESH_MIN_PENDING_CHAPTERS = 3;
 type PendingCompletedChapter = ({ kind: 'linear'; commit: WebBattleStoryCompletedCommit }
-  | { kind: 'branch'; commit: WebBattleStoryBranchCommit }) & {
+  | { kind: 'branch'; commit: WebBattleStoryBranchCommit }
+  | { kind: 'tail-rewrite'; commit: WebBattleStoryTailRewriteCommit }) & {
   chapters: BattleStoryChapterRecord[];
   warning?: string;
   saveEvidence?: BattleStorySaveEvidence;
@@ -274,25 +285,6 @@ const buildAnchoredChapterRequestWindow = (
   chapters: BattleStoryChapterRecord[],
   maxChapterIndex: number
 ) => buildChapterRequestWindow(chapters.filter((chapter) => chapter.index <= maxChapterIndex));
-
-const resolveChapterInputCombatants = (input: {
-  session: BattleStorySessionRecord;
-  checkpoints: BattleStoryCheckpointRecord[];
-  chapter: BattleStoryChapterRecord;
-  latestChapter: BattleStoryChapterRecord | null;
-}): Array<Record<string, unknown>> | null => {
-  const fromCheckpoint = toRecordCombatantArray(
-    getBattleStoryCheckpointForBoundary(input.checkpoints, Math.max(0, input.chapter.index - 1))?.combatants
-  );
-  if (fromCheckpoint) return fromCheckpoint;
-  if (input.chapter.index === 1) {
-    return toRecordCombatantArray(input.session.seed.combatants);
-  }
-  if (input.latestChapter && input.latestChapter.id === input.chapter.id) {
-    return toRecordCombatantArray(input.session.lastChapterInputCombatants);
-  }
-  return null;
-};
 
 const isFatalStatus = (status: number): boolean => {
   return status >= 500 || status === 429 || status === 401 || status === 403;
@@ -1290,14 +1282,18 @@ export function useBattleStorySession() {
     let attemptedCommit = false;
     try {
       const expectedReceipt = pending.kind === 'branch'
-        ? createBattleStoryBranchReceipt(pending.commit) : createBattleStoryCommitReceipt(pending.commit);
+        ? createBattleStoryBranchReceipt(pending.commit)
+        : pending.kind === 'tail-rewrite' ? createBattleStoryTailRewriteReceipt(pending.commit)
+          : createBattleStoryCommitReceipt(pending.commit);
       const previousReceipt = retry
         ? pending.kind === 'branch'
           ? await getBattleStoryBranchOperationReceipt(pending.commit.session.id, pending.commit.operationId, expectedReceipt.contentDigest)
-          : await getBattleStoryOperationReceipt(pending.commit.operationId)
+          : pending.kind === 'tail-rewrite'
+            ? await getBattleStoryTailRewriteOperationReceipt(pending.commit.session.id, pending.commit.operationId, expectedReceipt.contentDigest)
+            : await getBattleStoryOperationReceipt(pending.commit.operationId)
         : null;
-      if (!previousReceipt && retry && pending.kind === 'branch' && pending.saveEvidence !== 'not-written') {
-        setActionError('无法确认分支是否曾保存。仅可核对原保存状态，请保留或导出本章；不会再次写入或重新生成。');
+      if (!previousReceipt && retry && pending.kind !== 'linear' && pending.saveEvidence !== 'not-written') {
+        setActionError('无法确认本章是否曾保存。仅可核对原保存状态，请保留或导出本章；不会再次写入或重新生成。');
         return;
       }
       if (previousReceipt && previousReceipt.contentDigest !== expectedReceipt.contentDigest) {
@@ -1312,9 +1308,11 @@ export function useBattleStorySession() {
       if (!previousReceipt) {
         attemptedCommit = true;
         if (pending.kind === 'branch') await commitCompletedBattleStoryBranch(pending.commit);
+        else if (pending.kind === 'tail-rewrite') await commitCompletedBattleStoryTailRewrite(pending.commit);
         else await commitCompletedBattleStoryChapter(pending.commit);
       }
       committed = true;
+      if (pending.kind === 'tail-rewrite') delete summaryRetryAtRef.current[pending.commit.session.id];
       pendingCompletedChapterRef.current = null;
       setPendingCompletedChapter(null);
       setPendingStartSession(null);
@@ -1363,7 +1361,8 @@ export function useBattleStorySession() {
     // Own the complete result before the first storage attempt; retries never enter runGeneration.
     pendingCompletedChapterRef.current = pending;
     setPendingCompletedChapter(pending);
-    freezeBattleStoryCommit(pending.commit);
+    // Tail rewrite's receipt factory freezes and validates inside the save error boundary.
+    if (pending.kind !== 'tail-rewrite') freezeBattleStoryCommit(pending.commit);
     clearPendingRoleOutcome();
   }, [clearPendingRoleOutcome]);
 
@@ -1712,23 +1711,84 @@ export function useBattleStorySession() {
     await handleBranchFromChapter(selectedChapterId);
   }, [handleBranchFromChapter, selectedChapterId]);
 
+  const handleRewriteTailChapter = useCallback(async (sessionId: string, targetChapterId: string, selectionEpoch: number) => {
+    chapterOperationBusyRef.current = true;
+    try {
+      // The click chooses an identity, not whichever tail happens to exist when the read finishes.
+      const snapshot = freezeBattleStoryCommit(await readBattleStoryTailRewriteSource(sessionId));
+      if (!mountedRef.current || selectionEpoch !== viewEpochRef.current) return;
+      const expected = captureBattleStoryTailRewriteExpected(snapshot, targetChapterId);
+      const sessionRecord = snapshot.session!;
+      const activeChapters = getActiveBattleStoryChapters(snapshot.chapters);
+      const targetChapter = activeChapters.find((chapter) => chapter.id === targetChapterId)!;
+      const rewriteInputCombatants = resolveChapterInputCombatants({
+        session: sessionRecord, checkpoints: snapshot.checkpoints, chapter: targetChapter, latestChapter: targetChapter,
+      });
+      if (!rewriteInputCombatants) {
+        setActionError('该章节缺少“章前输入状态”快照，暂时无法安全重写。'); return;
+      }
+      const nextSource = buildProviderSource(sessionRecord.source, customProviderPayload);
+      const summaryState = resolveAnchoredSummaryState({
+        sessionSummary: sessionRecord.sessionSummary, summaryMeta: sessionRecord.summaryMeta,
+        maxCoveredChapterIndex: targetChapter.index, invalidateWhenCoveredAtOrBeyond: true,
+      });
+      const generated = await runGeneration({
+        sessionId, action: 'rewrite', sourceChapterId: targetChapterId,
+        source: nextSource, seed: sessionRecord.seed, chapterPlan: sessionRecord.chapterPlan,
+        workingCombatants: rewriteInputCombatants,
+        recentChapters: buildAnchoredChapterRequestWindow(activeChapters, targetChapter.index),
+        sessionSummary: summaryState.sessionSummary, chapterIndexHint: targetChapter.index,
+        userGuidance: useBattleStore.getState().settings.userGuidance,
+      });
+      if (generated.aborted) return;
+      const records = buildCompletedBattleStoryTailRewriteRecords({
+        session: sessionRecord, targetChapter, operationId: secureRandomUUID(), checkpointId: secureRandomUUID(),
+        now: Date.now(), source: nextSource, inputCombatants: rewriteInputCombatants, generated,
+      });
+      const commit: WebBattleStoryTailRewriteCommit = {
+        version: 1, action: 'tail-rewrite', operationId: records.chapter.id, expected, ...records,
+      };
+      const pending: PendingCompletedChapter = {
+        kind: 'tail-rewrite', commit,
+        chapters: [...activeChapters.filter((chapter) => chapter.id !== targetChapterId), records.chapter],
+        warning: generated.warning, selectionEpoch: generated.selectionEpoch,
+      };
+      retainCompletedChapter(pending);
+      await persistCompletedChapter(pending);
+    } catch (error) {
+      setActionError(normalizeErrorMessage(error, '重写尾章失败。'));
+    } finally {
+      chapterOperationBusyRef.current = false;
+    }
+  }, [customProviderPayload, persistCompletedChapter, retainCompletedChapter, runGeneration]);
+
   const handleRewriteChapter = useCallback(async (targetChapterId?: string | null) => {
     if (deleteSessionRef.current?.mode === 'unknown' && deleteSessionRef.current.session?.id === activeSessionRef.current?.id) {
       setDeleteSessionNotice('请先只读核对本机会话的删除状态，再继续操作这个会话。'); return;
     }
     if (chapterOperationBusyRef.current || legacyDeletionCountRef.current > 0 || pendingCompletedChapterRef.current || pendingRoleOutcomeRef.current) return;
-    const sessionRecord = activeSessionRef.current ? structuredClone(activeSessionRef.current) : null;
-    const activeChapters = getActiveBattleStoryChapters(structuredClone(chaptersRef.current));
-    const checkpointRecords = sortBattleStoryCheckpoints(structuredClone(checkpointsRef.current));
-    const latestChapter = getLatestBattleStoryChapter(activeChapters);
-    const targetChapter = targetChapterId
-      ? activeChapters.find((chapter) => chapter.id === targetChapterId) ?? null
-      : latestChapter;
+    const selectedSession = activeSessionRef.current;
+    const selectedChapters = getActiveBattleStoryChapters(chaptersRef.current);
+    const selectedLatestChapter = getLatestBattleStoryChapter(selectedChapters);
+    const selectedTargetChapter = targetChapterId
+      ? selectedChapters.find((chapter) => chapter.id === targetChapterId) ?? null
+      : selectedLatestChapter;
 
-    if (!sessionRecord || !targetChapter || !latestChapter) {
+    if (!selectedSession || !selectedTargetChapter || !selectedLatestChapter) {
       setActionError('当前没有可重写的章节。');
       return;
     }
+
+    if (selectedTargetChapter.id === selectedLatestChapter.id) {
+      await handleRewriteTailChapter(selectedSession.id, selectedTargetChapter.id, viewEpochRef.current);
+      return;
+    }
+
+    const sessionRecord = structuredClone(selectedSession);
+    const activeChapters = structuredClone(selectedChapters);
+    const latestChapter = getLatestBattleStoryChapter(activeChapters)!;
+    const targetChapter = activeChapters.find((chapter) => chapter.id === selectedTargetChapter.id)!;
+    const checkpointRecords = sortBattleStoryCheckpoints(structuredClone(checkpointsRef.current));
 
     const rewriteInputCombatants = resolveChapterInputCombatants({
       session: sessionRecord,
@@ -1845,7 +1905,7 @@ export function useBattleStorySession() {
     } finally {
       chapterOperationBusyRef.current = false;
     }
-  }, [clearPendingRoleOutcome, markLegacyCompletedSave, customProviderPayload, loadSession, refreshSessionList, refreshSummaryIfNeeded, runGeneration]);
+  }, [clearPendingRoleOutcome, markLegacyCompletedSave, customProviderPayload, handleRewriteTailChapter, loadSession, refreshSessionList, refreshSummaryIfNeeded, runGeneration]);
 
   const handleRewriteLastChapter = useCallback(async () => {
     const latestChapter = getLatestBattleStoryChapter(getActiveBattleStoryChapters(chaptersRef.current));

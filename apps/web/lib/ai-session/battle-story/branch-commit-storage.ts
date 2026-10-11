@@ -3,9 +3,11 @@ import { cloneBattleStoryActiveChaptersForNewSession, cloneBattleStoryCheckpoint
 import { openAiSessionDb, requestToPromise, transactionToPromise } from '@/lib/ai-session/storage';
 import { AI_SESSION_STORE_NAMES as stores } from '@/lib/ai-session/types';
 import { BattleStoryCommitConflictError, BattleStoryCommitNotSavedError } from './commit-storage';
+import { canonicalBattleStorySource as canonicalSource, readBattleStorySourceInTransaction as readSourceInTransaction, readBattleStorySource, type WebBattleStorySource } from './source-storage';
 import type { BattleStoryChapterRecord, BattleStoryCheckpointRecord, BattleStorySessionRecord } from './types';
 
-export type WebBattleStoryBranchSource = { session: BattleStorySessionRecord | null; chapters: BattleStoryChapterRecord[]; checkpoints: BattleStoryCheckpointRecord[] };
+export type WebBattleStoryBranchSource = WebBattleStorySource;
+export const readBattleStoryBranchSource = readBattleStorySource;
 export type WebBattleStoryBranchExpected = { sourceSessionId: string; sourceDigest: string; anchorChapterId: string; anchorIndex: number };
 export type WebBattleStoryBranchCommit = { version: 2; action: 'branch'; operationId: string; expected: WebBattleStoryBranchExpected; session: BattleStorySessionRecord; chapter: BattleStoryChapterRecord; copiedChapters: BattleStoryChapterRecord[]; checkpoints: BattleStoryCheckpointRecord[] };
 export type WebBattleStoryBranchReceipt = { version: 2; kind: 'branch'; operationId: string; sessionId: string; chapterId: string; chapterIndex: number; chapterCount: number; prefixEndIndex: number; anchorChapterId: string; checkpointId: string; contentDigest: string };
@@ -13,46 +15,7 @@ const storeNames = [stores.battleStorySessions, stores.battleStoryChapters, stor
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const digestPattern = /^sha256:[0-9a-f]{64}$/;
 const validId = (value: unknown): value is string => typeof value === 'string' && idPattern.test(value);
-const compareIds = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-const canonicalSource = (source: WebBattleStoryBranchSource): WebBattleStoryBranchSource => ({
-  session: source.session,
-  chapters: [...source.chapters].sort((a, b) => a.index - b.index || compareIds(a.id, b.id)),
-  checkpoints: [...source.checkpoints].sort((a, b) => a.boundaryIndex - b.boundaryIndex || compareIds(a.id, b.id)),
-});
 const check: (condition: unknown, message?: string) => asserts condition = (condition, message = '分支提交关系无效，尚未保存。') => { if (!condition) throw new BattleStoryCommitConflictError(message); };
-
-/** Callback-only reads keep the caller's IDB transaction alive through CAS and writes.
- * Store cursors deliberately include malformed/unindexed orphan rows owned by this session.
- */
-const readSourceInTransaction = (tx: IDBTransaction, sessionId: string, done: (source: WebBattleStoryBranchSource) => void, fail: (error: unknown) => void) => {
-  const source: WebBattleStoryBranchSource = { session: null, chapters: [], checkpoints: [] };
-  let pending = 3;
-  const complete = () => { if (--pending === 0) done(canonicalSource(source)); };
-  const session = tx.objectStore(stores.battleStorySessions).get(sessionId);
-  session.onsuccess = () => { try { source.session = session.result ?? null; complete(); } catch (error) { fail(error); } };
-  for (const [store, destination] of [[stores.battleStoryChapters, source.chapters], [stores.battleStoryCheckpoints, source.checkpoints]] as const) {
-    const request = tx.objectStore(store).openCursor();
-    request.onsuccess = () => { try {
-      const cursor = request.result;
-      if (!cursor) { complete(); return; }
-      if (cursor.value.sessionId === sessionId) (destination as unknown[]).push(cursor.value);
-      cursor.continue();
-    } catch (error) { fail(error); } };
-  }
-};
-
-export const readBattleStoryBranchSource = async (sessionId: string): Promise<WebBattleStoryBranchSource> => {
-  const db = await openAiSessionDb();
-  return await new Promise((resolve, reject) => {
-    const tx = db.transaction(storeNames, 'readonly');
-    let result: WebBattleStoryBranchSource | undefined;
-    let failure: unknown;
-    tx.oncomplete = () => result ? resolve(result) : reject(new Error('分支源读取未完成'));
-    tx.onabort = () => reject(failure ?? tx.error ?? new Error('分支源读取失败'));
-    tx.onerror = () => { failure ??= tx.error; };
-    readSourceInTransaction(tx, sessionId, (source) => { result = source; }, (error) => { failure = error; tx.abort(); });
-  });
-};
 
 export const captureBattleStoryBranchExpected = (source: WebBattleStoryBranchSource, anchorId: string): WebBattleStoryBranchExpected => {
   check(source.session && validId(source.session.id));

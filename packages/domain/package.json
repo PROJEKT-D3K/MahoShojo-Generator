@@ -258,7 +258,8 @@
     "./arena-adjudication-markdown": "./src/arena-adjudication-markdown.ts",
     "./arena-story-export": "./src/arena-story-export.ts",
     "./arena-story-completed-output": "./src/arena-story-completed-output.ts",
-    "./arena-story-branch": "./src/arena-story-branch.ts"
+    "./arena-story-branch": "./src/arena-story-branch.ts",
+    "./arena-story-tail-rewrite": "./src/arena-story-tail-rewrite.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

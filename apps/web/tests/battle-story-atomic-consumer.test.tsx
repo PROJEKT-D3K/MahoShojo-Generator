@@ -11,6 +11,7 @@ import { __resetAiSessionDbForTest } from '@/lib/ai-session/storage';
 import { AI_SESSION_DB_NAME, AI_SESSION_STORE_NAMES } from '@/lib/ai-session/types';
 import * as storage from '@/lib/ai-session/battle-story/storage';
 import * as branchProjection from '@mahoshojo/domain/arena-story-branch';
+import * as tailRewriteProjection from '@mahoshojo/domain/arena-story-tail-rewrite';
 import { createGenerationApiIntentLatch, type GenerationApiIntentDependencies } from '@/lib/hono-api-client';
 import { honoApiConfig } from '@/config/hono-api';
 import { selectHostedDrPlacement } from '@/lib/hosted-dr/client-preflight';
@@ -558,16 +559,23 @@ describe('actual pending outcome panel and legacy write boundaries', () => {
     fixture.state.settings.writeCurrentState = true;
     const roles = vi.fn().mockImplementation(roleSuccess); vi.stubGlobal('fetch', roles);
     await mount(); const first = await start(); await finish(first.pending, '# 第一章');
+    const originalChapterId = session.selectedChapter!.id;
+    let next!: Promise<void>; await act(async () => { next = session.handleContinueSession(); }); await finish(next, '# 第二章');
+    await act(async () => session.setSelectedChapterId(originalChapterId));
+    const selectedAtClick = session.selectedChapter!; const latestAtClick = session.latestActiveChapter!;
+    const supersede = vi.spyOn(storage, 'markBattleStoryChapterSuperseded');
     const write = vi.spyOn(storage, 'putBattleStoryChapter').mockRejectedValueOnce(new Error('legacy write failed'));
     let pending!: Promise<void>;
-    await act(async () => { pending = session.handleRewriteLastChapter(); });
+    await act(async () => { pending = session.handleRewriteSelectedChapter(); });
+    selectedAtClick.id = 'later-ui-identity'; selectedAtClick.index = 8; latestAtClick.index = 1;
     await completeForRoles('# 已完成但旧保存失败'); await act(async () => pending);
     expect(session.pendingRoleOutcome?.legacySaveState).toBe('unknown');
     expect(session.pendingRoleOutcome?.role.status).toBe('accepted');
     await act(async () => { await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles(); session.handleExportCompletedOutput(); });
+    expect(supersede).toHaveBeenCalledWith(expect.objectContaining({ chapterId: originalChapterId }));
     expect(write).toHaveBeenCalledTimes(1);
     expect(roles).toHaveBeenCalledTimes(1); expect(fixture.download).toHaveBeenCalledTimes(1);
-    expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+    expect(fixture.dispatch).toHaveBeenCalledTimes(3);
   });
 
   it.each(['rewrite-superseded', 'rewrite-checkpoint'] as const)(
@@ -575,6 +583,9 @@ describe('actual pending outcome panel and legacy write boundaries', () => {
       fixture.state.settings.writeCurrentState = true;
       const roles = vi.fn().mockImplementation(roleSuccess); vi.stubGlobal('fetch', roles);
       await mount(); const first = await start(); await finish(first.pending, '# 保留的原章节');
+      const originalChapterId = session.selectedChapter!.id;
+      let next!: Promise<void>; await act(async () => { next = session.handleContinueSession(); }); await finish(next, '# 后续章节');
+      await act(async () => session.setSelectedChapterId(originalChapterId));
       let deletedId: string | null = null;
       const deleteBetweenPhases = async (id: string) => {
         await storage.deleteBattleStorySession(id);
@@ -598,7 +609,7 @@ describe('actual pending outcome panel and legacy write boundaries', () => {
         return put.apply(this, args);
       });
       let pending!: Promise<void>;
-      await act(async () => { pending = session.handleRewriteLastChapter(); });
+      await act(async () => { pending = session.handleRewriteSelectedChapter(); });
       await completeForRoles('# 删除期间仍保留的完整正文'); await act(async () => pending);
       expect(deletedId).not.toBeNull();
       expect(lateWrites).toEqual([]);
@@ -614,7 +625,7 @@ describe('actual pending outcome panel and legacy write boundaries', () => {
         await session.handleRetrySaveChapter(); await session.handleBranchSession(); await session.handleRewriteLastChapter();
         session.handleExportCompletedOutput();
       });
-      expect(roles).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+      expect(roles).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(3);
       const blob = fixture.download.mock.calls[0]![0] as Blob;
       const exported = await new Promise<string>((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsText(blob); });
       expect(exported).toBe('# 删除期间仍保留的完整正文');
@@ -993,4 +1004,244 @@ describe('atomic branch consumes the shared completed-output recovery', () => {
     expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(2);
   });
 
+});
+
+describe('atomic tail rewrite consumes the shared projection and recovery', () => {
+  async function rewrite() {
+    let pending!: Promise<void>;
+    const before = fixture.dispatch.mock.calls.length;
+    await act(async () => { pending = session.handleRewriteLastChapter(); });
+    await act(async () => { await vi.waitFor(() => expect(fixture.dispatch).toHaveBeenCalledTimes(before + 1)); });
+    return { pending };
+  }
+
+  it('rollback retains the same frozen rewrite package and retries without a model or legacy writer', async () => {
+    await mount(); const first = await start(); await finish(first.pending, '# 原尾章');
+    const before = await storage.readBattleStoryTailRewriteSource(session.activeSession!.id);
+    const legacyChapter = vi.spyOn(storage, 'putBattleStoryChapter');
+    const legacySupersede = vi.spyOn(storage, 'markBattleStoryChapterSuperseded');
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryTailRewrite');
+    const add = IDBObjectStore.prototype.add;
+    const fault = vi.spyOn(IDBObjectStore.prototype, 'add').mockImplementation(function(this: IDBObjectStore, ...args) {
+      const request = add.apply(this, args);
+      if (this.name === AI_SESSION_STORE_NAMES.battleStoryCheckpoints) request.addEventListener('success', () => { try { this.transaction.abort(); } catch { /* already aborted */ } });
+      return request;
+    });
+    const { pending } = await rewrite(); await finish(pending, '# 完整重写正文');
+    const chapter = session.pendingCompletedChapter!;
+    expect(chapter.action).toBe('rewrite'); expect(session.pendingSaveUnknown).toBe(false);
+    expect(session.pendingRoleOutcome).toBeNull();
+    expect(await storage.readBattleStoryTailRewriteSource(before.session!.id)).toEqual(before);
+    const frozen = writer.mock.calls[0]![0];
+    expect(Object.isFrozen(frozen)).toBe(true); expect(Object.isFrozen(frozen.chapter.reportJson)).toBe(true);
+    fixture.state.settings.userGuidance = '新草稿不得混入';
+    await act(async () => { await session.handleRewriteLastChapter(); await session.handleContinueSession(); });
+    fault.mockRestore();
+    await act(async () => session.handleRetrySaveChapter());
+    expect(writer).toHaveBeenCalledTimes(2); expect(writer.mock.calls[1]![0]).toBe(frozen);
+    expect(session.pendingCompletedChapter).toBeNull(); expect(session.selectedChapter?.id).toBe(chapter.id);
+    expect(session.activeSession?.chapterCount).toBe(1); expect(session.activeSession?.id).toBe(before.session!.id);
+    expect((await storage.getBattleStoryChapter(before.session!.lastChapterId!))?.status).toBe('superseded');
+    expect(legacyChapter).not.toHaveBeenCalled(); expect(legacySupersede).not.toHaveBeenCalled();
+    expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('an invalid generated index retains the complete body before save validation', async () => {
+    await mount(); const first = await start(); await finish(first.pending, '# 原尾章');
+    const before = await storage.readBattleStoryTailRewriteSource(session.activeSession!.id);
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryTailRewrite');
+    const { pending } = await rewrite();
+    await act(async () => send(event('session_meta', { chapterIndex: 9 })));
+    await finish(pending, '# 错位但完整的正文');
+    expect(session.pendingCompletedChapter?.markdown).toBe('# 错位但完整的正文');
+    expect(session.pendingCompletedChapter?.index).toBe(9); expect(session.pendingSaveUnknown).toBe(false);
+    expect(writer).not.toHaveBeenCalled(); expect(await storage.readBattleStoryTailRewriteSource(before.session!.id)).toEqual(before);
+    await act(async () => { session.handleExportPendingChapter(); await session.handleRetrySaveChapter(); });
+    expect(fixture.download).toHaveBeenCalledTimes(1); expect(writer).not.toHaveBeenCalled(); expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['absence', 'mismatch', 'io'] as const)('unknown tail rewrite %s only queries its original receipt and never writes', async (result) => {
+    await mount(); const first = await start(); await finish(first.pending, '# 原章');
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryTailRewrite').mockRejectedValueOnce(new Error('lost outcome'));
+    const { pending } = await rewrite(); await finish(pending, '# 未知重写正文');
+    const frozen = writer.mock.calls[0]![0];
+    const expected = storage.createBattleStoryTailRewriteReceipt(frozen);
+    const query = vi.spyOn(storage, 'getBattleStoryTailRewriteOperationReceipt');
+    if (result === 'io') query.mockRejectedValue(new Error('read unavailable'));
+    else if (result === 'mismatch') query.mockResolvedValue({ ...expected, contentDigest: `sha256:${'a'.repeat(64)}` });
+    else query.mockResolvedValue(null);
+    const add = vi.spyOn(IDBObjectStore.prototype, 'add'); const put = vi.spyOn(IDBObjectStore.prototype, 'put'); const remove = vi.spyOn(IDBObjectStore.prototype, 'delete');
+    await act(async () => { await session.handleRetrySaveChapter(); await session.handleSavePendingAsNewSession(); });
+    expect(query).toHaveBeenCalledWith(frozen.session.id, frozen.operationId, expected.contentDigest);
+    expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+    expect(add).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
+    expect(session.pendingSaveUnknown).toBe(true); expect(session.pendingCompletedChapter?.markdown).toBe('# 未知重写正文');
+    await act(async () => session.handleExportPendingChapter()); expect(fixture.download).toHaveBeenCalledTimes(1);
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await act(async () => session.handleDiscardPendingChapter()); expect(session.pendingCompletedChapter).not.toBeNull();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await act(async () => session.handleDiscardPendingChapter()); expect(session.pendingCompletedChapter).toBeNull();
+  });
+
+  it.each(['superseded', 'deleted'] as const)('lost successful response remains receipt-only after the new chapter is %s', async (change) => {
+    await mount(); const first = await start(); await finish(first.pending, '# 原章');
+    const original = storage.commitCompletedBattleStoryTailRewrite;
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryTailRewrite').mockImplementationOnce(async (commit) => {
+      await original(commit); throw new Error('lost reply');
+    });
+    const { pending } = await rewrite(); await finish(pending, '# 已保存重写');
+    const chapter = session.pendingCompletedChapter!;
+    if (change === 'deleted') await storage.deleteBattleStorySession(chapter.sessionId);
+    else await storage.markBattleStoryChapterSuperseded({ chapterId: chapter.id, supersededByChapterId: 'later-rewrite' });
+    const add = vi.spyOn(IDBObjectStore.prototype, 'add'); const put = vi.spyOn(IDBObjectStore.prototype, 'put');
+    await act(async () => session.handleRetrySaveChapter());
+    expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+    expect(add).not.toHaveBeenCalled(); expect(put).not.toHaveBeenCalled();
+    if (change === 'deleted') {
+      expect(session.pendingCompletedChapter?.id).toBe(chapter.id); expect(session.pendingSaveUnknown).toBe(true);
+      expect(await storage.getBattleStorySession(chapter.sessionId)).toBeNull();
+    } else expect(session.pendingCompletedChapter).toBeNull();
+  });
+
+  it('freezes the clicked tail identity before reading and rejects it if it became a middle chapter', async () => {
+    await mount(); const first = await start(); await finish(first.pending, '# 点击时的尾章');
+    const source = session.activeSession!;
+    const read = storage.readBattleStoryTailRewriteSource;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(storage, 'readBattleStoryTailRewriteSource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    const legacy = vi.spyOn(storage, 'markBattleStoryChapterSuperseded');
+    let pending!: Promise<void>;
+    await act(async () => { pending = session.handleRewriteLastChapter(); });
+    const next = storage.createBattleStoryChapterRecord({ sessionId: source.id, index: 2, action: 'continue', sourceChapterId: source.lastChapterId, title: '另一页续章', markdown: '# 另一页续章', reportJson: {}, deterministicDigest: { chapterTitle: '另一页续章' } });
+    await storage.putBattleStoryChapter(next);
+    await storage.putBattleStoryCheckpoint(storage.createBattleStoryCheckpointRecord({ sessionId: source.id, boundaryIndex: 2, chapterId: next.id, combatants: source.workingCombatants }));
+    await storage.putBattleStorySession({ ...source, chapterCount: 2, lastChapterId: next.id });
+    const before = await read(source.id);
+    await act(async () => { release(); await pending; });
+    expect(session.actionError).not.toBeNull(); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+    expect(legacy).not.toHaveBeenCalled(); expect(await read(source.id)).toEqual(before);
+  });
+
+  it('fresh source read is fenced by selection epoch, including same-session ABA', async () => {
+    await mount(); const first = await start(); await finish(first.pending, '# 原章');
+    const sourceId = session.activeSession!.id;
+    const read = storage.readBattleStoryTailRewriteSource;
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(storage, 'readBattleStoryTailRewriteSource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    let pending!: Promise<void>; await act(async () => { pending = session.handleRewriteLastChapter(); });
+    await act(async () => session.handleSelectSession(sourceId));
+    await act(async () => { release(); await pending; });
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(session.pendingCompletedChapter).toBeNull();
+  });
+
+  it('consumes real shared projection with a fresh independent snapshot and unchanged rewrite request', async () => {
+    await mount(); const first = await start(); await finish(first.pending, '# 原尾章');
+    const source = session.activeSession!; const oldTailId = source.lastChapterId!;
+    await storage.putBattleStorySession({ ...source, title: '保留标题', chapterPlan: { totalChapters: 1, source: 'user', locked: true }, sessionSummary: '覆盖原章需清除', summaryMeta: { coveredUntilChapterIndex: 1, coveredChapterIds: [oldTailId], refreshedAt: 1, mode: 'ai' } });
+    const projection = vi.spyOn(tailRewriteProjection, 'buildCompletedBattleStoryTailRewriteRecords');
+    const inputProjection = vi.spyOn(tailRewriteProjection, 'resolveBattleStoryChapterInputCombatants');
+    const { pending } = await rewrite();
+    const body = JSON.parse(String(fixture.dispatch.mock.calls[1]![1].body));
+    expect(body).toMatchObject({ action: 'rewrite', chapterIndex: 1, sourceChapterId: oldTailId });
+    expect(body.chapterContext.recentChapters).toHaveLength(1);
+    expect(body.chapterContext.recentChapters[0].markdown).toBe('# 原尾章');
+    expect(body.chapterContext.sessionSummary).toBeUndefined();
+    session.activeSession!.seed.combatants.push({ laterPageDraft: true });
+    await finish(pending, '# 纯投影重写');
+    expect(session.actionError).toBeNull(); expect(projection).toHaveBeenCalledTimes(2); // hook assembly and writer validation
+    expect(inputProjection).toHaveBeenCalled();
+    expect(session.activeSession?.title).toBe('保留标题'); expect(session.activeSession?.chapterCount).toBe(1);
+    expect(session.activeSession?.seed.combatants).toHaveLength(1); expect(session.activeSession?.sessionSummary).toBeUndefined();
+    expect(session.selectedChapter).toMatchObject({ action: 'rewrite', index: 1, sourceChapterId: oldTailId });
+  });
+
+  it('repeated tail rewrites keep the chapter index, twelve-chapter window and earlier checkpoints', async () => {
+    await mount(); const first = await start(); await finish(first.pending, '# 第一章');
+    const source = session.activeSession!;
+    let headId = source.lastChapterId!;
+    for (let index = 2; index <= 14; index += 1) {
+      const chapter = storage.createBattleStoryChapterRecord({
+        sessionId: source.id, index, action: 'continue', sourceChapterId: headId,
+        title: `第${index}章`, markdown: `# 章${index}`, reportJson: {}, deterministicDigest: { chapterTitle: `第${index}章` },
+      });
+      await storage.putBattleStoryChapter(chapter);
+      await storage.putBattleStoryCheckpoint(storage.createBattleStoryCheckpointRecord({
+        sessionId: source.id, boundaryIndex: index, chapterId: chapter.id, combatants: [{ boundary: index }],
+      }));
+      headId = chapter.id;
+    }
+    await storage.putBattleStorySession({ ...source, lastChapterId: headId, chapterCount: 14,
+      workingCombatants: [{ boundary: 14 }], lastChapterInputCombatants: [{ staleFallback: true }],
+      chapterPlan: { totalChapters: 14, source: 'user', locked: true } });
+    await act(async () => session.handleSelectSession(source.id));
+    const before = await storage.readBattleStoryTailRewriteSource(source.id);
+    const earlyCheckpoints = before.checkpoints.filter((checkpoint) => checkpoint.boundaryIndex < 14);
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const { pending } = await rewrite();
+      const body = JSON.parse(String(fixture.dispatch.mock.calls.at(-1)![1].body));
+      expect(body).toMatchObject({ action: 'rewrite', chapterIndex: 14, sourceChapterId: headId });
+      expect(body.chapterContext.recentChapters).toHaveLength(12);
+      expect(body.chapterContext.recentChapters[0].index).toBe(3);
+      expect(body.chapterContext.recentChapters.at(-1).id).toBe(headId);
+      expect(body.chapterContext.workingCombatants).toEqual([{ boundary: 13 }]);
+      await finish(pending, `# 重写${attempt}`);
+      expect(session.actionError).toBeNull();
+      expect(session.activeSession?.chapterCount).toBe(14); expect(session.selectedChapter?.index).toBe(14);
+      const graph = await storage.readBattleStoryTailRewriteSource(source.id);
+      expect(graph.checkpoints.filter((checkpoint) => checkpoint.boundaryIndex < 14)).toEqual(earlyCheckpoints);
+      expect(graph.chapters.filter((chapter) => chapter.status === 'superseded')).toHaveLength(attempt);
+      expect(graph.chapters.find((chapter) => chapter.id === headId)).toMatchObject({ status: 'superseded', supersededByChapterId: session.selectedChapter!.id });
+      headId = session.selectedChapter!.id;
+    }
+    expect(fixture.dispatch).toHaveBeenCalledTimes(3);
+  });
+
+  it('a changed persisted graph during generation retains completed body without replacing the old tail', async () => {
+    await mount(); const first = await start(); await finish(first.pending, '# 原尾章');
+    const sourceId = session.activeSession!.id;
+    const { pending } = await rewrite();
+    await storage.updateBattleStorySession(sourceId, (value) => ({ ...value, sessionSummary: '另一页的摘要' }));
+    const before = await storage.readBattleStoryTailRewriteSource(sourceId);
+    await finish(pending, '# 应保留的重写');
+    expect(session.pendingCompletedChapter?.markdown).toBe('# 应保留的重写'); expect(session.pendingSaveUnknown).toBe(false);
+    await act(async () => session.handleRetrySaveChapter());
+    expect(await storage.readBattleStoryTailRewriteSource(sourceId)).toEqual(before);
+    expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('late successful save does not reselect the old chapter after same-session selection', async () => {
+    await mount(); const first = await start(); await finish(first.pending, '# 仍选中的原章');
+    const sourceId = session.activeSession!.id; const oldChapterId = session.selectedChapter!.id;
+    const original = storage.commitCompletedBattleStoryTailRewrite;
+    let release!: () => void; let started!: () => void;
+    const gate = new Promise<void>((resolve) => { started = resolve; });
+    vi.spyOn(storage, 'commitCompletedBattleStoryTailRewrite').mockImplementationOnce(async (commit) => {
+      started(); await new Promise<void>((resolve) => { release = resolve; }); return original(commit);
+    });
+    const { pending } = await rewrite();
+    await act(async () => { send(event('markdown', { chunk: '# 晚保存尾章' }) + event('done', { ok: true })); stream.close(); await gate; });
+    await act(async () => session.handleSelectSession(sourceId));
+    await act(async () => { release(); await pending; });
+    expect(session.selectedChapter?.id).toBe(oldChapterId); expect(session.hasUnreadSavedChapter).toBe(true);
+    expect(session.pendingCompletedChapter).toBeNull();
+  });
+
+  it('successful save followed by read failure is saved-unread, with no second write', async () => {
+    const list = storage.listBattleStorySessions; let failRead = false;
+    vi.spyOn(storage, 'listBattleStorySessions').mockImplementation(async (...args) => {
+      if (failRead) { failRead = false; throw new Error('read failure'); } return list(...args);
+    });
+    await mount(); const first = await start(); await finish(first.pending, '# 原章');
+    const original = storage.commitCompletedBattleStoryTailRewrite;
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryTailRewrite').mockImplementationOnce(async (commit) => {
+      const receipt = await original(commit); failRead = true; return receipt;
+    });
+    const { pending } = await rewrite(); await finish(pending, '# 已存待读尾章');
+    expect(session.pendingCompletedChapter).toBeNull(); expect(session.hasUnreadSavedChapter).toBe(true);
+    expect(session.actionError).toContain('已保存');
+    await act(async () => { await session.handleRetrySaveChapter(); await session.handleReloadSavedChapter(); });
+    expect(session.selectedChapter?.markdown).toBe('# 已存待读尾章');
+    expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+  });
 });

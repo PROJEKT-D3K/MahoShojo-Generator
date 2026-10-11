@@ -19,8 +19,10 @@ const allowedTransactionFiles = new Set([
   'lib/ai-session/battle-story/storage.ts',
   // 连续故事完成章的三 store 原子提交，同样只使用浏览器 IndexedDB。
   'lib/ai-session/battle-story/commit-storage.ts',
-  // 分支全图快照/CAS/原子保存，仅通过 openAiSessionDb 获取浏览器 IDBDatabase。
+  // 故事全图快照、分支与尾章原子保存，仅通过 openAiSessionDb 获取浏览器 IDBDatabase。
+  'lib/ai-session/battle-story/source-storage.ts',
   'lib/ai-session/battle-story/branch-commit-storage.ts',
+  'lib/ai-session/battle-story/tail-rewrite-commit-storage.ts',
   'lib/public-card-cache/storage.ts',
   'lib/web-package/cache.ts',
   // 浏览器端 IndexedDB 本地库存储（ADR-local-library-data-ownership §4 / LIB-002）。
@@ -148,20 +150,36 @@ describe('server D1 transaction guard', () => {
     'app/api/story/branch-commit-storage.ts',
     'lib/server/branch-commit-storage.ts',
     'lib/ai-session/battle-story/branch-commit-storage.server.ts',
+    'app/api/story/tail-rewrite-commit-storage.ts',
+    'lib/server/tail-rewrite-commit-storage.ts',
+    'lib/ai-session/battle-story/tail-rewrite-commit-storage.server.ts',
+    'app/api/story/source-storage.ts',
+    'lib/server/source-storage.ts',
+    'lib/ai-session/battle-story/source-storage.server.ts',
   ])('浏览器例外不放行服务端或相似路径 %s', (filePath) => {
     expect(allowedTransactionFiles.has(filePath)).toBe(false);
     expect(findTransactionViolations(filePath, 'await db.transaction(async (tx) => tx.insert(table));'))
       .toEqual([expect.objectContaining({ filePath, line: 1, snippet: 'db.transaction(async (tx) => tx.insert(table))' })]);
   });
 
-  test('分支例外只登记经浏览器数据库工厂取得的实际 IDB 模块', async () => {
-    const filePath = 'lib/ai-session/battle-story/branch-commit-storage.ts';
+  test.each([
+    { filePath: 'lib/ai-session/battle-story/source-storage.ts', transactions: [
+      "db.transaction(storeNames, 'readonly')",
+    ] },
+    { filePath: 'lib/ai-session/battle-story/branch-commit-storage.ts', transactions: [
+      "db.transaction(stores.battleStoryChapters, 'readonly')", "db.transaction(storeNames, 'readwrite')",
+    ] },
+    { filePath: 'lib/ai-session/battle-story/tail-rewrite-commit-storage.ts', transactions: [
+      "db.transaction(stores.battleStoryChapters, 'readonly')", "db.transaction(storeNames, 'readwrite')",
+    ] },
+  ])('故事例外只登记经浏览器数据库工厂取得的实际 IDB 模块 $filePath', async ({ filePath, transactions }) => {
     expect(allowedTransactionFiles.has(filePath)).toBe(true);
     const source = await readFile(path.join(repoRoot, filePath), 'utf8');
     expect(source).toContain("from '@/lib/ai-session/storage'");
-    expect(source).toContain('await openAiSessionDb()');
-    // readonly全图、只读receipt与readwrite提交三处调用，不能因登记遗漏它们的覆盖。
-    expect(findTransactionViolations(filePath, source)).toHaveLength(3);
+    // 每个独立入口均取得浏览器数据库；迁移后 readonly 全图由 source-storage 单独承载。
+    expect(source.match(/\bdb\s*=\s*await openAiSessionDb\(\)/gu)).toHaveLength(transactions.length);
+    // 精确记录 receiver、模式与调用数，不能以新增文件豁免未来出现的额外事务。
+    expect(findTransactionViolations(filePath, source).map((violation) => violation.snippet)).toEqual(transactions);
   });
 
   test('除显式白名单外，源码中不允许再出现 .transaction() 调用', async () => {
