@@ -15,7 +15,11 @@ fn copy(document: &str) -> Result<CopyRecord, StoryError> {
     let raw = serde_json::from_str(document).map_err(|_| StoryError::Corrupt)?;
     let index = chapter_index(&authority(raw, CHAPTER_AUTHORITY)?)?;
     copy_chapter(
-        CheckedCopySource::checked(document, document.len() as u64, &digest(document.as_bytes()))?,
+        CheckedCopySource::checked(
+            document,
+            document.len() as u64,
+            &digest(document.as_bytes()),
+        )?,
         &index,
         index.source_chapter_id.as_deref(),
         "target",
@@ -35,7 +39,11 @@ fn copy_cp(document: &str) -> Result<CopyRecord, StoryError> {
     let raw = serde_json::from_str(document).map_err(|_| StoryError::Corrupt)?;
     let index = checkpoint_index(&authority(raw, CHECKPOINT_AUTHORITY)?)?;
     copy_checkpoint(
-        CheckedCopySource::checked(document, document.len() as u64, &digest(document.as_bytes()))?,
+        CheckedCopySource::checked(
+            document,
+            document.len() as u64,
+            &digest(document.as_bytes()),
+        )?,
         &index,
         index.chapter_id.as_deref(),
         "target",
@@ -210,7 +218,12 @@ fn native_physical_copy_matches_the_real_domain_shared_fixture() {
         let document = source.to_string();
         let indexed: ChapterIndex = serde_json::from_value(source.clone()).unwrap();
         let copied = copy_chapter(
-            CheckedCopySource::checked(&document, document.len() as u64, &digest(document.as_bytes())).unwrap(),
+            CheckedCopySource::checked(
+                &document,
+                document.len() as u64,
+                &digest(document.as_bytes()),
+            )
+            .unwrap(),
             &indexed,
             indexed.source_chapter_id.as_deref(),
             target,
@@ -230,7 +243,12 @@ fn native_physical_copy_matches_the_real_domain_shared_fixture() {
         let document = source.to_string();
         let indexed: CheckpointIndex = serde_json::from_value(source.clone()).unwrap();
         let copied = copy_checkpoint(
-            CheckedCopySource::checked(&document, document.len() as u64, &digest(document.as_bytes())).unwrap(),
+            CheckedCopySource::checked(
+                &document,
+                document.len() as u64,
+                &digest(document.as_bytes()),
+            )
+            .unwrap(),
             &indexed,
             indexed.chapter_id.as_deref(),
             target,
@@ -323,4 +341,55 @@ fn verified_bytes_do_not_bypass_copy_authority_or_checkpoint_relationships() {
         copy_checkpoint(checked(), &checkpoint_index, Some("c1"), "target"),
         Err(StoryError::Corrupt)
     ));
+}
+
+#[test]
+fn streaming_authority_copy_matches_independent_full_raw_goldens() {
+    // Literal complete oracles: neither member scanner nor optimized authority
+    // projection generates any expected byte, including the fixed namespace IDs.
+    let chapter = r#"
+{ "\u0069d" : "c1", "session\u0049d":"source", "index":1,"action":"start",
+"status":"active","titlePreview":"章","titleTruncated":false,"createdAt":1,
+"markdownByteLength":0,"markdown":"","reportJson":{"a":[{"text":",:\"\\"}]},"deterministicDigest":{},
+"\ud800":"\udfff", "dup":1,"dup":2,"😀":{"x":1,"x":2} }	"#;
+    let expected = r#"
+{ "\u0069d" : "branch_c3b7134cee1c92a57c77fc71a4416fb7d248f37a464a50e8cdb7113e8b163886", "session\u0049d":"target", "index":1,"action":"start",
+"status":"active","titlePreview":"章","titleTruncated":false,"createdAt":1,
+"markdownByteLength":0,"markdown":"","reportJson":{"a":[{"text":",:\"\\"}]},"deterministicDigest":{},
+"\ud800":"\udfff", "dup":1,"dup":2,"😀":{"x":1,"x":2} ,"sourceChapterId":null,"supersededByChapterId":null}	"#;
+    assert_eq!(copy(chapter).unwrap().document, expected);
+    let checkpoint = r#" {"\u0069d":"p0", "sessionId" : "source", "boundaryIndex":0,
+"combatants":[{"x":1,"x":2,"\udfff":"\ud800","nested":[[[{}]]]}],"createdAt":1,"unknown":1,"unknown":2} "#;
+    let expected = r#" {"\u0069d":"branch_66689c0eccd23c3da199dada91e4b3c82e9854adf5b5a413a6b53e981f369ea7", "sessionId" : "target", "boundaryIndex":0,
+"combatants":[{"x":1,"x":2,"\udfff":"\ud800","nested":[[[{}]]]}],"createdAt":1,"unknown":1,"unknown":2,"chapterId":null} "#;
+    assert_eq!(copy_cp(checkpoint).unwrap().document, expected);
+}
+
+#[test]
+fn streaming_authority_matches_all_escaped_names_and_ignores_long_unknowns() {
+    for names in [CHAPTER_AUTHORITY, CHECKPOINT_AUTHORITY] {
+        for name in names {
+            let escaped = name
+                .bytes()
+                .map(|c| format!("\\u{c:04x}"))
+                .collect::<String>();
+            let text = format!(r#"{{"{escaped}":{{"opaque":"\ud800"}}}}"#);
+            let raw = serde_json::from_str(&text).unwrap();
+            let fields = authority(raw, names).unwrap();
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[name].get(), r#"{"opaque":"\ud800"}"#);
+        }
+    }
+    let long = format!("id{}\\ud800", "x".repeat(128 * 1024));
+    let raw_text =
+        format!(r#"{{"{long}":1,"{long}":2,"id\u0000":3,"i":4,"":5,"\ud800":6,"\udfff":7}}"#);
+    let raw = serde_json::from_str(&raw_text).unwrap();
+    assert!(authority(raw, CHAPTER_AUTHORITY).unwrap().is_empty());
+    let nested = format!("{}0{}", "[".repeat(96), "]".repeat(96));
+    let raw_text = format!(r#"{{"unknown":{nested},"\u0069d":"c1"}}"#);
+    let raw = serde_json::from_str(&raw_text).unwrap();
+    assert_eq!(
+        authority(raw, CHAPTER_AUTHORITY).unwrap()["id"].get(),
+        r#""c1""#
+    );
 }

@@ -2492,3 +2492,122 @@ pub(in crate::arena_story) fn with_operation(
     m.validate().unwrap();
     (m, parts)
 }
+
+#[test]
+fn borrowed_members_match_independent_literal_slices() {
+    for empty in ["{}", "{ \n\t }", "[]", "[ \r\n ]"] {
+        assert_eq!(member_iter(parse_raw(empty).unwrap()).unwrap().count(), 0);
+    }
+    let raw = parse_raw(
+        r#" { "a" : [1, {"x":"comma, colon: quote\" slash\\"}],
+        "b" : {"k":[[],{"n":null}]}, "\ud800": "\udfff" } "#,
+    )
+    .unwrap();
+    let expected = [
+        r#""a" : [1, {"x":"comma, colon: quote\" slash\\"}]"#,
+        r#""b" : {"k":[[],{"n":null}]}"#,
+        r#""\ud800": "\udfff""#,
+    ];
+    assert_eq!(member_iter(raw).unwrap().collect::<Vec<_>>(), expected);
+    assert_eq!(members(raw).unwrap(), expected);
+    let array = parse_raw(r#" [ "a,b", {"x":[1,2]}, [3,4], null ] "#).unwrap();
+    assert_eq!(
+        member_iter(array).unwrap().collect::<Vec<_>>(),
+        [r#""a,b""#, r#"{"x":[1,2]}"#, "[3,4]", "null"]
+    );
+    assert!(member_iter(parse_raw("null").unwrap()).is_err());
+    for bad in [
+        r#""id": "\q""#,
+        r#""id": [1,]"#,
+        r#""id": 1 trailing"#,
+        "12: 1",
+        "null: 1",
+        r#""id" 1"#,
+    ] {
+        assert!(raw_member_parts(bad).is_err(), "{bad}");
+    }
+    let item = r#" "i\u0064" : { "opaque": "\ud800" } "#;
+    let (key, value) = raw_member_parts(item).unwrap();
+    assert_eq!(key.get(), r#""i\u0064""#);
+    assert_eq!(value.get(), r#"{ "opaque": "\ud800" }"#);
+    for token in [key.get(), value.get()] {
+        let start = token.as_ptr() as usize - item.as_ptr() as usize;
+        assert_eq!(&item[start..start + token.len()], token);
+    }
+}
+
+#[test]
+fn streaming_string_units_keep_utf16_and_key_comparison_contract() {
+    let cases: &[(&str, &[u16])] = &[
+        (r#""""#, &[]),
+        (
+            r#""\"\\\/\b\f\n\r\t\u0000""#,
+            &[34, 92, 47, 8, 12, 10, 13, 9, 0],
+        ),
+        (r#""中😀""#, &[0x4e2d, 0xd83d, 0xde00]),
+        (r#""\u4e2d\ud83d\ude00""#, &[0x4e2d, 0xd83d, 0xde00]),
+        (r#""\ud800x\udfff""#, &[0xd800, 120, 0xdfff]),
+    ];
+    for (text, expected) in cases {
+        let raw = parse_raw(text).unwrap();
+        assert_eq!(string_units(raw).unwrap(), *expected);
+        assert_eq!(
+            string_unit_iter(raw)
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            *expected
+        );
+        assert!(text_length(raw, expected.len(), expected.len()).is_ok());
+        assert!(text_length(raw, expected.len() + 1, expected.len() + 1).is_err());
+    }
+    for key in [r#""id""#, r#""\u0069\u0064""#, r#""i\u0064""#] {
+        assert!(raw_key_equals(parse_raw(key).unwrap(), "id").unwrap());
+    }
+    for key in [
+        r#""""#,
+        r#""i""#,
+        r#""id\u0000""#,
+        r#""idmore""#,
+        r#""\ud800""#,
+        r#""\udfff""#,
+        r#""😀""#,
+    ] {
+        assert!(!raw_key_equals(parse_raw(key).unwrap(), "id").unwrap());
+    }
+    assert!(raw_key_equals(parse_raw(r#""\ud83d\ude00""#).unwrap(), "😀").unwrap());
+    assert!(!raw_key_equals(parse_raw(r#""\ud800""#).unwrap(), "�").unwrap());
+    for (token, name) in [
+        (r#""""#, ""),
+        (r#""\"""#, "\""),
+        (r#""\\""#, "\\"),
+        (r#""\/""#, "/"),
+        (r#""\u0000""#, "\0"),
+        (r#""\u4e2d""#, "中"),
+        (r#""😀""#, "😀"),
+    ] {
+        assert!(raw_key_equals(parse_raw(token).unwrap(), name).unwrap());
+    }
+    assert!(!raw_key_equals(parse_raw(r#""\u0069\u0064x""#).unwrap(), "id").unwrap());
+    assert!(raw_key_equals(parse_raw("null").unwrap(), "null").is_err());
+    assert!(string_units(parse_raw("1").unwrap()).is_err());
+}
+
+#[test]
+fn closed_and_hosted_decoded_duplicate_policies_remain_distinct() {
+    for text in [
+        r#"{"x":1,"\u0078":2}"#,
+        r#"{"\ud800":1,"\ud800":2}"#,
+        r#"{"😀":1,"\ud83d\ude00":2}"#,
+    ] {
+        let raw = parse_raw(text).unwrap();
+        assert!(raw_object(raw).is_err());
+        assert!(raw_projection_fields(raw, &["data"]).unwrap().is_empty());
+    }
+    let raw =
+        parse_raw(r#"{"data":1,"d\u0061ta": {"x":1,"x":2},"extension":1,"extension":2}"#).unwrap();
+    assert_eq!(
+        raw_projection_fields(raw, &["data"]).unwrap()["data"].get(),
+        r#"{"x":1,"x":2}"#
+    );
+}

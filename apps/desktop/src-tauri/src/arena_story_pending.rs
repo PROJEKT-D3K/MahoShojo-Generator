@@ -1236,44 +1236,85 @@ fn one_of(raw: &RawValue, values: &[&str]) -> Result<(), StoryError> {
 // Match JavaScript string length/TextEncoder without rejecting a legal lone
 // surrogate escape in an opaque JSON original. Stored bytes are never rewritten.
 pub(super) fn string_units(raw: &RawValue) -> Result<Vec<u16>, StoryError> {
+    string_unit_iter(raw)?.collect()
+}
+
+// RawValue has already validated the whole token, including any suffix a key
+// comparison will not visit. Decode UTF-16 units without allocating a key-sized
+// buffer; a literal supplementary scalar yields two units, lone escapes one.
+fn string_unit_iter(
+    raw: &RawValue,
+) -> Result<impl Iterator<Item = Result<u16, StoryError>> + '_, StoryError> {
     let raw = raw.get();
     if !raw.starts_with('"') || !raw.ends_with('"') {
         return Err(StoryError::Invalid);
     }
     let mut chars = raw[1..raw.len() - 1].chars();
-    let mut units = Vec::new();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            let unit = match chars.next().ok_or(StoryError::Invalid)? {
-                'u' => {
-                    let mut n = 0;
-                    for _ in 0..4 {
-                        n = (n << 4)
-                            | chars
-                                .next()
-                                .and_then(|c| c.to_digit(16))
-                                .ok_or(StoryError::Invalid)? as u16;
+    let mut pending = None;
+    Ok(std::iter::from_fn(move || {
+        if let Some(unit) = pending.take() {
+            return Some(Ok(unit));
+        }
+        let c = chars.next()?;
+        Some((|| {
+            if c == '\\' {
+                Ok(match chars.next().ok_or(StoryError::Invalid)? {
+                    'u' => {
+                        let mut n = 0;
+                        for _ in 0..4 {
+                            n = (n << 4)
+                                | chars
+                                    .next()
+                                    .and_then(|c| c.to_digit(16))
+                                    .ok_or(StoryError::Invalid)?
+                                    as u16;
+                        }
+                        n
                     }
-                    n
-                }
-                '"' => 34,
-                '\\' => 92,
-                '/' => 47,
-                'b' => 8,
-                'f' => 12,
-                'n' => 10,
-                'r' => 13,
-                't' => 9,
-                _ => return Err(StoryError::Invalid),
-            };
-            units.push(unit);
-        } else {
-            let mut buf = [0; 2];
-            units.extend_from_slice(c.encode_utf16(&mut buf));
+                    '"' => 34,
+                    '\\' => 92,
+                    '/' => 47,
+                    'b' => 8,
+                    'f' => 12,
+                    'n' => 10,
+                    'r' => 13,
+                    't' => 9,
+                    _ => return Err(StoryError::Invalid),
+                })
+            } else {
+                let mut buf = [0; 2];
+                let units = c.encode_utf16(&mut buf);
+                pending = units.get(1).copied();
+                Ok(units[0])
+            }
+        })())
+    }))
+}
+
+pub(super) fn raw_key_equals(raw: &RawValue, name: &str) -> Result<bool, StoryError> {
+    let token = raw.get();
+    if !token.starts_with('"') || !token.ends_with('"') {
+        return Err(StoryError::Invalid);
+    }
+    let inner = &token[1..token.len() - 1];
+    // One matching UTF-16 unit occupies at most six JSON bytes. UTF-8 name
+    // length is at least its UTF-16 unit count. This comparison-only bound
+    // avoids rescanning a huge opaque key for every small authority name.
+    if inner.len() > name.len().saturating_mul(6) {
+        return Ok(false);
+    }
+    if !inner.as_bytes().contains(&b'\\') {
+        return Ok(inner == name);
+    }
+    let mut expected = name.encode_utf16();
+    for unit in string_unit_iter(raw)? {
+        if Some(unit?) != expected.next() {
+            return Ok(false);
         }
     }
-    Ok(units)
+    Ok(expected.next().is_none())
 }
+
 fn text_length(raw: &RawValue, min: usize, max: usize) -> Result<(), StoryError> {
     let units = string_units(raw)?;
     if !(min..=max).contains(&units.len()) {
@@ -2033,45 +2074,60 @@ pub(super) mod tests;
 // Equality of JSON values, including unknown object members and lone UTF-16
 // surrogate escapes. No Value tree, string normalization or name-based role match.
 pub(super) fn members(raw: &RawValue) -> Result<Vec<&str>, StoryError> {
+    Ok(member_iter(raw)?.collect())
+}
+
+// The borrowed RawValue validates balanced containers and string escapes before
+// this delimiter scan. Retain just the current member, not all top-level spans.
+pub(super) fn member_iter(raw: &RawValue) -> Result<impl Iterator<Item = &str>, StoryError> {
     let text = raw.get();
     if !matches!(text.as_bytes().first(), Some(b'{' | b'[')) {
         return Err(StoryError::Invalid);
     }
     let inner = &text[1..text.len() - 1];
-    if inner.trim().is_empty() {
-        return Ok(vec![]);
-    }
-    let mut result = Vec::new();
-    let mut quote = false;
-    let mut escape = false;
-    let mut depth = 0usize;
-    let mut start = 0;
-    for (index, byte) in inner.bytes().enumerate() {
-        if quote {
-            if escape {
-                escape = false
-            } else if byte == b'\\' {
-                escape = true
-            } else if byte == b'"' {
-                quote = false
-            }
-            continue;
+    let mut remaining = if inner.trim().is_empty() { "" } else { inner };
+    Ok(std::iter::from_fn(move || {
+        if remaining.is_empty() {
+            return None;
         }
-        match byte {
-            b'"' => quote = true,
-            b'{' | b'[' => depth += 1,
-            b'}' | b']' => depth -= 1,
-            b',' if depth == 0 => {
-                result.push(inner[start..index].trim());
-                start = index + 1;
+        let mut quote = false;
+        let mut escape = false;
+        let mut depth = 0usize;
+        for (index, byte) in remaining.bytes().enumerate() {
+            if quote {
+                if escape {
+                    escape = false;
+                } else if byte == b'\\' {
+                    escape = true;
+                } else if byte == b'"' {
+                    quote = false;
+                }
+                continue;
             }
-            _ => {}
+            match byte {
+                b'"' => quote = true,
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' => depth -= 1,
+                b',' if depth == 0 => {
+                    let member = remaining[..index].trim();
+                    remaining = &remaining[index + 1..];
+                    return Some(member);
+                }
+                _ => {}
+            }
         }
-    }
-    result.push(inner[start..].trim());
-    Ok(result)
+        let member = remaining.trim();
+        remaining = "";
+        Some(member)
+    }))
 }
+
 pub(super) fn raw_member(item: &str) -> Result<(Vec<u16>, &RawValue), StoryError> {
+    let (key, value) = raw_member_parts(item)?;
+    Ok((string_units(key)?, value))
+}
+
+pub(super) fn raw_member_parts(item: &str) -> Result<(&RawValue, &RawValue), StoryError> {
     let mut quote = false;
     let mut escape = false;
     let mut colon = None;
@@ -2096,7 +2152,10 @@ pub(super) fn raw_member(item: &str) -> Result<(Vec<u16>, &RawValue), StoryError
         serde_json::from_str(item[..index].trim()).map_err(|_| StoryError::Invalid)?;
     let value: &RawValue =
         serde_json::from_str(item[index + 1..].trim()).map_err(|_| StoryError::Invalid)?;
-    Ok((string_units(key)?, value))
+    if !key.get().starts_with('"') {
+        return Err(StoryError::Invalid);
+    }
+    Ok((key, value))
 }
 fn raw_object(
     raw: &RawValue,

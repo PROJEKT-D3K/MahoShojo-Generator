@@ -92,14 +92,14 @@ fn authority<'a>(
     names: &[&'static str],
 ) -> Result<BTreeMap<&'static str, &'a RawValue>, StoryError> {
     let mut result = BTreeMap::new();
-    for member in super::pending::members(raw)? {
-        let (key, value) = super::pending::raw_member(member)?;
-        if let Some(name) = names
-            .iter()
-            .find(|name| key.iter().copied().eq(name.encode_utf16()))
-        {
-            if result.insert(*name, value).is_some() {
-                return Err(StoryError::Corrupt);
+    for member in super::pending::member_iter(raw)? {
+        let (key, value) = super::pending::raw_member_parts(member)?;
+        for name in names {
+            if super::pending::raw_key_equals(key, name)? {
+                if result.insert(*name, value).is_some() {
+                    return Err(StoryError::Corrupt);
+                }
+                break;
             }
         }
     }
