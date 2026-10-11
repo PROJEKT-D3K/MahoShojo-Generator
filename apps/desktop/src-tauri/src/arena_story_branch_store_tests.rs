@@ -600,3 +600,73 @@ fn unknown_commit_or_failed_rollback_fences_the_same_stage_when_receipt_is_absen
         assert_eq!(counts(store, "target"), (0, 0, 0));
     }
 }
+
+#[test]
+fn source_read_and_copy_share_one_check_for_chapter_and_checkpoint() {
+    let connection = Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE source (id TEXT PRIMARY KEY, document TEXT, bytes INTEGER, hash TEXT)",
+        )
+        .unwrap();
+    let chapter = r#"{"id":"c1","sessionId":"source","index":1,"action":"start","status":"active","sourceChapterId":null,"titlePreview":"t","titleTruncated":false,"createdAt":1,"markdownByteLength":0}"#;
+    let checkpoint = r#"{"id":"p0","sessionId":"source","boundaryIndex":0,"chapterId":null,"opaque":{"x":1,"x":2,"\ud800":"\udfff"}}"#;
+    for document in [chapter, checkpoint] {
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO source VALUES ('row',?1,?2,?3)",
+                params![document, document.len() as u64, digest(document.as_bytes())],
+            )
+            .unwrap();
+        let before = verified_source::check_count();
+        let copied = read_document(
+            &connection,
+            "source",
+            "document",
+            "bytes",
+            "hash",
+            "row",
+            |source| {
+                assert_eq!(verified_source::check_count(), before + 1);
+                if document == chapter {
+                    let index = chapter_index(&authority(source.raw(), CHAPTER_AUTHORITY)?)?;
+                    copy_chapter(source, &index, None, "target")
+                } else {
+                    let index = checkpoint_index(&authority(source.raw(), CHECKPOINT_AUTHORITY)?)?;
+                    copy_checkpoint(source, &index, None, "target")
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(verified_source::check_count(), before + 1);
+        assert_eq!(copied.digest, digest(copied.document.as_bytes()));
+        if document == checkpoint {
+            assert!(copied
+                .document
+                .contains(r#""opaque":{"x":1,"x":2,"\ud800":"\udfff"}"#));
+        }
+    }
+    // A callback must never see unchecked bytes, even with internally consistent metadata.
+    for (document, hash) in [
+        ("{}", digest(b"wrong")),
+        ("{", digest(b"{")),
+        ("[]", digest(b"[]")),
+    ] {
+        connection
+            .execute(
+                "UPDATE source SET document=?1,bytes=?2,hash=?3",
+                params![document, document.len() as u64, hash],
+            )
+            .unwrap();
+        let result = read_document(
+            &connection,
+            "source",
+            "document",
+            "bytes",
+            "hash",
+            "row",
+            |_| -> Result<(), StoryError> { panic!("corrupt source reached consumer") },
+        );
+        assert!(matches!(result, Err(StoryError::Corrupt)));
+    }
+}

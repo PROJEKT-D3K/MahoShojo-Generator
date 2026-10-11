@@ -286,17 +286,22 @@ fn check_source(connection: &Connection, m: &BranchManifest) -> Result<(), Story
                 "document_digest",
             ),
         };
-        let document = read_document(
+        read_document(
             connection,
             table,
             column,
             bytes,
             hash,
             &descriptor.record_id,
+            |document| {
+                if document.byte_length() != descriptor.byte_length
+                    || document.digest() != descriptor.digest
+                {
+                    return Err(StoryError::Stale);
+                }
+                Ok(())
+            },
         )?;
-        if document.byte_length != descriptor.byte_length || document.digest != descriptor.digest {
-            return Err(StoryError::Stale);
-        }
     }
     Ok(())
 }
@@ -420,29 +425,21 @@ fn validate_branch_stage(
 }
 
 // Identifiers here are internal fixed literals only, never command input.
-fn read_document(
+fn read_document<T>(
     connection: &Connection,
     table: &str,
     column: &str,
     bytes: &str,
     hash: &str,
     id: &str,
-) -> Result<CopyRecord, StoryError> {
+    use_checked: impl FnOnce(CheckedCopySource<'_>) -> Result<T, StoryError>,
+) -> Result<T, StoryError> {
     let (document, length, expected): (Option<String>,u64,String) = connection.query_row(&format!(
         "SELECT CASE WHEN {bytes} BETWEEN 1 AND ?2 AND length(CAST({column} AS BLOB))={bytes} THEN {column} END,{bytes},{hash} FROM {table} WHERE id=?1"),params![id,CANDIDATE_COMMIT_BYTES],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_|StoryError::Corrupt)?;
     let document = document.ok_or(StoryError::Corrupt)?;
-    CopySource {
-        document: &document,
-        byte_length: length,
-        digest: &expected,
-    }
-    .checked()?;
-    Ok(CopyRecord {
-        id: id.into(),
-        document,
-        byte_length: length,
-        digest: expected,
-    })
+    // The callback cannot retain a borrow of this local String. All consumers,
+    // including CAS and seed copying, receive only the checked immutable view.
+    use_checked(CheckedCopySource::checked(&document, length, &expected)?)
 }
 
 fn write_branch(
@@ -458,39 +455,32 @@ fn write_branch(
         params![s.id,document,document.len() as u64,digest(document.as_bytes()),s.revision,s.title_preview,s.title_truncated,s.mode,s.created_at,s.updated_at,s.chapter_count,s.last_chapter_id,s.working_checkpoint_id,s.last_input_checkpoint_id,s.chapter_plan.as_ref().map(serde_json::to_string).transpose().map_err(|_|StoryError::Invalid)?]).map_err(|_|StoryError::Io)?;
     drop(document);
     hook("session")?;
-    let seed = read_document(
+    read_document(
         connection,
         "arena_story_session",
         "seed_document",
         "seed_bytes",
         "seed_digest",
         &m.source.session.session_id,
+        |seed| {
+            connection.execute("UPDATE arena_story_session SET seed_document=?2,seed_bytes=?3,seed_digest=?4 WHERE id=?1",params![m.session_id,seed.document(),seed.byte_length(),seed.digest()]).map_err(|_|StoryError::Io)?;
+            Ok(())
+        },
     )?;
-    connection.execute("UPDATE arena_story_session SET seed_document=?2,seed_bytes=?3,seed_digest=?4 WHERE id=?1",params![m.session_id,seed.document,seed.byte_length,seed.digest]).map_err(|_|StoryError::Io)?;
-    drop(seed);
     hook("seed")?;
     // Every iteration reads, checks, transforms and writes exactly one document.
     let mut previous = None;
     for index in 1..=m.source.anchor_index {
         hook("before-copy-chapter")?;
         let indexed=connection.query_row("SELECT id,session_id,chapter_index,action,source_chapter_id,title_preview,title_truncated,created_at,markdown_bytes FROM arena_story_chapter WHERE session_id=?1 AND chapter_index=?2",params![m.source.session.session_id,index],|r|Ok(ChapterIndex{id:r.get(0)?,session_id:r.get(1)?,index:r.get(2)?,action:r.get(3)?,status:"active".into(),source_chapter_id:r.get(4)?,title_preview:r.get(5)?,title_truncated:r.get(6)?,created_at:r.get(7)?,markdown_byte_length:r.get(8)?})).map_err(|_|StoryError::Corrupt)?;
-        let source = read_document(
+        let copied = read_document(
             connection,
             "arena_story_chapter",
             "document",
             "document_bytes",
             "document_digest",
             &indexed.id,
-        )?;
-        let copied = copy_chapter(
-            CopySource {
-                document: &source.document,
-                byte_length: source.byte_length,
-                digest: &source.digest,
-            },
-            &indexed,
-            previous.as_deref(),
-            &m.session_id,
+            |source| copy_chapter(source, &indexed, previous.as_deref(), &m.session_id),
         )?;
         let marker = CopyMarker {
             version: 2,
@@ -520,23 +510,14 @@ fn write_branch(
         } else {
             Some(connection.query_row("SELECT id FROM arena_story_chapter WHERE session_id=?1 AND chapter_index=?2",params![m.source.session.session_id,index],|r|r.get::<_,String>(0)).map_err(|_|StoryError::Corrupt)?)
         };
-        let source = read_document(
+        let copied = read_document(
             connection,
             "arena_story_checkpoint",
             "document",
             "document_bytes",
             "document_digest",
             &indexed.id,
-        )?;
-        let copied = copy_checkpoint(
-            CopySource {
-                document: &source.document,
-                byte_length: source.byte_length,
-                digest: &source.digest,
-            },
-            &indexed,
-            chapter.as_deref(),
-            &m.session_id,
+            |source| copy_checkpoint(source, &indexed, chapter.as_deref(), &m.session_id),
         )?;
         let target_chapter = if index == 0 {
             None

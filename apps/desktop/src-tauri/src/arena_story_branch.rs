@@ -79,31 +79,11 @@ pub(super) struct CopyRecord {
     pub digest: String,
 }
 
-/// Borrow one checked source record. The per-record ceiling is not a history cap.
-pub(super) struct CopySource<'a> {
-    pub document: &'a str,
-    pub byte_length: u64,
-    pub digest: &'a str,
-}
-impl CopySource<'_> {
-    fn checked(&self) -> Result<&RawValue, StoryError> {
-        if self.byte_length == 0 || self.byte_length > CANDIDATE_COMMIT_BYTES {
-            return Err(StoryError::TooLarge);
-        }
-        if self.document.len() as u64 != self.byte_length
-            || !valid_digest(self.digest)
-            || digest(self.document.as_bytes()) != self.digest
-        {
-            return Err(StoryError::Corrupt);
-        }
-        let raw: &RawValue =
-            serde_json::from_str(self.document).map_err(|_| StoryError::Corrupt)?;
-        if !raw.get().starts_with('{') {
-            return Err(StoryError::Corrupt);
-        }
-        Ok(raw)
-    }
-}
+// Keep the evidence fields in a sibling of storage, not in its parent: Rust
+// descendants can access parent-private fields, which would permit forgery here.
+#[path = "arena_story_branch_verified_source.rs"]
+mod verified_source;
+use verified_source::CheckedCopySource;
 
 // Only retain the small allowlist, never opaque members. UTF-16 comparison catches
 // escaped aliases while allowing unknown lone-surrogate keys and duplicate keys.
@@ -234,13 +214,13 @@ fn finish(id: String, document: String) -> CopyRecord {
 
 /// `indexed` is the row read inside the same source snapshot; it is not a renderer DTO.
 /// `previous_id` is a bounded lookup of source index-1, not an untrusted mapping.
-pub(super) fn copy_chapter(
-    source: CopySource<'_>,
+fn copy_chapter(
+    source: CheckedCopySource<'_>,
     indexed: &ChapterIndex,
     previous_id: Option<&str>,
     target_session: &str,
 ) -> Result<CopyRecord, StoryError> {
-    let raw = source.checked()?;
+    let raw = source.raw();
     let fields = authority(raw, CHAPTER_AUTHORITY)?;
     let actual = chapter_index(&fields)?;
     if !valid_id(&indexed.id)
@@ -280,7 +260,7 @@ pub(super) fn copy_chapter(
         )?)?
     };
     let document = materialize(
-        source.document,
+        source.document(),
         &fields,
         &[
             ("id", json(&id)?),
@@ -293,13 +273,13 @@ pub(super) fn copy_chapter(
     Ok(finish(id, document))
 }
 
-pub(super) fn copy_checkpoint(
-    source: CopySource<'_>,
+fn copy_checkpoint(
+    source: CheckedCopySource<'_>,
     indexed: &CheckpointIndex,
     source_chapter_id: Option<&str>,
     target_session: &str,
 ) -> Result<CopyRecord, StoryError> {
-    let raw = source.checked()?;
+    let raw = source.raw();
     let fields = authority(raw, CHECKPOINT_AUTHORITY)?;
     let actual = checkpoint_index(&fields)?;
     if !valid_id(&indexed.id)
@@ -330,7 +310,7 @@ pub(super) fn copy_checkpoint(
         )?)?
     };
     let document = materialize(
-        source.document,
+        source.document(),
         &fields,
         &[
             ("id", json(&id)?),

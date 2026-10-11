@@ -15,11 +15,7 @@ fn copy(document: &str) -> Result<CopyRecord, StoryError> {
     let raw = serde_json::from_str(document).map_err(|_| StoryError::Corrupt)?;
     let index = chapter_index(&authority(raw, CHAPTER_AUTHORITY)?)?;
     copy_chapter(
-        CopySource {
-            document,
-            byte_length: document.len() as u64,
-            digest: &digest(document.as_bytes()),
-        },
+        CheckedCopySource::checked(document, document.len() as u64, &digest(document.as_bytes()))?,
         &index,
         index.source_chapter_id.as_deref(),
         "target",
@@ -39,11 +35,7 @@ fn copy_cp(document: &str) -> Result<CopyRecord, StoryError> {
     let raw = serde_json::from_str(document).map_err(|_| StoryError::Corrupt)?;
     let index = checkpoint_index(&authority(raw, CHECKPOINT_AUTHORITY)?)?;
     copy_checkpoint(
-        CopySource {
-            document,
-            byte_length: document.len() as u64,
-            digest: &digest(document.as_bytes()),
-        },
+        CheckedCopySource::checked(document, document.len() as u64, &digest(document.as_bytes()))?,
         &index,
         index.chapter_id.as_deref(),
         "target",
@@ -160,11 +152,7 @@ fn corrupt_bytes_hash_and_index_relationship_fail_closed() {
     let hash = digest(document.as_bytes());
     let run = |index: &ChapterIndex, previous, byte_length, hash: &str| {
         copy_chapter(
-            CopySource {
-                document: &document,
-                byte_length,
-                digest: hash,
-            },
+            CheckedCopySource::checked(&document, byte_length, hash)?,
             index,
             previous,
             "target",
@@ -222,11 +210,7 @@ fn native_physical_copy_matches_the_real_domain_shared_fixture() {
         let document = source.to_string();
         let indexed: ChapterIndex = serde_json::from_value(source.clone()).unwrap();
         let copied = copy_chapter(
-            CopySource {
-                document: &document,
-                byte_length: document.len() as u64,
-                digest: &digest(document.as_bytes()),
-            },
+            CheckedCopySource::checked(&document, document.len() as u64, &digest(document.as_bytes())).unwrap(),
             &indexed,
             indexed.source_chapter_id.as_deref(),
             target,
@@ -246,11 +230,7 @@ fn native_physical_copy_matches_the_real_domain_shared_fixture() {
         let document = source.to_string();
         let indexed: CheckpointIndex = serde_json::from_value(source.clone()).unwrap();
         let copied = copy_checkpoint(
-            CopySource {
-                document: &document,
-                byte_length: document.len() as u64,
-                digest: &digest(document.as_bytes()),
-            },
+            CheckedCopySource::checked(&document, document.len() as u64, &digest(document.as_bytes())).unwrap(),
             &indexed,
             indexed.chapter_id.as_deref(),
             target,
@@ -261,4 +241,86 @@ fn native_physical_copy_matches_the_real_domain_shared_fixture() {
             expected
         );
     }
+}
+
+#[test]
+fn checked_source_borrows_exact_bytes_and_rejects_invalid_object_evidence() {
+    let document = format!(" \n{}\t", chapter(1));
+    let hash = digest(document.as_bytes());
+    let source = CheckedCopySource::checked(&document, document.len() as u64, &hash).unwrap();
+    assert_eq!(source.document().as_ptr(), document.as_ptr());
+    assert_eq!(source.document(), document);
+    assert_eq!(source.byte_length(), document.len() as u64);
+    assert_eq!(source.digest(), hash);
+    let start = source.raw().get().as_ptr() as usize - document.as_ptr() as usize;
+    assert_eq!(
+        &document[start..start + source.raw().get().len()],
+        source.raw().get()
+    );
+    for invalid in ["{", "{\"x\":}", "{} trailing", "[]", "null", "\"object\""] {
+        assert!(matches!(
+            CheckedCopySource::checked(invalid, invalid.len() as u64, &digest(invalid.as_bytes())),
+            Err(StoryError::Corrupt)
+        ));
+    }
+    for length in [0, CANDIDATE_COMMIT_BYTES + 1] {
+        assert!(matches!(
+            CheckedCopySource::checked(&document, length, &hash),
+            Err(StoryError::TooLarge)
+        ));
+    }
+    assert!(matches!(
+        CheckedCopySource::checked(&document, document.len() as u64, "sha256:bad"),
+        Err(StoryError::Corrupt)
+    ));
+}
+
+#[test]
+fn verified_bytes_do_not_bypass_copy_authority_or_checkpoint_relationships() {
+    let document = chapter(1);
+    let chapter_index: ChapterIndex = serde_json::from_str(&document).unwrap();
+    for name in CHAPTER_AUTHORITY {
+        let alias = format!("\\u{:04x}{}", name.as_bytes()[0], &name[1..]);
+        let document = if document.contains(&format!("\"{name}\":")) {
+            document.clone()
+        } else {
+            format!("{},\"{name}\":null}}", &document[..document.len() - 1])
+        };
+        let document = format!("{},\"{alias}\":null}}", &document[..document.len() - 1]);
+        let hash = digest(document.as_bytes());
+        let checked = CheckedCopySource::checked(&document, document.len() as u64, &hash).unwrap();
+        assert!(
+            matches!(
+                copy_chapter(checked, &chapter_index, None, "target"),
+                Err(StoryError::Corrupt)
+            ),
+            "{name}"
+        );
+    }
+    let document = checkpoint(1);
+    let mut checkpoint_index: CheckpointIndex = serde_json::from_str(&document).unwrap();
+    for name in CHECKPOINT_AUTHORITY {
+        let alias = format!("\\u{:04x}{}", name.as_bytes()[0], &name[1..]);
+        let document = format!("{},\"{alias}\":null}}", &document[..document.len() - 1]);
+        let hash = digest(document.as_bytes());
+        let checked = CheckedCopySource::checked(&document, document.len() as u64, &hash).unwrap();
+        assert!(
+            matches!(
+                copy_checkpoint(checked, &checkpoint_index, Some("c1"), "target"),
+                Err(StoryError::Corrupt)
+            ),
+            "{name}"
+        );
+    }
+    let hash = digest(document.as_bytes());
+    let checked = || CheckedCopySource::checked(&document, document.len() as u64, &hash).unwrap();
+    assert!(matches!(
+        copy_checkpoint(checked(), &checkpoint_index, Some("wrong"), "target"),
+        Err(StoryError::Corrupt)
+    ));
+    checkpoint_index.boundary_index = 2;
+    assert!(matches!(
+        copy_checkpoint(checked(), &checkpoint_index, Some("c1"), "target"),
+        Err(StoryError::Corrupt)
+    ));
 }
