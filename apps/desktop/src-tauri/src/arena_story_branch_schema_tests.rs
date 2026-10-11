@@ -167,7 +167,7 @@ fn schema9_migrates_real_cyclic_rows_with_foreign_keys_on_and_preserves_bytes() 
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        9
+        crate::store::SCHEMA_VERSION
     );
     assert!(!c
         .prepare("PRAGMA foreign_key_check")
@@ -355,7 +355,7 @@ fn markdown_byte_audit_matches_sqlite_for_lone_surrogates_pairs_and_nul() {
     }
 }
 
-fn all_column_hashes(c: &Connection) -> Vec<String> {
+pub(crate) fn all_column_hashes(c: &Connection) -> Vec<String> {
     use rusqlite::types::ValueRef;
     use sha2::{Digest, Sha256};
     let mut result = Vec::new();
@@ -491,7 +491,7 @@ fn schema9_page_capacity_failure_reopens_v8_bytes_then_retries_medium_history() 
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        9
+        crate::store::SCHEMA_VERSION
     );
     assert_eq!(before, all_column_hashes(&c));
     assert!(!c
@@ -535,4 +535,244 @@ fn native_branch_origin_is_required_and_matches_target_prefix_provenance() {
     )
     .unwrap();
     super::super::audit::audit_session(&c, "target").unwrap();
+}
+
+fn assert_schema10_index(c: &Connection) {
+    let columns: Vec<String> = c
+        .prepare("SELECT name FROM pragma_index_info('arena_story_chapter_source') ORDER BY seqno")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(columns, ["session_id", "source_chapter_id"]);
+    let unique: i64 = c.query_row("SELECT \"unique\" FROM pragma_index_list('arena_story_chapter') WHERE name='arena_story_chapter_source'", [], |r| r.get(0)).unwrap();
+    assert_eq!(unique, 0);
+}
+
+#[test]
+fn schema10_indexes_both_linear_and_branch_rows_without_changing_any_column() {
+    for branch in [false, true] {
+        let c = connection(9);
+        fixture(&c, branch);
+        let before = all_column_hashes(&c);
+        crate::store::migrate(&c).unwrap();
+        assert_schema10_index(&c);
+        assert_eq!(before, all_column_hashes(&c));
+        assert_eq!(
+            c.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(!c
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap());
+        super::super::audit::audit_relations(&c).unwrap();
+        crate::store::migrate(&c).unwrap();
+        assert_eq!(before, all_column_hashes(&c));
+        assert_eq!(
+            crate::store::applied_migrations(&c).unwrap(),
+            (1..=10).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn failed_schema10_migration_leaves_version_journal_rows_and_foreign_keys_intact() {
+    let c = connection(9);
+    fixture(&c, true);
+    let before = all_column_hashes(&c);
+    c.execute_batch("CREATE TABLE arena_story_chapter_source(collision TEXT)")
+        .unwrap();
+    assert!(crate::store::migrate(&c).is_err());
+    assert!(c.is_autocommit());
+    assert_eq!(
+        c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        9
+    );
+    assert_eq!(
+        crate::store::applied_migrations(&c).unwrap(),
+        (1..=9).collect::<Vec<_>>()
+    );
+    assert_eq!(before, all_column_hashes(&c));
+    assert_eq!(
+        c.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    c.execute_batch("DROP TABLE arena_story_chapter_source")
+        .unwrap();
+    crate::store::migrate(&c).unwrap();
+    assert_schema10_index(&c);
+    assert_eq!(before, all_column_hashes(&c));
+}
+
+#[test]
+fn schema10_sqlite_full_index_failure_rolls_back_before_successful_retry() {
+    let c = connection(9);
+    fixture(&c, true);
+    // Remove pages left free by historical table rebuilds so max_page_count
+    // genuinely stops this new index's first allocation.
+    c.execute_batch("VACUUM").unwrap();
+    let before = all_column_hashes(&c);
+    let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
+    let free: i64 = c
+        .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(free, 0, "fixture must actually require a new index page");
+    let limit: i64 = c
+        .query_row(&format!("PRAGMA max_page_count={pages}"), [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(limit, pages);
+    c.execute_batch("BEGIN").unwrap();
+    let error = c.execute_batch(super::MIGRATION_10).unwrap_err();
+    assert_eq!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DiskFull)
+    );
+    if !c.is_autocommit() {
+        c.execute_batch("ROLLBACK").unwrap();
+    }
+    assert!(crate::store::migrate(&c).is_err());
+    assert!(c.is_autocommit());
+    assert_eq!(
+        c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        9
+    );
+    assert_eq!(
+        crate::store::applied_migrations(&c).unwrap(),
+        (1..=9).collect::<Vec<_>>()
+    );
+    assert_eq!(before, all_column_hashes(&c));
+    assert_eq!(
+        c.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(!c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='arena_story_chapter_source')",
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap());
+    c.execute_batch("PRAGMA max_page_count=2147483647").unwrap();
+    crate::store::migrate(&c).unwrap();
+    assert_schema10_index(&c);
+    assert_eq!(before, all_column_hashes(&c));
+}
+
+#[test]
+fn schema10_reverse_index_keeps_null_links_and_cross_session_fk_rejection() {
+    let c = connection(10);
+    fixture(&c, false);
+    assert_schema10_index(&c);
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM arena_story_chapter WHERE source_chapter_id IS NULL",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    // SQL-level FK fixture only: the second session's parent ID exists globally
+    // but cannot satisfy a child reference in the first session.
+    c.execute_batch("BEGIN;
+        INSERT INTO arena_story_session SELECT 'other',document,document_bytes,document_digest,seed_document,seed_bytes,seed_digest,1,title_preview,title_truncated,mode,chapter_plan,created_at,updated_at,1,'other-chapter','other-cp','other-cp' FROM arena_story_session WHERE id='target';
+        INSERT INTO arena_story_chapter SELECT 'other-chapter','other',1,'start',NULL,title_preview,title_truncated,created_at,markdown_bytes,document,document_bytes,document_digest,'other-operation',operation_digest,receipt FROM arena_story_chapter WHERE id='first';
+        INSERT INTO arena_story_checkpoint SELECT 'other-cp','other',0,NULL,document,document_bytes,document_digest FROM arena_story_checkpoint WHERE id='cp0';
+        COMMIT;").unwrap();
+    let before = all_column_hashes(&c);
+    for bad_parent in ["other-chapter", "missing-parent"] {
+        c.execute_batch("BEGIN").unwrap();
+        c.execute(
+            "UPDATE arena_story_chapter SET source_chapter_id=?1 WHERE id='second'",
+            [bad_parent],
+        )
+        .unwrap();
+        assert_eq!(
+            c.execute_batch("COMMIT").unwrap_err().sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ConstraintViolation)
+        );
+        c.execute_batch("ROLLBACK").unwrap();
+        assert_eq!(before, all_column_hashes(&c));
+        assert!(!c
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap());
+    }
+}
+
+#[test]
+#[ignore = "serial migration cost on an externally prepared legal schema-9 fixture"]
+fn schema10_migration_cost_preserves_real_history_and_reports_index_pages() {
+    use std::time::Instant;
+    let root = std::path::PathBuf::from(std::env::var("MAHO_MIGRATION_ROOT").unwrap());
+    let path = root.join("library.sqlite");
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;PRAGMA foreign_keys=ON")
+        .unwrap();
+    assert_eq!(
+        c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        9
+    );
+    super::super::audit::audit_relations(&c).unwrap();
+    let before = all_column_hashes(&c);
+    let pages_before: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
+    let page_size: i64 = c.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap();
+    let chapters: i64 = c
+        .query_row("SELECT count(*) FROM arena_story_chapter", [], |r| r.get(0))
+        .unwrap();
+    let start = Instant::now();
+    crate::store::migrate(&c).unwrap();
+    let elapsed = start.elapsed().as_nanos();
+    let pages_after: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
+    let index_pages: i64 = c
+        .query_row(
+            "SELECT count(*) FROM dbstat WHERE name='arena_story_chapter_source'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let index_bytes: i64 = c
+        .query_row(
+            "SELECT sum(pgsize) FROM dbstat WHERE name='arena_story_chapter_source'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(index_pages > 0);
+    assert_eq!(index_bytes, index_pages * page_size);
+    assert_schema10_index(&c);
+    assert_eq!(before, all_column_hashes(&c));
+    assert!(!c
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .exists([])
+        .unwrap());
+    super::super::audit::audit_relations(&c).unwrap();
+    let wal_bytes = std::fs::metadata(root.join("library.sqlite-wal"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    drop(c);
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    assert_schema10_index(&c);
+    assert_eq!(before, all_column_hashes(&c));
+    assert_eq!(
+        c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        10
+    );
+    println!(
+        "SCHEMA10_MIGRATION_COST {}",
+        json!({"chapters":chapters,"elapsedNs":elapsed,"pageSize":page_size,"pagesBefore":pages_before,"pagesAfter":pages_after,"indexPages":index_pages,"indexBytes":index_bytes,"walBytesAfterCommit":wal_bytes,"rawColumnsPreserved":true,"reopenVerified":true,"scope":"single debug migration on actual legal schema-9 history; logical pages and post-commit WAL length, not absolute peak or SLO"})
+    );
 }

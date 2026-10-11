@@ -83,6 +83,15 @@ def boundaries(markers):
                         "ending": ending,
                         "endCallNs": e[f"sqlite.{ending}.after"]-e[f"sqlite.{ending}.before"],
                         "beginReturnedToEndReturnedNs": e[f"sqlite.{ending}.after"]-e["sqlite.begin.after"]}
+    result["branchPhasesNs"] = {}
+    for phase in ("source-cas", "validate-stage", "copy-chapters", "copy-checkpoints", "target-audit"):
+        before, after = f"branch.{phase}.before", f"branch.{phase}.after"
+        if before in e and after in e:
+            result["branchPhasesNs"][phase] = e[after] - e[before]
+        elif before in e:
+            # Cancellation may stop within a phase. Do not report its partial
+            # duration as a successfully completed full phase.
+            result["branchPhasesNs"][phase] = {"interrupted": True}
     return result
 
 

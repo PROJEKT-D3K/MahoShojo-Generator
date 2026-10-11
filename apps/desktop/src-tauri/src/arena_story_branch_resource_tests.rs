@@ -2,6 +2,9 @@
 use super::*;
 use std::io::Write;
 
+#[path = "arena_story_branch_sqlite_probe.rs"]
+mod sqlite_probe;
+
 fn mark(phase: &str, extra: Value) {
     let memory = std::fs::read_to_string("/proc/self/status")
         .unwrap_or_default()
@@ -667,6 +670,11 @@ fn short_totals(store: &StoryStore, session: &str) -> Value {
     let (document,seed,chapters,checkpoints):(u64,u64,u64,u64) = c.query_row("SELECT (SELECT document_bytes FROM arena_story_session WHERE id=?1),(SELECT seed_bytes FROM arena_story_session WHERE id=?1),(SELECT coalesce(sum(document_bytes),0) FROM arena_story_chapter WHERE session_id=?1),(SELECT coalesce(sum(document_bytes),0) FROM arena_story_checkpoint WHERE session_id=?1)", [session], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     json!({"sessionDocumentBytes":document,"seedDocumentBytes":seed,"chapterDocumentBytes":chapters,"checkpointDocumentBytes":checkpoints,"sumDocumentBytes":document+seed+chapters+checkpoints,"sourcePrefixIncludingSeedBytes":seed+chapters+checkpoints})
 }
+fn short_index_storage(store: &StoryStore) -> Value {
+    let c = lock_connection(&store.connection).unwrap();
+    let (pages, bytes): (i64, i64) = c.query_row("SELECT count(*),coalesce(sum(pgsize),0) FROM dbstat WHERE name='arena_story_chapter_source'", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+    json!({"index":"arena_story_chapter_source","pages":pages,"bytes":bytes,"scope":"dbstat logical index pages after measured work; includes all persisted sessions"})
+}
 fn short_health(store: &StoryStore, root: &std::path::Path, n: u64) {
     assert_eq!(counts(store, "source"), (1, n, n + 1));
     assert_eq!(
@@ -742,6 +750,9 @@ fn real_store_short_history_resource_probe() {
             "fixture-verified",
             json!({"source":short_totals(store,"source"),"saveElapsedUs":save_elapsed}),
         );
+        let sqlite = sqlite_probe::inspect(&lock_connection(&store.connection).unwrap(), "source");
+        short_mark("sqlite-diagnostics", sqlite);
+        short_mark("index-storage", short_index_storage(store));
     } else if phase == "rollback" || phase == "branch" {
         let (m, parts) = fixture(store, "source", n, n, "target");
         let digest = m.request_digest().unwrap();
@@ -810,6 +821,7 @@ fn real_store_short_history_resource_probe() {
         assert!(lock_connection(&store.connection).unwrap().is_autocommit());
     } else if phase == "verify-rollback" || phase == "verify" {
         short_health(store, &root, n);
+        short_mark("index-storage", short_index_storage(store));
         if phase == "verify-rollback" {
             assert_eq!(counts(store, "target"), (0, 0, 0));
             let identity: Value =

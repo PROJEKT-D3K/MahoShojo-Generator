@@ -48,6 +48,12 @@ ALTER TABLE arena_story_checkpoint_v9 RENAME TO arena_story_checkpoint;
 CREATE INDEX arena_story_session_updated ON arena_story_session(updated_at DESC,id DESC);
 "#;
 
+/// Resolve deferred chapter-parent debt through the full child key. This is a
+/// non-unique lookup index only; record bytes and all FK constraints stay intact.
+pub(crate) const MIGRATION_10: &str = r#"
+CREATE INDEX arena_story_chapter_source ON arena_story_chapter(session_id,source_chapter_id);
+"#;
+
 #[cfg(test)]
 #[path = "arena_story_branch_schema_tests.rs"]
 pub(crate) mod tests;

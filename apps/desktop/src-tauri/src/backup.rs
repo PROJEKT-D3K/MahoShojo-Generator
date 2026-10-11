@@ -1388,4 +1388,57 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn schema9_and_schema10_branch_backups_keep_versioned_audit_dispatch() {
+        for version in [9, 10] {
+            let connection = crate::arena_story::branch::schema::tests::connection(version);
+            crate::arena_story::branch::schema::tests::fixture(&connection, true);
+            assert_eq!(verify_sqlite(&connection), Ok(version));
+            connection.execute_batch("UPDATE arena_story_chapter SET receipt=json_set(receipt,'$.branchOperationId','forged') WHERE chapter_index=1").unwrap();
+            assert_eq!(verify_sqlite(&connection), Err(BackupError::Corrupt));
+        }
+    }
+
+    #[test]
+    fn real_schema9_branch_backup_restores_into_schema10_without_rewriting_rows() {
+        let temp = scratch();
+        let root = temp.path();
+        let library = LocalLibrary::open(root).unwrap();
+        let id = historical_backup(root, 9, MANIFEST_VERSION);
+        let directory = root.join(BACKUPS_DIRECTORY).join(&id);
+        let path = directory.join(DATABASE_FILE);
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        crate::arena_story::branch::schema::tests::fixture(&c, true);
+        let before = crate::arena_story::branch::schema::tests::all_column_hashes(&c);
+        assert_eq!(verify_sqlite(&c), Ok(9));
+        drop(c);
+        let original = fs::read(&path).unwrap();
+        let manifest_path = directory.join(MANIFEST_FILE);
+        let mut manifest: BackupManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let (bytes, digest) = digest_file(&path).unwrap();
+        manifest.database.byte_length = bytes;
+        manifest.database.digest = digest;
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        verify_backup(root, &id).unwrap();
+        drop(crate::restore::prepare_restore(&library, &id).unwrap());
+        drop(library);
+        crate::restore::recover_pending(root).unwrap();
+        let restored = LocalLibrary::open(root).unwrap();
+        let c = restored.connection().lock().unwrap();
+        assert_eq!(verify_sqlite(&c), Ok(10));
+        assert_eq!(
+            before,
+            crate::arena_story::branch::schema::tests::all_column_hashes(&c)
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM arena_story_session", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
 }

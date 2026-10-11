@@ -243,9 +243,17 @@ impl StoryStore {
                 if manifest.source.session.instance != self.instance {
                     return Err(StoryError::Stale);
                 }
+                #[cfg(test)]
+                probe::mark("branch.source-cas.before");
                 check_source(&tx, &manifest)?;
+                #[cfg(test)]
+                probe::mark("branch.source-cas.after");
                 hook("source-cas", &tx)?;
+                #[cfg(test)]
+                probe::mark("branch.validate-stage.before");
                 let validated = validate_branch_stage(stage, &manifest, request_digest.clone())?;
+                #[cfg(test)]
+                probe::mark("branch.validate-stage.after");
                 write_branch(&tx, stage, &manifest, &validated, &mut |step| {
                     hook(step, &tx)
                 })?;
@@ -564,6 +572,8 @@ fn write_branch(
     )?;
     hook("seed")?;
     // Every iteration reads, checks, transforms and writes exactly one document.
+    #[cfg(test)]
+    probe::mark("branch.copy-chapters.before");
     let mut previous = None;
     for index in 1..=m.source.anchor_index {
         hook("before-copy-chapter")?;
@@ -601,6 +611,10 @@ fn write_branch(
         previous = Some(indexed.id);
         hook("copy-chapter")?;
     }
+    #[cfg(test)]
+    probe::mark("branch.copy-chapters.after");
+    #[cfg(test)]
+    probe::mark("branch.copy-checkpoints.before");
     for index in 0..=m.source.anchor_index {
         hook("before-copy-checkpoint")?;
         let indexed=connection.query_row("SELECT id,session_id,boundary_index,chapter_id FROM arena_story_checkpoint WHERE session_id=?1 AND boundary_index=?2",params![m.source.session.session_id,index],|r|Ok(CheckpointIndex{id:r.get(0)?,session_id:r.get(1)?,boundary_index:r.get(2)?,chapter_id:r.get(3)?})).map_err(|_|StoryError::Corrupt)?;
@@ -626,6 +640,8 @@ fn write_branch(
         connection.execute("INSERT INTO arena_story_checkpoint (id,session_id,boundary_index,chapter_id,document,document_bytes,document_digest) VALUES (?1,?2,?3,?4,?5,?6,?7)",params![copied.id,m.session_id,index,target_chapter,copied.document,copied.byte_length,copied.digest]).map_err(|_|StoryError::Io)?;
         hook("copy-checkpoint")?;
     }
+    #[cfg(test)]
+    probe::mark("branch.copy-checkpoints.after");
     let c = &v.chapter;
     let document = stage_document(stage, PartKind::Chapter)?;
     connection.execute("INSERT INTO arena_story_chapter (id,session_id,chapter_index,action,source_chapter_id,title_preview,title_truncated,created_at,markdown_bytes,document,document_bytes,document_digest,operation_id,operation_digest,receipt) VALUES (?1,?2,?3,'branch',?4,?5,?6,?7,?8,?9,?10,?11,?1,?12,?13)",params![c.id,c.session_id,c.index,c.source_chapter_id,c.title_preview,c.title_truncated,c.created_at,c.markdown_byte_length,document,document.len() as u64,digest(document.as_bytes()),v.receipt.request_digest,v.receipt.encode()?]).map_err(|_|StoryError::Io)?;
@@ -636,7 +652,11 @@ fn write_branch(
     connection.execute("INSERT INTO arena_story_checkpoint (id,session_id,boundary_index,chapter_id,document,document_bytes,document_digest) VALUES (?1,?2,?3,?4,?5,?6,?7)",params![p.id,p.session_id,p.boundary_index,p.chapter_id,document,document.len() as u64,digest(document.as_bytes())]).map_err(|_|StoryError::Io)?;
     hook("checkpoint")?;
     // The versioned target audit is also the restore contract; no source dependency.
+    #[cfg(test)]
+    probe::mark("branch.target-audit.before");
     super::audit::audit_session(connection, &m.session_id)?;
+    #[cfg(test)]
+    probe::mark("branch.target-audit.after");
     Ok(())
 }
 
