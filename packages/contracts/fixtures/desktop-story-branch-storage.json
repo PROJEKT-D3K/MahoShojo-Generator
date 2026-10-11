@@ -1,0 +1,1086 @@
+{
+  "version": 2,
+  "sourceCommits": [
+    {
+      "manifest": {
+        "version": 1,
+        "operationId": "source-c1",
+        "sessionId": "golden-source",
+        "expectedRevision": 0,
+        "expectedLastChapterId": null,
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 380,
+            "digest": "sha256:5013fe0256e743cb796afe1b42b9bf701c8a173fb977e213cd9cbf931b35e872"
+          },
+          {
+            "kind": "seed",
+            "byteLength": 66,
+            "digest": "sha256:445a4a61c7ca1c0dac2ea8888d83809794f7bfac2edf1d8e9833d628f1c600a0"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 426,
+            "digest": "sha256:0092870be17c77fc41615929b742a63c7dd1dd7b59f92f4c8bcd125287c46811"
+          },
+          {
+            "kind": "checkpoint0",
+            "byteLength": 232,
+            "digest": "sha256:407af0db4cfaeeb59b55687af0c0d8fc255ef20421bd6dbe8022826bef354626"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 256,
+            "digest": "sha256:d0370c4cd9a59ad411dcdb573bb9fc57ddccb9863c52d3c53dff89e6ca367530"
+          }
+        ]
+      },
+      "wireDigest": "sha256:5c7d4451a9d374c47806a5d1049c9acc4a15c00eaeb32f38c6b3175acb860e90",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"chapterCount\":1,\"createdAt\":1,\"id\":\"golden-source\",\"lastChapterId\":\"source-c1\",\"lastInputCheckpointId\":\"source-p0\",\"mode\":\"classic\",\"revision\":1,\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"updatedAt\":1,\"workingCheckpointId\":\"source-p1\"}"
+        },
+        {
+          "kind": "seed",
+          "document": "{\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}]}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"start\",\"createdAt\":1,\"deterministicDigest\":{\"chapterTitle\":\"源章1\"},\"generationId\":\"historical-generation-1\",\"id\":\"source-c1\",\"index\":1,\"markdown\":\"源章1\\n\",\"markdownByteLength\":8,\"reportJson\":{\"historical\":1},\"sessionId\":\"golden-source\",\"status\":\"active\",\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        },
+        {
+          "kind": "checkpoint0",
+          "document": "{\"boundaryIndex\":0,\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}],\"createdAt\":1,\"id\":\"source-p0\",\"sessionId\":\"golden-source\",\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":1,\"chapterId\":\"source-c1\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}],\"createdAt\":1,\"id\":\"source-p1\",\"sessionId\":\"golden-source\",\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        }
+      ]
+    },
+    {
+      "manifest": {
+        "version": 1,
+        "operationId": "source-c2",
+        "sessionId": "golden-source",
+        "expectedRevision": 1,
+        "expectedLastChapterId": "source-c1",
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 380,
+            "digest": "sha256:04e4f758e7c7a32fff5ac2189b9be3835b919bbf189a05ed359d47bdc9c154b3"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 459,
+            "digest": "sha256:e2bbec37a84485366451d5093917cb2f671ebc184aee0235403a2ec3acc94013"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 256,
+            "digest": "sha256:30a7ab90ab14f2fed195ffdcd4cbe4afdf66ab79e08813b7f96685c642353060"
+          }
+        ]
+      },
+      "wireDigest": "sha256:536e2e8b00860dbde536226fa9d842ea4407a2fe25b303b9b248164f7d4a8bec",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"chapterCount\":2,\"createdAt\":1,\"id\":\"golden-source\",\"lastChapterId\":\"source-c2\",\"lastInputCheckpointId\":\"source-p1\",\"mode\":\"classic\",\"revision\":2,\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"updatedAt\":2,\"workingCheckpointId\":\"source-p2\"}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"continue\",\"createdAt\":2,\"deterministicDigest\":{\"chapterTitle\":\"源章2\"},\"generationId\":\"historical-generation-2\",\"id\":\"source-c2\",\"index\":2,\"markdown\":\"源章2\\n\",\"markdownByteLength\":8,\"reportJson\":{\"historical\":2},\"sessionId\":\"golden-source\",\"sourceChapterId\":\"source-c1\",\"status\":\"active\",\"title\":\"源章2\",\"titlePreview\":\"源章2\",\"titleTruncated\":false,\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":2,\"chapterId\":\"source-c2\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}],\"createdAt\":2,\"id\":\"source-p2\",\"sessionId\":\"golden-source\",\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        }
+      ]
+    },
+    {
+      "manifest": {
+        "version": 1,
+        "operationId": "source-c3",
+        "sessionId": "golden-source",
+        "expectedRevision": 2,
+        "expectedLastChapterId": "source-c2",
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 380,
+            "digest": "sha256:57390417fe072f01a4673e01e88fc07a22a9855ab9ed14492224ab8c4f62844f"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 459,
+            "digest": "sha256:93c392eb216132e272df2207a6d47de770eff36013a79ae93baad20ede7bd4be"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 256,
+            "digest": "sha256:3161ba37b1bac590aa810bddb293223334ff25eba979770ce9c13d2f274028f2"
+          }
+        ]
+      },
+      "wireDigest": "sha256:eeb03058301ed7e6035d9c2190e651e9042c5d47373b1c0f034e9d12a54ff064",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"chapterCount\":3,\"createdAt\":1,\"id\":\"golden-source\",\"lastChapterId\":\"source-c3\",\"lastInputCheckpointId\":\"source-p2\",\"mode\":\"classic\",\"revision\":3,\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"title\":\"源章1\",\"titlePreview\":\"源章1\",\"titleTruncated\":false,\"updatedAt\":3,\"workingCheckpointId\":\"source-p3\"}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"continue\",\"createdAt\":3,\"deterministicDigest\":{\"chapterTitle\":\"源章3\"},\"generationId\":\"historical-generation-3\",\"id\":\"source-c3\",\"index\":3,\"markdown\":\"源章3\\n\",\"markdownByteLength\":8,\"reportJson\":{\"historical\":3},\"sessionId\":\"golden-source\",\"sourceChapterId\":\"source-c2\",\"status\":\"active\",\"title\":\"源章3\",\"titlePreview\":\"源章3\",\"titleTruncated\":false,\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":3,\"chapterId\":\"source-c3\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\"}],\"createdAt\":3,\"id\":\"source-p3\",\"sessionId\":\"golden-source\",\"opaque\":1e+02,\"opaque\":{\"escaped\":\"\\u4e2d\",\"lone\":\"\\ud800\",\"duplicate\":1,\"duplicate\":2}}"
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "name": "anchor-1",
+      "assembly": {
+        "session": {
+          "id": "golden-target-1",
+          "title": "未命名连续战报",
+          "createdAt": 1,
+          "updatedAt": 3,
+          "source": {
+            "mode": "classic",
+            "language": "zh-CN",
+            "storyLength": "short",
+            "generationMode": "stream",
+            "providerMode": "direct"
+          },
+          "seed": {
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                }
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "chapterCount": 3,
+          "lastChapterInputCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "lastChapterId": "source-c3",
+          "branchOf": {
+            "sessionId": "golden-source",
+            "chapterId": "source-c1",
+            "chapterIndex": 1,
+            "chapterTitle": "源章1"
+          },
+          "branchLabel": "从第 1 章《源章1》分支",
+          "sessionSummary": "保留安全摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "source-c1",
+              "not-in-prefix"
+            ],
+            "extension": "retained"
+          }
+        },
+        "operationId": "branch-new-1",
+        "checkpointId": "branch-output-1",
+        "now": 11,
+        "source": {
+          "mode": "classic",
+          "language": "zh-CN",
+          "storyLength": "short",
+          "generationMode": "stream",
+          "providerMode": "direct"
+        },
+        "inputCombatants": [
+          {
+            "name": "星",
+            "extension": {
+              "retained": "中😀"
+            }
+          }
+        ],
+        "generated": {
+          "chapterIndex": 2,
+          "markdown": "# 新分支1\n中😀\\\"\n",
+          "reportJson": {
+            "retained": {
+              "sourceId": "source-c1"
+            }
+          },
+          "digest": {
+            "chapterTitle": "新章1",
+            "winner": "星"
+          },
+          "generationId": "fresh-generation-1",
+          "nextWorkingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "new-1"
+            }
+          ]
+        },
+        "prefixEndIndex": 1,
+        "targetAnchorChapterId": "branch_46d595f34c8c303320d89df6f859867ff7d134bb4ff41bc10f5a37598091c792"
+      },
+      "expected": {
+        "session": {
+          "id": "golden-target-1",
+          "title": "未命名连续战报",
+          "createdAt": 1,
+          "updatedAt": 11,
+          "source": {
+            "mode": "classic",
+            "language": "zh-CN",
+            "storyLength": "short",
+            "generationMode": "stream",
+            "providerMode": "direct"
+          },
+          "seed": {
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                }
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "new-1"
+            }
+          ],
+          "chapterCount": 2,
+          "lastChapterInputCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "lastChapterId": "branch-new-1",
+          "branchOf": {
+            "sessionId": "golden-source",
+            "chapterId": "source-c1",
+            "chapterIndex": 1,
+            "chapterTitle": "源章1"
+          },
+          "branchLabel": "从第 1 章《源章1》分支",
+          "sessionSummary": "保留安全摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "branch_46d595f34c8c303320d89df6f859867ff7d134bb4ff41bc10f5a37598091c792"
+            ],
+            "extension": "retained"
+          }
+        },
+        "chapter": {
+          "id": "branch-new-1",
+          "sessionId": "golden-target-1",
+          "index": 2,
+          "action": "branch",
+          "status": "active",
+          "sourceChapterId": "branch_46d595f34c8c303320d89df6f859867ff7d134bb4ff41bc10f5a37598091c792",
+          "generationId": "fresh-generation-1",
+          "title": "新章1",
+          "markdown": "# 新分支1\n中😀\\\"\n",
+          "reportJson": {
+            "retained": {
+              "sourceId": "source-c1"
+            }
+          },
+          "deterministicDigest": {
+            "chapterTitle": "新章1",
+            "winner": "星"
+          },
+          "createdAt": 11
+        },
+        "checkpoints": [
+          {
+            "id": "branch-output-1",
+            "sessionId": "golden-target-1",
+            "boundaryIndex": 2,
+            "chapterId": "branch-new-1",
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                },
+                "state": "new-1"
+              }
+            ],
+            "createdAt": 11
+          }
+        ]
+      },
+      "manifest": {
+        "version": 2,
+        "operationId": "branch-new-1",
+        "sessionId": "golden-target-1",
+        "source": {
+          "session": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "golden-source",
+            "revision": 3,
+            "kind": "session",
+            "byteLength": 380,
+            "digest": "sha256:57390417fe072f01a4673e01e88fc07a22a9855ab9ed14492224ab8c4f62844f"
+          },
+          "seed": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "golden-source",
+            "revision": 3,
+            "kind": "seed",
+            "byteLength": 66,
+            "digest": "sha256:445a4a61c7ca1c0dac2ea8888d83809794f7bfac2edf1d8e9833d628f1c600a0"
+          },
+          "expectedLastChapterId": "source-c3",
+          "expectedChapterCount": 3,
+          "anchor": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "source-c1",
+            "revision": 3,
+            "kind": "chapter",
+            "byteLength": 426,
+            "digest": "sha256:0092870be17c77fc41615929b742a63c7dd1dd7b59f92f4c8bcd125287c46811"
+          },
+          "anchorIndex": 1,
+          "checkpoint": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "source-p1",
+            "revision": 3,
+            "kind": "checkpoint",
+            "byteLength": 256,
+            "digest": "sha256:d0370c4cd9a59ad411dcdb573bb9fc57ddccb9863c52d3c53dff89e6ca367530"
+          }
+        },
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 839,
+            "digest": "sha256:e75790c30760eec1b7f52f0050c131a996adcdfdf7aec8de351bc912eddbe43c"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 486,
+            "digest": "sha256:f51cfe10bac60e943f22b2e6890b6af311d1a6c0aa4cac591cf633abb9160783"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 195,
+            "digest": "sha256:ad44e0bef159d1e571ae705033731085376f4c90b863f8c98b261112528804a8"
+          }
+        ]
+      },
+      "manifestJson": "{\"version\":2,\"operationId\":\"branch-new-1\",\"sessionId\":\"golden-target-1\",\"source\":{\"session\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"golden-source\",\"revision\":3,\"kind\":\"session\",\"byteLength\":380,\"digest\":\"sha256:57390417fe072f01a4673e01e88fc07a22a9855ab9ed14492224ab8c4f62844f\"},\"seed\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"golden-source\",\"revision\":3,\"kind\":\"seed\",\"byteLength\":66,\"digest\":\"sha256:445a4a61c7ca1c0dac2ea8888d83809794f7bfac2edf1d8e9833d628f1c600a0\"},\"expectedLastChapterId\":\"source-c3\",\"expectedChapterCount\":3,\"anchor\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"source-c1\",\"revision\":3,\"kind\":\"chapter\",\"byteLength\":426,\"digest\":\"sha256:0092870be17c77fc41615929b742a63c7dd1dd7b59f92f4c8bcd125287c46811\"},\"anchorIndex\":1,\"checkpoint\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"source-p1\",\"revision\":3,\"kind\":\"checkpoint\",\"byteLength\":256,\"digest\":\"sha256:d0370c4cd9a59ad411dcdb573bb9fc57ddccb9863c52d3c53dff89e6ca367530\"}},\"parts\":[{\"kind\":\"session\",\"byteLength\":839,\"digest\":\"sha256:e75790c30760eec1b7f52f0050c131a996adcdfdf7aec8de351bc912eddbe43c\"},{\"kind\":\"chapter\",\"byteLength\":486,\"digest\":\"sha256:f51cfe10bac60e943f22b2e6890b6af311d1a6c0aa4cac591cf633abb9160783\"},{\"kind\":\"checkpoint1\",\"byteLength\":195,\"digest\":\"sha256:ad44e0bef159d1e571ae705033731085376f4c90b863f8c98b261112528804a8\"}]}",
+      "requestDigest": "sha256:3e1433d37d345849a3fbcf48a61e27e176ae1e3928432603e26497b34134188b",
+      "receipt": {
+        "version": 2,
+        "kind": "branch",
+        "operationId": "branch-new-1",
+        "sessionId": "golden-target-1",
+        "chapterId": "branch-new-1",
+        "chapterIndex": 2,
+        "revision": 2,
+        "chapterCount": 2,
+        "prefixEndIndex": 1,
+        "anchorChapterId": "branch_46d595f34c8c303320d89df6f859867ff7d134bb4ff41bc10f5a37598091c792",
+        "anchorCheckpointId": "branch_7d37bfee9583deaae3d5c5fbcbc543f738e69d381f5466e3f9e91bdd694ecd4e",
+        "checkpointId": "branch-output-1",
+        "requestDigest": "sha256:3e1433d37d345849a3fbcf48a61e27e176ae1e3928432603e26497b34134188b"
+      },
+      "receiptJson": "{\"version\":2,\"kind\":\"branch\",\"operationId\":\"branch-new-1\",\"sessionId\":\"golden-target-1\",\"chapterId\":\"branch-new-1\",\"chapterIndex\":2,\"revision\":2,\"chapterCount\":2,\"prefixEndIndex\":1,\"anchorChapterId\":\"branch_46d595f34c8c303320d89df6f859867ff7d134bb4ff41bc10f5a37598091c792\",\"anchorCheckpointId\":\"branch_7d37bfee9583deaae3d5c5fbcbc543f738e69d381f5466e3f9e91bdd694ecd4e\",\"checkpointId\":\"branch-output-1\",\"requestDigest\":\"sha256:3e1433d37d345849a3fbcf48a61e27e176ae1e3928432603e26497b34134188b\"}",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"branchLabel\":\"从第 1 章《源章1》分支\",\"branchOf\":{\"chapterId\":\"source-c1\",\"chapterIndex\":1,\"chapterTitle\":\"源章1\",\"sessionId\":\"golden-source\"},\"chapterCount\":2,\"createdAt\":1,\"id\":\"golden-target-1\",\"lastChapterId\":\"branch-new-1\",\"lastInputCheckpointId\":\"branch_7d37bfee9583deaae3d5c5fbcbc543f738e69d381f5466e3f9e91bdd694ecd4e\",\"mode\":\"classic\",\"revision\":2,\"sessionSummary\":\"保留安全摘要\",\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"summaryMeta\":{\"coveredChapterIds\":[\"branch_46d595f34c8c303320d89df6f859867ff7d134bb4ff41bc10f5a37598091c792\"],\"coveredUntilChapterIndex\":1,\"extension\":\"retained\"},\"title\":\"未命名连续战报\",\"titlePreview\":\"未命名连续战报\",\"titleTruncated\":false,\"updatedAt\":11,\"workingCheckpointId\":\"branch-output-1\"}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"branch\",\"createdAt\":11,\"deterministicDigest\":{\"chapterTitle\":\"新章1\",\"winner\":\"星\"},\"generationId\":\"fresh-generation-1\",\"id\":\"branch-new-1\",\"index\":2,\"markdown\":\"# 新分支1\\n中😀\\\\\\\"\\n\",\"markdownByteLength\":23,\"reportJson\":{\"retained\":{\"sourceId\":\"source-c1\"}},\"sessionId\":\"golden-target-1\",\"sourceChapterId\":\"branch_46d595f34c8c303320d89df6f859867ff7d134bb4ff41bc10f5a37598091c792\",\"status\":\"active\",\"title\":\"新章1\",\"titlePreview\":\"新章1\",\"titleTruncated\":false}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":2,\"chapterId\":\"branch-new-1\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\",\"state\":\"new-1\"}],\"createdAt\":11,\"id\":\"branch-output-1\",\"sessionId\":\"golden-target-1\"}"
+        }
+      ]
+    },
+    {
+      "name": "anchor-2",
+      "assembly": {
+        "session": {
+          "id": "golden-target-2",
+          "title": "未命名连续战报",
+          "createdAt": 1,
+          "updatedAt": 3,
+          "source": {
+            "mode": "classic",
+            "language": "zh-CN",
+            "storyLength": "short",
+            "generationMode": "stream",
+            "providerMode": "direct"
+          },
+          "seed": {
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                }
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "chapterCount": 3,
+          "lastChapterInputCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "lastChapterId": "source-c3",
+          "branchOf": {
+            "sessionId": "golden-source",
+            "chapterId": "source-c2",
+            "chapterIndex": 2,
+            "chapterTitle": "源章2"
+          },
+          "branchLabel": "从第 2 章《源章2》分支",
+          "sessionSummary": "保留安全摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "source-c1",
+              "not-in-prefix"
+            ],
+            "extension": "retained"
+          }
+        },
+        "operationId": "branch-new-2",
+        "checkpointId": "branch-output-2",
+        "now": 12,
+        "source": {
+          "mode": "classic",
+          "language": "zh-CN",
+          "storyLength": "short",
+          "generationMode": "stream",
+          "providerMode": "direct"
+        },
+        "inputCombatants": [
+          {
+            "name": "星",
+            "extension": {
+              "retained": "中😀"
+            }
+          }
+        ],
+        "generated": {
+          "chapterIndex": 3,
+          "markdown": "# 新分支2\n中😀\\\"\n",
+          "reportJson": {
+            "retained": {
+              "sourceId": "source-c1"
+            }
+          },
+          "digest": {
+            "chapterTitle": "新章2",
+            "winner": "星"
+          },
+          "generationId": "fresh-generation-2",
+          "nextWorkingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "new-2"
+            }
+          ]
+        },
+        "prefixEndIndex": 2,
+        "targetAnchorChapterId": "branch_36a88cd1d527dc6a65186b78752e40476a44f373efb25f16eca23bda5486d4c9"
+      },
+      "expected": {
+        "session": {
+          "id": "golden-target-2",
+          "title": "未命名连续战报",
+          "createdAt": 1,
+          "updatedAt": 12,
+          "source": {
+            "mode": "classic",
+            "language": "zh-CN",
+            "storyLength": "short",
+            "generationMode": "stream",
+            "providerMode": "direct"
+          },
+          "seed": {
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                }
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "new-2"
+            }
+          ],
+          "chapterCount": 3,
+          "lastChapterInputCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "lastChapterId": "branch-new-2",
+          "branchOf": {
+            "sessionId": "golden-source",
+            "chapterId": "source-c2",
+            "chapterIndex": 2,
+            "chapterTitle": "源章2"
+          },
+          "branchLabel": "从第 2 章《源章2》分支",
+          "sessionSummary": "保留安全摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "branch_922a927474b1c51a94686fb89d828657e41f35975c4c701f84b58af5196d34e2"
+            ],
+            "extension": "retained"
+          }
+        },
+        "chapter": {
+          "id": "branch-new-2",
+          "sessionId": "golden-target-2",
+          "index": 3,
+          "action": "branch",
+          "status": "active",
+          "sourceChapterId": "branch_36a88cd1d527dc6a65186b78752e40476a44f373efb25f16eca23bda5486d4c9",
+          "generationId": "fresh-generation-2",
+          "title": "新章2",
+          "markdown": "# 新分支2\n中😀\\\"\n",
+          "reportJson": {
+            "retained": {
+              "sourceId": "source-c1"
+            }
+          },
+          "deterministicDigest": {
+            "chapterTitle": "新章2",
+            "winner": "星"
+          },
+          "createdAt": 12
+        },
+        "checkpoints": [
+          {
+            "id": "branch-output-2",
+            "sessionId": "golden-target-2",
+            "boundaryIndex": 3,
+            "chapterId": "branch-new-2",
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                },
+                "state": "new-2"
+              }
+            ],
+            "createdAt": 12
+          }
+        ]
+      },
+      "manifest": {
+        "version": 2,
+        "operationId": "branch-new-2",
+        "sessionId": "golden-target-2",
+        "source": {
+          "session": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "golden-source",
+            "revision": 3,
+            "kind": "session",
+            "byteLength": 380,
+            "digest": "sha256:57390417fe072f01a4673e01e88fc07a22a9855ab9ed14492224ab8c4f62844f"
+          },
+          "seed": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "golden-source",
+            "revision": 3,
+            "kind": "seed",
+            "byteLength": 66,
+            "digest": "sha256:445a4a61c7ca1c0dac2ea8888d83809794f7bfac2edf1d8e9833d628f1c600a0"
+          },
+          "expectedLastChapterId": "source-c3",
+          "expectedChapterCount": 3,
+          "anchor": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "source-c2",
+            "revision": 3,
+            "kind": "chapter",
+            "byteLength": 459,
+            "digest": "sha256:e2bbec37a84485366451d5093917cb2f671ebc184aee0235403a2ec3acc94013"
+          },
+          "anchorIndex": 2,
+          "checkpoint": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "source-p2",
+            "revision": 3,
+            "kind": "checkpoint",
+            "byteLength": 256,
+            "digest": "sha256:30a7ab90ab14f2fed195ffdcd4cbe4afdf66ab79e08813b7f96685c642353060"
+          }
+        },
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 839,
+            "digest": "sha256:f3f88e5aafc85f9fb2ddd77508a9b04f5877d55ad84550ab0625c9fa11ae419f"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 486,
+            "digest": "sha256:566c941757faea74ca09fbf33f4d98ea81bc5ff9947b7fbc7ea489d2873e5ac4"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 195,
+            "digest": "sha256:c5eb5d1ef536b79132b7d6947963121a0e08f49969ab36183af5e8dea0ef6bf1"
+          }
+        ]
+      },
+      "manifestJson": "{\"version\":2,\"operationId\":\"branch-new-2\",\"sessionId\":\"golden-target-2\",\"source\":{\"session\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"golden-source\",\"revision\":3,\"kind\":\"session\",\"byteLength\":380,\"digest\":\"sha256:57390417fe072f01a4673e01e88fc07a22a9855ab9ed14492224ab8c4f62844f\"},\"seed\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"golden-source\",\"revision\":3,\"kind\":\"seed\",\"byteLength\":66,\"digest\":\"sha256:445a4a61c7ca1c0dac2ea8888d83809794f7bfac2edf1d8e9833d628f1c600a0\"},\"expectedLastChapterId\":\"source-c3\",\"expectedChapterCount\":3,\"anchor\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"source-c2\",\"revision\":3,\"kind\":\"chapter\",\"byteLength\":459,\"digest\":\"sha256:e2bbec37a84485366451d5093917cb2f671ebc184aee0235403a2ec3acc94013\"},\"anchorIndex\":2,\"checkpoint\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"source-p2\",\"revision\":3,\"kind\":\"checkpoint\",\"byteLength\":256,\"digest\":\"sha256:30a7ab90ab14f2fed195ffdcd4cbe4afdf66ab79e08813b7f96685c642353060\"}},\"parts\":[{\"kind\":\"session\",\"byteLength\":839,\"digest\":\"sha256:f3f88e5aafc85f9fb2ddd77508a9b04f5877d55ad84550ab0625c9fa11ae419f\"},{\"kind\":\"chapter\",\"byteLength\":486,\"digest\":\"sha256:566c941757faea74ca09fbf33f4d98ea81bc5ff9947b7fbc7ea489d2873e5ac4\"},{\"kind\":\"checkpoint1\",\"byteLength\":195,\"digest\":\"sha256:c5eb5d1ef536b79132b7d6947963121a0e08f49969ab36183af5e8dea0ef6bf1\"}]}",
+      "requestDigest": "sha256:4d0fccc2d7c4c137ac17675496bdfc29b5d088d6969922d031aec1d0d994b535",
+      "receipt": {
+        "version": 2,
+        "kind": "branch",
+        "operationId": "branch-new-2",
+        "sessionId": "golden-target-2",
+        "chapterId": "branch-new-2",
+        "chapterIndex": 3,
+        "revision": 3,
+        "chapterCount": 3,
+        "prefixEndIndex": 2,
+        "anchorChapterId": "branch_36a88cd1d527dc6a65186b78752e40476a44f373efb25f16eca23bda5486d4c9",
+        "anchorCheckpointId": "branch_d21616845f76259a8fe440d2c36ce42ff13d8f1a1810527b65cc0400782b240e",
+        "checkpointId": "branch-output-2",
+        "requestDigest": "sha256:4d0fccc2d7c4c137ac17675496bdfc29b5d088d6969922d031aec1d0d994b535"
+      },
+      "receiptJson": "{\"version\":2,\"kind\":\"branch\",\"operationId\":\"branch-new-2\",\"sessionId\":\"golden-target-2\",\"chapterId\":\"branch-new-2\",\"chapterIndex\":3,\"revision\":3,\"chapterCount\":3,\"prefixEndIndex\":2,\"anchorChapterId\":\"branch_36a88cd1d527dc6a65186b78752e40476a44f373efb25f16eca23bda5486d4c9\",\"anchorCheckpointId\":\"branch_d21616845f76259a8fe440d2c36ce42ff13d8f1a1810527b65cc0400782b240e\",\"checkpointId\":\"branch-output-2\",\"requestDigest\":\"sha256:4d0fccc2d7c4c137ac17675496bdfc29b5d088d6969922d031aec1d0d994b535\"}",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"branchLabel\":\"从第 2 章《源章2》分支\",\"branchOf\":{\"chapterId\":\"source-c2\",\"chapterIndex\":2,\"chapterTitle\":\"源章2\",\"sessionId\":\"golden-source\"},\"chapterCount\":3,\"createdAt\":1,\"id\":\"golden-target-2\",\"lastChapterId\":\"branch-new-2\",\"lastInputCheckpointId\":\"branch_d21616845f76259a8fe440d2c36ce42ff13d8f1a1810527b65cc0400782b240e\",\"mode\":\"classic\",\"revision\":3,\"sessionSummary\":\"保留安全摘要\",\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"summaryMeta\":{\"coveredChapterIds\":[\"branch_922a927474b1c51a94686fb89d828657e41f35975c4c701f84b58af5196d34e2\"],\"coveredUntilChapterIndex\":1,\"extension\":\"retained\"},\"title\":\"未命名连续战报\",\"titlePreview\":\"未命名连续战报\",\"titleTruncated\":false,\"updatedAt\":12,\"workingCheckpointId\":\"branch-output-2\"}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"branch\",\"createdAt\":12,\"deterministicDigest\":{\"chapterTitle\":\"新章2\",\"winner\":\"星\"},\"generationId\":\"fresh-generation-2\",\"id\":\"branch-new-2\",\"index\":3,\"markdown\":\"# 新分支2\\n中😀\\\\\\\"\\n\",\"markdownByteLength\":23,\"reportJson\":{\"retained\":{\"sourceId\":\"source-c1\"}},\"sessionId\":\"golden-target-2\",\"sourceChapterId\":\"branch_36a88cd1d527dc6a65186b78752e40476a44f373efb25f16eca23bda5486d4c9\",\"status\":\"active\",\"title\":\"新章2\",\"titlePreview\":\"新章2\",\"titleTruncated\":false}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":3,\"chapterId\":\"branch-new-2\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\",\"state\":\"new-2\"}],\"createdAt\":12,\"id\":\"branch-output-2\",\"sessionId\":\"golden-target-2\"}"
+        }
+      ]
+    },
+    {
+      "name": "anchor-3",
+      "assembly": {
+        "session": {
+          "id": "golden-target-3",
+          "title": "未命名连续战报",
+          "createdAt": 1,
+          "updatedAt": 3,
+          "source": {
+            "mode": "classic",
+            "language": "zh-CN",
+            "storyLength": "short",
+            "generationMode": "stream",
+            "providerMode": "direct"
+          },
+          "seed": {
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                }
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "chapterCount": 3,
+          "lastChapterInputCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "lastChapterId": "source-c3",
+          "branchOf": {
+            "sessionId": "golden-source",
+            "chapterId": "source-c3",
+            "chapterIndex": 3,
+            "chapterTitle": "源章3"
+          },
+          "branchLabel": "从第 3 章《源章3》分支",
+          "sessionSummary": "保留安全摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "source-c1",
+              "not-in-prefix"
+            ],
+            "extension": "retained"
+          }
+        },
+        "operationId": "branch-new-3",
+        "checkpointId": "branch-output-3",
+        "now": 13,
+        "source": {
+          "mode": "classic",
+          "language": "zh-CN",
+          "storyLength": "short",
+          "generationMode": "stream",
+          "providerMode": "direct"
+        },
+        "inputCombatants": [
+          {
+            "name": "星",
+            "extension": {
+              "retained": "中😀"
+            }
+          }
+        ],
+        "generated": {
+          "chapterIndex": 4,
+          "markdown": "# 新分支3\n中😀\\\"\n",
+          "reportJson": {
+            "retained": {
+              "sourceId": "source-c1"
+            }
+          },
+          "digest": {
+            "chapterTitle": "新章3",
+            "winner": "星"
+          },
+          "generationId": "fresh-generation-3",
+          "nextWorkingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "new-3"
+            }
+          ]
+        },
+        "prefixEndIndex": 3,
+        "targetAnchorChapterId": "branch_eb81527e0eee6b15f9f752148a0db3a613078e858d64cf7d009aa32aa3a5c7c2"
+      },
+      "expected": {
+        "session": {
+          "id": "golden-target-3",
+          "title": "未命名连续战报",
+          "createdAt": 1,
+          "updatedAt": 13,
+          "source": {
+            "mode": "classic",
+            "language": "zh-CN",
+            "storyLength": "short",
+            "generationMode": "stream",
+            "providerMode": "direct"
+          },
+          "seed": {
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                }
+              }
+            ]
+          },
+          "workingCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              },
+              "state": "new-3"
+            }
+          ],
+          "chapterCount": 4,
+          "lastChapterInputCombatants": [
+            {
+              "name": "星",
+              "extension": {
+                "retained": "中😀"
+              }
+            }
+          ],
+          "lastChapterId": "branch-new-3",
+          "branchOf": {
+            "sessionId": "golden-source",
+            "chapterId": "source-c3",
+            "chapterIndex": 3,
+            "chapterTitle": "源章3"
+          },
+          "branchLabel": "从第 3 章《源章3》分支",
+          "sessionSummary": "保留安全摘要",
+          "summaryMeta": {
+            "coveredUntilChapterIndex": 1,
+            "coveredChapterIds": [
+              "branch_3b404eeba4f70cd514f918f1ec60c991e75b55aeda564044e950bd1c515ba10f"
+            ],
+            "extension": "retained"
+          }
+        },
+        "chapter": {
+          "id": "branch-new-3",
+          "sessionId": "golden-target-3",
+          "index": 4,
+          "action": "branch",
+          "status": "active",
+          "sourceChapterId": "branch_eb81527e0eee6b15f9f752148a0db3a613078e858d64cf7d009aa32aa3a5c7c2",
+          "generationId": "fresh-generation-3",
+          "title": "新章3",
+          "markdown": "# 新分支3\n中😀\\\"\n",
+          "reportJson": {
+            "retained": {
+              "sourceId": "source-c1"
+            }
+          },
+          "deterministicDigest": {
+            "chapterTitle": "新章3",
+            "winner": "星"
+          },
+          "createdAt": 13
+        },
+        "checkpoints": [
+          {
+            "id": "branch-output-3",
+            "sessionId": "golden-target-3",
+            "boundaryIndex": 4,
+            "chapterId": "branch-new-3",
+            "combatants": [
+              {
+                "name": "星",
+                "extension": {
+                  "retained": "中😀"
+                },
+                "state": "new-3"
+              }
+            ],
+            "createdAt": 13
+          }
+        ]
+      },
+      "manifest": {
+        "version": 2,
+        "operationId": "branch-new-3",
+        "sessionId": "golden-target-3",
+        "source": {
+          "session": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "golden-source",
+            "revision": 3,
+            "kind": "session",
+            "byteLength": 380,
+            "digest": "sha256:57390417fe072f01a4673e01e88fc07a22a9855ab9ed14492224ab8c4f62844f"
+          },
+          "seed": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "golden-source",
+            "revision": 3,
+            "kind": "seed",
+            "byteLength": 66,
+            "digest": "sha256:445a4a61c7ca1c0dac2ea8888d83809794f7bfac2edf1d8e9833d628f1c600a0"
+          },
+          "expectedLastChapterId": "source-c3",
+          "expectedChapterCount": 3,
+          "anchor": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "source-c3",
+            "revision": 3,
+            "kind": "chapter",
+            "byteLength": 459,
+            "digest": "sha256:93c392eb216132e272df2207a6d47de770eff36013a79ae93baad20ede7bd4be"
+          },
+          "anchorIndex": 3,
+          "checkpoint": {
+            "instance": "00000000000000000000000000000000",
+            "sessionId": "golden-source",
+            "recordId": "source-p3",
+            "revision": 3,
+            "kind": "checkpoint",
+            "byteLength": 256,
+            "digest": "sha256:3161ba37b1bac590aa810bddb293223334ff25eba979770ce9c13d2f274028f2"
+          }
+        },
+        "parts": [
+          {
+            "kind": "session",
+            "byteLength": 839,
+            "digest": "sha256:ab2e475ccf188314090a997911e4c2c98d04af0cb609921d6154b8f0eda037c8"
+          },
+          {
+            "kind": "chapter",
+            "byteLength": 486,
+            "digest": "sha256:0e37fef4471fdd161552d73e0be9855590cc80511b0a5ce0e734706c57a9d79b"
+          },
+          {
+            "kind": "checkpoint1",
+            "byteLength": 195,
+            "digest": "sha256:b711fe9746128d6b27b6a8051ceb23a28183ec72278a632309d0d4a51a9d60f4"
+          }
+        ]
+      },
+      "manifestJson": "{\"version\":2,\"operationId\":\"branch-new-3\",\"sessionId\":\"golden-target-3\",\"source\":{\"session\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"golden-source\",\"revision\":3,\"kind\":\"session\",\"byteLength\":380,\"digest\":\"sha256:57390417fe072f01a4673e01e88fc07a22a9855ab9ed14492224ab8c4f62844f\"},\"seed\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"golden-source\",\"revision\":3,\"kind\":\"seed\",\"byteLength\":66,\"digest\":\"sha256:445a4a61c7ca1c0dac2ea8888d83809794f7bfac2edf1d8e9833d628f1c600a0\"},\"expectedLastChapterId\":\"source-c3\",\"expectedChapterCount\":3,\"anchor\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"source-c3\",\"revision\":3,\"kind\":\"chapter\",\"byteLength\":459,\"digest\":\"sha256:93c392eb216132e272df2207a6d47de770eff36013a79ae93baad20ede7bd4be\"},\"anchorIndex\":3,\"checkpoint\":{\"instance\":\"00000000000000000000000000000000\",\"sessionId\":\"golden-source\",\"recordId\":\"source-p3\",\"revision\":3,\"kind\":\"checkpoint\",\"byteLength\":256,\"digest\":\"sha256:3161ba37b1bac590aa810bddb293223334ff25eba979770ce9c13d2f274028f2\"}},\"parts\":[{\"kind\":\"session\",\"byteLength\":839,\"digest\":\"sha256:ab2e475ccf188314090a997911e4c2c98d04af0cb609921d6154b8f0eda037c8\"},{\"kind\":\"chapter\",\"byteLength\":486,\"digest\":\"sha256:0e37fef4471fdd161552d73e0be9855590cc80511b0a5ce0e734706c57a9d79b\"},{\"kind\":\"checkpoint1\",\"byteLength\":195,\"digest\":\"sha256:b711fe9746128d6b27b6a8051ceb23a28183ec72278a632309d0d4a51a9d60f4\"}]}",
+      "requestDigest": "sha256:e2f3de5bfe920e4b1b35dbf6afe836a90ad461fc7c2978edd870efb787ba94b2",
+      "receipt": {
+        "version": 2,
+        "kind": "branch",
+        "operationId": "branch-new-3",
+        "sessionId": "golden-target-3",
+        "chapterId": "branch-new-3",
+        "chapterIndex": 4,
+        "revision": 4,
+        "chapterCount": 4,
+        "prefixEndIndex": 3,
+        "anchorChapterId": "branch_eb81527e0eee6b15f9f752148a0db3a613078e858d64cf7d009aa32aa3a5c7c2",
+        "anchorCheckpointId": "branch_c4a1367cc45a2d799984165ec207c54a500333c7e68047069b763a690e22cb82",
+        "checkpointId": "branch-output-3",
+        "requestDigest": "sha256:e2f3de5bfe920e4b1b35dbf6afe836a90ad461fc7c2978edd870efb787ba94b2"
+      },
+      "receiptJson": "{\"version\":2,\"kind\":\"branch\",\"operationId\":\"branch-new-3\",\"sessionId\":\"golden-target-3\",\"chapterId\":\"branch-new-3\",\"chapterIndex\":4,\"revision\":4,\"chapterCount\":4,\"prefixEndIndex\":3,\"anchorChapterId\":\"branch_eb81527e0eee6b15f9f752148a0db3a613078e858d64cf7d009aa32aa3a5c7c2\",\"anchorCheckpointId\":\"branch_c4a1367cc45a2d799984165ec207c54a500333c7e68047069b763a690e22cb82\",\"checkpointId\":\"branch-output-3\",\"requestDigest\":\"sha256:e2f3de5bfe920e4b1b35dbf6afe836a90ad461fc7c2978edd870efb787ba94b2\"}",
+      "parts": [
+        {
+          "kind": "session",
+          "document": "{\"branchLabel\":\"从第 3 章《源章3》分支\",\"branchOf\":{\"chapterId\":\"source-c3\",\"chapterIndex\":3,\"chapterTitle\":\"源章3\",\"sessionId\":\"golden-source\"},\"chapterCount\":4,\"createdAt\":1,\"id\":\"golden-target-3\",\"lastChapterId\":\"branch-new-3\",\"lastInputCheckpointId\":\"branch_c4a1367cc45a2d799984165ec207c54a500333c7e68047069b763a690e22cb82\",\"mode\":\"classic\",\"revision\":4,\"sessionSummary\":\"保留安全摘要\",\"source\":{\"generationMode\":\"stream\",\"language\":\"zh-CN\",\"mode\":\"classic\",\"providerMode\":\"direct\",\"storyLength\":\"short\"},\"summaryMeta\":{\"coveredChapterIds\":[\"branch_3b404eeba4f70cd514f918f1ec60c991e75b55aeda564044e950bd1c515ba10f\"],\"coveredUntilChapterIndex\":1,\"extension\":\"retained\"},\"title\":\"未命名连续战报\",\"titlePreview\":\"未命名连续战报\",\"titleTruncated\":false,\"updatedAt\":13,\"workingCheckpointId\":\"branch-output-3\"}"
+        },
+        {
+          "kind": "chapter",
+          "document": "{\"action\":\"branch\",\"createdAt\":13,\"deterministicDigest\":{\"chapterTitle\":\"新章3\",\"winner\":\"星\"},\"generationId\":\"fresh-generation-3\",\"id\":\"branch-new-3\",\"index\":4,\"markdown\":\"# 新分支3\\n中😀\\\\\\\"\\n\",\"markdownByteLength\":23,\"reportJson\":{\"retained\":{\"sourceId\":\"source-c1\"}},\"sessionId\":\"golden-target-3\",\"sourceChapterId\":\"branch_eb81527e0eee6b15f9f752148a0db3a613078e858d64cf7d009aa32aa3a5c7c2\",\"status\":\"active\",\"title\":\"新章3\",\"titlePreview\":\"新章3\",\"titleTruncated\":false}"
+        },
+        {
+          "kind": "checkpoint1",
+          "document": "{\"boundaryIndex\":4,\"chapterId\":\"branch-new-3\",\"combatants\":[{\"extension\":{\"retained\":\"中😀\"},\"name\":\"星\",\"state\":\"new-3\"}],\"createdAt\":13,\"id\":\"branch-output-3\",\"sessionId\":\"golden-target-3\"}"
+        }
+      ]
+    }
+  ],
+  "copyIds": [
+    {
+      "sessionId": "golden-copy-wide",
+      "kind": "c",
+      "index": 1,
+      "id": "branch_9e37367cb995cad774beda864a4a21bb0f1f4a668b8081b75652ae6619b6555b"
+    },
+    {
+      "sessionId": "golden-copy-wide",
+      "kind": "c",
+      "index": 4294967297,
+      "id": "branch_6625b81889d18e99fcde62d090a005ad5d82932c3bffe0d86022a38500f38787"
+    },
+    {
+      "sessionId": "golden-copy-wide",
+      "kind": "c",
+      "index": 9007199254740991,
+      "id": "branch_6b715279328d0dc1ed5dd0b4d0115ca131d6be80d1a5dea18f33c21dc6c6056f"
+    },
+    {
+      "sessionId": "golden-copy-wide",
+      "kind": "p",
+      "index": 0,
+      "id": "branch_0c2f9cc8c1f4a8999d01a5d0c0858f03bcaaf051a0cccbb61aff4ff337d9f444"
+    },
+    {
+      "sessionId": "golden-copy-wide",
+      "kind": "p",
+      "index": 1,
+      "id": "branch_8d17a327b35ad8db4dcf66d31f39d5008f05ff1ff28746517c59239052134555"
+    },
+    {
+      "sessionId": "golden-copy-wide",
+      "kind": "p",
+      "index": 4294967297,
+      "id": "branch_2ad1e54304fc26132eae946fdf96996b4d829b1be05c6ce890bec0e8c84e6fe4"
+    },
+    {
+      "sessionId": "golden-copy-wide",
+      "kind": "p",
+      "index": 9007199254740991,
+      "id": "branch_73b6256637450b11b67412f03535e0d4fd5363052139459b25cd79f5af039ade"
+    }
+  ]
+}

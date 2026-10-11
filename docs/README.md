@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-11 Native分支冻结合同：[双运行时验收](./reports/2026-10-11_071500_Native分支冻结合同双运行时验收.md)新增独立closed v2 schema/有序字节codec、小型共用金样及真实TS投影→内部Rust writer测试；静态instance与首次store授权证据分开，原冻结请求不刷新。定向、Native605项/9既有ignored及clippy、contracts523项、类型/lint与源码独审通过；受测ba44f927于07:21:53–07:30:55Z原完整CI exit0（10,729 passed executions/21条件skip），CI后仅docs收尾、非docs mode/blob同源，未重跑Native/pipe；不开放branch IPC/ACL/binder/两页，资源与owner/Windows门继续保留。
+
 2026-10-11 Native分支生命周期后继：[强退与WAL读者探针](./reports/2026-10-11_063000_Native分支强退与WAL读者探针.md)仅新增真实SIGKILL三边界与有界WAL旧读者测试、runner及文档，四个私有8MiB章原件小库串行；不改生产逻辑或预算，不开放IPC/两页。真实四case、冻结Native597项/9ignored、clippy与独审通过；本轮受测2e472fec于06:39:59–06:48:49Z原完整ci:verify exit0（10,699 passed executions/21条件skip）；CI后仅docs收尾，非docs mode/blob同源，未重跑Native/pipe，尚未远端发布。OS ENOSPC/fsync、精确锁、真实取消、短章/IPC RSS、Windows及完整owner仍待验。
 
 2026-10-11 Native分支解析后继：[借用解析与键比较](./reports/2026-10-11_054500_Native分支借用解析与键比较.md)仅将branch authority改为流式借用成员及无分配键比较，保RawValue/hash/CAS/audit、三种重复语义与原预算。终版18case/90阶段及2组新鲜基线10阶段、Native597项/clippy与独审通过；累积受测1c4ca07于06:08:36–06:17:33Z原完整ci:verify真exit0（10,699 passed executions/21条件skip），不是基线独立CI。CI后仅docs收尾、非docs mode/blob同源；观测资源收益不称稳定性能率，不关闭资源/owner门或开放IPC/两页。

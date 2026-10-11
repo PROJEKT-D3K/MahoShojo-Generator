@@ -136,3 +136,15 @@ describe('whole-session deletion uses the shared controlled modal', () => {
     await click('删除本机会话'); expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(port.deleteSession).not.toHaveBeenCalled(); expect(execution.requests).toHaveLength(2);
   });
 });
+
+describe('closed Native branch product gate', () => {
+  it.each(['battle', 'arena'] as const)('%s does not offer a branch action after a saved chapter', async (product) => {
+    const { settleGeneration } = await mount({ product });
+    await click('新建连续战报');
+    await settleGeneration();
+    expect(container.querySelector('[data-story-read-status="loaded"]')).toBeTruthy();
+    const actions = [...container.querySelectorAll('button')].map((node) => node.textContent ?? '');
+    expect(actions.some((label) => /分支|branch/iu.test(label))).toBe(false);
+    expect('branch' in owner).toBe(false);
+  });
+});

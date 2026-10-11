@@ -1226,3 +1226,6 @@ fn branch_unknown_installation_serializes_with_prepared_pending_save() {
 
 #[path = "arena_story_branch_resource_tests.rs"]
 mod resource_probes;
+
+#[path = "arena_story_branch_contract_tests.rs"]
+mod contract_goldens;
