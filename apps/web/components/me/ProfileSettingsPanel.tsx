@@ -1,19 +1,10 @@
 'use client';
 
-import { useMemo } from 'react';
-import { ProfileSignatureField, useProfileSignatureEditor } from '@mahoshojo/ui-web/settings';
+import { ProfileAvatarField, ProfileSignatureField, useProfileSignatureEditor } from '@mahoshojo/ui-web/settings';
 
 import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
 
 import { useMeProfile } from '@/components/me/useMeProfile';
-
-function formatBytes(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB'];
-  const idx = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const value = bytes / Math.pow(1024, idx);
-  return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
-}
 
 export function ProfileSettingsPanel({ userId }: { userId: number | null }) {
   const {
@@ -29,10 +20,6 @@ export function ProfileSettingsPanel({ userId }: { userId: number | null }) {
     isClearingAvatar,
   } = useMeProfile(userId);
 
-  const avatarSize = useMemo(
-    () => (profile.avatarDataUrl ? formatBytes(profile.avatarDataUrl.length) : null),
-    [profile.avatarDataUrl],
-  );
   const editor = useProfileSignatureEditor({
     scope: signatureScope ?? (userId === null ? null : `web:${userId}`),
     signature: loaded ? profile.signature : undefined,
@@ -58,49 +45,19 @@ export function ProfileSettingsPanel({ userId }: { userId: number | null }) {
         <div>
           <div className="font-semibold text-gray-900">个人资料</div>
           <div className="mt-1 text-xs text-gray-500">
-            头像与签名保存到数据库；上传头像会在后端压缩为 128×128 WebP（质量约 80–85）再入库。
+            头像与签名保存到数据库；上传头像会在浏览器裁剪并压缩为 128×128 WebP（质量 82%）再保存。
           </div>
         </div>
       </div>
 
       <div className="mt-4 grid gap-4">
-        <div>
-          <div className="text-sm font-medium text-gray-900">头像</div>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <div className="h-14 w-14 overflow-hidden rounded-2xl border bg-gradient-to-br from-pink-100 via-purple-100 to-blue-100">
-              {profile.avatarDataUrl ? (
-                <img src={profile.avatarDataUrl} alt="头像预览" className="h-full w-full object-cover" />
-              ) : null}
-            </div>
-
-            <div className="flex-1 min-w-[220px]">
-              <input
-                type="file"
-                accept="image/*"
-                className="input-field file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (!f) return;
-                  uploadAvatar(f).catch(() => {});
-                  e.target.value = '';
-                }}
-                disabled={isUploadingAvatar || isClearingAvatar}
-              />
-              <div className="mt-1 text-xs text-gray-500">
-                建议方形图片；服务端会裁剪+压缩。{avatarSize ? `当前约：${avatarSize}` : ''}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              className="rounded-lg border bg-white px-3 py-2 text-xs hover:bg-gray-50 disabled:opacity-50"
-              onClick={() => clearAvatar().catch(() => {})}
-              disabled={!profile.avatarDataUrl || isUploadingAvatar || isClearingAvatar}
-            >
-              清除头像
-            </button>
-          </div>
-        </div>
+        <ProfileAvatarField
+          avatarDataUrl={profile.avatarDataUrl}
+          uploadAvatar={uploadAvatar}
+          clearAvatar={clearAvatar}
+          isUploadingAvatar={isUploadingAvatar}
+          isClearingAvatar={isClearingAvatar}
+        />
 
         <ProfileSignatureField editor={editor} />
         {(editor.error || (!loaded && error)) && <div className="text-xs text-gray-500">

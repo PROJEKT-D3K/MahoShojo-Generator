@@ -41,3 +41,28 @@ it('blocks link navigation while PUT is pending and keeps dirty leave confirmati
   const failedClick = new MouseEvent('click', { bubbles: true, cancelable: true }); act(() => link.dispatchEvent(failedClick));
   expect(failedClick.defaultPrevented).toBe(true); expect(confirm).toHaveBeenCalledTimes(1); link.remove();
 });
+
+it('uses the shared avatar field while retaining host errors and signature layout', async () => {
+  const avatarDataUrl = 'data:image/webp;base64,b2xk';
+  const uploadAvatar = vi.fn().mockRejectedValue(new Error('上传失败'));
+  const clearAvatar = vi.fn(async () => {});
+  mocked.value = { ...mocked.value, loaded: true, profile: { signature: '保留签名', avatarDataUrl }, uploadAvatar, clearAvatar,
+    isUploadingAvatar: false, isClearingAvatar: false };
+  await render();
+  const input = container.querySelector<HTMLInputElement>('input[type=file]')!;
+  expect(input.labels?.[0]?.textContent).toBe('头像');
+  expect(container.textContent).toContain('浏览器裁剪并压缩为 128×128 WebP');
+  expect(container.textContent).not.toContain('后端压缩');
+  const file = new File(['image'], 'avatar.png', { type: 'image/png' });
+  Object.defineProperty(input, 'files', { value: [file] });
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+  expect(uploadAvatar).toHaveBeenCalledExactlyOnceWith(file); expect(input.value).toBe('');
+  mocked.value = { ...mocked.value, error: '上传失败' }; await render();
+  expect(container.querySelector('img')?.src).toBe(avatarDataUrl);
+  expect(container.querySelector('textarea')?.value).toBe('保留签名');
+  expect(container.firstElementChild?.lastElementChild?.textContent).toBe('上传失败');
+  mocked.value = { ...mocked.value, error: null, isClearingAvatar: true }; await render();
+  expect(input.disabled).toBe(true);
+  expect([...container.querySelectorAll('button')].find((button) => button.textContent === '清除头像')?.disabled).toBe(true);
+  expect(clearAvatar).not.toHaveBeenCalled();
+});

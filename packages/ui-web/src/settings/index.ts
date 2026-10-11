@@ -55,3 +55,9 @@ export {
   PROFILE_SIGNATURE_MAX_LENGTH,
   type ProfileSignatureEditorState,
 } from './profile-text-editor';
+export { ProfileAvatarField, type ProfileAvatarFieldProps } from './profile-avatar';
+export {
+  compressAvatarToWebpBase64InBrowser,
+  MAX_AVATAR_BASE64_LENGTH,
+  AVATAR_DATA_URL_PREFIX,
+} from './profile-avatar-browser';
