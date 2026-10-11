@@ -1,5 +1,11 @@
 'use client';
 
+import {
+  resolveAnchoredSummaryState,
+  resolveBattleStoryChapterOutputCombatants as resolveChapterOutputCombatants,
+  toBattleStoryRecordCombatants as toRecordCombatantArray,
+} from '@mahoshojo/domain/arena-story-branch';
+
 import { canResolveBattleStoryRoles, type BattleStoryCompletedOutput } from '@mahoshojo/domain/arena-story-completed-output';
 import { resolveWebBattleStoryRoles, type WebBattleStoryRoleResult } from '../utils/battleStoryRoleResolution';
 
@@ -264,39 +270,6 @@ const buildAnchoredChapterRequestWindow = (
   maxChapterIndex: number
 ) => buildChapterRequestWindow(chapters.filter((chapter) => chapter.index <= maxChapterIndex));
 
-const resolveAnchoredSummaryState = (input: {
-  sessionSummary?: string;
-  summaryMeta?: BattleStorySessionRecord['summaryMeta'];
-  maxCoveredChapterIndex: number;
-  invalidateWhenCoveredAtOrBeyond?: boolean;
-}): {
-  sessionSummary?: string;
-  summaryMeta?: BattleStorySessionRecord['summaryMeta'];
-} => {
-  const coveredUntil = input.summaryMeta?.coveredUntilChapterIndex ?? 0;
-  const isUnsafe = input.invalidateWhenCoveredAtOrBeyond
-    ? coveredUntil >= input.maxCoveredChapterIndex
-    : coveredUntil > input.maxCoveredChapterIndex;
-  if (isUnsafe) {
-    return {
-      sessionSummary: undefined,
-      summaryMeta: undefined,
-    };
-  }
-  return {
-    sessionSummary: input.sessionSummary,
-    summaryMeta: input.summaryMeta,
-  };
-};
-
-const toRecordCombatantArray = (value: unknown): Array<Record<string, unknown>> | null => {
-  if (!Array.isArray(value)) return null;
-  const normalized = value.filter(
-    (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object'
-  );
-  return normalized.length > 0 ? normalized : null;
-};
-
 const resolveChapterInputCombatants = (input: {
   session: BattleStorySessionRecord;
   checkpoints: BattleStoryCheckpointRecord[];
@@ -312,22 +285,6 @@ const resolveChapterInputCombatants = (input: {
   }
   if (input.latestChapter && input.latestChapter.id === input.chapter.id) {
     return toRecordCombatantArray(input.session.lastChapterInputCombatants);
-  }
-  return null;
-};
-
-const resolveChapterOutputCombatants = (input: {
-  session: BattleStorySessionRecord;
-  checkpoints: BattleStoryCheckpointRecord[];
-  chapter: BattleStoryChapterRecord;
-  latestChapter: BattleStoryChapterRecord | null;
-}): Array<Record<string, unknown>> | null => {
-  const fromCheckpoint = toRecordCombatantArray(
-    getBattleStoryCheckpointForBoundary(input.checkpoints, input.chapter.index)?.combatants
-  );
-  if (fromCheckpoint) return fromCheckpoint;
-  if (input.latestChapter && input.latestChapter.id === input.chapter.id) {
-    return toRecordCombatantArray(input.session.workingCombatants);
   }
   return null;
 };

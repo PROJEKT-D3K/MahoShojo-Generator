@@ -84,3 +84,8 @@ Web 旧 key、migration、hydration 和实际写入仍留宿主。此片不开�
 Web 完成章角色未决修复：`domain/arena-story-completed-output` 为角色判别值/许可纯规则，
 `ui-web/arena-story-session` 的 `BattleStoryPendingOutcome` 是两宿主可控的正文/角色/保存结果区段。
 Web 已实际消费；其完成候选仅内存，Desktop 耐久恢复仍由后继 owner 接线，本包不增加存储或权威。
+
+连续故事分支首片：`domain/arena-story-branch` 为 owned snapshot 的 clone/label/锚点摘要与角色回退纯投影。
+Web 真实 hook 和 ID 分配 adapter 已回用；随机 ID、生成、持久化仍归原宿主。纯层保留扩展值与旧回退，
+不验证不可信输入、不分配 Native 映射或提供写权限。Desktop 分支 owner、Native 复制、Web 原子分支保存仍待后继；
+此入口不是双端分支完成声明，详见 DESK-105 窄合同。

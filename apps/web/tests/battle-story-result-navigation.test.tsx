@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useBattleStorySession } from '@/components/arena/hooks/useBattleStorySession';
+import * as branchProjection from '@mahoshojo/domain/arena-story-branch';
 import * as storage from '@/lib/ai-session/battle-story/storage';
 import type { BattleStoryCheckpointRecord, BattleStoryChapterRecord, BattleStorySessionRecord } from '@/lib/ai-session/battle-story/types';
 
@@ -601,4 +602,79 @@ it('closed unknown A keeps an A-only read-only fence while B continuation remain
   await act(async () => session.handleDeleteSession(b.id)); expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce(); expect(session.deleteSessionNotice).toContain('上一个删除');
   await act(async () => session.handleSelectSession(a.id)); expect(session.deleteSessionBlocksActive).toBe(true);
   await act(async () => session.handleObserveDeleteSession()); expect(session.deleteSessionTarget).toBeNull(); expect(storage.deleteBattleStorySession).toHaveBeenCalledOnce();
+});
+
+
+describe('Web branch consumes the shared projections without changing legacy persistence', () => {
+  it.each([1, 2])('branches from saved chapter %s with source unchanged and anchor-only summary/roles', async (anchorIndex) => {
+    const source = addHistory();
+    source.workingCombatants = [{ codename: 'latest-role' }];
+    source.sessionSummary = '第二章摘要';
+    source.summaryMeta = { coveredUntilChapterIndex: 2, coveredChapterIds: [...fixture.chapters.keys()], refreshedAt: 1, mode: 'ai' };
+    const originals = [...fixture.chapters.values()];
+    const anchor = originals[anchorIndex - 1]!;
+    // Legacy active rewrite history must remain branchable.
+    originals[0]!.action = 'rewrite';
+    if (anchorIndex === 1) {
+      const checkpoint = storage.createBattleStoryCheckpointRecord({ sessionId: source.id,
+        boundaryIndex: 1, chapterId: anchor.id, combatants: [{ codename: 'anchor-role' }] });
+      fixture.checkpoints.set(checkpoint.id, checkpoint);
+    }
+    const sourceBefore = structuredClone(source);
+    const chaptersBefore = structuredClone(originals);
+    localStorage.setItem('arena.battleStory.activeSessionId', source.id);
+    const clone = vi.spyOn(branchProjection, 'cloneBattleStoryActiveChaptersForNewSession');
+    const checkpoints = vi.spyOn(branchProjection, 'cloneBattleStoryCheckpointsForNewSession');
+    const summary = vi.spyOn(branchProjection, 'resolveAnchoredSummaryState');
+    const roles = vi.spyOn(branchProjection, 'resolveBattleStoryChapterOutputCombatants');
+    await mount();
+    let pending!: Promise<void>;
+    await act(async () => session.setSelectedChapterId(anchor.id));
+    await act(async () => { pending = session.handleBranchSelectedChapter(); });
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+    expect(roles).toHaveReturnedWith([{ codename: anchorIndex === 1 ? 'anchor-role' : 'latest-role' }]);
+    expect(summary).toHaveReturnedWith(anchorIndex === 1
+      ? { sessionSummary: undefined, summaryMeta: undefined }
+      : { sessionSummary: source.sessionSummary, summaryMeta: source.summaryMeta });
+    await act(async () => {
+      send(event('markdown', { chunk: '# 分支新章\n\n完整正文' }) + event('done', { ok: true }));
+      stream.close(); await pending;
+    });
+    expect(session.actionError).toBeNull();
+    expect(clone).toHaveBeenCalledTimes(1);
+    expect(checkpoints).toHaveBeenCalledTimes(1);
+    expect(fixture.sessions.get(source.id)).toEqual(sourceBefore);
+    expect(originals).toEqual(chaptersBefore);
+    const target = [...fixture.sessions.values()].find((item) => item.id !== source.id)!;
+    expect(target.chapterCount).toBe(anchorIndex + 1);
+    expect(target.branchOf).toMatchObject({ sessionId: source.id, chapterId: anchor.id, chapterIndex: anchorIndex });
+    expect(target.branchLabel).toBe(`从第 ${anchorIndex} 章《旧章${anchorIndex}》分支`);
+    const copied = [...fixture.chapters.values()].filter((item) => item.sessionId === target.id).sort((a, b) => a.index - b.index);
+    expect(copied[0]!.action).toBe('rewrite');
+    expect(copied.at(-1)!.sourceChapterId).toBe(copied[anchorIndex - 1]!.id);
+    expect(copied.at(-1)!.markdown).toContain('完整正文');
+    expect(target.summaryMeta?.coveredChapterIds).toEqual(anchorIndex === 1 ? undefined : copied.slice(0, anchorIndex).map((item) => item.id));
+    const boundaries = [...fixture.checkpoints.values()].filter((item) => item.sessionId === target.id).map((item) => item.boundaryIndex);
+    expect(boundaries).toContain(0);
+    expect(boundaries).toContain(anchorIndex);
+    expect(boundaries).toContain(anchorIndex + 1);
+    expect(storage.commitCompletedBattleStoryChapter).not.toHaveBeenCalled();
+  });
+
+  it('rejects a full plan or an old chapter without output roles before dispatch', async () => {
+    const source = addHistory();
+    source.chapterPlan = { totalChapters: 2, source: 'user', locked: true };
+    source.workingCombatants = [{ codename: 'latest-role' }];
+    localStorage.setItem('arena.battleStory.activeSessionId', source.id);
+    await mount();
+    const chapters = [...fixture.chapters.values()];
+    await act(async () => session.setSelectedChapterId(chapters[1]!.id));
+    await act(async () => session.handleBranchSelectedChapter());
+    expect(session.actionError).toContain('计划章节上限');
+    await act(async () => session.setSelectedChapterId(chapters[0]!.id));
+    await act(async () => session.handleBranchSelectedChapter());
+    expect(session.actionError).toContain('章末状态');
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect(fixture.sessions.size).toBe(1);
+  });
 });

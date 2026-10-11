@@ -1,5 +1,8 @@
 # 文档导航
 
+2026-10-10 分支首片：[连续故事分支窄合同](./specs/2026-10-10_233200_连续故事分支窄合同.md) / DESK-105 接受预算计量、receipt/历史备份与source CAS边界；当前仅纯投影/Web等价消费，未接Desktop分支、Native迁移或Web原子分支保存，不关闭D5.1b b-2。源码、定向、独审与正规完整CI通过（受测1787741168，21条件容量skip明确保留）；Native未改未重跑，Windows/Tauri待验。分项状态见唯一计划。
+
+
 2026-10-10 连续故事整会话删除：[窄后继 ADR](./decisions/2026-10-10_210000_连续故事整会话本地删除决策.md) / DESK-104 已接受，纳入唯一 D5.1b b-2，源码、定向、Native/真实pipe、修后独审与冻结完整CI通过（受测0d6d8e3）；[分项验收](./reports/2026-10-10_212900_连续故事整会话本地删除验收.md)保留失败与修复，真实Windows/Tauri继续待验。真实双端共源确认、原目标事务删除、unknown只读观察；SQLite8/IDB4不变，不含分支/重写/截尾或永久账本。DESK-103原片历史范围保持。
 
 2026-10-10 Desktop Hosted 连续故事两页：[接线 ADR](./decisions/2026-10-10_191200_DesktopHosted连续故事两页接线决策.md) / DESK-103 已接受 owner/UI 窄后继，源码实现与定向/Native/真实pipe验证通过，修后新owner/UI独审和冻结完整CI通过（受测2b6164d4）。保同页框 Direct 与原 C0，完整正文先保窗口，必须等 Native invoke 成功 settle 且原 actor 世代有效才 durable→role→freeze→一次保存；双槽原页恢复、只读围栏、原件导出与明确放弃一起接线。[本片验收记录](./reports/2026-10-10_191300_DesktopHosted连续故事两页接线验收.md)分列本片实际证据与剩余门禁，不借前片通过冒称已交付；下方 DESK-100/101/102 的范围和结果保留历史含义，无真实外部或发布。[Windows 有限验收](./runbooks/2026-10-10_200900_DesktopHosted连续故事Windows有限验收.md)仍需隔离双mock harness，当前普通dev不可直接替代。

@@ -1,5 +1,9 @@
 'use client';
 
+import {
+  cloneBattleStoryActiveChaptersForNewSession as projectBranchChapters,
+  cloneBattleStoryCheckpointsForNewSession as projectBranchCheckpoints,
+} from '@mahoshojo/domain/arena-story-branch';
 import { randomUUID } from '@/lib/crypto';
 import {
   createBattleStoryExportMarkdownWriter,
@@ -17,7 +21,6 @@ import type {
   BattleStorySessionSeed,
   BattleStorySessionSource,
   BattleStoryStreamUpdateMetaDebug,
-  BattleStorySummaryMeta,
 } from '@/lib/ai-session/battle-story/types';
 import type { AdjudicatorEvent } from '@/types/arena';
 
@@ -454,81 +457,15 @@ export const buildBattleStoryExportMarkdown = (
 export const cloneBattleStoryActiveChaptersForNewSession = (input: {
   chapters: BattleStoryChapterRecord[];
   newSessionId: string;
-}): {
-  chapters: BattleStoryChapterRecord[];
-  chapterIdMap: Map<string, string>;
-} => {
-  const activeChapters = input.chapters
-    .filter((chapter) => chapter.status !== 'superseded')
-    .sort((left, right) => left.index - right.index);
-
-  const chapterIdMap = new Map<string, string>();
-  const cloned = activeChapters.map((chapter) => {
-    const nextId = randomUUID();
-    chapterIdMap.set(chapter.id, nextId);
-    return {
-      ...chapter,
-      id: nextId,
-      sessionId: input.newSessionId,
-      status: 'active' as const,
-      supersededByChapterId: null,
-    };
-  });
-
-  const normalized = cloned.map((chapter) => ({
-    ...chapter,
-    sourceChapterId: chapter.sourceChapterId ? (chapterIdMap.get(chapter.sourceChapterId) ?? null) : null,
-  }));
-
-  return {
-    chapters: normalized,
-    chapterIdMap,
-  };
-};
+}): { chapters: BattleStoryChapterRecord[]; chapterIdMap: Map<string, string> } =>
+  projectBranchChapters({ ...input, allocateId: () => randomUUID() });
 
 export const cloneBattleStoryCheckpointsForNewSession = (input: {
   checkpoints: BattleStoryCheckpointRecord[];
   newSessionId: string;
   chapterIdMap: Map<string, string>;
   maxBoundaryIndex?: number;
-}): BattleStoryCheckpointRecord[] => {
-  const maxBoundaryIndex =
-    typeof input.maxBoundaryIndex === 'number' && Number.isFinite(input.maxBoundaryIndex)
-      ? Math.max(0, Math.floor(input.maxBoundaryIndex))
-      : Number.MAX_SAFE_INTEGER;
+}): BattleStoryCheckpointRecord[] =>
+  projectBranchCheckpoints({ ...input, allocateId: () => randomUUID() });
 
-  return input.checkpoints
-    .filter((checkpoint) => checkpoint.boundaryIndex <= maxBoundaryIndex)
-    .sort((left, right) => left.boundaryIndex - right.boundaryIndex)
-    .map((checkpoint) => ({
-      ...checkpoint,
-      id: randomUUID(),
-      sessionId: input.newSessionId,
-      chapterId: checkpoint.chapterId ? (input.chapterIdMap.get(checkpoint.chapterId) ?? null) : null,
-    }));
-};
-
-export const buildBattleStoryBranchLabel = (input: {
-  chapterIndex: number;
-  chapterTitle?: string | null;
-}): string => {
-  const index = Math.max(1, Math.floor(input.chapterIndex));
-  const title = normalizeText(input.chapterTitle);
-  return title ? `从第 ${index} 章《${title}》分支` : `从第 ${index} 章分支`;
-};
-
-export const remapBattleStorySummaryMeta = (
-  summaryMeta: BattleStorySummaryMeta | undefined,
-  chapterIdMap: Map<string, string>
-): BattleStorySummaryMeta | undefined => {
-  if (!summaryMeta) return undefined;
-
-  const coveredChapterIds = summaryMeta.coveredChapterIds
-    .map((chapterId) => chapterIdMap.get(chapterId) ?? null)
-    .filter((chapterId): chapterId is string => Boolean(chapterId));
-
-  return {
-    ...summaryMeta,
-    coveredChapterIds,
-  };
-};
+export { buildBattleStoryBranchLabel, remapBattleStorySummaryMeta } from '@mahoshojo/domain/arena-story-branch';
