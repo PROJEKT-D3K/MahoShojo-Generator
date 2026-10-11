@@ -155,7 +155,14 @@ export function useMeProfile(userId: number | null) {
       // 截住写入期间启动的 refetch，避免旧 GET 晚到覆盖已确认写入。
       await queryClient.cancelQueries({ queryKey: key, exact: true });
       if (!isCurrentOwner(initiatedBy)) throw new Error('账号已变化，旧请求结果已忽略');
-      queryClient.setQueryData(key, data);
+      // 签名回包中的头像可能早于并行头像写入，只合并本次确认的字段。
+      const updated = queryClient.setQueryData<ProfileApiResponse>(key, (prev) => prev
+        ? { success: true, profile: { ...prev.profile, signature: data.profile.signature } }
+        : undefined);
+      // 未知完整资料不能从旧快照补齐；重新读取头像等未由本次写入确认的字段。
+      if (!updated && isCurrentOwner(initiatedBy)) {
+        void queryClient.invalidateQueries({ queryKey: key, exact: true });
+      }
       return data;
     },
   });

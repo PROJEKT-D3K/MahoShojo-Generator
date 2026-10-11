@@ -25,6 +25,25 @@ describe('Web signature mutation owner and server confirmation', () => {
     expect(JSON.parse(mocks.fetch.mock.calls.at(-1)![1].body)).toEqual({ signature: '一\n二' });
     expect(client.getQueryData(['me-profile', 1])).toMatchObject({ profile: { signature: '服务器确认' } });
   });
+  it('returns the confirmed signature but waits for a fresh read when the initial profile is unknown', async () => {
+    const initial = deferred<ReturnType<typeof response>>(); const refresh = deferred<ReturnType<typeof response>>();
+    let reads = 0; let initialSignal: AbortSignal | undefined;
+    mocks.fetch.mockImplementation((_path, init) => {
+      if (init.method === 'PUT') return Promise.resolve(response('服务器确认'));
+      reads += 1;
+      if (reads === 1) { initialSignal = init.signal; return initial.promise; }
+      return refresh.promise;
+    });
+    await render(); expect(hook.loaded).toBe(false);
+    await act(async () => { expect((await hook.saveSignature('草稿')).profile.signature).toBe('服务器确认'); });
+    expect(initialSignal?.aborted).toBe(true); expect(reads).toBe(2);
+    expect(client.getQueryData(['me-profile', 1])).toBeUndefined(); expect(hook.loaded).toBe(false);
+    await act(async () => {
+      initial.resolve(response('旧签名')); refresh.resolve(response('服务器确认'));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(hook.loaded).toBe(true); expect(hook.profile.signature).toBe('服务器确认');
+  });
   it('does not accept HTTP200 success:false as a save', async () => {
     await render(); mocks.fetch.mockResolvedValueOnce(response('假的', false));
     await act(async () => { await expect(hook.saveSignature('草稿')).rejects.toThrow('未确认'); });

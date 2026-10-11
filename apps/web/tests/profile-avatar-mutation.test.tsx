@@ -22,12 +22,16 @@ const deferred = <T,>() => {
 };
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 let root: Root; let container: HTMLDivElement; let client: QueryClient;
-let userId: number | null; let hook: ReturnType<typeof useMeProfile>;
+let userId: number | null; let hook: ReturnType<typeof useMeProfile>; let signatureHook: ReturnType<typeof useMeProfile>;
 let releaseRead: (() => void) | undefined;
 let pauseRead: boolean;
 let avatarEvents: Mock<(event: Event) => void>;
 const Harness = () => { const result = useMeProfile(userId); useEffect(() => { hook = result; }); return null; };
-const render = () => act(async () => { root.render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>); await tick(); });
+const SignatureHarness = () => { const result = useMeProfile(userId); useEffect(() => { signatureHook = result; }); return null; };
+const render = (withSignatureEditor = false) => act(async () => {
+  root.render(<QueryClientProvider client={client}><Harness />{withSignatureEditor && <SignatureHarness />}</QueryClientProvider>);
+  await tick();
+});
 const file = () => new File(['image'], 'avatar.png', { type: 'image/png' });
 const run = (kind: 'upload' | 'clear') => kind === 'upload' ? hook.uploadAvatar(file()) : hook.clearAvatar();
 const avatarRequests = () => mocks.fetch.mock.calls.filter(([path]) => path === avatarPath);
@@ -80,6 +84,63 @@ describe('Web avatar mutation ownership and server confirmation', () => {
     expect(avatarRequests()).toHaveLength(1);
     if (kind === 'upload') expect(JSON.parse(avatarRequests()[0][1].body)).toEqual({ avatarWebpBase64: 'bmV3' });
     expect(hook.error).toBeNull();
+  });
+
+  it.each(['upload', 'clear'] as const)('keeps a confirmed %s when another hook receives a late signature snapshot', async (kind) => {
+    await render(true);
+    const signature = deferred<ReturnType<typeof response>>();
+    mocks.fetch.mockImplementation((path, init) => path === '/api/me/profile' && init.method === 'PUT'
+      ? signature.promise
+      : Promise.resolve(response({ success: true, avatarDataUrl: UPLOADED })));
+    let pending!: ReturnType<typeof signatureHook.saveSignature>;
+    await act(async () => { pending = signatureHook.saveSignature('新签名'); await tick(); });
+    await act(async () => { await run(kind); await tick(); });
+    const avatarDataUrl = kind === 'upload' ? UPLOADED : null;
+    expect(client.getQueryData(['me-profile', 1])).toMatchObject({ profile: { avatarDataUrl } });
+    await act(async () => {
+      signature.resolve(response({ success: true, profile: { signature: '服务器确认签名', avatarDataUrl: ORIGINAL } }));
+      await pending; await tick();
+    });
+    expect((await pending).profile.signature).toBe('服务器确认签名');
+    const expected = { signature: '服务器确认签名', avatarDataUrl };
+    expect(client.getQueryData(['me-profile', 1])).toEqual({ success: true, profile: expected });
+    expect(hook.profile).toEqual(expected); expect(signatureHook.profile).toEqual(expected);
+    expect(avatarEvents).toHaveBeenCalledTimes(1);
+    expect((avatarEvents.mock.calls[0][0] as CustomEvent).detail).toEqual({ userId: 1, avatarDataUrl });
+  });
+
+  it.each(['upload', 'clear'] as const)('does not seed unknown profile data from a late signature snapshot after %s', async (kind) => {
+    const initial = deferred<ReturnType<typeof response>>();
+    const recovery = deferred<ReturnType<typeof response>>();
+    const refresh = deferred<ReturnType<typeof response>>();
+    const signature = deferred<ReturnType<typeof response>>();
+    const readSignals: AbortSignal[] = [];
+    mocks.fetch.mockImplementation((path, init) => {
+      if (path === avatarPath) return Promise.resolve(response({ success: true, avatarDataUrl: UPLOADED }));
+      if (init.method === 'PUT') return signature.promise;
+      readSignals.push(init.signal);
+      return readSignals.length === 1 ? initial.promise : readSignals.length === 2 ? recovery.promise : refresh.promise;
+    });
+    await render(true); expect(hook.loaded).toBe(false);
+    let pending!: ReturnType<typeof signatureHook.saveSignature>;
+    await act(async () => { pending = signatureHook.saveSignature('新签名'); await tick(); });
+    await act(async () => { await run(kind); await tick(); });
+    expect(readSignals).toHaveLength(2); expect(hook.loaded).toBe(false);
+    await act(async () => {
+      signature.resolve(response({ success: true, profile: { signature: '服务器确认签名', avatarDataUrl: ORIGINAL } }));
+      await pending; await tick();
+    });
+    expect((await pending).profile.signature).toBe('服务器确认签名');
+    expect(client.getQueryData(['me-profile', 1])).toBeUndefined();
+    expect(hook.loaded).toBe(false); expect(signatureHook.loaded).toBe(false);
+    expect(readSignals).toHaveLength(3); expect(readSignals[1].aborted).toBe(true);
+    await act(async () => { initial.resolve(profileResponse()); recovery.resolve(profileResponse()); await tick(); });
+    expect(client.getQueryData(['me-profile', 1])).toBeUndefined();
+    const profile = { signature: '服务器确认签名', avatarDataUrl: kind === 'upload' ? UPLOADED : null };
+    await act(async () => { refresh.resolve(response({ success: true, profile })); await tick(); });
+    expect(hook.loaded).toBe(true); expect(signatureHook.loaded).toBe(true);
+    expect(hook.profile).toEqual(profile); expect(signatureHook.profile).toEqual(profile);
+    expect(avatarEvents).toHaveBeenCalledTimes(1);
   });
 
   it.each(['B', 'ABA'] as const)('does not send an old upload after %s during compression', async (next) => {
