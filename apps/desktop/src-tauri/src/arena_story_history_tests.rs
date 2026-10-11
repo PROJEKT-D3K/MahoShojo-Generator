@@ -191,7 +191,7 @@ fn history_receipts_read_active_export_continue_and_delete() {
                 anchor_chapter_id: "rewrite-two".into(),
                 anchor_index: 2
             })
-            .is_err());
+            .is_ok());
         // Native bound traversal must count only current chapters. Renderer owns
         // Markdown formatting; this exercises the actual export file lifecycle.
         let markdown = b"# synthetic active story\n";

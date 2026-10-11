@@ -21,6 +21,16 @@ fn call(store: &StoryStore, request: &RawValue) -> Result<Value, StoryError> {
     let op: String = parse(request, "op")?;
     match op.as_str() {
         "linear-begin" => encoded(store.begin(parse(request, "manifest")?, Instant::now())),
+        "branch-begin" => encoded(store.begin_branch(parse(request, "manifest")?, Instant::now())),
+        "branch-anchor" => encoded(store.resolve_branch_anchor(&parse(request, "request")?)),
+        "branch-end" => {
+            encoded(store.end_branch(&parse::<String>(request, "token")?, Instant::now()))
+        }
+        "branch-receipt" => encoded(store.branch_receipt(
+            &parse::<String>(request, "sessionId")?,
+            &parse::<String>(request, "operationId")?,
+            &parse::<String>(request, "requestDigest")?,
+        )),
         "tail-source" | "tail-rewrite-source" => {
             encoded(store.resolve_tail_rewrite_source(&parse(request, "request")?))
         }

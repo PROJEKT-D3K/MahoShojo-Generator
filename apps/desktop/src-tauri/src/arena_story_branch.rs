@@ -224,6 +224,7 @@ fn copy_chapter(
     indexed: &ChapterIndex,
     previous_id: Option<&str>,
     target_session: &str,
+    history: bool,
 ) -> Result<CopyRecord, StoryError> {
     let raw = source.raw();
     let fields = authority(raw, CHAPTER_AUTHORITY)?;
@@ -244,8 +245,18 @@ fn copy_chapter(
         || actual.title_truncated != indexed.title_truncated
         || actual.created_at != indexed.created_at
         || actual.markdown_byte_length != indexed.markdown_byte_length
-        || indexed.source_chapter_id.as_deref() != previous_id
-        || if indexed.index == 1 {
+        || if indexed.action == "rewrite" {
+            // A validated history source points to a superseded same-index
+            // version, or is itself a branch copy with no local source. Neither
+            // belongs to the active prefix, matching the domain map's null.
+            !history
+                || indexed
+                    .source_chapter_id
+                    .as_deref()
+                    .is_some_and(|id| !valid_id(id) || id == indexed.id || Some(id) == previous_id)
+        } else if indexed.source_chapter_id.as_deref() != previous_id {
+            true
+        } else if indexed.index == 1 {
             indexed.action != "start" || previous_id.is_some()
         } else {
             !["continue", "branch"].contains(&indexed.action.as_str())
@@ -255,7 +266,7 @@ fn copy_chapter(
         return Err(StoryError::Corrupt);
     }
     let id = copy_id(target_session, CopyKind::Chapter, indexed.index)?;
-    let previous = if indexed.index == 1 {
+    let previous = if indexed.index == 1 || indexed.action == "rewrite" {
         "null".into()
     } else {
         json(&copy_id(

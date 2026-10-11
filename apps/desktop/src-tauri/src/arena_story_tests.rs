@@ -444,13 +444,13 @@ fn branch_anchor_checks_raw_active_identity_and_rejects_ambiguous_authority() {
 }
 
 #[test]
-fn branch_anchor_scans_only_selected_record_and_preserves_opaque_extensions() {
+fn branch_anchor_scans_only_bounded_window_and_preserves_opaque_extensions() {
     let (_root, library) = library();
     let store = library.stories();
-    for index in 1..=3 {
+    for index in 1..=16 {
         commit(store, "story", index);
     }
-    let original = fixture("story", 2)
+    let original = fixture("story", 14)
         .into_iter()
         .find(|(kind, _)| *kind == PartKind::Chapter)
         .unwrap()
@@ -463,16 +463,17 @@ fn branch_anchor_scans_only_selected_record_and_preserves_opaque_extensions() {
     {
         let connection = lock_connection(library.connection()).unwrap();
         connection.execute(
-            "UPDATE arena_story_chapter SET document=?1,document_bytes=?2,document_digest=?3 WHERE id='story-chapter-2'",
+            "UPDATE arena_story_chapter SET document=?1,document_bytes=?2,document_digest=?3 WHERE id='story-chapter-14'",
             params![changed, changed.len() as u64, digest(changed.as_bytes())],
         ).unwrap();
-        // Metadata resolution must not parse either historical prefix or suffix.
-        connection.execute("UPDATE arena_story_chapter SET document='unread-document' WHERE id IN ('story-chapter-1','story-chapter-3')", []).unwrap();
+        // Legacy compatibility reads only the returned twelve-chapter window.
+        // Neither its omitted prefix nor the suffix is hydrated.
+        connection.execute("UPDATE arena_story_chapter SET document='unread-document' WHERE id IN ('story-chapter-1','story-chapter-2','story-chapter-15','story-chapter-16')", []).unwrap();
     }
     let result = store
-        .resolve_branch_anchor(&anchor_request("story", 3, 2))
+        .resolve_branch_anchor(&anchor_request("story", 16, 14))
         .unwrap();
-    assert_eq!(result.recent_chapters.len(), 2);
+    assert_eq!(result.recent_chapters.len(), 12);
     assert_eq!(result.source.anchor.digest, digest(changed.as_bytes()));
     assert_eq!(raw(store, &result.source.anchor), changed.as_bytes());
 }

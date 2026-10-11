@@ -197,7 +197,7 @@ fn rewrite(
     store.end_tail_rewrite(&token, Instant::now()).unwrap()
 }
 
-fn continue_after(store: &StoryStore, session: &str, operation: &str) -> StoryReceipt {
+pub(crate) fn continue_after(store: &StoryStore, session: &str, operation: &str) -> StoryReceipt {
     let (revision, count, head, _, input) = state(store, session);
     let mut parts = linear_tests::fixture(session, count + 1);
     let checkpoint = format!("cp-{operation}");
@@ -1599,4 +1599,24 @@ fn legacy_summary_numeric_lexemes_follow_js_safe_integer_semantics() {
             assert_rejected_without_writes(store, &manifest, &parts);
         }
     });
+}
+
+/// Share the real internal producer with branch compatibility tests.
+pub(crate) fn rewrite_for_branch(
+    store: &StoryStore,
+    session: &str,
+    operation: &str,
+) -> TailRewriteReceipt {
+    let (mut manifest, mut parts) = fixture(store, session, operation);
+    let original: Value =
+        serde_json::from_str(&raw(store, "arena_story_session", session)).unwrap();
+    let timestamp = original["updatedAt"].as_u64().unwrap() + 1;
+    edit_part(&mut parts, PartKind::Session, |v| {
+        v["updatedAt"] = json!(timestamp)
+    });
+    for kind in [PartKind::Chapter, PartKind::Checkpoint1] {
+        edit_part(&mut parts, kind, |v| v["createdAt"] = json!(timestamp));
+    }
+    manifest.parts = declarations(&parts);
+    rewrite(store, &manifest, &parts)
 }

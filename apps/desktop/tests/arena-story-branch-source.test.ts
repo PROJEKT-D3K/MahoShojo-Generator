@@ -56,6 +56,23 @@ describe('internal branch source snapshot', () => {
     expect(snapshot.source.expectedChapterCount).toBe(16);
     expect(f.read.mock.calls.filter(([d]) => d.kind === 'chapter').map(([d]) => d.recordId)).toEqual(Array.from({ length: 12 }, (_, i) => `source-c${i + 3}`));
   });
+  it.each([1, 2, 3, 14])('projects Native-proved original and copied rewrites through anchor %i', async k => {
+    for (const sourceChapterId of ['superseded-original', null]) {
+      const f = setup(k, Math.max(3, k + 1)), index = k === 14 ? 3 : k;
+      Object.assign(f.records.get(`source-c${index}`)!, { action: 'rewrite', sourceChapterId,
+        generationId: 'original-rewrite-generation', extension: { unchanged: true } });
+      const snapshot = await readStoryBranchSource(f, f.resolver, f.request);
+      expect(snapshot.recentWindow.find(chapter => chapter.chapterIndex === index)?.chapterId).toBe(`source-c${index}`);
+      if (index === k) expect(snapshot.anchor).toMatchObject({ action: 'rewrite', sourceChapterId,
+        generationId: 'original-rewrite-generation', extension: { unchanged: true } });
+      expect(f.read.mock.calls.some(([descriptor]) => descriptor.recordId === 'superseded-original')).toBe(false);
+    }
+  });
+  it.each(['source-c1', 'source-c2', 'source-c3'])('rejects a rewrite linked to active-window chapter %s', async sourceChapterId => {
+    const f = setup(3);
+    Object.assign(f.records.get('source-c2')!, { action: 'rewrite', sourceChapterId });
+    await expect(readStoryBranchSource(f, f.resolver, f.request)).rejects.toThrow('序列');
+  });
   it.each(['missing', 'duplicate', 'reordered'] as const)('rejects %s recent descriptors', async kind => {
     const f = setup(14, 16); f.resolver.resolveAnchor.mockImplementation(async () => { const r = f.response();
       if (kind === 'missing') r.recentChapters.pop();
@@ -106,11 +123,23 @@ describe('injected owner pre-generation source preparation', () => {
   function ownerSetup() {
     const f = setup(), reads = new StoryFixturePort(); reads.read.mockImplementation(f.read);
     const branch = { begin: vi.fn(), append: vi.fn(), end: vi.fn(), abort: vi.fn(), receipt: vi.fn() } as StoryBranchNativePort;
-    const owner = new DesktopArenaStorySession({ port: reads, branch: { port: branch, source: f.resolver }, execute: vi.fn(), exportMarkdown: vi.fn() });
+    const execute = vi.fn();
+    const owner = new DesktopArenaStorySession({ port: reads, branch: { port: branch, source: f.resolver }, execute, exportMarkdown: vi.fn() });
     owner.setExecutionScope('A');
     const input = { mode: 'direct' as const, generationId: 'generation', operationId: 'operation', sessionId: 'target', anchor: f.request };
-    return { ...f, owner, input, branch, reads };
+    return { ...f, owner, input, branch, reads, execute };
   }
+  it('stops before raw reads, model or save when Native rejects a legacy-schema rewrite source', async () => {
+    const f = ownerSetup();
+    const corrupt = { code: 'story-corrupt', message: 'legacy source contains rewrite', writeEvidence: 'not-written' };
+    f.resolver.resolveAnchor.mockRejectedValue(corrupt);
+    await expect(f.owner.prepareBranchCompletion(f.input)).rejects.toEqual(corrupt);
+    expect(f.owner.isBusy()).toBe(false); expect(f.owner.getSnapshot().pending).toBeNull();
+    for (const method of [f.read, f.reads.describe, f.reads.begin, f.reads.end, f.execute,
+      f.branch.begin, f.branch.append, f.branch.end, f.branch.receipt]) expect(method).not.toHaveBeenCalled();
+    await expect(f.owner.prepareBranchCompletion(f.input)).rejects.toThrow('已消费');
+    expect(f.resolver.resolveAnchor).toHaveBeenCalledTimes(1);
+  });
   it('prepares no save or model, transfers same run and releases on cancel', async () => {
     const f = ownerSetup(), result = await f.owner.prepareBranchCompletion(f.input);
     expect(f.owner.isBusy()).toBe(true); expect(f.branch.begin).not.toHaveBeenCalled(); expect(f.reads.describe).not.toHaveBeenCalled();

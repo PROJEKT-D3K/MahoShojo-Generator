@@ -346,7 +346,6 @@ pub(super) fn read_branch_receipt(
 
 fn check_source(connection: &Connection, m: &BranchManifest) -> Result<(), StoryError> {
     let s = &m.source;
-    super::history::reject_rewrite_branch_source(connection, &s.session.session_id)?;
     let exists: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM arena_story_session WHERE id=?1)",
@@ -362,6 +361,18 @@ fn check_source(connection: &Connection, m: &BranchManifest) -> Result<(), Story
         params![s.session.session_id,s.session.revision,s.session.byte_length,s.session.digest,s.expected_chapter_count,s.expected_last_chapter_id,s.seed.byte_length,s.anchor.record_id,s.anchor_index,s.anchor.byte_length,s.anchor.digest,s.checkpoint.record_id,s.checkpoint.byte_length,s.checkpoint.digest,s.seed.digest], |r| r.get(0)).map_err(|_|StoryError::Corrupt)?;
     if !valid {
         return Err(StoryError::Stale);
+    }
+    if super::history::enabled(connection)? {
+        // Validate all history, including versions beyond the selected prefix.
+        // Only then may the copier project active rows and discard old lineage.
+        super::audit::audit_session(connection, &s.session.session_id)?;
+        let active: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM arena_story_chapter WHERE session_id=?1 AND id=?2 AND status='active')",
+            params![s.session.session_id, s.anchor.record_id], |r| r.get(0),
+        ).map_err(|_| StoryError::Corrupt)?;
+        if !active {
+            return Err(StoryError::Stale);
+        }
     }
     // Verify frozen source bytes, not only digest columns. Release each before next.
     for descriptor in [&s.session, &s.seed, &s.anchor, &s.checkpoint] {
@@ -576,10 +587,12 @@ fn write_branch(
     // Every iteration reads, checks, transforms and writes exactly one document.
     #[cfg(test)]
     probe::mark("branch.copy-chapters.before");
+    let history = super::history::enabled(connection)?;
+    let active = super::history::active_filter(connection)?;
     let mut previous = None;
     for index in 1..=m.source.anchor_index {
         hook("before-copy-chapter")?;
-        let indexed=connection.query_row("SELECT id,session_id,chapter_index,action,source_chapter_id,title_preview,title_truncated,created_at,markdown_bytes FROM arena_story_chapter WHERE session_id=?1 AND chapter_index=?2",params![m.source.session.session_id,index],|r|Ok(ChapterIndex{id:r.get(0)?,session_id:r.get(1)?,index:r.get(2)?,action:r.get(3)?,status:"active".into(),source_chapter_id:r.get(4)?,title_preview:r.get(5)?,title_truncated:r.get(6)?,created_at:r.get(7)?,markdown_byte_length:r.get(8)?})).map_err(|_|StoryError::Corrupt)?;
+        let indexed=connection.query_row(&format!("SELECT id,session_id,chapter_index,action,source_chapter_id,title_preview,title_truncated,created_at,markdown_bytes FROM arena_story_chapter WHERE session_id=?1 AND chapter_index=?2 AND {active}"),params![m.source.session.session_id,index],|r|Ok(ChapterIndex{id:r.get(0)?,session_id:r.get(1)?,index:r.get(2)?,action:r.get(3)?,status:"active".into(),source_chapter_id:r.get(4)?,title_preview:r.get(5)?,title_truncated:r.get(6)?,created_at:r.get(7)?,markdown_byte_length:r.get(8)?})).map_err(|_|StoryError::Corrupt)?;
         let copied = read_document(
             connection,
             "arena_story_chapter",
@@ -587,7 +600,15 @@ fn write_branch(
             "document_bytes",
             "document_digest",
             &indexed.id,
-            |source| copy_chapter(source, &indexed, previous.as_deref(), &m.session_id),
+            |source| {
+                copy_chapter(
+                    source,
+                    &indexed,
+                    previous.as_deref(),
+                    &m.session_id,
+                    history,
+                )
+            },
         )?;
         let marker = CopyMarker {
             version: 2,
@@ -600,7 +621,7 @@ fn write_branch(
             source_chapter_id: indexed.id.clone(),
             request_digest: v.receipt.request_digest.clone(),
         };
-        let target_previous = if index == 1 {
+        let target_previous = if index == 1 || indexed.action == "rewrite" {
             None
         } else {
             Some(copy_id(&m.session_id, CopyKind::Chapter, index - 1)?)
@@ -619,12 +640,12 @@ fn write_branch(
     probe::mark("branch.copy-checkpoints.before");
     for index in 0..=m.source.anchor_index {
         hook("before-copy-checkpoint")?;
-        let indexed=connection.query_row("SELECT id,session_id,boundary_index,chapter_id FROM arena_story_checkpoint WHERE session_id=?1 AND boundary_index=?2",params![m.source.session.session_id,index],|r|Ok(CheckpointIndex{id:r.get(0)?,session_id:r.get(1)?,boundary_index:r.get(2)?,chapter_id:r.get(3)?})).map_err(|_|StoryError::Corrupt)?;
         let chapter = if index == 0 {
             None
         } else {
-            Some(connection.query_row("SELECT id FROM arena_story_chapter WHERE session_id=?1 AND chapter_index=?2",params![m.source.session.session_id,index],|r|r.get::<_,String>(0)).map_err(|_|StoryError::Corrupt)?)
+            Some(connection.query_row(&format!("SELECT id FROM arena_story_chapter WHERE session_id=?1 AND chapter_index=?2 AND {active}"),params![m.source.session.session_id,index],|r|r.get::<_,String>(0)).map_err(|_|StoryError::Corrupt)?)
         };
+        let indexed=connection.query_row("SELECT id,session_id,boundary_index,chapter_id FROM arena_story_checkpoint WHERE session_id=?1 AND boundary_index=?2 AND chapter_id IS ?3",params![m.source.session.session_id,index,chapter],|r|Ok(CheckpointIndex{id:r.get(0)?,session_id:r.get(1)?,boundary_index:r.get(2)?,chapter_id:r.get(3)?})).map_err(|_|StoryError::Corrupt)?;
         let copied = read_document(
             connection,
             "arena_story_checkpoint",

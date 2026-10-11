@@ -23,6 +23,7 @@ fn copy(document: &str) -> Result<CopyRecord, StoryError> {
         &index,
         index.source_chapter_id.as_deref(),
         "target",
+        false,
     )
 }
 fn checkpoint(index: u64) -> String {
@@ -164,6 +165,7 @@ fn corrupt_bytes_hash_and_index_relationship_fail_closed() {
             index,
             previous,
             "target",
+            false,
         )
     };
     assert!(run(&index, Some("wrong"), document.len() as u64, &hash).is_err());
@@ -227,6 +229,7 @@ fn native_physical_copy_matches_the_real_domain_shared_fixture() {
             &indexed,
             indexed.source_chapter_id.as_deref(),
             target,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -309,7 +312,7 @@ fn verified_bytes_do_not_bypass_copy_authority_or_checkpoint_relationships() {
         let checked = CheckedCopySource::checked(&document, document.len() as u64, &hash).unwrap();
         assert!(
             matches!(
-                copy_chapter(checked, &chapter_index, None, "target"),
+                copy_chapter(checked, &chapter_index, None, "target", false),
                 Err(StoryError::Corrupt)
             ),
             "{name}"

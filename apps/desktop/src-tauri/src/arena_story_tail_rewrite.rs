@@ -712,7 +712,7 @@ fn write_stage(
 
 #[cfg(test)]
 #[path = "arena_story_tail_rewrite_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "arena_story_tail_rewrite_pipe_tests.rs"]

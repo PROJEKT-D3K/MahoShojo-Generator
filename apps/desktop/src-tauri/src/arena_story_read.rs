@@ -209,6 +209,39 @@ fn check_branch_window_predecessor(raw: &RawValue, expected: &str) -> Result<(),
     Ok(())
 }
 
+fn check_legacy_branch_action(
+    connection: &Connection,
+    descriptor: &RecordDescriptor,
+) -> Result<(), StoryError> {
+    // The shared reader accepts history-shaped chapters only after Native has
+    // proved that schema. Preserve the old prompt-time rejection over exactly
+    // the bounded window, without hydrating any omitted prefix or suffix.
+    connection.query_row(
+        "SELECT CASE WHEN document_bytes BETWEEN 1 AND ?3 AND length(CAST(document AS BLOB))=document_bytes THEN document END,action FROM arena_story_chapter WHERE session_id=?1 AND id=?2",
+        params![descriptor.session_id, descriptor.record_id, super::CANDIDATE_COMMIT_BYTES],
+        |row| Ok((|| {
+            let document = row.get_ref(0).map_err(|_| StoryError::Corrupt)?.as_str().map_err(|_| StoryError::Corrupt)?;
+            let indexed = row.get_ref(1).map_err(|_| StoryError::Corrupt)?.as_str().map_err(|_| StoryError::Corrupt)?;
+            if !["start", "continue", "branch"].contains(&indexed)
+                || document.len() as u64 != descriptor.byte_length
+                || super::digest(document.as_bytes()) != descriptor.digest {
+                return Err(StoryError::Corrupt);
+            }
+            let raw: &RawValue = serde_json::from_str(document).map_err(|_| StoryError::Corrupt)?;
+            let mut action = None;
+            for member in super::pending::member_iter(raw).map_err(|_| StoryError::Corrupt)? {
+                let (key, value) = super::pending::raw_member_parts(member).map_err(|_| StoryError::Corrupt)?;
+                if super::pending::raw_key_equals(key, "action").map_err(|_| StoryError::Corrupt)?
+                    && action.replace(value).is_some() { return Err(StoryError::Corrupt); }
+            }
+            if !super::pending::raw_key_equals(action.ok_or(StoryError::Corrupt)?, indexed).map_err(|_| StoryError::Corrupt)? {
+                return Err(StoryError::Corrupt);
+            }
+            Ok(())
+        })()),
+    ).map_err(|_| StoryError::Corrupt)?
+}
+
 fn page_limit(limit: Option<u32>) -> Result<u32, StoryError> {
     let limit = limit.unwrap_or(DEFAULT_PAGE_SIZE);
     if limit == 0 || limit > MAX_PAGE_SIZE {
@@ -313,7 +346,6 @@ impl StoryStore {
             return Err(StoryError::Invalid);
         }
         let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
-        super::branch::history::reject_rewrite_branch_source(&connection, &request.session_id)?;
         let current: Option<(u64, u64, String)> = connection
             .query_row(
                 "SELECT revision,chapter_count,CASE WHEN length(last_chapter_id)<=128 THEN last_chapter_id END FROM arena_story_session WHERE id=?1",
@@ -329,6 +361,13 @@ impl StoryStore {
         {
             return Err(StoryError::Stale);
         }
+        let history = super::branch::history::enabled(&connection)?;
+        if history {
+            // A rewrite can refer outside the visible active window. Prove the
+            // complete native history before returning this bounded projection.
+            super::branch::audit::audit_session(&connection, &request.session_id)?;
+        }
+        let active = super::branch::history::active_filter(&connection)?;
         let descriptor = |kind, id: &str| -> Result<RecordDescriptor, StoryError> {
             let (_, byte_length, digest) =
                 record_metadata(&connection, &request.session_id, id, kind)?;
@@ -379,9 +418,9 @@ impl StoryStore {
             .optional()
             .map_err(|_| StoryError::Corrupt)?;
         let checkpoint = checkpoint.ok_or(StoryError::Corrupt)?;
-        let mut statement = connection.prepare(
-            "SELECT CASE WHEN length(id)<=128 THEN id END FROM arena_story_chapter WHERE session_id=?1 AND chapter_index<=?2 ORDER BY chapter_index DESC LIMIT 12",
-        ).map_err(|_| StoryError::Io)?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT CASE WHEN length(id)<=128 THEN id END FROM arena_story_chapter WHERE session_id=?1 AND {active} AND chapter_index<=?2 ORDER BY chapter_index DESC LIMIT 12",
+        )).map_err(|_| StoryError::Io)?;
         let ids = statement
             .query_map(params![request.session_id, request.anchor_index], |row| {
                 row.get::<_, String>(0)
@@ -392,9 +431,15 @@ impl StoryStore {
         let recent_chapters = ids
             .iter()
             .rev()
-            .map(|id| descriptor(RecordKind::Chapter, id))
+            .map(|id| {
+                let record = descriptor(RecordKind::Chapter, id)?;
+                if !history {
+                    check_legacy_branch_action(&connection, &record)?;
+                }
+                Ok(record)
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        if request.anchor_index > 12 {
+        if request.anchor_index > 12 && !history {
             // The renderer cannot compare the first window row with an omitted
             // predecessor. Check just this edge against the real index-1 row;
             // neither that predecessor's document nor the prefix is hydrated.

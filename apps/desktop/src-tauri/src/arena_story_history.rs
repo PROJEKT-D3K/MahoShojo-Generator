@@ -69,20 +69,6 @@ pub(crate) fn active_filter(c: &Connection) -> Result<&'static str, StoryError> 
     Ok(if enabled(c)? { "status='active'" } else { "1" })
 }
 
-/// Copying a rewritten prefix requires different lineage mapping. Until that
-/// consumer is implemented, reject before any branch write or prompt generation.
-pub(crate) fn reject_rewrite_branch_source(
-    c: &Connection,
-    session: &str,
-) -> Result<(), StoryError> {
-    if enabled(c)? && c.query_row(
-        "SELECT EXISTS(SELECT 1 FROM arena_story_chapter WHERE session_id=?1 AND (status!='active' OR action='rewrite'))",
-        [session], |r| r.get::<_, bool>(0)).map_err(|_| StoryError::Corrupt)? {
-        return Err(StoryError::Invalid);
-    }
-    Ok(())
-}
-
 pub(crate) fn audit_relations(c: &Connection) -> Result<(), StoryError> {
     super::audit::audit_scope(c, None, true)
 }
@@ -141,7 +127,9 @@ pub(super) fn audit_graph(c: &Connection, session: Option<&str>) -> Result<(), S
             OR (a.action='start' AND (a.chapter_index!=1 OR a.source_chapter_id IS NOT NULL OR (a.committed_revision IS NOT NULL AND a.committed_revision!=1)))
             OR (a.action IN ('continue','rewrite') AND a.committed_revision IS NOT NULL AND NOT EXISTS(SELECT 1 FROM arena_story_chapter previous WHERE previous.session_id=a.session_id AND previous.committed_revision=a.committed_revision-1))
             OR (a.action IN ('continue','branch') AND (a.chapter_index<=1 OR p.chapter_index IS NOT a.chapter_index-1))
-            OR (a.action='rewrite' AND (p.chapter_index IS NOT a.chapter_index OR p.superseded_by_chapter_id IS NOT a.id OR a.committed_revision IS NULL))
+            OR (a.action='rewrite' AND (
+                (a.committed_revision IS NULL AND a.source_chapter_id IS NOT NULL)
+                OR (a.committed_revision IS NOT NULL AND (p.chapter_index IS NOT a.chapter_index OR p.superseded_by_chapter_id IS NOT a.id))))
             OR (a.committed_revision IS NOT NULL AND a.source_chapter_id IS NOT NULL AND (
                 coalesce(p.committed_revision,0)>=a.committed_revision
                 OR EXISTS(SELECT 1 FROM arena_story_chapter q WHERE q.session_id=p.session_id AND q.id=p.superseded_by_chapter_id AND q.committed_revision<a.committed_revision)))

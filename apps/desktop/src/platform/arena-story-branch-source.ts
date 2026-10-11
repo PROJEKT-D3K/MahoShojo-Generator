@@ -46,15 +46,19 @@ export async function readStoryBranchSource(port: Pick<StoryNativePort, 'read'>,
   if (!workingCombatants || workingCombatants.length !== checkpoint.combatants.length || workingCombatants.some(Array.isArray)) throw new Error('分支锚点角色状态无效');
   if (isBattleStoryChapterPlanLimitReached({ chapterPlan: session.chapterPlan, completedChapterCount: request.anchorIndex })) throw new Error('分支下一章超出显式章节计划');
   const recentWindow: BattleStoryPromptWindowItem[] = [];
+  const activeWindowIds = new Set(recentChapters.map(descriptor => descriptor.recordId));
   let previousId: string | undefined;
   let anchor: ReturnType<typeof StoryChapterDocumentSchema.parse> | undefined;
   for (const descriptor of recentChapters) {
     const chapter = original(StoryChapterDocumentSchema, await readStoryRecord(port, descriptor, signal));
     const index = request.anchorIndex - recentChapters.length + recentWindow.length + 1;
-    if (chapter.status !== 'active' || chapter.action === 'rewrite' || chapter.id !== descriptor.recordId || chapter.sessionId !== request.sessionId || chapter.index !== index
-      || (index === 1 && (chapter.action !== 'start' || chapter.sourceChapterId != null))
-      || (index > 1 && (chapter.action === 'start' || !chapter.sourceChapterId))
-      || (previousId !== undefined && chapter.sourceChapterId !== previousId)
+    // Native's resolver proves the full local graph. A rewrite points to its
+    // superseded same-index chapter, or null after that history is not copied;
+    // neither is a link to the preceding active chapter.
+    if (chapter.status !== 'active' || chapter.id !== descriptor.recordId || chapter.sessionId !== request.sessionId || chapter.index !== index
+      || (chapter.action !== 'rewrite' && (index === 1 ? chapter.action !== 'start' || chapter.sourceChapterId != null
+        : chapter.action === 'start' || !chapter.sourceChapterId || previousId !== undefined && chapter.sourceChapterId !== previousId))
+      || (chapter.action === 'rewrite' && chapter.sourceChapterId != null && activeWindowIds.has(chapter.sourceChapterId))
       || chapter.supersededByChapterId != null) throw new Error('分支章节原件序列不符');
     recentWindow.push(projectBattleStoryPromptWindowItem(chapter, recentWindow.length < recentChapters.length - 2 ? 'digest' : 'full', 6000));
     previousId = chapter.id;

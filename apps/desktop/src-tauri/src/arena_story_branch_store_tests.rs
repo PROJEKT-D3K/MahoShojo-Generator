@@ -48,8 +48,16 @@ fn fixture(
     target: &str,
 ) -> (BranchManifest, Vec<(PartKind, String)>) {
     let connection = lock_connection(&store.connection).unwrap();
+    let active = super::super::history::active_filter(&connection).unwrap();
     let (anchor_id,cp_id):(String,String)=connection.query_row(
-        "SELECT c.id,p.id FROM arena_story_chapter c JOIN arena_story_checkpoint p ON p.session_id=c.session_id AND p.boundary_index=c.chapter_index WHERE c.session_id=?1 AND c.chapter_index=?2",params![source,anchor],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        &format!("SELECT c.id,p.id FROM arena_story_chapter c JOIN arena_story_checkpoint p ON p.session_id=c.session_id AND p.boundary_index=c.chapter_index AND p.chapter_id=c.id WHERE c.session_id=?1 AND c.chapter_index=?2 AND {active}"),params![source,anchor],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+    let revision: u64 = connection
+        .query_row(
+            "SELECT revision FROM arena_story_session WHERE id=?1",
+            [source],
+            |r| r.get(0),
+        )
+        .unwrap();
     let head: String = connection
         .query_row(
             "SELECT last_chapter_id FROM arena_story_session WHERE id=?1",
@@ -80,19 +88,19 @@ fn fixture(
         session_id: target.into(),
         source: BranchSource {
             session: store
-                .describe_record(source, count, RecordKind::Session, source)
+                .describe_record(source, revision, RecordKind::Session, source)
                 .unwrap(),
             seed: store
-                .describe_record(source, count, RecordKind::Seed, source)
+                .describe_record(source, revision, RecordKind::Seed, source)
                 .unwrap(),
             expected_last_chapter_id: head,
             expected_chapter_count: count,
             anchor: store
-                .describe_record(source, count, RecordKind::Chapter, &anchor_id)
+                .describe_record(source, revision, RecordKind::Chapter, &anchor_id)
                 .unwrap(),
             anchor_index: anchor,
             checkpoint: store
-                .describe_record(source, count, RecordKind::Checkpoint, &cp_id)
+                .describe_record(source, revision, RecordKind::Checkpoint, &cp_id)
                 .unwrap(),
         },
         parts: parts
@@ -698,7 +706,7 @@ fn source_read_and_copy_share_one_check_for_chapter_and_checkpoint() {
                 assert_eq!(verified_source::check_count(), before + 1);
                 if document == chapter {
                     let index = chapter_index(&authority(source.raw(), CHAPTER_AUTHORITY)?)?;
-                    copy_chapter(source, &index, None, "target")
+                    copy_chapter(source, &index, None, "target", false)
                 } else {
                     let index = checkpoint_index(&authority(source.raw(), CHECKPOINT_AUTHORITY)?)?;
                     copy_checkpoint(source, &index, None, "target")
@@ -1344,3 +1352,6 @@ fn candidate_history_schema_runs_real_linear_and_branch_writers() {
             .unwrap();
     });
 }
+
+#[path = "arena_story_rewritten_branch_tests.rs"]
+mod rewritten_branch;
