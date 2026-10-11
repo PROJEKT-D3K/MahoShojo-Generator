@@ -25,6 +25,87 @@ export type BattleStoryBranchSummaryMeta = {
   coveredChapterIds: string[];
 };
 
+export type BattleStoryBranchLink =
+  | { kind: 'root' }
+  | { kind: 'parent'; sessionId: string; chapterIndex: number; chapterTitle?: string }
+  | { kind: 'invalid' };
+
+/** Read only the display relationship; this does not validate a persisted session. */
+export function readBattleStoryBranchLink(value: unknown): BattleStoryBranchLink {
+  if (value === undefined) return { kind: 'root' };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'invalid' };
+
+  const { sessionId, chapterIndex, chapterTitle } = value as Record<string, unknown>;
+  if (
+    typeof sessionId !== 'string' || !sessionId.trim()
+    || typeof chapterIndex !== 'number' || !Number.isSafeInteger(chapterIndex) || chapterIndex < 1
+    || (chapterTitle !== undefined && typeof chapterTitle !== 'string')
+  ) return { kind: 'invalid' };
+
+  return {
+    kind: 'parent', sessionId, chapterIndex,
+    ...(chapterTitle === undefined ? {} : { chapterTitle }),
+  };
+}
+
+export type BattleStoryBranchChainStop =
+  | { kind: 'root' }
+  | { kind: 'missing'; sessionId: string }
+  | { kind: 'cycle'; sessionId: string }
+  | { kind: 'invalid'; sessionId: string };
+
+/** Project only known nodes, retaining their references and reporting incomplete ancestry. */
+export function buildBattleStoryBranchChain<Node extends {
+  id: string;
+  updatedAt: number;
+  parent: BattleStoryBranchLink;
+}>(input: {
+  sessions: readonly Node[];
+  activeSession: Node | null;
+}): { chain: Node[]; children: Node[]; stop: BattleStoryBranchChainStop | null } {
+  const { sessions, activeSession } = input;
+  if (!activeSession) return { chain: [], children: [], stop: null };
+
+  const sessionMap = new Map(sessions.map((session) => [session.id, session]));
+  sessionMap.set(activeSession.id, activeSession);
+  const visited = new Set<string>();
+  const chain: Node[] = [];
+  let cursor = activeSession;
+  let stop: BattleStoryBranchChainStop;
+
+  while (true) {
+    visited.add(cursor.id);
+    chain.push(cursor);
+    const parent = cursor.parent;
+    if (parent.kind === 'root') {
+      stop = { kind: 'root' };
+      break;
+    }
+    if (parent.kind === 'invalid') {
+      stop = { kind: 'invalid', sessionId: cursor.id };
+      break;
+    }
+    if (visited.has(parent.sessionId)) {
+      stop = { kind: 'cycle', sessionId: parent.sessionId };
+      break;
+    }
+    const next = sessionMap.get(parent.sessionId);
+    if (!next) {
+      stop = { kind: 'missing', sessionId: parent.sessionId };
+      break;
+    }
+    cursor = next;
+  }
+
+  const children = [...sessionMap.values()]
+    .filter((session) => session.id !== activeSession.id
+      && session.parent.kind === 'parent' && session.parent.sessionId === activeSession.id)
+    .sort((left, right) => right.updatedAt - left.updatedAt
+      || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+
+  return { chain: chain.reverse(), children, stop };
+}
+
 const normalizeText = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
 
 export const cloneBattleStoryActiveChaptersForNewSession = <Chapter extends BattleStoryBranchChapter>(input: {

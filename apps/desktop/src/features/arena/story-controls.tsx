@@ -1,6 +1,6 @@
 import { useRef, useState, useSyncExternalStore } from 'react';
 import {
-  BattleStoryActions, BattleStoryBranchAction, BattleStoryDeleteSessionControls, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
+  BattleStoryActions, BattleStoryBranchChainButton, BattleStoryBranchChainModal, BattleStoryBranchAction, BattleStoryDeleteSessionControls, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
   type BattleStoryChapterReadViewState,
 } from '@mahoshojo/ui-web/arena-story-session';
 import { StreamingBattleReportCard, type StreamingBattleReportCardProps, type BattleReportHostPorts } from '@mahoshojo/ui-web/arena-report';
@@ -138,6 +138,7 @@ export function DesktopArenaStoryControls(props: {
 }) {
   const { owner, draft } = props;
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
+  const branchRead = useSyncExternalStore(owner.branchReader.subscribe, owner.branchReader.getSnapshot);
   const [planMode, setPlanMode] = useState<BattleStoryDraftChapterPlanMode>('auto');
   const [planInput, setPlanInput] = useState('');
   const [guidance, setGuidance] = useState('');
@@ -214,10 +215,22 @@ export function DesktopArenaStoryControls(props: {
       <button className={secondary} type="button" disabled={!canGenerate || !state.active || reached || otherStoryCandidate || owner.hasUnconfirmedDeletion()} title={props.unavailableReason ?? undefined} onClick={() => props.onContinue(guidance)}>继续续写</button>
       <BattleStoryBranchAction variant="tail" disabled={!canBranch || !state.active || reached} title={branchTitle}
         onClick={() => { if (state.active) branchAt(state.active.lastChapterId, state.active.chapterCount); }} />
+      <BattleStoryBranchChainButton className={secondary} disabled={!state.active || busy} onClick={() => { if (state.active) void owner.branchReader.open(state.active); }} />
       <button className={secondary} type="button" disabled={!state.active || busy} onClick={() => void owner.exportSelectedStory()}>导出完整 Markdown</button>
       {generating && !hostedResult && !hosted?.busy ? <button className={secondary} type="button" onClick={() => owner.cancel()}>停止章节生成</button> : null}
       {state.exporting ? <button className={secondary} type="button" onClick={() => owner.cancelExport()}>取消故事导出</button> : null}
     </BattleStoryActions>
+    <BattleStoryBranchChainModal isOpen={branchRead.open} sessions={branchRead.sessions} activeSession={branchRead.activeSession}
+      onClose={() => owner.branchReader.close()} onSelectSession={id => void owner.branchReader.select(id)} loading={branchRead.loading} error={branchRead.error}
+      showChildren={false} scopeNote="按需逐级读取父链，不扫描所有故事或发现全部子分支。父会话须先在当前目录中载入；缺少来源不影响本分支的完整章节。"
+      actions={<BattleStoryActions>
+        {owner.branchReader.getParentHead() && !branchRead.failedSessionId ? <button type="button" className={secondary} disabled={branchRead.loading} onClick={() => void owner.branchReader.readParent()}>读取上一级父会话</button> : null}
+        {owner.branchReader.getUnloadedParentId() && !owner.branchReader.getParentHead() ? <p role="status" className="w-full text-xs text-amber-800">来源未在已加载目录中，可能尚未载入或已删除；请先载入更多目录或刷新后再读。</p> : null}
+        {branchRead.failedSessionId ? <button type="button" className={secondary} disabled={branchRead.loading} onClick={() => void owner.branchReader.retry()}>重试读取分支来源</button> : null}
+        <button type="button" className={secondary} disabled={state.listLoading} onClick={() => void owner.refreshSessions()}>刷新故事目录</button>
+        {state.sessionCursor ? <button type="button" className={secondary} disabled={state.listLoading} onClick={() => void owner.refreshSessions(true)}>载入更多故事目录</button> : null}
+        {state.listError ? <p role="alert">{state.listError}</p> : null}
+      </BattleStoryActions>} />
     <BattleStoryDeleteSessionControls
       target={state.deletion?.phase === 'preparing' ? null : state.deletion?.target ?? null}
       open={state.deletion?.dialogOpen}

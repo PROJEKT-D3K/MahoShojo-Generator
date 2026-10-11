@@ -22,3 +22,5 @@ export { BattleStoryDeleteSessionControls } from './delete-session-controls';
 export type { BattleStoryDeleteSessionControlsProps, BattleStoryDeleteSessionTargetView } from './delete-session-controls';
 export { BattleStoryBranchAction } from './branch-action';
 export type { BattleStoryBranchActionProps } from './branch-action';
+export { BattleStoryBranchChainButton, BattleStoryBranchChainModal, projectBattleStoryBranchSession } from './branch-chain';
+export type { BattleStoryBranchChainModalProps, BattleStoryBranchSessionView } from './branch-chain';

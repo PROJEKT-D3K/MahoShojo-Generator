@@ -28,6 +28,7 @@ import { readStoryBranchSource, readStoryBranchSummaryIds, type StoryBranchSourc
 import type { StoryBranchAnchorRequest, StoryBranchSource } from '@mahoshojo/contracts/desktop-arena-story-branch';
 import { executeArenaDirect, type ArenaDirectIntent, type ArenaDirectPartial } from './direct';
 import { createInitialArenaDraft, type ArenaDraft, type DesktopArenaProduct } from './session';
+import { DesktopStoryBranchReader } from './story-branch-reader';
 import { DesktopHostedStorySession, type DesktopHostedStoryState, type HostedStoryExecutionTarget } from './hosted-story-session';
 import type { DesktopArenaHostedActor } from '@mahoshojo/contracts/desktop-arena-hosted';
 import type { StoryPendingSnapshot, StoryPendingInput, StoryReceipt } from '@mahoshojo/contracts/desktop-arena-story';
@@ -97,6 +98,7 @@ export class DesktopArenaStorySession {
   private executionScope = '';
   private executionEpoch = 0;
   readonly hosted: DesktopHostedStorySession | null;
+  readonly branchReader: DesktopStoryBranchReader;
   constructor(private readonly dependencies: {
     port: StoryNativePort; execute?: typeof executeArenaDirect; id?: () => string; now?: () => number; random?: () => number;
     prepareCommit?: typeof prepareStoryStorageCommit;
@@ -104,6 +106,7 @@ export class DesktopArenaStorySession {
     hosted?: Omit<ConstructorParameters<typeof DesktopHostedStorySession>[0], 'onState' | 'onResult' | 'onSaved' | 'captureSelection' | 'loadBaseline'>;
     exportMarkdown: (head: StorySessionHead, signal: AbortSignal, onProgress: (value: StoryExportProgress) => void) => Promise<StoryExportResult>;
   }) {
+    this.branchReader = new DesktopStoryBranchReader({ port: dependencies.port, getHeads: () => this.state.sessions, selectSession: head => this.selectSession(head) });
     this.hosted = dependencies.hosted ? new DesktopHostedStorySession({ ...dependencies.hosted,
       onState: hosted => this.publish({ hosted }),
       onResult: (result, resultChapterIndex, phase) => this.publish({ resultSource: 'hosted', result, resultChapterIndex, phase, resultSaved: false }),
@@ -157,7 +160,11 @@ export class DesktopArenaStorySession {
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
-  private publish(patch: Partial<DesktopStoryState>) { if (this.disposed) return; this.state = { ...this.state, ...patch }; for (const listener of this.listeners) listener(); }
+  private publish(patch: Partial<DesktopStoryState>) {
+    if (this.disposed) return;
+    if ('active' in patch && (patch.active?.id !== this.state.active?.id || patch.active?.revision !== this.state.active?.revision)) this.branchReader.close();
+    this.state = { ...this.state, ...patch }; for (const listener of this.listeners) listener();
+  }
   private id = () => (this.dependencies.id ?? (() => crypto.randomUUID()))();
   private now = () => (this.dependencies.now ?? Date.now)();
   private deletionBlocksWork = () => Boolean(this.deletion) && this.state.deletion?.phase !== 'unknown' && this.state.deletion?.phase !== 'observing';
@@ -168,7 +175,7 @@ export class DesktopArenaStorySession {
   setExecutionScope(scope: string, actor: DesktopArenaHostedActor | null = null) {
     this.hosted?.setContext(scope, actor);
     if (scope === this.executionScope) return;
-    this.executionScope = scope; this.executionEpoch += 1;
+    this.executionScope = scope; this.executionEpoch += 1; this.branchReader.close();
     // The last accepted partial and any completed save candidate remain device-owned.
     this.runController?.abort(); this.branchSaveController?.abort();
   }
@@ -195,6 +202,7 @@ export class DesktopArenaStorySession {
   }
   async selectSession(head: StorySessionHead) {
     if (this.disposed) return;
+    this.branchReader.close();
     const valid = StorySessionHeadSchema.parse(head);
     const token = this.fence.begin('session'); if (!token) return;
     this.fence.begin('chapter'); this.fence.begin('chapters'); this.readController?.abort();
@@ -728,11 +736,12 @@ export class DesktopArenaStorySession {
   }
   cancelExport() { this.exportController?.abort(); this.hosted?.cancelExport(); }
   detach() {
+    this.branchReader.close();
     // Leaving can dismiss an unsubmitted confirmation, never release an already
     // dispatched deletion flight or make the same owner dispatch it a second time.
     this.cancelDeleteSession();
     if (this.pending?.kind === 'branch') this.pending.autoSelect = false;
     this.hosted?.detach(); this.runController?.abort(); this.branchSaveController?.abort(); this.cancelExport(); this.readController?.abort();
   }
-  dispose() { this.detach(); this.hosted?.dispose(); this.disposed = true; this.fence.dispose(); this.listeners.clear(); }
+  dispose() { this.detach(); this.branchReader.dispose(); this.hosted?.dispose(); this.disposed = true; this.fence.dispose(); this.listeners.clear(); }
 }

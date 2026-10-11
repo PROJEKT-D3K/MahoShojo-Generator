@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import {
-  BattleStoryActions,
+  BattleStoryActions, BattleStoryBranchChainButton,
   BattleStoryBranchAction,
   BattleStoryDeleteSessionControls,
   BattleStoryPendingOutcome,
@@ -714,13 +714,7 @@ export function BattleStorySessionPanel(props: {
                     <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
                       <div className="flex items-center justify-between gap-3">
                         <span>当前会话存在分支链，可查看父链与子分支。</span>
-                        <button
-                          type="button"
-                          className="font-semibold text-emerald-800 hover:underline"
-                          onClick={() => setShowBranchChainModal(true)}
-                        >
-                          查看分支链
-                        </button>
+                        <BattleStoryBranchChainButton onClick={() => setShowBranchChainModal(true)} />
                       </div>
                     </div>
                   ) : null}
