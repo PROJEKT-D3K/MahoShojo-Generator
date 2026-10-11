@@ -74,6 +74,61 @@ describe('Web Package hosted generation', () => {
     expect(events.find(event => event.type === 'meta_error')).toBeDefined();
   });
 
+  it.each([
+    [jsonContent, 'stop', 'completed'],
+    [jsonContent + '<!-- MAHOSHOJO_ARENA_META {broken} -->', 'stop', 'completed'],
+    [jsonContent + '<!-- MAHOSHOJO_ARENA_META {"version":1} -->', 'stop', 'completed'],
+    [jsonContent, undefined, 'failed'],
+    [jsonContent, 'length', 'failed'],
+    [jsonContent, 'unknown', 'failed'],
+    ['{"wrong":true}', 'stop', 'failed'],
+    ['broken JSON' + trailer, 'stop', 'failed'],
+    [jsonContent + trailer + trailer, 'stop', 'failed'],
+    [jsonContent + trailer + 'extra', 'stop', 'failed'],
+    [jsonContent + trailer, 'stop', 'completed'],
+  ])('independently qualifies package content only after trusted completion: %s / %s', async (source, finishReason, status) => {
+    const base = await createLocalProjectionPackage();
+    const generate = vi.fn(async () => ({ body: new Response(source).body!, telemetry: { finishReason } }));
+    const finalize = vi.fn(async () => ({ resultRef: 'r2:qualified', ranking: null }));
+    const runtime = createArenaGenerationRuntime({ checkSafety: async () => null, buildPrompt: buildArenaGenerationPrompt, generate, finalize });
+    const prepared = await runtime.prepare!({ request: new Request('https://example.test/api/arena/generate-stream'),
+      actorKey: 'user:42', generationRequestId: 'request', payload: { ...payload, webPackageRef: base.ref,
+        webPackagePromptProjection: buildWebPackagePromptProjection(base), writeArenaHistory: true, writeCurrentState: true } });
+    if (prepared instanceof Response || isArenaGenerationAuditableRejection(prepared)) throw new Error('unexpected rejection');
+    const events: Array<{ type: string; data: unknown }> = [];
+    const result = await runtime.execute({ generationId: 'generation', generationRequestId: 'request', actorKey: 'user:42',
+      producerToken: 'producer', payloadHash: 'hash', payload: prepared.executionPayload, signal: new AbortController().signal,
+      emit: async event => { events.push(event); }, claimFinalization: async () => ({ kind: 'claimed' }) });
+    expect(result.status).toBe(status);
+    expect(generate).toHaveBeenCalledOnce();
+    const finalized = vi.mocked(finalize).mock.calls[0] as unknown as [{ metadata: Record<string, unknown> }];
+    if (status === 'completed') {
+      expect(result.webPackage).toMatchObject({ packageRef: base.ref, targetPath: 'data/result.json' });
+      if (!source.endsWith(trailer)) {
+        expect(events.some(event => event.type === 'meta')).toBe(false);
+        expect(events.some(event => event.type === 'meta_error')).toBe(true);
+        expect(finalized[0].metadata.streamMeta).toBeUndefined();
+      } else expect(finalized[0].metadata.streamMeta).toMatchObject({ version: 1, report: { winner: 'A' } });
+    } else {
+      expect(result.webPackage).toBeUndefined();
+      expect(events.filter(event => event.type === 'markdown').map(event => (event.data as {chunk: string}).chunk).join('')).toBe(source);
+    }
+  });
+
+  it('does not grant package authority when cancellation wins finalization', async () => {
+    const runtime = createArenaGenerationRuntime({ checkSafety: async () => null, buildPrompt: buildArenaGenerationPrompt,
+      generate: async () => ({ body: new Response(content).body!, telemetry: { finishReason: 'stop' } }),
+      finalize: async () => ({ resultRef: null, ranking: null }) });
+    const prepared = await runtime.prepare!({ request: new Request('https://example.test/api/arena/generate-stream'),
+      actorKey: 'user:42', generationRequestId: 'request', payload });
+    if (prepared instanceof Response || isArenaGenerationAuditableRejection(prepared)) throw new Error('unexpected rejection');
+    const result = await runtime.execute({ generationId: 'generation', generationRequestId: 'request', actorKey: 'user:42',
+      producerToken: 'producer', payloadHash: 'hash', payload: prepared.executionPayload, signal: new AbortController().signal,
+      emit: async () => {}, claimFinalization: async () => ({ kind: 'cancelled', cancelReason: 'user' }) });
+    expect(result.status).toBe('cancelled');
+    expect(result.webPackage).toBeUndefined();
+  });
+
   it('projects the news HTML target consistently for stream and non-stream generation', async () => {
     const ref = BUILTIN_ARENA_NEWS_PACKAGE_REF;
     const results = await Promise.all(['stream', 'non-stream'].map((deliveryMode) => buildArenaGenerationPrompt({

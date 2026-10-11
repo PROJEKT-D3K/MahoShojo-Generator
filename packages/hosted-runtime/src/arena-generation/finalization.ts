@@ -1,3 +1,4 @@
+import { hasArenaWebPackageMeta } from '@mahoshojo/ai-core/arena-generation';
 import type {
   ArenaGenerationFinalizationInput,
   ArenaGenerationFinalizationResult,
@@ -91,6 +92,7 @@ export const createArenaGenerationFinalizer = (
     ...claim,
     idempotencyKey: buildArenaTerminalEffectIdempotencyKey(claim.generationId, effect),
   });
+  const reportOnly = Boolean(input.metadata.webPackageRef) && !hasArenaWebPackageMeta(input.metadata.streamMeta);
   let resultRef: string | null = null;
   let persistenceWarning: ArenaGenerationPersistenceWarning | undefined;
   if (input.status === 'completed' || (canArchivePartialOutput(input) && input.markdown.trim())) {
@@ -161,7 +163,7 @@ export const createArenaGenerationFinalizer = (
         const effectClaim = { ...claimInput, resultRef };
         await ports.persistCombatants(effectInput(effectClaim, 'combatants'));
         await ports.persistParticipants(effectInput(effectClaim, 'participants'));
-        if (input.status === 'completed') {
+        if (input.status === 'completed' && !reportOnly) {
           await ports.applyStoryImpacts(effectInput(effectClaim, 'story-impacts'));
           await ports.settleRatings(effectInput(effectClaim, 'ratings'));
         }
@@ -184,7 +186,7 @@ export const createArenaGenerationFinalizer = (
     throw lastError ?? new Error('ARENA_TERMINAL_FINALIZATION_FAILED');
   }
 
-  const ranking = input.status === 'completed'
+  const ranking = input.status === 'completed' && !reportOnly
     ? await ports.readRanking({
       generationId: input.generationId,
       actorKey: input.actorKey,

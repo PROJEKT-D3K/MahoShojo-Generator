@@ -5,8 +5,8 @@ import { validateHostedOutput, sameHostedPackageRef as sameRef } from './hosted-
 import { DesktopArenaHostedAnyRecoveryPointerSchema as DesktopArenaHostedRecoveryPointerSchema, type DesktopArenaHostedAnyRecoveryPointer as DesktopArenaHostedRecoveryPointer } from '@mahoshojo/contracts/desktop-arena-hosted-json';
 import { collectArenaHostedStreamOutput, createArenaHostedStreamOutput } from './hosted-stream-output';
 import {
-  buildArenaGenerationInputSnapshot, extractTitleFromBattleMarkdown, StreamUpdateMetaSchema,
-  parseArenaStructuredReportJson, type ArenaBattleReport, type ArenaGenerationInputSnapshot,
+  ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE, buildArenaGenerationInputSnapshot, extractTitleFromBattleMarkdown, hasArenaWebPackageMeta, StreamUpdateMetaSchema,
+  parseArenaStructuredReportJson, type ArenaBattleReport, type ArenaGenerationInputSnapshot, type ArenaMetadataStatus,
 } from '@mahoshojo/ai-core/arena-generation';
 import {
   DESKTOP_ARENA_HOSTED_PROTOCOL_VERSION,
@@ -102,7 +102,7 @@ export interface ArenaHostedContext {
 }
 type Common = ArenaHostedPartial & { requestId: string; scopeKey: string; generationId: string | null; mode: 'hosted' };
 export type ArenaHostedOutcome = Common & (
-  | { status: 'completed'; report: ArenaBattleReport; renderSnapshot?: BattleReportRenderSnapshotV1; canAppendHistory: boolean }
+  | { status: 'completed'; metaStatus: ArenaMetadataStatus; report: ArenaBattleReport; renderSnapshot?: BattleReportRenderSnapshotV1; canAppendHistory: boolean }
   | { status: 'cancelled'; message: string }
   | { status: 'failed'; message: string }
 );
@@ -264,12 +264,14 @@ const runHosted = async (
     }
     const terminal = details.terminal;
     const parsedMeta = StreamUpdateMetaSchema.safeParse(details.metaEvent?.event === 'meta' ? details.metaEvent.data.meta : null);
-    const meta = parsedMeta.success ? parsedMeta.data : null;
+    const metaStatus: ArenaMetadataStatus = hasArenaWebPackageMeta(details.metaEvent?.event === 'meta' ? details.metaEvent.data.meta : null) ? 'valid' : 'absent';
+    const packageFallback = Boolean(pointer.webPackageRef) && metaStatus === 'absent';
+    const meta = parsedMeta.success && !packageFallback ? parsedMeta.data : null;
     const checked = await validateHostedOutput(pointer, markdown, terminal.data.webPackage, context, signal, assertCurrent, frozenBase);
     const { renderSnapshot, ...validation } = checked; details = { ...details, ...validation };
     const reporter = details.headerMeta?.reporterInfo;
     let report: ArenaBattleReport = {
-      headline: meta?.report?.headline || extractTitleFromBattleMarkdown(markdown),
+      headline: packageFallback ? '' : meta?.report?.headline || extractTitleFromBattleMarkdown(markdown),
       reporterInfo: { name: typeof reporter?.name === 'string' ? reporter.name : '', publication: typeof reporter?.publication === 'string' ? reporter.publication : '' },
       article: { body: markdown, analysis: '' }, officialReport: { winner: meta?.report?.winner ?? '', conclusion: '' },
       mode: pointer.battleMode, reportFormat: pointer.format,
@@ -283,9 +285,10 @@ const runHosted = async (
         displayMarkdown = report.article.body || markdown;
       } else details = { ...details, outputValidation: 'invalid', validationMessage: '服务器已完成，但恢复内容不符合原非流式结构化报告协议；原文可完整导出。' };
     }
+    if (packageFallback && details.outputValidation === 'valid') details = { ...details, validationMessage: ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE };
     if (nonStream && !details.validationMessage) details = { ...details, validationMessage: '已恢复原任务可用正文与终态；原完整非流式 JSON 和附加元数据未取得。' };
     assertCurrent(); signal.throwIfAborted();
-    return { ...common(), markdown: displayMarkdown, status: 'completed', report, renderSnapshot, canAppendHistory: (Boolean(create) || automaticRecovery) && details.outputValidation === 'valid' };
+    return { ...common(), markdown: displayMarkdown, status: 'completed', metaStatus, report, renderSnapshot, canAppendHistory: (Boolean(create) || automaticRecovery) && details.outputValidation === 'valid' };
   } catch (cause) {
     if (signal.aborted) return { ...common(), status: 'cancelled', message: '本机订阅已停止；服务器停止/完成状态尚需按原请求确认。' };
     return { ...common(), status: 'failed', message: cause instanceof ArenaHostedBridgeError ? cause.message : '连接或战报校验未完成，收到的原文仍可导出或按原请求恢复。' };

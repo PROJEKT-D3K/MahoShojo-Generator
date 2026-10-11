@@ -128,6 +128,21 @@ describe('shared package final qualification', () => {
     expect(createOverlay).not.toHaveBeenCalled();
   });
 
+  it.each([null, {}, { version: 1, report: { headline: 'title', winner: '' } }])('qualifies missing metadata only with explicit provider stop and independent overlay validation', async (bad) => {
+    const createOverlay = vi.fn(async () => overlay);
+    const result = await qualifyArenaWebPackageOutput({ ref, projection, content: '{}', meta: bad, finishReason: 'stop', createOverlay });
+    expect(result.metaStatus).toBe('absent');
+    expect(result.artifact.generatedDigest).toBe(overlay.generatedDigest);
+    expect(createOverlay).toHaveBeenCalledOnce();
+    for (const finishReason of [undefined, 'length', 'unknown', 'error', 'cancelled']) {
+      await expect(qualifyArenaWebPackageOutput({ ref, content: '{}', meta: bad, finishReason, createOverlay }))
+        .rejects.toMatchObject({ failure: 'meta' });
+    }
+    const error = new Error('schema-invalid');
+    await expect(qualifyArenaWebPackageOutput({ ref, content: '{}', meta: bad, finishReason: 'stop', createOverlay: async () => { throw error; } }))
+      .rejects.toBe(error);
+  });
+
   it('pins ref and target to the frozen host projection', async () => {
     const createOverlay = vi.fn(async () => overlay);
     await expect(qualifyArenaWebPackageOutput({ ref: { ...ref, version: '2' }, projection, content: '{}', meta, createOverlay }))

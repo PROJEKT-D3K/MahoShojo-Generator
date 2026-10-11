@@ -1,5 +1,5 @@
 import { createStreamReadWithTimeout, buildStreamSoftTimeoutMessage, DEFAULT_STREAM_READ_IDLE_TIMEOUT_MS, DEFAULT_STREAM_READ_TOTAL_TIMEOUT_MS } from '@mahoshojo/ai-core/stream-timeout';
-import type { ArenaBattleReport } from '@mahoshojo/ai-core/arena-generation';
+import { ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE, hasArenaWebPackageReport, type ArenaBattleReport, type ArenaMetadataStatus } from '@mahoshojo/ai-core/arena-generation';
 import type { ArenaCompanionEnvelope, ArenaCompanionSuccessEnvelope } from '@mahoshojo/contracts/arena-companion';
 import type { DesktopArenaHostedAnyRecoveryPointer, DesktopArenaHostedJsonCreateRequest } from '@mahoshojo/contracts/desktop-arena-hosted-json';
 import type { ResolvedWebPackage } from '@mahoshojo/web-package';
@@ -108,11 +108,15 @@ export const runArenaHostedJson = async (
       || Boolean(envelope.metadata.webPackageRef) !== Boolean(pointer.webPackageRef)
       || (envelope.metadata.webPackageRef && !sameHostedPackageRef(envelope.metadata.webPackageRef, pointer.webPackageRef!))) throw new ArenaHostedBridgeError('protocol');
     generationId = envelope.body.generationId;
+    // Read the producer's checked envelope: fallback report fields are blank, before any view defaults or repair.
+    const metaStatus: ArenaMetadataStatus = hasArenaWebPackageReport({ headline: envelope.body.report.headline, winner: envelope.body.report.officialReport.winner }) ? 'valid' : 'absent';
     const report = projectArenaCompanionReportForView(envelope)!; markdown = report.article.body; reasoning = envelope.body.report.aiReasoning?.text ?? '';
     details = { ...details, serverStatus: 'completed', connectionState: 'completed', metadataState: 'available' };
     const { renderSnapshot, ...validation } = await validateHostedOutput(pointer, markdown, report.webPackage, context, signal, assertCurrent, frozenBase);
-    details = { ...details, ...validation }; assertCurrent(); signal.throwIfAborted(); update('completed');
-    return { ...common(), status: 'completed', report, renderSnapshot,
+    const packageFallback = Boolean(pointer.webPackageRef) && metaStatus === 'absent';
+    details = { ...details, ...validation, ...(packageFallback && validation.outputValidation === 'valid'
+      ? { validationMessage: ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE } : {}) }; assertCurrent(); signal.throwIfAborted(); update('completed');
+    return { ...common(), status: 'completed', metaStatus, report, renderSnapshot,
       usage: report.aiUsage ? Object.fromEntries(Object.entries(report.aiUsage).filter(([, value]) => typeof value === 'number')) : undefined,
       canAppendHistory: details.outputValidation === 'valid' };
   } catch (cause) {

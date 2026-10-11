@@ -1,3 +1,4 @@
+import { hasArenaWebPackageMeta, hasArenaWebPackageReport } from '@mahoshojo/ai-core/arena-generation';
 import type {
   ArenaGenerationRejectedTerminalRecorder,
   ArenaGenerationRejectedTerminalRecordInput,
@@ -380,6 +381,7 @@ const buildExtraJson = async (
     indexes.push(combatant.sortIndex);
     impactRosterQueues.set(key, indexes);
   }
+  const reportOnly = Boolean(input.metadata.webPackageRef) && !hasArenaWebPackageMeta(input.metadata.streamMeta);
   const reconciliationCandidate = {
     report: {
       headline: boundedString(report?.headline, 300) ?? (isWebArenaOutputContract(input.metadata.outputContract) ? null : headlineFromMarkdown(input.markdown)) ?? '',
@@ -424,10 +426,12 @@ const buildExtraJson = async (
       title: boundedString(scenario?.title, 300) ?? boundedString(scenario?.name, 300),
       isNative: serverContext?.scenarioNative === true,
     },
-    writeArenaHistory: input.payload.writeArenaHistory === true,
-    writeCurrentState: input.payload.writeCurrentState === true,
+    writeArenaHistory: !reportOnly && input.payload.writeArenaHistory === true,
+    writeCurrentState: !reportOnly && input.payload.writeCurrentState === true,
   };
-  const localCardReconciliation = jsonBytes(reconciliationCandidate) <= LOCAL_RECONCILIATION_MAX_BYTES
+  const localCardReconciliation = reportOnly
+    ? { available: false, reason: 'metadata_unavailable' }
+    : jsonBytes(reconciliationCandidate) <= LOCAL_RECONCILIATION_MAX_BYTES
     ? reconciliationCandidate
     : {
       available: false,
@@ -450,7 +454,7 @@ const buildExtraJson = async (
   const candidate = {
     ...authority,
     arenaStrictPolicy: seasonAuthorityAvailable ? '1+3:v1' : null,
-    arenaFreeRankingEnabled: input.payload.arenaFreeRankingEnabled === true,
+    arenaFreeRankingEnabled: !reportOnly && input.payload.arenaFreeRankingEnabled === true,
     seasonId: seasonAuthorityAvailable ? boundedString(season?.seasonId, 128) : null,
     seasonMode: seasonAuthorityAvailable && boundedString(season?.mode, 64) !== 'classic'
       ? boundedString(season?.mode, 64)
@@ -1294,7 +1298,9 @@ export const createNodeArenaGenerationTerminalStore = (
           extra,
           createdAt: input.updatedAt,
         });
-        if (status === 'completed') {
+        const packageReportOnly = Boolean(parseBattleReportRenderSnapshotV1(extra.battleReportRenderSnapshotV1)?.webPackage)
+          && !hasArenaWebPackageReport({ headline: existing.headline, winner: existing.winner });
+        if (status === 'completed' && !packageReportOnly) {
           await options.settleRatings?.({
             generationId: input.generationId,
             idempotencyKey: buildArenaTerminalEffectIdempotencyKey(

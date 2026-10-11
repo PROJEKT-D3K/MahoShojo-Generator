@@ -372,20 +372,24 @@ describe('Arena companion service', () => {
       packageRef: { id: 'test.fixture', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}` },
       targetPath: 'data/report.json', targetMediaType: 'application/json', generatedDigest: `sha256:${'b'.repeat(64)}`,
     };
+    const projectUpdatedCombatants = vi.fn(async () => []);
     const service = createArenaCompanionService({
       generationService: generationService(async () => subscription([
         { id: '1-0', type: 'snapshot', data: { markdown: source } },
         { id: '2-0', type: 'done', data: { status: 'completed', webPackage } },
       ])),
-      projectUpdatedCombatants: vi.fn(async () => []),
+      projectUpdatedCombatants,
     });
     const response = await service.generate(new Request('https://example.test/api/arena/generate', {
-      method: 'POST', body: JSON.stringify({ reportFormat: 'web' }),
+      method: 'POST', body: JSON.stringify({ reportFormat: 'web', writeArenaHistory: true, writeCurrentState: true }),
     }));
     expect(response.status).toBe(200);
     const result = await response.json() as { report: Record<string, unknown> };
     expect(result.report).toMatchObject({ reportFormat: 'web', webPackage, article: { body: source, analysis: '' } });
     expect(result.report).not.toHaveProperty('webHtml');
+    expect(result.report).toMatchObject({ headline: '', officialReport: { winner: '' } });
+    expect(projectUpdatedCombatants).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ updatedCombatants: [] });
   });
 
   it('从 structured JSON snapshot 原样投影 non-stream 战报与 impacts', async () => {

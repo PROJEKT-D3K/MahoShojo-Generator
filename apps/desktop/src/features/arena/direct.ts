@@ -14,6 +14,7 @@ import {
   type ArenaBattleAiImpact,
   type ArenaBattleReport,
   type ArenaGenerationInputSnapshot,
+  type ArenaMetadataStatus,
 } from '@mahoshojo/ai-core/arena-generation';
 import { buildStructuredJsonInstructionFromZodSchema, parseStructuredJsonWithSchema } from '@mahoshojo/ai-core/structured-json';
 import { collectAiStreamResult, looksLikeTrivialEmptyOutput, type AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -66,7 +67,7 @@ type CommonOutcome = ArenaDirectPartial & {
 };
 export type ArenaDirectOutcome = CommonOutcome & (
   | { status: 'completed'; report: ArenaBattleReport; impacts: ArenaBattleAiImpact[];
-      metaStatus: 'absent' | 'valid';
+      metaStatus: ArenaMetadataStatus;
       renderSnapshot?: BattleReportRenderSnapshotV1;
       /** Candidate only. A later host writer must verify this original scopeKey. */
       historyCandidate?: NarrativeHistoryAppendInput & { scopeKey: string; requestId: string } }
@@ -228,7 +229,7 @@ export const executeArenaDirect = async (
   let report: ArenaBattleReport;
   let impacts: ArenaBattleAiImpact[] = [];
   let markdown: string;
-  let metaStatus: 'absent' | 'valid' = 'absent';
+  let metaStatus: ArenaMetadataStatus = 'absent';
   let renderSnapshot: BattleReportRenderSnapshotV1 | undefined;
   try {
     if (web) {
@@ -239,16 +240,18 @@ export const executeArenaDirect = async (
       if (!markdown.trim()) return failed('empty-output', '未收到有效 Web 目标正文。', true);
       const event = projector.result().metaEvent;
       const parsedMeta = StreamUpdateMetaSchema.safeParse(event?.type === 'meta' ? event.data.meta : null);
-      const meta = parsedMeta.success ? parsedMeta.data : null;
+      let meta = parsedMeta.success ? parsedMeta.data : null;
       metaStatus = meta ? 'valid' : 'absent';
       impacts = normalizeBattleAiImpacts(meta?.impacts, unchangedText);
       renderSnapshot = { version: 1, reportFormat: 'web' };
       if (packageContext && packageBase) {
         const base = packageBase;
         const qualified = await qualifyArenaWebPackageOutput({ ref: packageContext.ref, projection: packageContext.projection,
-          content: markdown, meta: event?.type === 'meta' ? event.data.meta : null,
+          content: markdown, meta: event?.type === 'meta' ? event.data.meta : null, finishReason: terminal.finishReason, controlTail: projector.result().rawTail,
           createOverlay: (content, limits) => createWebPackageOverlayFromBase(base, content, limits) });
         if (signal.aborted) return cancelled();
+        metaStatus = qualified.metaStatus;
+        if (metaStatus === 'absent') { meta = null; impacts = []; }
         markdown = qualified.overlay.generatedContent;
         renderSnapshot.webPackage = qualified.artifact;
       }

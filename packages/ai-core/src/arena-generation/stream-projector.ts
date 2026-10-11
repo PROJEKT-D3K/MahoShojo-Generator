@@ -10,6 +10,8 @@ const META_START = /<!---*\s*(MAHOSHOJO_ARENA_META|MAHOSHOJO_META|MAHOSHOJO_STRE
 
 export type ArenaStreamProjectionResult = {
   metaEvent: ArenaStreamMetaEvent | null;
+  /** Exact control suffix retained for plain-text failure diagnostics, never executable target bytes. */
+  rawTail: string;
 };
 
 export type ArenaStreamProjector = {
@@ -26,6 +28,7 @@ export const createArenaStreamProjector = (
   let metaBuffer: string | null = null;
   let trailing = '';
   let finished = false;
+  let rawTail = '';
   let metaEvent: ArenaStreamMetaEvent | null = null;
 
   const push = (chunk: string): string[] => {
@@ -122,6 +125,7 @@ export const createArenaStreamProjector = (
     finish(): { markdown: string[] } {
       if (finished) return { markdown: [] };
       finished = true;
+      rawTail = (metaBuffer ?? '') + trailing;
       metaEvent = options.expectsMeta ? parseMeta() : null;
       if (options.strictTrailer && trailing.trim()) {
         metaEvent = { type: 'meta_error', data: { parseOk: false, error: 'MAHOSHOJO_ARENA_META 必须位于输出结尾' } };
@@ -131,6 +135,6 @@ export const createArenaStreamProjector = (
       trailing = '';
       return { markdown };
     },
-    result: () => ({ metaEvent }),
+    result: () => ({ metaEvent, rawTail }),
   });
 };

@@ -8,9 +8,9 @@ import type { ArenaGenerationConnectionState } from '@/lib/arena/resumable-gener
 
 const mocks = vi.hoisted(() => ({
   openStream: vi.fn(), dispatch: vi.fn(), quickCheck: vi.fn(), shield: vi.fn(),
-  updateFromMarkdown: vi.fn(), resolveRandom: vi.fn(), cooldown: vi.fn(),
+  updateFromMarkdown: vi.fn(), resolveRandom: vi.fn(), cooldown: vi.fn(), appendHistory: vi.fn(), queryData: vi.fn(),
 }));
-vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ setQueryData: vi.fn() }) }));
+vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ setQueryData: mocks.queryData }) }));
 vi.mock('@/lib/client-route-adapter', () => ({ useClientRouteAdapter: () => ({ push: vi.fn() }) }));
 vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({ isCooldown: false, startCooldown: mocks.cooldown, remainingTime: 0, otherRemainingTime: 0 }) }));
 vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: mocks.quickCheck }));
@@ -18,6 +18,10 @@ vi.mock('@/lib/shield-word-filter', () => ({ applyShieldWords: mocks.shield }));
 vi.mock('@/lib/auth', () => ({ authStorage: { getAuthHeader: async () => null, getActivityHeaders: async () => ({}) } }));
 vi.mock('@/components/arena/hooks/useBattleActions', () => ({ useBattleActions: () => ({ handleResolveRandomPlaceholders: mocks.resolveRandom }) }));
 vi.mock('@/components/arena/hooks/useStreamCombatantUpdater', () => ({ useStreamCombatantUpdater: () => ({ updateFromMarkdown: mocks.updateFromMarkdown, retryGenerationUpdate: vi.fn() }) }));
+vi.mock('@/lib/arena-room/narrative-history-runtime', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/arena-room/narrative-history-runtime')>(),
+  appendArenaNarrativeHistoryResult: mocks.appendHistory,
+}));
 vi.mock('@/components/arena/multiplayer/useArenaRoom', () => ({ useArenaRoomContext: () => null }));
 vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntentLatch: () => ({ tryAcquire: () => ({ dispatch: mocks.dispatch }) }) }));
 vi.mock('@/lib/arena/resumable-generation-client', async (importOriginal) => ({
@@ -113,6 +117,68 @@ describe('single-player Web generation integration', () => {
     await act(async () => current.handleGenerate());
     expect(mocks.openStream.mock.calls[0][0].body.webPackageRef).toEqual(BUILTIN_ARENA_NEWS_PACKAGE_REF);
     expect(useBattleStore.getState()).toMatchObject({ streamingMarkdown: content, resultWebPackage: artifact, resultWebReady: true });
+  });
+
+  it.each([
+    ['missing', sse('meta_error', { parseOk: false, error: 'missing-meta' })],
+    ['superseded', sse('meta', { parseOk: true, meta: { version: 1, report: { headline: '旧标题', winner: '角色甲' }, impacts: [{ characterName: '角色甲', impact: '不得应用' }] } }) + sse('meta_error', { parseOk: false, error: 'invalid-latest-meta' })],
+    ['invalid report', sse('meta', { parseOk: true, meta: { version: 1, report: { headline: ' ', winner: '角色甲' }, impacts: [{ characterName: '角色甲', impact: '不得应用', currentStateSummary: '不得应用' }] } })],
+    ['invalid version', sse('meta', { parseOk: true, meta: { version: 2, report: { headline: '标题', winner: '角色甲' } } })],
+  ])('keeps a completed package playable with %s metadata and preserves body history while disabling automatic role and ranking effects', async (_label, metaEvent) => {
+    const { generatedContent: content, ...artifact } = await createWebPackageOverlay(BUILTIN_ARENA_NEWS_PACKAGE_REF, source);
+    const original = useBattleStore.getState().combatants;
+    await act(async () => {
+      useBattleStore.getState().setWebPackageRef(BUILTIN_ARENA_NEWS_PACKAGE_REF);
+      useBattleStore.setState({ settings: { ...useBattleStore.getState().settings, writeArenaHistory: true, writeCurrentState: true, writeNarrativeHistory: true } });
+    });
+    mocks.openStream.mockResolvedValue(new Response(
+      sse('markdown', { chunk: content }) + metaEvent
+        + sse('ranking', { success: true, generationId: 'generation-web-test', state: 'ready', snapshot: { status: 'completed', combatantCount: 1 }, participants: [] })
+        + sse('done', { status: 'completed', ok: true, webPackage: artifact }),
+      { headers: { ...streamHeaders, 'x-mahoshojo-stream-meta': encodeURIComponent(JSON.stringify({ outputContract: 'web-package-target', reportFormat: 'web', webPackageRef: BUILTIN_ARENA_NEWS_PACKAGE_REF })) } },
+    ));
+    await act(async () => current.handleGenerate());
+    expect(useBattleStore.getState()).toMatchObject({ streamingMarkdown: content, resultWebPackage: artifact, resultWebReady: true, latestAiImpacts: null, updatedCombatants: [], lastGenerationRepairContext: null });
+    expect(useBattleStore.getState().combatants).toEqual(original);
+    expect(useBattleStore.getState().error).toContain('可体验和导出');
+    expect(mocks.updateFromMarkdown).not.toHaveBeenCalled(); expect(mocks.appendHistory).toHaveBeenCalledExactlyOnceWith({ title: 'Web 战报', contentMarkdown: content, generationId: 'generation-web-test' }); expect(mocks.queryData).not.toHaveBeenCalled();
+    expect(mocks.openStream).toHaveBeenCalledOnce(); expect(mocks.cooldown).toHaveBeenCalledOnce();
+  });
+
+  it('preserves automatic history, role and ranking updates for valid package metadata', async () => {
+    const { generatedContent: content, ...artifact } = await createWebPackageOverlay(BUILTIN_ARENA_NEWS_PACKAGE_REF, source);
+    await act(async () => {
+      useBattleStore.getState().setWebPackageRef(BUILTIN_ARENA_NEWS_PACKAGE_REF);
+      useBattleStore.setState({ settings: { ...useBattleStore.getState().settings, writeNarrativeHistory: true } });
+    });
+    const ranking = { success: true, generationId: 'generation-web-test', state: 'ready', snapshot: { status: 'completed', combatantCount: 1 }, participants: [] };
+    mocks.openStream.mockResolvedValue(new Response(
+      sse('markdown', { chunk: content }) + sse('meta', { parseOk: true, meta: { version: 1, report: { headline: '标题', winner: '角色甲' }, impacts: [{ characterName: '角色甲', impact: '成长' }] } })
+        + sse('ranking', ranking) + sse('done', { status: 'completed', ok: true, webPackage: artifact }),
+      { headers: { ...streamHeaders, 'x-mahoshojo-stream-meta': encodeURIComponent(JSON.stringify({ outputContract: 'web-package-target', reportFormat: 'web', webPackageRef: BUILTIN_ARENA_NEWS_PACKAGE_REF })) } },
+    ));
+    await act(async () => current.handleGenerate());
+    expect(useBattleStore.getState().error).toBeFalsy(); expect(useBattleStore.getState().resultWebReady).toBe(true);
+    expect(mocks.updateFromMarkdown).toHaveBeenCalledOnce(); expect(mocks.appendHistory).toHaveBeenCalledOnce();
+    expect(mocks.queryData).toHaveBeenCalledWith(['arenaGenerationRanking', ranking.generationId], ranking);
+  });
+
+  it('keeps a non-stream package fallback and body history while ignoring supplied role updates', async () => {
+    const { generatedContent: content, ...webPackage } = await createWebPackageOverlay(BUILTIN_ARENA_NEWS_PACKAGE_REF, source);
+    const original = useBattleStore.getState().combatants;
+    await act(async () => {
+      useBattleStore.getState().setGenerationMode('non-stream');
+      useBattleStore.getState().setWebPackageRef(BUILTIN_ARENA_NEWS_PACKAGE_REF);
+      useBattleStore.setState({ settings: { ...useBattleStore.getState().settings, writeArenaHistory: true, writeCurrentState: true, writeNarrativeHistory: true } });
+    });
+    const report = { reportFormat: 'web', webPackage, headline: '', article: { body: content, analysis: '' }, officialReport: { winner: '', conclusion: '' }, reporterInfo: { name: '记者', publication: 'Arena' } };
+    mocks.dispatch.mockResolvedValue(Response.json({ report, generationId: 'generation-package', impacts: [{ characterName: '角色甲', impact: '不得应用' }],
+      updatedCombatants: [{ index: 0, data: { name: '角色甲', signature: '不得应用', currentState: '不得应用' } }] }));
+    await act(async () => current.handleGenerate());
+    expect(useBattleStore.getState()).toMatchObject({ resultWebReady: true, resultWebPackage: webPackage, latestAiImpacts: null, updatedCombatants: [], lastGenerationRepairContext: null });
+    expect(useBattleStore.getState().newsReport?.headline).toBe(''); expect(useBattleStore.getState().newsReport?.officialReport.winner).toBe('');
+    expect(useBattleStore.getState().combatants).toEqual(original); expect(useBattleStore.getState().error).toContain('可体验和导出');
+    expect(mocks.appendHistory).toHaveBeenCalledOnce(); expect(mocks.appendHistory.mock.calls[0][0]).toMatchObject({ contentMarkdown: content, generationId: 'generation-package' }); expect(mocks.updateFromMarkdown).not.toHaveBeenCalled(); expect(mocks.dispatch).toHaveBeenCalledOnce();
   });
 
   it('keeps package content inert when a completed stream omits its artifact', async () => {

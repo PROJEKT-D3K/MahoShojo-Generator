@@ -44,6 +44,30 @@ const createPorts = (
 });
 
 describe('Arena generation finalization', () => {
+  it.each([undefined, {}, { version: 1, report: { headline: 'title', winner: '' }, impacts: [{ characterName: 'A', impact: 'untrusted' }] }])('archives metadata-free package without story, rating or ranking authority', async (streamMeta) => {
+    const ports = createPorts();
+    const result = await createArenaGenerationFinalizer(ports)({ ...input,
+      payload: { ...input.payload, writeArenaHistory: true, writeCurrentState: true },
+      metadata: { outputContract: 'web-package-target', webPackageRef: { id: 'test.package' }, streamMeta },
+    });
+    expect(ports.storeOutput).toHaveBeenCalledOnce();
+    expect(ports.completeTerminal).toHaveBeenCalledOnce();
+    expect(ports.applyStoryImpacts).not.toHaveBeenCalled();
+    expect(ports.settleRatings).not.toHaveBeenCalled();
+    expect(ports.readRanking).not.toHaveBeenCalled();
+    expect(result.ranking).toBeNull();
+  });
+
+  it('retains package effects for valid metadata', async () => {
+    const ports = createPorts();
+    await createArenaGenerationFinalizer(ports)({ ...input, metadata: {
+      webPackageRef: { id: 'test.package' }, streamMeta: { version: 1, report: { headline: 'title', winner: 'A' } },
+    } });
+    expect(ports.applyStoryImpacts).toHaveBeenCalledOnce();
+    expect(ports.settleRatings).toHaveBeenCalledOnce();
+    expect(ports.readRanking).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { status: 'cancelled' as const, errorCode: 'CONTENT_POLICY_CANCELLED', metadata: {} },
     { status: 'failed' as const, errorCode: 'AI_OUTPUT_FILTERED', metadata: {} },

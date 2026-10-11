@@ -1,3 +1,4 @@
+import { StreamUpdateMetaSchema } from './stream-meta';
 import { ARENA_CANONICAL_RESOURCE_LIMITS } from '@mahoshojo/contracts/arena-capabilities';
 import {
   WebPackageOverlaySchema,
@@ -8,6 +9,10 @@ import {
   type WebPackagePromptProjection,
   type WebPackageRef,
 } from '@mahoshojo/contracts/web-package';
+
+export type ArenaMetadataStatus = 'valid' | 'absent';
+
+export const ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE = 'Web 包已生成，可体验和导出；缺少有效战报元数据，已禁用本次角色历战、当前状态及排名的自动更新。';
 
 export type ArenaWebPackageQualificationFailure = 'meta' | 'identity' | 'target';
 
@@ -27,6 +32,10 @@ export type ArenaWebPackageOutputInput = {
   content: string;
   /** Only a successful strict projector meta event, never a display-title fallback. */
   meta: unknown;
+  /** Actual provider terminal, never inferred from EOF. Required only for metadata-free output. */
+  finishReason?: unknown;
+  /** Exact projector suffix. Nonterminal/duplicate control frames cannot qualify a prefix as a complete target. */
+  controlTail?: string;
   /**
    * Bind an existing web-package overlay creator to the host's frozen verified
    * base/projection. It owns target normalization, schema/UTF-8 validation and
@@ -40,6 +49,18 @@ const sameRef = (left: WebPackageRef, right: WebPackageRef): boolean => (
   left.id === right.id && left.version === right.version && left.digest === right.digest
 );
 
+/** Report fields are used by companion consumers after the server has validated the trailer. */
+export const hasArenaWebPackageReport = (value: unknown): boolean => {
+  const report = value as { headline?: unknown; winner?: unknown } | null;
+  return typeof report?.headline === 'string' && Boolean(report.headline.trim())
+    && typeof report.winner === 'string' && Boolean(report.winner.trim());
+};
+
+export const hasArenaWebPackageMeta = (value: unknown): boolean => {
+  const parsed = StreamUpdateMetaSchema.safeParse(value);
+  return parsed.success && parsed.data.version === 1 && hasArenaWebPackageReport(parsed.data.report);
+};
+
 /**
  * Shared final package qualification, not completion or execution authority.
  * The caller first verifies its own completed/stop and scope, then rechecks its
@@ -49,11 +70,13 @@ const sameRef = (left: WebPackageRef, right: WebPackageRef): boolean => (
  */
 export const qualifyArenaWebPackageOutput = async (
   input: ArenaWebPackageOutputInput,
-): Promise<{ overlay: WebPackageOverlay; artifact: WebPackageArtifact }> => {
-  const meta = input.meta as { version?: unknown; report?: { headline?: unknown; winner?: unknown } } | null;
-  if (meta?.version !== 1 || !meta.report
-    || typeof meta.report.headline !== 'string' || !meta.report.headline.trim()
-    || typeof meta.report.winner !== 'string' || !meta.report.winner.trim()) {
+): Promise<{ overlay: WebPackageOverlay; artifact: WebPackageArtifact; metaStatus: ArenaMetadataStatus }> => {
+  const controlEnd = input.controlTail?.indexOf('-->') ?? -1;
+  if (controlEnd >= 0 && input.controlTail!.slice(controlEnd + 3).trim()) {
+    throw new ArenaWebPackageQualificationError('meta');
+  }
+  const metaStatus = hasArenaWebPackageMeta(input.meta) ? 'valid' : 'absent';
+  if (metaStatus === 'absent' && input.finishReason !== 'stop') {
     throw new ArenaWebPackageQualificationError('meta');
   }
   // Snapshot expectations before any async host work.
@@ -73,5 +96,5 @@ export const qualifyArenaWebPackageOutput = async (
     targetMediaType: overlay.targetMediaType,
     generatedDigest: overlay.generatedDigest,
   };
-  return { overlay, artifact };
+  return { overlay, artifact, metaStatus };
 };

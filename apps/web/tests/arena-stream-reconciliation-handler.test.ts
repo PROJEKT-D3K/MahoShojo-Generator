@@ -101,6 +101,21 @@ describe('Arena stream reconciliation handler', () => {
     })));
   });
 
+  it('does not project or verify/sign cards when a package froze metadata-unavailable authority', async () => {
+    readOwnedReconciliation.mockResolvedValue({ kind: 'found', reconciliation: {
+      available: false, reason: 'metadata_unavailable', roster: authoritativePayload.roster,
+    } });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await appRouteHandler(request({ generationId,
+        combatants: [{ type: 'magical-girl', sourceDataCardId: 'card-a', data: { name: 'A', signature: 'valid' } }],
+      }) as never);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'ARENA_RECONCILIATION_MANIFEST_UNAVAILABLE' });
+    }
+    expect(applyPostBattleUpdates).not.toHaveBeenCalled();
+    expect(resolveNativeAuthority).not.toHaveBeenCalled();
+  });
+
   it('卡片正文发生无害变化后仍按 data card 身份更新', async () => {
     const combatants = [{
       type: 'magical-girl',

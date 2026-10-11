@@ -4,6 +4,7 @@ import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES } from '@mahoshojo/contracts/desktop-ipc';
+import { BUILTIN_ARENA_NEWS_PACKAGE_REF, resolveWebPackage } from '@mahoshojo/web-package';
 import { localLibraryRecordBytes } from '@mahoshojo/local-library/archive-export';
 import { ARENA_DRAFT_KEY, DesktopArenaSession, createInitialArenaDraft, type ArenaDraft } from '../src/features/arena/session';
 import { addAdvancedAuxScenario, addAdvancedCombatants, addAdvancedLore, importAdvancedHistory, setAdvancedMainScenario } from '../src/features/arena/advanced-input';
@@ -211,6 +212,24 @@ describe('Desktop Arena independent session', () => {
 
 });
 
+
+it.each(['stream', 'non-stream'] as const)('keeps a %s package fallback and opted-in body history without applying role effects', async (generationMode) => {
+  const storage = memory(), { port, records } = repository();
+  const base = await resolveWebPackage(BUILTIN_ARENA_NEWS_PACKAGE_REF);
+  const initial = makeDraft('daily', generationMode);
+  const draft = { ...initial, reportFormat: 'web' as const, webPackageRef: base.ref,
+    settings: { ...initial.settings, writeArenaHistory: true, writeCurrentState: true, writeNarrativeHistory: true } };
+  const source = '<!doctype html><html><body>可体验的原始故事</body></html>';
+  const session = new DesktopArenaSession({ repository: port, storage, resolveWebPackage: async () => base }); session.setScope('one'); session.updateDraft(draft);
+  await session.generate(native(source), draft, intent(generationMode));
+  expect(session.getSnapshot()).toMatchObject({ phase: 'completed', rawText: source, markdown: source,
+    report: { headline: '', officialReport: { winner: '' } }, renderSnapshot: { reportFormat: 'web', webPackage: { packageRef: base.ref } } });
+  expect(session.getSnapshot().draft.combatants).toEqual(draft.combatants); expect(session.getSnapshot().candidates?.characterEffects).toEqual([]);
+  expect(session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1); expect(session.getSnapshot().draft.narrativeHistoryEntries[0]?.content).toBe(source);
+  expect(session.getSnapshot().message).toContain('可体验和导出');
+  await session.save('characters'); expect(port.putIfAbsent).not.toHaveBeenCalled(); expect(await session.save('history')).toBe(true); expect(records.size).toBe(1); expect([...records.values()][0]?.cardType).toBe('history');
+  expect(JSON.parse(session.exportDocument()).result.renderSnapshot.webPackage.packageRef).toEqual(base.ref); session.dispose();
+});
 
 it('keeps completed Web source and narrative history without inventing character effects or executable history', async () => {
   const storage = memory(), { port, records } = repository();

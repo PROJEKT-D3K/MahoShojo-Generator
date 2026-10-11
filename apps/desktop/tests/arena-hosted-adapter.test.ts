@@ -6,7 +6,7 @@ import {
   type DesktopArenaHostedActor, type DesktopArenaHostedControlRequest, type DesktopArenaHostedControlResponse,
   type DesktopArenaHostedRecoveryPointer, type DesktopArenaHostedSseEvent, type DesktopArenaHostedStreamRequest,
 } from '@mahoshojo/contracts/desktop-arena-hosted';
-import { createWebPackageOverlayFromBase, digestWebPackageBytes, verifyWebPackage, type ResolvedWebPackage } from '@mahoshojo/web-package';
+import { createWebPackageOverlayFromBase, digestWebPackageBytes, prepareWebPackageReplay, verifyWebPackage, type ResolvedWebPackage } from '@mahoshojo/web-package';
 import {
   ARENA_HOSTED_DETACH, ARENA_HOSTED_USER_STOP, executeArenaHosted, resumeArenaHosted,
   type ArenaHostedContext, type ArenaHostedIntent, type ArenaHostedPartial,
@@ -23,6 +23,7 @@ const generationId = `arena_${'a'.repeat(64)}`;
 const now = '2026-10-10T05:00:00.000Z';
 const source = '# 相遇\n\n完整保留的故事';
 const freeWeb = '<!doctype html><html><head><title>相遇</title></head><body>完整故事</body></html>';
+const packageMeta = { version: 1, report: { headline: '网页战报', winner: '甲' }, impacts: [{ characterName: '甲', impact: '并肩作战' }] };
 const input = (battleMode: ArenaGenerationInputSnapshot['battleMode'] = 'classic', reportFormat: 'markdown' | 'web' = 'markdown'): ArenaGenerationInputSnapshot => ({
   battleMode, reportFormat, arenaFreeRankingEnabled: false,
   combatants: ['甲', '乙'].map(name => ({ type: 'general-character', data: { name, content: '完整角色设定', signature: 'source-signature' }, isValid: true, isPreset: false, filename: '' })),
@@ -330,9 +331,51 @@ describe('Hosted done Artifact plus body and exact Base qualification', () => {
     const base = await packageBase(target, mediaType); const { generatedContent: _, ...artifact } = await createWebPackageOverlayFromBase(base, content);
     const { host } = context({ resolveWebPackage: async () => base }); const h = native([complete(content, { webPackage: artifact })]);
     const result = await execute(h, host, { ...input('daily', 'web'), webPackageRef: base.ref });
-    expect(result).toMatchObject({ status: 'completed', canAppendHistory: true, hosted: { outputValidation: 'valid' }, renderSnapshot: { webPackage: artifact } });
+    expect(result).toMatchObject({ status: 'completed', metaStatus: 'absent', canAppendHistory: true, hosted: { outputValidation: 'valid' }, renderSnapshot: { webPackage: artifact },
+      report: { headline: '', officialReport: { winner: '' } } });
+    expect(result.hosted.validationMessage).toContain('元数据'); expect(result.hosted.validationMessage).toContain('角色历战、当前状态及排名');
     expect(artifact).not.toHaveProperty('generatedContent'); expect(h.streamRequests[0]).toHaveProperty('body.webPackagePromptProjection');
     expect(h.streamRequests[0]).not.toHaveProperty('body.files'); expect(h.streamRequests[0]).not.toHaveProperty('body.adjudicationResults');
+  });
+  it('keeps valid package metadata eligible for history without changing the verified Artifact', async () => {
+    const base = await packageBase(), content = '{"title":"相遇"}';
+    const { generatedContent: _, ...artifact } = await createWebPackageOverlayFromBase(base, content);
+    const { host } = context({ resolveWebPackage: async () => base }); const h = native([peer => {
+      peer.response(); peer.emit(textEvent(content));
+      peer.emit(event('2-0', 'meta', { parseOk: true, meta: packageMeta, raw: '{}', rawTruncated: false }));
+      peer.emit(doneEvent('3-0', { webPackage: artifact })); peer.end();
+    }]);
+    expect(await execute(h, host, { ...input('daily', 'web'), webPackageRef: base.ref })).toMatchObject({ status: 'completed', canAppendHistory: true,
+      hosted: { outputValidation: 'valid', validationMessage: null }, renderSnapshot: { webPackage: artifact },
+      report: { headline: '网页战报', officialReport: { winner: '甲' } } });
+    expect(h.streamRequests).toHaveLength(1); expect(h.controlRequests).toHaveLength(0);
+  });
+  it.each(['meta_error', 'missing-winner', 'unsupported-version', 'invalid-schema'] as const)('%s preserves a valid package result, narrative history and replay while denying metadata-dependent effects', async fault => {
+    const base = await packageBase(), content = '{"title":"相遇"}';
+    const { generatedContent: _, ...artifact } = await createWebPackageOverlayFromBase(base, content);
+    const { host } = context({ resolveWebPackage: async () => base }); const h = native([peer => {
+      peer.response(); peer.emit(textEvent(content));
+      peer.emit(event('2-0', 'meta', { parseOk: true, meta: packageMeta, raw: '{}', rawTruncated: false }));
+      peer.emit(fault === 'meta_error'
+        ? event('3-0', 'meta_error', { parseOk: false, error: 'MAHOSHOJO_ARENA_META JSON 无效' })
+        : event('3-0', 'meta', { parseOk: true, raw: '{}', rawTruncated: false, meta: {
+          ...packageMeta, ...(fault === 'missing-winner' ? { report: { headline: '不应采用的标题' } } : {}),
+          ...(fault === 'unsupported-version' ? { version: 2 } : {}), ...(fault === 'invalid-schema' ? { impacts: 'invalid' } : {}),
+        } }));
+      peer.emit(doneEvent('4-0', { webPackage: artifact })); peer.end();
+    }]);
+    const result = await execute(h, host, { ...input('daily', 'web'), webPackageRef: base.ref });
+    expect(result).toMatchObject({ status: 'completed', rawText: content, markdown: content, canAppendHistory: true,
+      hosted: { serverStatus: 'completed', outputValidation: 'valid', metaEvent: { event: fault === 'meta_error' ? 'meta_error' : 'meta' } },
+      renderSnapshot: { webPackage: artifact }, report: { headline: '', officialReport: { winner: '' } } });
+    expect(result.hosted.validationMessage).toContain('元数据'); expect(result.hosted.validationMessage).toContain('角色历战、当前状态及排名');
+    expect(result).not.toHaveProperty('impacts'); expect(result).not.toHaveProperty('updatedCombatants');
+    if (result.status !== 'completed' || !result.renderSnapshot?.webPackage) throw new Error('Expected a completed package Artifact');
+    const replay = await prepareWebPackageReplay({ artifact: result.renderSnapshot.webPackage, generatedContent: result.markdown },
+      { resolveExact: async () => base, findCandidatesById: async () => [] });
+    expect(replay.status).toBe('exact'); expect(replay.instance).toBeDefined(); expect(replay.overlay?.generatedContent).toBe(content);
+    expect(h.streamRequests).toHaveLength(1); expect(h.controlRequests).toHaveLength(0);
+    expect(host.recovery.getSnapshot().pointer).toMatchObject({ state: 'completed', cursor: '4-0' });
   });
   it.each(['missing-artifact', 'digest', 'target', 'ref', 'schema'] as const)('%s keeps server completion but denies output/history qualification', async fault => {
     const base = await packageBase(); const content = '{"title":"相遇"}'; const { generatedContent: _, ...good } = await createWebPackageOverlayFromBase(base, content);
@@ -351,6 +394,21 @@ describe('Hosted done Artifact plus body and exact Base qualification', () => {
     expect(result).toMatchObject({ status: 'completed', markdown: content, canAppendHistory: false,
       hosted: { outputValidation: 'missing-base', serverStatus: 'completed' }, renderSnapshot: { webPackage: artifact } });
     expect(resolve).toHaveBeenCalledExactlyOnceWith(base.ref); expect(h.streamRequests.every(request => request.operation === 'resume')).toBe(true);
+  });
+  it('restores a metadata-free package as a valid replay without restoring automatic history authority', async () => {
+    const base = await packageBase(), content = '{"title":"相遇"}';
+    const { generatedContent: _, ...artifact } = await createWebPackageOverlayFromBase(base, content);
+    const old = pointer({ format: 'web', battleMode: 'daily', webPackageRef: base.ref });
+    const { host } = context({ resolveWebPackage: async () => base }, old), h = native([complete(content, { webPackage: artifact })]);
+    const result = await resumeArenaHosted({ invoke: h.invoke }, old, host, new AbortController().signal);
+    expect(result).toMatchObject({ status: 'completed', markdown: content, canAppendHistory: false,
+      hosted: { outputValidation: 'valid', restored: true }, renderSnapshot: { webPackage: artifact },
+      report: { headline: '', officialReport: { winner: '' } } });
+    if (result.status !== 'completed' || !result.renderSnapshot?.webPackage) throw new Error('Expected a restored package Artifact');
+    const replay = await prepareWebPackageReplay({ artifact: result.renderSnapshot.webPackage, generatedContent: result.markdown },
+      { resolveExact: async () => base, findCandidatesById: async () => [] });
+    expect(replay.status).toBe('exact'); expect(replay.instance).toBeDefined();
+    expect(h.streamRequests.map(request => request.operation)).toEqual(['resume']);
   });
 });
 

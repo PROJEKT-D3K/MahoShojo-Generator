@@ -6,7 +6,7 @@ import { projectArenaCompanionReportForView } from './hosted-json';
 import type { DesktopArenaHostedAnyRecoveryPointer as DesktopArenaHostedRecoveryPointer } from '@mahoshojo/contracts/desktop-arena-hosted-json';
 import { parseBattleReportRenderSnapshotV1, type BattleReportRenderSnapshotV1 } from '@mahoshojo/contracts';
 import { WebPackageRefSchema, WebPackagePromptProjectionSchema } from '@mahoshojo/contracts/web-package';
-import { buildArenaGenerationInputSnapshot, type ArenaBattleReport } from '@mahoshojo/ai-core/arena-generation';
+import { ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE, buildArenaGenerationInputSnapshot, type ArenaBattleReport } from '@mahoshojo/ai-core/arena-generation';
 import { ARENA_CANONICAL_CAPABILITIES, ARENA_CANONICAL_RESOURCE_LIMITS, evaluateArenaBasicGenerationReadiness } from '@mahoshojo/contracts/arena-capabilities';
 import { countBattleStoryCommitJsonBytes } from '@mahoshojo/domain/arena-story-commit';
 import { validateArenaAiInputJson } from '@mahoshojo/contracts/ai-execution';
@@ -302,14 +302,15 @@ export class DesktopArenaSession {
       if (frozen?.settings.writeNarrativeHistory && outcome.canAppendHistory) this.appendHostedHistory();
       if (!this.current(scope, epoch) || controller.signal.aborted) return;
       const completedPointer = this.hostedRecovery.getSnapshot().pointer;
-      if (completedPointer?.requestId === requestId && outcome.generationId && completedPointer.version === 3
+      const packageFallback = Boolean(completedPointer?.webPackageRef) && outcome.metaStatus === 'absent';
+      if (!packageFallback && completedPointer?.requestId === requestId && outcome.generationId && completedPointer.version === 3
         && (completedPointer.writeArenaHistory || completedPointer.writeCurrentState)) {
         this.roleContext = { pointer: clone(completedPointer), generationId: outcome.generationId, scope, epoch };
         // Completion is already committed. A role-sync failure can never turn this report into a failure.
         if (this.controller === controller) this.controller = null;
-        if (!pointer && outcome.canAppendHistory) await this.retryHostedRoleUpdates(options);
+        if (!pointer && outcome.hosted.outputValidation === 'valid') await this.retryHostedRoleUpdates(options);
         else this.publish({ roleUpdates: { status: 'idle', message: '本次报告已恢复；可显式重试服务器已生成的角色更新。', items: [] } });
-      } else this.publish({ roleUpdates: { status: 'unavailable', message: '本任务创建时未开启角色写入，保留原角色。', items: [] } });
+      } else this.publish({ roleUpdates: { status: 'unavailable', message: packageFallback ? '缺少有效战报元数据，未应用角色历史或当前状态。Web 包仍可体验和导出。' : '本任务创建时未开启角色写入，保留原角色。', items: [] } });
     } catch (cause) { if (this.current(scope, epoch)) this.publish({ phase: controller.signal.aborted ? 'cancelled' : 'failed', message: cause instanceof Error ? cause.message : '服务器连接未完成，可恢复原请求。' }); }
     finally { if (this.controller === controller) this.controller = null; if (this.current(scope, epoch)) this.retryDraftSave(); }
   }
@@ -382,7 +383,7 @@ export class DesktopArenaSession {
       combatants: this.state.draft.combatants.map((item, index) => effects.has(index) ? { ...item, data: effects.get(index)!, isValid: false, isPreset: false } : item),
       narrativeHistoryEntries: candidates.narrativeHistory?.entries ?? this.state.draft.narrativeHistoryEntries,
       ...(this.dependencies.product === 'arena' && candidates.narrativeHistory?.appended ? { historyUpdatedAt: occurredAt } : {}) };
-    this.publish({ phase: 'completed', report: outcome.report, renderSnapshot: outcome.renderSnapshot ?? null, draft, candidates, message: input.reportFormat === 'web' && outcome.metaStatus !== 'valid' ? '生成完成，未提供可用机器元数据，未应用角色效果。源码仍可保存和导出。' : '生成完成。工作副本已更新；保存到本地库需单独确认操作。' });
+    this.publish({ phase: 'completed', report: outcome.report, renderSnapshot: outcome.renderSnapshot ?? null, draft, candidates, message: input.reportFormat === 'web' && outcome.metaStatus !== 'valid' ? input.webPackageRef ? ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE : '生成完成，未提供可用机器元数据，未应用角色效果。源码仍可保存和导出。' : '生成完成。工作副本已更新；保存到本地库需单独确认操作。' });
   }
   private clearHostedSoftTimeout() { if (this.state.hosted?.softTimeoutWarning) this.publish({ hosted: { ...this.state.hosted, softTimeoutWarning: null } }); }
   cancel() { this.roleController?.abort(); this.clearHostedSoftTimeout(); this.controller?.abort(this.resultMode === 'hosted' ? ARENA_HOSTED_USER_STOP : undefined); this.importController?.abort(); }

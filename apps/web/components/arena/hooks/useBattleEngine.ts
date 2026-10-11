@@ -1,7 +1,8 @@
 'use client';
 
 import {
-  buildArenaGenerationInputSnapshot, normalizeBattleAiImpacts, extractTitleFromBattleMarkdown,
+  ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE, buildArenaGenerationInputSnapshot, normalizeBattleAiImpacts, extractTitleFromBattleMarkdown,
+  hasArenaWebPackageMeta, hasArenaWebPackageReport,
   projectArenaBattleReport, projectArenaUpdatedRoster,
 } from '@mahoshojo/ai-core/arena-generation';
 
@@ -822,6 +823,8 @@ export const useBattleEngine = () => {
       );
 
       const applyBattleResult = async (result: BattleApiResponse, origin: 'battle' | 'battle-stream') => {
+        const packageFallback = result.report.reportFormat === 'web' && Boolean(result.report.webPackage)
+          && !hasArenaWebPackageReport({ headline: result.report.headline, winner: result.report.officialReport.winner });
         if (typeof result.generationId === 'string' && result.generationId.trim()) {
           captureGenerationRepairContext(result.generationId);
         }
@@ -867,20 +870,24 @@ export const useBattleEngine = () => {
         setResultWebReady(result.report.reportFormat === 'web' && (Boolean(result.report.webPackage) || typeof result.report.webHtml === 'string'));
         setNewsReport(reportWithScenario);
         revealGeneratedResult();
-        const normalizedImpacts = normalizeBattleAiImpacts(result.impacts, sanitizeTextByShieldWords);
+        const normalizedImpacts = packageFallback ? [] : normalizeBattleAiImpacts(result.impacts, sanitizeTextByShieldWords);
         setLatestAiImpacts(normalizedImpacts.length > 0 ? normalizedImpacts : null);
-        setUpdatedCombatants(result.updatedCombatants);
+        setUpdatedCombatants(packageFallback ? [] : result.updatedCombatants);
         if (result.adjudicationResults) {
           setAdjudicationResults(result.adjudicationResults);
         }
 
-        const updatedRoster = projectArenaUpdatedRoster(freshCombatants, result.updatedCombatants);
-        setCombatants(updatedRoster);
+        if (packageFallback) {
+          setLastGenerationRepairContext(null);
+          setError(ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE);
+        } else {
+          setCombatants(projectArenaUpdatedRoster(freshCombatants, result.updatedCombatants));
+        }
 
         if (settings.writeNarrativeHistory) {
           await appendArenaNarrativeHistoryResult({
-            title: reportWithScenario.headline,
-            contentMarkdown: toBattleReportMarkdown(reportWithScenario),
+            title: packageFallback ? 'Web 战报' : reportWithScenario.headline,
+            contentMarkdown: packageFallback ? reportWithScenario.article.body : toBattleReportMarkdown(reportWithScenario),
             generationId: result.generationId ?? null,
           });
         }
@@ -1095,6 +1102,8 @@ export const useBattleEngine = () => {
 	          let interruptedMessage: string | null = null;
 	          let sseEndedWithoutDone = false;
           let authoritativeStreamDone = false;
+          let streamUpdateMeta: unknown = null;
+          let pendingRanking: GenerationRankingResponse | null = null;
           const presentGeneratedContent = (content: string) => authoritativeWebContract || reportFormat === 'web'
             ? content
             : sanitizeTextByShieldWords(content);
@@ -1371,6 +1380,7 @@ export const useBattleEngine = () => {
               }
 
               if (event === 'meta') {
+                streamUpdateMeta = payload?.parseOk ? payload?.meta : null;
                 if (payload?.webPackage) {
                   authoritativeWebContract = true;
                   authoritativePackage = true;
@@ -1400,6 +1410,8 @@ export const useBattleEngine = () => {
               }
 
               if (event === 'meta_error') {
+                streamUpdateMeta = null;
+                if (authoritativePackage) metaOverrideFromSse = undefined;
                 setStreamUpdateMetaDebug({
                   source: 'sse',
                   parseOk: false,
@@ -1413,12 +1425,7 @@ export const useBattleEngine = () => {
 
               if (event === 'ranking') {
                 const ranking = parseGenerationRankingResponse(payload);
-                if (ranking) {
-                  queryClient.setQueryData<GenerationRankingResponse>(
-                    ['arenaGenerationRanking', ranking.generationId],
-                    ranking,
-                  );
-                }
+                if (ranking) pendingRanking = ranking;
                 return;
               }
 
@@ -1681,6 +1688,7 @@ export const useBattleEngine = () => {
 
               if (allowStreamMeta) {
                 const extracted = await extractStreamUpdateMeta(markdownForUi);
+                streamUpdateMeta = extracted?.meta ?? null;
                 if (extracted?.meta && (extracted.meta.report || (extracted.meta.impacts && extracted.meta.impacts.length > 0))) {
                   const impacts = normalizeBattleAiImpacts(extracted.meta.impacts, sanitizeTextByShieldWords);
                   metaOverride = {
@@ -1768,6 +1776,19 @@ export const useBattleEngine = () => {
             setError('⚠️ 战报正文为空，但检测到角色更新元数据，已尝试继续更新角色数据。');
           }
 
+          const packageFallback = authoritativePackage && !hasArenaWebPackageMeta(streamUpdateMeta);
+          if (packageFallback) {
+            metaOverride = undefined;
+            setLatestAiImpacts(null);
+            setUpdatedCombatants([]);
+            setLastGenerationRepairContext(null);
+            setError(ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE);
+          } else if (pendingRanking) {
+            queryClient.setQueryData<GenerationRankingResponse>(
+              ['arenaGenerationRanking', pendingRanking.generationId], pendingRanking,
+            );
+          }
+
           if (settings.writeNarrativeHistory) {
             await appendArenaNarrativeHistoryResult({
               title: authoritativeWebContract
@@ -1780,7 +1801,7 @@ export const useBattleEngine = () => {
 
           startCooldown();
 
-          if (settings.writeArenaHistory || settings.writeCurrentState) {
+          if (!packageFallback && (settings.writeArenaHistory || settings.writeCurrentState)) {
             try {
               await updateFromMarkdown(
                 markdownForUi,

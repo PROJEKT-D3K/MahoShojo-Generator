@@ -29,7 +29,7 @@ import type {
 import { createArenaStreamProjector } from './stream-projector';
 import { assertStreamCompletion } from './completion';
 import { WebPackageRefSchema, type WebPackageArtifact, type WebPackagePromptProjection } from '@mahoshojo/contracts/web-package';
-import { ArenaWebPackageQualificationError, qualifyArenaWebPackageOutput } from '@mahoshojo/ai-core/arena-generation';
+import { ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE, ArenaWebPackageQualificationError, qualifyArenaWebPackageOutput } from '@mahoshojo/ai-core/arena-generation';
 import { createWebPackageOverlay, createWebPackageOverlayFromProjection, isWebPackageTargetError } from '@mahoshojo/web-package';
 import { isWebArenaOutputContract } from './output-contract';
 
@@ -845,24 +845,28 @@ export const createArenaGenerationRuntime = (
         await emit({ type: 'markdown', data: { chunk: projected } });
       }
       await flushReasoningEvents();
-      const { metaEvent } = projector.result();
+      let { metaEvent } = projector.result();
       assertStreamCompletion(telemetry);
       if (prepared.metadata.webPackageRef) {
         const eventData = metaEvent?.type === 'meta' ? metaEvent.data as Record<string, unknown> : null;
         try {
           const projection = prepared.metadata.webPackagePromptProjection as WebPackagePromptProjection | undefined;
-          const { artifact } = await qualifyArenaWebPackageOutput({
+          const { artifact, metaStatus } = await qualifyArenaWebPackageOutput({
             ref: WebPackageRefSchema.parse(prepared.metadata.webPackageRef),
             projection,
             content: markdown,
             meta: eventData?.meta,
+            finishReason: telemetry.finishReason,
+            controlTail: projector.result().rawTail,
             createOverlay: (content, options) => projection !== undefined
               ? createWebPackageOverlayFromProjection(projection, content, options)
               : createWebPackageOverlay(WebPackageRefSchema.parse(prepared.metadata.webPackageRef), content, options),
           });
           webPackage = artifact;
           executionMetadata.webPackage = webPackage;
-          if (eventData) eventData.webPackage = webPackage;
+          if (metaStatus === 'valid' && eventData) eventData.webPackage = webPackage;
+          else metaEvent = { type: 'meta_error', data: { parseOk: false,
+            error: ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE } };
         } catch (error) {
           if (error instanceof ArenaWebPackageQualificationError && error.failure === 'meta') {
             throw webPackageOutputError('ARENA_WEB_PACKAGE_OUTPUT_INVALID');
@@ -945,6 +949,12 @@ export const createArenaGenerationRuntime = (
         for (const chunk of projector.finish().markdown) {
           markdown += chunk;
           await emit({ type: 'markdown', data: { chunk } }).catch(() => undefined);
+        }
+        if (prepared.metadata.webPackageRef && projector.result().rawTail) {
+          // Failed targets remain fully inspectable; never turn a hidden control suffix into an artifact.
+          const tail = projector.result().rawTail;
+          markdown += tail;
+          await emit({ type: 'markdown', data: { chunk: tail } }).catch(() => undefined);
         }
         // A replay transport failure must not prevent durable failed finalization.
         await emit({ type: 'telemetry', data: telemetry }).catch(() => undefined);

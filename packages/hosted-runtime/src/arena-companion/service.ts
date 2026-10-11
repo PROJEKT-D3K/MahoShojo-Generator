@@ -1,3 +1,4 @@
+import { hasArenaWebPackageMeta } from '@mahoshojo/ai-core/arena-generation';
 import { ARENA_RECONCILIATION_PROTOCOL_HEADER, ARENA_RECONCILIATION_PROTOCOL_VERSION } from '@mahoshojo/contracts/arena-reconciliation';
 import { ARENA_COMPANION_PROTOCOL_HEADER, ARENA_COMPANION_PROTOCOL_VERSION, ArenaCompanionModelIdSchema } from '@mahoshojo/contracts/arena-companion';
 import { createArenaCompanionResponseWriter } from './response';
@@ -413,6 +414,7 @@ export const createArenaCompanionService = (
       producerCompleted = true;
       const headerMeta = parseHeaderMeta(upstream.headers);
       const isWeb = isWebArenaOutputContract(headerMeta.outputContract) || Boolean(collected.webPackage);
+      const reportOnly = Boolean(collected.webPackage) && !hasArenaWebPackageMeta(collected.meta);
       const writeArenaHistory = booleanOf(payload.writeArenaHistory, true);
       const writeCurrentState = booleanOf(payload.writeCurrentState, true);
       const structuredReport = isWeb ? null : parseArenaStructuredReportJson(collected.markdown, {
@@ -429,6 +431,9 @@ export const createArenaCompanionService = (
           generationId: upstream.generationId,
         }, 502, upstream.headers, headerMeta, true);
       }
+      // Package report fields encode producer metadata availability on the existing C2 wire:
+      // a qualified trailer supplies both fields; metadata-free completion leaves them empty.
+      // Never substitute display/DOM titles here: adapters read this before view projection.
       const metaReport = recordOf(collected.meta.report) ?? {};
       const structuredArticle = recordOf(structuredReport?.article);
       const structuredOfficialReport = recordOf(structuredReport?.officialReport);
@@ -487,7 +492,7 @@ export const createArenaCompanionService = (
       try {
         // New opt-in freezes generation effects, but only the separate owned Next reconciliation
         // may produce updated cards. Never sign/project a second copy in the companion response.
-        updatedCombatants = reconciliationOptIn ? [] : await options.projectUpdatedCombatants({
+        updatedCombatants = reconciliationOptIn || reportOnly ? [] : await options.projectUpdatedCombatants({
           combatants: Array.isArray(payload.combatants) ? payload.combatants : [],
           report,
           impacts,

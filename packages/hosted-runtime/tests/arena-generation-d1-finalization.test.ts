@@ -952,6 +952,27 @@ describe('Arena D1/R2 finalization ports', () => {
     expect(client.prepare).toHaveBeenCalledWith(expect.stringContaining('large_objects'));
   });
 
+  it('freezes disabled reconciliation and ranking for a metadata-free package', async () => {
+    const client = sequentialD1([result([], 1)]);
+    const ports = createNodeArenaGenerationFinalizationPorts({ getD1Client: () => client });
+    await ports.claimTerminal({ ...claimInput,
+      payload: { ...claimInput.payload, writeArenaHistory: true, writeCurrentState: true, arenaFreeRankingEnabled: true },
+      metadata: { outputContract: 'web-package-target', webPackageRef: { id: 'test.package' } },
+    });
+    const raw = client.boundCalls.flat().find(value => typeof value === 'string' && value.includes('localCardReconciliation'));
+    expect(typeof raw).toBe('string');
+    expect(JSON.parse(raw as string)).toMatchObject({
+      arenaFreeRankingEnabled: false,
+      localCardReconciliation: { available: false, reason: 'metadata_unavailable' },
+    });
+    const stored = JSON.parse(raw as string);
+    const found = await arenaD1Finalization.readOwnedNodeArenaGenerationReconciliation({
+      client: sequentialD1([result([{ status: 'completed', extra_json: JSON.stringify({ ...stored, finalizationCompleted: true }) }])]),
+      generationId: claimInput.generationId, actorKey: claimInput.actorKey,
+    });
+    expect(found).toMatchObject({ kind: 'found', reconciliation: { available: false, reason: 'metadata_unavailable' } });
+  });
+
   it('keeps local card bodies out of the bounded D1 reconciliation manifest', async () => {
     const client = sequentialD1([result([], 1)]);
     const ports = createNodeArenaGenerationFinalizationPorts({
@@ -1542,7 +1563,7 @@ ORDER BY user_id
     })).resolves.toEqual({ kind: 'pending', payloadHash: 'payload-hash-1' });
   });
 
-  it('repairs an incomplete durable terminal after the Redis producer lease expires', async () => {
+  it.each([false, true])('repairs expired terminal without granting metadata-free package rating authority: %s', async (packageReportOnly) => {
     const ownerHash = await crypto.subtle.digest(
       'SHA-256',
       new TextEncoder().encode('user:42'),
@@ -1554,6 +1575,10 @@ ORDER BY user_id
       generationTerminalStatus: 'completed',
       finalizationCompleted: false,
       resultRef: 'r2:key',
+      ...(packageReportOnly ? { battleReportRenderSnapshotV1: { version: 1, reportFormat: 'web', webPackage: {
+        packageRef: { id: 'test.package', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}` },
+        targetPath: 'index.html', targetMediaType: 'text/html', generatedDigest: `sha256:${'b'.repeat(64)}`,
+      } } } : {}),
       combatantsFallback: [
         { sortIndex: 0, name: 'A', type: 'magical-girl', isNative: false, isPreset: false },
         { sortIndex: 1, name: 'B', type: 'magical-girl', isNative: false, isPreset: false },
@@ -1610,7 +1635,8 @@ ORDER BY user_id
       contentAvailable: false,
       contentUnavailableReason: 'not-found',
     });
-    expect(settleRatings).toHaveBeenCalledWith({
+    if (packageReportOnly) expect(settleRatings).not.toHaveBeenCalled();
+    else expect(settleRatings).toHaveBeenCalledWith({
       generationId: 'generation-1',
       idempotencyKey: 'arena-terminal:generation-1:ratings',
     });

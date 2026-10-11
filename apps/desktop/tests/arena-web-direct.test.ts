@@ -6,6 +6,16 @@ import { executeArenaDirect, type ArenaDirectHostContext, type ArenaDirectIntent
 import { createInitialArenaDraft } from '../src/features/arena/session';
 
 const trailer = '<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"网页战报","winner":"甲"},"impacts":[{"characterName":"甲","impact":"并肩作战"}]} -->';
+const fallbackTrailers = [
+  { metadata: 'missing', suffix: '' },
+  { metadata: 'malformed', suffix: '\n<!-- MAHOSHOJO_ARENA_META malformed -->' },
+  { metadata: 'missing winner', suffix: '\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"不应采用的标题"},"impacts":[{"characterName":"甲","impact":"不应写卡","currentStateSummary":"不应更新"}]} -->' },
+  { metadata: 'blank headline', suffix: '\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"  ","winner":"甲"}} -->' },
+  { metadata: 'missing version', suffix: '\n<!-- MAHOSHOJO_ARENA_META {"report":{"headline":"不应采用的标题","winner":"甲"}} -->' },
+  { metadata: 'unsupported version', suffix: '\n<!-- MAHOSHOJO_ARENA_META {"version":2,"report":{"headline":"不应采用的标题","winner":"甲"}} -->' },
+  { metadata: 'invalid schema', suffix: '\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"不应采用的标题","winner":"甲"},"impacts":"invalid"} -->' },
+];
+const fallbackCases = (['stream', 'non-stream'] as const).flatMap(generationMode => fallbackTrailers.map(value => ({ generationMode, ...value })));
 const html = '<!doctype html><html><head><title>仅显示标题</title></head><body><script>globalThis.untrusted = true</script>故事</body></html>';
 const input = (mode: 'classic' | 'kizuna' | 'daily' | 'scenario' = 'classic') => ({ ...createInitialArenaDraft(), reportFormat: 'web' as const, battleMode: mode,
   combatants: ['甲', '乙'].map((name) => ({ type: 'general-character' as const, data: { name, content: '完整角色' }, isValid: false, isPreset: false, filename: `${name}.json` })),
@@ -49,10 +59,12 @@ describe('Arena Web Direct protocol', () => {
     }
   });
   it.each(['stream', 'non-stream'] as const)('%s normalizes/validates one target and freezes the canonical prompt projection', async (generationMode) => {
-    const base = await jsonPackage(), value = { ...input(), webPackageRef: base.ref };
+    const base = await jsonPackage(), draft = input(), value = { ...draft, settings: { ...draft.settings, writeNarrativeHistory: true }, webPackageRef: base.ref };
     const raw = '```json\n{"value":1}\n```\n' + trailer, transport = native(raw);
     const result = await executeArenaDirect(transport.options, value, intent(generationMode), host(base), new AbortController().signal);
     expect(result.status).toBe('completed'); expect(result.rawText).toBe(raw); expect(result.markdown).toBe('{"value":1}');
+    expect(result).toMatchObject({ metaStatus: 'valid', impacts: [{ characterName: '甲', impact: '并肩作战' }],
+      report: { headline: '网页战报', officialReport: { winner: '甲' } }, historyCandidate: { title: '网页战报', content: '{"value":1}' } });
     expect(result).toMatchObject({ renderSnapshot: { reportFormat: 'web', webPackage: { packageRef: base.ref, targetPath: 'story.json', targetMediaType: 'application/json', generatedDigest: await digestWebPackageBytes(new TextEncoder().encode('{"value":1}')) } } });
     const request = transport.request!; expect(request.messages[0]?.role).toBe('system'); expect(request.messages[1]?.role).toBe('user');
     const payload = JSON.parse(request.arenaInputJson!); expect(payload.webPackagePromptProjection.target.path).toBe('story.json');
@@ -65,7 +77,33 @@ describe('Arena Web Direct protocol', () => {
     expect(result).toMatchObject({ status: 'completed', metaStatus: 'absent', impacts: [], report: { headline: '', officialReport: { winner: '' } } });
     expect(result.rawText).toBe(text); expect(transport.invoke).toHaveBeenCalledOnce();
   });
-  it.each(['{"value":1}', '{"value":1}\n' + trailer + '\nextra', '{"value":1}\n' + trailer + '\n' + trailer, '{"value":"invalid"}\n' + trailer])('rejects package control/target failures without a second provider call', async (text) => {
+  it.each(fallbackCases)('$generationMode accepts a valid package target with $metadata metadata and preserves narrative history without role effects', async ({ generationMode, suffix }) => {
+    const base = await jsonPackage(), draft = input();
+    const raw = '```json\n{"value":1}\n```' + suffix, transport = native(raw), partials: string[] = [];
+    const result = await executeArenaDirect(transport.options,
+      { ...draft, settings: { ...draft.settings, writeArenaHistory: true, writeCurrentState: true, writeNarrativeHistory: true }, webPackageRef: base.ref },
+      intent(generationMode), host(base), new AbortController().signal, partial => partials.push(partial.markdown));
+    expect(result).toMatchObject({ status: 'completed', rawText: raw, markdown: '{"value":1}', metaStatus: 'absent', impacts: [],
+      report: { headline: '', officialReport: { winner: '' } },
+      renderSnapshot: { version: 1, reportFormat: 'web', webPackage: { packageRef: base.ref, targetPath: 'story.json',
+        targetMediaType: 'application/json', generatedDigest: await digestWebPackageBytes(new TextEncoder().encode('{"value":1}')) } } });
+    expect(result).toHaveProperty('historyCandidate', { scopeKey: 'one', requestId: 'web-run', generationId: 'web-run', title: 'Web 战报', content: '{"value":1}' });
+    expect(transport.invoke).toHaveBeenCalledOnce();
+    expect(partials.every(partial => !partial.includes('MAHOSHOJO_ARENA_META'))).toBe(true);
+  });
+  it.each(fallbackCases)('$generationMode still rejects an invalid package target with $metadata metadata', async ({ generationMode, suffix }) => {
+    const base = await jsonPackage(), raw = '{"value":"invalid"}' + suffix, transport = native(raw);
+    const result = await executeArenaDirect(transport.options, { ...input(), webPackageRef: base.ref }, intent(generationMode), host(base), new AbortController().signal);
+    expect(result).toMatchObject({ status: 'invalid-output', rawText: raw });
+    expect(result).not.toHaveProperty('renderSnapshot'); expect(result).not.toHaveProperty('historyCandidate'); expect(transport.invoke).toHaveBeenCalledOnce();
+  });
+  it.each(fallbackCases)('$generationMode rejects length termination even with a valid package target and $metadata metadata', async ({ generationMode, suffix }) => {
+    const base = await jsonPackage(), raw = '{"value":1}' + suffix, transport = native(raw, 'length');
+    const result = await executeArenaDirect(transport.options, { ...input(), webPackageRef: base.ref }, intent(generationMode), host(base), new AbortController().signal);
+    expect(result).toMatchObject({ status: 'invalid-output', rawText: raw });
+    expect(result).not.toHaveProperty('renderSnapshot'); expect(result).not.toHaveProperty('historyCandidate'); expect(transport.invoke).toHaveBeenCalledOnce();
+  });
+  it.each(['{"value":1}\n' + trailer + '\nextra', '{"value":1}\n' + trailer + '\n' + trailer, '{"value":"invalid"}\n' + trailer])('rejects package control/target failures without a second provider call', async (text) => {
     const base = await jsonPackage(), transport = native(text);
     const result = await executeArenaDirect(transport.options, { ...input(), webPackageRef: base.ref }, intent(), host(base), new AbortController().signal);
     expect(result.status).toBe('invalid-output'); expect(result).not.toHaveProperty('renderSnapshot'); expect(result).not.toHaveProperty('historyCandidate');
