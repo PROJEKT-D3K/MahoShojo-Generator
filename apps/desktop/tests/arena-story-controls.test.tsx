@@ -42,8 +42,52 @@ describe('continuous-story actual controlled surface',()=>{
  });
  it('budget refusal has full-result exports but no deterministic retry affordance or save IPC',async()=>{
   const {port,execution,download,settleGeneration}=await mount({budget:1});await click('新建连续战报');await settleGeneration();
-  expect(container.textContent).toContain('生成完成，未保存到会话');expect(button('重试本地保存')).toBeUndefined();
-  await click('导出未保存章节');expect(download.mock.calls.at(-1)![1]).toContain('甲与乙');expect(port.begin).not.toHaveBeenCalled();expect(execution.requests).toHaveLength(1);
+  const pending=container.querySelector('[data-story-pending-outcome]')!;
+  expect(pending.textContent).toContain('生成完成，未保存到会话');expect(button('重试本地保存')).toBeUndefined();
+  expect([...pending.querySelectorAll('button')].map(node=>node.textContent)).toEqual(['导出未保存章节','导出完整原始输出','丢弃当前结果']);
+  const result=owner.getSnapshot().result!;
+  await click('导出未保存章节');expect(download.mock.calls.at(-1)![1]).toBe(result.markdown);
+  await click('导出完整原始输出');expect(JSON.parse(download.mock.calls.at(-1)![1])).toMatchObject({rawText:result.rawText,reasoning:result.reasoning});
+  expect(owner.hasUnsavedResult()).toBe(true);expect(port.begin).not.toHaveBeenCalled();expect(execution.requests).toHaveLength(1);
+ });
+ it.each(['battle','arena'] as const)('%s shared pending retries the original unwritten package once without another model request',async(product)=>{
+  const {port,execution,settleGeneration}=await mount({product});port.failBegin=true;
+  await click('新建连续战报');await settleGeneration();
+  const original=port.begin.mock.calls[0]![0],pending=container.querySelector('[data-story-pending-outcome]')!;
+  expect(owner.getSnapshot().pending).toMatchObject({evidence:'not-written',retryable:true});
+  expect([...pending.querySelectorAll('button')].map(node=>node.textContent)).toEqual(['重试本地保存','导出未保存章节','导出完整原始输出','丢弃当前结果']);
+  expect([...pending.querySelectorAll('button')].every(node=>node.tabIndex===0)).toBe(true);
+  const gate=deferred<void>();port.failBegin=false;port.beforeEnd=()=>gate.promise;
+  const save=vi.spyOn(owner,'savePending');
+  await act(async()=>{button('重试本地保存').click();button('重试本地保存').click();});
+  await act(async()=>{await vi.waitFor(()=>expect(port.end).toHaveBeenCalledTimes(1));});
+  expect(pending.querySelector('[role="status"][aria-live="polite"]')?.textContent).toContain('正在保存已完成章节');
+  expect(button('重试本地保存').disabled).toBe(true);expect(button('丢弃当前结果').disabled).toBe(true);
+  expect(port.begin).toHaveBeenCalledTimes(2);expect(port.begin.mock.calls[1]![0]).toBe(original);expect(execution.requests).toHaveLength(1);
+  await act(async()=>{gate.resolve();await Promise.all(save.mock.results.map(result=>result.value));});
+  expect(container.querySelector('[data-story-pending-outcome]')).toBeNull();
+  expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('已保存');
+  expect(owner.getSnapshot()).toMatchObject({pending:null,resultSaved:true,active:{chapterCount:1}});
+  expect(port.begin).toHaveBeenCalledTimes(2);expect(execution.requests).toHaveLength(1);
+ });
+ it('keeps saved-unread recovery outside pending after a manual selection and a failed read',async()=>{
+  const {port,execution,settleGeneration}=await mount();await click('新建连续战报');await settleGeneration();
+  const first=owner.getSnapshot().active!.lastChapterId,gate=deferred<void>();port.beforeEnd=()=>gate.promise;
+  await click('继续续写');await act(async()=>{await vi.waitFor(()=>expect(port.end).toHaveBeenCalledTimes(2));});
+  const firstRow=[...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find(node=>node.textContent?.startsWith('第 1 章'))!;
+  await act(async()=>{firstRow.click();await vi.waitFor(()=>expect(owner.getSnapshot().selected).toMatchObject({status:'loaded',chapterId:first}));gate.resolve();});await settleGeneration();
+  const saved=owner.getSnapshot().active!.lastChapterId;
+  expect(container.querySelector('[data-story-read-status="loaded"]')?.getAttribute('data-story-chapter-id')).toBe(first);
+  expect(container.querySelector('[data-story-pending-outcome]')).toBeNull();expect(button('读取刚保存的章节')).toBeTruthy();
+  expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('本次第 2 章 · 已保存');
+  port.beforeRead=async descriptor=>{if(descriptor.kind==='chapter'&&descriptor.recordId===saved)throw new Error('reader temporarily unavailable');};
+  const read=vi.spyOn(owner,'readSavedResult');await click('读取刚保存的章节');await act(async()=>{await read.mock.results.at(-1)!.value;});
+  expect(container.querySelector('[data-story-read-status="error"]')).toBeTruthy();expect(button('读取刚保存的章节')).toBeTruthy();
+  expect(container.querySelector('[data-story-pending-outcome]')).toBeNull();expect(button('重试本地保存')).toBeUndefined();
+  port.beforeRead=undefined;await click('读取刚保存的章节');await act(async()=>{await read.mock.results.at(-1)!.value;});
+  expect(container.querySelector('[data-story-read-status="loaded"]')?.getAttribute('data-story-chapter-id')).toBe(saved);
+  expect(button('读取刚保存的章节')).toBeUndefined();expect(owner.getSnapshot()).toMatchObject({pending:null,savedUnread:null,resultSaved:true});
+  expect(port.begin).toHaveBeenCalledTimes(2);expect(execution.requests).toHaveLength(2);
  });
  it('uses the shared long-content guard without mounting giant headings and exports both full copies',async()=>{
   const raw='# '+ '题'.repeat(270000)+'\n\n完整尾文';

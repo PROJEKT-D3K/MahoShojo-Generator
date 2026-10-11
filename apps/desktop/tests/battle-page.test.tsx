@@ -562,14 +562,33 @@ describe('Desktop two-route continuous story through actual default binder', () 
     expect(container.querySelector('[aria-label="连续战报会话"]')?.textContent).toContain('共 2 章'); expect(received).toHaveLength(2);
     expect(activeCloseHandles).toBe(1);
   });
-  it('shows query-only unknown saving in the actual route and never starts another model', async () => {
+  it.each(['battle', 'arena'] as const)('%s shared unknown outcome queries only its original receipt and retains exported or cancelled results', async (product) => {
     storyPort.loseEndReply = true; storyPort.hideReceipts = true;
-    saveDraft(draft('daily','stream')); await mount(); await click('恢复草稿'); await click('新建连续战报');
+    window.localStorage.setItem(product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
+    window.location.hash = `#/${product}`; const router = await mount(); await click('恢复草稿'); await click('新建连续战报');
     await vi.waitFor(() => expect(container.textContent).toContain('保存状态待确认')); await settle();
-    await click('查询原保存结果'); expect(received).toHaveLength(1); expect(storyPort.begin).toHaveBeenCalledTimes(1);
-    await click('导出未保存章节'); expect(mocks.download.mock.calls.at(-1)![1]).toContain(text);
+    const pending = container.querySelector('[data-story-pending-outcome]')!, original = storyPort.begin.mock.calls[0]![0];
+    expect(pending.querySelector('[role="status"][aria-live="polite"]')?.textContent).toContain('保存状态待确认');
+    expect([...pending.querySelectorAll('button')].map(node => node.textContent)).toEqual(['查询原保存结果', '导出未保存章节', '导出完整原始输出', '丢弃当前结果']);
+    expect([...pending.querySelectorAll('button')].every(node => node.tabIndex === 0)).toBe(true);
+    expect(pending.contains(container.querySelector('[aria-label="本次章节结果"]'))).toBe(false);
+    storyPort.receipt.mockClear(); await click('查询原保存结果');
+    expect(storyPort.receipt).toHaveBeenCalledExactlyOnceWith(original.sessionId, original.operationId);
+    expect(pending.textContent).toContain('保存状态待确认'); expect(received).toHaveLength(1); expect(storyPort.begin).toHaveBeenCalledTimes(1);
+    await click('导出未保存章节', pending); expect(mocks.download.mock.calls.at(-1)![1]).toContain(text);
+    await click('导出完整原始输出', pending);
+    expect(JSON.parse(mocks.download.mock.calls.at(-1)![1])).toMatchObject({ rawText: rendered(true), reasoning: '独立的推理' });
+    await click('丢弃当前结果', pending);
+    expect(window.confirm).toHaveBeenLastCalledWith('丢弃当前未保存结果？请先导出。保存待确认时，本机可能已有此章。');
+    expect(container.querySelector('[data-story-pending-outcome]')).toBe(pending);
+    expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain(text);
+    await act(async () => { expect(scopeClose().preventDefault).toHaveBeenCalledOnce(); });
+    await act(async () => { void router.navigate({ to: '/local-library' }); }); await settle();
+    expect(window.location.hash).toBe(`#/${product}`); expect(container.querySelector('[data-story-pending-outcome]')).toBe(pending);
     storyPort.hideReceipts = false; await click('查询原保存结果'); await vi.waitFor(() => expect(container.textContent).toContain('完整章节已保存到本机故事'));
-    expect(received).toHaveLength(1); expect(storyPort.begin).toHaveBeenCalledTimes(1);
+    expect(storyPort.receipt.mock.calls).toEqual([[original.sessionId, original.operationId], [original.sessionId, original.operationId]]);
+    expect(container.querySelector('[data-story-pending-outcome]')).toBeNull(); expect(button('读取刚保存的章节')).toBeUndefined();
+    expect(received).toHaveLength(1); expect(storyPort.begin).toHaveBeenCalledTimes(1); expect(storyPort.end).toHaveBeenCalledTimes(1);
   });
   it.each(['single', 'story'] as const)('delayed anonymous bootstrap preserves in-flight Direct %s credential preparation', async flow => {
     localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5,

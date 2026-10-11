@@ -278,15 +278,14 @@ export function DesktopArenaStoryControls(props: {
       {hosted.exportError ? <p role="alert">{hosted.exportError}</p> : null}
       {hosted.exportResults.length ? <ul aria-label="原件导出成功回执" className="space-y-1 text-xs">{hosted.exportResults.map(result => <li key={result.token} className="break-all">已导出：{result.absolutePath}（{result.byteLength} 字节）｜{result.digest}</li>)}</ul> : null}
     </section> : null}
-    {state.pending ? <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4" role="status">
-      <p className="font-semibold">{state.saving ? '正在保存已完成章节…' : state.pending.evidence === 'unknown' ? '生成完成，保存状态待确认' : '生成完成，未保存到会话'}</p>
-      <p className="text-sm">完整结果只保留在当前窗口，关闭后可能丢失。先导出正文和原始输出可保留本次结果。</p>
-      <BattleStoryActions>
-        {state.pending.retryable ? <button className={secondary} type="button" disabled={state.saving} onClick={() => void owner.savePending()}>{state.pending.evidence === 'unknown' ? '查询原保存结果' : '重试本地保存'}</button> : null}
+    {state.pending ? <BattleStoryPendingOutcome
+      heading={state.saving ? '正在保存已完成章节…' : state.pending.evidence === 'unknown' ? '生成完成，保存状态待确认' : '生成完成，未保存到会话'}
+      detail="完整结果只保留在当前窗口，关闭后可能丢失。先导出正文和原始输出可保留本次结果。"
+      saveActions={state.pending.retryable ? <button className={secondary} type="button" disabled={state.saving} onClick={() => void owner.savePending()}>{state.pending.evidence === 'unknown' ? '查询原保存结果' : '重试本地保存'}</button> : null}
+      exportAction={<>
         <button className={secondary} type="button" onClick={exportResult}>导出未保存章节</button><button className={secondary} type="button" onClick={exportRaw}>导出完整原始输出</button>
         <button className={secondary} type="button" disabled={owner.isBusy()} onClick={() => { if (window.confirm('丢弃当前未保存结果？请先导出。保存待确认时，本机可能已有此章。')) owner.discardResult(); }}>丢弃当前结果</button>
-      </BattleStoryActions>
-    </div> : null}
+      </>} /> : null}
     {state.savedUnread ? <button className={secondary} type="button" onClick={() => void owner.readSavedResult()}>读取刚保存的章节</button> : null}
     {state.exporting ? <p role="status">{state.exportProgress?.phase === 'writing' ? '正在写出完整故事' : '正在核对完整故事'}：{state.exportProgress?.bytes ?? 0} 字节；未完成核验前不会发布文件。</p> : null}
     {state.exportError ? <p role="alert">{state.exportError}</p> : null}
