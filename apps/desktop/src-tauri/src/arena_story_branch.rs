@@ -326,7 +326,7 @@ fn copy_checkpoint(
 mod tests;
 
 #[path = "arena_story_branch_receipt.rs"]
-mod receipt;
+pub(crate) mod receipt;
 
 #[path = "arena_story_branch_store.rs"]
 mod storage;

@@ -125,13 +125,9 @@ pub struct ContinueDescriptors {
     pub head: SessionHead,
 }
 
-/// Internal pre-generation read only. This does not register a branch IPC command.
+/// Bounded, read-only source identity for the dedicated branch anchor command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[allow(
-    dead_code,
-    reason = "branch IPC and default owner capability remain closed"
-)]
 pub(crate) struct BranchAnchorRequest {
     pub session_id: String,
     pub revision: u64,
@@ -143,10 +139,6 @@ pub(crate) struct BranchAnchorRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[allow(
-    dead_code,
-    reason = "branch IPC and default owner capability remain closed"
-)]
 pub(crate) struct BranchAnchorDescriptors {
     pub source: BranchSource,
     pub recent_chapters: Vec<RecordDescriptor>,
@@ -305,10 +297,6 @@ impl StoryStore {
     /// Freeze one arbitrary active anchor and its bounded prompt window under a
     /// single connection lock. Full-session head/count remain in BranchSource;
     /// the writer must recheck that source CAS when saving the generated branch.
-    #[allow(
-        dead_code,
-        reason = "branch IPC and default owner capability remain closed"
-    )]
     pub(crate) fn resolve_branch_anchor(
         &self,
         request: &BranchAnchorRequest,

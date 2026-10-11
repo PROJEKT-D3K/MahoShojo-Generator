@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import { createIpcStoryNativePort, createIpcStoryMarkdownExportPort, STORY_IPC, type StoryInvoke } from '../src/platform/arena-story-native';
 import type { StoryRecordDescriptor } from '@mahoshojo/contracts/desktop-arena-story';
@@ -13,6 +14,15 @@ describe('actual story IPC binder', () => {
     expect(() => port.append(token, 'chapter', -1, bytes)).toThrow();
     expect(() => port.append(token, 'chapter', 0, new Uint8Array(4 * 1024 * 1024 + 1))).toThrow();
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+  it('preserves cross-realm Uint8Array frames for shared save and Markdown export', async () => {
+    const invoke = vi.fn<StoryInvoke>(async () => ({}));
+    const foreign = runInNewContext('new Uint8Array([0, 128, 255])') as Uint8Array;
+    expect(foreign instanceof Uint8Array).toBe(false);
+    await createIpcStoryNativePort(invoke).append(token, 'chapter', 0, foreign);
+    await createIpcStoryMarkdownExportPort(invoke).append(token, 0, foreign);
+    expect(invoke.mock.calls.map(call => call[1])).toEqual([foreign, foreign]);
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
   it('uses fixed descriptor reads and rejects JSON/base64/oversized binary responses', async () => {
     const invoke = vi.fn<StoryInvoke>(async () => new Uint8Array([1, 2, 3]).buffer); const port = createIpcStoryNativePort(invoke);

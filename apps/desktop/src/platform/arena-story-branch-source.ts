@@ -12,7 +12,7 @@ import { projectBattleStoryPromptWindowItem, isBattleStoryChapterPlanLimitReache
 import { branchCopyId } from './arena-story-branch-storage';
 import { readStoryRecord, listStoryChapters, type StoryNativePort } from './arena-story-storage';
 
-/** Injected internal read capability. Never installed by the default Tauri binder. */
+/** Separate bounded read capability. Pages must explicitly opt in through their owner. */
 export interface StoryBranchSourcePort {
   resolveAnchor(request: StoryBranchAnchorRequest): Promise<unknown>;
 }

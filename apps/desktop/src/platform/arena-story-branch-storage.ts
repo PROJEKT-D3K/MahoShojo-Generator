@@ -17,7 +17,7 @@ import {
 } from '@mahoshojo/domain/arena-story-commit';
 import { StorySaveError, storyTitlePreview, storySourceWithoutSecrets } from './arena-story-storage';
 
-/** Deliberately separate from the v1 port. There is no default IPC binder. */
+/** Deliberately separate from the v1 port; branch commands never widen its ABI. */
 export interface StoryBranchNativePort {
   begin(manifest: StoryBranchManifest): Promise<unknown>;
   append(token: string, kind: StoryPartKind, offset: number, bytes: Uint8Array): Promise<unknown>;

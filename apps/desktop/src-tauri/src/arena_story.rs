@@ -1187,10 +1187,6 @@ pub mod markdown_export;
 #[path = "arena_story_pending.rs"]
 pub mod pending;
 
-// Internal only: no command or write authority until the branch resource gates close.
-#[allow(
-    dead_code,
-    reason = "Native branch IPC stays closed until the resource and owner gates pass"
-)]
+// Dedicated branch commands use this storage path; Hosted and linear v1 stay separate.
 #[path = "arena_story_branch.rs"]
 pub(crate) mod branch;

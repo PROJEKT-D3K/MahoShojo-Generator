@@ -65,3 +65,7 @@ getrandom = "0.3"
 
 [profile.dev]
 incremental = true
+
+[dev-dependencies]
+# The test feature only exposes Tauri's in-process IPC harness; no new dependency.
+tauri = { version = "2.11.6", features = ["test"] }

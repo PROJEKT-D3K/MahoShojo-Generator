@@ -17,6 +17,8 @@ mod ai_e2e_tests;
 mod announcements;
 mod arena_hosted;
 mod arena_story;
+#[cfg(test)]
+mod arena_story_command_pipe_tests;
 mod audit;
 mod backup;
 mod blob;
@@ -1011,20 +1013,36 @@ fn abort_arena_story_pending_export(
 // Dedicated story commands. All disk/connection waits run off the UI thread. The
 // app manifest grants these exact operations only to the main-ui webview.
 #[tauri::command(async)]
-fn begin_arena_story_commit(
-    app: tauri::AppHandle,
+fn begin_arena_story_commit<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     library: State<'_, LocalLibrary>,
     manifest: arena_story::CommitManifest,
 ) -> Result<arena_story::BeginOutcome, arena_story::StoryError> {
     let begun = library
         .stories()
         .begin(manifest, std::time::Instant::now())?;
-    let token = begun.token.clone();
+    expire_arena_story_stage(app, begun.token.clone());
+    Ok(begun)
+}
+
+fn expire_arena_story_stage<R: tauri::Runtime>(app: tauri::AppHandle<R>, token: String) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(arena_story::STAGE_LIFETIME).await;
         // Exact random token: a late timer cannot remove a newer operation.
         let _ = app.state::<LocalLibrary>().stories().abort(&token);
     });
+}
+
+#[tauri::command(async)]
+fn begin_arena_story_branch_commit<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    library: State<'_, LocalLibrary>,
+    manifest: arena_story::branch::BranchManifest,
+) -> Result<arena_story::BeginOutcome, arena_story::StoryError> {
+    let begun = library
+        .stories()
+        .begin_branch(manifest, std::time::Instant::now())?;
+    expire_arena_story_stage(app, begun.token.clone());
     Ok(begun)
 }
 #[tauri::command(async)]
@@ -1067,6 +1085,16 @@ fn end_arena_story_commit(
     library.stories().end(&token, std::time::Instant::now())
 }
 #[tauri::command(async)]
+fn end_arena_story_branch_commit(
+    library: State<'_, LocalLibrary>,
+    token: String,
+) -> Result<arena_story::branch::receipt::BranchReceipt, arena_story::StoryError> {
+    arena_story::ipc::token(Some(&token))?;
+    library
+        .stories()
+        .end_branch(&token, std::time::Instant::now())
+}
+#[tauri::command(async)]
 fn abort_arena_story_commit(
     library: State<'_, LocalLibrary>,
     token: String,
@@ -1081,6 +1109,24 @@ fn query_arena_story_receipt(
     operation_id: String,
 ) -> Result<Option<arena_story::StoryReceipt>, arena_story::StoryError> {
     library.stories().receipt(&session_id, &operation_id)
+}
+#[tauri::command(async)]
+fn query_arena_story_branch_receipt(
+    library: State<'_, LocalLibrary>,
+    session_id: String,
+    operation_id: String,
+    request_digest: String,
+) -> Result<Option<arena_story::branch::receipt::BranchReceipt>, arena_story::StoryError> {
+    library
+        .stories()
+        .branch_receipt(&session_id, &operation_id, &request_digest)
+}
+#[tauri::command(async)]
+fn resolve_arena_story_branch_anchor(
+    library: State<'_, LocalLibrary>,
+    request: arena_story::read::BranchAnchorRequest,
+) -> Result<arena_story::read::BranchAnchorDescriptors, arena_story::StoryError> {
+    library.stories().resolve_branch_anchor(&request)
 }
 #[tauri::command(async)]
 fn delete_arena_story_session(
@@ -1887,10 +1933,14 @@ pub fn run() {
             end_arena_story_pending_export,
             abort_arena_story_pending_export,
             begin_arena_story_commit,
+            begin_arena_story_branch_commit,
             append_arena_story_part,
             end_arena_story_commit,
+            end_arena_story_branch_commit,
             abort_arena_story_commit,
             query_arena_story_receipt,
+            query_arena_story_branch_receipt,
+            resolve_arena_story_branch_anchor,
             list_arena_story_sessions,
             delete_arena_story_session,
             list_arena_story_chapters,

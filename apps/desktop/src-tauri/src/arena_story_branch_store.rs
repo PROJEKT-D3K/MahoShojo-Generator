@@ -1,4 +1,4 @@
-//! Source-assisted branch storage. Internal only; no IPC command is registered.
+//! Source-assisted branch storage behind the dedicated branch command adapter.
 use super::receipt::{BranchKind, BranchReceipt, CopyKind as MarkerKind, CopyMarker};
 use super::*;
 use crate::arena_story::read::{RecordDescriptor, RecordKind};
