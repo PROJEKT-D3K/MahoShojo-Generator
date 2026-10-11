@@ -13,6 +13,42 @@ fn bytes(c: &Connection) -> Vec<String> {
     }).collect()
 }
 
+fn schema_objects(c: &Connection) -> Vec<(String, String, String, Option<String>)> {
+    c.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+fn candidate_statements() -> Vec<&'static str> {
+    super::super::schema::MIGRATION_11
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn assert_child_index(c: &Connection, table: &str, name: &str, child: &str) {
+    let properties: (bool, bool) = c
+        .query_row(
+            "SELECT \"unique\",partial FROM pragma_index_list(?1) WHERE name=?2",
+            [table, name],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(properties, (false, false));
+    let columns = c
+        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
+        .unwrap()
+        .query_map([name], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(columns, ["session_id", child]);
+}
+
 /// Fixture-only state transition, deliberately not a production rewrite API.
 /// Uses the same raw member replacement primitive to preserve unknown tokens.
 pub(crate) fn rewrite_tail(c: &Connection, session: &str, new_id: &str) {
@@ -126,6 +162,113 @@ fn candidate_migration_keeps_original_bytes_and_closed_default() {
             .unwrap();
         assert_eq!(copy_null, u64::from(branch));
         assert!(verify_schema(&c, 10).is_err());
+    }
+}
+
+#[test]
+fn candidate_migration_child_indexes_cover_copy_and_legacy_drop() {
+    for branch in [false, true] {
+        let c = super::super::schema::tests::connection(10);
+        super::super::schema::tests::fixture(&c, branch);
+        let before = bytes(&c);
+        let old_schema = schema_objects(&c);
+        c.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let mut inspected_copy = false;
+        for sql in candidate_statements() {
+            if sql.starts_with("INSERT INTO arena_story_chapter_v11") {
+                inspected_copy = true;
+                assert_eq!(
+                    c.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
+                        .unwrap(),
+                    1
+                );
+                // The real session copy references its missing head and two
+                // checkpoints. FK debt remains during the chapter bulk copy.
+                assert_eq!(
+                    c.query_row(
+                        "SELECT count(*) FROM pragma_foreign_key_check WHERE \"table\"='arena_story_session_v11'",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                    3
+                );
+                for (table, name, child) in [
+                    (
+                        "arena_story_chapter_v11",
+                        "arena_story_chapter_source_v11",
+                        "source_chapter_id",
+                    ),
+                    (
+                        "arena_story_chapter_v11",
+                        "arena_story_chapter_superseder_v11",
+                        "superseded_by_chapter_id",
+                    ),
+                    (
+                        "arena_story_checkpoint",
+                        "arena_story_checkpoint_chapter_v11",
+                        "chapter_id",
+                    ),
+                ] {
+                    assert_child_index(&c, table, name, child);
+                }
+                assert_eq!(
+                    c.query_row(
+                        "SELECT tbl_name FROM sqlite_schema WHERE name='arena_story_chapter_source'",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                    "arena_story_chapter"
+                );
+            }
+            if sql == "DROP TABLE arena_story_chapter" {
+                // DROP performs FK-checked deletes against the old CP rows.
+                assert_child_index(
+                    &c,
+                    "arena_story_checkpoint",
+                    "arena_story_checkpoint_chapter_v11",
+                    "chapter_id",
+                );
+            }
+            c.execute_batch(sql).unwrap();
+            if sql == "DROP TABLE arena_story_checkpoint" {
+                assert!(!c
+                    .prepare("SELECT 1 FROM sqlite_schema WHERE name='arena_story_checkpoint_chapter_v11'")
+                    .unwrap()
+                    .exists([])
+                    .unwrap());
+            }
+        }
+        assert!(inspected_copy);
+        assert_eq!(bytes(&c), before);
+        verify_schema(&c, 11).unwrap();
+        audit_relations(&c).unwrap();
+        assert!(!c
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap());
+        assert!(!c
+            .prepare("SELECT 1 FROM sqlite_schema WHERE instr(name,'_v11')>0")
+            .unwrap()
+            .exists([])
+            .unwrap());
+        for (name, sql) in [
+            ("arena_story_session_updated", "CREATE INDEX arena_story_session_updated ON arena_story_session(updated_at DESC,id DESC)"),
+            ("arena_story_chapter_source", "CREATE INDEX arena_story_chapter_source ON arena_story_chapter(session_id,source_chapter_id)"),
+        ] {
+            assert_eq!(
+                c.query_row("SELECT sql FROM sqlite_schema WHERE name=?1", [name], |r| r.get::<_, String>(0)).unwrap(),
+                sql
+            );
+        }
+        // Statement-by-statement inspection is a diagnostic transaction. The
+        // normal candidate entry is covered separately, including journal faults.
+        c.execute_batch("ROLLBACK").unwrap();
+        assert!(c.is_autocommit());
+        assert_eq!(schema_objects(&c), old_schema);
+        assert_eq!(bytes(&c), before);
     }
 }
 
@@ -317,20 +460,19 @@ fn lifecycle_partial_unique_and_checkpoint_corruption_fail_closed() {
 
 #[test]
 fn every_candidate_ddl_failure_rolls_back_old_file_on_reopen() {
-    let statements: Vec<_> = super::super::schema::MIGRATION_11
-        .split(';')
-        .filter(|s| !s.trim().is_empty())
-        .collect();
+    let statements = candidate_statements();
     for stop in 0..statements.len() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("synthetic.sqlite");
         let before;
+        let old_schema;
         {
             let c = Connection::open(&path).unwrap();
             c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
             crate::store::migrate_to_version_for_test(&c, 10);
             super::super::schema::tests::fixture(&c, false);
             before = bytes(&c);
+            old_schema = schema_objects(&c);
             c.execute_batch("BEGIN IMMEDIATE").unwrap();
             super::super::audit::audit_relations(&c).unwrap();
             for sql in &statements[..stop] {
@@ -344,6 +486,7 @@ fn every_candidate_ddl_failure_rolls_back_old_file_on_reopen() {
         }
         let c = Connection::open(path).unwrap();
         assert_eq!(bytes(&c), before);
+        assert_eq!(schema_objects(&c), old_schema);
         assert_eq!(
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
@@ -362,6 +505,7 @@ fn real_candidate_journal_failure_rolls_back_schema_version_and_graph() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("synthetic.sqlite");
     let before;
+    let old_schema;
     {
         let c = Connection::open(&path).unwrap();
         c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
@@ -369,6 +513,7 @@ fn real_candidate_journal_failure_rolls_back_schema_version_and_graph() {
         super::super::schema::tests::fixture(&c, true);
         before = bytes(&c);
         c.execute_batch("CREATE TRIGGER migration_journal_fault BEFORE INSERT ON schema_migration WHEN NEW.version=11 BEGIN SELECT RAISE(ABORT,'synthetic journal failure'); END;").unwrap();
+        old_schema = schema_objects(&c);
         assert_eq!(
             crate::store::migrate_history_candidate_for_test(&c),
             Err(crate::store::StoreError::Failure)
@@ -377,6 +522,7 @@ fn real_candidate_journal_failure_rolls_back_schema_version_and_graph() {
     }
     let c = Connection::open(&path).unwrap();
     assert_eq!(bytes(&c), before);
+    assert_eq!(schema_objects(&c), old_schema);
     verify_schema(&c, 10).unwrap();
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))

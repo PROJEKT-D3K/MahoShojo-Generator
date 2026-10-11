@@ -61,6 +61,11 @@ pub(crate) mod tests;
 /// Candidate history migration. The caller must audit schema 10 before executing
 /// this SQL, then audit the copied schema 11 graph before committing its journal.
 /// Original JSON, receipts, operation identities and digests remain byte-exact.
+/// Session copy leaves deferred FK debt while chapters are copied, so both
+/// reverse chapter keys must already be indexed. Temporary names avoid the old
+/// schema's source index and are removed before recreating the final definitions.
+/// The old checkpoint child key also needs an index for DROP chapter's implicit
+/// FK-checked deletes. Dropping the old checkpoint table removes that index.
 #[cfg(test)]
 pub(crate) const MIGRATION_11: &str = r#"
 CREATE TABLE arena_story_session_v11 (
@@ -102,6 +107,9 @@ CREATE TABLE arena_story_checkpoint_v11 (
     FOREIGN KEY(session_id,chapter_id) REFERENCES arena_story_chapter_v11(session_id,id) DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 
+CREATE INDEX arena_story_chapter_source_v11 ON arena_story_chapter_v11(session_id,source_chapter_id);
+CREATE INDEX arena_story_chapter_superseder_v11 ON arena_story_chapter_v11(session_id,superseded_by_chapter_id);
+CREATE INDEX arena_story_checkpoint_chapter_v11 ON arena_story_checkpoint(session_id,chapter_id);
 INSERT INTO arena_story_session_v11 SELECT * FROM arena_story_session;
 INSERT INTO arena_story_chapter_v11
 SELECT *, 'active', NULL,
@@ -114,6 +122,8 @@ DROP TABLE arena_story_checkpoint;
 ALTER TABLE arena_story_session_v11 RENAME TO arena_story_session;
 ALTER TABLE arena_story_chapter_v11 RENAME TO arena_story_chapter;
 ALTER TABLE arena_story_checkpoint_v11 RENAME TO arena_story_checkpoint;
+DROP INDEX arena_story_chapter_source_v11;
+DROP INDEX arena_story_chapter_superseder_v11;
 CREATE INDEX arena_story_session_updated ON arena_story_session(updated_at DESC,id DESC);
 CREATE INDEX arena_story_chapter_source ON arena_story_chapter(session_id,source_chapter_id);
 CREATE INDEX arena_story_chapter_history ON arena_story_chapter(session_id,chapter_index,id);
