@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-11 Native分支资源计量：[长记录/JSON形状探针](./reports/2026-10-11_045500_Native分支长记录形状资源探针.md)仅新增测试/runner/文档；2/8/16MiB完整矩阵与32/64MiB重复键、长key哨兵共38case/190独立阶段通过，冻结Native592项/clippy通过。64MiB重复键章end约76.409秒、观测VmHWM最大257.34MiB；分离fixture/branch/验证，不把end称锁时间。近128MiB、精确锁/取消/OS ENOSPC及完整owner仍待验，不开放branch IPC或两页，不新增历史cap；最小流式scanner后继仅只读建议，完整workspace CI本片未跑。
+
 2026-10-11 Native分支安全后继：[未知结果围栏验收](./reports/2026-10-11_041200_Native分支未知结果围栏验收.md)记录原operation围栏与临时上传生命周期分离、共享有界槽和重启冻结包拒写；含pending实际保存防绕路P2修复，源码复审、Native592项/clippy及修后完整CI通过（10,699 passed executions/21条件skip）；旧候选CI人为取消与P2反例单列。尚无branch IPC/两页UI，不声明完整owner恢复。
 
 2026-10-11 Web原子分支后继：[验收记录](./reports/2026-10-11_031000_Web连续故事原子分支保存验收.md)记录完整源图内容CAS、三store原子writer、独立Web v2有界receipt与原完成章恢复UI共源接线。定向/类型、修后独审与第三轮冻结完整CI通过（10,699 passed / 21条件skip），前两轮失败保留；CI后仅补文档，非docs受测字节/mode不变。IDB4/Hosted v1/Native入口保持原状，不关闭D5.1b b-2。下方首片“旧多步保存”的表述保留当时历史范围。

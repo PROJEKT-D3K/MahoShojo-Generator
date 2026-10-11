@@ -1223,3 +1223,6 @@ fn branch_unknown_installation_serializes_with_prepared_pending_save() {
         assert_fence_resources(store, 1);
     }
 }
+
+#[path = "arena_story_branch_resource_tests.rs"]
+mod resource_probes;
