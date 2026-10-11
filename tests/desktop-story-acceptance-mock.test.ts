@@ -300,7 +300,9 @@ describe('isolated W01 mock failure and privacy boundaries', () => {
     await mocks.close();
     expect(Date.now() - began).toBeLessThan(1000);
     await expect(response.text()).rejects.toThrow();
-    expect(mocks.trace().requests[0].responseAborted).toBe(true);
+    // Fetch rejection and server.close() can precede ServerResponse's close event.
+    // Wait for that actual server-side cancellation signal, never a guessed delay.
+    await expect.poll(() => mocks.trace().requests[0].responseAborted, { timeout: 1000 }).toBe(true);
     const probe = createServer();
     expect(await listen(probe, Number(new URL(mocks.honoOrigin).port))).toBe(Number(new URL(mocks.honoOrigin).port));
     await closeServer(probe);
