@@ -6,6 +6,10 @@ use crate::arena_story::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+#[path = "arena_story_branch_probe.rs"]
+mod probe;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BranchSource {
@@ -135,7 +139,11 @@ impl StoryStore {
         now: Instant,
         hook: &mut impl FnMut(&str, &Connection) -> Result<(), StoryError>,
     ) -> Result<BranchReceipt, StoryError> {
+        #[cfg(test)]
+        let _stages_after = probe::Release::after(probe::Guard::Stages);
         let mut stages = self.stages.lock().map_err(|_| StoryError::Io)?;
+        #[cfg(test)]
+        let _stages_before = probe::Release::before(probe::Guard::Stages);
         stages.retain(|_, stage| now.saturating_duration_since(stage.created_at) < STAGE_LIFETIME);
         // Retired tokens carry no files or write permission, only exact lookup.
         if let Some((operation, fence)) = stages
@@ -160,15 +168,31 @@ impl StoryStore {
         let request_digest = manifest.request_digest()?;
         let mut unknown = false;
         let result = (|| {
+            #[cfg(test)]
+            let _permit_after = probe::Release::after(probe::Guard::Permit);
             let _permit = self
                 .gate
                 .enter_write()
                 .map_err(|_| StoryError::Maintenance)?;
+            #[cfg(test)]
+            let _permit_before = probe::Release::before(probe::Guard::Permit);
+            #[cfg(test)]
+            let _connection_after = probe::Release::after(probe::Guard::Connection);
             let mut connection =
                 lock_connection(&self.connection).map_err(StoryError::from_store)?;
+            #[cfg(test)]
+            let _connection_before = probe::Release::before(probe::Guard::Connection);
+            #[cfg(test)]
+            probe::mark("sqlite.begin.before");
             let tx = connection
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .map_err(|_| StoryError::Io)?;
+                .map_err(|_error| {
+                    #[cfg(test)]
+                    probe::mark("sqlite.begin.after");
+                    StoryError::Io
+                })?;
+            #[cfg(test)]
+            probe::mark("sqlite.begin.after");
             // Exact durable success precedes source existence, current instance and CAS.
             let replay = read_branch_receipt(
                 &tx,
@@ -178,17 +202,39 @@ impl StoryStore {
             );
             match replay {
                 Ok(Some(receipt)) => {
-                    tx.rollback().map_err(|_| {
+                    #[cfg(test)]
+                    probe::mark("sqlite.rollback.before");
+                    tx.rollback().map_err(|_error| {
+                        #[cfg(test)]
+                        probe::sqlite_error(
+                            "sqlite.rollback.after",
+                            &_error,
+                            connection.is_autocommit(),
+                            None,
+                        );
                         unknown = true;
                         StoryError::CommitUnknown
                     })?;
+                    #[cfg(test)]
+                    probe::mark("sqlite.rollback.after");
                     return Ok(receipt);
                 }
                 Err(error) => {
-                    tx.rollback().map_err(|_| {
+                    #[cfg(test)]
+                    probe::mark("sqlite.rollback.before");
+                    tx.rollback().map_err(|_error| {
+                        #[cfg(test)]
+                        probe::sqlite_error(
+                            "sqlite.rollback.after",
+                            &_error,
+                            connection.is_autocommit(),
+                            None,
+                        );
                         unknown = true;
                         StoryError::CommitUnknown
                     })?;
+                    #[cfg(test)]
+                    probe::mark("sqlite.rollback.after");
                     return Err(error);
                 }
                 Ok(None) => {}
@@ -209,17 +255,41 @@ impl StoryStore {
             let receipt = match outcome {
                 Ok(receipt) => receipt,
                 Err(error) => {
-                    tx.rollback().map_err(|_| {
+                    #[cfg(test)]
+                    probe::mark("sqlite.rollback.before");
+                    tx.rollback().map_err(|_error| {
+                        #[cfg(test)]
+                        probe::sqlite_error(
+                            "sqlite.rollback.after",
+                            &_error,
+                            connection.is_autocommit(),
+                            None,
+                        );
                         unknown = true;
                         StoryError::CommitUnknown
                     })?;
+                    #[cfg(test)]
+                    probe::mark("sqlite.rollback.after");
                     return Err(error);
                 }
             };
             // Only a real COMMIT attempt or failed explicit rollback makes the stage
             // uncertain. Known rollback/cancellation remains explicitly retryable.
             unknown = true;
-            tx.commit().map_err(|_| StoryError::CommitUnknown)?;
+            #[cfg(test)]
+            probe::mark("sqlite.commit.before");
+            tx.commit().map_err(|_error| {
+                #[cfg(test)]
+                probe::sqlite_error(
+                    "sqlite.commit.after",
+                    &_error,
+                    connection.is_autocommit(),
+                    None,
+                );
+                StoryError::CommitUnknown
+            })?;
+            #[cfg(test)]
+            probe::mark("sqlite.commit.after");
             // If an IPC response disappears, only the same target/op/request can recover.
             hook("after-commit", &connection).map_err(|_| StoryError::CommitUnknown)?;
             Ok(receipt)
@@ -523,7 +593,11 @@ fn write_branch(
         } else {
             Some(copy_id(&m.session_id, CopyKind::Chapter, index - 1)?)
         };
-        connection.execute("INSERT INTO arena_story_chapter (id,session_id,chapter_index,action,source_chapter_id,title_preview,title_truncated,created_at,markdown_bytes,document,document_bytes,document_digest,operation_id,operation_digest,receipt) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?1,?13,?14)",params![copied.id,m.session_id,index,indexed.action,target_previous,indexed.title_preview,indexed.title_truncated,indexed.created_at,indexed.markdown_byte_length,copied.document,copied.byte_length,copied.digest,v.receipt.request_digest,marker.encode()?]).map_err(|_|StoryError::Io)?;
+        connection.execute("INSERT INTO arena_story_chapter (id,session_id,chapter_index,action,source_chapter_id,title_preview,title_truncated,created_at,markdown_bytes,document,document_bytes,document_digest,operation_id,operation_digest,receipt) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?1,?13,?14)",params![copied.id,m.session_id,index,indexed.action,target_previous,indexed.title_preview,indexed.title_truncated,indexed.created_at,indexed.markdown_byte_length,copied.document,copied.byte_length,copied.digest,v.receipt.request_digest,marker.encode()?]).map_err(|_error| {
+            #[cfg(test)]
+            probe::sqlite_error("sqlite.copy-chapter-insert.error", &_error, connection.is_autocommit(), Some(index));
+            StoryError::Io
+        })?;
         previous = Some(indexed.id);
         hook("copy-chapter")?;
     }

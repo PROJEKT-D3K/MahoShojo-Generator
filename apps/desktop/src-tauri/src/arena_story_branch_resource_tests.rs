@@ -77,7 +77,7 @@ fn upload_frames(store: &StoryStore, token: &str, parts: &[(PartKind, String)]) 
 
 // Hash actual source bytes, plus persisted digest, one record at a time. This is
 // deliberately verification-phase work, outside the independent branch process.
-fn source_fingerprint(store: &StoryStore) -> String {
+pub(super) fn source_fingerprint(store: &StoryStore) -> String {
     use sha2::{Digest, Sha256};
     let c = lock_connection(&store.connection).unwrap();
     let mut hash = Sha256::new();
@@ -159,7 +159,9 @@ fn verify_copy(store: &StoryStore, table: &str, order: &str, allowed: &[&str]) {
     let c = lock_connection(&store.connection).unwrap();
     let mut q = c.prepare(&format!("SELECT s.document,t.document,t.document_bytes,t.document_digest FROM {table} s JOIN {table} t ON s.{order}=t.{order} WHERE s.session_id='source' AND t.session_id='target' ORDER BY s.{order}")).unwrap();
     let mut rows = q.query([]).unwrap();
+    let mut matched = 0u64;
     while let Some(row) = rows.next().unwrap() {
+        matched += 1;
         let a: String = row.get(0).unwrap();
         let b: String = row.get(1).unwrap();
         assert_eq!(b.len() as u64, row.get::<_, u64>(2).unwrap());
@@ -196,6 +198,14 @@ fn verify_copy(store: &StoryStore, table: &str, order: &str, allowed: &[&str]) {
             "raw tokens/order changed beyond allowed identities"
         );
     }
+    let expected: u64 = c
+        .query_row(
+            &format!("SELECT count(*) FROM {table} WHERE session_id='source'"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(matched, expected, "raw-copy JOIN omitted source records");
 }
 
 #[test]
@@ -643,4 +653,220 @@ fn real_store_branch_lifecycle_probe() {
 }
 fn m_source_instance(root: &std::path::Path) -> String {
     serde_json::from_slice(&std::fs::read(root.join("frozen-instance.json")).unwrap()).unwrap()
+}
+
+fn short_mark(phase: &str, extra: Value) {
+    println!(
+        "SHORT_HISTORY {}",
+        json!({"phase":phase,"extra":extra,"pid":std::process::id(),"nonce":std::env::var("MAHO_SHORT_NONCE").unwrap(),"chapters":std::env::var("MAHO_SHORT_CHAPTERS").unwrap().parse::<u64>().unwrap()})
+    );
+    std::io::stdout().flush().unwrap();
+}
+fn short_totals(store: &StoryStore, session: &str) -> Value {
+    let c = lock_connection(&store.connection).unwrap();
+    let (document,seed,chapters,checkpoints):(u64,u64,u64,u64) = c.query_row("SELECT (SELECT document_bytes FROM arena_story_session WHERE id=?1),(SELECT seed_bytes FROM arena_story_session WHERE id=?1),(SELECT coalesce(sum(document_bytes),0) FROM arena_story_chapter WHERE session_id=?1),(SELECT coalesce(sum(document_bytes),0) FROM arena_story_checkpoint WHERE session_id=?1)", [session], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    json!({"sessionDocumentBytes":document,"seedDocumentBytes":seed,"chapterDocumentBytes":chapters,"checkpointDocumentBytes":checkpoints,"sumDocumentBytes":document+seed+chapters+checkpoints,"sourcePrefixIncludingSeedBytes":seed+chapters+checkpoints})
+}
+fn short_health(store: &StoryStore, root: &std::path::Path, n: u64) {
+    assert_eq!(counts(store, "source"), (1, n, n + 1));
+    assert_eq!(
+        source_fingerprint(store),
+        std::fs::read_to_string(root.join("source-fingerprint")).unwrap()
+    );
+    let c = lock_connection(&store.connection).unwrap();
+    assert_eq!(
+        c.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    assert!(!c
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .exists([])
+        .unwrap());
+    crate::arena_story::branch::audit::audit_relations(&c).unwrap();
+}
+fn short_calibration() -> Value {
+    // This reports call-loop overhead, not a correction to measured lock times.
+    let start = Instant::now();
+    for _ in 0..32_000 {
+        probe::mark("calibration");
+    }
+    let disabled = start.elapsed().as_nanos();
+    let mut enabled = 0;
+    for _ in 0..1000 {
+        probe::enable();
+        let start = Instant::now();
+        for _ in 0..32 {
+            probe::mark("calibration");
+        }
+        enabled += start.elapsed().as_nanos();
+        assert_eq!(probe::take().len(), 32);
+    }
+    json!({"calls":32000,"disabledLoopNs":disabled,"enabledLoopNs":enabled,"scope":"debug call-loop overhead; clock and fixed-slot bookkeeping included; not subtracted from measurements"})
+}
+#[test]
+#[ignore = "serial short-history resource probe; explicit root/count/phase/nonce and bounded runner required"]
+fn real_store_short_history_resource_probe() {
+    let root = std::path::PathBuf::from(std::env::var("MAHO_SHORT_ROOT").unwrap());
+    let n: u64 = std::env::var("MAHO_SHORT_CHAPTERS")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        [100, 1000, 10000].contains(&n),
+        "fixture tiers, not a product limit"
+    );
+    let phase = std::env::var("MAHO_SHORT_PHASE").unwrap();
+    short_mark(
+        "process-start",
+        json!({"phase":phase,"debugAssertions":cfg!(debug_assertions)}),
+    );
+    let lib = LocalLibrary::open(&root).unwrap();
+    let store = lib.stories();
+    if phase == "fixture" {
+        let start = Instant::now();
+        for index in 1..=n {
+            commit(store, "source", index);
+            if index % 100 == 0 {
+                short_mark(
+                    "fixture-progress",
+                    json!({"saved":index,"elapsedUs":start.elapsed().as_micros()}),
+                );
+            }
+        }
+        let save_elapsed = start.elapsed().as_micros();
+        std::fs::write(root.join("source-fingerprint"), source_fingerprint(store)).unwrap();
+        short_health(store, &root, n);
+        short_mark(
+            "fixture-verified",
+            json!({"source":short_totals(store,"source"),"saveElapsedUs":save_elapsed}),
+        );
+    } else if phase == "rollback" || phase == "branch" {
+        let (m, parts) = fixture(store, "source", n, n, "target");
+        let digest = m.request_digest().unwrap();
+        std::fs::write(
+            root.join("request-identity.json"),
+            serde_json::to_vec(&json!({"operation":m.operation_id,"digest":digest})).unwrap(),
+        )
+        .unwrap();
+        let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+        upload_frames(store, &token, &parts);
+        drop(parts);
+        short_mark("calibration", short_calibration());
+        let mut copied = 0u64;
+        probe::enable();
+        let start = Instant::now();
+        let result = store.end_branch_with_hook(&token, Instant::now(), &mut |step, _| {
+            if step == "copy-chapter" {
+                copied += 1;
+                if phase == "rollback" && copied == n / 2 {
+                    return Err(StoryError::Busy);
+                }
+            }
+            Ok(())
+        });
+        let elapsed = start.elapsed().as_nanos();
+        let events = probe::take();
+        probe::validate(
+            &events,
+            if phase == "branch" {
+                "commit"
+            } else {
+                "rollback"
+            },
+        );
+        short_mark(
+            "end-return",
+            json!({"elapsedNs":elapsed,"copiedChapters":copied,"events":events,"result":format!("{result:?}"),"scope":"fresh uncontended end; acquired/release boundary brackets include observer overhead; permit is not a held gate mutex"}),
+        );
+        if phase == "rollback" {
+            assert_eq!(copied, n / 2);
+            assert_eq!(result, Err(StoryError::Busy));
+            assert_eq!(counts(store, "target"), (0, 0, 0));
+            assert_eq!(
+                store
+                    .branch_receipt("target", &m.operation_id, &digest)
+                    .unwrap(),
+                None
+            );
+            store.abort(&token).unwrap();
+        } else {
+            assert_eq!(copied, n);
+            let receipt = result.unwrap();
+            assert_eq!(
+                store
+                    .branch_receipt("target", &m.operation_id, &digest)
+                    .unwrap(),
+                Some(receipt.clone())
+            );
+            assert_eq!(counts(store, "target"), (1, n + 1, n + 2));
+            std::fs::write(
+                root.join("expected-receipt.json"),
+                serde_json::to_vec(&receipt).unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(lock_connection(&store.connection).unwrap().is_autocommit());
+    } else if phase == "verify-rollback" || phase == "verify" {
+        short_health(store, &root, n);
+        if phase == "verify-rollback" {
+            assert_eq!(counts(store, "target"), (0, 0, 0));
+            let identity: Value =
+                serde_json::from_slice(&std::fs::read(root.join("request-identity.json")).unwrap())
+                    .unwrap();
+            assert_eq!(
+                store
+                    .branch_receipt(
+                        "target",
+                        identity["operation"].as_str().unwrap(),
+                        identity["digest"].as_str().unwrap()
+                    )
+                    .unwrap(),
+                None
+            );
+        } else {
+            let receipt: BranchReceipt =
+                serde_json::from_slice(&std::fs::read(root.join("expected-receipt.json")).unwrap())
+                    .unwrap();
+            assert_eq!(counts(store, "target"), (1, n + 1, n + 2));
+            assert_eq!(
+                store
+                    .branch_receipt("target", &receipt.operation_id, &receipt.request_digest)
+                    .unwrap(),
+                Some(receipt)
+            );
+            verify_copy(
+                store,
+                "arena_story_chapter",
+                "chapter_index",
+                &[
+                    "id",
+                    "sessionId",
+                    "sourceChapterId",
+                    "status",
+                    "supersededByChapterId",
+                ],
+            );
+            verify_copy(
+                store,
+                "arena_story_checkpoint",
+                "boundary_index",
+                &["id", "sessionId", "chapterId"],
+            );
+            let c = lock_connection(&store.connection).unwrap();
+            let seeds_equal: bool = c.query_row("SELECT CAST(s.seed_document AS BLOB)=CAST(t.seed_document AS BLOB) FROM arena_story_session s JOIN arena_story_session t ON t.id='target' WHERE s.id='source'", [], |r| r.get(0)).unwrap();
+            assert!(seeds_equal, "copied seed raw bytes changed");
+            let copied:(u64,u64,u64)=c.query_row("SELECT (SELECT seed_bytes FROM arena_story_session WHERE id='target'),(SELECT sum(document_bytes) FROM arena_story_chapter WHERE session_id='target' AND chapter_index<=?1),(SELECT sum(document_bytes) FROM arena_story_checkpoint WHERE session_id='target' AND boundary_index<=?1)",[n],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+            drop(c);
+            short_mark(
+                "verified-copy-bytes",
+                json!({"source":short_totals(store,"source"),"target":short_totals(store,"target"),"targetCopiedPrefixBytesIncludingSeed":copied.0+copied.1+copied.2,"copiedChapterRows":n,"copiedCheckpointRows":n+1,"scope":"persisted raw document byte totals, not physical device write counts"}),
+            );
+        }
+        assert_eq!(std::fs::read_dir(&store.staging_root).unwrap().count(), 0);
+    } else {
+        panic!("unknown phase");
+    }
+    short_mark("process-end", json!({"phase":phase}));
 }

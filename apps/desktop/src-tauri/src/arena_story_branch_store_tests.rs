@@ -417,28 +417,96 @@ fn commit_with_padding(store: &StoryStore, session: &str, index: u64, padding: u
 
 #[test]
 fn sqlite_page_capacity_failure_never_commits_a_partial_branch() {
-    let (_root, lib) = library();
+    let (root, lib) = library();
     let store = lib.stories();
     commit_with_padding(store, "source", 1, 1024 * 1024);
+    let fingerprint = resource_probes::source_fingerprint(store);
     let (m, parts) = fixture(store, "source", 1, 1, "target");
+    let request = m.request_digest().unwrap();
     let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
     upload_parts(store, &token, &parts);
-    {
+    let budget = {
         let c = lock_connection(&store.connection).unwrap();
         let pages: u64 = c.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
-        c.execute_batch(&format!("PRAGMA max_page_count={}", pages + 4))
+        let size: u64 = c.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap();
+        let free: u64 = c
+            .query_row("PRAGMA freelist_count", [], |r| r.get(0))
             .unwrap();
-    }
-    assert!(store.end_branch(&token, Instant::now()).is_err());
+        let before: u64 = c
+            .query_row("PRAGMA max_page_count", [], |r| r.get(0))
+            .unwrap();
+        let actual: u64 = c
+            .query_row(&format!("PRAGMA max_page_count={}", pages + 4), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(actual, pages + 4);
+        json!({"pageCount":pages,"pageSize":size,"freelistCount":free,"previousMax":before,"actualMax":actual})
+    };
+    probe::enable();
+    let result = store.end_branch(&token, Instant::now());
+    let events = probe::take();
+    println!(
+        "PAGE_BUDGET {}",
+        json!({"budget":budget,"events":events,"result":format!("{result:?}")})
+    );
+    probe::validate(&events, "rollback");
+    let raw: Vec<_> = events
+        .iter()
+        .filter(|e| e.name == "sqlite.copy-chapter-insert.error")
+        .collect();
+    assert_eq!(raw.len(), 1, "must fail the real copied chapter INSERT");
+    assert!(raw[0].disk_full);
+    assert_eq!(raw[0].primary, Some(13));
+    assert_eq!(raw[0].extended, Some(13));
+    assert_eq!(raw[0].index, Some(1));
+    // Bundled SQLite automatically rolls back SQLITE_FULL. Existing production
+    // handling then observes failed explicit ROLLBACK and conservatively fences.
+    assert_eq!(raw[0].autocommit, Some(true));
+    let rollback = events
+        .iter()
+        .find(|e| e.name == "sqlite.rollback.after")
+        .unwrap();
+    assert_eq!(rollback.primary, Some(1));
+    assert_eq!(rollback.extended, Some(1));
+    assert_eq!(rollback.autocommit, Some(true));
+    assert_eq!(result, Err(StoryError::CommitUnknown));
+    assert_fence_resources(store, 1);
+    assert_eq!(resource_probes::source_fingerprint(store), fingerprint);
     assert_eq!(counts(store, "source"), (1, 1, 2));
     assert_eq!(counts(store, "target"), (0, 0, 0));
     assert_eq!(
         store
-            .branch_receipt("target", &m.operation_id, &m.request_digest().unwrap())
+            .branch_receipt("target", &m.operation_id, &request)
             .unwrap(),
         None
     );
     assert!(lock_connection(&store.connection).unwrap().is_autocommit());
+    let changes = lock_connection(&store.connection).unwrap().total_changes();
+    assert_eq!(
+        store.end_branch(&token, Instant::now()),
+        Err(StoryError::CommitUnknown)
+    );
+    assert!(store.begin_branch(m.clone(), Instant::now()).is_err());
+    assert_eq!(
+        lock_connection(&store.connection).unwrap().total_changes(),
+        changes
+    );
+    drop(lib);
+    let reopened = LocalLibrary::open(root.path()).unwrap();
+    let store = reopened.stories();
+    assert_eq!(resource_probes::source_fingerprint(store), fingerprint);
+    assert_eq!(counts(store, "target"), (0, 0, 0));
+    assert_eq!(
+        store
+            .branch_receipt("target", &m.operation_id, &request)
+            .unwrap(),
+        None
+    );
+    crate::arena_story::branch::audit::audit_relations(
+        &lock_connection(&store.connection).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
