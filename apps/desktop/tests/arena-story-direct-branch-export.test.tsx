@@ -10,8 +10,8 @@ import { installStoryCrypto, storyDraft } from './helpers/story-fixture';
 
 installStoryCrypto();
 afterEach(() => vi.restoreAllMocks());
-describe('injected branch result uses existing complete-output export only', () => {
-  it.each(['battle', 'arena'] as const)('%s exports complete received prose after projection failure while its branch entry stays closed', async product => {
+describe('branch result retains existing complete-output export', () => {
+  it.each(['battle', 'arena'] as const)('%s exports complete received prose after projection failure and blocks another branch', async product => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     HTMLElement.prototype.scrollIntoView = vi.fn(); vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     const f = await directBranchOwnerFixture(), download = vi.fn(), rawText = '# 未存分支\n\n' + '完整正文中😀'.repeat(3000) + '\n完整尾文';
@@ -23,7 +23,7 @@ describe('injected branch result uses existing complete-output export only', () 
       await act(async () => f.owner.generateBranch({ mode: 'direct', anchor: f.anchor, userGuidance: '新走向' }, execution.prepare));
       const button = (text: string) => [...container.querySelectorAll('button')].find(node => node.textContent === text);
       expect(button('重试本地保存')).toBeUndefined();
-      expect([...container.querySelectorAll('button')].some(node => /分支|branch/iu.test(node.textContent ?? ''))).toBe(false);
+      expect(button('创建分支')?.disabled).toBe(true);
       await act(async () => button('导出未保存章节')!.click());
       expect(download).toHaveBeenLastCalledWith('未保存章节.md', rawText, 'text/markdown;charset=utf-8');
       await act(async () => button('导出完整原始输出')!.click());

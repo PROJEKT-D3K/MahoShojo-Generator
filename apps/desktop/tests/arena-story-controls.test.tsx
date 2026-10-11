@@ -137,14 +137,14 @@ describe('whole-session deletion uses the shared controlled modal', () => {
   });
 });
 
-describe('closed Native branch product gate', () => {
-  it.each(['battle', 'arena'] as const)('%s does not offer a branch action after a saved chapter', async (product) => {
+describe('controlled branch product actions', () => {
+  it.each(['battle', 'arena'] as const)('%s cannot dispatch a branch without its host callback', async (product) => {
     const { settleGeneration } = await mount({ product });
     await click('新建连续战报');
     await settleGeneration();
     expect(container.querySelector('[data-story-read-status="loaded"]')).toBeTruthy();
-    const actions = [...container.querySelectorAll('button')].map((node) => node.textContent ?? '');
-    expect(actions.some((label) => /分支|branch/iu.test(label))).toBe(false);
+    expect(button('创建分支').disabled).toBe(true);
+    expect(button('从第 1 章创建分支').disabled).toBe(true);
     expect('branch' in owner).toBe(false);
   });
 });

@@ -43,8 +43,10 @@ import { DesktopArenaStorySession, type PrepareStoryExecution } from '../feature
 import { DesktopArenaStoryControls } from '../features/arena/story-controls';
 import { createIpcStoryPendingPort, createIpcStoryPendingExportPort } from '../platform/arena-story-pending-native';
 import { createIpcStoryNativePort, createIpcStoryMarkdownExportPort } from '../platform/arena-story-native';
+import { createIpcStoryBranchNativePort, createIpcStoryBranchSourcePort } from '../platform/arena-story-branch-native';
 import { exportCommittedStoryMarkdown } from '../platform/arena-story-storage';
 import type { BattleStoryChapterPlan } from '@mahoshojo/domain/arena-battle-story-session';
+import type { StoryBranchAnchorRequest } from '@mahoshojo/contracts/desktop-arena-story-branch';
 
 const secondary = generationActionClassNames.secondary;
 const limits = ARENA_CANONICAL_CAPABILITIES;
@@ -59,7 +61,7 @@ const createWebPackages = () => {
 
 const createStorySession = (product: DesktopArenaProduct) => {
   const port = createIpcStoryNativePort(invoke), sink = createIpcStoryMarkdownExportPort(invoke);
-  return new DesktopArenaStorySession({ port, hosted: { product, invoke, storage: window.localStorage, port: createIpcStoryPendingPort(invoke), sink: createIpcStoryPendingExportPort(invoke) }, exportMarkdown: (head, signal, onProgress) => exportCommittedStoryMarkdown(port, sink, head, { signal, onProgress }) });
+  return new DesktopArenaStorySession({ port, branch: { port: createIpcStoryBranchNativePort(invoke), source: createIpcStoryBranchSourcePort(invoke) }, hosted: { product, invoke, storage: window.localStorage, port: createIpcStoryPendingPort(invoke), sink: createIpcStoryPendingExportPort(invoke) }, exportMarkdown: (head, signal, onProgress) => exportCommittedStoryMarkdown(port, sink, head, { signal, onProgress }) });
 };
 
 /** Desktop owns session/IO only. The actual Web controls, layout and report are shared. */
@@ -297,6 +299,16 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   };
   const startStory = (chapterPlan?: BattleStoryChapterPlan) => { if (allowStoryGeneration()) void storyOwner.start({ draft: session.getSnapshot().draft, product, chapterPlan }, prepareStoryExecution); };
   const continueStory = (guidance: string) => { if (allowStoryGeneration()) void storyOwner.continue(guidance, prepareStoryExecution); };
+  const branchStory = (anchor: StoryBranchAnchorRequest, guidance: string) => {
+    if (hostedTarget) { setError('分支仅支持客户端 Direct，请自行选择客户端模型。'); return; }
+    if (!allowStoryGeneration()) return;
+    const epoch = ownerEpoch.current, originalState = storyOwner.getSnapshot(); setError(null);
+    // Source preparation can reject before generateBranch owns its completion
+    // callback. Entered runs report through their owner; only untouched preflight
+    // failures need the page fallback. A cancelled old read must not publish here.
+    void storyOwner.generateBranch({ mode: 'direct', anchor, userGuidance: guidance }, prepareStoryExecution)
+      .catch((cause: unknown) => { if (epoch === ownerEpoch.current && storyOwner.getSnapshot() === originalState) reportError(cause); });
+  };
   const restoreHosted = () => {
     const pointer = session.hostedRecovery.getSnapshot().pointer;
     if (!pointer || disabled || diagnosisFlight.current || preparing.current || session.isBusy() || !cloudState.bootstrapped) return;
@@ -406,7 +418,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           {error || guard.message ? <p role="alert">{error ?? guard.message}</p> : null}
           {state.message ? <p role="status">{state.message}</p> : null}
         </>,
-        community: null, result, storySession: <DesktopArenaStoryControls owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} onStart={startStory} onContinue={continueStory} download={download} onNavigateExternal={openContent} />,
+        community: null, result, storySession: <DesktopArenaStoryControls owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
         homeLink: <BackHomeLink href="#/" onNavigate={() => navigateByProductHref(router, '/')} />,
         footer: <ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />,
   };

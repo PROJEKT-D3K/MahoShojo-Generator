@@ -64,7 +64,7 @@ export type DesktopStoryState = {
 type PendingDeletion = { head: StorySessionHead; selection: BattleStoryReadToken; target: StorySessionDeleteTarget | null };
 type PendingCommit = { selection: BattleStoryReadToken; evidence: BattleStorySaveEvidence } & (
   | { kind: 'linear'; prepared: PreparedStoryCommit }
-  | { kind: 'branch'; prepared: PreparedStoryBranchCommit }
+  | { kind: 'branch'; prepared: PreparedStoryBranchCommit; executionEpoch: number; autoSelect: boolean }
 );
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : '操作未完成，请保留现有内容后重试。';
 const emptyState = (): DesktopStoryState => ({
@@ -471,7 +471,7 @@ export class DesktopArenaStorySession {
     });
     if (!dispatched && !this.disposed) this.publish({ phase: 'cancelled', message: '生成准备已取消，未调用模型。' });
   }
-  /** Internal optional producer only. No default binder or page installs this seam. */
+  /** Direct-only producer; source and output share the existing owner/save fences. */
   async generateBranch(input: { mode: 'direct' | 'hosted'; anchor: StoryBranchAnchorRequest; userGuidance: string }, prepare: PrepareStoryExecution) {
     if (!this.dependencies.branch?.source || input.mode !== 'direct') throw new Error('此入口未开放分支生成；Hosted 分支不受支持');
     const frozen = freezeBattleStoryCommit(structuredClone(input));
@@ -493,6 +493,7 @@ export class DesktopArenaStorySession {
         userGuidance: frozen.userGuidance });
       await prepare(async target => {
         if (!completion.isReadyForGeneration()) throw new Error('分支生成准备已取消或选择已变化');
+        this.assertNoBranchCandidate(frozen.anchor.sessionId);
         if (dispatched) throw new Error('本分支已提交一次生成请求，不能自动重复');
         if (target.mode === 'hosted') throw new Error('Hosted 分支不受支持');
         const { options, intent } = target;
@@ -502,7 +503,7 @@ export class DesktopArenaStorySession {
         const events = AdjudicatorEventSchema.array().parse(seed.adjudicationEvents ?? []);
         const adjudicationResults = resolveAdjudicationEvents(events, this.dependencies.random ?? (() => crypto.getRandomValues(new Uint32Array(1))[0]! / 0x1_0000_0000)) as unknown as AdjudicationResult[];
         dispatched = true;
-        this.publish({ resultSource: 'direct', phase: 'generating', resultChapterIndex: snapshot.source.anchorIndex + 1,
+        this.publish({ resultSource: 'direct', phase: 'generating', message: null, resultChapterIndex: snapshot.source.anchorIndex + 1,
           result: { rawText: '', markdown: '', reasoning: '' } });
         const scopeKey = `desktop-story:${sessionId}:${generationId}`;
         const outcome = await (this.dependencies.execute ?? executeArenaDirect)(options, createInitialArenaDraft(),
@@ -522,7 +523,14 @@ export class DesktopArenaStorySession {
       if (!dispatched) completion.cancel();
     } catch (cause) { completion.fail(cause); }
   }
-  /** Internal pre-generation read seam. No default binder, model or page caller. */
+  private assertNoBranchCandidate(sourceSessionId: string) {
+    const hosted = this.hosted?.getSnapshot();
+    if (this.hosted?.hasCandidate() || hosted && (Object.keys(hosted.discoveryErrors).length > 0
+      || Object.values(hosted.slots).some(slot => slot?.manifest.sessionId === sourceSessionId))) {
+      throw new Error('原 Hosted 故事候选尚未处理或核清，不能创建分支。');
+    }
+  }
+  /** Freeze the selected source before AI credential preparation or model dispatch. */
   async prepareBranchCompletion(input: {
     mode: 'direct' | 'hosted'; generationId: string; operationId: string; sessionId: string; anchor: StoryBranchAnchorRequest;
   }) {
@@ -532,6 +540,9 @@ export class DesktopArenaStorySession {
     if (this.hasUnconfirmedDeletion(frozen.anchor.sessionId)) throw new Error('源会话删除状态待确认，不能准备分支');
     const run = this.beginGeneration();
     if (!run) throw new Error('当前故事仍有待处理操作或未保存结果');
+    this.publish({ resultSource: 'direct', message: this.hosted
+      ? '正在核对分支源和原 Hosted 故事候选，尚未调用模型。'
+      : '正在核对分支锚点与故事原件，尚未调用模型。' });
     this.branchOperations.add(frozen.operationId); this.branchGenerations.add(frozen.generationId);
     const cancelled = () => {
       this.generationFailure(new Error('分支源读取已取消'), run.controller);
@@ -539,6 +550,12 @@ export class DesktopArenaStorySession {
     };
     run.controller.signal.addEventListener('abort', cancelled, { once: true });
     try {
+      // Empty slots before discovery are not proof that the product/source has
+      // no pending work. Reserve this run, then require a fresh authoritative read.
+      if (this.hosted && !await this.hosted.discover()) throw new Error('原 Hosted 故事候选读取已变化，请重试核对。');
+      if (this.disposed || run.controller.signal.aborted || this.runController !== run.controller
+        || run.epoch !== this.executionEpoch || !run.selection.isCurrent()) throw new Error('分支准备已取消或选择已变化');
+      this.assertNoBranchCandidate(frozen.anchor.sessionId);
       const snapshot = await readStoryBranchSource(this.dependencies.port, this.dependencies.branch.source, frozen.anchor, run.controller.signal);
       if (this.disposed || run.controller.signal.aborted || this.runController !== run.controller
         || run.epoch !== this.executionEpoch || !run.selection.isCurrent()) throw new Error('分支源读取已取消或选择已变化');
@@ -553,7 +570,7 @@ export class DesktopArenaStorySession {
   }
   /** Internal injected completion seam, not a model/anchor-reading capability.
    * The controlled producer freezes its source BEFORE generation, then transfers
-   * one completed owned graph. Default pages never inject a branch port. */
+   * one completed owned graph. Pages use generateBranch instead. */
   captureBranchCompletion(input: {
     mode: 'direct' | 'hosted'; generationId: string; operationId: string; sessionId: string; source: StoryBranchSource;
   }) {
@@ -594,7 +611,7 @@ export class DesktopArenaStorySession {
         if (records.chapter.generationId !== generationId) throw new Error('分支完成章与原生成身份不一致');
         const prepared = (this.dependencies.branch!.prepareCommit ?? prepareStoryBranchCommit)(identity, records);
         if (!ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
-        this.pending = { kind: 'branch', prepared, selection: run.selection, evidence: 'not-written' };
+        this.pending = { kind: 'branch', prepared, selection: run.selection, evidence: 'not-written', executionEpoch: run.epoch, autoSelect: true };
         this.publish({ pending: { title: records.chapter.title, evidence: 'not-written', retryable: true, tooLarge: false } });
         await this.savePending();
       } catch (cause) {
@@ -643,7 +660,7 @@ export class DesktopArenaStorySession {
         head = await this.currentSavedHead(head);
         this.publish({ savedUnread: head });
       }
-      if (pending.selection.isCurrent()) {
+      if (pending.selection.isCurrent() && (pending.kind === 'linear' || pending.autoSelect && !saveController?.signal.aborted && pending.executionEpoch === this.executionEpoch)) {
         await this.openSavedChapter(head, receipt.chapterId);
         if (this.state.selected.status === 'loaded' && this.state.selected.chapterId === receipt.chapterId) this.publish({ savedUnread: null });
       } else if (this.state.active?.id === head.id) {
@@ -688,7 +705,11 @@ export class DesktopArenaStorySession {
     } catch (cause) { this.publish({ message: `章节已保存，读取暂未完成：${errorText(cause)}` }); }
   }
   discardResult() { if (this.isBusy()) return; if (this.hosted?.hasCandidate()) { this.publish({ message: '请先导出或明确放弃原 Hosted 候选；清除预览不会释放候选。' }); return; } this.pending = null; this.publish({ resultSource: null, result: null, pending: null, phase: 'idle', resultSaved: false, resultChapterIndex: null, message: null }); }
-  cancel() { if (this.hosted?.getSnapshot().busy === 'model') { void this.hosted.requestServerStop(); return; } this.runController?.abort(); this.branchSaveController?.abort(); }
+  cancel() {
+    if (this.hosted?.getSnapshot().busy === 'model') { void this.hosted.requestServerStop(); return; }
+    if (this.pending?.kind === 'branch') this.pending.autoSelect = false;
+    this.runController?.abort(); this.branchSaveController?.abort();
+  }
   async exportSelectedStory() {
     const head = this.state.active;
     if (head) await this.exportStory(head);
@@ -710,6 +731,7 @@ export class DesktopArenaStorySession {
     // Leaving can dismiss an unsubmitted confirmation, never release an already
     // dispatched deletion flight or make the same owner dispatch it a second time.
     this.cancelDeleteSession();
+    if (this.pending?.kind === 'branch') this.pending.autoSelect = false;
     this.hosted?.detach(); this.runController?.abort(); this.branchSaveController?.abort(); this.cancelExport(); this.readController?.abort();
   }
   dispose() { this.detach(); this.hosted?.dispose(); this.disposed = true; this.fence.dispose(); this.listeners.clear(); }

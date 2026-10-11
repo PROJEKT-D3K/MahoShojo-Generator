@@ -1,6 +1,6 @@
 import { useRef, useState, useSyncExternalStore } from 'react';
 import {
-  BattleStoryActions, BattleStoryDeleteSessionControls, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
+  BattleStoryActions, BattleStoryBranchAction, BattleStoryDeleteSessionControls, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
   type BattleStoryChapterReadViewState,
 } from '@mahoshojo/ui-web/arena-story-session';
 import { StreamingBattleReportCard, type StreamingBattleReportCardProps, type BattleReportHostPorts } from '@mahoshojo/ui-web/arena-report';
@@ -8,6 +8,7 @@ import { useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { DENY_EXTERNAL_MEDIA } from '@mahoshojo/ui-web/markdown';
 import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
 import { ArenaCompanionAdjudicationResultSchema } from '@mahoshojo/contracts/arena-companion';
+import type { StoryBranchAnchorRequest } from '@mahoshojo/contracts/desktop-arena-story-branch';
 import {
   formatBattleStoryChapterProgress, isBattleStoryChapterPlanLimitReached, normalizeBattleStoryTotalChapters,
   resolveBattleStoryInitialChapterPlan, type BattleStoryChapterPlan, type BattleStoryDraftChapterPlanMode,
@@ -131,6 +132,7 @@ export function DesktopArenaStoryControls(props: {
   owner: DesktopArenaStorySession; draft: ArenaDraft; disabled: boolean; unavailableReason: string | null;
   product?: StoryProduct; onNavigateStoryProduct?(product: StoryProduct): void;
   onStart(plan?: BattleStoryChapterPlan): void; onContinue(userGuidance: string): void;
+  onBranch?(anchor: StoryBranchAnchorRequest, userGuidance: string): void; branchUnavailableReason?: string | null;
   download(fileName: string, text: string, mimeType: string): void;
   onNavigateExternal: BattleReportHostPorts['onNavigateExternal'];
 }) {
@@ -156,6 +158,14 @@ export function DesktopArenaStoryControls(props: {
   const canGenerate = !busy && !state.pending && !props.unavailableReason && !blockedByCandidate;
   const otherStoryCandidate = !!state.active && Object.values(hosted?.slots ?? {}).some(slot => slot?.manifest.sessionId === state.active?.id);
   const reached = !!state.active && isBattleStoryChapterPlanLimitReached({ chapterPlan: state.active.chapterPlan, completedChapterCount: state.active.chapterCount });
+  const canBranch = canGenerate && !!props.onBranch && !props.branchUnavailableReason && !otherStoryCandidate && !owner.hasUnconfirmedDeletion();
+  const branchTitle = props.branchUnavailableReason ?? props.unavailableReason ?? undefined;
+  const branchAt = (chapterId: string, chapterIndex: number) => {
+    const head = state.active;
+    if (!canBranch || !head || isBattleStoryChapterPlanLimitReached({ chapterPlan: head.chapterPlan, completedChapterCount: chapterIndex })) return;
+    props.onBranch?.(Object.freeze({ sessionId: head.id, revision: head.revision, expectedLastChapterId: head.lastChapterId,
+      expectedChapterCount: head.chapterCount, anchorChapterId: chapterId, anchorIndex: chapterIndex }), guidance);
+  };
   const ports: BattleReportHostPorts = { mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: props.onNavigateExternal,
     downloadMarkdown: (text, fileName) => props.download(fileName, text, 'text/markdown;charset=utf-8') };
   const selection = state.selected;
@@ -167,7 +177,12 @@ export function DesktopArenaStoryControls(props: {
         exportAction={<button type="button" className={secondary} onClick={() => props.download(`第${selection.chapter.index}章.md`, selection.chapter.markdown, 'text/markdown;charset=utf-8')}>导出本章完整正文</button>}>
         <StreamingBattleReportCard {...cardProps(selection.chapter.cardSnapshot)} content={selection.chapter.markdown} mode={state.active?.mode} ports={ports} />
       </BattleStoryContentPreview>,
-      footer: <p className="text-xs text-gray-500">本章保存在当前设备；角色变化仅属于本故事的工作副本。</p>,
+      footer: <>
+        <p className="text-xs text-gray-500">本章保存在当前设备；角色变化仅属于本故事的工作副本。</p>
+        <BattleStoryActions className="mt-3 flex flex-wrap gap-2"><BattleStoryBranchAction variant="selected" chapterIndex={selection.chapter.index}
+          disabled={!canBranch || selection.sessionId !== state.active?.id || isBattleStoryChapterPlanLimitReached({ chapterPlan: state.active?.chapterPlan, completedChapterCount: selection.chapter.index })}
+          title={branchTitle} onClick={() => branchAt(selection.chapterId, selection.chapter.index)} /></BattleStoryActions>
+      </>,
     } : selection.status === 'loading' ? { status: 'loading', identity: { sessionId: selection.sessionId, chapterId: selection.chapterId } }
       : { status: 'error', identity: { sessionId: selection.sessionId, chapterId: selection.chapterId }, message: selection.message };
   const exportResult = () => { if (state.result) props.download(state.resultSaved ? '本次章节.md' : '未保存章节.md', state.result.markdown, 'text/markdown;charset=utf-8'); };
@@ -176,7 +191,7 @@ export function DesktopArenaStoryControls(props: {
   return <section aria-label="连续战报会话" className="mt-6 space-y-4 rounded-2xl border border-gray-200 bg-white p-4 sm:p-6">
     <div><h2 className="text-xl font-semibold text-gray-900">连续战报会话</h2>
       <p className="mt-1 text-sm text-gray-600">{hostedOwner ? '简洁版与高级版共用本机故事。首章冻结当前页配置；续写沿用故事种子与章末角色，并使用当前显式选择的执行位置与模型。' : '简洁版与高级版共用本机故事。首章冻结当前页配置；续写沿用故事种子与章末角色，并使用当前显式选择的 Direct 模型。'}</p>
-      <p className="mt-1 text-xs text-gray-500">{hostedOwner ? '仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。分支和重写暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。' : '仅线性 Markdown 流式章节；确定性摘要不额外调用 AI。Hosted、分支和重写暂未开放。单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。'}</p>
+      <p className="mt-1 text-xs text-gray-500">Markdown 流式章节；确定性摘要不额外调用 AI。Direct 分支会保留到锚点为止的完整故事并生成下一章，源故事不变。{hostedOwner ? 'Hosted 分支和重写暂未开放。' : 'Hosted 和重写暂未开放。'}单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。</p>
       <p className="mt-1 text-xs text-gray-500">当前连续请求沿用 Web 的种子字段：分队显示名称、活动历史及历史引用不会额外注入章节。读取／写入角色历战与当前状态按冻结设置生效。</p>
     </div>
     <div className="grid gap-3 sm:grid-cols-2">
@@ -197,6 +212,8 @@ export function DesktopArenaStoryControls(props: {
     <BattleStoryActions>
       <button className={secondary} type="button" disabled={!canGenerate || !!planError} title={props.unavailableReason ?? undefined} onClick={() => props.onStart(plan ?? undefined)}>新建连续战报</button>
       <button className={secondary} type="button" disabled={!canGenerate || !state.active || reached || otherStoryCandidate || owner.hasUnconfirmedDeletion()} title={props.unavailableReason ?? undefined} onClick={() => props.onContinue(guidance)}>继续续写</button>
+      <BattleStoryBranchAction variant="tail" disabled={!canBranch || !state.active || reached} title={branchTitle}
+        onClick={() => { if (state.active) branchAt(state.active.lastChapterId, state.active.chapterCount); }} />
       <button className={secondary} type="button" disabled={!state.active || busy} onClick={() => void owner.exportSelectedStory()}>导出完整 Markdown</button>
       {generating && !hostedResult && !hosted?.busy ? <button className={secondary} type="button" onClick={() => owner.cancel()}>停止章节生成</button> : null}
       {state.exporting ? <button className={secondary} type="button" onClick={() => owner.cancelExport()}>取消故事导出</button> : null}
@@ -268,7 +285,7 @@ export function DesktopArenaStoryControls(props: {
           selectedId={state.active?.id ?? null} onSelect={(id) => { const head = state.sessions.find((row) => row.id === id); if (head) void owner.selectSession(head); }}
           loading={state.listLoading} error={state.listError} footer={<BattleStoryActions className="mt-3 flex flex-wrap gap-2"><button type="button" className={secondary} disabled={state.listLoading} onClick={() => void owner.refreshSessions()}>刷新故事目录</button>{state.sessionCursor ? <button type="button" className={secondary} disabled={state.listLoading} onClick={() => void owner.refreshSessions(true)}>更多故事</button> : null}</BattleStoryActions>} />
         <BattleStoryChapterDirectory rows={state.chapters.map((row) => ({ id: row.id, title: `第 ${row.index} 章 · ${row.titlePreview}${row.titleTruncated ? '…' : ''}`,
-          description: `${row.action === 'start' ? '首章' : '续写'}｜${new Date(row.createdAt).toLocaleString()}` }))}
+          description: `${row.action === 'start' ? '首章' : row.action === 'branch' ? '分支' : '续写'}｜${new Date(row.createdAt).toLocaleString()}` }))}
           selectedId={selection.status === 'unloaded' ? null : selection.chapterId} count={state.active?.chapterCount ?? 0} onSelect={(id) => void owner.selectChapter(id)}
           loading={state.chaptersLoading} error={state.chaptersError} footer={<BattleStoryActions className="mt-3 flex flex-wrap gap-2">{state.chaptersError && state.active ? <button type="button" className={secondary} onClick={() => { if (state.active) void owner.selectSession(state.active); }}>重读章节目录</button> : null}{state.chapterCursor ? <button type="button" className={secondary} disabled={state.chaptersLoading} onClick={() => void owner.loadMoreChapters()}>更多章节</button> : null}</BattleStoryActions>} />
       </div>

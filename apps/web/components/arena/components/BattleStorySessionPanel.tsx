@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import {
   BattleStoryActions,
+  BattleStoryBranchAction,
   BattleStoryDeleteSessionControls,
   BattleStoryPendingOutcome,
   BattleStoryChapterDirectory,
@@ -281,9 +282,6 @@ export function BattleStorySessionPanel(props: {
   const liveCardContent =
     streamingMarkdown.trim() ||
     `# 第 ${streamChapterIndex ?? '?'} 章\n\n正在等待模型返回正文...`;
-  const selectedBranchButtonText = selectedChapter
-    ? `从第 ${selectedChapter.index} 章创建分支`
-    : '从所选章节创建分支';
   const selectedRewriteButtonText = selectedChapter
     ? (selectedChapterIsLatest ? '重写本章' : '重写本章并截断后续')
     : '重写所选章节';
@@ -307,21 +305,19 @@ export function BattleStorySessionPanel(props: {
         如果想保留原路线，优先创建分支；中间章节重写或删除会截断其后续，本地会话链会改变，但服务端历史战报记录不会删除。
       </div>
       <BattleStoryActions className="mt-4 flex flex-wrap gap-2">
-        <button
-          type="button"
+        <BattleStoryBranchAction
+          variant="selected"
+          chapterIndex={selectedChapter.index}
           onClick={() => void handleBranchSelectedChapter()}
           disabled={deleteSessionBlocksActive || Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !selectedChapter || Boolean(selectedBranchDisabledReason)}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+          busy={isGenerating && generatingAction === 'branch'}
+          cooldownSeconds={isCooldown ? remainingTime : null}
           title={
             isCooldown
               ? `冷却中，请等待 ${remainingTime} 秒`
               : (selectedBranchDisabledReason ?? '以当前所选章节为锚点创建新分支会话')
           }
-        >
-          {isGenerating && generatingAction === 'branch'
-            ? '正在创建分支...'
-            : (isCooldown ? `冷却中 ${remainingTime}s` : selectedBranchButtonText)}
-        </button>
+        />
         <button
           type="button"
           onClick={() => void handleRewriteSelectedChapter()}
@@ -523,21 +519,18 @@ export function BattleStorySessionPanel(props: {
                 ? '正在续写...'
                 : (isCooldown ? `冷却中 ${remainingTime}s` : '继续续写')}
             </button>
-            <button
-              type="button"
+            <BattleStoryBranchAction
+              variant="tail"
               onClick={() => void handleBranchSession()}
               disabled={deleteSessionBlocksActive || Boolean(pendingCompletedChapter || pendingRoleOutcome) || isSavingChapter || isGenerating || isDeletingSession || isCooldown || !activeSession || !latestActiveChapter || hasReachedActiveChapterPlanLimit}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+              busy={isGenerating && generatingAction === 'branch'}
+              cooldownSeconds={isCooldown ? remainingTime : null}
               title={
                 isCooldown
                   ? `冷却中，请等待 ${remainingTime} 秒`
                   : (branchDisabledReason ?? '以当前结尾为基础复制一条分支会话')
               }
-            >
-              {isGenerating && generatingAction === 'branch'
-                ? '正在分支...'
-                : (isCooldown ? `冷却中 ${remainingTime}s` : '创建分支')}
-            </button>
+            />
             <button
               type="button"
               onClick={() => void handleRewriteLastChapter()}

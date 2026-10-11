@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import { StoryPendingSnapshotSchema } from '@mahoshojo/contracts/desktop-arena-story';
 import { DesktopArenaHostedRecoveryPointerSchema } from '@mahoshojo/contracts/desktop-arena-hosted';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { builtinWebPackageSource, BUILTIN_WEB_PACKAGE_PRESETS, packWebPackageZip, unpackWebPackageZip } from '@mahoshojo/web-package';
@@ -21,6 +22,7 @@ import { arenaWebPackageFixture, wrappedArenaWebPackageFile } from './fixtures/a
 import { createDesktopRouter } from '../src/app/router';
 import { deferred, installStoryCrypto, StoryFixturePort, storyFixtureInvoke } from './helpers/story-fixture';
 import { HostedStoryFixture } from './helpers/hosted-story-fixture';
+import { branchPageFixture } from './helpers/arena-story-branch-page-fixture';
 import { STORY_PENDING_IPC } from '../src/platform/arena-story-pending-native';
 import { ARENA_HOSTED_RECOVERY_KEYS } from '../src/features/arena/hosted-recovery';
 import { getDesktopCloudSessionStore, resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
@@ -33,6 +35,7 @@ vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileI
 let root: Root, container: HTMLDivElement, server: Server, endpoint: string;
 let activeCloseHandles = 0;
 let storyPort: StoryFixturePort, storyIpc: ReturnType<typeof storyFixtureInvoke>;
+let storyBranch: Awaited<ReturnType<typeof branchPageFixture>> | null;
 let hostedStory: HostedStoryFixture, hostedCapabilityAvailable: boolean;
 let cloudAccount: { userId: number; username: string } | null;
 const pendingCommands = new Set<string>(Object.values(STORY_PENDING_IPC));
@@ -83,7 +86,7 @@ const calls = () => mocks.invoke.mock.calls.filter(([cmd]) => ['stream_direct_ai
 const scopeClose = () => { const args = mocks.listen.mock.calls.at(-1)!; const event = { preventDefault: vi.fn() }; args[0](event); return event; };
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.clearAllMocks(); localStorage.clear(); storyPort = new StoryFixturePort(); storyIpc = storyFixtureInvoke(storyPort); received = []; docs = new Map(); hold = false; failSave = false; eof = false; release = undefined; activeCloseHandles = 0; markdownSuffix = ''; webTextOverride = null; packageDocs = new Map(); packageBytes = new Map();
+  vi.clearAllMocks(); localStorage.clear(); storyBranch = null; storyPort = new StoryFixturePort(); storyIpc = storyFixtureInvoke(storyPort); received = []; docs = new Map(); hold = false; failSave = false; eof = false; release = undefined; activeCloseHandles = 0; markdownSuffix = ''; webTextOverride = null; packageDocs = new Map(); packageBytes = new Map();
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'client', clientConnectionId: 'loopback' }, hiddenPresetIds: [] }));
   resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
   hostedStory = new HostedStoryFixture(); hostedCapabilityAvailable = true; cloudAccount = null;
@@ -92,6 +95,7 @@ beforeEach(() => {
   mocks.invoke.mockImplementation(async (command: string, raw?: Record<string, unknown> | Uint8Array, options?: { headers: Record<string, string> }) => {
     // Pending discovery is separate; the Direct record fixture must not swallow it.
     if (pendingCommands.has(command)) return hostedStory.invoke(command, raw, options);
+    if (storyBranch?.handles(command, raw, options)) return storyBranch.invoke(command, raw, options);
     if (command.includes('_arena_story_')) return storyIpc.invoke(command, raw, options);
     if (command === 'cloud_cached_account') return cloudAccount ? { account: cloudAccount } : null;
     if (command === 'cloud_auth_status') return cloudAccount ? { state: 'active', account: cloudAccount } : { state: 'signed-out' };
@@ -869,12 +873,268 @@ describe('Desktop Hosted story routes through prepared targets and default binde
 
 });
 
-it.each(['battle', 'arena'] as const)('keeps %s branch entry closed in the actual routed story surface', async product => {
-  localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
-  window.location.hash = `#/${product}`;
-  await mount();
-  await click('恢复草稿'); await click('新建连续战报');
-  await vi.waitFor(() => expect(container.querySelector('[data-story-read-status="loaded"]')).toBeTruthy());
-  expect([...container.querySelectorAll('button')].filter(node => /分支|branch/iu.test(node.textContent ?? ''))).toHaveLength(0);
-  expect(mocks.invoke.mock.calls.filter(([command]) => /branch/iu.test(command))).toHaveLength(0);
+
+// Real RouterProvider → shared page factory → story owner → both branch IPC
+// binders → synthetic byte storage and loopback model. No injected page owner.
+describe('Desktop Direct branch routes through actual default factories', () => {
+  const setupBranch = async (k = 2, total = 3) => {
+    const fixture = await branchPageFixture(k, total);
+    storyBranch = fixture; storyPort = fixture.records; storyIpc = storyFixtureInvoke(storyPort);
+    return fixture;
+  };
+  const mountBranch = async (product: 'battle' | 'arena' = 'battle') => {
+    localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
+    window.location.hash = `#/${product}`;
+    const router = await mount(); await click('恢复草稿');
+    await vi.waitFor(() => expect(container.querySelector('[data-story-read-status="loaded"]')).toBeTruthy());
+    return router;
+  };
+  const chooseChapter = async (index: number) => {
+    const row = [...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find(node => node.textContent?.startsWith(`第 ${index} 章 ·`));
+    expect(row, `chapter ${index}`).toBeTruthy(); await act(async () => row!.click()); await settle();
+    await vi.waitFor(() => expect(container.querySelector('[data-story-read-status="loaded"]')?.textContent).toContain(`第 ${index} 章`));
+  };
+  const reader = () => container.querySelector('[data-story-read-status]')!;
+  const assertNoBranchDispatch = (fixture: Awaited<ReturnType<typeof setupBranch>>) => {
+    expect(received).toHaveLength(0); expect(calls()).toHaveLength(0); expect(fixture.begin).not.toHaveBeenCalled();
+    expect(fixture.end).not.toHaveBeenCalled(); expect(hostedStory.streams).toHaveLength(0); expect(storyPort.heads()).toHaveLength(1);
+  };
+  it.each(['battle', 'arena'] as const)('%s tail click uses the actual Direct factory, saves one independent branch and reopens it', async product => {
+    const fixture = await setupBranch(), source = new Map([...storyPort.documents].map(([key, doc]) => [key, Buffer.from(doc.bytes)]));
+    const router = await mountBranch(product);
+    const draftKey = product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, draftBefore = localStorage.getItem(draftKey);
+    const prepared = vi.spyOn(getDesktopAiConfigStore(), 'withPreparedGeneration');
+    await change('textarea[aria-label="下一章故事引导"]', '从尾章改走北方');
+    await click('创建分支'); await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); await settle();
+    expect(prepared).toHaveBeenCalledTimes(1); expect(received).toHaveLength(1);
+    expect(fixture.resolveAnchor).toHaveBeenCalledWith({ sessionId: fixture.sessionId, revision: 3, expectedChapterCount: 3,
+      expectedLastChapterId: fixture.chapterIds[2], anchorChapterId: fixture.chapterIds[2], anchorIndex: 3 });
+    const manifest = fixture.manifests[0]!, target = manifest.sessionId;
+    expect(fixture.begin).toHaveBeenCalledTimes(1); expect(fixture.end).toHaveBeenCalledTimes(1);
+    expect(manifest.parts.map(part => part.kind)).toEqual(['session', 'chapter', 'checkpoint1']);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'append_arena_story_part').every(([, raw]) => raw instanceof Uint8Array)).toBe(true);
+    const payload = JSON.parse(received[0]!.arenaInputJson!);
+    expect(payload.userGuidance).toBe('从尾章改走北方'); expect(payload.internalGuidance).toContain('分支续写第 4 章');
+    expect(payload.combatants[0].data.name).toBe('甲-boundary-3');
+    expect(storyPort.chapterDocuments(target).map(chapter => chapter.action)).toEqual(['start', 'continue', 'continue', 'branch']);
+    expect(storyPort.documents.get(`${target}:session`)!.value.branchOf).toMatchObject({ sessionId: fixture.sessionId, chapterId: fixture.chapterIds[2], chapterIndex: 3 });
+    expect(reader().getAttribute('data-story-session-id')).toBe(target); expect(reader().getAttribute('data-story-chapter-id')).toBe(manifest.operationId);
+    expect(localStorage.getItem(draftKey)).toBe(draftBefore);
+    for (const [key, bytes] of source) expect(Buffer.from(storyPort.documents.get(key)!.bytes)).toEqual(bytes);
+    await click('导出完整 Markdown'); expect(storyIpc.exported).toContain('章节数：4 章'); expect(storyIpc.exported).toContain('边界 1 的历史完整正文');
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await act(async () => router.navigate({ to: product === 'battle' ? '/arena' : '/battle' })); await settle();
+    await vi.waitFor(() => expect(reader().getAttribute('data-story-session-id')).toBe(target));
+    expect(received).toHaveLength(1); expect(activeCloseHandles).toBe(1);
+  });
+  it('uses the real chapter-55 tail while the directory still shows only its first page', async () => {
+    const fixture = await setupBranch(53, 55); await mountBranch();
+    expect([...container.querySelectorAll('button[aria-pressed]')].filter(node => node.textContent?.startsWith('第 '))).toHaveLength(25);
+    expect(reader().getAttribute('data-story-chapter-id')).toBe(fixture.chapterIds[54]);
+    await click('创建分支'); await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); await settle();
+    expect(fixture.resolveAnchor).toHaveBeenCalledWith({ sessionId: fixture.sessionId, revision: 55, expectedChapterCount: 55,
+      expectedLastChapterId: fixture.chapterIds[54], anchorChapterId: fixture.chapterIds[54], anchorIndex: 55 });
+    expect(fixture.manifests[0]!.source.anchorIndex).toBe(55);
+    expect(storyPort.heads().find(head => head.id !== fixture.sessionId)?.chapterCount).toBe(56);
+    expect(JSON.parse(received[0]!.arenaInputJson!).internalGuidance).toContain('分支续写第 56 章'); expect(received).toHaveLength(1);
+  });
+  it('branches from a paginated historical chapter with boundary roles and bounded source reads', async () => {
+    const fixture = await setupBranch(53, 55); await mountBranch('arena');
+    expect(reader().getAttribute('data-story-chapter-id')).toBe(fixture.chapterIds[54]);
+    while (!([...container.querySelectorAll('button[aria-pressed]')].some(node => node.textContent?.startsWith('第 53 章 ·')))) await click('更多章节');
+    await chooseChapter(53); storyPort.read.mockClear(); storyPort.listChapters.mockClear();
+    await click('从第 53 章创建分支'); await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); await settle();
+    expect(fixture.manifests[0]!.source).toMatchObject({ anchorIndex: 53, expectedChapterCount: 55, anchor: { recordId: fixture.chapterIds[52] } });
+    const payload = JSON.parse(received[0]!.arenaInputJson!);
+    expect(payload.combatants[0].data.name).toBe('甲-boundary-53'); expect(payload.internalGuidance).toContain('分支续写第 54 章');
+    expect(payload.internalGuidance).not.toContain('边界 54 的历史完整正文');
+    const sourceReads = storyPort.read.mock.calls.filter(([descriptor]) => descriptor.sessionId === fixture.sessionId && descriptor.kind === 'chapter');
+    expect(sourceReads.map(([descriptor]) => descriptor.recordId)).toEqual(fixture.chapterIds.slice(41, 53));
+    expect(storyPort.listChapters.mock.calls.filter(([id]) => id === fixture.sessionId).map(([, , cursor, limit]) => [cursor?.index ?? 0, limit])).toEqual([[0, 50], [50, 3]]);
+    expect(storyPort.heads().find(head => head.id !== fixture.sessionId)?.chapterCount).toBe(54); expect(received).toHaveLength(1);
+  });
+  it('disables the completed plan head while an earlier selected chapter can still branch', async () => {
+    const fixture = await setupBranch(), source = storyPort.documents.get(`${fixture.sessionId}:session`)!.value;
+    fixture.put(fixture.sessionId, 'session', { ...source, chapterPlan: { totalChapters: 3, source: 'user', locked: false } });
+    await mountBranch(); expect(button('创建分支').disabled).toBe(true); expect(button('继续续写').disabled).toBe(true);
+    expect(button('从第 3 章创建分支').disabled).toBe(true);
+    await chooseChapter(1); expect(button('从第 1 章创建分支').disabled).toBe(false);
+    await click('从第 1 章创建分支'); await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); await settle();
+    expect(fixture.manifests[0]!.source.anchorIndex).toBe(1); expect(storyPort.heads().find(head => head.id !== fixture.sessionId)?.chapterCount).toBe(2);
+    expect(received).toHaveLength(1);
+  });
+  it.each(['battle', 'arena'] as const)('%s keeps Hosted branch controls disabled without switching execution location', async product => {
+    const fixture = await setupBranch(); await mountBranch(product);
+    await act(async () => getDesktopAiConfigStore().selectExecutionLocation('server')); await settle();
+    expect(button('创建分支').disabled).toBe(true); expect(button('从第 3 章创建分支').disabled).toBe(true);
+    expect(button('创建分支').title).toContain('Direct');
+    await click('创建分支'); await click('从第 3 章创建分支');
+    expect(getDesktopAiConfigStore().getSnapshot().selection.executionPreference).toBe('server');
+    expect(fixture.resolveAnchor).not.toHaveBeenCalled(); assertNoBranchDispatch(fixture);
+  });
+
+  it('rejects a Hosted target returned at the actual AI preparation seam with no dispatch', async () => {
+    const fixture = await setupBranch(); await mountBranch();
+    const prepare = vi.spyOn(getDesktopAiConfigStore(), 'withPreparedGeneration').mockImplementationOnce(async run => run({
+      location: 'server', providerTarget: { kind: 'system' }, profile: null, mode: null, modelId: 'default',
+      availableModelIds: [], generationOverrides: undefined, unavailableReason: null,
+    }).then(() => {}));
+    await click('创建分支'); await vi.waitFor(() => expect(container.textContent).toContain('Hosted 分支不受支持'));
+    expect(prepare).toHaveBeenCalledTimes(1); expect(fixture.resolveAnchor).toHaveBeenCalledTimes(1); assertNoBranchDispatch(fixture);
+  });
+  it('coalesces repeated branch clicks while its frozen source is still being prepared', async () => {
+    const fixture = await setupBranch(), gate = deferred<void>(), original = fixture.resolveAnchor.getMockImplementation()!;
+    fixture.resolveAnchor.mockImplementation(async request => { await gate.promise; return original(request); });
+    release = () => gate.resolve(); await mountBranch();
+    await change('textarea[aria-label="下一章故事引导"]', '一次冻结引导');
+    const tail = button('创建分支'); await act(async () => { tail.click(); tail.click(); }); await settle();
+    expect(fixture.resolveAnchor).toHaveBeenCalledTimes(1); expect(button('创建分支').disabled).toBe(true); expect(received).toHaveLength(0);
+    await act(async () => gate.resolve()); await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); await settle();
+    expect(fixture.begin).toHaveBeenCalledTimes(1); expect(fixture.end).toHaveBeenCalledTimes(1); expect(received).toHaveLength(1);
+    expect(JSON.parse(received[0]!.arenaInputJson!).userGuidance).toBe('一次冻结引导');
+  });
+  it.each(['selection', 'ABA'] as const)('a %s change during source preparation never dispatches from a stale click', async changeKind => {
+    const fixture = await setupBranch(), gate = deferred<void>(), original = fixture.resolveAnchor.getMockImplementation()!;
+    fixture.resolveAnchor.mockImplementation(async request => { await gate.promise; return original(request); });
+    release = () => gate.resolve(); await mountBranch(); await click('创建分支');
+    await chooseChapter(1); if (changeKind === 'ABA') await chooseChapter(3);
+    await act(async () => gate.resolve()); await vi.waitFor(() => expect(button('创建分支').disabled).toBe(false)); await settle();
+    expect(reader().getAttribute('data-story-chapter-id')).toBe(fixture.chapterIds[changeKind === 'ABA' ? 2 : 0]);
+    expect(fixture.resolveAnchor).toHaveBeenCalledTimes(1); assertNoBranchDispatch(fixture);
+  });
+  it('late committed branch success preserves a newer manual chapter selection', async () => {
+    const fixture = await setupBranch(), gate = deferred<void>(); fixture.state.beforeEnd = () => gate.promise;
+    release = () => gate.resolve(); await mountBranch(); await click('创建分支');
+    await vi.waitFor(() => expect(fixture.end).toHaveBeenCalledTimes(1)); await chooseChapter(1);
+    await act(async () => gate.resolve()); await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); await settle();
+    expect(reader().getAttribute('data-story-session-id')).toBe(fixture.sessionId);
+    expect(reader().getAttribute('data-story-chapter-id')).toBe(fixture.chapterIds[0]);
+    expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('已保存');
+    await click('读取刚保存的章节');
+    expect(reader().getAttribute('data-story-session-id')).toBe(fixture.manifests[0]!.sessionId);
+    expect(fixture.begin).toHaveBeenCalledTimes(1); expect(fixture.end).toHaveBeenCalledTimes(1); expect(received).toHaveLength(1);
+  });
+  it('cancels in-flight branch generation, keeps received text, and confirms before replacing unsaved output', async () => {
+    const fixture = await setupBranch(); await mountBranch(); hold = true;
+    await click('创建分支'); await vi.waitFor(() => expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain(text));
+    await click('停止章节生成'); release?.(); await settle(); hold = false;
+    expect(storyPort.heads()).toHaveLength(1); expect(fixture.begin).not.toHaveBeenCalled(); expect(received).toHaveLength(1);
+    await click('导出完整原始输出'); expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).rawText).toContain(text);
+    await click('创建分支'); expect(window.confirm).toHaveBeenCalledWith('开始新章节会清除当前未保存原文，请先导出。继续？');
+    expect(received).toHaveLength(1); expect(fixture.resolveAnchor).toHaveBeenCalledTimes(1);
+    vi.mocked(window.confirm).mockReturnValue(true); await click('创建分支');
+    await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); expect(received).toHaveLength(2); expect(fixture.begin).toHaveBeenCalledTimes(1);
+  });
+  it('keeps a confirmed branch save read-only after target reading fails', async () => {
+    const fixture = await setupBranch(); await mountBranch();
+    storyPort.beforeDescribe = async (id, kind) => { if (id !== fixture.sessionId && kind === 'chapter') throw new Error('synthetic saved chapter read failure'); };
+    await click('创建分支'); await vi.waitFor(() => expect(container.textContent).toContain('synthetic saved chapter read failure')); await settle();
+    expect(storyPort.heads()).toHaveLength(2); expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('已保存');
+    expect(button('重试本地保存')).toBeUndefined(); expect(button('查询原保存结果')).toBeUndefined();
+    storyPort.beforeDescribe = undefined; await click('读取刚保存的章节');
+    expect(reader().getAttribute('data-story-chapter-id')).toBe(fixture.manifests[0]!.operationId);
+    expect(fixture.begin).toHaveBeenCalledTimes(1); expect(fixture.end).toHaveBeenCalledTimes(1); expect(received).toHaveLength(1);
+  });
+  it('unknown branch saving only queries its original identity even after source removal and instance change', async () => {
+    const fixture = await setupBranch(); fixture.state.loseEndReply = true; await mountBranch();
+    await click('创建分支'); await vi.waitFor(() => expect(container.textContent).toContain('保存状态待确认')); await settle();
+    const manifest = fixture.manifests[0]!, query = fixture.receipt.mock.calls.at(-1)!;
+    expect(button('创建分支').disabled).toBe(true); expect(button('重试本地保存')).toBeUndefined();
+    await click('查询原保存结果'); await click('导出未保存章节'); expect(mocks.download.mock.calls.at(-1)![0]).toBe('未保存章节.md');
+    expect(mocks.download.mock.calls.at(-1)![1]).toContain(text);
+    for (const key of [...storyPort.documents.keys()]) if (key.startsWith(`${fixture.sessionId}:`)) storyPort.documents.delete(key);
+    storyPort.instance = 'b'.repeat(32); fixture.state.hideReceipt = false;
+    await click('查询原保存结果'); await vi.waitFor(() => expect(container.textContent).toContain('完整章节已保存到本机故事'));
+    expect(fixture.receipt.mock.calls.every(args => JSON.stringify(args) === JSON.stringify(query))).toBe(true);
+    expect(fixture.begin).toHaveBeenCalledTimes(1); expect(fixture.end).toHaveBeenCalledTimes(1); expect(fixture.resolveAnchor).toHaveBeenCalledTimes(1);
+    expect(received).toHaveLength(1); expect(reader().getAttribute('data-story-chapter-id')).toBe(manifest.operationId);
+  });
+  it('handles a missing source boundary before dispatch without an unhandled page promise', async () => {
+    const fixture = await setupBranch(); await mountBranch(); storyPort.documents.delete(`${fixture.sessionId}:${fixture.checkpointIds[3]}`);
+    await click('创建分支'); await vi.waitFor(() => expect(button('创建分支').disabled).toBe(false)); await settle();
+    expect(fixture.resolveAnchor).toHaveBeenCalledTimes(1); assertNoBranchDispatch(fixture);
+  });
+  it('keeps both branch actions disabled while source deletion is unknown', async () => {
+    const fixture = await setupBranch(); await mountBranch();
+    storyPort.deleteSession.mockRejectedValue(new Error('ambiguous deletion transport failure'));
+    await click('删除本机会话'); await click('确认删除本机会话');
+    await vi.waitFor(() => expect(document.body.textContent).toContain('删除状态待确认')); await click('返回');
+    expect(button('创建分支').disabled).toBe(true); expect(button('从第 3 章创建分支').disabled).toBe(true);
+    await click('创建分支'); expect(fixture.resolveAnchor).not.toHaveBeenCalled(); assertNoBranchDispatch(fixture);
+  });
+  it.each(['cancel', 'actor-ABA'] as const)('an exact success after end-time %s stays saved without automatic navigation', async ending => {
+    const fixture = await setupBranch(), gate = deferred<void>(); fixture.state.beforeEnd = () => gate.promise;
+    release = () => gate.resolve(); cloudAccount = { userId: 7, username: 'fixture-user-seven' }; await mountBranch(); await click('创建分支');
+    await vi.waitFor(() => expect(fixture.end).toHaveBeenCalledTimes(1));
+    if (ending === 'cancel') await click('取消生成');
+    else {
+      cloudAccount = { userId: 8, username: 'fixture-user-eight' }; await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+      cloudAccount = { userId: 7, username: 'fixture-user-seven' }; await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+    }
+    await act(async () => gate.resolve()); await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); await settle();
+    expect(reader().getAttribute('data-story-session-id')).toBe(fixture.sessionId);
+    expect(reader().getAttribute('data-story-chapter-id')).toBe(fixture.chapterIds[2]);
+    expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('已保存');
+    expect(button('读取刚保存的章节')).toBeTruthy(); expect(button('重试本地保存')).toBeUndefined();
+    expect(received).toHaveLength(1); expect(fixture.begin).toHaveBeenCalledTimes(1); expect(fixture.end).toHaveBeenCalledTimes(1);
+  });
+  it.each(['candidate', 'read-error'] as const)('waits for fresh Hosted discovery after manually selecting a story during delayed initial %s', async outcome => {
+    const fixture = await setupBranch(), gate = deferred<void>(), original = mocks.invoke.getMockImplementation()!;
+    const pending = StoryPendingSnapshotSchema.parse({ manifest: { version: 1, product: 'arena', requestId: 'existing-hosted-request', actor: { kind: 'anonymous' },
+      pendingRevision: 1, sessionId: fixture.sessionId, operationId: 'existing-hosted-chapter', outputCheckpointId: 'existing-hosted-output', initialCheckpointId: null,
+      createdAt: 4, localAssembly: { version: 1, chapterPlan: null }, expectedRevision: 3, expectedLastChapterId: fixture.chapterIds[2],
+      lastInputCheckpointId: fixture.checkpointIds[3], inputDigest: `sha256:${'a'.repeat(64)}`,
+      writeOptions: { writeArenaHistory: false, writeCurrentState: false, writeNarrativeHistory: false },
+      modelCompleted: false, roleState: 'not-requested', roleInputDigest: null,
+      parts: [{ kind: 'input', byteLength: 1, digest: `sha256:${'a'.repeat(64)}` }], commitManifest: null },
+      createClaim: null, saveAttemptId: null, restored: false, abandonRequested: false });
+    mocks.invoke.mockImplementation(async (command, args, options) => {
+      if (command === STORY_PENDING_IPC.describe) {
+        await gate.promise;
+        if (outcome === 'read-error') throw new Error('synthetic discovery read failure');
+        return args.product === 'arena' ? pending : null;
+      }
+      return original(command, args, options);
+    });
+    release = () => gate.resolve(); saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿');
+    const sourceRow = [...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find(node => node.textContent?.startsWith(fixture.head.titlePreview))!;
+    expect(sourceRow).toBeTruthy(); await act(async () => sourceRow.click()); await settle();
+    expect(reader().getAttribute('data-story-read-status')).toBe('loaded'); expect(button('创建分支').disabled).toBe(false);
+    await click('创建分支'); expect(fixture.resolveAnchor).not.toHaveBeenCalled(); assertNoBranchDispatch(fixture);
+    await act(async () => gate.resolve()); await vi.waitFor(() => expect(container.textContent).toContain('原 Hosted 故事候选尚未处理或核清'));
+    expect(fixture.resolveAnchor).not.toHaveBeenCalled(); assertNoBranchDispatch(fixture);
+  });
+  it('can cancel Direct source preparation after displaying a saved Hosted chapter', async () => {
+    const fixture = await setupBranch();
+    vi.stubGlobal('TextEncoder', class extends NodeTextEncoder { encode(input?: string) { return Uint8Array.from(super.encode(input)); } });
+    hostedStory.records.documents = storyPort.documents;
+    // The Direct fixture intentionally carries opaque draft settings; Hosted has a closed input schema.
+    const seed = structuredClone(storyPort.documents.get(`${fixture.sessionId}:seed`)!.value);
+    delete (seed.settings as Record<string, unknown>).userGuidance; fixture.put(fixture.sessionId, 'seed', seed);
+    vi.spyOn(hostedStory.pointers, 'get').mockImplementation(key => localStorage.getItem(key) ?? undefined);
+    await mountBranch(); await act(async () => getDesktopAiConfigStore().selectExecutionLocation('server')); await settle();
+    await click('继续续写'); await vi.waitFor(() => expect(storyPort.heads()[0]?.chapterCount, container.textContent ?? '').toBe(4)); await settle();
+    expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('合成故事');
+    await act(async () => getDesktopAiConfigStore().selectExecutionLocation('client')); await settle();
+    const gate = deferred<void>(), original = fixture.resolveAnchor.getMockImplementation()!;
+    fixture.resolveAnchor.mockImplementation(async request => { await gate.promise; return original(request); }); release = () => gate.resolve();
+    await click('创建分支'); await vi.waitFor(() => expect(fixture.resolveAnchor).toHaveBeenCalledTimes(1));
+    expect(button('停止章节生成')).toBeTruthy(); await click('停止章节生成');
+    await act(async () => gate.resolve()); await settle();
+    expect(received).toHaveLength(0); expect(fixture.begin).not.toHaveBeenCalled(); expect(storyPort.heads()).toHaveLength(1);
+    expect(hostedStory.streams.filter(request => request.operation === 'create-story-stream')).toHaveLength(1);
+  });
+  it('does not revive an old source error after cancellation and a newer successful branch', async () => {
+    const fixture = await setupBranch(), gate = deferred<void>();
+    fixture.resolveAnchor.mockImplementationOnce(async () => { await gate.promise; throw new Error('obsolete branch source error'); });
+    release = () => gate.resolve(); await mountBranch(); await click('创建分支');
+    await vi.waitFor(() => expect(fixture.resolveAnchor).toHaveBeenCalledTimes(1)); await click('停止章节生成');
+    await click('创建分支'); await vi.waitFor(() => expect(storyPort.heads()).toHaveLength(2)); await settle();
+    const target = fixture.manifests[0]!.sessionId;
+    await act(async () => gate.resolve()); await settle();
+    expect(container.textContent).not.toContain('obsolete branch source error');
+    expect(reader().getAttribute('data-story-session-id')).toBe(target);
+    expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('已保存');
+    expect(received).toHaveLength(1); expect(fixture.begin).toHaveBeenCalledTimes(1);
+  });
 });

@@ -129,10 +129,11 @@ export class DesktopHostedStorySession {
       try { return { product, snapshot: await describeStoryPending(this.dependencies.port, product) }; }
       catch (cause) { return { product, error: errorText(cause) }; }
     }));
-    if (this.disposed || revision !== this.discoveryEpoch) return;
+    if (this.disposed || revision !== this.discoveryEpoch) return false;
     const slots: DesktopHostedStoryState['slots'] = {}, discoveryErrors: DesktopHostedStoryState['discoveryErrors'] = {};
     for (const entry of entries) { if (entry.snapshot) slots[entry.product] = entry.snapshot; if (entry.error) discoveryErrors[entry.product] = entry.error; }
     this.publish({ slots, discoveryErrors });
+    return true;
   }
   private async freshActive() {
     const prior = this.state.active; if (!prior) throw new Error('没有已读取的故事候选');

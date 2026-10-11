@@ -24,6 +24,7 @@ let container: HTMLDivElement;
 let chapters: BattleStoryChapterRecord[];
 let session: BattleStorySessionRecord;
 const button = (label: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
+const branchButton = (variant: 'tail' | 'selected') => container.querySelector<HTMLButtonElement>(`[data-story-branch-action="${variant}"]`)!;
 const render = async () => { await act(async () => root.render(<BattleStorySessionPanel />)); };
 
 beforeEach(() => {
@@ -79,8 +80,9 @@ describe('Web panel consumes the shared controlled story views', () => {
   it('retains host branch/rewrite/delete actions, cooldown blocks and Markdown export', async () => {
     await render();
     await act(async () => {
-      button('从第 1 章创建分支').click(); button('重写本章并截断后续').click(); button('删除整个会话').click(); button('导出 Markdown').click();
+      button('创建分支').click(); button('从第 1 章创建分支').click(); button('重写本章并截断后续').click(); button('删除整个会话').click(); button('导出 Markdown').click();
     });
+    expect(fixture.hook.handleBranchSession).toHaveBeenCalledTimes(1);
     expect(fixture.hook.handleBranchSelectedChapter).toHaveBeenCalledTimes(1);
     expect(fixture.hook.handleRewriteSelectedChapter).toHaveBeenCalledTimes(1);
     expect(fixture.hook.handleDeleteSelectedChapter).toHaveBeenCalledTimes(1);
@@ -89,6 +91,81 @@ describe('Web panel consumes the shared controlled story views', () => {
     const cooldownButtons = [...container.querySelectorAll('button')].filter((item) => item.textContent === '冷却中 9s');
     expect(cooldownButtons.length).toBeGreaterThan(0); expect(cooldownButtons.every((item) => item.disabled)).toBe(true);
     expect(button('导出 Markdown').disabled).toBe(false); expect(container.textContent).toContain('宿主冷却提示');
+  });
+
+  it.each([
+    'deleteSessionBlocksActive', 'isSavingChapter', 'isGenerating', 'isDeletingSession',
+  ] as const)('preserves both branch entry fences while %s', async (flag) => {
+    fixture.hook[flag] = true; await render();
+    for (const variant of ['tail', 'selected'] as const) {
+      expect(branchButton(variant).disabled).toBe(true);
+      await act(async () => branchButton(variant).click());
+    }
+    expect(fixture.hook.handleBranchSession).not.toHaveBeenCalled();
+    expect(fixture.hook.handleBranchSelectedChapter).not.toHaveBeenCalled();
+  });
+
+  it('blocks both branch entries while a completed chapter remains unsaved', async () => {
+    fixture.hook.pendingCompletedChapter = chapters[1]; await render();
+    expect(branchButton('tail').disabled).toBe(true); expect(branchButton('selected').disabled).toBe(true);
+    await act(async () => { branchButton('tail').click(); branchButton('selected').click(); });
+    expect(fixture.hook.handleBranchSession).not.toHaveBeenCalled();
+    expect(fixture.hook.handleBranchSelectedChapter).not.toHaveBeenCalled();
+  });
+
+  it('keeps role-unresolved completed output from starting either branch entry', async () => {
+    fixture.hook.pendingRoleOutcome = {
+      output: {
+        markdown: '已经生成的完整正文', reportJson: {}, digest: { chapterTitle: '第三章' },
+        chapterIndex: 3, generationId: 'original-generation', cardSnapshot: null,
+        nextWorkingCombatants: [], selectionEpoch: 1,
+      },
+      role: { status: 'unresolved' }, source: session.source, action: 'continue',
+      roleBusy: false, canResolveRoles: true, canDiscard: true,
+    };
+    await render();
+    expect(branchButton('tail').disabled).toBe(true); expect(branchButton('selected').disabled).toBe(true);
+    await act(async () => { branchButton('tail').click(); branchButton('selected').click(); });
+    expect(fixture.hook.handleBranchSession).not.toHaveBeenCalled();
+    expect(fixture.hook.handleBranchSelectedChapter).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('已经生成的完整正文');
+  });
+
+  it('keeps tail plan limits separate from a usable earlier selected anchor and preserves host reason titles', async () => {
+    fixture.hook.hasReachedActiveChapterPlanLimit = true;
+    fixture.hook.branchDisabledReason = '当前结尾已达到计划上限'; await render();
+    expect(branchButton('tail').disabled).toBe(true); expect(branchButton('tail').title).toBe('当前结尾已达到计划上限');
+    expect(branchButton('selected').disabled).toBe(false);
+    await act(async () => branchButton('selected').click());
+    expect(fixture.hook.handleBranchSelectedChapter).toHaveBeenCalledOnce();
+    fixture.hook.selectedBranchDisabledReason = '当前所选章节不能作为分支锚点'; await render();
+    expect(branchButton('selected').disabled).toBe(true);
+    expect(branchButton('selected').title).toBe('当前所选章节不能作为分支锚点');
+  });
+
+  it('retains distinct busy labels and cooldown precedence without triggering callbacks on updates', async () => {
+    fixture.hook.isGenerating = true; fixture.hook.generatingAction = 'branch';
+    fixture.hook.isCooldown = true; fixture.hook.remainingTime = 6; await render();
+    expect(branchButton('tail').textContent).toBe('正在分支...');
+    expect(branchButton('selected').textContent).toBe('正在创建分支...');
+    for (const variant of ['tail', 'selected'] as const) {
+      expect(branchButton(variant).disabled).toBe(true);
+      expect(branchButton(variant).title).toBe('冷却中，请等待 6 秒');
+    }
+    fixture.hook.isGenerating = false; fixture.hook.remainingTime = 0; await render();
+    expect(branchButton('tail').textContent).toBe('冷却中 0s'); expect(branchButton('tail').disabled).toBe(true);
+    expect(branchButton('selected').textContent).toBe('冷却中 0s'); expect(branchButton('selected').disabled).toBe(true);
+    fixture.hook.isCooldown = false; fixture.hook.selectedChapter = chapters[1]; await render();
+    expect(branchButton('selected').textContent).toBe('从第 2 章创建分支');
+    expect(branchButton('tail').textContent).toBe('创建分支');
+    expect(fixture.hook.handleBranchSession).not.toHaveBeenCalled();
+    expect(fixture.hook.handleBranchSelectedChapter).not.toHaveBeenCalled();
+  });
+
+  it('keeps the tail unavailable without a loaded head and hides selected action without a selection', async () => {
+    fixture.hook.latestActiveChapter = null; fixture.hook.selectedChapter = null; await render();
+    expect(branchButton('tail').disabled).toBe(true); expect(branchButton('selected')).toBeNull();
+    await act(async () => branchButton('tail').click()); expect(fixture.hook.handleBranchSession).not.toHaveBeenCalled();
   });
 
   it('preserves live host card rendering and stop while the shared reader retains the committed selection', async () => {

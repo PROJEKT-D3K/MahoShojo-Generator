@@ -132,6 +132,48 @@ describe('internal Direct branch real producer', () => {
     expect(f.owner.getSnapshot()).toMatchObject({ resultSaved: true, pending: null, active: { id: f.sessionId }, selected: { status: 'loaded', chapterId: f.chapterIds[0] } });
     expect(f.owner.getSnapshot().savedUnread?.id).toBe(f.prepared[0]!.manifest.sessionId); expect(execution.requests).toHaveLength(1);
   });
+  it.each(['cancel', 'scope-aba', 'detach'] as const)('records late exact success after %s without selecting its target', async kind => {
+    const f = await setup(), gate = deferred<void>(), execution = directBranchExecution();
+    const end = vi.mocked(f.branch.end).getMockImplementation()!;
+    vi.mocked(f.branch.end).mockImplementation(async (...args) => { await gate.promise; return end(...args); });
+    const running = f.owner.generateBranch(input(f), execution.prepare);
+    await vi.waitFor(() => expect(f.branch.end).toHaveBeenCalledTimes(1));
+    const selected = f.owner.getSnapshot().selected;
+    if (kind === 'cancel') f.owner.cancel();
+    else if (kind === 'scope-aba') { f.owner.setExecutionScope('B'); f.owner.setExecutionScope('direct-test'); }
+    else f.owner.detach();
+    gate.resolve(); await running;
+    expect(f.owner.getSnapshot()).toMatchObject({ resultSaved: true, pending: null, active: { id: f.sessionId }, selected,
+      savedUnread: { id: f.prepared[0]!.manifest.sessionId } });
+    expect(execution.requests).toHaveLength(1); expect(f.branch.end).toHaveBeenCalledTimes(1);
+    await f.owner.readSavedResult();
+    expect(f.owner.getSnapshot().active?.id).toBe(f.prepared[0]!.manifest.sessionId);
+  });
+  it('cancelling an explicit retry revokes target selection without refreshing its frozen package', async () => {
+    const f = await setup(), execution = directBranchExecution(); f.setFault('rollback');
+    await f.owner.generateBranch(input(f), execution.prepare);
+    const manifest = vi.mocked(f.branch.begin).mock.calls[0]![0];
+    const end = vi.mocked(f.branch.end).getMockImplementation()!;
+    vi.mocked(f.branch.end).mockImplementation(async (...args) => { f.owner.cancel(); return end(...args); });
+    await f.owner.savePending();
+    expect(f.owner.getSnapshot()).toMatchObject({ resultSaved: true, pending: null, active: { id: f.sessionId }, savedUnread: { id: manifest.sessionId } });
+    expect(vi.mocked(f.branch.begin).mock.calls[1]![0]).toBe(manifest);
+    expect(execution.requests).toHaveLength(1); expect(f.prepareCommit).toHaveBeenCalledTimes(1);
+  });
+  it.each(['cancel', 'detach'] as const)('%s during post-success directory refresh leaves the saved target for explicit reading', async kind => {
+    const f = await setup(), gate = deferred<void>(), entered = deferred<void>(), execution = directBranchExecution();
+    const list = f.reads.listSessions.getMockImplementation()!;
+    f.reads.listSessions.mockImplementationOnce(async (...args) => { entered.resolve(); await gate.promise; return list(...args); });
+    const selected = f.owner.getSnapshot().selected;
+    const running = f.owner.generateBranch(input(f), execution.prepare);
+    await entered.promise;
+    expect(f.owner.getSnapshot()).toMatchObject({ resultSaved: true, pending: null });
+    if (kind === 'cancel') f.owner.cancel(); else f.owner.detach();
+    gate.resolve(); await running;
+    expect(f.owner.getSnapshot()).toMatchObject({ active: { id: f.sessionId }, selected,
+      savedUnread: { id: f.prepared[0]!.manifest.sessionId }, resultSaved: true });
+    expect(execution.requests).toHaveLength(1); expect(f.branch.end).toHaveBeenCalledTimes(1);
+  });
   it.each(['cancel', 'invalid'] as const)('%s output keeps received prose but creates zero targets', async kind => {
     const f = await setup(), gate = deferred<void>(), rawText = kind === 'invalid' ? '<!-- MAHOSHOJO_ARENA_META {invalid -->' : directBranchText;
     const execution = directBranchExecution({ rawText, ...(kind === 'cancel' ? { afterText: () => gate.promise } : {}) });

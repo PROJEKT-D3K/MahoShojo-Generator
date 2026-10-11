@@ -20,3 +20,5 @@ export { BattleStoryPendingOutcome } from './pending-outcome';
 export type { BattleStoryPendingOutcomeProps } from './pending-outcome';
 export { BattleStoryDeleteSessionControls } from './delete-session-controls';
 export type { BattleStoryDeleteSessionControlsProps, BattleStoryDeleteSessionTargetView } from './delete-session-controls';
+export { BattleStoryBranchAction } from './branch-action';
+export type { BattleStoryBranchActionProps } from './branch-action';

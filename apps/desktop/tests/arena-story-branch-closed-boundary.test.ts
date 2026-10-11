@@ -4,7 +4,7 @@ import { createIpcStoryNativePort, STORY_IPC } from '../src/platform/arena-story
 import { STORY_BRANCH_IPC } from '../src/platform/arena-story-branch-native';
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
-describe('branch v2 has narrow IPC capability but no default product entry', () => {
+describe('branch v2 keeps its narrow IPC capability separate from v1', () => {
   it('registers exactly four branch commands for main-ui only', () => {
     const build = read('../src-tauri/build.rs');
     const lib = read('../src-tauri/src/lib.rs');
@@ -44,15 +44,16 @@ describe('branch v2 has narrow IPC capability but no default product entry', () 
     expect(lib.match(/expire_arena_story_stage\(app, begun.token.clone\(\)\)/gu)).toHaveLength(2);
     expect(lib).toContain('tokio::time::sleep(arena_story::STAGE_LIFETIME).await');
   });
-  it('keeps the actual default binder and both pages without branch injection', () => {
+  it('keeps v1 unchanged while both pages share explicit branch ports', () => {
     const port = createIpcStoryNativePort(vi.fn());
     expect(Object.keys(port).filter((key) => /branch/iu.test(key))).toEqual([]);
     expect(Object.values(STORY_IPC).filter((name) => /branch/iu.test(name))).toEqual([]);
     const page = read('../src/app/battle-page.tsx');
     expect(page).toContain('DesktopBattle()');
     expect(page).toContain('DesktopAdvancedArena()');
-    for (const source of [page, read('../src/features/arena/story-controls.tsx')]) {
-      expect(source).not.toMatch(/onBranch|startBranch|beginBranch|captureBranchCompletion|prepareBranchCompletion|arena-story-branch-native|arena-story-branch-source|arena-story-branch-storage|buildCompletedBattleStoryBranchRecords|desktop-arena-story-branch/u);
-    }
+    expect(page).toContain('port: createIpcStoryBranchNativePort(invoke)');
+    expect(page).toContain('source: createIpcStoryBranchSourcePort(invoke)');
+    expect(page).toContain('storyOwner.generateBranch(');
+    expect(read('../src/features/arena/story-controls.tsx')).toContain('BattleStoryBranchAction');
   });
 });
