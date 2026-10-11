@@ -123,7 +123,7 @@ fn abandon_unknown_save_never_mutates_committed_receipt_or_issues_new_attempt() 
 }
 
 #[test]
-fn restored_schema8_backup_keeps_cleanup_intent_and_original_actor_fence() {
+fn restored_backup_keeps_cleanup_intent_and_original_actor_fence() {
     let (root, lib) = fixture();
     let (manifest, parts) = unstarted(Product::Battle);
     let token = upload(lib.stories(), &manifest, &parts);

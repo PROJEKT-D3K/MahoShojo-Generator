@@ -2096,6 +2096,8 @@ pub(crate) fn fence_restored_database(path: &Path) -> Result<(), StoryError> {
 #[cfg(test)]
 #[path = "arena_story_pending_tests.rs"]
 pub(super) mod tests;
+#[cfg(test)]
+pub(crate) use tests::seed_historical_backup;
 
 // Equality of JSON values, including unknown object members and lone UTF-16
 // surrogate escapes. No Value tree, string normalization or name-based role match.

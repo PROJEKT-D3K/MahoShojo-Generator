@@ -2773,3 +2773,110 @@ fn history_pending_save_commits_revision_five_as_third_active_chapter() {
     .unwrap();
     assert!(store.pending_describe(m.product).unwrap().is_none());
 }
+
+// Produce valid pending records through the existing API, then copy only columns
+// actually present in the historical schema. Never open/migrate the destination.
+pub(crate) fn seed_historical_backup(destination: &Connection, version: i64, save_attempt: bool) {
+    assert!((6..=10).contains(&version));
+    let (_root, library) = fixture();
+    let store = library.stories();
+    let (frozen, parts) = candidate(Product::Battle, true);
+    let token = upload(store, &frozen, &parts);
+    store.pending_seal(&token).unwrap();
+    if save_attempt {
+        store
+            .pending_prepare_save(
+                &frozen.key(),
+                &frozen
+                    .commit_manifest
+                    .as_ref()
+                    .unwrap()
+                    .wire_digest()
+                    .unwrap(),
+            )
+            .unwrap();
+    }
+    let (unstarted, parts) = unstarted(Product::Arena);
+    let token = upload(store, &unstarted, &parts);
+    store.pending_seal(&token).unwrap();
+    // Leave an unpublished, fully uploaded revision for startup reclamation.
+    let mut next = unstarted.clone();
+    next.pending_revision += 1;
+    upload(store, &next, &parts);
+    let guard = store.pending_admission(unstarted.product).unwrap();
+    if version >= 7 {
+        let permit = store
+            .pending_claim_create(
+                &guard,
+                &unstarted.key(),
+                &unstarted.actor,
+                &unstarted.input_digest,
+                &"a".repeat(64),
+                native_funding(),
+            )
+            .unwrap();
+        store
+            .pending_consume_create(
+                &guard,
+                &unstarted.key(),
+                &unstarted.actor,
+                &unstarted.input_digest,
+                permit,
+            )
+            .unwrap();
+    }
+    if version >= 8 {
+        store
+            .pending_begin_abandon(
+                &guard,
+                &AbandonRequest {
+                    key: unstarted.key(),
+                    input_digest: unstarted.input_digest.clone(),
+                    actor: unstarted.actor.clone(),
+                },
+            )
+            .unwrap();
+    }
+    drop(guard);
+    let source = lock_connection(library.connection()).unwrap();
+    let mut columns =
+        "token,product,request_id,revision,active,metadata,total_bytes,save_attempt,restored"
+            .to_string();
+    if version >= 7 {
+        columns.push_str(",create_claim");
+    }
+    if version >= 8 {
+        columns.push_str(",abandon_requested");
+    }
+    destination.execute_batch("BEGIN").unwrap();
+    for (table, columns) in [
+        ("arena_story_pending", columns.as_str()),
+        (
+            "arena_story_pending_part",
+            "id,token,kind,byte_length,received_bytes,digest,payload",
+        ),
+    ] {
+        let mut statement = source
+            .prepare(&format!("SELECT {columns} FROM {table}"))
+            .unwrap();
+        let count = statement.column_count();
+        let rows = statement
+            .query_map([], |row| {
+                (0..count)
+                    .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap();
+        let placeholders = vec!["?"; count].join(",");
+        for row in rows {
+            destination
+                .execute(
+                    &format!("INSERT INTO {table} ({columns}) VALUES ({placeholders})"),
+                    rusqlite::params_from_iter(row.unwrap()),
+                )
+                .unwrap();
+        }
+    }
+    destination.execute_batch("COMMIT").unwrap();
+    audit(destination).unwrap();
+}

@@ -932,7 +932,7 @@ mod tests {
         crate::blob::digest_of(b"PK\x03\x04")
     }
 
-    fn historical_backup(root: &Path, version: i64, format_version: u32) -> String {
+    pub(super) fn historical_backup(root: &Path, version: i64, format_version: u32) -> String {
         let id = "local-library-20261003T000000Z";
         let directory = root.join(BACKUPS_DIRECTORY).join(id);
         fs::create_dir_all(directory.join("blobs")).expect("backup directories");
@@ -1457,3 +1457,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "backup_history_tests.rs"]
+mod history_tests;
