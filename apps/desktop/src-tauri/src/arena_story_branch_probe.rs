@@ -4,7 +4,7 @@ use std::time::Instant;
 
 const CAPACITY: usize = 64;
 #[derive(Clone, Copy, Debug, serde::Serialize)]
-pub(super) struct Event {
+pub(crate) struct Event {
     pub name: &'static str,
     pub nanos: u64,
     pub primary: Option<i32>,
@@ -79,7 +79,7 @@ fn push(state: &mut State, name: &'static str, raw: Option<(&rusqlite::Error, bo
     });
     state.len += 1;
 }
-pub(super) fn mark(name: &'static str) {
+pub(crate) fn mark(name: &'static str) {
     visit(|s| push(s, name, None));
 }
 pub(super) fn sqlite_error(
@@ -150,7 +150,7 @@ impl Drop for Release {
         });
     }
 }
-pub(super) fn enable() {
+pub(crate) fn enable() {
     INVALID.with(|v| v.set(false));
     STATE.with(|s| {
         let mut s = s.borrow_mut();
@@ -159,7 +159,7 @@ pub(super) fn enable() {
         s.start = Some(Instant::now());
     });
 }
-pub(super) fn take() -> Vec<Event> {
+pub(crate) fn take() -> Vec<Event> {
     assert!(
         !INVALID.with(Cell::get),
         "invalid/overflowed boundary observation"

@@ -346,6 +346,8 @@ pub(crate) mod receipt;
 
 #[path = "arena_story_branch_store.rs"]
 mod storage;
+#[cfg(test)]
+pub(crate) use storage::probe as resource_probe;
 pub(crate) use storage::{BranchManifest, BranchSource};
 
 #[path = "arena_story_branch_audit.rs"]

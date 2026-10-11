@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 #[path = "arena_story_branch_probe.rs"]
-mod probe;
+pub(crate) mod probe;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

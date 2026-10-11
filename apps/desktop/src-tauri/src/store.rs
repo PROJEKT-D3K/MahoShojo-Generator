@@ -61,8 +61,12 @@ pub fn open_shared_connection(paths: &LocalStorePaths) -> Result<SharedConnectio
         connection
             .set_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
             .map_err(|_| StoreError::Unavailable)?;
+        #[cfg(test)]
+        crate::arena_story::branch::resource_probe::mark("upgrade.pre-backup.before");
         crate::backup::backup_before_history_upgrade(root, &connection, had_sidecars)
             .map_err(StoreError::UpgradeBackup)?;
+        #[cfg(test)]
+        crate::arena_story::branch::resource_probe::mark("upgrade.pre-backup.after");
         connection
             .set_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, previous)
             .map_err(|_| StoreError::Unavailable)?;
@@ -414,22 +418,42 @@ pub fn timestamp_sort_key(updated_at: &str) -> Result<i64, StoreError> {
 /// `user_version` 写在事务内部因此会随回滚一起撤销：失败的迁移在磁盘上不留痕迹，下次
 /// 启动仍是"未应用"状态。
 fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), StoreError> {
+    #[cfg(test)]
+    if step.version == 11 {
+        crate::arena_story::branch::resource_probe::mark("migration11.begin.before");
+    }
     connection
         .execute_batch("BEGIN IMMEDIATE")
         .map_err(|_| StoreError::Failure)?;
+    #[cfg(test)]
+    if step.version == 11 {
+        crate::arena_story::branch::resource_probe::mark("migration11.begin.after");
+    }
 
     let outcome = (|| {
         if step.version == 11 {
+            #[cfg(test)]
+            crate::arena_story::branch::resource_probe::mark("migration11.pre-audit.before");
             crate::arena_story::branch::history::verify_schema(connection, 10)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::branch::audit::audit_relations(connection)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::pending::audit(connection)
                 .map_err(|_| StoreError::InvalidDocument)?;
+            #[cfg(test)]
+            crate::arena_story::branch::resource_probe::mark("migration11.pre-audit.after");
+        }
+        #[cfg(test)]
+        if step.version == 11 {
+            crate::arena_story::branch::resource_probe::mark("migration11.sql.before");
         }
         connection
             .execute_batch(step.sql)
             .map_err(|_| StoreError::Failure)?;
+        #[cfg(test)]
+        if step.version == 11 {
+            crate::arena_story::branch::resource_probe::mark("migration11.sql.after");
+        }
         connection
             .execute(
                 "INSERT OR IGNORE INTO schema_migration (version, applied_at) VALUES (?1, ?2)",
@@ -440,6 +464,8 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
             .execute_batch(&format!("PRAGMA user_version = {}", step.version))
             .map_err(|_| StoreError::Failure)?;
         if step.version == 11 {
+            #[cfg(test)]
+            crate::arena_story::branch::resource_probe::mark("migration11.post-audit.before");
             crate::arena_story::branch::history::verify_schema(connection, 11)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::branch::history::audit_relations(connection)
@@ -454,6 +480,8 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
             if invalid {
                 return Err(StoreError::InvalidDocument);
             }
+            #[cfg(test)]
+            crate::arena_story::branch::resource_probe::mark("migration11.post-audit.after");
         }
         Ok(())
     })();
@@ -462,11 +490,19 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
         rollback_migration(connection)?;
         return Err(error);
     }
+    #[cfg(test)]
+    if step.version == 11 {
+        crate::arena_story::branch::resource_probe::mark("migration11.commit.before");
+    }
     if connection.execute_batch("COMMIT").is_err() {
         // Deferred FK or disk failures can surface only at COMMIT. Do not leave
         // the migration transaction active with a misleading new user_version.
         rollback_migration(connection)?;
         return Err(StoreError::Failure);
+    }
+    #[cfg(test)]
+    if step.version == 11 {
+        crate::arena_story::branch::resource_probe::mark("migration11.commit.after");
     }
     Ok(())
 }

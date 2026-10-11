@@ -1620,3 +1620,6 @@ pub(crate) fn rewrite_for_branch(
     manifest.parts = declarations(&parts);
     rewrite(store, &manifest, &parts)
 }
+
+#[path = "arena_story_history_resource_tests.rs"]
+mod resource_probes;
