@@ -1420,7 +1420,7 @@ pub async fn stream_target_ai(
     registry: &RequestRegistry,
     on_event: &dyn EventSink,
 ) -> Result<(), DirectAiError> {
-    use crate::provider_target::{resolve_direct_preset, ProviderTarget};
+    use crate::provider_target::{resolve_direct_preset, resolve_hosted_preset, ProviderTarget};
     match target {
         ProviderTarget::Custom { profile_id } => {
             stream_direct_ai(&profile_id, request, store, secrets, registry, on_event).await
@@ -1446,6 +1446,20 @@ pub async fn stream_target_ai(
                     .map_err(|error| {
                         DirectAiError::new(DirectAiErrorCode::ProfileRejected, error.message())
                     })?;
+            let preset =
+                resolve_hosted_preset(&provider_id, &profile.model_id).map_err(|error| {
+                    DirectAiError::new(DirectAiErrorCode::ProfileRejected, error.message())
+                })?;
+            // Explicit JSON mode cannot silently become text: this generic IPC has no schema.
+            // Product generation already uses prompt JSON with local validation and responseFormat=text.
+            if preset.structured_output.as_deref() == Some("text-json")
+                && request.response_format.as_deref() == Some("json")
+            {
+                return Err(DirectAiError::new(
+                    DirectAiErrorCode::UnsupportedRequest,
+                    "provider requires prompt JSON with local schema validation, not JSON response format",
+                ));
+            }
             request.model_id = Some(profile.model_id.clone());
             stream_resolved_direct_ai(
                 profile,
@@ -1773,5 +1787,29 @@ mod credential_snapshot_tests {
         // 从未写入或先行删除同一 ref——两种情形都不得发出带凭据请求。
         let error = build_headers(&execution_profile(), &secrets).unwrap_err();
         assert_eq!(error.code, super::DirectAiErrorCode::MissingSecret);
+    }
+}
+
+#[cfg(test)]
+mod request_body_tests {
+    use super::*;
+
+    #[test]
+    fn existing_json_request_keeps_json_object_and_text_has_no_response_format() {
+        let profile =
+            crate::provider_target::resolve_direct_preset("deepseek", "plain-model").unwrap();
+        let mut request: AiExecutionRequest = serde_json::from_value(serde_json::json!({
+            "requestId": "body-policy-test", "contractVersion": 1, "mode": "direct-local",
+            "messages": [{"role": "user", "content": "Return JSON"}], "responseFormat": "json"
+        }))
+        .unwrap();
+        assert_eq!(
+            build_request_body(&profile, &request)["response_format"],
+            serde_json::json!({"type": "json_object"})
+        );
+        request.response_format = Some("text".into());
+        assert!(build_request_body(&profile, &request)
+            .get("response_format")
+            .is_none());
     }
 }

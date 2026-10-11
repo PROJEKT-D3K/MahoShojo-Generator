@@ -2,6 +2,7 @@ import { generateObject, generateText, NoObjectGeneratedError } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createDeepSeek } from "@ai-sdk/deepseek";
+import { findAiProviderPreset } from '@mahoshojo/ai-core/provider-catalog';
 import { getProviderFetch } from './provider-fetch';
 import { resolveGenerationSettings } from './generation-settings/resolve';
 import { enhanceErrorWithUpstreamMessage } from './error-extraction';
@@ -528,7 +529,11 @@ async function generateWithAIUsing<T, I = string>(
         };
 
         // 0) 预判：某些模型（如 Gemma / GLM）不支持 JSON mode，直接走“文本 JSON + 本地解析”避免硬错误与二次请求
-        if (shouldForceTextJsonFallback(selectedModel)) {
+        const preset = provider.providerId ? findAiProviderPreset(provider.providerId) : null;
+        const usePresetTextJson = preset?.structuredOutput === 'text-json'
+          && preset.type === provider.type
+          && preset.baseUrl === provider.baseUrl;
+        if (usePresetTextJson || shouldForceTextJsonFallback(selectedModel)) {
           log.warn('检测到模型可能不支持 JSON mode，直接启用兼容回退（文本生成 JSON + 本地解析）', {
             provider: provider.name,
             model: selectedModel,

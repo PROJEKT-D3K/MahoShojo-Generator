@@ -29,6 +29,18 @@
         "adapter": null
       },
       {
+        "id": "gpt-6.1-sol",
+        "adapter": null
+      },
+      {
+        "id": "gpt-6-luna",
+        "adapter": null
+      },
+      {
+        "id": "gpt-6-sol",
+        "adapter": null
+      },
+      {
         "id": "gpt-5.5",
         "adapter": null
       },
@@ -337,6 +349,14 @@
     "endpointKind": "provider-public",
     "adapter": "openai-compatible",
     "models": [
+      {
+        "id": "mimo-v2.6-pro",
+        "adapter": null
+      },
+      {
+        "id": "mimo-v2.6-flash",
+        "adapter": null
+      },
       {
         "id": "mimo-v2.5-pro",
         "adapter": null
@@ -1034,6 +1054,14 @@
         "adapter": null
       },
       {
+        "id": "openai/gpt-6.1-sol",
+        "adapter": null
+      },
+      {
+        "id": "openai/gpt-6-luna",
+        "adapter": null
+      },
+      {
         "id": "openai/gpt-5.5",
         "adapter": null
       },
@@ -1062,6 +1090,18 @@
         "adapter": null
       },
       {
+        "id": "anthropic/claude-opus-5.5",
+        "adapter": null
+      },
+      {
+        "id": "anthropic/claude-sonnet-5.5",
+        "adapter": null
+      },
+      {
+        "id": "anthropic/claude-haiku-5.5",
+        "adapter": null
+      },
+      {
         "id": "anthropic/claude-fable-5.1",
         "adapter": null
       },
@@ -1074,7 +1114,15 @@
         "adapter": null
       },
       {
+        "id": "x-ai/grok-4.7",
+        "adapter": null
+      },
+      {
         "id": "x-ai/grok-4.5",
+        "adapter": null
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash",
         "adapter": null
       },
       {
@@ -1087,6 +1135,10 @@
       },
       {
         "id": "deepseek/deepseek-v4-pro",
+        "adapter": null
+      },
+      {
+        "id": "qwen/qwen3.8-flash",
         "adapter": null
       },
       {
@@ -1165,6 +1217,18 @@
         "adapter": null
       },
       {
+        "id": "GPT-6.1-Sol",
+        "adapter": null
+      },
+      {
+        "id": "GPT-6-Luna",
+        "adapter": null
+      },
+      {
+        "id": "GPT-6-Sol",
+        "adapter": null
+      },
+      {
         "id": "GPT-5.5",
         "adapter": null
       },
@@ -1185,6 +1249,18 @@
         "adapter": null
       },
       {
+        "id": "Claude-Opus-5.5",
+        "adapter": null
+      },
+      {
+        "id": "Claude-Sonnet-5.5",
+        "adapter": null
+      },
+      {
+        "id": "Claude-Fable-5.1",
+        "adapter": null
+      },
+      {
         "id": "Claude-Opus-4.8",
         "adapter": null
       },
@@ -1194,6 +1270,10 @@
       },
       {
         "id": "Claude-Haiku-4.5",
+        "adapter": null
+      },
+      {
+        "id": "Grok-4.7",
         "adapter": null
       },
       {
@@ -1320,6 +1400,10 @@
         "adapter": null
       },
       {
+        "id": "nvidia/nemotron-3-ultra-550b-a55b",
+        "adapter": null
+      },
+      {
         "id": "nvidia/nemotron-3-super-120b-a12b",
         "adapter": null
       }
@@ -1335,11 +1419,19 @@
     "adapter": null,
     "models": [
       {
+        "id": "deepseek-v4.1-flash",
+        "adapter": "openai-compatible"
+      },
+      {
         "id": "deepseek-v4-flash",
         "adapter": "openai-compatible"
       },
       {
         "id": "deepseek-v4-pro",
+        "adapter": "openai-compatible"
+      },
+      {
+        "id": "glm-5.3",
         "adapter": "openai-compatible"
       },
       {
@@ -1402,6 +1494,10 @@
     "adapter": null,
     "models": [
       {
+        "id": "deepseek-v4.1-flash",
+        "adapter": "openai-compatible"
+      },
+      {
         "id": "deepseek-v4-flash",
         "adapter": "openai-compatible"
       },
@@ -1430,6 +1526,14 @@
         "adapter": "openai-compatible"
       },
       {
+        "id": "mimo-v2.6-pro",
+        "adapter": "openai-compatible"
+      },
+      {
+        "id": "mimo-v2.6-flash",
+        "adapter": "openai-compatible"
+      },
+      {
         "id": "mimo-v2.5-pro",
         "adapter": "openai-compatible"
       },
@@ -1438,8 +1542,168 @@
         "adapter": "openai-compatible"
       },
       {
+        "id": "hy4-preview",
+        "adapter": "openai-compatible"
+      },
+      {
         "id": "hy3",
         "adapter": "openai-compatible"
+      }
+    ]
+  },
+  {
+    "id": "sta1n",
+    "name": "STA1N",
+    "baseUrl": "https://cdn.sta1n.cn/v1",
+    "providerType": "openai",
+    "modelAliases": {},
+    "endpointKind": "provider-public",
+    "structuredOutput": "text-json",
+    "adapter": "openai-compatible",
+    "models": [
+      {
+        "id": "[次][抗截断]gemini-3.1-pro-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][抗截断]gemini-3.6-flash-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][抗截断]gemini-3.7-flash-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][抗截断]gemini-3.8-flash-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][AN]gemini-3.1-pro-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][AN]gemini-3.5-flash-lite",
+        "adapter": null
+      },
+      {
+        "id": "[公益]Gemini",
+        "adapter": null
+      },
+      {
+        "id": "[公益]gemini-3.1-flash-lite",
+        "adapter": null
+      },
+      {
+        "id": "[公益]gemini-3.5-flash-lite",
+        "adapter": null
+      },
+      {
+        "id": "[次][Kiro]claude-opus-4-6-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][Kiro]claude-opus-4-7-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][Kiro]claude-opus-4-8-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][Kiro]claude-opus-5-5-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][Kiro]claude-opus-5-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[次][Kiro]claude-sonnet-5-5-thinking",
+        "adapter": null
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "adapter": null
+      },
+      {
+        "id": "[特价]DeepSeek-V4.1-Flash",
+        "adapter": null
+      },
+      {
+        "id": "[特价]GLM-5.3-Flash",
+        "adapter": null
+      },
+      {
+        "id": "[Cloud]GLM-5.3",
+        "adapter": null
+      },
+      {
+        "id": "[Cloud]Kimi-K3",
+        "adapter": null
+      },
+      {
+        "id": "[Cloud]Kimi-K2.6-thinking",
+        "adapter": null
+      },
+      {
+        "id": "[Cloud]Minimax-M3",
+        "adapter": null
+      },
+      {
+        "id": "mimo-v2.6-flash",
+        "adapter": null
+      }
+    ]
+  },
+  {
+    "id": "intern-discovery",
+    "name": "端砚 · 上海人工智能实验室",
+    "baseUrl": "https://discovery-api.intern-ai.org.cn/v1",
+    "providerType": "openai",
+    "modelAliases": {},
+    "endpointKind": "provider-public",
+    "structuredOutput": "text-json",
+    "adapter": "openai-compatible",
+    "models": [
+      {
+        "id": "intern-s2",
+        "adapter": null
+      },
+      {
+        "id": "Atria-Dawn-Preview",
+        "adapter": null
+      },
+      {
+        "id": "Agents-A1",
+        "adapter": null
+      },
+      {
+        "id": "deepseek-v4-flash-0731",
+        "adapter": null
+      },
+      {
+        "id": "deepseek-v4-flash-vision",
+        "adapter": null
+      },
+      {
+        "id": "deepseek-v4-pro-0813",
+        "adapter": null
+      },
+      {
+        "id": "glm-5.3",
+        "adapter": null
+      },
+      {
+        "id": "kimi-k2.6",
+        "adapter": null
+      },
+      {
+        "id": "minimax-m3",
+        "adapter": null
+      },
+      {
+        "id": "qwen3.8-27b",
+        "adapter": null
       }
     ]
   },

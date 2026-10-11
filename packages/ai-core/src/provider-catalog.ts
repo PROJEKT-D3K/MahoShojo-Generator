@@ -30,6 +30,8 @@ export interface AIProviderOption {
     readonly type: 'openai' | 'google' | 'deepseek';
     // 待实现
     readonly mode?: 'auto' | 'json' | 'tool';
+    /** 未核验原生结构化输出的端点直接用提示词 JSON + 本地 schema 校验。 */
+    readonly structuredOutput?: 'text-json';
     readonly models: readonly AIModelOption[];
 }
 
@@ -302,16 +304,19 @@ export const resolveAIProviderModel = (
     return { modelId: normalizeResolvedModelId(provider, customModelId), isCustom: true };
 };
 
+// 官方型号与停服公告：https://mimo.mi.com/docs/en-US/quick-start/model（2026-10-11 核验）。
 const XIAOMI_MIMO_MODELS: readonly AIModelOption[] = [
+    { value: 'mimo-v2.6-pro', label: 'MiMo V2.6 Pro', description: '小米 MiMo 新版 Pro 模型，适合复杂指令与高质量生成。' },
+    { value: 'mimo-v2.6-flash', label: 'MiMo V2.6 Flash', description: '小米 MiMo 新版 Flash 模型，适合快速交互与日常生成。' },
     {
         value: 'mimo-v2.5-pro',
         label: 'MiMo V2.5 Pro',
-        description: '小米 MiMo V2.5 Pro，适合复杂指令、长文本创作与高质量生成。'
+        description: '历史型号；官方公告将于北京时间 2026-10-21 10:00 停服，建议改选 MiMo V2.6 Pro。'
     },
     {
         value: 'mimo-v2.5',
         label: 'MiMo V2.5',
-        description: '小米 MiMo V2.5 通用模型，适合日常对话、剧情推进与结构化文本生成。'
+        description: '历史型号；官方公告将于北京时间 2026-10-21 10:00 停服，建议改选 MiMo V2.6 Flash。'
     }
 ];
 
@@ -433,16 +438,17 @@ const OPENAI_COMPATIBLE_DIRECT_WIRE: AiDirectWireEvidence = Object.freeze({
 const OPENCODE_ZEN_CHAT_COMPLETIONS_WIRE: AiDirectWireEvidence = Object.freeze({
     adapter: 'openai-compatible',
     sourceUrl: 'https://opencode.ai/docs/en/zen/',
-    reviewedAt: '2026-10-04',
+    reviewedAt: '2026-10-11',
 });
 
 const OPENCODE_GO_CHAT_COMPLETIONS_WIRE: AiDirectWireEvidence = Object.freeze({
     adapter: 'openai-compatible',
     sourceUrl: 'https://opencode.ai/docs/go/',
-    reviewedAt: '2026-10-04',
+    reviewedAt: '2026-10-11',
 });
 
 const OPENCODE_ZEN_CHAT_COMPLETIONS_MODEL_IDS: ReadonlySet<string> = new Set([
+    'deepseek-v4.1-flash',
     'deepseek-v4-flash',
     'deepseek-v4-flash-free',
     'deepseek-v4-pro',
@@ -460,14 +466,18 @@ const OPENCODE_ZEN_CHAT_COMPLETIONS_MODEL_IDS: ReadonlySet<string> = new Set([
 ]);
 
 const OPENCODE_GO_CHAT_COMPLETIONS_MODEL_IDS: ReadonlySet<string> = new Set([
+    'deepseek-v4.1-flash',
     'deepseek-v4-flash',
     'deepseek-v4-pro',
     'glm-5.3',
     'glm-5.3-flash',
+    'hy4-preview',
     'hy3',
     'kimi-k2.6',
     'kimi-k2.7-code',
     'kimi-k3',
+    'mimo-v2.6-pro',
+    'mimo-v2.6-flash',
     'mimo-v2.5',
     'mimo-v2.5-pro',
 ]);
@@ -528,6 +538,9 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
                 label: 'Gemini 2.5 Pro',
                 description: 'Google 前代旗舰模型系列，综合性能均衡，适合复杂创作与推理。'
             },
+            { value: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', description: 'OpenAI 新一代 Sol 模型，适合复杂指令与内容生成。' },
+            { value: 'gpt-6-luna', label: 'GPT-6 Luna', description: 'OpenAI Luna 模型，适合快速交互与日常生成。' },
+            { value: 'gpt-6-sol', label: 'GPT-6 Sol', description: 'OpenAI Sol 模型，适合通用创作与复杂任务。' },
             {
                 value: 'gpt-5.5',
                 label: 'GPT-5.5',
@@ -1727,6 +1740,8 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
             { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Google 前代旗舰模型系列，综合性能均衡，适合复杂创作与推理。' },
             { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Google 前代旗舰模型系列，在性能和价格上十分均衡，也是魔法少女生成器默认使用的模型。' },
             { value: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite', description: 'Google 前代旗舰模型系列，性能略逊但速度很快，是魔法少女生成器默认使用的轻量模型。' },
+            { value: 'openai/gpt-6.1-sol', label: 'GPT-6.1 Sol', description: 'OpenAI 新一代 Sol 模型，适合复杂指令与内容生成。' },
+            { value: 'openai/gpt-6-luna', label: 'GPT-6 Luna', description: 'OpenAI Luna 模型，适合快速交互与日常生成。' },
             { value: 'openai/gpt-5.5', label: 'GPT-5.5', description: 'OpenAI 旗舰模型，适合高质量内容生成与复杂任务。' },
             { value: 'openai/gpt-5.4', label: 'GPT-5.4', description: 'OpenAI 通用模型，适合高质量内容生成与复杂任务。' },
             { value: 'openai/gpt-5.6-luna', label: 'GPT-5.6 Luna', description: 'GPT-5.6 系列高性价比模型，主打极致速度与成本效益，适合高频调用、低延迟的高吞吐量任务。' },
@@ -1734,13 +1749,19 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
             { value: 'openai/gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'GPT-5.6 系列旗舰模型，专为复杂编程、科研与多步推理等高端任务设计，支持深度推理与多智能体协作。' },
             { value: 'openai/gpt-6-astra', label: 'GPT-6 Astra', description: 'GPT-6 系列旗舰模型，专为复杂编程、科研与多步推理等高端任务设计，支持深度推理与多智能体协作。' },
             { value: 'openai/gpt-6-astra-pro', label: 'GPT-6 Astra Pro', description: 'GPT-6 Astra 的 Pro 推理档，适合质量优先的高难度任务。' },
+            { value: 'anthropic/claude-opus-5.5', label: 'Claude Opus 5.5', description: 'Anthropic Opus 模型，适合复杂任务与高质量创作。' },
+            { value: 'anthropic/claude-sonnet-5.5', label: 'Claude Sonnet 5.5', description: 'Anthropic Sonnet 模型，适合日常写作与推理。' },
+            { value: 'anthropic/claude-haiku-5.5', label: 'Claude Haiku 5.5', description: 'Anthropic Haiku 模型，适合快速交互与轻量生成。' },
             { value: 'anthropic/claude-fable-5.1', label: 'Claude Fable 5.1', description: 'Anthropic 最新高端模型之一，适合高难度推理、长程 Agent 编码、研究与知识工作。' },
             { value: 'anthropic/claude-opus-4.8', label: 'Claude Opus 4.8', description: 'Anthropic 旗下旗舰模型，非常适合复杂的专业任务和高级代理。' },
             { value: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet 4.6', description: 'Anthropic 旗下主力模型之一，写作、推理与长文本表现稳定。' },
+            { value: 'x-ai/grok-4.7', label: 'Grok 4.7', description: 'xAI 通用模型，适合创作与问答。' },
             { value: 'x-ai/grok-4.5', label: 'Grok 4.5', description: 'xAI 通用模型，适合头脑风暴、创意发散与快速问答。' },
+            { value: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', description: 'DeepSeek 新版 Flash 模型，适合日常生成与复杂指令。' },
             { value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash Preview', description: 'DeepSeek V4 Flash 预览版，百万级上下文，兼顾质量与成本。' },
             { value: 'deepseek/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash', description: 'DeepSeek V4 Flash 正式版，Agent 能力大幅增强，百万级上下文，兼顾质量与成本。' },
             { value: 'deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro', description: 'DeepSeek V4 的高性能版本，适合需要高精度和复杂推理的任务。' },
+            { value: 'qwen/qwen3.8-flash', label: 'Qwen 3.8 Flash', description: '通义千问 Flash 模型，适合快速生成与交互。' },
             { value: 'qwen/qwen3.8-max', label: 'Qwen 3.8 Max', description: '通义千问 3.8 旗舰模型，2.4 万亿参数 MoE，编程与办公能力全面跃升，原生视觉理解，适合长周期自主任务。' },
             { value: 'qwen/qwen3.7-max', label: 'Qwen 3.7 Max', description: '通义千问 3.7 旗舰模型，面向智能体工作负载，编码与长周期自主任务能力强，支持提示缓存。' },
             { value: 'qwen/qwen3.6-plus', label: 'Qwen 3.6 Plus', description: '通义千问 3.6 Plus，混合架构结合线性注意力与 MoE，智能体编码与推理能力突出。' },
@@ -1809,6 +1830,9 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
                 label: 'Gemini 3.6 Flash',
                 description: 'Google 的新模型，据用户评测说很喜欢一惊一乍，还挺中二的。'
             },
+            { value: 'GPT-6.1-Sol', label: 'GPT-6.1 Sol', description: 'OpenAI 新一代 Sol 模型，适合复杂指令与内容生成。' },
+            { value: 'GPT-6-Luna', label: 'GPT-6 Luna', description: 'OpenAI Luna 模型，适合快速交互与日常生成。' },
+            { value: 'GPT-6-Sol', label: 'GPT-6 Sol', description: 'OpenAI Sol 模型，适合通用创作与复杂任务。' },
             {
                 value: 'GPT-5.5',
                 label: 'GPT-5.5',
@@ -1834,6 +1858,9 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
                 label: 'GPT-5.6 Sol',
                 description: 'GPT-5.6 系列旗舰模型，专为复杂编程、科研与多步推理等高端任务设计，支持深度推理与多智能体协作。'
             },
+            { value: 'Claude-Opus-5.5', label: 'Claude Opus 5.5', description: 'Poe 官方 Claude Opus Bot，适合复杂任务与高质量创作。' },
+            { value: 'Claude-Sonnet-5.5', label: 'Claude Sonnet 5.5', description: 'Poe 官方 Claude Sonnet Bot，适合写作与推理。' },
+            { value: 'Claude-Fable-5.1', label: 'Claude Fable 5.1', description: 'Poe 官方 Claude Fable Bot，适合长文本创作与复杂任务。' },
             {
                 value: 'Claude-Opus-4.8',
                 label: 'Claude Opus 4.8',
@@ -1849,6 +1876,7 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
                 label: 'Claude Haiku 4.5',
                 description: '更快更省的 Claude，适合高频对话、草稿生成与轻量改写。'
             },
+            { value: 'Grok-4.7', label: 'Grok 4.7', description: 'Poe 官方 Grok Bot，适合创作与问答。' },
             {
                 value: 'Grok-4.5',
                 label: 'Grok 4.5',
@@ -2006,6 +2034,7 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
                 label: 'Nemotron Mini 4B Instruct',
                 description: '超轻量模型，适合低门槛试用与简短结构化输出。'
             },
+            { value: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'Nemotron 3 Ultra', description: 'NVIDIA Nemotron Ultra 模型，适合复杂指令与内容生成。' },
             {
                 value: 'nvidia/nemotron-3-super-120b-a12b',
                 label: 'Nemotron 3 Super',
@@ -2025,6 +2054,7 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
         // 多协议端点：无 preset 级 direct 声明，逐模型核验（Zen 侧 allowlist）。
         models: markModelsWithDirectWire(
             [
+            { value: 'deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', description: 'DeepSeek 新版 Flash 模型，适合日常生成与复杂指令。' },
             {
                 value: 'deepseek-v4-flash',
                 label: 'DeepSeek V4 Flash',
@@ -2035,6 +2065,7 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
                 label: 'DeepSeek V4 Pro',
                 description: 'DeepSeek V4 完全体，适合复杂分析、长文本写作与高质量生成。'
             },
+            { value: 'glm-5.3', label: 'GLM-5.3', description: '智谱通用模型，适合复杂指令与内容生成。' },
             {
                 value: 'glm-5.3-flash',
                 label: 'GLM-5.3 Flash',
@@ -2112,6 +2143,7 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
         // 多协议端点：无 preset 级 direct 声明，逐模型核验（Go 侧 allowlist）。
         models: markModelsWithDirectWire(
             [
+            { value: 'deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash', description: 'DeepSeek 新版 Flash 模型，适合日常生成与复杂指令。' },
             {
                 value: 'deepseek-v4-flash',
                 label: 'DeepSeek V4 Flash',
@@ -2148,6 +2180,7 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
                 description: 'Moonshot 通用模型，适合中文创作、角色设定、摘要与多轮指令跟随。'
             },
             ...XIAOMI_MIMO_MODELS,
+            { value: 'hy4-preview', label: '混元 Hy4 Preview', description: '腾讯混元预览模型，适合通用生成与复杂任务。' },
             {
                 value: 'hy3',
                 label: '混元 Hy3',
@@ -2157,6 +2190,76 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
             OPENCODE_GO_CHAT_COMPLETIONS_MODEL_IDS,
             OPENCODE_GO_CHAT_COMPLETIONS_WIRE
         )
+    },
+    {
+        id: 'sta1n',
+        name: 'STA1N',
+        description: 'STA1N 模型中转，提供 Gemini、Claude 等模型。名称中的渠道、公益、抗截断等标签沿用供应商原名，价格与行为以平台实际服务为准。',
+        docsUrl: 'https://cdn.sta1n.cn',
+        baseUrl: 'https://cdn.sta1n.cn/v1',
+        type: 'openai',
+        mode: 'auto',
+        structuredOutput: 'text-json',
+        endpointKind: 'provider-public',
+        // 2026-10-11 用户提供服务目录与 /v1/chat/completions 接入说明；未进行带 Key 实测。
+        // 本项目仅使用 Chat adapter，不宣称实现其 Responses/Messages，也不从名称推导 thinking。
+        direct: { adapter: 'openai-compatible', reviewedAt: '2026-10-11' },
+        models: [
+            { value: '[次][抗截断]gemini-3.1-pro-thinking', label: '[次][抗截断]gemini-3.1-pro-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][抗截断]gemini-3.6-flash-thinking', label: '[次][抗截断]gemini-3.6-flash-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][抗截断]gemini-3.7-flash-thinking', label: '[次][抗截断]gemini-3.7-flash-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][抗截断]gemini-3.8-flash-thinking', label: '[次][抗截断]gemini-3.8-flash-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][AN]gemini-3.1-pro-thinking', label: '[次][AN]gemini-3.1-pro-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][AN]gemini-3.5-flash-lite', label: '[次][AN]gemini-3.5-flash-lite', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[公益]Gemini', label: '[公益]Gemini', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[公益]gemini-3.1-flash-lite', label: '[公益]gemini-3.1-flash-lite', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[公益]gemini-3.5-flash-lite', label: '[公益]gemini-3.5-flash-lite', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][Kiro]claude-opus-4-6-thinking', label: '[次][Kiro]claude-opus-4-6-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][Kiro]claude-opus-4-7-thinking', label: '[次][Kiro]claude-opus-4-7-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][Kiro]claude-opus-4-8-thinking', label: '[次][Kiro]claude-opus-4-8-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][Kiro]claude-opus-5-5-thinking', label: '[次][Kiro]claude-opus-5-5-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][Kiro]claude-opus-5-thinking', label: '[次][Kiro]claude-opus-5-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[次][Kiro]claude-sonnet-5-5-thinking', label: '[次][Kiro]claude-sonnet-5-5-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[特价]DeepSeek-V4.1-Flash', label: '[特价]DeepSeek-V4.1-Flash', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[特价]GLM-5.3-Flash', label: '[特价]GLM-5.3-Flash', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[Cloud]GLM-5.3', label: '[Cloud]GLM-5.3', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[Cloud]Kimi-K3', label: '[Cloud]Kimi-K3', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[Cloud]Kimi-K2.6-thinking', label: '[Cloud]Kimi-K2.6-thinking', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: '[Cloud]Minimax-M3', label: '[Cloud]Minimax-M3', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+            { value: 'mimo-v2.6-flash', label: 'mimo-v2.6-flash', description: '供应商原始模型 ID；渠道标签不代表本项目对价格、协议或输出行为的保证。' },
+        ]
+    },
+    {
+        id: 'intern-discovery',
+        name: '端砚 · 上海人工智能实验室',
+        description: '上海人工智能实验室端砚平台，提供 Intern、DeepSeek、GLM、Kimi 等模型；额度与活动以平台说明为准。',
+        docsUrl: 'https://discovery.intern-ai.org.cn',
+        baseUrl: 'https://discovery-api.intern-ai.org.cn/v1',
+        type: 'openai',
+        mode: 'auto',
+        structuredOutput: 'text-json',
+        endpointKind: 'provider-public',
+        // 官方 API 概览与 Chat 文档明确 Bearer、chat/completions 及 SSE [DONE]。
+        // 未承诺 response_format/json_schema 或请求级 thinking 控制，不据模型家族推断能力。
+        direct: {
+            adapter: 'openai-compatible',
+            sourceUrl: 'https://cdn-static.openxlab.org.cn/magic-maker/action-static/tokenplan-doc/api-reference/03-chat-completions.md',
+            reviewedAt: '2026-10-11',
+        },
+        // 精确大小写/日期版本来自官方 quick-start/04-model-limits-and-pricing.md。
+        models: [
+            { value: 'intern-s2', label: 'Intern S2', description: '上海人工智能实验室通用模型；活动与额度以平台当前说明为准。' },
+            { value: 'Atria-Dawn-Preview', label: 'Atria Dawn Preview', description: '平台预览模型；活动与额度以平台当前说明为准。' },
+            { value: 'Agents-A1', label: 'Agents A1', description: '平台通用模型；活动与额度以平台当前说明为准。' },
+            { value: 'deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash 0731', description: '端砚提供的 DeepSeek V4 Flash 日期版本。' },
+            { value: 'deepseek-v4-flash-vision', label: 'DeepSeek V4 Flash Vision', description: '端砚提供的 DeepSeek V4 Flash Vision；当前用于文本生成。' },
+            { value: 'deepseek-v4-pro-0813', label: 'DeepSeek V4 Pro 0813', description: '端砚提供的 DeepSeek V4 Pro 日期版本。' },
+            { value: 'glm-5.3', label: 'GLM-5.3', description: '端砚提供的智谱 GLM 5.3。' },
+            { value: 'kimi-k2.6', label: 'Kimi K2.6', description: '端砚提供的 Moonshot Kimi K2.6。' },
+            { value: 'minimax-m3', label: 'MiniMax M3', description: '端砚提供的 MiniMax M3。' },
+            { value: 'qwen3.8-27b', label: 'Qwen 3.8 27B', description: '端砚提供的通义千问 Qwen 3.8 27B。' },
+        ]
     },
     {
         id: 'mystery',

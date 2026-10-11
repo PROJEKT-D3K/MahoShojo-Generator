@@ -21,6 +21,7 @@ describe('native provider authority', () => {
       expect(entry.providerType).toBe(preset.type);
       expect(entry.modelAliases).toEqual(AI_PROVIDER_MODEL_ALIASES[preset.id] ?? {});
       expect(entry.endpointKind).toBe(preset.endpointKind);
+      expect(entry.structuredOutput).toBe(preset.structuredOutput);
       expect(entry.models.map((model: { id: string }) => model.id)).toEqual(preset.models.map((model) => model.value));
       for (const model of [...preset.models, { value: 'not-a-catalog-model' }]) {
         const wire = describeAiPresetModelDirectWire(preset, model.value);

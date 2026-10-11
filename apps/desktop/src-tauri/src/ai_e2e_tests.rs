@@ -307,6 +307,7 @@ impl EventSink for TerminalFailingSink {
 #[derive(Default)]
 struct TestSecretStore {
     values: Mutex<BTreeMap<String, String>>,
+    resolve_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl SecretStore for TestSecretStore {
@@ -335,6 +336,8 @@ impl SecretStore for TestSecretStore {
     }
 
     fn resolve(&self, secret_ref: &str) -> Result<Option<String>, SecretStoreError> {
+        self.resolve_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self
             .values
             .lock()
@@ -1961,5 +1964,115 @@ async fn legacy_native_behavior_is_unchanged_and_ts_retains_its_result_boundary(
         matches!(terminals(&sink.snapshot())[0], AiExecutionResult::Completed(result) if result.output.text.as_ref().unwrap().len() == 1_000_000)
     );
     assert_eq!(registry.len(), 0);
+    assert_eq!(server.observation.await.unwrap().request_count, 1);
+}
+
+#[tokio::test]
+async fn prompt_json_presets_reject_json_before_secrets_or_dispatch() {
+    let store = LocalStore::open_in_memory().unwrap();
+    let secrets = TestSecretStore::default();
+    for (provider, model) in [
+        ("intern-discovery", "deepseek-v4-flash-0731"),
+        ("intern-discovery", "custom-model"),
+        ("sta1n", "[次][抗截断]gemini-3.8-flash-thinking"),
+        ("sta1n", "custom-model"),
+    ] {
+        let sink = CollectingSink::default();
+        let mut req = request("intern-explicit-json");
+        req.model_id = Some(model.into());
+        req.response_format = Some("json".into());
+        let error = crate::ai::stream_target_ai(
+            crate::provider_target::ProviderTarget::Preset {
+                provider_id: provider.into(),
+            },
+            req,
+            &store,
+            &secrets,
+            &RequestRegistry::default(),
+            &sink,
+        )
+        .await
+        .expect_err("unsupported JSON format must be rejected before execution");
+        assert!(format!("{error:?}").contains("UnsupportedRequest"));
+        assert!(sink.snapshot().is_empty());
+    }
+    assert_eq!(
+        secrets
+            .resolve_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test]
+async fn prompt_json_presets_text_and_legacy_json_reach_existing_secret_gate() {
+    for (provider, format) in [
+        ("intern-discovery", None),
+        ("intern-discovery", Some("text")),
+        ("sta1n", None),
+        ("sta1n", Some("text")),
+        ("deepseek", Some("json")),
+    ] {
+        let store = LocalStore::open_in_memory().unwrap();
+        let secrets = TestSecretStore::default();
+        let sink = CollectingSink::default();
+        let mut req = request("preset-supported-format");
+        req.model_id = Some("custom-model".into());
+        req.response_format = format.map(str::to_owned);
+        crate::ai::stream_target_ai(
+            crate::provider_target::ProviderTarget::Preset {
+                provider_id: provider.into(),
+            },
+            req,
+            &store,
+            &secrets,
+            &RequestRegistry::default(),
+            &sink,
+        )
+        .await
+        .unwrap();
+        assert!(
+            secrets
+                .resolve_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0
+        );
+        assert!(
+            matches!(terminals(&sink.snapshot()).first(), Some(AiExecutionResult::Failed(result))
+            if result.error.code == "authentication-failed")
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_custom_profile_named_like_a_prompt_json_preset_keeps_its_own_policy() {
+    let server = spawn_sse_server(Scenario::Complete).await;
+    let store = LocalStore::open_in_memory().unwrap();
+    store
+        .put(
+            "intern-discovery",
+            &stored_profile("intern-discovery", &server.base_url, false),
+            "t",
+        )
+        .unwrap();
+    let sink = CollectingSink::default();
+    let mut req = request("custom-intern-json");
+    req.response_format = Some("json".into());
+    crate::ai::stream_target_ai(
+        crate::provider_target::ProviderTarget::Custom {
+            profile_id: "intern-discovery".into(),
+        },
+        req,
+        &store,
+        &TestSecretStore::default(),
+        &RequestRegistry::default(),
+        &sink,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        terminals(&sink.snapshot()).first(),
+        Some(AiExecutionResult::Completed(_))
+    ));
     assert_eq!(server.observation.await.unwrap().request_count, 1);
 }

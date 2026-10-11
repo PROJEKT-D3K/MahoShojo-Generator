@@ -353,5 +353,10 @@ export const getModelGenerationCapabilities = (
   if (!providerId || !modelId) {
     return buildCapabilities({});
   }
+  // 端砚官方请求协议不接受 thinking/reasoning/effort 控制；也适用于自定义 modelId。
+  // https://cdn-static.openxlab.org.cn/magic-maker/action-static/tokenplan-doc/api-reference/03-chat-completions.md
+  if (providerId === 'intern-discovery') {
+    return buildCapabilities({ thinking: { support: 'unsupported', adapter: 'unknown' } });
+  }
   return CAPABILITIES.get(buildKey(providerId, modelId)) ?? buildCapabilities({});
 };

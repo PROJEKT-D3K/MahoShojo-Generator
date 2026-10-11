@@ -23,6 +23,7 @@ pub struct TrustedProviderPreset {
     pub name: String,
     pub base_url: String,
     pub provider_type: String,
+    pub structured_output: Option<String>,
     model_aliases: std::collections::BTreeMap<String, String>,
     endpoint_kind: String,
     adapter: Option<String>,

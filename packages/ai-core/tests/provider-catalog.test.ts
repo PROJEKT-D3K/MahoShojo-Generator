@@ -330,3 +330,90 @@ describe('Direct 支持度判定（wire 核验 ∩ 宿主注入的已实现 adap
     expect(isDirectCapableAiPreset(findAiProviderPreset('deepseek')!, OPENAI_COMPATIBLE_ONLY)).toBe(true);
   });
 });
+
+
+describe('2026-10 已核验目录增量', () => {
+  const expectedModels: Record<string, string[]> = {
+    kourichat: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-sol'],
+    openrouter: ['openai/gpt-6.1-sol', 'openai/gpt-6-luna', 'anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-haiku-5.5', 'x-ai/grok-4.7', 'deepseek/deepseek-v4.1-flash', 'qwen/qwen3.8-flash'],
+    poe: ['GPT-6.1-Sol', 'GPT-6-Luna', 'GPT-6-Sol', 'Claude-Opus-5.5', 'Claude-Sonnet-5.5', 'Claude-Fable-5.1', 'Grok-4.7'],
+    'xiaomi-mimo': ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.5-pro', 'mimo-v2.5'],
+    'opencode-zen': ['deepseek-v4.1-flash', 'glm-5.3'],
+    'opencode-go': ['deepseek-v4.1-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash', 'hy4-preview'],
+    nvidia: ['nvidia/nemotron-3-ultra-550b-a55b'],
+    'intern-discovery': ['intern-s2', 'Atria-Dawn-Preview', 'Agents-A1', 'deepseek-v4-flash-0731', 'deepseek-v4-flash-vision', 'deepseek-v4-pro-0813', 'glm-5.3', 'kimi-k2.6', 'minimax-m3', 'qwen3.8-27b'],
+  };
+
+  it.each(Object.entries(expectedModels))('%s 使用已核验的精确模型 ID', (providerId, models) => {
+    const preset = findAiProviderPreset(providerId)!;
+    expect(preset.models.map((model) => model.value)).toEqual(expect.arrayContaining(models));
+    for (const modelId of models) {
+      expect(resolveAIProviderModel(preset, modelId)).toEqual({ modelId, isCustom: false });
+    }
+  });
+
+  it('所有预设和模型唯一，既有默认顺序不因同产品线补录改变', () => {
+    expect(new Set(AI_PROVIDER_PRESETS.map((preset) => preset.id)).size).toBe(AI_PROVIDER_PRESETS.length);
+    for (const preset of AI_PROVIDER_PRESETS) {
+      expect(new Set(preset.models.map((model) => model.value)).size).toBe(preset.models.length);
+    }
+    expect(findAiProviderPreset('kourichat')?.models[0].value).toBe('gemini-3.8-flash');
+    expect(findAiProviderPreset('openrouter')?.models[0].value).toBe('google/gemini-3.8-flash');
+    expect(findAiProviderPreset('xiaomi-mimo')?.models.map((model) => model.value)).toEqual(expectedModels['xiaomi-mimo']);
+  });
+
+  it('端砚只信任实际 API host，不把日期 ID 当作 DeepSeek 官方 alias', () => {
+    const preset = findAiProviderPreset('intern-discovery')!;
+    expect(preset.baseUrl).toBe('https://discovery-api.intern-ai.org.cn/v1');
+    expect(preset.structuredOutput).toBe('text-json');
+    expect(describeAiPresetModelDirectWire(preset, 'deepseek-v4-flash-0731')).toMatchObject({
+      status: 'verified', adapter: 'openai-compatible', reviewedAt: '2026-10-11',
+    });
+    expect(resolveAIProviderModel(preset, 'deepseek-v4-flash-0731')?.modelId).toBe('deepseek-v4-flash-0731');
+  });
+
+  it.each(['opencode-zen', 'opencode-go'])('%s 新模型只从本端点 Chat allowlist 获得 Direct', (providerId) => {
+    const preset = findAiProviderPreset(providerId)!;
+    for (const modelId of expectedModels[providerId]) {
+      expect(describeAiPresetModelDirectWire(preset, modelId)).toMatchObject({ status: 'verified', adapter: 'openai-compatible' });
+    }
+    expect(describeAiPresetModelDirectWire(preset, 'gpt-6-luna')).toEqual({ status: 'unverified' });
+  });
+});
+
+
+it('STA1N 保留完整 23 个 served IDs，不归一化前缀或大小写', () => {
+  const preset = findAiProviderPreset('sta1n')!;
+  const models = [
+    '[次][抗截断]gemini-3.1-pro-thinking',
+    '[次][抗截断]gemini-3.6-flash-thinking',
+    '[次][抗截断]gemini-3.7-flash-thinking',
+    '[次][抗截断]gemini-3.8-flash-thinking',
+    '[次][AN]gemini-3.1-pro-thinking',
+    '[次][AN]gemini-3.5-flash-lite',
+    '[公益]Gemini',
+    '[公益]gemini-3.1-flash-lite',
+    '[公益]gemini-3.5-flash-lite',
+    '[次][Kiro]claude-opus-4-6-thinking',
+    '[次][Kiro]claude-opus-4-7-thinking',
+    '[次][Kiro]claude-opus-4-8-thinking',
+    '[次][Kiro]claude-opus-5-5-thinking',
+    '[次][Kiro]claude-opus-5-thinking',
+    '[次][Kiro]claude-sonnet-5-5-thinking',
+    'deepseek-v4-pro',
+    '[特价]DeepSeek-V4.1-Flash',
+    '[特价]GLM-5.3-Flash',
+    '[Cloud]GLM-5.3',
+    '[Cloud]Kimi-K3',
+    '[Cloud]Kimi-K2.6-thinking',
+    '[Cloud]Minimax-M3',
+    'mimo-v2.6-flash',
+  ];
+  expect(preset.baseUrl).toBe('https://cdn.sta1n.cn/v1');
+  expect(preset.models.map((model) => model.value)).toEqual(models);
+  expect(preset.structuredOutput).toBe('text-json');
+  for (const modelId of models) {
+    expect(resolveAIProviderModel(preset, modelId)).toEqual({ modelId, isCustom: false });
+    expect(describeAiPresetModelDirectWire(preset, modelId)).toMatchObject({ status: 'verified', adapter: 'openai-compatible' });
+  }
+});

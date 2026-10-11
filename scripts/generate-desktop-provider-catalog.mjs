@@ -26,6 +26,7 @@ const entries = AI_PROVIDER_PRESETS.map((preset) => ({
   providerType: preset.type,
   modelAliases: AI_PROVIDER_MODEL_ALIASES[preset.id] ?? {},
   endpointKind: preset.endpointKind,
+  ...(preset.structuredOutput ? { structuredOutput: preset.structuredOutput } : {}),
   adapter: preset.direct?.adapter ?? null,
   models: preset.models.map((model) => ({
     id: model.value,
