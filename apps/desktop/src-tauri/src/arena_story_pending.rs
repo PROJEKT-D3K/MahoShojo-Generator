@@ -739,7 +739,7 @@ impl StoryStore {
         check_candidate(&connection, &manifest)?;
         let (count, bytes) = upload_reservations(&connection)?;
         let reserved: u64 = stages.values().map(|s| s.total).sum();
-        if count + stages.len() >= MAX_STAGES
+        if count + stages.admission_slots() >= MAX_STAGES
             || total > STAGING_BYTES.saturating_sub(bytes + reserved)
         {
             return Err(StoryError::Busy);
@@ -1081,6 +1081,11 @@ impl StoryStore {
             .map_err(|_| StoryError::Io)?
             .remove(attempt_id)
             .ok_or(StoryError::CommitUnknown)?;
+        // Keep the same admission → stages → connection order as begin/seal.
+        // The short attempts lock above is already released. Hold stages until
+        // save finishes: a branch cannot release its connection after an unknown
+        // COMMIT and race this writer before installing its operation fence.
+        let stages = self.stages.lock().map_err(|_| StoryError::Io)?;
         let mut connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
         let row = exact(&connection, key)?;
         if row.token != token
@@ -1098,6 +1103,12 @@ impl StoryStore {
             .ok_or(StoryError::Incomplete)?;
         if m.wire_digest() != Ok(wire_digest.into()) {
             return Err(StoryError::OperationMismatch);
+        }
+        if stages.branch_unknown.contains_key(&m.operation_id) {
+            // This includes uploads sealed/prepared before branch uncertainty.
+            // Retain the durable attempt and every pending original for reading
+            // and export; only the original branch receipt can resolve success.
+            return Err(StoryError::CommitUnknown);
         }
         let result = (|| {
             no_space(&self.staging_root, m.validate()?)?;
@@ -2017,7 +2028,7 @@ pub(crate) fn fence_restored_database(path: &Path) -> Result<(), StoryError> {
 
 #[cfg(test)]
 #[path = "arena_story_pending_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 // Equality of JSON values, including unknown object members and lone UTF-16
 // surrogate escapes. No Value tree, string normalization or name-based role match.

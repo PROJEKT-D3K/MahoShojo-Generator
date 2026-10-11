@@ -5,7 +5,10 @@ use serde_json::json;
 fn input(session: &str, request: &str) -> String {
     json!({"version":1,"sessionId":session,"generationRequestId":request,"action":"start","chapterIndex":1,"chapterContext":{"recentWindow":[],"workingCombatants":[{"data":{"name":"角色"}}]},"seed":{"combatants":[{"data":{"name":"角色"}}],"mode":"classic","storyLength":"default","language":"zh-CN","settings":{"readArenaHistory":false,"writeArenaHistory":true,"readCurrentState":true,"writeCurrentState":true,"readNarrativeHistory":false,"writeNarrativeHistory":false}}}).to_string()
 }
-fn candidate(product: Product, frozen: bool) -> (PendingManifest, Vec<(PendingKind, String)>) {
+pub(in crate::arena_story) fn candidate(
+    product: Product,
+    frozen: bool,
+) -> (PendingManifest, Vec<(PendingKind, String)>) {
     let request = "request-story-1";
     let session = "story";
     let mut parts = vec![
@@ -80,7 +83,11 @@ fn candidate(product: Product, frozen: bool) -> (PendingManifest, Vec<(PendingKi
     };
     (manifest, parts)
 }
-fn upload(store: &StoryStore, m: &PendingManifest, parts: &[(PendingKind, String)]) -> String {
+pub(in crate::arena_story) fn upload(
+    store: &StoryStore,
+    m: &PendingManifest,
+    parts: &[(PendingKind, String)],
+) -> String {
     let token = store.pending_begin(m.clone()).unwrap().token;
     for (kind, body) in parts {
         for (i, bytes) in body.as_bytes().chunks(31).enumerate() {
@@ -2417,3 +2424,71 @@ mod abandon_tests;
 
 #[path = "arena_story_pending_assembly_tests.rs"]
 mod assembly;
+
+#[test]
+fn branch_unknown_metadata_consumes_shared_upload_slots_without_bytes() {
+    let (_root, library) = fixture();
+    let store = library.stories();
+    let (manifest, _) = candidate(Product::Battle, false);
+    // Isolate admission arithmetic. Real SQLite unknown-to-fence transitions are
+    // covered by branch storage tests; this helper does not simulate a COMMIT.
+    let insert_fence = |operation: &str| {
+        store.stages.lock().unwrap().branch_unknown.insert(
+            operation.into(),
+            super::super::BranchUnknown {
+                session_id: "branch-target".into(),
+                request_digest: digest(b"branch"),
+                tokens: Vec::new(),
+            },
+        );
+    };
+    insert_fence("unknown-1");
+    let admitted = store.pending_begin(manifest.clone()).unwrap();
+    assert_eq!(store.stages.lock().unwrap().admission_slots(), 1);
+    let (other, _) = candidate(Product::Arena, false);
+    assert_eq!(store.pending_begin(other.clone()), Err(StoryError::Busy));
+    // Existing idempotent upload admission remains usable, without an extra slot.
+    assert_eq!(store.pending_begin(manifest).unwrap(), admitted);
+    store.pending_abort(&admitted.token).unwrap();
+    insert_fence("unknown-2");
+    assert_eq!(store.pending_begin(other), Err(StoryError::Busy));
+    assert_eq!(store.stages.lock().unwrap().admission_slots(), MAX_STAGES);
+    assert_eq!(
+        upload_reservations(&lock_connection(&store.connection).unwrap()).unwrap(),
+        (0, 0)
+    );
+}
+
+pub(in crate::arena_story) fn with_operation(
+    operation: &str,
+) -> (PendingManifest, Vec<(PendingKind, String)>) {
+    let (mut m, mut parts) = candidate(Product::Battle, true);
+    let original = m.operation_id.clone();
+    m.operation_id = operation.into();
+    for (_, body) in &mut parts {
+        *body = body.replace(&original, operation);
+    }
+    for declaration in &mut m.parts {
+        let body = &parts
+            .iter()
+            .find(|(kind, _)| *kind == declaration.kind)
+            .unwrap()
+            .1;
+        declaration.byte_length = body.len() as u64;
+        declaration.digest = digest(body.as_bytes());
+    }
+    m.input_digest = m.parts[0].digest.clone();
+    let carrier = m.commit_manifest.as_mut().unwrap();
+    carrier.operation_id = operation.into();
+    for declaration in &mut carrier.parts {
+        let body = &parts
+            .iter()
+            .find(|(kind, _)| *kind == PendingKind::from_commit(declaration.kind))
+            .unwrap()
+            .1;
+        declaration.byte_length = body.len() as u64;
+        declaration.digest = digest(body.as_bytes());
+    }
+    m.validate().unwrap();
+    (m, parts)
+}

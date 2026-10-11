@@ -670,3 +670,556 @@ fn source_read_and_copy_share_one_check_for_chapter_and_checkpoint() {
         assert!(matches!(result, Err(StoryError::Corrupt)));
     }
 }
+
+// Faults exercise real SQLite COMMIT / explicit ROLLBACK boundaries. They are
+// not claims to emulate physical disk failure or an outer IPC response loss.
+fn force_unknown(store: &StoryStore, token: &str, fault: u8) {
+    let result = store.end_branch_with_hook(token, Instant::now(), &mut |step, connection| {
+        if step == "before-commit" && fault == 0 {
+            connection.execute("DELETE FROM arena_story_checkpoint WHERE session_id='target' AND boundary_index=2", []).unwrap();
+        }
+        if step == "before-commit" && fault == 1 {
+            connection.execute_batch("ROLLBACK").unwrap();
+            return Err(StoryError::Busy);
+        }
+        if step == "after-commit" && fault == 2 { return Err(StoryError::Io); }
+        Ok(())
+    });
+    assert_eq!(result, Err(StoryError::CommitUnknown));
+}
+fn assert_fence_resources(store: &StoryStore, fences: usize) {
+    let stages = store.stages.lock().unwrap();
+    assert_eq!(stages.admission_slots(), fences);
+    assert!(stages.is_empty());
+    assert_eq!(stages.branch_unknown.len(), fences);
+    assert!(stages
+        .branch_unknown
+        .values()
+        .all(|f| f.tokens.len() <= MAX_STAGES));
+    assert_eq!(fs::read_dir(&store.staging_root).unwrap().count(), 0);
+}
+
+#[test]
+fn unknown_operation_survives_abort_expiry_fresh_begin_and_prebuilt_tokens() {
+    for fault in 0..=2 {
+        for second_kind in 0..=3 {
+            let (_root, lib) = library();
+            let store = lib.stories();
+            commit(store, "source", 1);
+            let (m, parts) = fixture(store, "source", 1, 1, "target");
+            let digest = m.request_digest().unwrap();
+            let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+            upload_parts(store, &token, &parts);
+            let mut second = m.clone();
+            if second_kind == 1 {
+                second.session_id = "other".into();
+            }
+            if second_kind == 2 {
+                second.parts[0].digest = crate::arena_story::digest(b"changed");
+            }
+            let second_token = if second_kind == 3 {
+                let linear_parts = crate::arena_story::tests::fixture("linear", 1);
+                let mut linear = crate::arena_story::tests::manifest("linear", 1, &linear_parts);
+                linear.operation_id = m.operation_id.clone();
+                store.begin(linear, Instant::now()).unwrap().token
+            } else {
+                store
+                    .begin_branch(second.clone(), Instant::now())
+                    .unwrap()
+                    .token
+            };
+            force_unknown(store, &token, fault);
+            assert_fence_resources(store, 1);
+            store.abort(&token).unwrap();
+            store.abort(&second_token).unwrap();
+            let later = Instant::now() + STAGE_LIFETIME + Duration::from_secs(1);
+            let expected = store
+                .branch_receipt("target", &m.operation_id, &digest)
+                .unwrap();
+            assert_eq!(expected.is_some(), fault == 2);
+            for old in [&token, &second_token] {
+                let mut writes = 0;
+                let result = store.end_branch_with_hook(old, later, &mut |_, _| {
+                    writes += 1;
+                    Ok(())
+                });
+                if old == &second_token && second_kind != 0 {
+                    assert_eq!(result, Err(StoryError::Stale));
+                } else {
+                    assert_eq!(result, expected.clone().ok_or(StoryError::CommitUnknown));
+                }
+                assert_eq!(writes, 0);
+                assert!(store
+                    .append(old, PartKind::Session, 0, b"x", later)
+                    .is_err());
+                assert!(store.end(old, later).is_err());
+            }
+            assert_eq!(
+                store.begin_branch(m.clone(), later),
+                Err(StoryError::CommitUnknown)
+            );
+            let mut changed = m.clone();
+            changed.session_id = "other".into();
+            assert_eq!(
+                store.begin_branch(changed, later),
+                Err(StoryError::OperationMismatch)
+            );
+            let mut changed = m.clone();
+            changed.parts[0].digest = crate::arena_story::digest(b"changed");
+            assert_eq!(
+                store.begin_branch(changed, later),
+                Err(StoryError::OperationMismatch)
+            );
+            assert_eq!(
+                store.branch_receipt("other", &m.operation_id, &digest),
+                Err(StoryError::OperationMismatch)
+            );
+            assert_eq!(
+                store.branch_receipt(
+                    "target",
+                    &m.operation_id,
+                    &crate::arena_story::digest(b"changed")
+                ),
+                Err(StoryError::OperationMismatch)
+            );
+            let linear_parts = crate::arena_story::tests::fixture("linear", 1);
+            let mut linear = crate::arena_story::tests::manifest("linear", 1, &linear_parts);
+            linear.operation_id = m.operation_id.clone();
+            assert_eq!(
+                store.begin(linear, later),
+                Err(StoryError::OperationMismatch)
+            );
+            // Unrelated normal linear work still has its remaining shared slot.
+            commit(store, "linear", 1);
+            assert_eq!(
+                counts(store, "target"),
+                if fault == 2 { (1, 2, 3) } else { (0, 0, 0) }
+            );
+            assert_fence_resources(store, 1);
+        }
+    }
+}
+
+#[test]
+fn unknown_exact_success_stays_read_only_after_source_changes_and_target_deletion() {
+    let (_root, lib) = library();
+    let store = lib.stories();
+    commit(store, "source", 1);
+    let (m, parts) = fixture(store, "source", 1, 1, "target");
+    let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+    upload_parts(store, &token, &parts);
+    force_unknown(store, &token, 2);
+    let receipt = store.end_branch(&token, Instant::now()).unwrap();
+    commit(store, "source", 2);
+    let (refreshed, _) = fixture(store, "source", 2, 1, "target");
+    assert_eq!(
+        store.begin_branch(refreshed, Instant::now()),
+        Err(StoryError::OperationMismatch)
+    );
+    commit(store, "target", 3);
+    delete(store, "source", 2);
+    store.abort(&token).unwrap();
+    assert_eq!(
+        store
+            .end_branch(&token, Instant::now() + STAGE_LIFETIME)
+            .unwrap(),
+        receipt
+    );
+    assert_fence_resources(store, 1);
+    delete(store, "target", 3);
+    assert_eq!(
+        store
+            .branch_receipt("target", &m.operation_id, &m.request_digest().unwrap())
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store.end_branch(&token, Instant::now()),
+        Err(StoryError::CommitUnknown)
+    );
+    assert_eq!(
+        store.begin_branch(m, Instant::now()),
+        Err(StoryError::CommitUnknown)
+    );
+    assert_fence_resources(store, 1);
+}
+
+#[test]
+fn failed_receipt_read_never_clears_unknown_or_regrants_upload() {
+    let (_root, lib) = library();
+    let store = lib.stories();
+    commit(store, "source", 1);
+    let (m, parts) = fixture(store, "source", 1, 1, "target");
+    let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+    upload_parts(store, &token, &parts);
+    force_unknown(store, &token, 0);
+    {
+        let mut connection = lock_connection(&store.connection).unwrap();
+        let tx = connection.transaction().unwrap();
+        tx.execute_batch("ALTER TABLE arena_story_chapter RENAME TO unavailable_chapter")
+            .unwrap();
+        tx.commit().unwrap();
+    }
+    assert_eq!(
+        store.branch_receipt("target", &m.operation_id, &m.request_digest().unwrap()),
+        Err(StoryError::Io)
+    );
+    assert_eq!(
+        store.end_branch(&token, Instant::now()),
+        Err(StoryError::Io)
+    );
+    lock_connection(&store.connection)
+        .unwrap()
+        .execute_batch("ALTER TABLE unavailable_chapter RENAME TO arena_story_chapter")
+        .unwrap();
+    assert_eq!(
+        store.end_branch(&token, Instant::now()),
+        Err(StoryError::CommitUnknown)
+    );
+    assert_eq!(
+        store.begin_branch(m, Instant::now()),
+        Err(StoryError::CommitUnknown)
+    );
+    assert_fence_resources(store, 1);
+}
+
+#[test]
+fn unknown_fences_share_slots_release_bytes_and_are_never_capacity_evicted() {
+    let (_root, lib) = library();
+    let store = lib.stories();
+    commit(store, "source", 1);
+    let (m, parts) = fixture(store, "source", 1, 1, "target");
+    let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+    upload_parts(store, &token, &parts);
+    force_unknown(store, &token, 1);
+    // All original upload bytes were released; a different operation can reserve
+    // the entire existing aggregate limit in the remaining slot (no new budget).
+    let linear_parts = crate::arena_story::tests::fixture("linear", 1);
+    let mut linear = crate::arena_story::tests::manifest("linear", 1, &linear_parts);
+    let rest: u64 = linear.parts.iter().skip(1).map(|p| p.byte_length).sum();
+    linear.parts[0].byte_length = CANDIDATE_COMMIT_BYTES - rest;
+    let large = store.begin(linear.clone(), Instant::now()).unwrap();
+    assert_eq!(large.total_bytes, CANDIDATE_COMMIT_BYTES);
+    assert_eq!(
+        store.begin(linear.clone(), Instant::now()),
+        Err(StoryError::Busy)
+    );
+    store.abort(&large.token).unwrap();
+    let (second, parts) = fixture(store, "source", 1, 1, "second");
+    let token = store
+        .begin_branch(second.clone(), Instant::now())
+        .unwrap()
+        .token;
+    upload_parts(store, &token, &parts);
+    force_unknown(store, &token, 1);
+    assert_fence_resources(store, MAX_STAGES);
+    let later = Instant::now() + STAGE_LIFETIME + Duration::from_secs(1);
+    store.abort(&token).unwrap();
+    assert_eq!(store.begin(linear, later), Err(StoryError::Busy));
+    let (third, _) = fixture(store, "source", 1, 1, "third");
+    assert_eq!(store.begin_branch(third, later), Err(StoryError::Busy));
+    assert_eq!(store.begin_branch(m, later), Err(StoryError::CommitUnknown));
+    assert_eq!(
+        store.begin_branch(second, later),
+        Err(StoryError::CommitUnknown)
+    );
+    assert_fence_resources(store, MAX_STAGES);
+}
+
+#[test]
+fn restart_and_restore_reject_frozen_unknown_package_but_allow_new_work() {
+    for restore in [false, true] {
+        let (root, lib) = library();
+        let store = lib.stories();
+        commit(store, "source", 1);
+        let (m, parts) = fixture(store, "source", 1, 1, "target");
+        let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+        upload_parts(store, &token, &parts);
+        force_unknown(store, &token, 1);
+        if restore {
+            let backup = crate::backup::create_backup(&lib).unwrap();
+            drop(crate::restore::prepare_restore(&lib, &backup.backup_id).unwrap());
+        }
+        drop(lib);
+        if restore {
+            crate::restore::recover_pending(root.path()).unwrap();
+        }
+        let reopened = LocalLibrary::open(root.path()).unwrap();
+        let store = reopened.stories();
+        assert_ne!(store.instance, m.source.session.instance);
+        assert_fence_resources(store, 0);
+        assert_eq!(
+            store
+                .branch_receipt("target", &m.operation_id, &m.request_digest().unwrap())
+                .unwrap(),
+            None
+        );
+        let token = store.begin_branch(m, Instant::now()).unwrap().token;
+        upload_parts(store, &token, &parts);
+        let mut writes = 0;
+        assert_eq!(
+            store.end_branch_with_hook(&token, Instant::now(), &mut |_, _| {
+                writes += 1;
+                Ok(())
+            }),
+            Err(StoryError::Stale)
+        );
+        assert_eq!(writes, 0);
+        store.abort(&token).unwrap();
+        assert_eq!(counts(store, "target"), (0, 0, 0));
+        commit(store, "new-work", 1);
+    }
+}
+
+#[test]
+fn inflight_unknown_is_serialized_with_abort_and_second_end() {
+    for fault in [0, 1] {
+        let (_root, lib) = library();
+        let store = lib.stories();
+        commit(store, "source", 1);
+        let (m, parts) = fixture(store, "source", 1, 1, "target");
+        let first = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+        let second = store.begin_branch(m, Instant::now()).unwrap().token;
+        upload_parts(store, &first, &parts);
+        upload_parts(store, &second, &parts);
+        std::thread::scope(|scope| {
+            let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let first = &first;
+            let second = &second;
+            let writer = scope.spawn(move || store.end_branch_with_hook(first, Instant::now(), &mut |step, connection| {
+                if step == "before-commit" {
+                    entered_tx.send(()).unwrap();
+                    started_rx.recv().unwrap();
+                    if fault == 0 {
+                        connection.execute("DELETE FROM arena_story_checkpoint WHERE session_id='target' AND boundary_index=2", []).unwrap();
+                    } else {
+                        connection.execute_batch("ROLLBACK").unwrap();
+                        return Err(StoryError::Busy);
+                    }
+                }
+                Ok(())
+            }));
+            entered_rx.recv().unwrap();
+            let observer = scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                store.abort(first).unwrap();
+                store.end_branch(second, Instant::now())
+            });
+            assert_eq!(writer.join().unwrap(), Err(StoryError::CommitUnknown));
+            assert_eq!(observer.join().unwrap(), Err(StoryError::CommitUnknown));
+        });
+        assert_eq!(counts(store, "target"), (0, 0, 0));
+        assert_fence_resources(store, 1);
+    }
+}
+
+#[test]
+fn unknown_success_exact_receipt_precedes_restart_and_restore_instance() {
+    for restore in [false, true] {
+        let (root, lib) = library();
+        let store = lib.stories();
+        commit(store, "source", 1);
+        let (m, parts) = fixture(store, "source", 1, 1, "target");
+        let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+        upload_parts(store, &token, &parts);
+        force_unknown(store, &token, 2);
+        let receipt = store.end_branch(&token, Instant::now()).unwrap();
+        commit(store, "target", 3);
+        delete(store, "source", 1);
+        if restore {
+            let backup = crate::backup::create_backup(&lib).unwrap();
+            drop(crate::restore::prepare_restore(&lib, &backup.backup_id).unwrap());
+        }
+        drop(lib);
+        if restore {
+            crate::restore::recover_pending(root.path()).unwrap();
+        }
+        let reopened = LocalLibrary::open(root.path()).unwrap();
+        let store = reopened.stories();
+        assert_ne!(store.instance, m.source.session.instance);
+        assert_eq!(
+            store
+                .branch_receipt("target", &m.operation_id, &m.request_digest().unwrap())
+                .unwrap(),
+            Some(receipt.clone())
+        );
+        // The frozen package can only discover success, despite absent source,
+        // obsolete instance and an advanced target head; no writer hook runs.
+        let token = store.begin_branch(m, Instant::now()).unwrap().token;
+        upload_parts(store, &token, &parts);
+        let mut writes = 0;
+        assert_eq!(
+            store
+                .end_branch_with_hook(&token, Instant::now(), &mut |_, _| {
+                    writes += 1;
+                    Ok(())
+                })
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(writes, 0);
+        assert_eq!(counts(store, "target"), (1, 3, 4));
+        assert_eq!(counts(store, "source"), (0, 0, 0));
+        assert_fence_resources(store, 0);
+    }
+}
+
+#[test]
+fn branch_unknown_blocks_fresh_and_prebuilt_pending_save_without_losing_originals() {
+    for fault in 0..=2 {
+        // Fresh after unknown, uploaded before unknown, sealed before unknown,
+        // and prepared before unknown must all converge on the actual save fence.
+        for lifecycle in 0..=3 {
+            let (_root, lib) = library();
+            let store = lib.stories();
+            commit(store, "source", 1);
+            let (m, parts) = fixture(store, "source", 1, 1, "target");
+            let (pending, originals) = pending::tests::with_operation(&m.operation_id);
+            let wire = pending
+                .commit_manifest
+                .as_ref()
+                .unwrap()
+                .wire_digest()
+                .unwrap();
+            let mut pending_token = None;
+            let mut attempt = None;
+            if lifecycle > 0 {
+                let token = pending::tests::upload(store, &pending, &originals);
+                if lifecycle > 1 {
+                    store.pending_seal(&token).unwrap();
+                }
+                if lifecycle > 2 {
+                    attempt = Some(store.pending_prepare_save(&pending.key(), &wire).unwrap());
+                }
+                pending_token = Some(token);
+            }
+            let token = store.begin_branch(m.clone(), Instant::now()).unwrap().token;
+            upload_parts(store, &token, &parts);
+            force_unknown(store, &token, fault);
+            if fault == 2 {
+                // Even receipt success followed by target deletion cannot turn
+                // the same operation into a different pending/linear generation.
+                assert!(store
+                    .branch_receipt("target", &m.operation_id, &m.request_digest().unwrap())
+                    .unwrap()
+                    .is_some());
+                delete(store, "target", 2);
+            }
+            let pending_token = pending_token
+                .unwrap_or_else(|| pending::tests::upload(store, &pending, &originals));
+            store.pending_seal(&pending_token).unwrap();
+            let attempt = attempt
+                .unwrap_or_else(|| store.pending_prepare_save(&pending.key(), &wire).unwrap());
+            let before = store.pending_describe(pending.product).unwrap().unwrap();
+            let changes = lock_connection(&store.connection).unwrap().total_changes();
+            assert_eq!(
+                store.pending_save(&pending.key(), &wire, &attempt.attempt_id),
+                Err(StoryError::CommitUnknown),
+                "fault={fault}, lifecycle={lifecycle}"
+            );
+            assert_eq!(
+                lock_connection(&store.connection).unwrap().total_changes(),
+                changes
+            );
+            assert_eq!(
+                store.pending_describe(pending.product).unwrap().unwrap(),
+                before
+            );
+            assert_eq!(counts(store, "target"), (0, 0, 0));
+            assert_eq!(counts(store, &pending.session_id), (0, 0, 0));
+            for (kind, body) in &originals {
+                assert_eq!(
+                    store
+                        .pending_read(&pending.key(), *kind, 0, body.len())
+                        .unwrap(),
+                    body.as_bytes()
+                );
+            }
+            assert_eq!(
+                store.pending_save(&pending.key(), &wire, &attempt.attempt_id),
+                Err(StoryError::CommitUnknown)
+            );
+            assert_eq!(
+                store.pending_prepare_save(&pending.key(), &wire),
+                Err(StoryError::CommitUnknown)
+            );
+            assert_eq!(
+                store.begin_branch(m, Instant::now()),
+                Err(StoryError::CommitUnknown)
+            );
+            assert_fence_resources(store, 1);
+            // Another product's unrelated operation remains a normal pending save.
+            let (other, other_parts) = pending::tests::candidate(pending::Product::Arena, true);
+            let t = pending::tests::upload(store, &other, &other_parts);
+            store.pending_seal(&t).unwrap();
+            let wire = other
+                .commit_manifest
+                .as_ref()
+                .unwrap()
+                .wire_digest()
+                .unwrap();
+            let attempt = store.pending_prepare_save(&other.key(), &wire).unwrap();
+            store
+                .pending_save(&other.key(), &wire, &attempt.attempt_id)
+                .unwrap();
+            assert_eq!(counts(store, &other.session_id), (1, 1, 2));
+            assert_eq!(
+                store.pending_describe(pending.product).unwrap().unwrap(),
+                before
+            );
+        }
+    }
+}
+
+#[test]
+fn branch_unknown_installation_serializes_with_prepared_pending_save() {
+    for fault in [0, 1] {
+        let (_root, lib) = library();
+        let store = lib.stories();
+        commit(store, "source", 1);
+        let (m, parts) = fixture(store, "source", 1, 1, "target");
+        let (pending, originals) = pending::tests::with_operation(&m.operation_id);
+        let pending_token = pending::tests::upload(store, &pending, &originals);
+        store.pending_seal(&pending_token).unwrap();
+        let wire = pending
+            .commit_manifest
+            .as_ref()
+            .unwrap()
+            .wire_digest()
+            .unwrap();
+        let attempt = store.pending_prepare_save(&pending.key(), &wire).unwrap();
+        let token = store.begin_branch(m, Instant::now()).unwrap().token;
+        upload_parts(store, &token, &parts);
+        std::thread::scope(|scope| {
+            let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let token = &token;
+            let branch = scope.spawn(move || store.end_branch_with_hook(token, Instant::now(), &mut |step, connection| {
+                if step == "before-commit" {
+                    entered_tx.send(()).unwrap();
+                    started_rx.recv().unwrap();
+                    if fault == 0 {
+                        connection.execute("DELETE FROM arena_story_checkpoint WHERE session_id='target' AND boundary_index=2", []).unwrap();
+                    } else {
+                        connection.execute_batch("ROLLBACK").unwrap();
+                        return Err(StoryError::Busy);
+                    }
+                }
+                Ok(())
+            }));
+            entered_rx.recv().unwrap();
+            let key = pending.key();
+            let save = scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                store.pending_save(&key, &wire, &attempt.attempt_id)
+            });
+            assert_eq!(branch.join().unwrap(), Err(StoryError::CommitUnknown));
+            assert_eq!(save.join().unwrap(), Err(StoryError::CommitUnknown));
+        });
+        assert_eq!(counts(store, "target"), (0, 0, 0));
+        assert_eq!(counts(store, &pending.session_id), (0, 0, 0));
+        assert!(store.pending_describe(pending.product).unwrap().is_some());
+        assert_fence_resources(store, 1);
+    }
+}

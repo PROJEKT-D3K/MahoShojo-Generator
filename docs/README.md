@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-11 Native分支安全后继：[未知结果围栏验收](./reports/2026-10-11_041200_Native分支未知结果围栏验收.md)记录原operation围栏与临时上传生命周期分离、共享有界槽和重启冻结包拒写；含pending实际保存防绕路P2修复，源码复审、Native592项/clippy及修后完整CI通过（10,699 passed executions/21条件skip）；旧候选CI人为取消与P2反例单列。尚无branch IPC/两页UI，不声明完整owner恢复。
+
 2026-10-11 Web原子分支后继：[验收记录](./reports/2026-10-11_031000_Web连续故事原子分支保存验收.md)记录完整源图内容CAS、三store原子writer、独立Web v2有界receipt与原完成章恢复UI共源接线。定向/类型、修后独审与第三轮冻结完整CI通过（10,699 passed / 21条件skip），前两轮失败保留；CI后仅补文档，非docs受测字节/mode不变。IDB4/Hosted v1/Native入口保持原状，不关闭D5.1b b-2。下方首片“旧多步保存”的表述保留当时历史范围。
 
 2026-10-11 Native分支单次源核验后继：私有受检借用去除章/检查点重复hash/RawValue检查，保留完整authority/CAS/输出hash/target audit；定向与独审、冻结Native582项/clippy及同debug真实129MiB串行对照通过。本次end总耗时24.176→19.197秒，仅单次观测，非精确锁收益；完整本地CI已通过（10,644 passed / 21原有条件跳过），CI后仅补文档，非docs受测字节/mode不变，入口与其余资源/owner门保持关闭。[分项验收](./reports/2026-10-11_023900_Native分支源记录单次核验.md)。

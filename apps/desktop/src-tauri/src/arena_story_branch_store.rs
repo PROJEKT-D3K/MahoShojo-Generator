@@ -113,6 +113,12 @@ impl StoryStore {
         if !valid_id(session) || !valid_id(operation) || !valid_digest(request_digest) {
             return Err(StoryError::Invalid);
         }
+        let stages = self.stages.lock().map_err(|_| StoryError::Io)?;
+        if let Some(fence) = stages.branch_unknown.get(operation) {
+            if fence.session_id != session || fence.request_digest != request_digest {
+                return Err(StoryError::OperationMismatch);
+            }
+        }
         let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
         read_branch_receipt(&connection, session, operation, request_digest)
     }
@@ -131,80 +137,99 @@ impl StoryStore {
     ) -> Result<BranchReceipt, StoryError> {
         let mut stages = self.stages.lock().map_err(|_| StoryError::Io)?;
         stages.retain(|_, stage| now.saturating_duration_since(stage.created_at) < STAGE_LIFETIME);
+        // Retired tokens carry no files or write permission, only exact lookup.
+        if let Some((operation, fence)) = stages
+            .branch_unknown
+            .iter()
+            .find(|(_, fence)| fence.tokens.iter().any(|old| old == token))
+        {
+            let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
+            return read_branch_receipt(
+                &connection,
+                &fence.session_id,
+                operation,
+                &fence.request_digest,
+            )?
+            .ok_or(StoryError::CommitUnknown);
+        }
         let stage = stages.get_mut(token).ok_or(StoryError::Stale)?;
         if stage.current != stage.parts.len() {
             return Err(StoryError::Incomplete);
         }
         let manifest = stage.branch.clone().ok_or(StoryError::Invalid)?;
         let request_digest = manifest.request_digest()?;
-        let _permit = self
-            .gate
-            .enter_write()
-            .map_err(|_| StoryError::Maintenance)?;
-        let mut connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
-        let tx = connection
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(|_| StoryError::Io)?;
-        // Exact durable success precedes source existence, current instance and CAS.
-        let replay = read_branch_receipt(
-            &tx,
-            &manifest.session_id,
-            &manifest.operation_id,
-            &request_digest,
-        );
-        match replay {
-            Ok(Some(receipt)) => {
-                tx.rollback().map_err(|_| {
-                    stage.branch_unknown = true;
-                    StoryError::CommitUnknown
+        let mut unknown = false;
+        let result = (|| {
+            let _permit = self
+                .gate
+                .enter_write()
+                .map_err(|_| StoryError::Maintenance)?;
+            let mut connection =
+                lock_connection(&self.connection).map_err(StoryError::from_store)?;
+            let tx = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|_| StoryError::Io)?;
+            // Exact durable success precedes source existence, current instance and CAS.
+            let replay = read_branch_receipt(
+                &tx,
+                &manifest.session_id,
+                &manifest.operation_id,
+                &request_digest,
+            );
+            match replay {
+                Ok(Some(receipt)) => {
+                    tx.rollback().map_err(|_| {
+                        unknown = true;
+                        StoryError::CommitUnknown
+                    })?;
+                    return Ok(receipt);
+                }
+                Err(error) => {
+                    tx.rollback().map_err(|_| {
+                        unknown = true;
+                        StoryError::CommitUnknown
+                    })?;
+                    return Err(error);
+                }
+                Ok(None) => {}
+            }
+            let outcome = (|| {
+                if manifest.source.session.instance != self.instance {
+                    return Err(StoryError::Stale);
+                }
+                check_source(&tx, &manifest)?;
+                hook("source-cas", &tx)?;
+                let validated = validate_branch_stage(stage, &manifest, request_digest.clone())?;
+                write_branch(&tx, stage, &manifest, &validated, &mut |step| {
+                    hook(step, &tx)
                 })?;
-                stages.remove(token);
-                return Ok(receipt);
-            }
-            Err(error) => {
-                tx.rollback().map_err(|_| {
-                    stage.branch_unknown = true;
-                    StoryError::CommitUnknown
-                })?;
-                return Err(error);
-            }
-            Ok(None) => {}
-        }
-        if stage.branch_unknown {
-            tx.rollback().map_err(|_| StoryError::CommitUnknown)?;
-            return Err(StoryError::CommitUnknown);
-        }
-        let outcome = (|| {
-            if manifest.source.session.instance != self.instance {
-                return Err(StoryError::Stale);
-            }
-            check_source(&tx, &manifest)?;
-            hook("source-cas", &tx)?;
-            let validated = validate_branch_stage(stage, &manifest, request_digest)?;
-            write_branch(&tx, stage, &manifest, &validated, &mut |step| {
-                hook(step, &tx)
-            })?;
-            hook("before-commit", &tx)?;
-            Ok(validated.receipt)
+                hook("before-commit", &tx)?;
+                Ok(validated.receipt)
+            })();
+            let receipt = match outcome {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    tx.rollback().map_err(|_| {
+                        unknown = true;
+                        StoryError::CommitUnknown
+                    })?;
+                    return Err(error);
+                }
+            };
+            // Only a real COMMIT attempt or failed explicit rollback makes the stage
+            // uncertain. Known rollback/cancellation remains explicitly retryable.
+            unknown = true;
+            tx.commit().map_err(|_| StoryError::CommitUnknown)?;
+            // If an IPC response disappears, only the same target/op/request can recover.
+            hook("after-commit", &connection).map_err(|_| StoryError::CommitUnknown)?;
+            Ok(receipt)
         })();
-        let receipt = match outcome {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                tx.rollback().map_err(|_| {
-                    stage.branch_unknown = true;
-                    StoryError::CommitUnknown
-                })?;
-                return Err(error);
-            }
-        };
-        // Only a real COMMIT attempt or failed explicit rollback makes the stage
-        // uncertain. Known rollback/cancellation remains explicitly retryable.
-        stage.branch_unknown = true;
-        tx.commit().map_err(|_| StoryError::CommitUnknown)?;
-        // If an IPC response disappears, only the same target/op/request can recover.
-        hook("after-commit", &connection).map_err(|_| StoryError::CommitUnknown)?;
-        stages.remove(token);
-        Ok(receipt)
+        if unknown && result.is_err() {
+            stages.fence_branch(&manifest, request_digest);
+        } else if result.is_ok() {
+            stages.remove(token);
+        }
+        result
     }
 }
 

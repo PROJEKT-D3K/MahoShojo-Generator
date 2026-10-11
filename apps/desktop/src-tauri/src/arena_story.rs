@@ -205,17 +205,70 @@ struct StagePart {
 struct Stage {
     manifest: CommitManifest,
     branch: Option<branch::BranchManifest>,
-    branch_unknown: bool,
     parts: Vec<StagePart>,
     current: usize,
     created_at: Instant,
     total: u64,
 }
+// Unknown writes outlive upload files. All admission, end and abort paths hold
+// the same lock, so replacing uploads with one fence cannot race another writer.
+struct BranchUnknown {
+    session_id: String,
+    request_digest: String,
+    // At most MAX_STAGES pre-existing tokens; these permit receipt-only end replay.
+    tokens: Vec<String>,
+}
+#[derive(Default)]
+struct StagingState {
+    uploads: HashMap<String, Stage>,
+    branch_unknown: HashMap<String, BranchUnknown>,
+}
+impl std::ops::Deref for StagingState {
+    type Target = HashMap<String, Stage>;
+    fn deref(&self) -> &Self::Target {
+        &self.uploads
+    }
+}
+impl std::ops::DerefMut for StagingState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.uploads
+    }
+}
+impl StagingState {
+    fn admission_slots(&self) -> usize {
+        self.uploads.len() + self.branch_unknown.len()
+    }
+    fn fence_branch(&mut self, manifest: &branch::BranchManifest, request_digest: String) {
+        let mut tokens = Vec::new();
+        self.uploads.retain(|token, stage| {
+            let same_operation = stage.manifest.operation_id == manifest.operation_id;
+            if same_operation
+                && stage.branch.as_ref().is_some_and(|m| {
+                    m.session_id == manifest.session_id
+                        && m.request_digest().as_ref() == Ok(&request_digest)
+                })
+            {
+                tokens.push(token.clone());
+            }
+            !same_operation
+        });
+        // Never expire or capacity-evict uncertainty, even after exact success.
+        // The receipt/target can later be deleted; a query cannot regrant writes.
+        self.branch_unknown.insert(
+            manifest.operation_id.clone(),
+            BranchUnknown {
+                session_id: manifest.session_id.clone(),
+                request_digest,
+                tokens,
+            },
+        );
+    }
+}
 pub struct StoryStore {
     pub(super) connection: SharedConnection,
     gate: Arc<MaintenanceGate>,
     staging_root: PathBuf,
-    stages: Mutex<HashMap<String, Stage>>,
+    stages: Mutex<StagingState>,
     pending_admission: [Mutex<()>; 2],
     pending_attempts: Mutex<HashMap<String, String>>,
     pending_inputs: Mutex<HashMap<(String, pending::PendingKind), Vec<u8>>>,
@@ -369,7 +422,7 @@ impl StoryStore {
             markdown_export: markdown_export::StoryMarkdownExport::open(
                 crate::export::ExportPaths::under(root),
             )?,
-            stages: Mutex::new(HashMap::new()),
+            stages: Mutex::new(StagingState::default()),
             pending_admission: [Mutex::new(()), Mutex::new(())],
             pending_attempts: Mutex::new(HashMap::new()),
             pending_inputs: Mutex::new(HashMap::new()),
@@ -392,10 +445,22 @@ impl StoryStore {
         let total = manifest.validate()?;
         let mut stages = self.stages.lock().map_err(|_| StoryError::Io)?;
         stages.retain(|_, stage| now.saturating_duration_since(stage.created_at) < STAGE_LIFETIME);
+        if let Some(fence) = stages.branch_unknown.get(&manifest.operation_id) {
+            return Err(
+                if branch.as_ref().is_some_and(|branch| {
+                    fence.session_id == branch.session_id
+                        && branch.request_digest().as_ref() == Ok(&fence.request_digest)
+                }) {
+                    StoryError::CommitUnknown
+                } else {
+                    StoryError::OperationMismatch
+                },
+            );
+        }
         let reserved: u64 = stages.values().map(|stage| stage.total).sum();
         let connection = lock_connection(&self.connection).map_err(StoryError::from_store)?;
         let (pending_count, pending_bytes) = pending::upload_reservations(&connection)?;
-        if stages.len() + pending_count >= MAX_STAGES
+        if stages.admission_slots() + pending_count >= MAX_STAGES
             || total > STAGING_BYTES.saturating_sub(reserved + pending_bytes)
         {
             return Err(StoryError::Busy);
@@ -418,7 +483,6 @@ impl StoryStore {
             Stage {
                 manifest,
                 branch,
-                branch_unknown: false,
                 parts,
                 current: 0,
                 created_at: now,
