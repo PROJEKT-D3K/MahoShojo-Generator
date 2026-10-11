@@ -30,6 +30,25 @@ function readProfileResponse(data: unknown, maxLength = 1024): ProfileApiRespons
 const AVATAR_SIZE = 128;
 const AVATAR_WEBP_QUALITY = 0.82;
 const MAX_AVATAR_BASE64_LENGTH = 350_000;
+const AVATAR_DATA_URL_PREFIX = 'data:image/webp;base64,';
+
+function readAvatarResponse(data: unknown): { success: true } {
+  if ((data as { success?: unknown } | null)?.success !== true) {
+    throw new Error('服务端未确认头像变更，请刷新后重试');
+  }
+  return data as { success: true };
+}
+
+function readUploadedAvatarResponse(data: unknown): { success: true; avatarDataUrl: string } {
+  const result = readAvatarResponse(data) as { success: true; avatarDataUrl?: unknown };
+  if (typeof result.avatarDataUrl !== 'string'
+    || !result.avatarDataUrl.startsWith(AVATAR_DATA_URL_PREFIX)
+    || result.avatarDataUrl.length <= AVATAR_DATA_URL_PREFIX.length
+    || result.avatarDataUrl.length > AVATAR_DATA_URL_PREFIX.length + MAX_AVATAR_BASE64_LENGTH) {
+    throw new Error('服务端未确认头像变更，请刷新后重试');
+  }
+  return result as { success: true; avatarDataUrl: string };
+}
 
 async function authedFetch(path: string, init?: RequestInit) {
   const res = await authStorage.fetch(path, init);
@@ -141,48 +160,80 @@ export function useMeProfile(userId: number | null) {
     },
   });
 
+  // 上传和清除共用本 hook 的意图序号，旧压缩/响应不能覆盖较新的操作。
+  const avatarSequence = useRef(0);
+  type AvatarIntent = { initiatedBy: typeof currentOwner; sequence: number };
+  const isCurrentAvatarIntent = (intent: AvatarIntent | undefined) => Boolean(intent
+    && isCurrentOwner(intent.initiatedBy) && intent.sequence === avatarSequence.current);
+  const assertAvatarIntent = (intent: AvatarIntent) => {
+    if (intent.initiatedBy.userId === null || intent.initiatedBy.authIdentity?.id !== intent.initiatedBy.userId
+      || !isCurrentOwner(intent.initiatedBy)) throw new Error('账号已变化，旧头像操作已忽略');
+    if (intent.sequence !== avatarSequence.current) throw new Error('头像操作已变化，旧请求结果已忽略');
+    return intent.initiatedBy.userId;
+  };
+  const createAvatarIntent = (): AvatarIntent => {
+    const intent = { initiatedBy: currentOwner, sequence: avatarSequence.current };
+    assertAvatarIntent(intent);
+    return { ...intent, sequence: ++avatarSequence.current };
+  };
+  const cancelAvatarProfileQuery = async (intent: AvatarIntent, onlyIfLoaded = false) => {
+    assertAvatarIntent(intent);
+    const key = ['me-profile', intent.initiatedBy.userId] as const;
+    // 未加载时保留唯一初始读取，写失败也能继续取得真实签名。
+    if (!onlyIfLoaded || queryClient.getQueryData(key) !== undefined) {
+      await queryClient.cancelQueries({ queryKey: key, exact: true });
+    }
+    assertAvatarIntent(intent);
+    return key;
+  };
+  const publishAvatar = async (intent: AvatarIntent, avatarDataUrl: string | null) => {
+    // 与签名写入一样，截住写入期间启动的旧 GET。
+    const key = await cancelAvatarProfileQuery(intent);
+    assertAvatarIntent(intent);
+    const updated = queryClient.setQueryData<ProfileApiResponse>(key, (prev) => prev
+      ? { success: true, profile: { ...prev.profile, avatarDataUrl } }
+      : undefined);
+    const userId = assertAvatarIntent(intent);
+    dispatchMeProfileAvatarUpdated({ userId, avatarDataUrl });
+    // 初始 GET 可能已被取消；头像回执不能证明未知签名为空。
+    if (!updated && isCurrentAvatarIntent(intent)) {
+      void queryClient.invalidateQueries({ queryKey: key, exact: true });
+    }
+  };
+
   const uploadAvatarMutation = useMutation({
-    mutationFn: async (file: File) => {
+    retry: false,
+    mutationFn: async ({ file, ...intent }: AvatarIntent & { file: File }) => {
+      assertAvatarIntent(intent);
       const avatarWebpBase64 = await compressAvatarToWebpBase64InBrowser(file);
-      const data = await authedFetch('/api/me/profile/avatar', {
+      await cancelAvatarProfileQuery(intent, true);
+      assertAvatarIntent(intent);
+      const data = readUploadedAvatarResponse(await authedFetch('/api/me/profile/avatar', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ avatarWebpBase64 }),
-      });
-      return data as { success: boolean; avatarDataUrl: string };
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData(queryKey, (prev: ProfileApiResponse | undefined) => {
-        const prevProfile = prev?.profile ?? { signature: '', avatarDataUrl: null };
-        return { success: true, profile: { ...prevProfile, avatarDataUrl: data.avatarDataUrl } };
-      });
-      if (typeof userId === 'number' && userId > 0) {
-        dispatchMeProfileAvatarUpdated({ userId, avatarDataUrl: data.avatarDataUrl });
-      }
+      }));
+      await publishAvatar(intent, data.avatarDataUrl);
+      return data;
     },
   });
 
   const clearAvatarMutation = useMutation({
-    mutationFn: async () => {
-      const data = await authedFetch('/api/me/profile/avatar', { method: 'DELETE' });
-      return data as { success: boolean };
-    },
-    onSuccess: () => {
-      queryClient.setQueryData(queryKey, (prev: ProfileApiResponse | undefined) => {
-        const prevProfile = prev?.profile ?? { signature: '', avatarDataUrl: null };
-        return { success: true, profile: { ...prevProfile, avatarDataUrl: null } };
-      });
-      if (typeof userId === 'number' && userId > 0) {
-        dispatchMeProfileAvatarUpdated({ userId, avatarDataUrl: null });
-      }
+    retry: false,
+    mutationFn: async (intent: AvatarIntent) => {
+      await cancelAvatarProfileQuery(intent, true);
+      assertAvatarIntent(intent);
+      const data = readAvatarResponse(await authedFetch('/api/me/profile/avatar', { method: 'DELETE' }));
+      await publishAvatar(intent, null);
+      return data;
     },
   });
 
   const profile: MeProfile = profileQuery.data?.profile ?? { signature: '', avatarDataUrl: null };
   const error =
     (profileQuery.error instanceof Error ? profileQuery.error.message : null) ||
-    (uploadAvatarMutation.error instanceof Error ? uploadAvatarMutation.error.message : null) ||
-    (clearAvatarMutation.error instanceof Error ? clearAvatarMutation.error.message : null);
+    (isCurrentAvatarIntent(uploadAvatarMutation.variables) && uploadAvatarMutation.error instanceof Error ? uploadAvatarMutation.error.message : null) ||
+    (isCurrentAvatarIntent(clearAvatarMutation.variables) && clearAvatarMutation.error instanceof Error ? clearAvatarMutation.error.message : null);
 
   return {
     profile,
@@ -201,10 +252,10 @@ export function useMeProfile(userId: number | null) {
     saveSignature: (signature: string) => saveSignatureMutation.mutateAsync({ signature, initiatedBy: currentOwner }),
     isSavingSignature: saveSignatureMutation.variables?.initiatedBy === currentOwner && saveSignatureMutation.isPending,
 
-    uploadAvatar: (file: File) => uploadAvatarMutation.mutateAsync(file),
-    isUploadingAvatar: uploadAvatarMutation.isPending,
-    clearAvatar: () => clearAvatarMutation.mutateAsync(),
-    isClearingAvatar: clearAvatarMutation.isPending,
+    uploadAvatar: async (file: File) => uploadAvatarMutation.mutateAsync({ file, ...createAvatarIntent() }),
+    isUploadingAvatar: isCurrentAvatarIntent(uploadAvatarMutation.variables) && uploadAvatarMutation.isPending,
+    clearAvatar: async () => clearAvatarMutation.mutateAsync(createAvatarIntent()),
+    isClearingAvatar: isCurrentAvatarIntent(clearAvatarMutation.variables) && clearAvatarMutation.isPending,
 
     refetch: () => profileQuery.refetch(),
   };
