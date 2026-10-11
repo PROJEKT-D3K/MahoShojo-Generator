@@ -9,8 +9,9 @@ import {
 import { StoryCommitManifestSchema, type StoryCommitManifest, type StoryPartKind } from '@mahoshojo/contracts/desktop-arena-story';
 import { buildCompletedBattleStoryBranchRecords } from '@mahoshojo/domain/arena-story-branch';
 import { digestBattleStoryCommitValue } from '@mahoshojo/domain/arena-story-commit';
+import { freezeStoryBranchIdentity, prepareStoryBranchCommit } from '../src/platform/arena-story-branch-storage';
 import { storyWireDigest } from '../src/platform/arena-story-storage';
-import { branchCopyId, byteDigest, prepareBranchGoldenParts, type BranchAssembly } from './helpers/arena-story-branch-golden';
+import { branchCopyId, byteDigest, type BranchAssembly } from './helpers/arena-story-branch-golden';
 
 Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
 type RawPart = { kind: StoryPartKind; document: string };
@@ -56,7 +57,10 @@ describe('Native branch shared-domain storage contract goldens', () => {
     expect(records.chapter.sourceChapterId).toBe(branchCopyId(target, 'c', assembly.prefixEndIndex));
     expect(records.session.title).toBe(assembly.session.title);
     expect(records.session.summaryMeta?.coveredChapterIds).toEqual([branchCopyId(target, 'c', 1)]);
-    const parts = prepareBranchGoldenParts(records, assembly.prefixEndIndex);
+    const prepared = prepareStoryBranchCommit(freezeStoryBranchIdentity(fixture.manifest), records);
+    expect(prepared.manifest).toEqual(fixture.manifest);
+    expect(prepared.requestDigest).toBe(fixture.requestDigest);
+    const parts = prepared.parts.map(({ kind, prepared }) => ({ kind, document: Buffer.concat([...prepared.chunks()]).toString('utf8') }));
     expect(parts).toEqual(fixture.parts);
     expect(parts.map(({ kind }) => kind)).toEqual(['session', 'chapter', 'checkpoint1']);
     expect(parts.map(({ kind, document }) => ({ kind, byteLength: Buffer.byteLength(document), digest: byteDigest(document) }))).toEqual(fixture.manifest.parts);

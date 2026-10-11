@@ -17,15 +17,15 @@ describe('branch v2 is a closed storage contract, not an enabled product capabil
     expect(acl.permissions.filter((permission) => /branch/iu.test(permission))).toEqual([]);
     expect(lib).not.toMatch(/#\[tauri::command[^\]]*\][\s\S]{0,200}fn\s+\w*branch/iu);
   });
-  it('keeps the actual default binder and both page owners without a branch path', () => {
+  it('keeps the actual default binder and both pages without branch injection', () => {
     const port = createIpcStoryNativePort(vi.fn());
     expect(Object.keys(port).filter((key) => /branch/iu.test(key))).toEqual([]);
     expect(Object.values(STORY_IPC).filter((name) => /branch/iu.test(name))).toEqual([]);
     const page = read('../src/app/battle-page.tsx');
     expect(page).toContain('DesktopBattle()');
     expect(page).toContain('DesktopAdvancedArena()');
-    for (const source of [page, read('../src/features/arena/story-controls.tsx'), read('../src/features/arena/story-session.ts')]) {
-      expect(source).not.toMatch(/onBranch|startBranch|beginBranch|buildCompletedBattleStoryBranchRecords|desktop-arena-story-branch/u);
+    for (const source of [page, read('../src/features/arena/story-controls.tsx')]) {
+      expect(source).not.toMatch(/onBranch|startBranch|beginBranch|captureBranchCompletion|arena-story-branch-storage|buildCompletedBattleStoryBranchRecords|desktop-arena-story-branch/u);
     }
   });
 });

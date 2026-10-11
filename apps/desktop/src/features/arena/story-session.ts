@@ -20,6 +20,11 @@ import {
   prepareStorySessionDeletion, deleteStorySession, observeStorySessionDeletion, StoryDeleteError,
   type PreparedStoryCommit, type StoryNativePort,
 } from '../../platform/arena-story-storage';
+import {
+  freezeStoryBranchIdentity, prepareStoryBranchCommit, savePreparedStoryBranchCommit, queryStoryBranchReceipt,
+  type StoryBranchNativePort, type PreparedStoryBranchCommit, type CompletedStoryBranchRecords,
+} from '../../platform/arena-story-branch-storage';
+import type { StoryBranchSource } from '@mahoshojo/contracts/desktop-arena-story-branch';
 import { executeArenaDirect, type ArenaDirectIntent, type ArenaDirectPartial } from './direct';
 import { createInitialArenaDraft, type ArenaDraft, type DesktopArenaProduct } from './session';
 import { DesktopHostedStorySession, type DesktopHostedStoryState, type HostedStoryExecutionTarget } from './hosted-story-session';
@@ -56,7 +61,10 @@ export type DesktopStoryState = {
   exporting: boolean; exportProgress: StoryExportProgress | null; exportResult: StoryExportResult | null; exportError: string | null;
 };
 type PendingDeletion = { head: StorySessionHead; selection: BattleStoryReadToken; target: StorySessionDeleteTarget | null };
-type PendingCommit = { prepared: PreparedStoryCommit; selection: BattleStoryReadToken; evidence: BattleStorySaveEvidence };
+type PendingCommit = { selection: BattleStoryReadToken; evidence: BattleStorySaveEvidence } & (
+  | { kind: 'linear'; prepared: PreparedStoryCommit }
+  | { kind: 'branch'; prepared: PreparedStoryBranchCommit }
+);
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : '操作未完成，请保留现有内容后重试。';
 const emptyState = (): DesktopStoryState => ({
   hosted: null, deletion: null, deletionNotice: null,
@@ -76,7 +84,13 @@ export class DesktopArenaStorySession {
   private readController: AbortController | null = null;
   private runController: AbortController | null = null;
   private exportController: AbortController | null = null;
+  private branchSaveController: AbortController | null = null;
   private pending: PendingCommit | null = null;
+  private savedResultChapterId: string | null = null;
+  // Owner-lifetime consumed identities, including explicitly discarded results.
+  // No persistence or cold-start recovery promise; an old callback never reauthorizes.
+  private branchOperations = new Set<string>();
+  private branchGenerations = new Set<string>();
   // Ephemeral confirmation only: never serialize or replay deletion intent.
   private deletion: PendingDeletion | null = null;
   private executionScope = '';
@@ -85,6 +99,7 @@ export class DesktopArenaStorySession {
   constructor(private readonly dependencies: {
     port: StoryNativePort; execute?: typeof executeArenaDirect; id?: () => string; now?: () => number; random?: () => number;
     prepareCommit?: typeof prepareStoryStorageCommit;
+    branch?: { port: StoryBranchNativePort; prepareCommit?: typeof prepareStoryBranchCommit };
     hosted?: Omit<ConstructorParameters<typeof DesktopHostedStorySession>[0], 'onState' | 'onResult' | 'onSaved' | 'captureSelection' | 'loadBaseline'>;
     exportMarkdown: (head: StorySessionHead, signal: AbortSignal, onProgress: (value: StoryExportProgress) => void) => Promise<StoryExportResult>;
   }) {
@@ -122,6 +137,7 @@ export class DesktopArenaStorySession {
       workingCombatants: value.checkpoint.combatants, summaryMeta };
   }
   private async acceptHostedReceipt(receipt: StoryReceipt, knownHead: StorySessionHead | null, selection: BattleStoryReadToken) {
+    this.savedResultChapterId = receipt.chapterId;
     this.publish({ pending: null, resultSaved: true, message: '完整章节已保存到本机故事。' });
     await this.refreshSessions();
     let head = knownHead ?? this.state.sessions.find(row => row.id === receipt.sessionId && row.lastChapterId === receipt.chapterId) ?? null;
@@ -153,7 +169,7 @@ export class DesktopArenaStorySession {
     if (scope === this.executionScope) return;
     this.executionScope = scope; this.executionEpoch += 1;
     // The last accepted partial and any completed save candidate remain device-owned.
-    this.runController?.abort();
+    this.runController?.abort(); this.branchSaveController?.abort();
   }
   async refreshSessions(more = false) {
     if (this.disposed || (more && (this.state.listLoading || !this.state.sessionCursor))) return;
@@ -442,7 +458,7 @@ export class DesktopArenaStorySession {
           expectedRevision: input.expectedRevision, expectedLastChapterId: session.lastChapterId ?? null,
           lastInputCheckpointId: input.lastInputCheckpointId });
         if (this.disposed) return;
-        this.pending = { prepared, selection: input.selection, evidence: 'not-written' };
+        this.pending = { kind: 'linear', prepared, selection: input.selection, evidence: 'not-written' };
         this.publish({ pending: { title: records.chapter.title, evidence: 'not-written', retryable: true, tooLarge: false } });
         await this.savePending();
       } catch (cause) {
@@ -454,22 +470,83 @@ export class DesktopArenaStorySession {
     });
     if (!dispatched && !this.disposed) this.publish({ phase: 'cancelled', message: '生成准备已取消，未调用模型。' });
   }
+  /** Internal injected completion seam, not a model/anchor-reading capability.
+   * The controlled producer freezes its source BEFORE generation, then transfers
+   * one completed owned graph. Default pages never inject a branch port. */
+  captureBranchCompletion(input: {
+    mode: 'direct' | 'hosted'; generationId: string; operationId: string; sessionId: string; source: StoryBranchSource;
+  }) {
+    if (!this.dependencies.branch || input.mode !== 'direct') throw new Error('此入口未开放分支保存；Hosted 分支不受支持');
+    if (!input.generationId || this.branchOperations.has(input.operationId) || this.branchGenerations.has(input.generationId)) throw new Error('原分支生成身份已消费，不能重新准备');
+    if (this.hasUnconfirmedDeletion(input.source.session.sessionId)) throw new Error('源会话删除状态待确认，不能准备分支');
+    const identity = freezeStoryBranchIdentity(input), generationId = input.generationId;
+    const run = this.beginGeneration();
+    if (!run) throw new Error('当前故事仍有待处理操作或未保存结果');
+    this.branchOperations.add(identity.operationId); this.branchGenerations.add(generationId);
+    let consumed = false;
+    const ownsRun = () => !this.disposed && this.runController === run.controller;
+    const release = () => { if (this.runController === run.controller) { this.runController = null; this.publish({}); } };
+    const fail = (cause: unknown) => {
+      if (consumed) return; consumed = true;
+      if (ownsRun()) this.publish({ phase: run.controller.signal.aborted ? 'cancelled' : 'failed', message: errorText(cause) });
+      release();
+    };
+    run.controller.signal.addEventListener('abort', () => {
+      if (!consumed) fail(new Error('分支候选准备已取消，未提交章节'));
+    }, { once: true });
+    return Object.freeze({
+      signal: run.controller.signal,
+      cancel: () => run.controller.abort(),
+      fail,
+      complete: async (records: CompletedStoryBranchRecords, result: ArenaDirectPartial): Promise<void> => {
+        if (consumed || !ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
+        consumed = true;
+        let title = '未命名分支章';
+        try {
+          title = typeof records?.chapter?.title === 'string' ? records.chapter.title : title;
+          // Keep completed text before schema, graph or byte-budget validation.
+          this.publish({ resultSource: 'direct', phase: 'completed', result: { ...result }, resultChapterIndex: identity.source.anchorIndex + 1,
+            pending: { title, evidence: 'not-written', retryable: false, tooLarge: false }, message: '分支生成完成，正在准备本地保存。' });
+          if (records.chapter.generationId !== generationId) throw new Error('分支完成章与原生成身份不一致');
+          const prepared = (this.dependencies.branch!.prepareCommit ?? prepareStoryBranchCommit)(identity, records);
+          if (!ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
+          this.pending = { kind: 'branch', prepared, selection: run.selection, evidence: 'not-written' };
+          this.publish({ pending: { title: records.chapter.title, evidence: 'not-written', retryable: true, tooLarge: false } });
+          await this.savePending();
+        } catch (cause) {
+          if (!ownsRun()) return;
+          const tooLarge = cause instanceof BattleStoryCommitByteLimitError;
+          this.publish({ pending: { title, evidence: 'not-written', retryable: false, tooLarge },
+            message: `分支完成章未保存：${errorText(cause)} 原文保留在当前窗口，可导出；不会重新调用模型。` });
+        } finally { release(); }
+      },
+    });
+  }
   async savePending() {
     const pending = this.pending;
     if (this.disposed || !pending || this.state.saving || this.deletionBlocksWork()) return;
+    const saveController = pending.kind === 'branch' ? this.runController ?? new AbortController() : null;
+    if (saveController) this.branchSaveController = saveController;
     this.publish({ saving: true, message: pending.evidence === 'unknown' ? '正在查询原保存操作…' : '正在保存完整章节…' });
     try {
-      const receipt = pending.evidence === 'unknown'
-        ? await queryStoryCommitReceipt(this.dependencies.port, pending.prepared)
-        : await savePreparedStoryCommit(this.dependencies.port, pending.prepared, pending.evidence);
+      const receipt = pending.kind === 'branch'
+        ? pending.evidence === 'unknown'
+          ? await queryStoryBranchReceipt(this.dependencies.branch!.port, pending.prepared)
+          : await savePreparedStoryBranchCommit(this.dependencies.branch!.port, pending.prepared, pending.evidence, saveController?.signal)
+        : pending.evidence === 'unknown'
+          ? await queryStoryCommitReceipt(this.dependencies.port, pending.prepared)
+          : await savePreparedStoryCommit(this.dependencies.port, pending.prepared, pending.evidence);
       if (!receipt) throw new StorySaveError('尚无可核对的原操作回执，保存状态仍待确认。请保留原文或导出。', 'unknown');
       const stored = pending.prepared.parts.find((part) => part.kind === 'session')!.prepared.value as Record<string, unknown>;
-      const head = StorySessionHeadSchema.parse(Object.fromEntries(['id','revision','titlePreview','titleTruncated','mode','chapterPlan','createdAt','updatedAt','chapterCount','lastChapterId'].filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]])));
-      this.pending = null;
+      let head = StorySessionHeadSchema.parse(Object.fromEntries(['id','revision','titlePreview','titleTruncated','mode','chapterPlan','createdAt','updatedAt','chapterCount','lastChapterId'].filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]])));
+      this.pending = null; this.savedResultChapterId = receipt.chapterId;
       this.publish({ pending: null, resultSaved: true, savedUnread: head, message: '完整章节已保存到本机故事。' });
-      await this.refreshSessions();
+      if (await this.refreshSessions()) {
+        head = await this.currentSavedHead(head);
+        this.publish({ savedUnread: head });
+      }
       if (pending.selection.isCurrent()) {
-        await this.selectSession(head);
+        await this.openSavedChapter(head, receipt.chapterId);
         if (this.state.selected.status === 'loaded' && this.state.selected.chapterId === receipt.chapterId) this.publish({ savedUnread: null });
       } else if (this.state.active?.id === head.id) {
         // A manual old-chapter choice wins, while the same story's head can advance.
@@ -480,11 +557,40 @@ export class DesktopArenaStorySession {
     } catch (cause) {
       if (cause instanceof StorySaveError && cause.evidence === 'unknown') pending.evidence = 'unknown';
       this.publish({ pending: this.state.pending ? { ...this.state.pending, evidence: pending.evidence } : null, message: errorText(cause) });
-    } finally { this.publish({ saving: false }); }
+    } finally {
+      if (this.branchSaveController === saveController) this.branchSaveController = null;
+      this.publish({ saving: false });
+    }
   }
-  async readSavedResult() { if (this.state.savedUnread) { const head = this.state.savedUnread; await this.selectSession(head); if (this.state.selected.status === 'loaded' && this.state.selected.chapterId === head.lastChapterId) this.publish({ savedUnread: null }); } }
+  // Only reader revision may advance after exact success. The frozen writer and
+  // receipt identity are never rebuilt from this directory result.
+  private async currentSavedHead(fallback: StorySessionHead): Promise<StorySessionHead> {
+    let head = this.state.sessions.find(row => row.id === fallback.id), cursor = this.state.sessionCursor;
+    while (!head && cursor) {
+      const page = await listStorySessions(this.dependencies.port, cursor);
+      head = page.rows.find(row => row.id === fallback.id); cursor = page.nextCursor;
+    }
+    return head ?? fallback;
+  }
+  private async openSavedChapter(head: StorySessionHead, chapterId: string) {
+    const loading = this.selectSession(head), selection = this.captureSelection();
+    await loading;
+    if (selection.isCurrent() && head.lastChapterId !== chapterId) await this.selectChapter(chapterId);
+  }
+  async readSavedResult() {
+    const original = this.state.savedUnread, chapterId = this.savedResultChapterId ?? original?.lastChapterId;
+    if (!original || !chapterId || this.isBusy()) return;
+    const selection = this.captureSelection();
+    try {
+      const head = await this.refreshSessions() ? await this.currentSavedHead(original) : original;
+      if (!selection.isCurrent() || this.state.savedUnread?.id !== original.id || this.isBusy()) return;
+      this.publish({ savedUnread: head });
+      await this.openSavedChapter(head, chapterId);
+      if (this.state.selected.status === 'loaded' && this.state.selected.chapterId === chapterId) this.publish({ savedUnread: null });
+    } catch (cause) { this.publish({ message: `章节已保存，读取暂未完成：${errorText(cause)}` }); }
+  }
   discardResult() { if (this.isBusy()) return; if (this.hosted?.hasCandidate()) { this.publish({ message: '请先导出或明确放弃原 Hosted 候选；清除预览不会释放候选。' }); return; } this.pending = null; this.publish({ resultSource: null, result: null, pending: null, phase: 'idle', resultSaved: false, resultChapterIndex: null, message: null }); }
-  cancel() { if (this.hosted?.getSnapshot().busy === 'model') { void this.hosted.requestServerStop(); return; } this.runController?.abort(); }
+  cancel() { if (this.hosted?.getSnapshot().busy === 'model') { void this.hosted.requestServerStop(); return; } this.runController?.abort(); this.branchSaveController?.abort(); }
   async exportSelectedStory() {
     const head = this.state.active;
     if (head) await this.exportStory(head);
@@ -506,7 +612,7 @@ export class DesktopArenaStorySession {
     // Leaving can dismiss an unsubmitted confirmation, never release an already
     // dispatched deletion flight or make the same owner dispatch it a second time.
     this.cancelDeleteSession();
-    this.hosted?.detach(); this.runController?.abort(); this.cancelExport(); this.readController?.abort();
+    this.hosted?.detach(); this.runController?.abort(); this.branchSaveController?.abort(); this.cancelExport(); this.readController?.abort();
   }
   dispose() { this.detach(); this.hosted?.dispose(); this.disposed = true; this.fence.dispose(); this.listeners.clear(); }
 }

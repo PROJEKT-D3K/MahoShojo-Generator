@@ -65,6 +65,7 @@ const sourceWithoutSecrets = (source: object): Record<string, unknown> => {
   const keys = ['mode', 'language', 'storyLength', 'customStoryLength', 'generationMode', 'providerMode', 'providerId', 'modelId'] as const;
   return Object.fromEntries(keys.filter((key) => record[key] !== undefined).map((key) => [key, record[key]]));
 };
+export { titlePreview as storyTitlePreview, sourceWithoutSecrets as storySourceWithoutSecrets };
 const hashBytes = async (bytes: Uint8Array): Promise<string> => {
   const buffer = Uint8Array.from(bytes).buffer;
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', buffer));

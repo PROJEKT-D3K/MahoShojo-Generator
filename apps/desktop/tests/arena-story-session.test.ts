@@ -68,6 +68,20 @@ describe('device-owned continuous story journey',()=>{
     port.hideReceipts=false;await owner.savePending();expect(owner.getSnapshot()).toMatchObject({pending:null,resultSaved:true,active:{chapterCount:1}});
     expect(port.begin).toHaveBeenCalledTimes(1);expect(execution.requests).toHaveLength(1);
   });
+  it('an old linear success receipt reads its original chapter using the now-current target revision', async () => {
+    const { owner, port, execution } = setup(); port.loseEndReply = true; port.hideReceipts = true;
+    await owner.start({ draft: storyDraft(), product: 'battle' }, execution.prepare);
+    const originalChapterId = port.manifest!.operationId;
+    expect(owner.getSnapshot().pending?.evidence).toBe('unknown');
+    port.loseEndReply = false; port.hideReceipts = false;
+    const newer = new DesktopArenaStorySession({ port, exportMarkdown: async () => ({ absolutePath: 'x', byteLength: 1 }) });
+    newer.setExecutionScope('new-owner'); await newer.initialize(); await newer.continue('later chapter', execution.prepare);
+    expect(newer.getSnapshot().active?.revision).toBe(2);
+    const writes = port.begin.mock.calls.length;
+    await owner.savePending();
+    expect(owner.getSnapshot()).toMatchObject({ resultSaved: true, pending: null, active: { revision: 2 }, selected: { status: 'loaded', chapterId: originalChapterId } });
+    expect(port.begin).toHaveBeenCalledTimes(writes); newer.dispose();
+  });
   it('known local save failure retries the exact prepared identity without any model replay',async()=>{
     const {owner,port,execution}=setup();port.failBegin=true;
     await owner.start({draft:storyDraft(),product:'battle'},execution.prepare);

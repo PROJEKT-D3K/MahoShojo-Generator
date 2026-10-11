@@ -868,3 +868,13 @@ describe('Desktop Hosted story routes through prepared targets and default binde
   });
 
 });
+
+it.each(['battle', 'arena'] as const)('keeps %s branch entry closed in the actual routed story surface', async product => {
+  localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
+  window.location.hash = `#/${product}`;
+  await mount();
+  await click('恢复草稿'); await click('新建连续战报');
+  await vi.waitFor(() => expect(container.querySelector('[data-story-read-status="loaded"]')).toBeTruthy());
+  expect([...container.querySelectorAll('button')].filter(node => /分支|branch/iu.test(node.textContent ?? ''))).toHaveLength(0);
+  expect(mocks.invoke.mock.calls.filter(([command]) => /branch/iu.test(command))).toHaveLength(0);
+});

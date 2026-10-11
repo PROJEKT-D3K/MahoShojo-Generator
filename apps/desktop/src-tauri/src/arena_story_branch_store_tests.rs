@@ -1229,3 +1229,6 @@ mod resource_probes;
 
 #[path = "arena_story_branch_contract_tests.rs"]
 mod contract_goldens;
+
+#[path = "arena_story_branch_completion_pipe_tests.rs"]
+mod completion_pipe;
