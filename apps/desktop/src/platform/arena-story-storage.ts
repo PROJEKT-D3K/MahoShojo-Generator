@@ -204,7 +204,7 @@ const validateOriginal = <T>(schema: { parse(value: unknown): T }, value: unknow
   return value as T;
 };
 
-const readRecord = async (port: StoryNativePort, descriptor: StoryRecordDescriptor, signal?: AbortSignal): Promise<unknown> => {
+export const readStoryRecord = async (port: Pick<StoryNativePort, 'read'>, descriptor: StoryRecordDescriptor, signal?: AbortSignal): Promise<unknown> => {
   const checked = StoryRecordDescriptorSchema.parse(descriptor);
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const hash = createBattleStoryByteDigest(); const strings: string[] = [];
@@ -285,7 +285,7 @@ export const listStoryChapters = async (port: StoryNativePort, head: StorySessio
 export const readSelectedStoryChapter = async (port: StoryNativePort, head: StorySessionHead, chapterId: string, signal?: AbortSignal): Promise<StoryChapterDocument> => {
   const descriptor = StoryRecordDescriptorSchema.parse(await port.describe(head.id, head.revision, 'chapter', chapterId));
   if (descriptor.kind !== 'chapter' || descriptor.recordId !== chapterId || descriptor.sessionId !== head.id || descriptor.revision !== head.revision) throw new Error('选章读取身份不符');
-  const chapter = validateOriginal(StoryChapterDocumentSchema, await readRecord(port, descriptor, signal));
+  const chapter = validateOriginal(StoryChapterDocumentSchema, await readStoryRecord(port, descriptor, signal));
   if (chapter.id !== chapterId || chapter.sessionId !== head.id || chapter.index > head.chapterCount) throw new Error('章节原件身份不符');
   return chapter;
 };
@@ -297,15 +297,15 @@ export const readStoryContinueState = async (port: StoryNativePort, head: StoryS
   }
   if (result.session.kind !== 'session' || result.seed.kind !== 'seed' || result.checkpoint.kind !== 'checkpoint'
     || result.session.recordId !== head.id || result.seed.recordId !== head.id) throw new Error('续写记录类型不符');
-  const session = validateOriginal(StorySessionDocumentSchema, await readRecord(port, result.session, signal));
-  const seed = validateOriginal(StorySeedDocumentSchema, await readRecord(port, result.seed, signal));
-  const checkpoint = validateOriginal(StoryCheckpointDocumentSchema, await readRecord(port, result.checkpoint, signal));
+  const session = validateOriginal(StorySessionDocumentSchema, await readStoryRecord(port, result.session, signal));
+  const seed = validateOriginal(StorySeedDocumentSchema, await readStoryRecord(port, result.seed, signal));
+  const checkpoint = validateOriginal(StoryCheckpointDocumentSchema, await readStoryRecord(port, result.checkpoint, signal));
   if (session.id !== head.id || session.revision !== head.revision || session.lastChapterId !== head.lastChapterId
     || session.workingCheckpointId !== checkpoint.id || checkpoint.boundaryIndex !== head.chapterCount || checkpoint.chapterId !== head.lastChapterId) throw new Error('续写检查点不符');
   const recentWindow: BattleStoryPromptWindowItem[] = [];
   for (const descriptor of result.recentChapters) {
     if (descriptor.kind !== 'chapter') throw new Error('续写章节类型不符');
-    const chapter = validateOriginal(StoryChapterDocumentSchema, await readRecord(port, descriptor, signal));
+    const chapter = validateOriginal(StoryChapterDocumentSchema, await readStoryRecord(port, descriptor, signal));
     if (chapter.sessionId !== head.id || chapter.id !== descriptor.recordId || chapter.index !== head.chapterCount - result.recentChapters.length + recentWindow.length + 1) throw new Error('续写章节序列不符');
     recentWindow.push(projectBattleStoryPromptWindowItem(chapter, recentWindow.length < result.recentChapters.length - 2 ? 'digest' : 'full', 6000));
   }
@@ -338,7 +338,7 @@ export async function* readAllCommittedStoryChapters(port: StoryNativePort, head
 export const readStorySessionDocument = async (port: StoryNativePort, head: StorySessionHead, signal?: AbortSignal): Promise<StorySessionDocument> => {
   const descriptor = StoryRecordDescriptorSchema.parse(await port.describe(head.id, head.revision, 'session', head.id));
   if (descriptor.kind !== 'session' || descriptor.recordId !== head.id || descriptor.sessionId !== head.id || descriptor.revision !== head.revision) throw new Error('故事读取身份不符');
-  const session = validateOriginal(StorySessionDocumentSchema, await readRecord(port, descriptor, signal));
+  const session = validateOriginal(StorySessionDocumentSchema, await readStoryRecord(port, descriptor, signal));
   if (session.id !== head.id || session.revision !== head.revision || session.chapterCount !== head.chapterCount || session.lastChapterId !== head.lastChapterId) throw new Error('故事原件身份不符');
   return session;
 };

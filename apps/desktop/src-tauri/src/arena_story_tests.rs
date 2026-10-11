@@ -88,6 +88,449 @@ fn raw(store: &StoryStore, descriptor: &RecordDescriptor) -> Vec<u8> {
     assert_eq!(digest(&bytes), descriptor.digest);
     bytes
 }
+
+fn anchor_request(session: &str, count: u64, anchor: u64) -> BranchAnchorRequest {
+    BranchAnchorRequest {
+        session_id: session.into(),
+        revision: count,
+        expected_last_chapter_id: format!("{session}-chapter-{count}"),
+        expected_chapter_count: count,
+        anchor_chapter_id: format!("{session}-chapter-{anchor}"),
+        anchor_index: anchor,
+    }
+}
+
+#[test]
+fn branch_anchor_resolves_first_middle_last_with_full_source_cas_and_bounded_window() {
+    let (_root, library) = library();
+    let store = library.stories();
+    for index in 1..=15 {
+        commit(store, "story", index);
+    }
+    let changes = lock_connection(library.connection())
+        .unwrap()
+        .total_changes();
+    for anchor in [1, 8, 15] {
+        let result = store
+            .resolve_branch_anchor(&anchor_request("story", 15, anchor))
+            .unwrap();
+        assert_eq!(result.source.anchor_index, anchor);
+        assert_eq!(
+            result.source.anchor.record_id,
+            format!("story-chapter-{anchor}")
+        );
+        assert_eq!(
+            result.source.checkpoint.record_id,
+            format!("story-checkpoint-{anchor}")
+        );
+        assert_eq!(result.source.expected_last_chapter_id, "story-chapter-15");
+        assert_eq!(result.source.expected_chapter_count, 15);
+        for descriptor in [
+            &result.source.session,
+            &result.source.seed,
+            &result.source.anchor,
+            &result.source.checkpoint,
+        ]
+        .into_iter()
+        .chain(result.recent_chapters.iter())
+        {
+            assert_eq!(descriptor.instance, store.instance);
+            assert_eq!(descriptor.session_id, "story");
+            assert_eq!(descriptor.revision, 15);
+            assert_eq!(
+                descriptor,
+                &store
+                    .describe_record("story", 15, descriptor.kind, &descriptor.record_id)
+                    .unwrap(),
+            );
+        }
+        let expected: Vec<_> = (anchor.saturating_sub(11).max(1)..=anchor)
+            .map(|index| format!("story-chapter-{index}"))
+            .collect();
+        assert_eq!(
+            result
+                .recent_chapters
+                .iter()
+                .map(|record| record.record_id.clone())
+                .collect::<Vec<_>>(),
+            expected,
+        );
+        let checkpoint: Value =
+            serde_json::from_slice(&raw(store, &result.source.checkpoint)).unwrap();
+        assert_eq!(checkpoint["boundaryIndex"], anchor);
+        assert_eq!(checkpoint["chapterId"], result.source.anchor.record_id);
+        let wire = serde_json::to_value(&result).unwrap();
+        assert_eq!(wire.as_object().unwrap().len(), 2);
+        assert!(wire.get("source").is_some());
+        assert!(wire.get("recentChapters").is_some());
+    }
+    assert_eq!(
+        lock_connection(library.connection())
+            .unwrap()
+            .total_changes(),
+        changes
+    );
+    assert!(store.stages.lock().unwrap().is_empty());
+}
+
+#[test]
+fn branch_anchor_request_is_closed_and_rejects_unsafe_or_inconsistent_identities() {
+    let (_root, library) = library();
+    let store = library.stories();
+    commit(store, "story", 1);
+    let request = anchor_request("story", 1, 1);
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire.as_object().unwrap().len(), 6);
+    for field in [
+        "sessionId",
+        "revision",
+        "expectedLastChapterId",
+        "expectedChapterCount",
+        "anchorChapterId",
+        "anchorIndex",
+    ] {
+        let mut missing = wire.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<BranchAnchorRequest>(missing).is_err(),
+            "{field}"
+        );
+    }
+    let mut unknown = wire;
+    unknown["checkpointId"] = json!("caller-cannot-choose-checkpoint");
+    assert!(serde_json::from_value::<BranchAnchorRequest>(unknown).is_err());
+    let duplicate =
+        serde_json::to_string(&request)
+            .unwrap()
+            .replacen('{', "{\"anchorIndex\":1,", 1);
+    assert!(serde_json::from_str::<BranchAnchorRequest>(&duplicate).is_err());
+    for field in 0..9 {
+        let mut invalid = request.clone();
+        match field {
+            0 => invalid.session_id = "invalid/id".into(),
+            1 => invalid.expected_last_chapter_id = String::new(),
+            2 => invalid.anchor_chapter_id = "a".repeat(129),
+            3 => invalid.revision = 0,
+            4 => {
+                invalid.revision = MAX_SAFE_INTEGER + 1;
+                invalid.expected_chapter_count = invalid.revision;
+            }
+            5 => invalid.expected_chapter_count = 2,
+            6 => invalid.anchor_index = 0,
+            7 => {
+                invalid.revision = MAX_SAFE_INTEGER;
+                invalid.expected_chapter_count = MAX_SAFE_INTEGER;
+                invalid.anchor_index = MAX_SAFE_INTEGER;
+            }
+            8 => invalid.anchor_index = 2,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            store.resolve_branch_anchor(&invalid).unwrap_err(),
+            StoryError::Invalid,
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn branch_anchor_window_edge_requires_actual_predecessor_in_raw_and_index() {
+    let (_root, library) = library();
+    let store = library.stories();
+    for index in 1..=16 {
+        commit(store, "story", index);
+    }
+    let request = anchor_request("story", 16, 14);
+    let window = store.resolve_branch_anchor(&request).unwrap();
+    assert_eq!(
+        window.recent_chapters.first().unwrap().record_id,
+        "story-chapter-3"
+    );
+    assert_eq!(
+        window.recent_chapters.last().unwrap().record_id,
+        "story-chapter-14"
+    );
+    let original = fixture("story", 3)
+        .into_iter()
+        .find(|(kind, _)| *kind == PartKind::Chapter)
+        .unwrap()
+        .1;
+    for case in [
+        "future-in-both",
+        "raw-only",
+        "index-only",
+        "duplicate-source",
+        "bad-hash",
+    ] {
+        let document = match case {
+            "future-in-both" | "raw-only" => {
+                original.replace("story-chapter-2", "story-chapter-16")
+            }
+            "duplicate-source" => {
+                original.replacen('{', "{\"sourceChapter\\u0049d\":\"story-chapter-2\",", 1)
+            }
+            "bad-hash" => original.replace("正文", "变化"),
+            "index-only" => original.clone(),
+            _ => unreachable!(),
+        };
+        let indexed_source = if matches!(case, "future-in-both" | "index-only") {
+            "story-chapter-16"
+        } else {
+            "story-chapter-2"
+        };
+        let hash = if case == "bad-hash" {
+            digest(original.as_bytes())
+        } else {
+            digest(document.as_bytes())
+        };
+        lock_connection(library.connection()).unwrap().execute(
+            "UPDATE arena_story_chapter SET document=?1,document_bytes=?2,document_digest=?3,source_chapter_id=?4 WHERE id='story-chapter-3'",
+            params![document, document.len() as u64, hash, indexed_source],
+        ).unwrap();
+        assert_eq!(
+            store.resolve_branch_anchor(&request).unwrap_err(),
+            StoryError::Corrupt,
+            "{case}"
+        );
+    }
+    lock_connection(library.connection()).unwrap().execute(
+        "UPDATE arena_story_chapter SET document=?1,document_bytes=?2,document_digest=?3,source_chapter_id='story-chapter-2' WHERE id='story-chapter-3'",
+        params![original, original.len() as u64, digest(original.as_bytes())],
+    ).unwrap();
+    store.resolve_branch_anchor(&request).unwrap();
+}
+
+#[test]
+fn branch_anchor_rejects_stale_head_count_revision_and_wrong_anchor_owner_or_index() {
+    let (_root, library) = library();
+    let store = library.stories();
+    for index in 1..=3 {
+        commit(store, "story", index);
+    }
+    commit(store, "other", 1);
+    let request = anchor_request("story", 3, 1);
+    let mut stale = request.clone();
+    stale.expected_last_chapter_id = "story-chapter-2".into();
+    assert_eq!(
+        store.resolve_branch_anchor(&stale).unwrap_err(),
+        StoryError::Stale
+    );
+    let mut stale = anchor_request("story", 2, 1);
+    stale.expected_last_chapter_id = request.expected_last_chapter_id.clone();
+    assert_eq!(
+        store.resolve_branch_anchor(&stale).unwrap_err(),
+        StoryError::Stale
+    );
+    let mut wrong = request.clone();
+    wrong.anchor_chapter_id = "other-chapter-1".into();
+    assert_eq!(
+        store.resolve_branch_anchor(&wrong).unwrap_err(),
+        StoryError::Missing
+    );
+    wrong.anchor_chapter_id = "missing-chapter".into();
+    assert_eq!(
+        store.resolve_branch_anchor(&wrong).unwrap_err(),
+        StoryError::Missing
+    );
+    wrong.anchor_chapter_id = "story-chapter-2".into();
+    assert_eq!(
+        store.resolve_branch_anchor(&wrong).unwrap_err(),
+        StoryError::Stale
+    );
+    lock_connection(library.connection())
+        .unwrap()
+        .execute(
+            "UPDATE arena_story_session SET chapter_count=2 WHERE id='story'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        store.resolve_branch_anchor(&request).unwrap_err(),
+        StoryError::Stale
+    );
+}
+
+#[test]
+fn branch_anchor_frozen_descriptors_become_stale_after_suffix_append() {
+    let (_root, library) = library();
+    let store = library.stories();
+    for index in 1..=3 {
+        commit(store, "story", index);
+    }
+    let request = anchor_request("story", 3, 1);
+    let frozen = store.resolve_branch_anchor(&request).unwrap();
+    commit(store, "story", 4);
+    assert_eq!(
+        store.resolve_branch_anchor(&request).unwrap_err(),
+        StoryError::Stale
+    );
+    assert_eq!(
+        store.read_record_chunk(&frozen.source.anchor, 0, 1),
+        Err(StoryError::Stale)
+    );
+    assert_eq!(frozen.source.expected_last_chapter_id, "story-chapter-3");
+    assert_eq!(frozen.source.expected_chapter_count, 3);
+    assert_eq!(frozen.source.anchor.revision, 3);
+}
+
+#[test]
+fn branch_anchor_requires_real_boundary_checkpoint_and_its_chapter_relation() {
+    for mutation in [
+        "UPDATE arena_story_checkpoint SET chapter_id='story-chapter-2' WHERE id='story-checkpoint-1'",
+        "UPDATE arena_story_checkpoint SET boundary_index=9 WHERE id='story-checkpoint-1'",
+        "DELETE FROM arena_story_checkpoint WHERE id='story-checkpoint-1'",
+    ] {
+        let (_root, library) = library();
+        let store = library.stories();
+        for index in 1..=3 { commit(store, "story", index); }
+        lock_connection(library.connection()).unwrap().execute(mutation, []).unwrap();
+        assert_eq!(
+            store.resolve_branch_anchor(&anchor_request("story", 3, 1)).unwrap_err(),
+            StoryError::Corrupt,
+            "{mutation}",
+        );
+    }
+}
+
+#[test]
+fn branch_anchor_checks_raw_active_identity_and_rejects_ambiguous_authority() {
+    for case in [
+        "superseded",
+        "missing-status",
+        "status-alias",
+        "wrong-identity",
+        "superseded-link",
+        "bad-digest",
+    ] {
+        let (_root, library) = library();
+        let store = library.stories();
+        commit(store, "story", 1);
+        let document = fixture("story", 1)
+            .into_iter()
+            .find(|(kind, _)| *kind == PartKind::Chapter)
+            .unwrap()
+            .1;
+        let changed = match case {
+            "superseded" => document.replace("\"status\":\"active\"", "\"status\":\"superseded\""),
+            "missing-status" => document.replace("\"status\":\"active\",", ""),
+            "status-alias" => document.replacen('{', "{\"st\\u0061tus\":\"active\",", 1),
+            "wrong-identity" => {
+                document.replace("\"id\":\"story-chapter-1\"", "\"id\":\"another-id\"")
+            }
+            "superseded-link" => {
+                document.replacen('{', "{\"supersededByChapterId\":\"later-chapter\",", 1)
+            }
+            "bad-digest" => document.replace("正文", "变化"),
+            _ => unreachable!(),
+        };
+        assert_ne!(changed, document, "{case}");
+        let hash = if case == "bad-digest" {
+            digest(document.as_bytes())
+        } else {
+            digest(changed.as_bytes())
+        };
+        lock_connection(library.connection()).unwrap().execute(
+            "UPDATE arena_story_chapter SET document=?1,document_bytes=?2,document_digest=?3 WHERE id='story-chapter-1'",
+            params![changed, changed.len() as u64, hash],
+        ).unwrap();
+        assert_eq!(
+            store
+                .resolve_branch_anchor(&anchor_request("story", 1, 1))
+                .unwrap_err(),
+            StoryError::Corrupt,
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn branch_anchor_scans_only_selected_record_and_preserves_opaque_extensions() {
+    let (_root, library) = library();
+    let store = library.stories();
+    for index in 1..=3 {
+        commit(store, "story", index);
+    }
+    let original = fixture("story", 2)
+        .into_iter()
+        .find(|(kind, _)| *kind == PartKind::Chapter)
+        .unwrap()
+        .1;
+    let changed = original.replacen(
+        '{',
+        "{\"opaque\":\"\\ud800\",\"opaque\":{\"x\":1,\"x\":2},\"\\ud800\":1,",
+        1,
+    );
+    {
+        let connection = lock_connection(library.connection()).unwrap();
+        connection.execute(
+            "UPDATE arena_story_chapter SET document=?1,document_bytes=?2,document_digest=?3 WHERE id='story-chapter-2'",
+            params![changed, changed.len() as u64, digest(changed.as_bytes())],
+        ).unwrap();
+        // Metadata resolution must not parse either historical prefix or suffix.
+        connection.execute("UPDATE arena_story_chapter SET document='unread-document' WHERE id IN ('story-chapter-1','story-chapter-3')", []).unwrap();
+    }
+    let result = store
+        .resolve_branch_anchor(&anchor_request("story", 3, 2))
+        .unwrap();
+    assert_eq!(result.recent_chapters.len(), 2);
+    assert_eq!(result.source.anchor.digest, digest(changed.as_bytes()));
+    assert_eq!(raw(store, &result.source.anchor), changed.as_bytes());
+}
+
+#[test]
+fn branch_anchor_accepts_copied_active_chapters_without_success_receipt() {
+    let (_root, library) = library();
+    let store = library.stories();
+    for index in 1..=3 {
+        commit(store, "source", index);
+    }
+    let source = store
+        .resolve_branch_anchor(&anchor_request("source", 3, 2))
+        .unwrap()
+        .source;
+    let copied_anchor = branch::copy_id("target", branch::CopyKind::Chapter, 2).unwrap();
+    let copied_checkpoint = branch::copy_id("target", branch::CopyKind::Checkpoint, 2).unwrap();
+    let mut parts = fixture("target", 3);
+    for (kind, document) in &mut parts {
+        let mut value: Value = serde_json::from_str(document).unwrap();
+        if *kind == PartKind::Session {
+            value["lastInputCheckpointId"] = json!(copied_checkpoint);
+            value["branchOf"] =
+                json!({"sessionId":"source","chapterId":"source-chapter-2","chapterIndex":2});
+        }
+        if *kind == PartKind::Chapter {
+            value["action"] = json!("branch");
+            value["sourceChapterId"] = json!(copied_anchor);
+        }
+        *document = value.to_string();
+    }
+    let manifest = branch::BranchManifest {
+        version: 2,
+        operation_id: "target-chapter-3".into(),
+        session_id: "target".into(),
+        source,
+        parts: manifest("target", 3, &parts).parts,
+    };
+    let token = store.begin_branch(manifest, Instant::now()).unwrap().token;
+    for (kind, document) in parts {
+        store
+            .append(&token, kind, 0, document.as_bytes(), Instant::now())
+            .unwrap();
+    }
+    store.end_branch(&token, Instant::now()).unwrap();
+    for index in [1, 2, 3] {
+        let mut request = anchor_request("target", 3, index);
+        if index < 3 {
+            request.anchor_chapter_id =
+                branch::copy_id("target", branch::CopyKind::Chapter, index).unwrap();
+            assert!(store.receipt("target", &request.anchor_chapter_id).is_err());
+        }
+        let resolved = store.resolve_branch_anchor(&request).unwrap();
+        assert_eq!(resolved.source.anchor.record_id, request.anchor_chapter_id);
+        assert_eq!(resolved.source.anchor_index, index);
+    }
+}
+
 #[test]
 fn first_append_exact_bytes_reopen_and_receipt() {
     let (root, library) = library();

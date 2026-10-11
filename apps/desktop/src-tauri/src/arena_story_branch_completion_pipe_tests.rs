@@ -17,6 +17,7 @@ fn call(store: &StoryStore, request: &Value) -> Result<Value, StoryError> {
     match text("op")? {
         "linear-begin" => encoded(store.begin(parse(&request["manifest"])?, Instant::now())),
         "branch-begin" => encoded(store.begin_branch(parse(&request["manifest"])?, Instant::now())),
+        "branch-anchor" => encoded(store.resolve_branch_anchor(&parse(&request["request"])?)),
         "append" => {
             let bytes = STANDARD
                 .decode(text("bytes")?)

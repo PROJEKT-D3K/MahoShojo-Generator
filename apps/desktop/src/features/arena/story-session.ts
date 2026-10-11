@@ -24,7 +24,8 @@ import {
   freezeStoryBranchIdentity, prepareStoryBranchCommit, savePreparedStoryBranchCommit, queryStoryBranchReceipt,
   type StoryBranchNativePort, type PreparedStoryBranchCommit, type CompletedStoryBranchRecords,
 } from '../../platform/arena-story-branch-storage';
-import type { StoryBranchSource } from '@mahoshojo/contracts/desktop-arena-story-branch';
+import { readStoryBranchSource, type StoryBranchSourcePort } from '../../platform/arena-story-branch-source';
+import type { StoryBranchAnchorRequest, StoryBranchSource } from '@mahoshojo/contracts/desktop-arena-story-branch';
 import { executeArenaDirect, type ArenaDirectIntent, type ArenaDirectPartial } from './direct';
 import { createInitialArenaDraft, type ArenaDraft, type DesktopArenaProduct } from './session';
 import { DesktopHostedStorySession, type DesktopHostedStoryState, type HostedStoryExecutionTarget } from './hosted-story-session';
@@ -99,7 +100,7 @@ export class DesktopArenaStorySession {
   constructor(private readonly dependencies: {
     port: StoryNativePort; execute?: typeof executeArenaDirect; id?: () => string; now?: () => number; random?: () => number;
     prepareCommit?: typeof prepareStoryStorageCommit;
-    branch?: { port: StoryBranchNativePort; prepareCommit?: typeof prepareStoryBranchCommit };
+    branch?: { port: StoryBranchNativePort; prepareCommit?: typeof prepareStoryBranchCommit; source?: StoryBranchSourcePort };
     hosted?: Omit<ConstructorParameters<typeof DesktopHostedStorySession>[0], 'onState' | 'onResult' | 'onSaved' | 'captureSelection' | 'loadBaseline'>;
     exportMarkdown: (head: StorySessionHead, signal: AbortSignal, onProgress: (value: StoryExportProgress) => void) => Promise<StoryExportResult>;
   }) {
@@ -470,6 +471,35 @@ export class DesktopArenaStorySession {
     });
     if (!dispatched && !this.disposed) this.publish({ phase: 'cancelled', message: '生成准备已取消，未调用模型。' });
   }
+  /** Internal pre-generation read seam. No default binder, model or page caller. */
+  async prepareBranchCompletion(input: {
+    mode: 'direct' | 'hosted'; generationId: string; operationId: string; sessionId: string; anchor: StoryBranchAnchorRequest;
+  }) {
+    const frozen = freezeBattleStoryCommit(structuredClone(input));
+    if (!this.dependencies.branch?.source || frozen.mode !== 'direct') throw new Error('此入口未开放分支源读取；Hosted 分支不受支持');
+    if (!frozen.generationId || this.branchOperations.has(frozen.operationId) || this.branchGenerations.has(frozen.generationId)) throw new Error('原分支生成身份已消费，不能重新准备');
+    if (this.hasUnconfirmedDeletion(frozen.anchor.sessionId)) throw new Error('源会话删除状态待确认，不能准备分支');
+    const run = this.beginGeneration();
+    if (!run) throw new Error('当前故事仍有待处理操作或未保存结果');
+    this.branchOperations.add(frozen.operationId); this.branchGenerations.add(frozen.generationId);
+    const cancelled = () => {
+      this.generationFailure(new Error('分支源读取已取消'), run.controller);
+      if (this.runController === run.controller) { this.runController = null; this.publish({}); }
+    };
+    run.controller.signal.addEventListener('abort', cancelled, { once: true });
+    try {
+      const snapshot = await readStoryBranchSource(this.dependencies.port, this.dependencies.branch.source, frozen.anchor, run.controller.signal);
+      if (this.disposed || run.controller.signal.aborted || this.runController !== run.controller
+        || run.epoch !== this.executionEpoch || !run.selection.isCurrent()) throw new Error('分支源读取已取消或选择已变化');
+      const identity = freezeStoryBranchIdentity({ ...frozen, source: snapshot.source });
+      run.controller.signal.removeEventListener('abort', cancelled);
+      return Object.freeze({ snapshot, completion: this.branchCompletionForRun(identity, frozen.generationId, run) });
+    } catch (cause) {
+      this.generationFailure(cause, run.controller);
+      if (this.runController === run.controller) { this.runController = null; this.publish({}); }
+      throw cause;
+    } finally { run.controller.signal.removeEventListener('abort', cancelled); }
+  }
   /** Internal injected completion seam, not a model/anchor-reading capability.
    * The controlled producer freezes its source BEFORE generation, then transfers
    * one completed owned graph. Default pages never inject a branch port. */
@@ -483,6 +513,10 @@ export class DesktopArenaStorySession {
     const run = this.beginGeneration();
     if (!run) throw new Error('当前故事仍有待处理操作或未保存结果');
     this.branchOperations.add(identity.operationId); this.branchGenerations.add(generationId);
+    return this.branchCompletionForRun(identity, generationId, run);
+  }
+  private branchCompletionForRun(identity: ReturnType<typeof freezeStoryBranchIdentity>, generationId: string,
+    run: { controller: AbortController; epoch: number; selection: BattleStoryReadToken }) {
     let consumed = false;
     const ownsRun = () => !this.disposed && this.runController === run.controller;
     const release = () => { if (this.runController === run.controller) { this.runController = null; this.publish({}); } };

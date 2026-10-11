@@ -34,6 +34,18 @@ export const StoryBranchSourceSchema = z.object({
 });
 export type StoryBranchSource = z.infer<typeof StoryBranchSourceSchema>;
 
+/** Internal read-only resolution; intentionally no registered command or binder. */
+export const StoryBranchAnchorRequestSchema = z.object({
+  sessionId: id, revision: integer, expectedLastChapterId: id, expectedChapterCount: integer,
+  anchorChapterId: id, anchorIndex: integer.max(Number.MAX_SAFE_INTEGER - 1),
+}).strict().refine(value => value.revision === value.expectedChapterCount && value.anchorIndex <= value.expectedChapterCount);
+export type StoryBranchAnchorRequest = z.infer<typeof StoryBranchAnchorRequestSchema>;
+export const StoryBranchAnchorDescriptorsSchema = z.object({
+  source: StoryBranchSourceSchema,
+  recentChapters: z.array(StoryRecordDescriptorSchema.extend({ kind: z.literal('chapter') })).min(1).max(12),
+}).strict();
+
+
 export const StoryBranchManifestSchema = z.object({
   version: z.literal(2), operationId: id, sessionId: id,
   source: StoryBranchSourceSchema,

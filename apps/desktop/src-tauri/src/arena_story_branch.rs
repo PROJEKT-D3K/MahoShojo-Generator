@@ -330,7 +330,7 @@ mod receipt;
 
 #[path = "arena_story_branch_store.rs"]
 mod storage;
-pub(crate) use storage::BranchManifest;
+pub(crate) use storage::{BranchManifest, BranchSource};
 
 #[path = "arena_story_branch_audit.rs"]
 pub(crate) mod audit;

@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-11 Desktop任意锚点源：[生成前冻结切片](./reports/2026-10-11_081500_Desktop任意锚点分支源冻结.md)新增未注册内部resolver、boundary k角色与安全摘要/十二章上下文冻结，复用同owner/run完成保存。定向219项、contracts11项、Native614项/10既有ignored、真实内部pipe16case与types/lint/fmt/clippy及独审通过；受测0538084于08:23:16–08:32:42Z原完整CI exit0（10,785 passed executions/21原条件skip）。最终仅docs收口、3756非docs严格NUL同源；Native/pipe为独立冻结实测，CI未重跑。无模型、IPC/ACL/默认binder/两页开放，不关闭资源/Windows/Tauri门。
+
 2026-10-11 Desktop分支保存接缝：[实现与分层验收](./reports/2026-10-11_074000_Desktop分支注入保存接缝.md)新增可选注入的完成候选保存，复用现owner及原unknown围栏，默认binder/IPC/两页仍关闭。定向161项、完整实际页面81项、真实TS→Rust/SQLite四case、Native605项/10ignored及clippy/独审通过；受测3a33dd13完整ci:verify于07:49:53–07:59:02Z exit0（10,759 passed executions/21原条件skip），CI后仅文档收口、非docs同源，未在CI重跑Native/pipe；不是完整模型生成或Windows/Tauri验收。
 
 2026-10-11 Native分支冻结合同：[双运行时验收](./reports/2026-10-11_071500_Native分支冻结合同双运行时验收.md)新增独立closed v2 schema/有序字节codec、小型共用金样及真实TS投影→内部Rust writer测试；静态instance与首次store授权证据分开，原冻结请求不刷新。定向、Native605项/9既有ignored及clippy、contracts523项、类型/lint与源码独审通过；受测ba44f927于07:21:53–07:30:55Z原完整CI exit0（10,729 passed executions/21条件skip），CI后仅docs收尾、非docs mode/blob同源，未重跑Native/pipe；不开放branch IPC/ACL/binder/两页，资源与owner/Windows门继续保留。

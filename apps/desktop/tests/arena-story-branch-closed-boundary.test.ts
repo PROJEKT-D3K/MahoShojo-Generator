@@ -12,8 +12,8 @@ describe('branch v2 is a closed storage contract, not an enabled product capabil
     expect(build).toContain('begin_arena_story_commit');
     expect(handler).toContain('begin_arena_story_commit');
     expect(acl.permissions).toContain('allow-begin-arena-story-commit');
-    expect(build).not.toMatch(/(?:begin|end|query|save)_arena_story_branch/iu);
-    expect(handler).not.toMatch(/(?:begin|end|query|save)_arena_story_branch/iu);
+    expect(build).not.toMatch(/(?:begin|end|query|save|resolve)_arena_story_branch/iu);
+    expect(handler).not.toMatch(/(?:begin|end|query|save|resolve)_arena_story_branch/iu);
     expect(acl.permissions.filter((permission) => /branch/iu.test(permission))).toEqual([]);
     expect(lib).not.toMatch(/#\[tauri::command[^\]]*\][\s\S]{0,200}fn\s+\w*branch/iu);
   });
@@ -25,7 +25,7 @@ describe('branch v2 is a closed storage contract, not an enabled product capabil
     expect(page).toContain('DesktopBattle()');
     expect(page).toContain('DesktopAdvancedArena()');
     for (const source of [page, read('../src/features/arena/story-controls.tsx')]) {
-      expect(source).not.toMatch(/onBranch|startBranch|beginBranch|captureBranchCompletion|arena-story-branch-storage|buildCompletedBattleStoryBranchRecords|desktop-arena-story-branch/u);
+      expect(source).not.toMatch(/onBranch|startBranch|beginBranch|captureBranchCompletion|prepareBranchCompletion|arena-story-branch-source|arena-story-branch-storage|buildCompletedBattleStoryBranchRecords|desktop-arena-story-branch/u);
     }
   });
 });
