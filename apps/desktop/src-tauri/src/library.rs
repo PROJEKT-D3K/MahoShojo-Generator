@@ -72,6 +72,7 @@ impl LocalLibrary {
     }
 
     /// 从已准备好的连接构造。供测试在内存库上构造完整形态。
+    /// 此入口不执行文件启动的升级前备份守卫；文件升级测试必须走 `open` 并持单实例锁。
     #[cfg(test)]
     pub fn open_with_connection(
         data_root: &Path,

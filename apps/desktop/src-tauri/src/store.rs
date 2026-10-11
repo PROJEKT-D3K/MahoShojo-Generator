@@ -24,6 +24,7 @@ pub type SharedConnection = Arc<Mutex<Connection>>;
 
 /// 打开（或创建）共享连接，并跑完 PRAGMA 配置与迁移阶梯。
 ///
+/// 文件启动调用方必须已持有 `InstanceGuard`；不在这里另建跨进程锁。
 /// 迁移只在**这一处**执行。四条连接各自跑一遍阶梯曾经是可行的，但那是"四条连接"的
 /// 副产品，不是设计：一旦合并成一条连接，跑四次就成了四次无谓的 DDL 与 journal 写入。
 pub fn open_shared_connection(paths: &LocalStorePaths) -> Result<SharedConnection, StoreError> {
@@ -31,6 +32,17 @@ pub fn open_shared_connection(paths: &LocalStorePaths) -> Result<SharedConnectio
         std::fs::create_dir_all(parent).map_err(|_| StoreError::Unavailable)?;
     }
 
+    // InstanceGuard belongs to the caller (LocalLibrary's startup contract).
+    // Keep this before configuration/migration and before StoryStore reclamation.
+    let upgrade_root = paths
+        .database()
+        .parent()
+        .filter(|_| supported_schema_version() >= 11);
+    let had_sidecars = upgrade_root
+        .map(crate::backup::check_upgrade_source_path)
+        .transpose()
+        .map_err(StoreError::UpgradeBackup)?
+        .unwrap_or(false);
     let connection = Connection::open_with_flags(
         paths.database(),
         OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -39,6 +51,22 @@ pub fn open_shared_connection(paths: &LocalStorePaths) -> Result<SharedConnectio
     )
     .map_err(|_| StoreError::Unavailable)?;
 
+    if let Some(root) = upgrade_root {
+        // Failed fresh/source verification must not checkpoint or remove an
+        // existing WAL merely because this unopened library's connection drops.
+        use rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE;
+        let previous = connection
+            .db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE)
+            .map_err(|_| StoreError::Unavailable)?;
+        connection
+            .set_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+            .map_err(|_| StoreError::Unavailable)?;
+        crate::backup::backup_before_history_upgrade(root, &connection, had_sidecars)
+            .map_err(StoreError::UpgradeBackup)?;
+        connection
+            .set_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, previous)
+            .map_err(|_| StoreError::Unavailable)?;
+    }
     configure_and_migrate(&connection)?;
 
     Ok(Arc::new(Mutex::new(connection)))
@@ -137,6 +165,8 @@ pub const MAX_DOCUMENT_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     Unavailable,
+    /// No migration ran: retain the live library and all backup attempts.
+    UpgradeBackup(crate::backup::BackupError),
     InvalidDocument,
     DocumentTooLarge,
     /// 调用方声明的索引列与 document 中的实际值不一致。以此拒绝而不是写入自相矛盾的行。
@@ -177,6 +207,7 @@ impl StoreError {
     pub fn code(&self) -> &'static str {
         match self {
             StoreError::Unavailable => "store-unavailable",
+            StoreError::UpgradeBackup(_) => "upgrade-backup-failed",
             StoreError::InvalidDocument => "invalid-document",
             StoreError::DocumentTooLarge => "document-too-large",
             StoreError::IndexMismatch => "index-mismatch",
@@ -193,6 +224,12 @@ impl StoreError {
     pub fn message(&self) -> &'static str {
         match self {
             StoreError::Unavailable => "local store is unavailable",
+            StoreError::UpgradeBackup(crate::backup::BackupError::SourceUnavailable) =>
+                "pre-upgrade backup storage is unavailable; check free space and permissions. No migration started; the library and backup attempts were retained",
+            StoreError::UpgradeBackup(crate::backup::BackupError::Corrupt | crate::backup::BackupError::UnsupportedVersion | crate::backup::BackupError::Incomplete) =>
+                "pre-upgrade backup or source failed verification. No migration started; the library and backup attempts were retained",
+            StoreError::UpgradeBackup(_) =>
+                "pre-upgrade backup failed. No migration started; the library and backup attempts were retained",
             StoreError::InvalidDocument => "local store rejected the document",
             StoreError::DocumentTooLarge => "local store document exceeds its byte ceiling",
             StoreError::IndexMismatch => "local store index columns disagree with the document",

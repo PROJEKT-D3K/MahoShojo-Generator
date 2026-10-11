@@ -146,18 +146,115 @@ pub fn create_backup_in_window(
     library: &LocalLibrary,
     _window: &MaintenancePermit,
 ) -> Result<BackupSummary, BackupError> {
-    let root = library.data_root().join(BACKUPS_DIRECTORY);
-    require_real_directory(library.data_root())?;
+    create_backup_from_snapshot(library.data_root(), |target| {
+        let connection = lock_connection(library.connection()).map_err(|_| BackupError::Failed)?;
+        write_snapshot(&connection, target)
+    })
+}
+
+/// Only the candidate cross-11 file-open path calls these checks. A missing
+/// main file with SQLite sidecars or managed blobs is not a fresh library.
+pub(crate) fn check_upgrade_source_path(data_root: &Path) -> Result<bool, BackupError> {
+    let mut had_sidecars = false;
+    for name in ["library.sqlite-wal", "library.sqlite-shm"] {
+        match fs::symlink_metadata(data_root.join(name)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(BackupError::SourceUnavailable),
+            Ok(_) => had_sidecars = true,
+        }
+    }
+    match fs::symlink_metadata(data_root.join(DATABASE_FILE)) {
+        // SQLite may delete a WAL on the very first read of a zero-page main.
+        Ok(metadata) if metadata.len() == 0 && had_sidecars => Err(BackupError::Corrupt),
+        Ok(_) => Ok(had_sidecars),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if had_sidecars {
+                return Err(BackupError::Corrupt);
+            }
+            require_no_managed_blobs(data_root)?;
+            Ok(false)
+        }
+        Err(_) => Err(BackupError::SourceUnavailable),
+    }
+}
+
+pub(crate) fn backup_before_history_upgrade(
+    data_root: &Path,
+    connection: &Connection,
+    had_sidecars: bool,
+) -> Result<(), BackupError> {
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|_| BackupError::Corrupt)?;
+    if version >= 11 {
+        return Ok(()); // Normal migration rejects versions above the target.
+    }
+    if !is_regular_file(&data_root.join(DATABASE_FILE)) {
+        return Err(BackupError::Corrupt);
+    }
+    if version == 0 {
+        if had_sidecars {
+            return Err(BackupError::Corrupt);
+        }
+        let empty: bool = connection
+            .query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM sqlite_master)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| BackupError::Corrupt)?;
+        if !empty {
+            return Err(BackupError::Corrupt);
+        }
+        // Do not initialize a mislabeled old library or ignore orphaned assets.
+        return require_no_managed_blobs(data_root);
+    }
+    if !(1..11).contains(&version) {
+        return Err(BackupError::UnsupportedVersion);
+    }
+    create_pre_upgrade_backup(data_root, connection).map(|_| ())
+}
+
+fn require_no_managed_blobs(data_root: &Path) -> Result<(), BackupError> {
+    let root = BlobPaths::under(data_root);
+    match fs::symlink_metadata(root.root()) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        _ => require_real_directory(root.root())?,
+    }
+    if fs::read_dir(root.root())
+        .map_err(|_| BackupError::SourceUnavailable)?
+        .next()
+        .is_some()
+    {
+        return Err(BackupError::Corrupt);
+    }
+    Ok(())
+}
+
+/// Startup only: the caller owns InstanceGuard and has not exposed any stores or
+/// run migrations. Runtime callers must use the maintenance-window entry above.
+fn create_pre_upgrade_backup(
+    data_root: &Path,
+    connection: &Connection,
+) -> Result<BackupSummary, BackupError> {
+    create_backup_from_snapshot(data_root, |target| write_snapshot(connection, target))
+}
+
+fn create_backup_from_snapshot(
+    data_root: &Path,
+    snapshot: impl FnOnce(&Path) -> Result<(), BackupError>,
+) -> Result<BackupSummary, BackupError> {
+    let root = data_root.join(BACKUPS_DIRECTORY);
+    require_real_directory(data_root)?;
     if !root.exists() {
         fs::create_dir(&root).map_err(|_| BackupError::SourceUnavailable)?;
     }
     require_real_directory(&root)?;
     let (backup_id, directory) = reserve_backup_directory(&root)?;
 
-    // The directory is intentionally retained on failure. It has no final manifest and
-    // therefore cannot be treated as restorable; list_backups reports it as invalid.
-    let summary = build_backup(library, &directory, backup_id)?;
-    Ok(summary)
+    // Retain failed attempts for diagnosis. Only full verification, never merely
+    // a directory or manifest, authorizes restore or the following migration.
+    build_backup(data_root, &directory, backup_id, snapshot)
 }
 
 pub fn list_backups(root: &Path) -> Result<BackupList, BackupError> {
@@ -310,11 +407,7 @@ fn verify_components(
     if schema_version >= 4 {
         verify_no_package_without_reference(&database)?;
     }
-    let db_blobs = if schema_version >= 3 {
-        read_blob_rows(&database)?
-    } else {
-        Vec::new()
-    };
+    let db_blobs = read_schema_blobs(&database, schema_version)?;
     if db_blobs.len() > MAX_BLOB_ENTRIES || db_blobs.len() != manifest.blobs.len() {
         return Err(BackupError::Corrupt);
     }
@@ -364,9 +457,10 @@ fn verify_components(
 }
 
 fn build_backup(
-    library: &LocalLibrary,
+    data_root: &Path,
     directory: &Path,
     backup_id: String,
+    snapshot: impl FnOnce(&Path) -> Result<(), BackupError>,
 ) -> Result<BackupSummary, BackupError> {
     let created_at = timestamp_now()?;
     let database_target = directory.join(DATABASE_FILE);
@@ -377,38 +471,16 @@ fn build_backup(
         .into_temp_path();
     let database_temp_path = database_temp.to_path_buf();
 
-    // Maintenance blocks all mutating IPC while VACUUM INTO reads the live database.
-    // The connection lock serializes this snapshot with every SQL operation as well.
-    {
-        let connection = lock_connection(library.connection()).map_err(|_| BackupError::Failed)?;
-        let page_count: u64 = connection
-            .query_row("PRAGMA page_count", [], |row| row.get(0))
-            .map_err(|_| BackupError::Failed)?;
-        let page_size: u64 = connection
-            .query_row("PRAGMA page_size", [], |row| row.get(0))
-            .map_err(|_| BackupError::Failed)?;
-        let blob_bytes = read_blob_rows(&connection)?
-            .iter()
-            .try_fold(0_u64, |sum, row| {
-                sum.checked_add(row.byte_length).ok_or(BackupError::Failed)
-            })?;
-        let minimum = page_count
-            .checked_mul(page_size)
-            .and_then(|n| n.checked_add(blob_bytes))
-            .ok_or(BackupError::Failed)?;
-        if fs4::available_space(directory).map_err(|_| BackupError::SourceUnavailable)? < minimum {
-            return Err(BackupError::SourceUnavailable);
-        }
-        let path = database_temp_path.to_str().ok_or(BackupError::Failed)?;
-        connection
-            .execute("VACUUM INTO ?1", rusqlite::params![path])
-            .map_err(|_| BackupError::Failed)?;
-    }
+    // The runtime caller locks only the snapshot, retaining its maintenance
+    // permit throughout the copy. Startup instead holds the application lock.
+    snapshot(&database_temp_path)?;
 
     let snapshot = open_immutable_database(&database_temp_path)?;
     let snapshot_schema = verify_sqlite(&snapshot)?;
-    let blobs = read_blob_rows(&snapshot)?;
-    verify_no_package_without_reference(&snapshot)?;
+    let blobs = read_schema_blobs(&snapshot, snapshot_schema)?;
+    if snapshot_schema >= 4 {
+        verify_no_package_without_reference(&snapshot)?;
+    }
     let (database_bytes, database_digest) = digest_file(&database_temp_path)?;
     drop(snapshot);
     OpenOptions::new()
@@ -421,9 +493,13 @@ fn build_backup(
         .persist_noclobber(&database_target)
         .map_err(|_| BackupError::Failed)?;
 
-    let source_paths = BlobPaths::under(library.data_root());
+    let source_paths = BlobPaths::under(data_root);
     let destination_paths = BlobPaths::under(directory);
-    require_real_directory(source_paths.root())?;
+    // Schemas 1–2 predate managed blobs. Later schemas require their source
+    // directory even with zero rows; missing assets must not look like a new DB.
+    if snapshot_schema >= 3 {
+        require_real_directory(source_paths.root())?;
+    }
     fs::create_dir_all(destination_paths.root()).map_err(|_| BackupError::SourceUnavailable)?;
     let mut manifest_blobs = Vec::with_capacity(blobs.len());
     let mut blob_bytes = 0_u64;
@@ -474,11 +550,53 @@ fn build_backup(
         .map_err(|_| BackupError::Failed)?;
     sync_directory(directory)?;
 
-    let summary = verify_backup(library.data_root(), &backup_id)?;
+    let summary = verify_backup(data_root, &backup_id)?;
     if summary.database_bytes != database_bytes || summary.blob_bytes != blob_bytes {
         return Err(BackupError::Corrupt);
     }
     Ok(summary)
+}
+
+fn write_snapshot(connection: &Connection, target: &Path) -> Result<(), BackupError> {
+    let schema: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|_| BackupError::Corrupt)?;
+    let page_count: u64 = connection
+        .query_row("PRAGMA page_count", [], |row| row.get(0))
+        .map_err(|_| BackupError::Failed)?;
+    let page_size: u64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .map_err(|_| BackupError::Failed)?;
+    let blob_bytes = read_schema_blobs(connection, schema)?
+        .iter()
+        .try_fold(0_u64, |sum, row| {
+            sum.checked_add(row.byte_length).ok_or(BackupError::Failed)
+        })?;
+    // A lower bound for the backup, not a promise of enough space for migration,
+    // WAL growth or restore staging. Every subsequent I/O still fails closed.
+    let minimum = page_count
+        .checked_mul(page_size)
+        .and_then(|n| n.checked_add(blob_bytes))
+        .ok_or(BackupError::Failed)?;
+    let directory = target.parent().ok_or(BackupError::Failed)?;
+    if fs4::available_space(directory).map_err(|_| BackupError::SourceUnavailable)? < minimum {
+        return Err(BackupError::SourceUnavailable);
+    }
+    connection
+        .execute(
+            "VACUUM INTO ?1",
+            rusqlite::params![target.to_str().ok_or(BackupError::Failed)?],
+        )
+        .map_err(|_| BackupError::Failed)?;
+    Ok(())
+}
+
+fn read_schema_blobs(connection: &Connection, schema: i64) -> Result<Vec<BlobRow>, BackupError> {
+    if schema < 3 {
+        Ok(Vec::new())
+    } else {
+        read_blob_rows(connection)
+    }
 }
 
 fn read_blob_rows(connection: &Connection) -> Result<Vec<BlobRow>, BackupError> {

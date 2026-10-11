@@ -512,3 +512,6 @@ fn restored_old_backup_journal_failure_rolls_back_only_candidate11_and_retries()
     });
     assert_eq!(crate::store::supported_schema_version(), 10);
 }
+
+#[path = "backup_upgrade_tests.rs"]
+mod upgrade_tests;
