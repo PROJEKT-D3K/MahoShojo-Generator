@@ -22,6 +22,13 @@ export type { WebBattleStoryBranchSource, WebBattleStoryBranchExpected, WebBattl
 export { readBattleStoryTailRewriteSource, captureBattleStoryTailRewriteExpected, createBattleStoryTailRewriteReceipt, getBattleStoryTailRewriteOperationReceipt, commitCompletedBattleStoryTailRewrite } from './tail-rewrite-commit-storage';
 export type { WebBattleStoryTailRewriteSource, WebBattleStoryTailRewriteExpected, WebBattleStoryTailRewriteCommit, WebBattleStoryTailRewriteReceipt } from './tail-rewrite-commit-storage';
 
+export { readBattleStorySource } from './source-storage';
+export type { WebBattleStorySource } from './source-storage';
+export { readBattleStoryMiddleRewriteSource, captureBattleStoryMiddleRewriteExpected, createBattleStoryMiddleRewriteReceipt, getBattleStoryMiddleRewriteOperationReceipt, commitCompletedBattleStoryMiddleRewrite } from './middle-rewrite-commit-storage';
+export type { WebBattleStoryMiddleRewriteSource, WebBattleStoryMiddleRewriteExpected, WebBattleStoryMiddleRewriteCommit, WebBattleStoryMiddleRewriteReceipt } from './middle-rewrite-commit-storage';
+export { captureBattleStoryTruncationExpected, buildBattleStoryTruncationCommit, commitBattleStoryTruncation } from './truncation-commit-storage';
+export type { WebBattleStoryTruncationExpected, WebBattleStoryTruncationCommit } from './truncation-commit-storage';
+
 const DEFAULT_LIST_LIMIT = 50;
 
 const normalizeLimit = (value: number | undefined, fallback = DEFAULT_LIST_LIMIT): number => {

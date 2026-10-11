@@ -12,6 +12,8 @@ import { AI_SESSION_DB_NAME, AI_SESSION_STORE_NAMES } from '@/lib/ai-session/typ
 import * as storage from '@/lib/ai-session/battle-story/storage';
 import * as branchProjection from '@mahoshojo/domain/arena-story-branch';
 import * as tailRewriteProjection from '@mahoshojo/domain/arena-story-tail-rewrite';
+import * as middleRewriteProjection from '@mahoshojo/domain/arena-story-middle-rewrite';
+import { createBattleStoryCommitReceipt } from '@mahoshojo/domain/arena-story-commit';
 import { createGenerationApiIntentLatch, type GenerationApiIntentDependencies } from '@/lib/hono-api-client';
 import { honoApiConfig } from '@/config/hono-api';
 import { selectHostedDrPlacement } from '@/lib/hosted-dr/client-preflight';
@@ -533,7 +535,7 @@ describe('completed story body survives unresolved headerless Web roles', () => 
   });
 });
 
-describe('actual pending outcome panel and legacy write boundaries', () => {
+describe('actual pending outcome panel', () => {
   it('Panel renders unresolved completed body and drives the shared retry/keep/export controls', async () => {
     fixture.state.settings.writeCurrentState = true;
     const roles = vi.fn().mockRejectedValue(new Error('role network unavailable')); vi.stubGlobal('fetch', roles);
@@ -555,83 +557,7 @@ describe('actual pending outcome panel and legacy write boundaries', () => {
     expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(roles).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['rewrite'] as const)('%s partial write failure retains export without replay or another role request', async (action) => {
-    fixture.state.settings.writeCurrentState = true;
-    const roles = vi.fn().mockImplementation(roleSuccess); vi.stubGlobal('fetch', roles);
-    await mount(); const first = await start(); await finish(first.pending, '# 第一章');
-    const originalChapterId = session.selectedChapter!.id;
-    let next!: Promise<void>; await act(async () => { next = session.handleContinueSession(); }); await finish(next, '# 第二章');
-    await act(async () => session.setSelectedChapterId(originalChapterId));
-    const selectedAtClick = session.selectedChapter!; const latestAtClick = session.latestActiveChapter!;
-    const supersede = vi.spyOn(storage, 'markBattleStoryChapterSuperseded');
-    const write = vi.spyOn(storage, 'putBattleStoryChapter').mockRejectedValueOnce(new Error('legacy write failed'));
-    let pending!: Promise<void>;
-    await act(async () => { pending = session.handleRewriteSelectedChapter(); });
-    selectedAtClick.id = 'later-ui-identity'; selectedAtClick.index = 8; latestAtClick.index = 1;
-    await completeForRoles('# 已完成但旧保存失败'); await act(async () => pending);
-    expect(session.pendingRoleOutcome?.legacySaveState).toBe('unknown');
-    expect(session.pendingRoleOutcome?.role.status).toBe('accepted');
-    await act(async () => { await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles(); session.handleExportCompletedOutput(); });
-    expect(supersede).toHaveBeenCalledWith(expect.objectContaining({ chapterId: originalChapterId }));
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(roles).toHaveBeenCalledTimes(1); expect(fixture.download).toHaveBeenCalledTimes(1);
-    expect(fixture.dispatch).toHaveBeenCalledTimes(3);
-  });
 
-  it.each(['rewrite-superseded', 'rewrite-checkpoint'] as const)(
-    '%s: deletion between real IndexedDB phases cannot recreate orphan children', async (phase) => {
-      fixture.state.settings.writeCurrentState = true;
-      const roles = vi.fn().mockImplementation(roleSuccess); vi.stubGlobal('fetch', roles);
-      await mount(); const first = await start(); await finish(first.pending, '# 保留的原章节');
-      const originalChapterId = session.selectedChapter!.id;
-      let next!: Promise<void>; await act(async () => { next = session.handleContinueSession(); }); await finish(next, '# 后续章节');
-      await act(async () => session.setSelectedChapterId(originalChapterId));
-      let deletedId: string | null = null;
-      const deleteBetweenPhases = async (id: string) => {
-        await storage.deleteBattleStorySession(id);
-        deletedId = id;
-      };
-      if (phase === 'rewrite-superseded') {
-        const original = storage.markBattleStoryChapterSuperseded;
-        vi.spyOn(storage, 'markBattleStoryChapterSuperseded').mockImplementationOnce(async (input) => {
-          const record = await original(input); await deleteBetweenPhases(record.sessionId); return record;
-        });
-      } else {
-        const original = storage.putBattleStoryCheckpoint;
-        vi.spyOn(storage, 'putBattleStoryCheckpoint').mockImplementationOnce(async (record) => {
-          await deleteBetweenPhases(record.sessionId); await original(record);
-        });
-      }
-      const lateWrites: string[] = [];
-      const put = IDBObjectStore.prototype.put;
-      vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function(this: IDBObjectStore, ...args) {
-        if (deletedId) lateWrites.push(this.name);
-        return put.apply(this, args);
-      });
-      let pending!: Promise<void>;
-      await act(async () => { pending = session.handleRewriteSelectedChapter(); });
-      await completeForRoles('# 删除期间仍保留的完整正文'); await act(async () => pending);
-      expect(deletedId).not.toBeNull();
-      expect(lateWrites).toEqual([]);
-      expect(await storage.getBattleStorySession(deletedId!)).toBeNull();
-      expect(await storage.listBattleStoryChaptersBySession(deletedId!, { includeSuperseded: true })).toEqual([]);
-      expect(await storage.listBattleStoryCheckpointsBySession(deletedId!)).toEqual([]);
-      expect(session.pendingRoleOutcome?.legacySaveState).toBe('unknown');
-      expect(session.pendingRoleOutcome?.role.status).toBe('accepted');
-      expect(session.pendingRoleOutcome?.output.markdown).toBe('# 删除期间仍保留的完整正文');
-      expect(session.actionError).toContain('未找到 battle story session');
-      await act(async () => {
-        await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles();
-        await session.handleRetrySaveChapter(); await session.handleBranchSession(); await session.handleRewriteLastChapter();
-        session.handleExportCompletedOutput();
-      });
-      expect(roles).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(3);
-      const blob = fixture.download.mock.calls[0]![0] as Blob;
-      const exported = await new Promise<string>((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsText(blob); });
-      expect(exported).toBe('# 删除期间仍保留的完整正文');
-
-    },
-  );
 });
 
 it('a late generation response cannot overwrite a newer anonymous actor; completed output remains exportable', async () => {
@@ -1244,4 +1170,690 @@ describe('atomic tail rewrite consumes the shared projection and recovery', () =
     expect(session.selectedChapter?.markdown).toBe('# 已存待读尾章');
     expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(2);
   });
+});
+
+// These fixtures include superseded history as well as every input/output boundary.
+// Reading the complete three-store graph catches orphan and partial-truncation regressions.
+const boundaryRoles = (index: number) => [{ type: 'magical-girl', data: { codename: `第${index}章后角色` }, isValid: true }];
+async function seedStoryGraph(count = 4, title = '原路线') {
+  const record = storage.createBattleStorySessionRecord({
+    title, source: { mode: 'daily', language: 'zh-CN', storyLength: 'standard', generationMode: 'stream', providerMode: 'system', providerId: 'system' },
+    seed: { combatants: boundaryRoles(0), settings: {
+      readArenaHistory: false, writeArenaHistory: fixture.state.settings.writeArenaHistory,
+      readCurrentState: false, writeCurrentState: fixture.state.settings.writeCurrentState,
+      readNarrativeHistory: false, writeNarrativeHistory: false,
+    } },
+    workingCombatants: boundaryRoles(count),
+  });
+  const chapters = Array.from({ length: count }, (_, offset) => storage.createBattleStoryChapterRecord({
+    sessionId: record.id, index: offset + 1, action: offset === 0 ? 'start' : 'continue',
+    title: `${title}第${offset + 1}章`, markdown: `# ${title}第${offset + 1}章`, reportJson: { index: offset + 1 },
+    deterministicDigest: { chapterTitle: `${title}第${offset + 1}章` },
+  }));
+  chapters.forEach((chapter, index) => { if (index) chapter.sourceChapterId = chapters[index - 1]!.id; });
+  await storage.putBattleStorySession({ ...record, chapterCount: count, lastChapterId: chapters.at(-1)!.id,
+    lastChapterInputCombatants: boundaryRoles(count - 1) });
+  for (const chapter of chapters) await storage.putBattleStoryChapter(chapter);
+  for (let index = 0; index <= count; index += 1) await storage.putBattleStoryCheckpoint(storage.createBattleStoryCheckpointRecord({
+    sessionId: record.id, boundaryIndex: index, chapterId: index ? chapters[index - 1]!.id : undefined, combatants: boundaryRoles(index),
+  }));
+  for (const chapter of [chapters[0]!, ...(count > 1 ? [chapters.at(-1)!] : [])]) {
+    const old = storage.createBattleStoryChapterRecord({ ...chapter });
+    await storage.putBattleStoryChapter({ ...old, status: 'superseded', supersededByChapterId: chapter.id });
+  }
+  return await storage.readBattleStorySource(record.id);
+}
+const activeChapterAt = (graph: storage.WebBattleStorySource, index: number) => graph.chapters.find((chapter) => chapter.index === index && chapter.status !== 'superseded')!;
+async function selectStory(graph: storage.WebBattleStorySource, index = 2) {
+  await act(async () => session.handleSelectSession(graph.session!.id));
+  await act(async () => session.setSelectedChapterId(activeChapterAt(graph, index).id));
+}
+async function prepareStory(count = 4, index = 2) {
+  await mount(); const graph = await seedStoryGraph(count); await selectStory(graph, index); return graph;
+}
+async function rewriteSelected() {
+  const calls = fixture.dispatch.mock.calls.length;
+  let pending!: Promise<void>;
+  await act(async () => { pending = session.handleRewriteSelectedChapter(); });
+  await act(async () => { await vi.waitFor(() => expect(fixture.dispatch).toHaveBeenCalledTimes(calls + 1)); });
+  return { pending };
+}
+function abortAfterWrite(method: 'add' | 'put' | 'delete', storeName: string) {
+  const original = IDBObjectStore.prototype[method] as (...args: unknown[]) => IDBRequest;
+  const reached = vi.fn();
+  const fault = vi.spyOn(IDBObjectStore.prototype, method).mockImplementation(function(this: IDBObjectStore, ...args: unknown[]) {
+    const request = original.apply(this, args);
+    if (this.name === storeName) request.addEventListener('success', () => {
+      reached(); try { this.transaction.abort(); } catch { /* earlier matching request already aborted */ }
+    });
+    return request;
+  });
+  return { reached, restore: () => fault.mockRestore() };
+}
+function watchWrites() {
+  const writes = [vi.spyOn(IDBObjectStore.prototype, 'add'), vi.spyOn(IDBObjectStore.prototype, 'put'),
+    vi.spyOn(IDBObjectStore.prototype, 'delete'), vi.spyOn(IDBCursor.prototype, 'delete')];
+  return { expectNone: () => writes.forEach((write) => expect(write).not.toHaveBeenCalled()), restore: () => writes.forEach((write) => write.mockRestore()) };
+}
+async function mountActualPanel() {
+  const useOriginal = storyHook.useBattleStorySession;
+  vi.spyOn(storyHook, 'useBattleStorySession').mockImplementation(function useObservedSession() {
+    const value = useOriginal(); useLayoutEffect(() => { session = value; }); return value;
+  });
+  await act(async () => root.render(<BattleStorySessionPanel />));
+  await vi.waitFor(async () => { await act(async () => {}); expect(session.isReady).toBe(true); });
+}
+const panelButton = (text: string) => [...container.querySelectorAll('button')].find((button) => button.textContent === text)!;
+
+const middleWriteStages = [
+  ['supersede target', 'put', AI_SESSION_STORE_NAMES.battleStoryChapters],
+  ['add replacement', 'add', AI_SESSION_STORE_NAMES.battleStoryChapters],
+  ['delete suffix chapters', 'delete', AI_SESSION_STORE_NAMES.battleStoryChapters],
+  ['delete suffix checkpoints', 'delete', AI_SESSION_STORE_NAMES.battleStoryCheckpoints],
+  ['add replacement checkpoint', 'add', AI_SESSION_STORE_NAMES.battleStoryCheckpoints],
+  ['replace session head', 'put', AI_SESSION_STORE_NAMES.battleStorySessions],
+] as const;
+
+describe('real middle rewrite consumer uses one full-graph atomic commit', () => {
+  it.each(middleWriteStages)('%s abort rolls back every store; retry reuses the frozen completed package', async (_label, method, storeName) => {
+    const before = await prepareStory();
+    const legacy = [vi.spyOn(storage, 'putBattleStoryChapter'), vi.spyOn(storage, 'markBattleStoryChapterSuperseded'),
+      vi.spyOn(storage, 'putBattleStoryCheckpoint'), vi.spyOn(storage, 'deleteBattleStoryChaptersFromIndex')];
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite');
+    const fault = abortAfterWrite(method, storeName);
+    const { pending } = await rewriteSelected(); await finish(pending, '# 原包完整中章\n不可丢弃的正文');
+    expect(fault.reached).toHaveBeenCalled();
+    expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+    expect(session.pendingCompletedChapter?.markdown).toBe('# 原包完整中章\n不可丢弃的正文');
+    expect(session.pendingSaveUnknown).toBe(false); expect(session.pendingRoleOutcome).toBeNull();
+    const commit = writer.mock.calls[0]![0];
+    expect(Object.isFrozen(commit)).toBe(true); expect(Object.isFrozen(commit.chapter.reportJson)).toBe(true);
+    expect(commit.expected.targetChapterId).toBe(activeChapterAt(before, 2).id);
+    await act(async () => { session.handleExportPendingChapter(); await session.handleContinueSession(); await session.handleRewriteSelectedChapter(); });
+    expect(fixture.download).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+    fixture.state.settings.userGuidance = '之后编辑的草稿';
+    fault.restore();
+    await act(async () => session.handleRetrySaveChapter());
+    expect(writer).toHaveBeenCalledTimes(2); expect(writer.mock.calls[1]![0]).toBe(commit);
+    expect(session.pendingCompletedChapter).toBeNull(); expect(session.selectedChapter?.id).toBe(commit.chapter.id);
+    const after = await storage.readBattleStorySource(before.session!.id);
+    expect(after.session?.chapterCount).toBe(2); expect(after.session?.lastChapterId).toBe(commit.chapter.id);
+    expect(after.chapters.find((chapter) => chapter.id === commit.expected.targetChapterId)).toMatchObject({ status: 'superseded', supersededByChapterId: commit.chapter.id });
+    expect(after.chapters.filter((chapter) => chapter.index > 2)).toEqual([]);
+    expect(after.checkpoints.filter((checkpoint) => checkpoint.boundaryIndex < 2)).toEqual(before.checkpoints.filter((checkpoint) => checkpoint.boundaryIndex < 2));
+    expect(after.checkpoints.find((checkpoint) => checkpoint.boundaryIndex === 2)?.combatants).toEqual(commit.session.workingCombatants);
+    legacy.forEach((write) => expect(write).not.toHaveBeenCalled()); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['chapter', 'checkpoint'] as const)('a global %s identity collision preserves the source and foreign graph', async (collision) => {
+    const before = await prepareStory(); const foreign = await seedStoryGraph(1, '另一会话');
+    const original = storage.commitCompletedBattleStoryMiddleRewrite;
+    let foreignBefore!: storage.WebBattleStorySource;
+    vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite').mockImplementationOnce(async (commit) => {
+      if (collision === 'chapter') await storage.putBattleStoryChapter({ ...commit.chapter, sessionId: foreign.session!.id });
+      else await storage.putBattleStoryCheckpoint({ ...commit.checkpoint, sessionId: foreign.session!.id });
+      foreignBefore = await storage.readBattleStorySource(foreign.session!.id);
+      return original(commit);
+    });
+    const { pending } = await rewriteSelected(); await finish(pending, '# 身份冲突仍保留');
+    expect(session.pendingCompletedChapter?.markdown).toBe('# 身份冲突仍保留'); expect(session.pendingSaveUnknown).toBe(false);
+    expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+    expect(await storage.readBattleStorySource(foreign.session!.id)).toEqual(foreignBefore);
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('completed body and accepted roles survive abort/export/retry without another model or role POST', async () => {
+    fixture.state.settings.writeCurrentState = true;
+    const roles = vi.fn().mockImplementation(roleSuccess); vi.stubGlobal('fetch', roles);
+    const before = await prepareStory();
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite');
+    const fault = abortAfterWrite('add', AI_SESSION_STORE_NAMES.battleStoryCheckpoints);
+    const { pending } = await rewriteSelected();
+    fixture.state.combatants[0]!.data.codename = '当前编辑态';
+    await completeForRoles('# 已完成正文与角色'); await act(async () => pending);
+    expect(session.pendingCompletedChapter?.markdown).toBe('# 已完成正文与角色'); expect(session.pendingRoleOutcome).toBeNull();
+    const commit = writer.mock.calls[0]![0];
+    expect(commit.session.lastChapterInputCombatants).toEqual(boundaryRoles(1));
+    expect(commit.session.workingCombatants[0]).toMatchObject({ data: { codename: '同步后的角色' } });
+    expect(JSON.parse(roles.mock.calls[0]![1].body)).toMatchObject({ generationId: 'generation-original-1', combatants: [{ type: 'magical-girl', data: { codename: '第1章后角色' } }] });
+    expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+    await act(async () => { await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles(); session.handleExportPendingChapter(); });
+    fault.restore(); await act(async () => session.handleRetrySaveChapter());
+    expect(writer.mock.calls[1]![0]).toBe(commit); expect(session.pendingCompletedChapter).toBeNull();
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(roles).toHaveBeenCalledTimes(1); expect(fixture.download).toHaveBeenCalledTimes(1);
+    expect(fixture.state.combatants[0]!.data.codename).toBe('当前编辑态');
+  });
+
+  it.each(['session', 'target', 'checkpoint', 'superseded-history', 'deleted'] as const)('a changed %s during generation fails full-graph CAS without any partial replacement', async (change) => {
+    const before = await prepareStory(); const { pending } = await rewriteSelected();
+    if (change === 'session') await storage.updateBattleStorySession(before.session!.id, (value) => ({ ...value, sessionSummary: '外部摘要' }));
+    if (change === 'target') await storage.putBattleStoryChapter({ ...activeChapterAt(before, 2), markdown: '# 外部修改目标正文' });
+    if (change === 'checkpoint') await storage.putBattleStoryCheckpoint({ ...before.checkpoints[0]!, combatants: [{ external: true }] });
+    if (change === 'superseded-history') await storage.putBattleStoryChapter({ ...before.chapters.find((chapter) => chapter.status === 'superseded')!, markdown: '# 外部历史变更' });
+    if (change === 'deleted') await storage.deleteBattleStorySession(before.session!.id);
+    const current = await storage.readBattleStorySource(before.session!.id);
+    const writes = watchWrites();
+    await finish(pending, '# CAS冲突完整正文');
+    expect(session.pendingCompletedChapter?.markdown).toBe('# CAS冲突完整正文'); expect(session.pendingSaveUnknown).toBe(false);
+    await act(async () => { await session.handleRetrySaveChapter(); session.handleExportPendingChapter(); });
+    writes.expectNone(); expect(await storage.readBattleStorySource(before.session!.id)).toEqual(current);
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(fixture.download).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['absence', 'contentDigest', 'sessionId', 'targetChapterId', 'checkpointId', 'chapterCount', 'io'] as const)(
+    'unknown middle rewrite %s remains receipt-only with no model, roles, or storage writes', async (result) => {
+      await prepareStory();
+      const writer = vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite').mockRejectedValueOnce(new Error('lost host reply'));
+      const roles = vi.fn(); vi.stubGlobal('fetch', roles);
+      const { pending } = await rewriteSelected(); await finish(pending, '# 未知结果原文');
+      const commit = writer.mock.calls[0]![0]; const expected = storage.createBattleStoryMiddleRewriteReceipt(commit);
+      const query = vi.spyOn(storage, 'getBattleStoryMiddleRewriteOperationReceipt');
+      if (result === 'io') query.mockRejectedValue(new Error('receipt read failed'));
+      else if (result === 'absence') query.mockResolvedValue(null);
+      else query.mockResolvedValue({ ...expected, [result]: result === 'chapterCount' ? 17 : `different-${result}` });
+      const writes = watchWrites();
+      await act(async () => { await session.handleRetrySaveChapter(); await session.handleSavePendingAsNewSession(); await session.handleRetryStoryRoles(); session.handleKeepOriginalStoryRoles(); });
+      expect(query).toHaveBeenCalledWith(commit.session.id, commit.operationId, expected.contentDigest);
+      expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(roles).not.toHaveBeenCalled();
+      writes.expectNone(); expect(session.pendingSaveUnknown).toBe(true); expect(session.pendingSaveAsNewSession).toBe(false);
+      expect(session.pendingCompletedChapter?.id).toBe(commit.chapter.id);
+      await act(async () => session.handleExportPendingChapter()); expect(fixture.download).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['superseded', 'deleted'] as const)('a lost successful middle rewrite receipt cannot revive a %s result', async (change) => {
+    await prepareStory(); const original = storage.commitCompletedBattleStoryMiddleRewrite;
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite').mockImplementationOnce(async (commit) => { await original(commit); throw new Error('lost reply'); });
+    const { pending } = await rewriteSelected(); await finish(pending, '# 曾经保存的中章');
+    const chapter = session.pendingCompletedChapter!;
+    if (change === 'deleted') await storage.deleteBattleStorySession(chapter.sessionId);
+    else await storage.markBattleStoryChapterSuperseded({ chapterId: chapter.id, supersededByChapterId: 'later-rewrite' });
+    const before = await storage.readBattleStorySource(chapter.sessionId); const writes = watchWrites();
+    await act(async () => session.handleRetrySaveChapter());
+    writes.expectNone(); expect(await storage.readBattleStorySource(chapter.sessionId)).toEqual(before);
+    expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+    if (change === 'deleted') { expect(session.pendingSaveUnknown).toBe(true); expect(session.pendingCompletedChapter?.id).toBe(chapter.id); }
+    else expect(session.pendingCompletedChapter).toBeNull();
+  });
+
+  it('same-tick double click reserves the fresh read and save as one operation', async () => {
+    await prepareStory(); const read = storage.readBattleStorySource;
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    const sourceRead = vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite');
+    let pending!: Promise<void>;
+    await act(async () => { pending = session.handleRewriteSelectedChapter(); void session.handleRewriteSelectedChapter(); });
+    expect(sourceRead).toHaveBeenCalledTimes(1); expect(fixture.dispatch).not.toHaveBeenCalled();
+    await act(async () => { release(); await vi.waitFor(() => expect(fixture.dispatch).toHaveBeenCalledTimes(1)); });
+    await finish(pending, '# 只有一次中章');
+    expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['session-ABA', 'chapter-ABA'] as const)('fresh middle source read is invalidated by %s', async (navigation) => {
+    const before = await prepareStory(); const read = storage.readBattleStorySource;
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    let pending!: Promise<void>; await act(async () => { pending = session.handleRewriteSelectedChapter(); });
+    if (navigation === 'session-ABA') await selectStory(before, 2);
+    else { await act(async () => session.setSelectedChapterId(activeChapterAt(before, 1).id)); await act(async () => session.setSelectedChapterId(activeChapterAt(before, 2).id)); }
+    await act(async () => { release(); await pending; });
+    expect(fixture.dispatch).not.toHaveBeenCalled(); expect(await read(before.session!.id)).toEqual(before);
+  });
+
+  it('fresh source owns the clicked identity, regardless of later mutation to displayed chapter objects', async () => {
+    const before = await prepareStory(); const targetId = activeChapterAt(before, 2).id; const read = storage.readBattleStorySource;
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite');
+    let pending!: Promise<void>; await act(async () => { pending = session.handleRewriteSelectedChapter(); });
+    session.selectedChapter!.id = 'later-ui-identity'; session.selectedChapter!.index = 9; session.latestActiveChapter!.index = 1;
+    await act(async () => { release(); await vi.waitFor(() => expect(fixture.dispatch).toHaveBeenCalledTimes(1)); });
+    expect(JSON.parse(String(fixture.dispatch.mock.calls[0]![1].body))).toMatchObject({ sourceChapterId: targetId, chapterIndex: 2 });
+    await finish(pending, '# 原点击目标');
+    expect(writer.mock.calls[0]![0].expected.targetChapterId).toBe(targetId); expect(session.selectedChapter?.index).toBe(2);
+  });
+
+  it('late successful middle save does not take selection back from newer navigation', async () => {
+    const before = await prepareStory(); const original = storage.commitCompletedBattleStoryMiddleRewrite;
+    let release!: () => void; let entered!: () => void; const enteredGate = new Promise<void>((resolve) => { entered = resolve; });
+    vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite').mockImplementationOnce(async (commit) => {
+      entered(); await new Promise<void>((resolve) => { release = resolve; }); return original(commit);
+    });
+    const { pending } = await rewriteSelected();
+    await act(async () => { send(event('markdown', { chunk: '# 迟到的已存中章' }) + event('done', { ok: true })); stream.close(); await enteredGate; });
+    await act(async () => session.setSelectedChapterId(activeChapterAt(before, 1).id));
+    await act(async () => { release(); await pending; });
+    expect(session.selectedChapter?.id).toBe(activeChapterAt(before, 1).id); expect(session.hasUnreadSavedChapter).toBe(true);
+    expect(session.pendingCompletedChapter).toBeNull(); expect((await storage.readBattleStorySource(before.session!.id)).session?.chapterCount).toBe(2);
+  });
+
+  it.each([10, 13])('middle request caps the original window and restores boundary roles; summary coverage %s is respected', async (coverage) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })));
+    const before = await prepareStory(15, 13);
+    const summary = { coveredUntilChapterIndex: coverage, coveredChapterIds: [activeChapterAt(before, coverage).id], refreshedAt: 1, mode: 'ai' as const };
+    await storage.putBattleStorySession({ ...before.session!, sessionSummary: '原摘要', summaryMeta: summary,
+      chapterPlan: { totalChapters: 15, source: 'user', locked: true } });
+    const originalGraph = await storage.readBattleStorySource(before.session!.id);
+    const projection = vi.spyOn(middleRewriteProjection, 'buildCompletedBattleStoryMiddleRewriteRecords');
+    const { pending } = await rewriteSelected(); const body = JSON.parse(String(fixture.dispatch.mock.calls[0]![1].body));
+    expect(body).toMatchObject({ action: 'rewrite', chapterIndex: 13, sourceChapterId: activeChapterAt(before, 13).id });
+    expect(body.chapterContext.recentChapters).toHaveLength(12);
+    expect(body.chapterContext.recentChapters.map((chapter: { index: number }) => chapter.index)).toEqual(Array.from({ length: 12 }, (_, index) => index + 2));
+    expect(body.chapterContext.workingCombatants).toEqual(boundaryRoles(12));
+    expect(body.chapterContext.sessionSummary).toBe(coverage === 13 ? undefined : '原摘要');
+    await finish(pending, '# 第十三章新结局');
+    const graph = await storage.readBattleStorySource(before.session!.id);
+    expect(projection).toHaveBeenCalledTimes(2); expect(graph.session?.chapterCount).toBe(13);
+    expect(graph.session?.lastChapterInputCombatants).toEqual(boundaryRoles(12));
+    expect(graph.session?.sessionSummary).toBe(coverage === 13 ? undefined : '原摘要');
+    expect(graph.session?.summaryMeta).toEqual(coverage === 13 ? undefined : summary);
+    expect(graph.session?.chapterPlan).toEqual({ totalChapters: 15, source: 'user', locked: true });
+    expect(graph.checkpoints.filter((checkpoint) => checkpoint.boundaryIndex < 13)).toEqual(originalGraph.checkpoints.filter((checkpoint) => checkpoint.boundaryIndex < 13));
+    expect(graph.chapters.some((chapter) => chapter.index > 13)).toBe(false);
+  });
+
+  it('the actual Panel middle-rewrite entry retains and retries the completed body using the atomic writer', async () => {
+    const before = await seedStoryGraph(); await mountActualPanel(); await selectStory(before, 2);
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite').mockRejectedValueOnce(new storage.BattleStoryCommitNotSavedError(new Error('known local failure')));
+    const rewriteButton = [...container.querySelectorAll('button')].find((button) => button.title === '重写当前所选章节；若不是最后一章，会同时截断后续')!;
+    expect(rewriteButton).toBeDefined(); await act(async () => rewriteButton.click());
+    await vi.waitFor(() => expect(fixture.dispatch).toHaveBeenCalledTimes(1));
+    await act(async () => { send(event('markdown', { chunk: '# Panel中章完整正文' }) + event('done', { ok: true })); stream.close(); });
+    await vi.waitFor(async () => { await act(async () => {}); expect(session.pendingCompletedChapter).not.toBeNull(); });
+    expect(container.textContent).toContain('正文已完成，尚未保存'); expect(panelButton('新建连续战报').disabled).toBe(true);
+    await act(async () => panelButton('导出本章').click());
+    await act(async () => panelButton('重试保存').click());
+    await vi.waitFor(async () => { await act(async () => {}); expect(session.pendingCompletedChapter).toBeNull(); });
+    expect(writer).toHaveBeenCalledTimes(2); expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(fixture.download).toHaveBeenCalledTimes(1);
+    expect(session.selectedChapter?.markdown).toBe('# Panel中章完整正文');
+  });
+});
+
+describe('real selected-chapter truncation consumer', () => {
+  it('cancelled fresh confirmation performs no writes and leaves every record intact', async () => {
+    const before = await prepareStory(); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation'); const writes = watchWrites();
+    await act(async () => session.handleDeleteSelectedChapter());
+    expect(confirm).toHaveBeenCalledTimes(1); expect(confirm.mock.calls[0]![0]).toContain('第 2 章');
+    expect(writer).not.toHaveBeenCalled(); writes.expectNone(); expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before); expect(session.isDeletingSession).toBe(false);
+  });
+
+  it('same-tick duplicate clicks reserve one source read, one confirmation and one transaction', async () => {
+    const before = await prepareStory(); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const read = storage.readBattleStorySource; let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    const reader = vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation');
+    let pending!: Promise<void>; await act(async () => { pending = session.handleDeleteSelectedChapter(); void session.handleDeleteSelectedChapter(); });
+    expect(reader).toHaveBeenCalledTimes(1); expect(confirm).not.toHaveBeenCalled();
+    await act(async () => { release(); await pending; });
+    expect(confirm).toHaveBeenCalledTimes(1); expect(writer).toHaveBeenCalledTimes(1);
+    expect((await read(before.session!.id)).session?.chapterCount).toBe(1); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('the clicked target is copied before fresh read and cannot drift with displayed object mutation', async () => {
+    const before = await prepareStory(4, 3); const targetId = activeChapterAt(before, 3).id;
+    const read = storage.readBattleStorySource; let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation'); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    let pending!: Promise<void>; await act(async () => { pending = session.handleDeleteSelectedChapter(); });
+    session.selectedChapter!.id = 'newer-display-id'; session.selectedChapter!.index = 9;
+    await act(async () => { release(); await pending; });
+    expect(confirm.mock.calls[0]![0]).toContain('第 3 章'); expect(writer.mock.calls[0]![0].expected.targetChapterId).toBe(targetId);
+    expect(session.activeSession?.chapterCount).toBe(2); expect(session.selectedChapter?.id).toBe(activeChapterAt(before, 2).id);
+  });
+
+  it.each(['session-ABA', 'chapter-ABA'] as const)('fresh truncation read is cancelled before confirmation after %s navigation', async (navigation) => {
+    const before = await prepareStory(); const read = storage.readBattleStorySource;
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true); const writer = vi.spyOn(storage, 'commitBattleStoryTruncation');
+    let pending!: Promise<void>; await act(async () => { pending = session.handleDeleteSelectedChapter(); });
+    if (navigation === 'session-ABA') await selectStory(before, 2);
+    else { await act(async () => session.setSelectedChapterId(activeChapterAt(before, 1).id)); await act(async () => session.setSelectedChapterId(activeChapterAt(before, 2).id)); }
+    await act(async () => { release(); await pending; });
+    expect(confirm).not.toHaveBeenCalled(); expect(writer).not.toHaveBeenCalled(); expect(await read(before.session!.id)).toEqual(before);
+  });
+
+  it('fresh read rejects a clicked target removed externally instead of deleting the new selected head', async () => {
+    const before = await prepareStory(); const read = storage.readBattleStorySource;
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    let pending!: Promise<void>; await act(async () => { pending = session.handleDeleteSelectedChapter(); });
+    await storage.commitBattleStoryTruncation(storage.buildBattleStoryTruncationCommit(before, activeChapterAt(before, 2).id, Date.now()));
+    const current = await read(before.session!.id); const writes = watchWrites();
+    await act(async () => { release(); await pending; });
+    expect(confirm).not.toHaveBeenCalled(); writes.expectNone(); expect(await read(before.session!.id)).toEqual(current);
+    expect(session.actionError).not.toBeNull(); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each(['session', 'chapter', 'checkpoint', 'history', 'deleted'] as const)('a %s change after confirmation is rejected by full-graph CAS', async (change) => {
+    const before = await prepareStory(); vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const original = storage.commitBattleStoryTruncation; let current!: storage.WebBattleStorySource;
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockImplementationOnce(async (commit) => {
+      if (change === 'session') await storage.putBattleStorySession({ ...before.session!, title: '外部新标题' });
+      if (change === 'chapter') await storage.putBattleStoryChapter({ ...activeChapterAt(before, 4), markdown: '# 外部尾章' });
+      if (change === 'checkpoint') await storage.putBattleStoryCheckpoint({ ...before.checkpoints[0]!, combatants: [{ external: true }] });
+      if (change === 'history') await storage.putBattleStoryChapter({ ...before.chapters.find((chapter) => chapter.status === 'superseded')!, markdown: '# 外部历史' });
+      if (change === 'deleted') await storage.deleteBattleStorySession(before.session!.id);
+      current = await storage.readBattleStorySource(before.session!.id);
+      const writes = watchWrites();
+      try { return await original(commit); } finally { writes.expectNone(); writes.restore(); }
+    });
+    await act(async () => session.handleDeleteSelectedChapter());
+    expect(writer).toHaveBeenCalledTimes(1); expect(await storage.readBattleStorySource(before.session!.id)).toEqual(current);
+    expect(session.chapterDeletionPending).toBe(false); expect(session.actionError).not.toBeNull(); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['delete chapters', 'delete', AI_SESSION_STORE_NAMES.battleStoryChapters],
+    ['delete checkpoints', 'delete', AI_SESSION_STORE_NAMES.battleStoryCheckpoints],
+    ['replace session', 'put', AI_SESSION_STORE_NAMES.battleStorySessions],
+  ] as const)('%s phase abort restores the entire graph and requires a fresh confirmation', async (_label, method, storeName) => {
+    const before = await prepareStory(); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation'); const fault = abortAfterWrite(method, storeName);
+    await act(async () => session.handleDeleteSelectedChapter());
+    expect(fault.reached).toHaveBeenCalled(); expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+    expect(session.chapterDeletionPending).toBe(false); expect(session.actionError).not.toBeNull();
+    fault.restore(); await act(async () => session.handleDeleteSelectedChapter());
+    expect(confirm).toHaveBeenCalledTimes(2); expect(writer).toHaveBeenCalledTimes(2);
+    expect(writer.mock.calls[1]![0]).not.toBe(writer.mock.calls[0]![0]);
+    expect(session.activeSession?.chapterCount).toBe(1); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 3])('successful truncation restores roles/checkpoints/head and respects summary coverage %s', async (coverage) => {
+    const before = await prepareStory(4, 3);
+    const summary = { coveredUntilChapterIndex: coverage, coveredChapterIds: [activeChapterAt(before, coverage).id], refreshedAt: 1, mode: 'ai' as const };
+    await storage.putBattleStorySession({ ...before.session!, sessionSummary: '原摘要', summaryMeta: summary });
+    const expectedSource = await storage.readBattleStorySource(before.session!.id);
+    const legacy = [vi.spyOn(storage, 'deleteBattleStoryChaptersFromIndex'), vi.spyOn(storage, 'deleteBattleStoryCheckpointsFromBoundary'), vi.spyOn(storage, 'putBattleStorySession')];
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await act(async () => session.handleDeleteSelectedChapter());
+    const graph = await storage.readBattleStorySource(before.session!.id);
+    expect(graph.chapters).toEqual(expectedSource.chapters.filter((chapter) => chapter.index < 3));
+    expect(graph.checkpoints).toEqual(expectedSource.checkpoints.filter((checkpoint) => checkpoint.boundaryIndex < 3));
+    expect(graph.session).toMatchObject({ chapterCount: 2, lastChapterId: activeChapterAt(before, 2).id,
+      workingCombatants: boundaryRoles(2), lastChapterInputCombatants: boundaryRoles(1) });
+    expect(graph.session?.sessionSummary).toBe(coverage === 3 ? undefined : '原摘要');
+    expect(graph.session?.summaryMeta).toEqual(coverage === 3 ? undefined : summary);
+    expect(session.activeSession).toEqual(graph.session); expect(session.selectedChapter?.id).toBe(activeChapterAt(before, 2).id);
+    expect(session.notice).toContain('回退到第 2 章'); expect(session.chapterDeletionPending).toBe(false);
+    legacy.forEach((write) => expect(write).not.toHaveBeenCalled()); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each(['original', 'truncated', 'changed'] as const)('unknown truncation observes the %s current graph read-only and preserves historical uncertainty', async (currentState) => {
+    const before = await prepareStory(4, 3); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const original = storage.commitBattleStoryTruncation;
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockImplementationOnce(async (commit) => {
+      if (currentState === 'truncated') await original(commit);
+      throw new Error('host response lost');
+    });
+    await act(async () => session.handleDeleteSelectedChapter());
+    if (currentState === 'changed') await storage.updateBattleStorySession(before.session!.id, (value) => ({ ...value, title: '后续修改标题' }));
+    const current = await storage.readBattleStorySource(before.session!.id);
+    expect(session.chapterDeletionPending).toBe(true); expect(session.deleteSessionBlocksActive).toBe(true);
+    const unload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(unload); expect(unload.defaultPrevented).toBe(true);
+    const writes = watchWrites();
+    await act(async () => { await session.handleContinueSession(); await session.handleRewriteSelectedChapter(); await session.handleBranchSession(); await session.handleDeleteSelectedChapter(); await session.handleDeleteSession(); });
+    expect(confirm).toHaveBeenCalledTimes(1); expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).not.toHaveBeenCalled();
+    await act(async () => session.handleObserveChapterDeletion());
+    writes.expectNone(); expect(await storage.readBattleStorySource(before.session!.id)).toEqual(current);
+    expect(writer).toHaveBeenCalledTimes(1); expect(session.chapterDeletionPending).toBe(false); expect(session.deleteSessionBlocksActive).toBe(false);
+    expect(session.chapterDeletionNotice).toContain('原截尾操作的历史结果仍无法确认');
+    expect(session.chapterDeletionNotice).toContain('未再次删除');
+    if (currentState === 'original') expect(session.chapterDeletionNotice).toContain('不能证明原操作未写入');
+    else if (currentState === 'changed') expect(session.chapterDeletionNotice).toContain('当前原目标章仍在，故事记录已变化');
+    else expect(session.chapterDeletionNotice).toContain('原目标章已不在活动章节中');
+    expect(session.activeSession).toEqual(current.session);
+    const newTarget = activeChapterAt(current, 2);
+    await act(async () => session.setSelectedChapterId(newTarget.id));
+    confirm.mockReturnValue(false);
+    await act(async () => session.handleDeleteSelectedChapter());
+    expect(confirm).toHaveBeenCalledTimes(2); expect(writer).toHaveBeenCalledTimes(1); writes.expectNone();
+    expect(session.chapterDeletionNotice).toContain('原截尾操作的历史结果仍无法确认');
+  });
+
+  it('unknown observation I/O failure writes nothing, keeps the original block, and allows another session to generate', async () => {
+    const before = await prepareStory(4, 3); const other = await seedStoryGraph(1, '可继续的另一会话');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockRejectedValueOnce(new Error('lost reply'));
+    await act(async () => session.handleDeleteSelectedChapter());
+    const sourceRead = vi.spyOn(storage, 'readBattleStorySource').mockRejectedValueOnce(new Error('只读I/O不可用'));
+    const writes = watchWrites();
+    await act(async () => session.handleObserveChapterDeletion());
+    writes.expectNone(); expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect(session.chapterDeletionPending).toBe(true); expect(session.deleteSessionBlocksActive).toBe(true);
+    expect(session.chapterDeletionNotice).toContain('只读I/O不可用'); sourceRead.mockRestore(); writes.restore();
+    await selectStory(other, 1); expect(session.deleteSessionBlocksActive).toBe(false);
+    let pending!: Promise<void>; await act(async () => { pending = session.handleContinueSession(); });
+    await finish(pending, '# 另一会话允许继续');
+    expect(session.activeSession?.id).toBe(other.session!.id); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+    await selectStory(before, 3); expect(session.deleteSessionBlocksActive).toBe(true);
+    await act(async () => session.handleObserveChapterDeletion());
+    expect(session.chapterDeletionPending).toBe(false); expect(session.chapterDeletionNotice).toContain('原截尾操作的历史结果仍无法确认');
+    expect(writer).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unresolved truncation cannot be replaced by deleting a different session suffix', async () => {
+    const before = await prepareStory(); const other = await seedStoryGraph(3, '另一截尾目标');
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockRejectedValueOnce(new Error('lost reply'));
+    await act(async () => session.handleDeleteSelectedChapter());
+    await selectStory(other, 2); const writes = watchWrites();
+    await act(async () => session.handleDeleteSelectedChapter());
+    writes.expectNone(); expect(confirm).toHaveBeenCalledTimes(1); expect(writer).toHaveBeenCalledTimes(1);
+    expect(await storage.readBattleStorySource(other.session!.id)).toEqual(other);
+    await act(async () => session.handleObserveChapterDeletion());
+    expect(session.activeSession?.id).toBe(other.session!.id); expect(session.chapterDeletionNotice).toContain('原截尾操作的历史结果仍无法确认');
+    expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+  });
+
+  it('a late successful truncation does not steal selection from another session', async () => {
+    const before = await prepareStory(4, 3); const other = await seedStoryGraph(1, '另一所选会话');
+    vi.spyOn(window, 'confirm').mockReturnValue(true); const original = storage.commitBattleStoryTruncation;
+    let release!: () => void; let entered!: () => void; const gate = new Promise<void>((resolve) => { entered = resolve; });
+    vi.spyOn(storage, 'commitBattleStoryTruncation').mockImplementationOnce(async (commit) => {
+      entered(); await new Promise<void>((resolve) => { release = resolve; }); return original(commit);
+    });
+    let pending!: Promise<void>; await act(async () => { pending = session.handleDeleteSelectedChapter(); await gate; });
+    await selectStory(other, 1); await act(async () => { release(); await pending; });
+    expect(session.activeSession?.id).toBe(other.session!.id); expect(session.selectedChapter?.id).toBe(activeChapterAt(other, 1).id);
+    expect((await storage.readBattleStorySource(before.session!.id)).session?.chapterCount).toBe(2);
+  });
+
+  it('committed truncation followed by readback failure observes success without replay', async () => {
+    const list = storage.listBattleStorySessions; let failRead = false;
+    vi.spyOn(storage, 'listBattleStorySessions').mockImplementation(async (...args) => {
+      if (failRead) { failRead = false; throw new Error('readback failed'); } return list(...args);
+    });
+    await prepareStory(); vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const original = storage.commitBattleStoryTruncation;
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockImplementationOnce(async (commit) => {
+      await original(commit); failRead = true;
+    });
+    await act(async () => session.handleDeleteSelectedChapter());
+    expect(session.chapterDeletionPending).toBe(true); expect(session.chapterDeletionNotice).toContain('截尾已完成');
+    const writes = watchWrites(); await act(async () => session.handleObserveChapterDeletion()); writes.expectNone();
+    expect(session.chapterDeletionPending).toBe(false); expect(session.chapterDeletionNotice).toContain('原截尾操作已完成');
+    expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('selecting the first chapter retains the existing whole-session deletion dialog', async () => {
+    const before = await prepareStory(4, 1); const confirm = vi.spyOn(window, 'confirm'); const writer = vi.spyOn(storage, 'commitBattleStoryTruncation');
+    const writes = watchWrites(); await act(async () => session.handleDeleteSelectedChapter());
+    expect(session.deleteSessionDialogOpen).toBe(true); expect(session.deleteSessionTarget?.id).toBe(before.session!.id);
+    expect(writer).not.toHaveBeenCalled(); expect(confirm).not.toHaveBeenCalled(); writes.expectNone();
+    await act(async () => session.handleCancelDeleteSession()); expect(session.deleteSessionDialogOpen).toBe(false);
+    expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+  });
+
+  it('actual Panel delete and read-only observation buttons share the hook block and preserve unknown history', async () => {
+    const before = await seedStoryGraph(); await mountActualPanel(); await selectStory(before, 2);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockRejectedValueOnce(new Error('lost host reply'));
+    await act(async () => panelButton('删除本章及后续').click());
+    await vi.waitFor(async () => { await act(async () => {}); expect(session.chapterDeletionPending).toBe(true); });
+    expect(panelButton('删除本章及后续').disabled).toBe(true); expect(panelButton('只读核对截尾状态').disabled).toBe(false);
+    const writes = watchWrites(); await act(async () => panelButton('只读核对截尾状态').click());
+    await vi.waitFor(async () => { await act(async () => {}); expect(session.chapterDeletionPending).toBe(false); });
+    writes.expectNone(); expect(container.textContent).toContain('原截尾操作的历史结果仍无法确认');
+    expect(panelButton('删除本章').disabled).toBe(false); expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('linear continue unknown outcome never replays after rollback to its old parent', () => {
+  it.each(['absence', 'contentDigest', 'sessionId', 'chapterId', 'chapterIndex', 'chapterCount', 'checkpointIds', 'io'] as const)(
+    'receipt %s is query-only even when a later truncation restores the original full parent graph', async (result) => {
+      const before = await prepareStory(1, 1); const original = storage.commitCompletedBattleStoryChapter;
+      const writer = vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockImplementationOnce(async (commit) => { await original(commit); throw new Error('lost successful continue reply'); });
+      let pending!: Promise<void>; await act(async () => { pending = session.handleContinueSession(); }); await finish(pending, '# 后来被截尾的完整续章');
+      const commit = writer.mock.calls[0]![0]; const expected = createBattleStoryCommitReceipt(commit);
+      const committed = await storage.readBattleStorySource(before.session!.id);
+      await storage.commitBattleStoryTruncation(storage.buildBattleStoryTruncationCommit(committed, commit.chapter.id, before.session!.updatedAt));
+      expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+      expect(await storage.getBattleStoryOperationReceipt(commit.operationId)).toBeNull();
+      const query = vi.spyOn(storage, 'getBattleStoryOperationReceipt');
+      if (result === 'io') query.mockRejectedValue(new Error('receipt read failed'));
+      else if (result === 'absence') query.mockResolvedValue(null);
+      else query.mockResolvedValue({ ...expected, [result]: result === 'chapterCount' || result === 'chapterIndex' ? 17 : result === 'checkpointIds' ? ['different-checkpoint'] : `different-${result}` });
+      const writes = watchWrites();
+      await act(async () => { await session.handleRetrySaveChapter(); await session.handleSavePendingAsNewSession(); });
+      expect(query).toHaveBeenCalledWith(commit.operationId); writes.expectNone();
+      expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+      expect(session.pendingSaveUnknown).toBe(true); expect(session.pendingSaveAsNewSession).toBe(false);
+      expect(session.pendingCompletedChapter?.id).toBe(commit.chapter.id); expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+      await act(async () => session.handleExportPendingChapter()); expect(fixture.download).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
+it('an in-flight truncation observation cannot clear the block after newer same-session chapter selection', async () => {
+  const before = await prepareStory(4, 3); vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const original = storage.commitBattleStoryTruncation;
+  const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockImplementationOnce(async (commit) => { await original(commit); throw new Error('lost reply'); });
+  await act(async () => session.handleDeleteSelectedChapter());
+  const read = storage.readBattleStorySource; let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+  vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+  const writes = watchWrites(); let observing!: Promise<void>;
+  await act(async () => { observing = session.handleObserveChapterDeletion(); });
+  await act(async () => session.setSelectedChapterId(activeChapterAt(before, 1).id));
+  await act(async () => { release(); await observing; });
+  expect(session.selectedChapter?.id).toBe(activeChapterAt(before, 1).id);
+  expect(session.chapterDeletionPending).toBe(true); expect(session.deleteSessionBlocksActive).toBe(true);
+  await act(async () => session.handleContinueSession());
+  expect(fixture.dispatch).not.toHaveBeenCalled(); expect(writer).toHaveBeenCalledTimes(1); writes.expectNone();
+  await act(async () => session.handleObserveChapterDeletion());
+  expect(session.chapterDeletionPending).toBe(false); expect(session.chapterDeletionNotice).toContain('原截尾操作的历史结果仍无法确认');
+});
+
+it.each(['chapter', 'same-session-ABA'] as const)('late successful truncation after %s navigation remains committed-unread until a fresh observation', async (navigation) => {
+  const before = await prepareStory(4, 3); vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const original = storage.commitBattleStoryTruncation;
+  let release!: () => void; let entered!: () => void; const gate = new Promise<void>((resolve) => { entered = resolve; });
+  const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockImplementationOnce(async (commit) => {
+    entered(); await new Promise<void>((resolve) => { release = resolve; }); return original(commit);
+  });
+  let pending!: Promise<void>; await act(async () => { pending = session.handleDeleteSelectedChapter(); await gate; });
+  if (navigation === 'chapter') await act(async () => session.setSelectedChapterId(activeChapterAt(before, 1).id));
+  else await selectStory(before, 3);
+  const selectedId = session.selectedChapter?.id;
+  await act(async () => { release(); await pending; });
+  expect(session.selectedChapter?.id).toBe(selectedId); expect(session.chapterDeletionPending).toBe(true);
+  expect(session.chapterDeletionNotice).toContain('截尾已完成'); expect(session.deleteSessionBlocksActive).toBe(true);
+  const writes = watchWrites(); await act(async () => session.handleContinueSession());
+  expect(fixture.dispatch).not.toHaveBeenCalled();
+  await act(async () => session.handleObserveChapterDeletion()); writes.expectNone();
+  expect(session.chapterDeletionPending).toBe(false); expect(session.chapterDeletionNotice).toContain('原截尾操作已完成');
+  expect(session.activeSession?.chapterCount).toBe(2); expect(writer).toHaveBeenCalledTimes(1);
+});
+
+it('after observing unknown truncation, a new delete captures and confirms a fresh complete graph', async () => {
+  const before = await prepareStory(4, 3); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockRejectedValueOnce(new Error('lost reply'));
+  await act(async () => session.handleDeleteSelectedChapter());
+  const originalIntent = writer.mock.calls[0]![0];
+  await act(async () => session.handleObserveChapterDeletion());
+  expect(session.chapterDeletionNotice).toContain('原截尾操作的历史结果仍无法确认');
+  await storage.updateBattleStorySession(before.session!.id, (value) => ({ ...value, title: '新确认应保留的外部标题' }));
+  const current = await storage.readBattleStorySource(before.session!.id);
+  await act(async () => session.setSelectedChapterId(activeChapterAt(before, 2).id));
+  await act(async () => session.handleDeleteSelectedChapter());
+  expect(confirm).toHaveBeenCalledTimes(2); expect(confirm.mock.calls[0]![0]).toContain('第 3 章'); expect(confirm.mock.calls[1]![0]).toContain('第 2 章');
+  expect(writer).toHaveBeenCalledTimes(2); const latestIntent = writer.mock.calls[1]![0];
+  expect(latestIntent).not.toBe(originalIntent);
+  expect(latestIntent.expected).toEqual(storage.captureBattleStoryTruncationExpected(current, activeChapterAt(before, 2).id));
+  expect(latestIntent.expected.sourceDigest).not.toBe(originalIntent.expected.sourceDigest);
+  expect(session.activeSession).toMatchObject({ title: '新确认应保留的外部标题', chapterCount: 1 });
+  expect(fixture.dispatch).not.toHaveBeenCalled();
+});
+
+it('an invalid generated middle index retains all body content without calling the atomic writer', async () => {
+  const before = await prepareStory(); const writer = vi.spyOn(storage, 'commitCompletedBattleStoryMiddleRewrite');
+  const { pending } = await rewriteSelected(); await act(async () => send(event('session_meta', { chapterIndex: 9 })));
+  await finish(pending, '# 服务端位置异常的完整中章');
+  expect(session.pendingCompletedChapter?.markdown).toBe('# 服务端位置异常的完整中章'); expect(session.pendingCompletedChapter?.index).toBe(9);
+  expect(session.pendingSaveUnknown).toBe(false); expect(writer).not.toHaveBeenCalled();
+  await act(async () => { await session.handleRetrySaveChapter(); session.handleExportPendingChapter(); });
+  expect(writer).not.toHaveBeenCalled(); expect(await storage.readBattleStorySource(before.session!.id)).toEqual(before);
+  expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(fixture.download).toHaveBeenCalledTimes(1);
+});
+
+it('reload-saved intent invalidates a pending truncation observation even when the reload itself fails', async () => {
+  const list = storage.listBattleStorySessions; let failList = false;
+  vi.spyOn(storage, 'listBattleStorySessions').mockImplementation(async (...args) => {
+    if (failList) { failList = false; throw new Error('saved view read failed'); } return list(...args);
+  });
+  const before = await prepareStory(3, 2); const original = storage.commitCompletedBattleStoryChapter;
+  vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockImplementationOnce(async (commit) => { const receipt = await original(commit); failList = true; return receipt; });
+  let pending!: Promise<void>; await act(async () => { pending = session.handleContinueSession(); }); await finish(pending, '# 已存但未读续章');
+  expect(session.hasUnreadSavedChapter).toBe(true); expect(session.pendingCompletedChapter).toBeNull();
+  const current = await storage.readBattleStorySource(before.session!.id); await selectStory(current, 3);
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const writer = vi.spyOn(storage, 'commitBattleStoryTruncation').mockRejectedValueOnce(new Error('lost truncation reply'));
+  await act(async () => session.handleDeleteSelectedChapter());
+  expect(session.chapterDeletionPending).toBe(true); expect(session.hasUnreadSavedChapter).toBe(true);
+  const read = storage.readBattleStorySource; let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+  vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+  let observing!: Promise<void>; const writes = watchWrites();
+  await act(async () => { observing = session.handleObserveChapterDeletion(); });
+  failList = true; await act(async () => session.handleReloadSavedChapter());
+  await act(async () => { release(); await observing; });
+  expect(session.chapterDeletionPending).toBe(true); expect(session.deleteSessionBlocksActive).toBe(true);
+  await act(async () => session.handleContinueSession());
+  writes.expectNone(); expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  expect(await read(before.session!.id)).toEqual(current);
+});
+
+it('a failed internal saved-session load cannot let an older truncation observation clear its stale-view block', async () => {
+  const getSession = storage.getBattleStorySession; let failSessionId: string | null = null;
+  vi.spyOn(storage, 'getBattleStorySession').mockImplementation(async (id) => {
+    if (id === failSessionId) throw new Error('new saved session read failed');
+    return getSession(id);
+  });
+  const source = await prepareStory(4, 3);
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const truncation = vi.spyOn(storage, 'commitBattleStoryTruncation').mockRejectedValueOnce(new Error('lost truncation reply'));
+  await act(async () => session.handleDeleteSelectedChapter());
+  expect(session.chapterDeletionPending).toBe(true);
+
+  const originalCommit = storage.commitCompletedBattleStoryChapter;
+  const writer = vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockImplementationOnce(async (commit) => {
+    const receipt = await originalCommit(commit); failSessionId = commit.session.id; return receipt;
+  });
+  const { pending } = await start();
+  const read = storage.readBattleStorySource; let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+  vi.spyOn(storage, 'readBattleStorySource').mockImplementationOnce(async (id) => { await gate; return read(id); });
+  let observing!: Promise<void>; await act(async () => { observing = session.handleObserveChapterDeletion(); });
+  await finish(pending, '# 新会话已保存但回读失败');
+  expect(session.activeSession?.id).toBe(source.session!.id);
+  expect(session.hasUnreadSavedChapter).toBe(true); expect(session.pendingCompletedChapter).toBeNull();
+  expect((await read(writer.mock.calls[0]![0].session.id)).session?.chapterCount).toBe(1);
+
+  const writes = watchWrites(); await act(async () => { release(); await observing; });
+  expect(session.chapterDeletionPending).toBe(true); expect(session.deleteSessionBlocksActive).toBe(true);
+  expect(session.activeSession?.id).toBe(source.session!.id);
+  await act(async () => session.handleContinueSession());
+  writes.expectNone(); expect(fixture.dispatch).toHaveBeenCalledTimes(1); expect(truncation).toHaveBeenCalledTimes(1);
+  expect(await read(source.session!.id)).toEqual(source);
 });

@@ -19,10 +19,12 @@ const allowedTransactionFiles = new Set([
   'lib/ai-session/battle-story/storage.ts',
   // 连续故事完成章的三 store 原子提交，同样只使用浏览器 IndexedDB。
   'lib/ai-session/battle-story/commit-storage.ts',
-  // 故事全图快照、分支与尾章原子保存，仅通过 openAiSessionDb 获取浏览器 IDBDatabase。
+  // 故事全图快照、分支、重写与截尾原子保存，仅通过 openAiSessionDb 获取浏览器 IDBDatabase。
   'lib/ai-session/battle-story/source-storage.ts',
   'lib/ai-session/battle-story/branch-commit-storage.ts',
   'lib/ai-session/battle-story/tail-rewrite-commit-storage.ts',
+  'lib/ai-session/battle-story/middle-rewrite-commit-storage.ts',
+  'lib/ai-session/battle-story/truncation-commit-storage.ts',
   'lib/public-card-cache/storage.ts',
   'lib/web-package/cache.ts',
   // 浏览器端 IndexedDB 本地库存储（ADR-local-library-data-ownership §4 / LIB-002）。
@@ -153,6 +155,12 @@ describe('server D1 transaction guard', () => {
     'app/api/story/tail-rewrite-commit-storage.ts',
     'lib/server/tail-rewrite-commit-storage.ts',
     'lib/ai-session/battle-story/tail-rewrite-commit-storage.server.ts',
+    'app/api/story/middle-rewrite-commit-storage.ts',
+    'lib/server/middle-rewrite-commit-storage.ts',
+    'lib/ai-session/battle-story/middle-rewrite-commit-storage.server.ts',
+    'app/api/story/truncation-commit-storage.ts',
+    'lib/server/truncation-commit-storage.ts',
+    'lib/ai-session/battle-story/truncation-commit-storage.server.ts',
     'app/api/story/source-storage.ts',
     'lib/server/source-storage.ts',
     'lib/ai-session/battle-story/source-storage.server.ts',
@@ -171,6 +179,12 @@ describe('server D1 transaction guard', () => {
     ] },
     { filePath: 'lib/ai-session/battle-story/tail-rewrite-commit-storage.ts', transactions: [
       "db.transaction(stores.battleStoryChapters, 'readonly')", "db.transaction(storeNames, 'readwrite')",
+    ] },
+    { filePath: 'lib/ai-session/battle-story/middle-rewrite-commit-storage.ts', transactions: [
+      "db.transaction(stores.battleStoryChapters, 'readonly')", "db.transaction(storeNames, 'readwrite')",
+    ] },
+    { filePath: 'lib/ai-session/battle-story/truncation-commit-storage.ts', transactions: [
+      "db.transaction(storeNames, 'readwrite')",
     ] },
   ])('故事例外只登记经浏览器数据库工厂取得的实际 IDB 模块 $filePath', async ({ filePath, transactions }) => {
     expect(allowedTransactionFiles.has(filePath)).toBe(true);

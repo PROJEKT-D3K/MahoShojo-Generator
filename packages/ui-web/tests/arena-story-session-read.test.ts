@@ -113,7 +113,7 @@ describe('restore and captured reload ordering', () => {
   it('clear wins delayed reads and a captured reload cannot override later selection', async () => {
     const f = fixture(); const session = deferred<typeof f.session>(); f.ports.getSession.mockReturnValueOnce(session.promise);
     const old = f.reader.select('A'); const reload = f.reader.captureSelection();
-    await f.reader.select(null); await reload('A'); session.resolve(f.session); await old;
+    await f.reader.select(null); expect(await reload('A')).toBe(false); session.resolve(f.session); await old;
     expect(f.ports.getSession).toHaveBeenCalledTimes(1);
     expect(f.publish.selection).toHaveBeenCalledExactlyOnceWith({ session: null, chapters: [], checkpoints: [], selectedChapterId: null });
     expect(f.ports.writePreferredId).toHaveBeenCalledExactlyOnceWith(null);
@@ -121,7 +121,7 @@ describe('restore and captured reload ordering', () => {
 
   it('captured reload remains eligible across independent list refresh, and can only win once', async () => {
     const f = fixture(); const reload = f.reader.captureSelection(); await f.reader.refreshList();
-    await reload('A'); await reload('A');
+    expect(await reload('A')).toBe(true); expect(await reload('A')).toBe(false);
     expect(f.publish.selection).toHaveBeenCalledTimes(1);
   });
 
@@ -144,6 +144,14 @@ it('a stale failed post-delete fallback cannot clear a newer manual selection', 
   const f = fixture(); await f.reader.select('A'); const reload = f.reader.captureSelection({ clearOnError: true });
   const gate = deferred<typeof f.chapters>(); f.ports.listChapters.mockReturnValueOnce(gate.promise);
   const fallback = reload('B'); await f.reader.select('C'); const last = f.publish.selection.mock.calls.at(-1);
-  gate.reject(new Error('old fallback failed')); await fallback;
+  gate.reject(new Error('old fallback failed')); expect(await fallback).toBe(false);
   expect(f.publish.selection.mock.calls.at(-1)).toBe(last); expect(f.ports.writePreferredId).not.toHaveBeenLastCalledWith(null);
+});
+
+it('a successful captured reload superseded during I/O reports no publication', async () => {
+  const f = fixture(); const reload = f.reader.captureSelection();
+  const gate = deferred<typeof f.session>(); f.ports.getSession.mockReturnValueOnce(gate.promise);
+  const pending = reload('A'); await f.reader.select(null);
+  gate.resolve(f.session); expect(await pending).toBe(false);
+  expect(f.publish.selection).toHaveBeenCalledExactlyOnceWith({ session: null, chapters: [], checkpoints: [], selectedChapterId: null });
 });

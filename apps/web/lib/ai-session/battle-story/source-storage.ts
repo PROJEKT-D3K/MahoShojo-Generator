@@ -1,5 +1,6 @@
 import { openAiSessionDb } from '@/lib/ai-session/storage';
 import { AI_SESSION_STORE_NAMES as stores } from '@/lib/ai-session/types';
+import { BattleStoryCommitConflictError } from './commit-storage';
 import type { BattleStoryChapterRecord, BattleStoryCheckpointRecord, BattleStorySessionRecord } from './types';
 
 export type WebBattleStorySource = {
@@ -48,3 +49,31 @@ export const readBattleStorySource = async (sessionId: string): Promise<WebBattl
   });
 };
 
+const validSourceId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+const checkSource: (condition: unknown, message?: string) => asserts condition = (condition, message = '源故事关系无效。') => {
+  if (!condition) throw new BattleStoryCommitConflictError(message);
+};
+
+/** Validate the complete owned graph, including rows absent from compound indexes. */
+export const assertBattleStorySourceGraph = (source: WebBattleStorySource) => {
+  const session = source.session;
+  checkSource(session && validSourceId(session.id));
+  const ordered = canonicalBattleStorySource(source);
+  const active = ordered.chapters.filter((chapter) => chapter.status !== 'superseded');
+  const count = session.chapterCount;
+  checkSource(Number.isSafeInteger(count) && count >= 1 && active.length === count
+    && session.lastChapterId === active.at(-1)?.id
+    && active.every((chapter, index) => chapter.index === index + 1 && !chapter.supersededByChapterId)
+    && new Set(source.chapters.map((chapter) => chapter.id)).size === source.chapters.length
+    && new Set(source.checkpoints.map((checkpoint) => checkpoint.id)).size === source.checkpoints.length
+    && new Set(source.checkpoints.map((checkpoint) => checkpoint.boundaryIndex)).size === source.checkpoints.length
+    && source.chapters.every((chapter) => validSourceId(chapter.id) && chapter.sessionId === session.id
+      && Number.isSafeInteger(chapter.index) && chapter.index >= 1 && chapter.index <= count
+      && (chapter.status === undefined || chapter.status === 'active' || chapter.status === 'superseded'))
+    && source.checkpoints.every((checkpoint) => validSourceId(checkpoint.id) && checkpoint.sessionId === session.id
+      && Number.isSafeInteger(checkpoint.boundaryIndex) && checkpoint.boundaryIndex >= 0 && checkpoint.boundaryIndex <= count
+      && (checkpoint.boundaryIndex === 0 ? !checkpoint.chapterId
+        : checkpoint.chapterId === active[checkpoint.boundaryIndex - 1]?.id)),
+  '源故事关系无效，请检查已保存章节后再操作。');
+  return { session, active };
+};

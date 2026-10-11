@@ -3,7 +3,7 @@ import { buildCompletedBattleStoryTailRewriteRecords, resolveBattleStoryChapterI
 import { openAiSessionDb, requestToPromise, transactionToPromise } from '@/lib/ai-session/storage';
 import { AI_SESSION_STORE_NAMES as stores } from '@/lib/ai-session/types';
 import { BattleStoryCommitConflictError, BattleStoryCommitNotSavedError } from './commit-storage';
-import { canonicalBattleStorySource, readBattleStorySource, readBattleStorySourceInTransaction, type WebBattleStorySource } from './source-storage';
+import { assertBattleStorySourceGraph, canonicalBattleStorySource, readBattleStorySource, readBattleStorySourceInTransaction, type WebBattleStorySource } from './source-storage';
 import type { BattleStoryChapterRecord, BattleStoryCheckpointRecord, BattleStorySessionRecord } from './types';
 
 export type WebBattleStoryTailRewriteSource = WebBattleStorySource;
@@ -29,29 +29,10 @@ const check: (condition: unknown, message?: string) => asserts condition = (
 
 export const readBattleStoryTailRewriteSource = readBattleStorySource;
 
-/** Validate the complete owned graph, including rows absent from compound indexes. */
 const assertSourceGraph = (source: WebBattleStoryTailRewriteSource, targetId: string) => {
-  const session = source.session;
-  check(session && validId(session.id));
-  const ordered = canonicalBattleStorySource(source);
-  const active = ordered.chapters.filter((chapter) => chapter.status !== 'superseded');
-  const count = session.chapterCount;
-  check(Number.isSafeInteger(count) && count >= 1 && active.length === count
-    && session.lastChapterId === active.at(-1)?.id
-    && active.every((chapter, index) => chapter.index === index + 1 && !chapter.supersededByChapterId)
-    && new Set(source.chapters.map((chapter) => chapter.id)).size === source.chapters.length
-    && new Set(source.checkpoints.map((checkpoint) => checkpoint.id)).size === source.checkpoints.length
-    && new Set(source.checkpoints.map((checkpoint) => checkpoint.boundaryIndex)).size === source.checkpoints.length
-    && source.chapters.every((chapter) => validId(chapter.id) && chapter.sessionId === session.id
-      && Number.isSafeInteger(chapter.index) && chapter.index >= 1 && chapter.index <= count
-      && (chapter.status === undefined || chapter.status === 'active' || chapter.status === 'superseded'))
-    && source.checkpoints.every((checkpoint) => validId(checkpoint.id) && checkpoint.sessionId === session.id
-      && Number.isSafeInteger(checkpoint.boundaryIndex) && checkpoint.boundaryIndex >= 0 && checkpoint.boundaryIndex <= count
-      && (checkpoint.boundaryIndex === 0 ? !checkpoint.chapterId
-        : checkpoint.chapterId === active[checkpoint.boundaryIndex - 1]?.id)),
-  '源故事关系无效，请检查已保存章节后再重写。');
+  const { session, active } = assertBattleStorySourceGraph(source);
   const target = active.at(-1)!;
-  check(target.id === targetId && target.index === count, '重写目标已不是最新活动章，本章尚未保存。');
+  check(target.id === targetId && target.index === session.chapterCount, '重写目标已不是最新活动章，本章尚未保存。');
   return { session, target };
 };
 

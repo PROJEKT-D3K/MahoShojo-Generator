@@ -29,8 +29,9 @@ export type BattleStorySessionReader<S> = {
    * null means invalidated/disposed or a superseded failure, never an empty storage snapshot. */
   refreshList(): Promise<S[] | null>;
   select(id: string | null, onError?: (error: unknown) => void): Promise<void>;
-  /** Capture eligibility for a post-delete reload; later selection intents take precedence. */
-  captureSelection(options?: { clearOnError?: boolean }): (id: string | null) => Promise<void>;
+  /** Capture eligibility for a post-delete reload; later selection intents take precedence.
+   * true proves this read published; false means skipped or superseded, never read success. */
+  captureSelection(options?: { clearOnError?: boolean }): (id: string | null) => Promise<boolean>;
   restore(callbacks: { onError(error: unknown): void; onReady(): void }): Promise<void>;
   invalidate(): void;
   dispose(): void;
@@ -64,7 +65,7 @@ export function createBattleStorySessionReader<S extends SessionKeys, C extends 
     }
   };
 
-  const readSelection = async (id: string | null, token: BattleStoryReadToken, onError?: (error: unknown) => void) => {
+  const readSelection = async (id: string | null, token: BattleStoryReadToken, onError?: (error: unknown) => void): Promise<boolean> => {
     try {
       const [session, chapters, checkpoints] = id
         ? await Promise.all([
@@ -73,7 +74,7 @@ export function createBattleStorySessionReader<S extends SessionKeys, C extends 
           ports.listCheckpoints(id, { direction: 'next', limit: 400 }),
         ])
         : [null, [], []] as const;
-      if (!token.isCurrent()) return;
+      if (!token.isCurrent()) return false;
       const sortedChapters = session ? [...chapters].sort((left, right) => left.index - right.index) : [];
       const sortedCheckpoints = session ? [...checkpoints].sort((left, right) => left.boundaryIndex - right.boundaryIndex) : [];
       // Publish the whole Promise.all snapshot together; a rejected read preserves the old selection.
@@ -84,25 +85,27 @@ export function createBattleStorySessionReader<S extends SessionKeys, C extends 
         selectedChapterId: session?.lastChapterId ?? sortedChapters.at(-1)?.id ?? null,
       });
       if (token.isCurrent()) ports.writePreferredId(session?.id ?? null);
+      return token.isCurrent();
     } catch (error) {
-      if (!token.isCurrent()) return;
+      if (!token.isCurrent()) return false;
       // Interactive errors publish inside the fence, rather than in a later host catch microtask.
       if (onError) onError(error);
       else throw error;
+      return false;
     }
   };
 
   return {
     refreshList,
-    select: (id, onError) => {
+    select: async (id, onError) => {
       // Reserve the intent before the first await, including explicit clear.
       const token = fence.begin('selection');
-      return token ? readSelection(id, token, onError) : Promise.resolve();
+      if (token) await readSelection(id, token, onError);
     },
     captureSelection: (options) => {
       const captured = fence.capture('selection');
       return (id) => {
-        if (!captured.isCurrent()) return Promise.resolve();
+        if (!captured.isCurrent()) return Promise.resolve(false);
         const token = fence.begin('selection');
         return token ? readSelection(id, token, options?.clearOnError ? (error) => {
           // Used only after the original selection has been irreversibly deleted.
@@ -111,7 +114,7 @@ export function createBattleStorySessionReader<S extends SessionKeys, C extends 
           publish.selection({ session: null, chapters: [], checkpoints: [], selectedChapterId: null });
           ports.writePreferredId(null);
           throw error;
-        } : undefined) : Promise.resolve();
+        } : undefined) : Promise.resolve(false);
       };
     },
     restore: async ({ onError, onReady }) => {

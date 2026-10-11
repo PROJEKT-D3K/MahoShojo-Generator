@@ -47,6 +47,16 @@ vi.mock('@/lib/ai-session/battle-story/storage', async (importOriginal) => {
   const original = await importOriginal<typeof storage>();
   return {
     ...original,
+    readBattleStorySource: vi.fn(async (id: string) => structuredClone({
+      session: fixture.sessions.get(id) ?? null,
+      chapters: [...fixture.chapters.values()].filter((item) => item.sessionId === id),
+      checkpoints: [...fixture.checkpoints.values()].filter((item) => item.sessionId === id),
+    })),
+    commitBattleStoryTruncation: vi.fn(async (commit: storage.WebBattleStoryTruncationCommit) => {
+      for (const [id, item] of fixture.chapters) if (item.sessionId === commit.session.id && item.index >= commit.expected.targetIndex) fixture.chapters.delete(id);
+      for (const [id, item] of fixture.checkpoints) if (item.sessionId === commit.session.id && item.boundaryIndex >= commit.expected.targetIndex) fixture.checkpoints.delete(id);
+      fixture.sessions.set(commit.session.id, commit.session);
+    }),
     readBattleStoryBranchSource: vi.fn(async (id: string) => structuredClone({
       session: fixture.sessions.get(id) ?? null,
       chapters: [...fixture.chapters.values()].filter((item) => item.sessionId === id),
@@ -460,8 +470,9 @@ describe('Battle story storage reads through the real React session hook', () =>
     await mount(); vi.spyOn(window, 'confirm').mockReturnValue(true);
     const first = [...fixture.chapters.values()].find((item) => item.sessionId === a.id && item.index === 1)!;
     await act(async () => session.handleDeleteSelectedChapter());
-    expect(storage.deleteBattleStoryChaptersFromIndex).toHaveBeenCalledWith({ sessionId: a.id, startIndex: 2 });
-    expect(storage.deleteBattleStoryCheckpointsFromBoundary).toHaveBeenCalledWith({ sessionId: a.id, startBoundaryIndex: 2 });
+    expect(storage.commitBattleStoryTruncation).toHaveBeenCalledWith(expect.objectContaining({ expected: expect.objectContaining({ sourceSessionId: a.id, targetIndex: 2 }) }));
+    expect(storage.deleteBattleStoryChaptersFromIndex).not.toHaveBeenCalled();
+    expect(storage.deleteBattleStoryCheckpointsFromBoundary).not.toHaveBeenCalled();
     expect(storage.getBattleStorySession).toHaveBeenLastCalledWith(a.id);
     expect(session.chapters).toEqual([first]); expect(session.selectedChapterId).toBe(first.id);
     expect(session.activeSession?.workingCombatants).toEqual(a.lastChapterInputCombatants);
