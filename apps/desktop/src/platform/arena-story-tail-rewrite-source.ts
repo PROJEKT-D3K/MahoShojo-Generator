@@ -11,7 +11,7 @@ import { resolveAnchoredSummaryState, toBattleStoryRecordCombatants, type Battle
 import { projectBattleStoryPromptWindowItem, type BattleStoryPromptWindowItem } from '@mahoshojo/domain/arena-battle-story-session';
 import { readStoryRecord, storySourceWithoutSecrets, type StoryNativePort } from './arena-story-storage';
 
-/** Internal read-only capability. No default Native binder or UI entry point. */
+/** Read-only capability with a separate Native binder. No product UI entry point. */
 export interface StoryTailRewriteSourcePort {
   resolveSource(request: StoryTailRewriteSourceRequest): Promise<unknown>;
 }

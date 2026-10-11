@@ -42,13 +42,17 @@ fn app(library: LocalLibrary) -> tauri::App<MockRuntime> {
         .invoke_handler(tauri::generate_handler![
             begin_arena_story_commit,
             begin_arena_story_branch_commit,
+            begin_arena_story_tail_rewrite_commit,
             append_arena_story_part,
             end_arena_story_commit,
             end_arena_story_branch_commit,
+            end_arena_story_tail_rewrite_commit,
             abort_arena_story_commit,
             query_arena_story_receipt,
             query_arena_story_branch_receipt,
+            query_arena_story_tail_rewrite_receipt,
             resolve_arena_story_branch_anchor,
+            resolve_arena_story_tail_rewrite_source,
             list_arena_story_sessions,
             delete_arena_story_session,
             list_arena_story_chapters,
@@ -188,6 +192,129 @@ fn command_macros_and_app_acl_reject_invalid_or_untrusted_calls() {
         "headers":{"x-story-token":token,"x-story-part":"session","x-story-offset":"0"}
     }));
     assert_eq!(json_body["error"]["code"], "story-invalid");
+}
+
+#[test]
+fn tail_wire_commands_keep_raw_text_and_exact_main_ui_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let transport = crate::store::with_history_schema_for_test(|| Transport::new(root.path()));
+    let golden: Value = serde_json::from_str(include_str!(
+        "../../../../packages/contracts/fixtures/desktop-story-tail-rewrite-storage.json"
+    ))
+    .unwrap();
+    let case = &golden["cases"][0];
+    let source = &golden["sourceCommits"][0];
+    let begin = transport
+        .respond(json!({"cmd":"begin_arena_story_commit","args":{"manifest":source["manifest"]}}));
+    assert_eq!(begin["ok"], true);
+    let token = begin["value"]["token"].as_str().unwrap();
+    assert_eq!(
+        transport
+            .respond(json!({"cmd":"end_arena_story_tail_rewrite_commit","args":{"token":token}}))
+            ["error"]["code"],
+        "story-invalid"
+    );
+    for part in source["parts"].as_array().unwrap() {
+        let appended = transport.respond(json!({"cmd":"append_arena_story_part","raw":STANDARD.encode(part["document"].as_str().unwrap()),
+            "headers":{"x-story-token":token,"x-story-part":part["kind"],"x-story-offset":"0"}}));
+        assert_eq!(appended["ok"], true);
+    }
+    assert_eq!(
+        transport.respond(json!({"cmd":"end_arena_story_commit","args":{"token":token}}))["ok"],
+        true
+    );
+    let mut manifest = case["manifest"].clone();
+    let request = json!({"sessionId":manifest["sessionId"],"expectedRevision":manifest["source"]["expectedRevision"],
+        "expectedChapterCount":manifest["source"]["expectedChapterCount"],"targetChapterId":manifest["source"]["targetChapterId"]});
+    let resolved = transport.respond(
+        json!({"cmd":"resolve_arena_story_tail_rewrite_source","args":{"request":request}}),
+    );
+    assert_eq!(resolved["ok"], true);
+    manifest["source"] = resolved["value"]["source"].clone();
+    let manifest_json = serde_json::to_string(&manifest).unwrap();
+    let begin_request = json!({"cmd":"begin_arena_story_tail_rewrite_commit","args":{"manifestJson":manifest_json}});
+    for args in [
+        json!({"manifest":manifest}),
+        json!({"manifest_json":manifest_json}),
+        json!({"manifestJson":manifest}),
+    ] {
+        assert!(transport
+            .respond(json!({"cmd":"begin_arena_story_tail_rewrite_commit","args":args}))["error"]
+            .is_string());
+    }
+    for malformed in [
+        manifest_json.replacen("\"version\":3", "\"version\":3,\"version\":3", 1),
+        manifest_json.replacen("\"version\":3", "\"version\":3,\"\\u0076ersion\":3", 1),
+    ] {
+        let result = transport.respond(json!({"cmd":"begin_arena_story_tail_rewrite_commit","args":{"manifestJson":malformed}}));
+        assert_eq!(result["error"]["code"], "story-invalid");
+    }
+    let exact = format!("{manifest_json}{}", " ".repeat(2048 - manifest_json.len()));
+    assert_eq!(transport.respond(json!({"cmd":"begin_arena_story_tail_rewrite_commit","args":{"manifestJson":format!("{exact} ")}}))["error"]["code"], "story-too-large");
+    let begun = transport.respond(
+        json!({"cmd":"begin_arena_story_tail_rewrite_commit","args":{"manifestJson":exact}}),
+    );
+    assert_eq!(begun["ok"], true);
+    let token = begun["value"]["token"].as_str().unwrap();
+    for part in case["parts"].as_array().unwrap() {
+        assert_eq!(transport.respond(json!({"cmd":"append_arena_story_part","raw":STANDARD.encode(part["document"].as_str().unwrap()),
+            "headers":{"x-story-token":token,"x-story-part":part["kind"],"x-story-offset":"0"}}))["ok"], true);
+    }
+    for command in ["end_arena_story_commit", "end_arena_story_branch_commit"] {
+        assert_eq!(
+            transport.respond(json!({"cmd":command,"args":{"token":token}}))["error"]["code"],
+            "story-invalid"
+        );
+    }
+    let end_request = json!({"cmd":"end_arena_story_tail_rewrite_commit","args":{"token":token}});
+    let ended = transport.respond(end_request.clone());
+    assert_eq!(ended["ok"], true);
+    let text = ended["value"].as_str().unwrap();
+    assert!(text.len() <= 2048);
+    let receipt: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(receipt["revision"], 2);
+    assert_eq!(receipt["chapterCount"], 1);
+    let receipt_request = json!({"cmd":"query_arena_story_tail_rewrite_receipt","args":{"sessionId":manifest["sessionId"],
+        "operationId":manifest["operationId"],"requestDigest":receipt["requestDigest"]}});
+    assert_eq!(transport.respond(receipt_request.clone())["value"], text);
+    let source_request =
+        json!({"cmd":"resolve_arena_story_tail_rewrite_source","args":{"request":request}});
+    for call in [
+        begin_request,
+        end_request,
+        receipt_request.clone(),
+        source_request,
+    ] {
+        for (field, value) in [("webview", "untrusted"), ("url", "https://example.invalid")] {
+            let mut denied = call.clone();
+            denied[field] = json!(value);
+            let result = transport.respond(denied);
+            assert_eq!(result["ok"], false);
+            assert!(
+                result["error"].is_string(),
+                "ACL must reject before Native store dispatch"
+            );
+        }
+    }
+    let mut missing = receipt_request;
+    missing["args"]
+        .as_object_mut()
+        .unwrap()
+        .remove("requestDigest");
+    assert!(transport.respond(missing)["error"].is_string());
+    assert_eq!(
+        transport.respond(
+            json!({"cmd":"end_arena_story_tail_rewrite_commit","args":{"token":"invalid"}})
+        )["error"]["code"],
+        "story-invalid"
+    );
+
+    let default_root = tempfile::tempdir().unwrap();
+    let default = Transport::new(default_root.path());
+    let rejected = default.respond(
+        json!({"cmd":"resolve_arena_story_tail_rewrite_source","args":{"request":request}}),
+    );
+    assert_eq!(rejected["error"]["code"], "story-invalid");
 }
 
 #[test]

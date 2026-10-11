@@ -1,4 +1,4 @@
-//! Unregistered schema-11 candidate. A rewrite preserves every historical record
+//! Schema-11 candidate behind the explicit version gate. A rewrite preserves every historical record
 //! and receipt, replacing only the current tail and its working checkpoint.
 use super::{authority, chapter_index, checkpoint_index, materialize, optional_id, required};
 use crate::arena_story::read::{RecordDescriptor, RecordKind};
@@ -153,7 +153,7 @@ impl TailRewriteReceipt {
         }
         Ok(())
     }
-    pub(super) fn encode(&self) -> Result<String, StoryError> {
+    pub(crate) fn encode(&self) -> Result<String, StoryError> {
         self.validate()?;
         let text = serde_json::to_string(self).map_err(|_| StoryError::Corrupt)?;
         if text.len() > WIRE_BYTES {

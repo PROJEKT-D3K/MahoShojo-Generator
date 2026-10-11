@@ -1046,6 +1046,21 @@ fn begin_arena_story_branch_commit<R: tauri::Runtime>(
     Ok(begun)
 }
 #[tauri::command(async)]
+fn begin_arena_story_tail_rewrite_commit<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    library: State<'_, LocalLibrary>,
+    manifest_json: String,
+) -> Result<arena_story::BeginOutcome, arena_story::StoryError> {
+    // Decode the original bounded text, before a JSON object can erase duplicate
+    // fields or raw byte-length evidence. v1/v2 retain their existing carriers.
+    let manifest = arena_story::branch::tail_rewrite::TailRewriteManifest::decode(&manifest_json)?;
+    let begun = library
+        .stories()
+        .begin_tail_rewrite(manifest, std::time::Instant::now())?;
+    expire_arena_story_stage(app, begun.token.clone());
+    Ok(begun)
+}
+#[tauri::command(async)]
 fn append_arena_story_part(
     request: tauri::ipc::Request,
     library: State<'_, LocalLibrary>,
@@ -1095,6 +1110,17 @@ fn end_arena_story_branch_commit(
         .end_branch(&token, std::time::Instant::now())
 }
 #[tauri::command(async)]
+fn end_arena_story_tail_rewrite_commit(
+    library: State<'_, LocalLibrary>,
+    token: String,
+) -> Result<String, arena_story::StoryError> {
+    arena_story::ipc::token(Some(&token))?;
+    library
+        .stories()
+        .end_tail_rewrite(&token, std::time::Instant::now())?
+        .encode()
+}
+#[tauri::command(async)]
 fn abort_arena_story_commit(
     library: State<'_, LocalLibrary>,
     token: String,
@@ -1127,6 +1153,27 @@ fn resolve_arena_story_branch_anchor(
     request: arena_story::read::BranchAnchorRequest,
 ) -> Result<arena_story::read::BranchAnchorDescriptors, arena_story::StoryError> {
     library.stories().resolve_branch_anchor(&request)
+}
+#[tauri::command(async)]
+fn query_arena_story_tail_rewrite_receipt(
+    library: State<'_, LocalLibrary>,
+    session_id: String,
+    operation_id: String,
+    request_digest: String,
+) -> Result<Option<String>, arena_story::StoryError> {
+    library
+        .stories()
+        .tail_rewrite_receipt(&session_id, &operation_id, &request_digest)?
+        .map(|receipt| receipt.encode())
+        .transpose()
+}
+#[tauri::command(async)]
+fn resolve_arena_story_tail_rewrite_source(
+    library: State<'_, LocalLibrary>,
+    request: arena_story::branch::tail_rewrite::TailRewriteSourceRequest,
+) -> Result<arena_story::branch::tail_rewrite::TailRewriteSourceDescriptors, arena_story::StoryError>
+{
+    library.stories().resolve_tail_rewrite_source(&request)
 }
 #[tauri::command(async)]
 fn delete_arena_story_session(
@@ -1934,13 +1981,17 @@ pub fn run() {
             abort_arena_story_pending_export,
             begin_arena_story_commit,
             begin_arena_story_branch_commit,
+            begin_arena_story_tail_rewrite_commit,
             append_arena_story_part,
             end_arena_story_commit,
             end_arena_story_branch_commit,
+            end_arena_story_tail_rewrite_commit,
             abort_arena_story_commit,
             query_arena_story_receipt,
             query_arena_story_branch_receipt,
+            query_arena_story_tail_rewrite_receipt,
             resolve_arena_story_branch_anchor,
+            resolve_arena_story_tail_rewrite_source,
             list_arena_story_sessions,
             delete_arena_story_session,
             list_arena_story_chapters,

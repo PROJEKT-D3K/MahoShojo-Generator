@@ -4,7 +4,7 @@
 //! verifies an indexed, hashed Native record and changes its physical identities.
 //! The caller must recheck the complete source CAS inside its write transaction.
 
-// Candidate only: no command, ACL, UI factory or production schema activation.
+// Candidate schema 11: default activation and product page injection remain closed.
 #[allow(dead_code, reason = "internal schema-11 tail rewrite candidate")]
 #[path = "arena_story_tail_rewrite.rs"]
 pub(crate) mod tail_rewrite;

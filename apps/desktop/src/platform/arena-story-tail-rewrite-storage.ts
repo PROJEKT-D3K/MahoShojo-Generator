@@ -16,7 +16,7 @@ import {
 } from '@mahoshojo/domain/arena-story-commit';
 import { StorySaveError, storyTitlePreview, storySourceWithoutSecrets } from './arena-story-storage';
 
-/** Intentionally injected only. It does not widen the registered v1/v2 IPC ABI. */
+/** Separately injected v3 capability. It does not widen the v1/v2 IPC ABI. */
 export interface StoryTailRewriteNativePort {
   begin(manifest: StoryTailRewriteManifest): Promise<unknown>;
   append(token: string, kind: StoryPartKind, offset: number, bytes: Uint8Array): Promise<unknown>;

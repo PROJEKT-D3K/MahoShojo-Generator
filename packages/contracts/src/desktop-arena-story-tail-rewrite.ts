@@ -1,7 +1,7 @@
 import { z } from './zod';
 import { STORY_CANDIDATE_COMMIT_BYTES, StoryRecordDescriptorSchema } from './desktop-arena-story';
 
-/** Internal Native v3 only. No IPC name, default binder, or schema activation. */
+/** Independent Native v3 wire. Schema activation remains separate from IPC. */
 export const STORY_TAIL_REWRITE_WIRE_BYTES = 2048;
 export const STORY_TAIL_REWRITE_REQUEST_DOMAIN = 'arena-story-tail-rewrite-wire-v3\n';
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u);

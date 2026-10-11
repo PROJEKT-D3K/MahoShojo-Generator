@@ -41,7 +41,7 @@ describe('branch v2 keeps its narrow IPC capability separate from v1', () => {
     for (const command of Object.values(STORY_BRANCH_IPC)) expect(subset).toContain(command);
     expect(transport).toContain('get_ipc_response(');
     expect(transport).toContain('.build(tauri::generate_context!())');
-    expect(lib.match(/expire_arena_story_stage\(app, begun.token.clone\(\)\)/gu)).toHaveLength(2);
+    expect(lib.match(/expire_arena_story_stage\(app, begun.token.clone\(\)\)/gu)).toHaveLength(3);
     expect(lib).toContain('tokio::time::sleep(arena_story::STAGE_LIFETIME).await');
   });
   it('keeps v1 unchanged while both pages share explicit branch ports', () => {

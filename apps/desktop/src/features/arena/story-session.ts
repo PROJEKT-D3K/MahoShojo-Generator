@@ -539,7 +539,7 @@ export class DesktopArenaStorySession {
       if (!dispatched) completion.cancel();
     } catch (cause) { completion.fail(cause); }
   }
-  /** Internal opt-in Direct producer. No page or default binder grants this capability. */
+  /** Opt-in Direct producer. Product pages do not inject this capability. */
   async generateTailRewrite(input: { mode: 'direct' | 'hosted'; target: StoryTailRewriteSourceRequest; userGuidance: string }, prepare: PrepareStoryExecution) {
     if (!this.dependencies.tailRewrite || input.mode !== 'direct') throw new Error('此入口未开放尾章重写；Hosted 重写不受支持');
     const frozen = freezeBattleStoryCommit(structuredClone(input));

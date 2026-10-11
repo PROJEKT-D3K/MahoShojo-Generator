@@ -1,19 +1,22 @@
-/** Opt-in actual TS owner -> test-only stdin -> actual Rust/SQLite. Only model
- * responses are synthetic. No Tauri command, UI activation or live account. */
+/** Actual default Tauri JS binders and owner -> test-only stdin -> Rust/SQLite.
+ * Only host transport/model responses are synthetic. No command macro/ACL or UI activation. */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, webcrypto } from 'node:crypto';
 import { createReadStream, mkdirSync, mkdtempSync, readFileSync, readdirSync, statfsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { encodeStoryTailRewriteManifest, encodeStoryTailRewriteReceipt, decodeStoryTailRewriteReceipt } from '@mahoshojo/contracts/desktop-arena-story-tail-rewrite';
+import { createIpcStoryNativePort, STORY_IPC, type StoryInvoke } from '../../src/platform/arena-story-native';
+import { createIpcStoryTailRewriteNativePort, createIpcStoryTailRewriteSourcePort, STORY_TAIL_REWRITE_IPC } from '../../src/platform/arena-story-tail-rewrite-native';
 import type { StoryCommitManifest, StoryPartKind, StoryRecordDescriptor, StorySessionHead } from '@mahoshojo/contracts/desktop-arena-story';
 import type { BattleStoryArenaRequestInput } from '@mahoshojo/domain/arena-battle-story-request';
 import { DesktopArenaStorySession, type PrepareStoryExecution } from '../../src/features/arena/story-session';
 import { createInitialArenaDraft } from '../../src/features/arena/session';
 import { captureDesktopStorySeed } from '../../src/features/arena/story-snapshot';
 import type { executeArenaDirect } from '../../src/features/arena/direct';
-import { prepareStoryTailRewriteCommit, type PreparedStoryTailRewriteCommit, type StoryTailRewriteNativePort } from '../../src/platform/arena-story-tail-rewrite-storage';
-import { readStoryRecord, type StoryNativePort } from '../../src/platform/arena-story-storage';
+import { prepareStoryTailRewriteCommit, type PreparedStoryTailRewriteCommit } from '../../src/platform/arena-story-tail-rewrite-storage';
+import { readStoryRecord } from '../../src/platform/arena-story-storage';
 Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
 const [binary, outputArg, repoArg, nativeSourceArg] = process.argv.slice(2);
 assert.ok(binary && outputArg && repoArg && nativeSourceArg, 'binary evidence-directory source-checkout native-source-snapshot required');
@@ -23,9 +26,9 @@ const fixture = JSON.parse(readFileSync(join(repo, 'packages/contracts/fixtures/
 };
 const sha = (bytes: Uint8Array | string) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const unknownToken = '"opaque":{"duplicate":1,"duplicate":2,"number":1e+02,"lone":"\\ud800","escaped":"\\u4e2d"}';
-function launch(root: string) {
+function launch(root: string, defaultSchema = false) {
   const available = statfsSync(output); assert.ok(available.bavail * available.bsize >= 256 * 1024 * 1024, '256 MiB free-space floor');
-  const child = spawn(binary!, ['--ignored', '--exact', 'arena_story::branch::tail_rewrite::completion_pipe::real_store_tail_rewrite_completion_pipe', '--nocapture', '--test-threads=1'], {
+  const child = spawn(binary!, ['--ignored', '--exact', `arena_story::branch::tail_rewrite::completion_pipe::real_store_tail_rewrite_${defaultSchema ? 'default_schema' : 'completion'}_pipe`, '--nocapture', '--test-threads=1'], {
     env: { ...process.env, MAHO_TAIL_REWRITE_PIPE_ROOT: root }, stdio: ['pipe', 'pipe', 'pipe'],
   });
   const waiting: Array<{ resolve(value: unknown): void; reject(error: unknown): void }> = [], trace: Array<Record<string, unknown>> = [];
@@ -53,39 +56,51 @@ function launch(root: string) {
     waiting.push({ resolve: done, reject }); child.stdin.write(frame + '\n');
   }), close: async () => { if (!terminal) child.stdin.end(); await closed; } };
 }
-type Scenario = 'first' | 'third' | 'long-window' | 'multiple' | 'rollback' | 'commit-failed' | 'cold-unknown' | 'source-restart' | 'saved-unread';
+type Scenario = 'schema10' | 'first' | 'third' | 'long-window' | 'multiple' | 'rollback' | 'commit-failed' | 'cold-unknown' | 'source-restart' | 'saved-unread';
 async function scenario(kind: Scenario) {
-  const root = mkdtempSync(join(output, `${kind}-`)); let host = launch(root), hide: 'none' | 'absent' | 'mismatch' | 'io' = 'none';
+  const root = mkdtempSync(join(output, `${kind}-`)); let host = launch(root, kind === 'schema10'), hide: 'none' | 'absent' | 'mismatch' | 'io' | 'malformed' = 'none';
   const receipts: unknown[] = [];
   const traces: Array<Array<Record<string, unknown>>> = [], models: BattleStoryArenaRequestInput[] = [], prepared: PreparedStoryTailRewriteCommit[] = [];
   let fault = kind === 'rollback' ? 'rollback' : kind === 'commit-failed' ? 'commit-failed' : kind === 'cold-unknown' ? 'commit-unknown' : '';
-  let id = 0, failRead = false;
+  let id = 0, failRead = false, preparations = 0;
   const call = (op: string, args?: Record<string, unknown>) => host.call(op, args);
-  const append = (token: string, kind: StoryPartKind, offset: number, bytes: Uint8Array) => call('append', { token, kind, offset, bytes: Buffer.from(bytes).toString('base64') });
-  const reads: StoryNativePort = {
-    begin: manifest => call('linear-begin', { manifest }), append, end: token => call('linear-end', { token }), abort: async token => { await call('abort', { token }); },
-    receipt: (sessionId, operationId) => call('linear-receipt', { sessionId, operationId }),
-    listSessions: (cursor, limit) => { if (failRead) throw new Error('synthetic directory read IO after exact receipt'); return call('sessions', { cursor, limit }); },
-    listChapters: (sessionId, revision, cursor, limit) => call('chapters', { sessionId, revision, cursor, limit }),
-    describe: (sessionId, revision, kind, recordId) => call('describe', { sessionId, revision, kind, recordId }),
-    read: async (descriptor, offset, length) => Uint8Array.from(Buffer.from(await call('read', { descriptor, offset, length }) as string, 'base64')),
-    continueState: (sessionId, revision, expectedHead) => call('continue', { sessionId, revision, expectedHead }), deleteSession: target => call('delete', { target }),
-  };
-  const tail: StoryTailRewriteNativePort = {
-    begin: manifest => call('tail-begin', { manifest }), append, abort: reads.abort,
-    end: async token => {
+  const invoke: StoryInvoke = async (command, args, options) => {
+    const params = args as Record<string, unknown>;
+    if (command === STORY_IPC.append) {
+      assert.ok(args instanceof Uint8Array);
+      const headers = options!.headers;
+      assert.deepEqual(Object.keys(headers).sort(), ['x-story-offset', 'x-story-part', 'x-story-token']);
+      return call('append', { token: headers['x-story-token'], kind: headers['x-story-part'], offset: Number(headers['x-story-offset']), bytes: Buffer.from(args).toString('base64') });
+    }
+    if (command === STORY_TAIL_REWRITE_IPC.end) {
       const current = fault; fault = '';
-      try { const receipt = await call('tail-end', { token, fault: current }); receipts.push(receipt); if (kind === 'saved-unread') failRead = true; return receipt; }
-      catch (error) { if (current === 'commit-unknown') hide = 'absent'; throw error; }
-    },
-    receipt: async (sessionId, operationId, requestDigest) => {
-      const value = await call('tail-receipt', { sessionId, operationId, requestDigest });
-      if (value) receipts.push(value);
+      try {
+        const text = await call(command, { ...params, fault: current }); receipts.push(decodeStoryTailRewriteReceipt(text as string));
+        if (kind === 'saved-unread') failRead = true;
+        return text;
+      } catch (error) { if (current === 'commit-unknown') hide = 'absent'; throw error; }
+    }
+    if (command === STORY_TAIL_REWRITE_IPC.receipt) {
+      const text = await call(command, params);
+      if (text) receipts.push(decodeStoryTailRewriteReceipt(text as string));
       if (hide === 'absent') return null; if (hide === 'io') throw new Error('synthetic receipt IO');
-      if (hide === 'mismatch' && value) return { ...(value as object), requestDigest: `sha256:${'f'.repeat(64)}` };
-      return value;
-    },
+      if (hide === 'malformed') return '{"PRIVATE_SENTINEL":true}';
+      if (hide === 'mismatch' && text) return encodeStoryTailRewriteReceipt({ ...decodeStoryTailRewriteReceipt(text as string), requestDigest: `sha256:${'f'.repeat(64)}` });
+      return text;
+    }
+    if (command === STORY_TAIL_REWRITE_IPC.begin || command === STORY_TAIL_REWRITE_IPC.resolveSource) return call(command, params);
+    if (command === STORY_IPC.sessions && failRead) throw new Error('synthetic directory read IO after exact receipt');
+    if (command === STORY_IPC.read) {
+      const bytes = Uint8Array.from(Buffer.from(await call('read', params) as string, 'base64')); return bytes.buffer;
+    }
+    if (command === STORY_IPC.continueState) return call('continue', { ...params, expectedHead: params.expectedHead });
+    const names: Record<string, string> = { [STORY_IPC.begin]: 'linear-begin', [STORY_IPC.end]: 'linear-end', [STORY_IPC.abort]: 'abort',
+      [STORY_IPC.receipt]: 'linear-receipt', [STORY_IPC.sessions]: 'sessions', [STORY_IPC.chapters]: 'chapters', [STORY_IPC.describe]: 'describe', [STORY_IPC.deleteSession]: 'delete' };
+    assert.ok(names[command], `Unexpected command: ${command}`); return call(names[command]!, params);
   };
+  Object.defineProperty(globalThis, 'window', { value: { __TAURI_INTERNALS__: { invoke } }, configurable: true });
+  const reads = createIpcStoryNativePort(), tail = createIpcStoryTailRewriteNativePort(), source = createIpcStoryTailRewriteSourcePort();
+  const append = reads.append;
   const execute: typeof executeArenaDirect = async (_options, _draft, intent, context, _signal, partial) => {
     models.push(context.story!); partial?.({ rawText: '流式原文', markdown: '流式原文', reasoning: '流式推理' });
     if (kind === 'source-restart') { traces.push(host.trace); await host.close(); host = launch(root); }
@@ -94,11 +109,11 @@ async function scenario(kind: Scenario) {
       report: { headline: '完整新尾章', mode: 'classic', officialReport: { winner: '星' } },
       impacts: [{ characterName: '星', impact: '成长', currentStateSummary: '新状态' }] } as Awaited<ReturnType<typeof executeArenaDirect>>;
   };
-  const createOwner = () => new DesktopArenaStorySession({ port: reads, tailRewrite: { port: tail, source: { resolveSource: request => call('tail-source', { request }) }, prepareCommit: (...args) => {
+  const createOwner = () => new DesktopArenaStorySession({ port: reads, tailRewrite: { port: tail, source, prepareCommit: (...args) => {
     const value = prepareStoryTailRewriteCommit(...args); prepared.push(value); return value;
   } }, execute, id: () => `owner-${++id}`, now: () => 1_000 + id, exportMarkdown: async () => { throw new Error('no export'); } });
   let owner = createOwner();
-  const prepare: PrepareStoryExecution = async run => run({ options: { invoke: async () => { throw new Error('mock model only'); }, profileId: 'synthetic', createChannel: () => ({}) }, intent: { mode: 'direct-local', modelId: 'synthetic-model' } });
+  const prepare: PrepareStoryExecution = async run => { preparations++; return run({ options: { invoke: async () => { throw new Error('mock model only'); }, profileId: 'synthetic', createChannel: () => ({}) }, intent: { mode: 'direct-local', modelId: 'synthetic-model' } }); };
   const count = kind === 'first' ? 1 : kind === 'long-window' ? 14 : 3;
   const initial = createInitialArenaDraft();
   const draft = { ...initial, combatants: ['星', '月'].map(name => ({ type: 'general-character', data: { name, content: '原始完整角色', signature: 'synthetic-card-signature', custom: { signature: 'ordinary' } }, isValid: false, isPreset: false, filename: '' })),
@@ -137,6 +152,31 @@ async function scenario(kind: Scenario) {
     owner.setExecutionScope('synthetic-A'); await owner.initialize();
     const rewrite = async () => { const head = owner.getSnapshot().active!; await owner.generateTailRewrite({ mode: 'direct', userGuidance: '完整改写引导',
       target: { sessionId: head.id, expectedRevision: head.revision, expectedChapterCount: head.chapterCount, targetChapterId: head.lastChapterId } }, prepare); };
+    if (kind === 'schema10') {
+      const before = await call('snapshot'); const boundary = host.trace.length;
+      await rewrite();
+      assert.equal(preparations, 0); assert.equal(prepared.length, 0); assert.equal(models.length, 0);
+      assert.ok(owner.getSnapshot().message); assert.equal(owner.getSnapshot().pending, null);
+      assert.deepEqual(host.trace.slice(boundary).map(entry => entry.op), [STORY_TAIL_REWRITE_IPC.resolveSource]);
+      const after = await call('snapshot'); assert.deepEqual(after, before);
+      assert.equal((after as { version: number }).version, 10); assert.equal((after as { stages: number }).stages, 0);
+      const report = { kind, passed: true, preparations, models: models.length, before, after, trace: host.trace };
+      writeFileSync(join(output, `${kind}.json`), JSON.stringify(report, null, 2) + '\n'); return { kind, passed: true, models: 0, preparations: 0 };
+    }
+    // Native receives the original text even when bypassing the TS encoder.
+    const raw = encodeStoryTailRewriteManifest(JSON.parse(readFileSync(join(repo, 'packages/contracts/fixtures/desktop-story-tail-rewrite-storage.json'), 'utf8')).cases[0].manifest);
+    const exact = raw.padEnd(2048, ' ');
+    const accepted = await call(STORY_TAIL_REWRITE_IPC.begin, { manifestJson: exact }) as { token: string };
+    await reads.abort(accepted.token);
+    const boundary = await call('snapshot');
+    for (const manifestJson of [exact + ' ', raw.replace('"version":3', '"version":3,"version":3'), raw.replace('"version":3', '"version":3,"\\u0076ersion":3')]) {
+      await assert.rejects(call(STORY_TAIL_REWRITE_IPC.begin, { manifestJson }));
+      assert.deepEqual(await call('snapshot'), boundary);
+    }
+    host.trace.splice(0, host.trace.length);
+    const headBefore = owner.getSnapshot().active!;
+    const oldTailDescriptor = await reads.describe(headBefore.id, headBefore.revision, 'chapter', headBefore.lastChapterId) as StoryRecordDescriptor;
+    const oldTail = await readStoryRecord(reads, oldTailDescriptor) as Record<string, unknown>;
     await rewrite(); assert.equal(prepared.length, 1); assert.equal(models.length, 1);
     const first = prepared[0]!;
     assert.equal(models[0]!.action, 'rewrite'); assert.equal(models[0]!.sourceChapterId, `source-c${count}`);
@@ -146,13 +186,13 @@ async function scenario(kind: Scenario) {
     if (kind === 'rollback') {
       assert.equal(owner.getSnapshot().pending?.evidence, 'not-written'); assert.equal(owner.getSnapshot().resultSaved, false);
       await owner.savePending(); assert.equal(prepared.length, 1); assert.equal(models.length, 1);
-      const begins = host.trace.filter(x => x.op === 'tail-begin'); assert.equal(begins.length, 2); assert.deepEqual(begins[0]!.manifest, begins[1]!.manifest);
+      const begins = host.trace.filter(x => x.op === STORY_TAIL_REWRITE_IPC.begin); assert.equal(begins.length, 2); assert.equal(begins[0]!.manifestJson, begins[1]!.manifestJson);
     }
     if (kind === 'commit-failed') {
       assert.equal(owner.getSnapshot().pending?.evidence, 'unknown');
       await owner.savePending(); await owner.savePending();
       assert.equal(owner.getSnapshot().pending?.evidence, 'unknown');
-      assert.equal(host.trace.filter(x => x.op === 'tail-begin').length, 1);
+      assert.equal(host.trace.filter(x => x.op === STORY_TAIL_REWRITE_IPC.begin).length, 1);
       assert.equal(models.length, 1); assert.equal(prepared.length, 1);
       assert.equal((await reads.listSessions(null, 25) as { rows: StorySessionHead[] }).rows[0]!.revision, count);
     } else if (kind === 'source-restart') {
@@ -164,13 +204,14 @@ async function scenario(kind: Scenario) {
       // Both the Native process and owner are fresh. The only retained recovery
       // input is the original prepared handle; no new source or model is available.
       owner = createOwner();
-      for (const mode of ['absent', 'mismatch', 'io'] as const) {
+      for (const mode of ['absent', 'mismatch', 'io', 'malformed'] as const) {
         hide = mode;
         if (mode === 'absent') await owner.recoverTailRewriteReceipt(first, result); else await owner.savePending();
         assert.equal(owner.getSnapshot().pending?.evidence, 'unknown');
+        assert.ok(!owner.getSnapshot().message?.includes('PRIVATE_SENTINEL'));
       }
       hide = 'none'; await owner.savePending();
-      assert.equal(host.trace.filter(x => x.op === 'tail-begin' || x.op === 'tail-source').length, 0);
+      assert.equal(host.trace.filter(x => x.op === STORY_TAIL_REWRITE_IPC.begin || x.op === STORY_TAIL_REWRITE_IPC.resolveSource).length, 0);
       assert.equal(prepared.length, 1); assert.equal(models.length, 1);
     }
     if (kind !== 'source-restart' && kind !== 'commit-failed') {
@@ -179,6 +220,9 @@ async function scenario(kind: Scenario) {
       failRead = false; await owner.readSavedResult();
       if (kind === 'multiple') { await rewrite(); assert.equal(prepared.length, 2); assert.equal(prepared[1]!.manifest.source.inputCheckpointId, first.manifest.source.inputCheckpointId); }
       const head = (await reads.listSessions(null, 25) as { rows: StorySessionHead[] }).rows[0]!;
+      assert.equal(head.chapterCount, count); assert.equal(head.revision, count + (kind === 'multiple' ? 2 : 1));
+      const preserved = await readStoryRecord(reads, await reads.describe(head.id, head.revision, 'chapter', headBefore.lastChapterId) as StoryRecordDescriptor);
+      assert.deepEqual(preserved, { ...oldTail, status: 'superseded', supersededByChapterId: first.manifest.operationId });
       const descriptor = await reads.describe(head.id, head.revision, 'session', head.id) as StoryRecordDescriptor;
       const raw = Buffer.from(await reads.read(descriptor, 0, descriptor.byteLength)).toString('utf8'); assert.ok(raw.includes(unknownToken), 'Native retains exact unknown raw tokens');
       const session = JSON.parse(raw); assert.equal(session.opaque.lone, '\ud800');
@@ -223,7 +267,7 @@ async function main() {
   writeFileSync(join(output, 'sources-before.json'), JSON.stringify({ binaryShaBefore, ...sourcesBefore }, null, 2));
   const results = [];
   try {
-  for (const kind of ['first', 'third', 'long-window', 'multiple', 'rollback', 'commit-failed', 'cold-unknown', 'source-restart', 'saved-unread'] as const) results.push(await scenario(kind));
+  for (const kind of ['schema10', 'first', 'third', 'long-window', 'multiple', 'rollback', 'commit-failed', 'cold-unknown', 'source-restart', 'saved-unread'] as const) results.push(await scenario(kind));
   } finally {
     const sourcesAfter = snapshotSources(), binaryShaAfter = await binaryDigest();
     writeFileSync(join(output, 'sources-after.json'), JSON.stringify({ binaryShaAfter, ...sourcesAfter }, null, 2));
@@ -233,7 +277,7 @@ async function main() {
   const sourcesAfter = snapshotSources(), binaryShaAfter = await binaryDigest();
   assert.deepEqual(sourcesAfter, sourcesBefore, 'TS/Native inputs changed during pipe verification');
   assert.equal(binaryShaAfter, binaryShaBefore, 'Native binary changed during pipe verification');
-  const report = { sourceCheckout: repo, binary: resolve(binary!), binaryShaBefore, binaryShaAfter, sourceStable: true, sourcesBefore, sourcesAfter, results, caveat: 'Actual internal TS owner and Rust SQLite; only model responses synthetic. No Tauri/Windows/default UI/resource-gate acceptance.' };
+  const report = { sourceCheckout: repo, binary: resolve(binary!), binaryShaBefore, binaryShaAfter, sourceStable: true, sourcesBefore, sourcesAfter, results, caveat: 'Actual default Tauri JS binders, owner and Rust SQLite; host transport/model responses synthetic. Command macros/ACL not compiled or executed; no Windows/default UI/resource-gate acceptance.' };
   writeFileSync(join(output, 'result.json'), JSON.stringify(report, null, 2) + '\n'); console.log(JSON.stringify(report));
 }
 void main().catch(error => { console.error(error); process.exitCode = 1; });

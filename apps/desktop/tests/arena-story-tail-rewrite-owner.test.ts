@@ -132,6 +132,6 @@ describe('internal owner tail rewrite generation and save', () => {
     const f = await tailRewriteFixture(), owner = new DesktopArenaStorySession({ port: f.reads, exportMarkdown: vi.fn() });
     await expect(owner.generateTailRewrite({ mode: 'direct', target: f.request(), userGuidance: '' }, f.execution.prepare)).rejects.toThrow('未开放');
     expect(Object.keys(createIpcStoryNativePort(vi.fn())).some(k => /tail|rewrite/i.test(k))).toBe(false);
-    for (const file of ['../src/app/battle-page.tsx', '../src-tauri/build.rs', '../src-tauri/capabilities/main-ui.json']) expect(readFileSync(new URL(file, import.meta.url), 'utf8')).not.toMatch(/tailRewrite|tail_rewrite|tail-rewrite/);
+    for (const file of ['../src/app/battle-page.tsx']) expect(readFileSync(new URL(file, import.meta.url), 'utf8')).not.toMatch(/tailRewrite|tail_rewrite|tail-rewrite/);
   });
 });
