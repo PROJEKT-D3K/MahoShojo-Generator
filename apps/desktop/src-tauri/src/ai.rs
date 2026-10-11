@@ -1411,6 +1411,26 @@ pub async fn stream_direct_ai(
     .await
 }
 
+fn apply_preset_request_policy(
+    preset: &crate::provider_target::TrustedProviderPreset,
+    model_id: &str,
+    request: &mut AiExecutionRequest,
+) -> Result<(), DirectAiError> {
+    // This policy is called only after trusted Preset resolution, never for a custom Profile.
+    if preset.structured_output.as_deref() == Some("text-json")
+        && request.response_format.as_deref() == Some("json")
+    {
+        return Err(DirectAiError::new(
+            DirectAiErrorCode::UnsupportedRequest,
+            "provider requires prompt JSON with local schema validation, not JSON response format",
+        ));
+    }
+    if preset.omits_temperature(model_id) {
+        request.temperature = None;
+    }
+    Ok(())
+}
+
 /// Additive target-based entry. Legacy Profile requests keep their existing identity and limits.
 pub async fn stream_target_ai(
     target: crate::provider_target::ProviderTarget,
@@ -1450,16 +1470,7 @@ pub async fn stream_target_ai(
                 resolve_hosted_preset(&provider_id, &profile.model_id).map_err(|error| {
                     DirectAiError::new(DirectAiErrorCode::ProfileRejected, error.message())
                 })?;
-            // Explicit JSON mode cannot silently become text: this generic IPC has no schema.
-            // Product generation already uses prompt JSON with local validation and responseFormat=text.
-            if preset.structured_output.as_deref() == Some("text-json")
-                && request.response_format.as_deref() == Some("json")
-            {
-                return Err(DirectAiError::new(
-                    DirectAiErrorCode::UnsupportedRequest,
-                    "provider requires prompt JSON with local schema validation, not JSON response format",
-                ));
-            }
+            apply_preset_request_policy(&preset, &profile.model_id, &mut request)?;
             request.model_id = Some(profile.model_id.clone());
             stream_resolved_direct_ai(
                 profile,
@@ -1793,6 +1804,49 @@ mod credential_snapshot_tests {
 #[cfg(test)]
 mod request_body_tests {
     use super::*;
+
+    #[test]
+    fn trusted_preset_omits_only_explicitly_unsupported_temperature() {
+        for temperature in [0.8, 1.2] {
+            for (provider, model, omitted) in [
+                ("openrouter", "openai/gpt-6.1-sol", true),
+                ("openrouter", "openai/gpt-6-luna", true),
+                ("openrouter", "anthropic/claude-opus-5.5", true),
+                ("openrouter", "anthropic/claude-sonnet-5.5", true),
+                ("openrouter", "anthropic/claude-haiku-5.5", true),
+                ("openrouter", "openai/gpt-5.5", true),
+                ("openrouter", "google/gemini-3.1-pro-preview", false),
+                ("openrouter", "custom-model", false),
+                ("kourichat", "gpt-6.1-sol", false),
+                ("poe", "GPT-6.1-Sol", false),
+            ] {
+                let profile =
+                    crate::provider_target::resolve_direct_preset(provider, model).unwrap();
+                let preset =
+                    crate::provider_target::resolve_hosted_preset(provider, model).unwrap();
+                let mut request: AiExecutionRequest = serde_json::from_value(serde_json::json!({
+                    "requestId": "temperature-policy-test", "contractVersion": 1, "mode": "direct-local",
+                    "messages": [{"role": "user", "content": "Hello"}], "temperature": temperature
+                })).unwrap();
+                // Raw custom/Profile body construction keeps its prior semantics, even for the same ID.
+                assert!(build_request_body(&profile, &request)
+                    .get("temperature")
+                    .is_some());
+                apply_preset_request_policy(&preset, &profile.model_id, &mut request).unwrap();
+                assert_eq!(
+                    build_request_body(&profile, &request)
+                        .get("temperature")
+                        .is_none(),
+                    omitted
+                );
+            }
+        }
+        let google =
+            crate::provider_target::resolve_hosted_preset("google-cloudflare", "gemini-3.8-flash")
+                .unwrap();
+        assert!(google.omits_temperature("gemini-3.8-flash"));
+        assert!(!google.omits_temperature("custom-model"));
+    }
 
     #[test]
     fn existing_json_request_keeps_json_object_and_text_has_no_response_format() {

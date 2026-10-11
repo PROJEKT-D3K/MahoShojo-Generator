@@ -56,6 +56,8 @@ const UNKNOWN_THINKING: ModelGenerationCapabilities['thinking'] = {
 
 // Gemini 3 Flash / Flash-Lite 支持 minimal/low/medium/high；3.1 Pro 不支持 minimal。
 const GEMINI_3_FLASH_THINKING_LEVELS: ThinkingEffort[] = ['minimal', 'low', 'medium', 'high'];
+// Gemini 3.8 Flash 不接受 minimal；与 3.6 Flash 分开维护。
+const GEMINI_3_8_FLASH_THINKING_LEVELS: ThinkingEffort[] = ['low', 'medium', 'high'];
 const GEMINI_3_PRO_THINKING_LEVELS: ThinkingEffort[] = ['low', 'medium', 'high'];
 const GEMMA_4_THINKING_LEVELS: ThinkingEffort[] = ['high'];
 
@@ -127,6 +129,16 @@ const CAPABILITIES = new Map<string, ModelGenerationCapabilities>([
 
   // ---- Gemini 3.x（google-thinking-level，档位 low/medium/high）----
   // 3.6/3.5 Flash-Lite 起移除 sampling 参数（temperature 不发送）。
+  // https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash（2026-10-11 核验）。
+  [buildKey('google-cloudflare', 'gemini-3.8-flash'), buildCapabilities({
+    temperature: { support: 'unsupported' },
+    maxOutputTokens: buildMaxOutputTokens(65_536),
+    thinking: buildThinking('google-thinking-level', GEMINI_3_8_FLASH_THINKING_LEVELS, false),
+  })],
+  [buildKey('system', 'gemini-3.8-flash'), buildCapabilities({
+    temperature: { support: 'unsupported' },
+    maxOutputTokens: buildMaxOutputTokens(65_536),
+  })],
   [buildKey('google-cloudflare', 'gemini-3.6-flash'), buildCapabilities({
     temperature: { support: 'unsupported' },
     maxOutputTokens: buildMaxOutputTokens(65_536),
@@ -237,6 +249,54 @@ const CAPABILITIES = new Map<string, ModelGenerationCapabilities>([
   [buildKey('openrouter', 'google/gemini-2.5-flash-lite'), buildCapabilities({
     temperature: SUPPORTED_TEMPERATURE,
     maxOutputTokens: buildMaxOutputTokens(65_535),
+  })],
+
+  // OpenRouter /api/v1/models（2026-10-11）：这两个型号均未列 temperature；
+  // max_completion_tokens=128000。Sol mandatory reasoning，Luna 额外支持 none。
+  [buildKey('openrouter', 'openai/gpt-6.1-sol'), buildCapabilities({
+    temperature: { support: 'unsupported' },
+    maxOutputTokens: buildMaxOutputTokens(128_000),
+    thinking: buildThinking('openai-reasoning-effort', OPENROUTER_GPT_5_6_EFFORTS, false),
+  })],
+  [buildKey('openrouter', 'openai/gpt-6-luna'), buildCapabilities({
+    temperature: { support: 'unsupported' },
+    maxOutputTokens: buildMaxOutputTokens(128_000),
+    thinking: buildThinking('openai-reasoning-effort', OPENROUTER_GPT_5_6_EFFORTS),
+  })],
+
+  // 同一 OpenRouter 快照：Claude 5.5 三档均未列 temperature，最大输出 128000。
+  // Haiku 虽非 mandatory，但档位仍未列 none；不推导 reasoning_effort:none 的支持。
+  [buildKey('openrouter', 'anthropic/claude-opus-5.5'), buildCapabilities({
+    temperature: { support: 'unsupported' },
+    maxOutputTokens: buildMaxOutputTokens(128_000),
+    thinking: buildThinking('openai-reasoning-effort', OPENROUTER_CLAUDE_OPUS_4_8_EFFORTS, false),
+  })],
+  [buildKey('openrouter', 'anthropic/claude-sonnet-5.5'), buildCapabilities({
+    temperature: { support: 'unsupported' },
+    maxOutputTokens: buildMaxOutputTokens(128_000),
+    thinking: buildThinking('openai-reasoning-effort', OPENROUTER_CLAUDE_OPUS_4_8_EFFORTS, false),
+  })],
+  [buildKey('openrouter', 'anthropic/claude-haiku-5.5'), buildCapabilities({
+    temperature: { support: 'unsupported' },
+    maxOutputTokens: buildMaxOutputTokens(128_000),
+    thinking: buildThinking('openai-reasoning-effort', OPENROUTER_CLAUDE_OPUS_4_8_EFFORTS, false),
+  })],
+
+  // 其余本轮 OpenRouter 新型号明确支持 temperature。以下数值均为输出上限而非上下文。
+  [buildKey('openrouter', 'x-ai/grok-4.7'), buildCapabilities({
+    temperature: SUPPORTED_TEMPERATURE,
+    maxOutputTokens: buildMaxOutputTokens(450_000),
+    thinking: buildThinking('openai-reasoning-effort', ['low', 'medium', 'high', 'xhigh'], false),
+  })],
+  [buildKey('openrouter', 'deepseek/deepseek-v4.1-flash'), buildCapabilities({
+    temperature: SUPPORTED_TEMPERATURE,
+    maxOutputTokens: buildMaxOutputTokens(943_718),
+    // 上游档位 low/high/max 不含 adapter 缺省 medium，暂不暴露不可安全默认的控制。
+  })],
+  [buildKey('openrouter', 'qwen/qwen3.8-flash'), buildCapabilities({
+    temperature: SUPPORTED_TEMPERATURE,
+    maxOutputTokens: buildMaxOutputTokens(131_072),
+    // 元数据未列 reasoning_effort；不能套用 Qwen Max 的控制参数。
   })],
 
   // GPT 5.4 / 5.5 / 5.6：网关元数据未列 temperature，避免发送；

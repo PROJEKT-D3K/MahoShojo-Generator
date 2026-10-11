@@ -30,10 +30,21 @@ pub struct TrustedProviderPreset {
     models: Vec<TrustedPresetModel>,
 }
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TrustedPresetModel {
     id: String,
+    #[serde(default)]
+    omit_temperature: bool,
     adapter: Option<String>,
+}
+
+impl TrustedProviderPreset {
+    /// Only explicit shared capability evidence suppresses a parameter; unknown stays unchanged.
+    pub(crate) fn omits_temperature(&self, model_id: &str) -> bool {
+        self.models
+            .iter()
+            .any(|model| model.id == model_id && model.omit_temperature)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,6 +329,7 @@ mod tests {
     fn explicit_model_denial_overrides_preset_protocol() {
         let mut preset = resolve_hosted_preset("deepseek", "model").unwrap();
         preset.models.push(TrustedPresetModel {
+            omit_temperature: false,
             id: "denied-model".into(),
             adapter: Some("none".into()),
         });

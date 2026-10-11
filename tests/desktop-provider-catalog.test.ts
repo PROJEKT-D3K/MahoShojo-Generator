@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { getModelGenerationCapabilities } from '../packages/ai-core/src/generation-settings/model-capabilities';
 import { AI_PROVIDER_PRESETS, AI_PROVIDER_MODEL_ALIASES, describeAiPresetModelDirectWire } from '../packages/ai-core/src/provider-catalog';
 
 describe('native provider authority', () => {
@@ -25,6 +26,10 @@ describe('native provider authority', () => {
       expect(entry.models.map((model: { id: string }) => model.id)).toEqual(preset.models.map((model) => model.value));
       for (const model of [...preset.models, { value: 'not-a-catalog-model' }]) {
         const wire = describeAiPresetModelDirectWire(preset, model.value);
+        const nativeModel = entry.models.find((value: { id: string }) => value.id === model.value);
+        expect(nativeModel?.omitTemperature === true).toBe(
+          getModelGenerationCapabilities(preset.id, model.value).temperature.support === 'unsupported',
+        );
         const nativeAdapter = entry.models.find((value: { id: string }) => value.id === model.value)?.adapter ?? entry.adapter;
         const nativeSupports = entry.endpointKind === 'provider-public' && nativeAdapter === 'openai-compatible';
         expect(nativeSupports, `${preset.id}/${model.value}`).toBe(wire.status === 'verified' && wire.adapter === 'openai-compatible');

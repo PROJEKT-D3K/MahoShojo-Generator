@@ -7,13 +7,18 @@ import { build } from 'esbuild';
 // without changing application import syntax or leaving generated JS on disk.
 const { outputFiles } = await build({
   absWorkingDir: fileURLToPath(new URL('..', import.meta.url)),
-  entryPoints: [fileURLToPath(new URL('../packages/ai-core/src/provider-catalog.ts', import.meta.url))],
+  stdin: {
+    contents: `export * from './packages/ai-core/src/provider-catalog.ts';
+      export { getModelGenerationCapabilities } from './packages/ai-core/src/generation-settings/model-capabilities.ts';`,
+    resolveDir: fileURLToPath(new URL('..', import.meta.url)),
+    sourcefile: 'native-provider-authority.ts',
+  },
   bundle: true,
   write: false,
   format: 'esm',
   platform: 'node',
 });
-const { AI_PROVIDER_PRESETS, AI_PROVIDER_MODEL_ALIASES } = await import(
+const { AI_PROVIDER_PRESETS, AI_PROVIDER_MODEL_ALIASES, getModelGenerationCapabilities } = await import(
   `data:text/javascript;base64,${Buffer.from(outputFiles[0].contents).toString('base64')}`
 );
 
@@ -30,6 +35,8 @@ const entries = AI_PROVIDER_PRESETS.map((preset) => ({
   adapter: preset.direct?.adapter ?? null,
   models: preset.models.map((model) => ({
     id: model.value,
+    ...(getModelGenerationCapabilities(preset.id, model.value).temperature.support === 'unsupported'
+      ? { omitTemperature: true } : {}),
     adapter: model.direct === 'none' ? 'none' : model.direct?.adapter ?? null,
   })),
 }));
