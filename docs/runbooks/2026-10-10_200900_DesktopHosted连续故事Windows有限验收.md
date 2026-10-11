@@ -13,9 +13,36 @@
 ## 执行前必须具备
 
 1. **独立测试身份三层隔离**：沿既有 [D4b runbook](./2026-10-10_030600_D4b隔离窗口Windows有限验收.md) §2，在独立 Windows 测试树使用新 identifier，例如 `me.colanns.mahoshojo.desktop.hostedstoryacceptance`；`.tmp` Tauri config 只覆盖 identifier，保留 `main-ui`、窗口、capability/CSP/withGlobalTauri。测试树 `secret.rs::SECRET_STORE_SERVICE` 临时使用同一隔离 namespace；`WEBVIEW2_USER_DATA_FOLDER` 指向独立空目录。不读/列举日常凭据、不复制日常 AppData；只在此 namespace 放固定无真实权限的 synthetic actor/token/Key。
-2. **两个自有 mock origin，尚需 Windows 窄 harness**：Hono 与 Next 分别使用 `http://127.0.0.1:<不同非零端口>`，只收本机合成请求。现 `ArenaState::with_story_loopback_origins` 是 `#[cfg(test)]`；普通 Tauri setup 仍调用 `ArenaState::new`，固定 Hono/Next 目的地。`MAHOSHOJO_CLOUD_ORIGIN` 仅覆盖一般 Cloud/公告 debug 编译期 origin，**不覆盖这两个 Arena origin**。所以当前源码不能仅设置环境变量后直接 `tauri dev` 做本清单。
-3. **harness 准入标准（待准备，不在本稿实现）**：在隔离测试构建中明确接入两 origin、共用真实 `Arc<StoryStore>`、真实 Tauri commands/Channel 和实际页面 owner；沿现 factory 的严格 loopback 校验，缺配置直接拒启，禁止回落生产。一般 Cloud/公告请求也在编译前指向其中一个 mock 并补齐其启动响应。保留生产 constructor、endpoint allowlist、TLS、重定向/no-proxy、CSP/ACL、协议和容量；不增加 renderer 任意 URL/凭据/通用文件入口。仅用窄一次性故障点延迟/丢失真实 invoke 回执或模拟隔离 SecretStore 故障，不伪造保存成功。旧 pipe 的 `loopback.cjs` 仅是响应素材，含 Linux 路径且非 Windows 一键服务；须另适配并记录 patch/hash/PID。所需故障点未准备的项目记“阻塞”，不得用 mock JS invoke 冒充真机通过。
+2. **两个自有 mock origin，普通 dev 不可直接替代**：Hono 与 Next 分别使用 `http://127.0.0.1:<不同非零端口>`，只收本机合成请求。现 `ArenaState::with_story_loopback_origins` 是 `#[cfg(test)]`；普通 Tauri setup 仍调用 `ArenaState::new`，固定 Hono/Next 目的地。`MAHOSHOJO_CLOUD_ORIGIN` 仅覆盖一般 Cloud/公告 debug 编译期 origin，**不覆盖这两个 Arena origin**。所以当前正式源码不能仅设置环境变量后直接 `tauri dev` 做本清单；下节脚本仅为独立测试副本接入最小 W01。
+3. **harness 准入标准**：在隔离测试构建中明确接入两 origin、共用真实 `Arc<StoryStore>`、真实 Tauri commands/Channel 和实际页面 owner；沿现 factory 的严格 loopback 校验，缺配置直接拒启，禁止回落生产。一般 Cloud/公告请求也在编译前指向其中一个 mock 并补齐其启动响应。保留生产 constructor、endpoint allowlist、TLS、重定向/no-proxy、CSP/ACL、协议和容量；不增加 renderer 任意 URL/凭据/通用文件入口。仅用窄一次性故障点延迟/丢失真实 invoke 回执或模拟隔离 SecretStore 故障，不伪造保存成功。旧 pipe 的 `loopback.cjs` 仅是响应素材，含 Linux 路径且非 Windows 一键服务；须另适配并记录 patch/hash/PID。所需故障点未准备的项目记“阻塞”，不得用 mock JS invoke 冒充真机通过。
 4. **启动和记录**：先记录 commit/tree/dirty patch、Windows/WebView2/Tauri/工具链版本、运行方式、当前 DPI/缩放、两 origin/PID、实际数据目录与合成夹具 hash。确认上述 harness 后才按 D4b 既有绝对路径 `--config` 流程启动真实 Tauri；Vite 1420 冲突就报告，不杀他人进程。使用已有工具链，缺少组件不顺带安装。不改 hosts、DNS、证书信任、代理、防火墙或系统安全设置。
+
+## W01 最小隔离 harness（Windows 仍未测）
+
+[`scripts/desktop-story-acceptance.mjs`](../../scripts/desktop-story-acceptance.mjs) 只支持两页 **anonymous/system 首章与续章**；账号、preset、故障注入、冷重启及其余 W02–W10 尚未由此脚本提供。脚本合同/HTTP 测试通过不代表真实 Tauri、Channel、OS SecretStore、WebView、落盘或完整 W01 矩阵通过。
+
+给本地 Agent 的执行顺序：
+
+1. 使用与来源仓库 **同 tree、clean、已具备项目依赖** 的独立 Windows 测试 checkout；不要指向日常开发树、日常 AppData 或其子目录。脚本不复制仓库、不创建 worktree、不装依赖/工具链。缺少条件就报告阻塞，不能改用已安装的日常应用。选择两个自有空闲 IPv4 loopback 端口和一个父目录已存在、目录本身尚不存在的独立状态路径
+2. 先运行默认 preflight；它只做源码、隔离、配置与短暂端口占用检查，之后释放端口，不写文件或启动应用。确认报告后显式 prepare；四个 Rust 文件仅在测试副本临时替换，严格匹配锚点，保存 temporary.patch。正式源码、commands/Channel、页面 owner、CSP/ACL、TLS/no-proxy/redirect 策略保持原样
+3. prepare 生成随机 identifier、同名 SecretStore namespace、独立空 WebView 目录、专用 Cargo target 和两张 synthetic-card JSON。测试副本在 Builder/凭据访问前核实际 Tauri identifier、启动标记与 WebView 目录环境变量；Cloud/公告/公开缓存的 origin 及其 fallback 固定到 Next mock，Arena 两路固定到各自 mock。缺配置、路径漂移、非 canonical 127.0.0.1 origin、同端口、占用端口、意外源码/配置改动均拒绝；release 构建直接失败
+4. 显式 launch 再核补丁与隔离，先绑定双 mock 后才启动现有 Tauri CLI；只启 debug，关闭 Rust watch，Cargo 使用 locked/offline，不自动安装。现有 pnpm 须匹配仓库 packageManager，Cargo/Rust 稳定版须满足 rust-version；固定禁用 pnpm 自动补装/版本切换、运行时下载及 rustup 自动安装。工具不符、缺依赖或 Vite 1420（IPv4/IPv6）冲突即停，不杀他人进程。不要登录、设置 Provider/Key、导入真实资料、打开外链或点 Direct；本脚本没有全应用网络沙箱，不能宣称所有其它功能均零外网
+
+PowerShell 示例（替换为实际绝对路径；整个状态目录单次使用）：
+
+```powershell
+$script = 'D:\source\MahoShojo-Generator\scripts\desktop-story-acceptance.mjs'
+$argsW01 = @('--test-tree', 'D:\isolated\story-checkout', '--state-root', 'D:\acceptance\story-fresh', '--hono-origin', 'http://127.0.0.1:24181', '--next-origin', 'http://127.0.0.1:24182')
+node $script @argsW01
+node $script prepare @argsW01
+node $script launch --state-root 'D:\acceptance\story-fresh'
+```
+
+在真实窗口分别打开 `#/battle` 与 `#/arena`，通过既有导入/粘贴入口加入两张合成卡，选“服务器 / 系统默认”。battle 将“新故事章节规划”设为“自定义 / 2”，arena 设为“不限制”；各点“新建连续战报”，待实际本机保存完成后改变普通草稿，再点“继续续写”，慢流期间手选旧章。验证原 seed/plan/角色沿用、普通草稿与原卡不变、晚结果不抢选章。两页各完成两章时应合计 4 个 model POST、4 个 role POST；必须结合真实 IPC 观察、保存回执/章节读取与截图核对 prepare/save，HTTP 数量本身不能证明本机保存或 IPC 顺序。
+
+正常关本次窗口、等待 launcher 退出。状态目录保留 `acceptance.json`、`temporary.patch`、`launched.json` 和 `mock-trace.json`；trace 只记录受限路由、计数、合成 identity、状态与正文摘要，不含原始 header、token、Key 或正文。另核对并记录实际 Native PID、AppData/WebView 数据目录和截图（环境变量检查不能代替 WebView2 实际目录观察）；不要上传整个 WebView/凭据目录。单次已启动状态拒绝重用，不据此测试冷重启。不要清理日常凭据/数据，测试树与证据先保留。
+
+源码维护合同：`pnpm exec vitest run --config vitest.config.ts tests/desktop-story-acceptance.test.ts tests/desktop-story-acceptance-mock.test.ts`。只用微型临时 Git fixture 验隔离变换及双 loopback HTTP，不创建完整测试树、不安装依赖、不编译或启动 Tauri；受测层级必须与 Windows 结果分开。
 
 ## 十项有限检查
 
