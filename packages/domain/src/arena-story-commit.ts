@@ -1,7 +1,20 @@
+import {
+  buildCompletedBattleStoryRecords,
+  type BattleStoryCommitSession,
+  type BattleStoryCommitChapter,
+  type BattleStoryCommitCheckpoint,
+  type BuildCompletedBattleStoryRecordsInput,
+} from './arena-story-records';
+
+// Preserve the existing public entrypoint for all linear/Desktop consumers.
+export { buildCompletedBattleStoryRecords } from './arena-story-records';
+export type {
+  BattleStoryCommitSession, BattleStoryCommitChapter, BattleStoryCommitCheckpoint,
+  BuildCompletedBattleStoryRecordsInput, BattleStoryCompletedRecords,
+} from './arena-story-records';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { DesktopArenaHostedStoryClientBodyIntentSchema, type DesktopArenaHostedStoryClientBodyIntent } from '@mahoshojo/contracts/desktop-arena-story-transport';
 import type { DesktopArenaHostedSuccessTelemetry } from '@mahoshojo/contracts/desktop-arena-hosted';
-import type { BattleStoryDeterministicDigest } from './arena-battle-story-session';
 
 /** Transport frame size only; the host supplies its separate whole-commit resource policy. */
 export const BATTLE_STORY_JSON_MAX_CHUNK_BYTES = 4 * 1024 * 1024;
@@ -265,21 +278,6 @@ export const prepareBattleStoryCommitJson = <T>(value: T, maxBytes: number): Pre
   });
 };
 
-export type BattleStoryCommitSession = {
-  id: string; title: string; createdAt: number; updatedAt: number;
-  source: object; seed: { combatants: unknown[] }; workingCombatants: unknown[];
-  lastChapterInputCombatants?: unknown[]; lastChapterId?: string | null; chapterCount: number;
-};
-export type BattleStoryCommitChapter<CardSnapshot = object> = {
-  id: string; sessionId: string; index: number; action: 'start' | 'continue' | 'branch' | 'rewrite';
-  status: 'active' | 'superseded'; sourceChapterId?: string | null; generationId?: string | null;
-  title: string; markdown: string; reportJson: Record<string, unknown>; cardSnapshot?: CardSnapshot;
-  deterministicDigest: BattleStoryDeterministicDigest; createdAt: number;
-};
-export type BattleStoryCommitCheckpoint = {
-  id: string; sessionId: string; boundaryIndex: number; chapterId?: string | null;
-  combatants: unknown[]; createdAt: number;
-};
 export type BattleStoryCommitReceipt = {
   version: 1; operationId: string; sessionId: string; chapterId: string; chapterIndex: number;
   chapterCount: number; checkpointIds: string[]; contentDigest: string;
@@ -410,65 +408,6 @@ export const projectHostedStoryPendingContent = (input: HostedStoryPendingConten
     reportJson: meta?.event === 'meta' && meta.data.parseOk ? meta.data.meta ?? {} : {},
     cardSnapshot,
     nextWorkingCombatants,
-  };
-};
-
-export type BuildCompletedBattleStoryRecordsInput<S extends BattleStoryCommitSession = BattleStoryCommitSession, CardSnapshot = object> = {
-  action: 'start' | 'continue'; session: S;
-  operationId: string; checkpointId: string; initialCheckpointId?: string; now: number;
-  source: S['source']; inputCombatants: unknown[];
-  generated: {
-    chapterIndex: number; markdown: string; reportJson: Record<string, unknown>;
-    digest: BattleStoryDeterministicDigest; generationId?: string | null; cardSnapshot?: CardSnapshot | null;
-    nextWorkingCombatants: unknown[];
-  };
-};
-
-export type BattleStoryCompletedRecords<S extends BattleStoryCommitSession = BattleStoryCommitSession, CardSnapshot = object> = Pick<
-  BattleStoryCompletedCommit<S, CardSnapshot>, 'session' | 'chapter' | 'checkpoints'
->;
-
-/**
- * Shared record assembly, independent of the host's CAS representation. No time, IDs,
- * storage, model calls or platform effects are created here. Keep generated content even
- * when its announced index is invalid: validate at save time, after the host retains it.
- */
-export const buildCompletedBattleStoryRecords = <S extends BattleStoryCommitSession, CardSnapshot = object>(
-  input: BuildCompletedBattleStoryRecordsInput<S, CardSnapshot>,
-): BattleStoryCompletedRecords<S, CardSnapshot> => {
-  const { generated, session, action, now } = input;
-  const previousCount = action === 'start' ? 0 : session.chapterCount;
-  if (!Number.isSafeInteger(previousCount) || previousCount < 0
-    || (action === 'start' && !input.initialCheckpointId)) {
-    throw new Error('完成章与预期会话位置不一致，未保存本章。');
-  }
-  const title = generated.digest.chapterTitle?.trim() || generated.digest.chapterTitle || `第 ${generated.chapterIndex} 章`;
-  const chapter: BattleStoryCommitChapter<CardSnapshot> = {
-    id: input.operationId, sessionId: session.id, index: generated.chapterIndex, action, status: 'active',
-    ...(action === 'continue' && session.lastChapterId ? { sourceChapterId: session.lastChapterId } : {}),
-    ...(generated.generationId ? { generationId: generated.generationId } : {}),
-    title, markdown: generated.markdown, reportJson: generated.reportJson ?? {},
-    ...(generated.cardSnapshot ? { cardSnapshot: generated.cardSnapshot } : {}),
-    deterministicDigest: generated.digest, createdAt: now,
-  };
-  const checkpoints: BattleStoryCommitCheckpoint[] = [];
-  if (action === 'start') checkpoints.push({
-    id: input.initialCheckpointId!, sessionId: session.id, boundaryIndex: 0,
-    combatants: input.inputCombatants, createdAt: now,
-  });
-  checkpoints.push({
-    id: input.checkpointId, sessionId: session.id, boundaryIndex: generated.chapterIndex,
-    chapterId: chapter.id, combatants: generated.nextWorkingCombatants, createdAt: now,
-  });
-  return {
-    session: {
-      ...session, source: input.source,
-      title: action === 'start' || session.title === '未命名连续战报'
-        ? generated.digest.chapterTitle || session.title : session.title,
-      workingCombatants: generated.nextWorkingCombatants, lastChapterInputCombatants: input.inputCombatants,
-      lastChapterId: chapter.id, chapterCount: previousCount + 1, updatedAt: now,
-    },
-    chapter, checkpoints,
   };
 };
 

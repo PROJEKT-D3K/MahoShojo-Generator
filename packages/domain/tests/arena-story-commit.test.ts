@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { buildCompletedBattleStoryRecords as pureRecordProjection } from '../src/arena-story-records';
 import { advanceBattleStorySaveEvidence, buildCompletedBattleStoryCommit, buildCompletedBattleStoryRecords, captureBattleStoryCommitExpected, digestBattleStoryCommitValue, freezeBattleStoryCommit } from '../src/arena-story-commit';
 
 const session = {
@@ -19,6 +20,9 @@ const start = () => buildCompletedBattleStoryCommit({
 });
 
 describe('completed battle story commit rules', () => {
+  it('preserves the existing commit API as the same pure record projection', () => {
+    expect(buildCompletedBattleStoryRecords).toBe(pureRecordProjection);
+  });
   it.each([
     [undefined, 'not-written', 'not-written'], [undefined, 'unknown', 'unknown'],
     ['not-written', 'not-written', 'not-written'], ['not-written', 'unknown', 'unknown'],

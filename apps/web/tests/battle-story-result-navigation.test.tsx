@@ -47,6 +47,17 @@ vi.mock('@/lib/ai-session/battle-story/storage', async (importOriginal) => {
   const original = await importOriginal<typeof storage>();
   return {
     ...original,
+    readBattleStoryBranchSource: vi.fn(async (id: string) => structuredClone({
+      session: fixture.sessions.get(id) ?? null,
+      chapters: [...fixture.chapters.values()].filter((item) => item.sessionId === id),
+      checkpoints: [...fixture.checkpoints.values()].filter((item) => item.sessionId === id),
+    })),
+    commitCompletedBattleStoryBranch: vi.fn(async (commit: storage.WebBattleStoryBranchCommit) => {
+      fixture.sessions.set(commit.session.id, commit.session);
+      for (const item of [...commit.copiedChapters, commit.chapter]) fixture.chapters.set(item.id, item);
+      for (const item of commit.checkpoints) fixture.checkpoints.set(item.id, item);
+      return original.createBattleStoryBranchReceipt(commit);
+    }),
     commitCompletedBattleStoryChapter: vi.fn(async (commit: storage.WebBattleStoryCompletedCommit) => {
       fixture.sessions.set(commit.session.id, commit.session);
       fixture.chapters.set(commit.chapter.id, commit.chapter);
@@ -605,7 +616,7 @@ it('closed unknown A keeps an A-only read-only fence while B continuation remain
 });
 
 
-describe('Web branch consumes the shared projections without changing legacy persistence', () => {
+describe('Web branch navigation consumes the shared projections and atomic storage port', () => {
   it.each([1, 2])('branches from saved chapter %s with source unchanged and anchor-only summary/roles', async (anchorIndex) => {
     const source = addHistory();
     source.workingCombatants = [{ codename: 'latest-role' }];
@@ -659,6 +670,7 @@ describe('Web branch consumes the shared projections without changing legacy per
     expect(boundaries).toContain(anchorIndex);
     expect(boundaries).toContain(anchorIndex + 1);
     expect(storage.commitCompletedBattleStoryChapter).not.toHaveBeenCalled();
+    expect(storage.commitCompletedBattleStoryBranch).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a full plan or an old chapter without output roles before dispatch', async () => {

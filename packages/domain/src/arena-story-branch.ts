@@ -1,3 +1,5 @@
+import { buildCompletedBattleStoryRecords, type BattleStoryCommitSession, type BuildCompletedBattleStoryRecordsInput } from './arena-story-records';
+
 /** Pure projections for owned story snapshots; no validation or persistence authority.
  * Allocators preserve each host's existing identity policy. They must supply fresh IDs.
  * Payloads/extensions are retained by shallow copy; callers own snapshot isolation.
@@ -156,4 +158,36 @@ export const resolveBattleStoryChapterOutputCombatants = (input: {
     return toBattleStoryRecordCombatants(input.session.workingCombatants);
   }
   return null;
+};
+
+/** Assemble only the new three records. Native can map each summary ID without
+ * hydrating a historical prefix; Web supplies its existing random-ID map.
+ * The caller owns the independent source/draft and retains this result before validation.
+ */
+export const buildCompletedBattleStoryBranchRecords = <
+  S extends BattleStoryCommitSession & { summaryMeta?: BattleStoryBranchSummaryMeta }, CardSnapshot = object,
+>(input: Omit<BuildCompletedBattleStoryRecordsInput<S, CardSnapshot>, 'action' | 'initialCheckpointId'> & {
+  prefixEndIndex: number;
+  targetAnchorChapterId: string;
+  mapChapterId: (sourceId: string) => string | undefined;
+}) => {
+  const records = buildCompletedBattleStoryRecords({
+    ...input,
+    action: 'continue',
+    session: { ...input.session, chapterCount: input.prefixEndIndex, lastChapterId: input.targetAnchorChapterId },
+  });
+  const summaryMeta = input.session.summaryMeta;
+  return {
+    session: {
+      ...records.session,
+      title: input.session.title,
+      ...(summaryMeta ? { summaryMeta: {
+        ...summaryMeta,
+        coveredChapterIds: summaryMeta.coveredChapterIds
+          .map(input.mapChapterId).filter((id): id is string => Boolean(id)),
+      } } : {}),
+    },
+    chapter: { ...records.chapter, action: 'branch' as const },
+    checkpoints: records.checkpoints,
+  };
 };

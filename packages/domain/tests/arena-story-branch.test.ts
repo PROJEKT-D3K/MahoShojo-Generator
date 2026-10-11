@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildBattleStoryBranchLabel,
+  buildCompletedBattleStoryBranchRecords,
   cloneBattleStoryActiveChaptersForNewSession,
   cloneBattleStoryCheckpointsForNewSession,
   remapBattleStorySummaryMeta,
@@ -106,5 +107,46 @@ describe('story branch owned-snapshot pure projections', () => {
     expect(buildBattleStoryBranchLabel({ chapterIndex: 0, chapterTitle: ' ' })).toBe('从第 1 章分支');
     expect(willBattleStoryChapterExceedPlan({ chapterPlan: { totalChapters: 3 }, nextChapterIndex: 4 })).toBe(true);
     expect(willBattleStoryChapterExceedPlan({ chapterPlan: { totalChapters: 3 }, nextChapterIndex: 3 })).toBe(false);
+  });
+});
+
+describe('completed branch new-record projection', () => {
+  it('projects the new three records without reading a historical prefix', () => {
+    const roles = [{ data: { name: '原角色', extension: ['保留', '\ud800'] } }];
+    const next = [{ data: { name: '章末角色' } }];
+    const draft = {
+      id: 'target', title: '原分支标题', source: {}, seed: { combatants: roles },
+      workingCombatants: roles, lastChapterInputCombatants: roles, lastChapterId: null as string | null,
+      createdAt: 7, updatedAt: 7, chapterCount: 0,
+      summaryMeta: { coveredUntilChapterIndex: 2, coveredChapterIds: ['a', 'b', 'outside'], extension: { keep: true } },
+      extension: { unknown: ['保留'] },
+    };
+    const reportJson = { extension: { surrogate: '\ud800' } };
+    const cardSnapshot = { unknownReasoningExtension: '原文' };
+    const mapped: string[] = [];
+    const result = buildCompletedBattleStoryBranchRecords({
+      session: draft, prefixEndIndex: 53, targetAnchorChapterId: 'target-anchor',
+      operationId: 'operation', checkpointId: 'checkpoint', now: 9, source: draft.source,
+      inputCombatants: roles,
+      mapChapterId: (id) => { mapped.push(id); return id === 'outside' ? undefined : `mapped-${id}`; },
+      generated: { chapterIndex: 54, markdown: '# 完整正文', digest: { chapterTitle: '生成标题' },
+        reportJson, cardSnapshot, nextWorkingCombatants: next, generationId: 'generation' },
+    });
+    expect(mapped).toEqual(['a', 'b', 'outside']);
+    expect(result.session.title).toBe(draft.title);
+    expect(result.session.chapterCount).toBe(54);
+    expect(result.session.lastChapterId).toBe('operation');
+    expect(result.session.workingCombatants).toBe(next);
+    expect(result.session.lastChapterInputCombatants).toBe(roles);
+    expect(result.session.extension).toBe(draft.extension);
+    expect(result.session.summaryMeta).toEqual({ ...draft.summaryMeta, coveredChapterIds: ['mapped-a', 'mapped-b'] });
+    expect(result.chapter).toMatchObject({ action: 'branch', id: 'operation', sourceChapterId: 'target-anchor',
+      sessionId: 'target', index: 54, markdown: '# 完整正文', createdAt: 9, generationId: 'generation' });
+    expect(result.chapter.cardSnapshot).toBe(cardSnapshot);
+    expect(result.chapter.reportJson).toBe(reportJson);
+    expect(result.checkpoints).toEqual([{ id: 'checkpoint', sessionId: 'target', boundaryIndex: 54,
+      chapterId: 'operation', combatants: next, createdAt: 9 }]);
+    expect(draft.chapterCount).toBe(0);
+    expect(draft.summaryMeta.coveredChapterIds).toEqual(['a', 'b', 'outside']);
   });
 });

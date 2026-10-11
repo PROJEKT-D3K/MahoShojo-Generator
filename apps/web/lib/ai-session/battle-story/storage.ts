@@ -16,6 +16,9 @@ import type {
 export { commitCompletedBattleStoryChapter, getBattleStoryOperationReceipt, BattleStoryCommitConflictError, BattleStoryCommitNotSavedError } from './commit-storage';
 export type { WebBattleStoryCompletedCommit } from './commit-storage';
 
+export { readBattleStoryBranchSource, captureBattleStoryBranchExpected, createBattleStoryBranchReceipt, getBattleStoryBranchOperationReceipt, commitCompletedBattleStoryBranch } from './branch-commit-storage';
+export type { WebBattleStoryBranchSource, WebBattleStoryBranchExpected, WebBattleStoryBranchCommit, WebBattleStoryBranchReceipt } from './branch-commit-storage';
+
 const DEFAULT_LIST_LIMIT = 50;
 
 const normalizeLimit = (value: number | undefined, fallback = DEFAULT_LIST_LIMIT): number => {
