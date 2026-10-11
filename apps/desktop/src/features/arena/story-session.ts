@@ -24,14 +24,14 @@ import {
   freezeStoryBranchIdentity, prepareStoryBranchCommit, savePreparedStoryBranchCommit, queryStoryBranchReceipt,
   type StoryBranchNativePort, type PreparedStoryBranchCommit, type CompletedStoryBranchRecords,
 } from '../../platform/arena-story-branch-storage';
-import { readStoryBranchSource, type StoryBranchSourcePort } from '../../platform/arena-story-branch-source';
+import { readStoryBranchSource, readStoryBranchSummaryIds, type StoryBranchSourcePort } from '../../platform/arena-story-branch-source';
 import type { StoryBranchAnchorRequest, StoryBranchSource } from '@mahoshojo/contracts/desktop-arena-story-branch';
 import { executeArenaDirect, type ArenaDirectIntent, type ArenaDirectPartial } from './direct';
 import { createInitialArenaDraft, type ArenaDraft, type DesktopArenaProduct } from './session';
 import { DesktopHostedStorySession, type DesktopHostedStoryState, type HostedStoryExecutionTarget } from './hosted-story-session';
 import type { DesktopArenaHostedActor } from '@mahoshojo/contracts/desktop-arena-hosted';
 import type { StoryPendingSnapshot, StoryPendingInput, StoryReceipt } from '@mahoshojo/contracts/desktop-arena-story';
-import { captureDesktopStorySeed, completeDesktopStoryRecords, type StorySessionSnapshot } from './story-snapshot';
+import { captureDesktopStorySeed, completeDesktopStoryRecords, completeDesktopBranchRecords, type StorySessionSnapshot } from './story-snapshot';
 
 export type StoryExecutionTarget = { mode?: never; options: DesktopAiExecutionOptions; intent: Omit<ArenaDirectIntent, 'requestId' | 'generationMode'> } | HostedStoryExecutionTarget;
 /** Host resolves the CURRENT selected target and credentials. Stored source is display only. */
@@ -132,7 +132,7 @@ export class DesktopArenaStorySession {
     if (!head || head.revision !== manifest.expectedRevision || head.lastChapterId !== manifest.expectedLastChapterId) throw new Error('原故事基线已变化或无法读取；保留候选，不能追加到新的章节头。');
     const value = await readStoryContinueState(this.dependencies.port, head);
     const summaryMeta = value.session.summaryMeta as StorySessionSnapshot['summaryMeta'];
-    if (summaryMeta !== undefined && (!summaryMeta || summaryMeta.mode !== 'deterministic-fallback' || summaryMeta.coveredUntilChapterIndex !== head.chapterCount || !Array.isArray(summaryMeta.coveredChapterIds) || summaryMeta.coveredChapterIds.some(id => typeof id !== 'string') || !Number.isSafeInteger(summaryMeta.refreshedAt))) throw new Error('原故事摘要覆盖记录无效');
+    if (summaryMeta !== undefined && (!summaryMeta || summaryMeta.mode !== 'deterministic-fallback' || (!Number.isSafeInteger(summaryMeta.coveredUntilChapterIndex) || summaryMeta.coveredUntilChapterIndex < 0 || summaryMeta.coveredUntilChapterIndex > head.chapterCount) || !Array.isArray(summaryMeta.coveredChapterIds) || summaryMeta.coveredChapterIds.some(id => typeof id !== 'string') || !Number.isSafeInteger(summaryMeta.refreshedAt))) throw new Error('原故事摘要覆盖记录无效');
     return { ...value.session, source: StorySourceSchema.parse(value.session.source), seed: BattleStoryArenaSeedSchema.parse({ ...value.seed,
       mode: source.mode, language: source.language, storyLength: source.storyLength, customStoryLength: source.customStoryLength }),
       workingCombatants: value.checkpoint.combatants, summaryMeta };
@@ -390,7 +390,7 @@ export class DesktopArenaStorySession {
       const source = StorySourceSchema.parse(value.session.source);
       const seed = BattleStoryArenaSeedSchema.parse({ ...value.seed, mode: source.mode, language: source.language, storyLength: source.storyLength, customStoryLength: source.customStoryLength });
       const summaryMeta = value.session.summaryMeta;
-      if (summaryMeta !== undefined && (!summaryMeta || typeof summaryMeta !== 'object' || !('coveredChapterIds' in summaryMeta) || !Array.isArray(summaryMeta.coveredChapterIds) || summaryMeta.coveredChapterIds.some((id: unknown) => typeof id !== 'string') || !('coveredUntilChapterIndex' in summaryMeta) || summaryMeta.coveredUntilChapterIndex !== head.chapterCount || !('mode' in summaryMeta) || summaryMeta.mode !== 'deterministic-fallback' || !('refreshedAt' in summaryMeta) || !Number.isSafeInteger(summaryMeta.refreshedAt))) throw new Error('会话摘要覆盖记录无效，请保留故事并导出。');
+      if (summaryMeta !== undefined && (!summaryMeta || typeof summaryMeta !== 'object' || !('coveredChapterIds' in summaryMeta) || !Array.isArray(summaryMeta.coveredChapterIds) || summaryMeta.coveredChapterIds.some((id: unknown) => typeof id !== 'string') || !('coveredUntilChapterIndex' in summaryMeta) || (!Number.isSafeInteger(summaryMeta.coveredUntilChapterIndex) || (summaryMeta.coveredUntilChapterIndex as number) < 0 || (summaryMeta.coveredUntilChapterIndex as number) > head.chapterCount) || !('mode' in summaryMeta) || summaryMeta.mode !== 'deterministic-fallback' || !('refreshedAt' in summaryMeta) || !Number.isSafeInteger(summaryMeta.refreshedAt))) throw new Error('会话摘要覆盖记录无效，请保留故事并导出。');
       const session: StorySessionSnapshot = { ...value.session, source, seed, workingCombatants: value.checkpoint.combatants, summaryMeta: summaryMeta as StorySessionSnapshot['summaryMeta'] };
       // The shared request builder validates all seed semantics before any model dispatch.
       await this.generateChapter({ session, workingCombatants: value.checkpoint.combatants, action: 'continue', expectedRevision: head.revision,
@@ -471,6 +471,57 @@ export class DesktopArenaStorySession {
     });
     if (!dispatched && !this.disposed) this.publish({ phase: 'cancelled', message: '生成准备已取消，未调用模型。' });
   }
+  /** Internal optional producer only. No default binder or page installs this seam. */
+  async generateBranch(input: { mode: 'direct' | 'hosted'; anchor: StoryBranchAnchorRequest; userGuidance: string }, prepare: PrepareStoryExecution) {
+    if (!this.dependencies.branch?.source || input.mode !== 'direct') throw new Error('此入口未开放分支生成；Hosted 分支不受支持');
+    const frozen = freezeBattleStoryCommit(structuredClone(input));
+    const generationId = this.id(), operationId = this.id(), sessionId = this.id(), checkpointId = this.id();
+    const ready = await this.prepareBranchCompletion({ mode: frozen.mode, generationId, operationId, sessionId, anchor: frozen.anchor });
+    const { snapshot, completion } = ready;
+    let dispatched = false;
+    try {
+      const summaryIds = await readStoryBranchSummaryIds(this.dependencies.port, snapshot, sessionId, completion.signal);
+      if (!completion.isReadyForGeneration()) throw new Error('分支生成准备已取消或选择已变化');
+      const originalSource = StorySourceSchema.parse(snapshot.session.source);
+      const seed = BattleStoryArenaSeedSchema.parse({ ...snapshot.seed, mode: originalSource.mode, language: originalSource.language,
+        storyLength: originalSource.storyLength, customStoryLength: originalSource.customStoryLength });
+      const session = freezeBattleStoryCommit({ ...snapshot.session, id: sessionId, createdAt: this.now(),
+        source: originalSource, seed, workingCombatants: snapshot.workingCombatants } as StorySessionSnapshot);
+      const story: BattleStoryArenaRequestInput = freezeBattleStoryCommit({ action: 'branch', chapterIndex: snapshot.source.anchorIndex + 1,
+        sourceChapterId: snapshot.anchor.id, chapterPlan: session.chapterPlan, seed,
+        chapterContext: { workingCombatants: snapshot.workingCombatants, sessionSummary: snapshot.sessionSummary, recentWindow: snapshot.recentWindow },
+        userGuidance: frozen.userGuidance });
+      await prepare(async target => {
+        if (!completion.isReadyForGeneration()) throw new Error('分支生成准备已取消或选择已变化');
+        if (dispatched) throw new Error('本分支已提交一次生成请求，不能自动重复');
+        if (target.mode === 'hosted') throw new Error('Hosted 分支不受支持');
+        const { options, intent } = target;
+        if (intent.mode !== 'direct-local' && intent.mode !== 'direct-remote') throw new Error('客户端生成目标无效');
+        const source = StorySourceSchema.parse({ ...originalSource, providerMode: intent.mode,
+          providerId: options.providerTarget?.kind === 'preset' ? options.providerTarget.providerId : options.profileId, modelId: intent.modelId });
+        const events = AdjudicatorEventSchema.array().parse(seed.adjudicationEvents ?? []);
+        const adjudicationResults = resolveAdjudicationEvents(events, this.dependencies.random ?? (() => crypto.getRandomValues(new Uint32Array(1))[0]! / 0x1_0000_0000)) as unknown as AdjudicationResult[];
+        dispatched = true;
+        this.publish({ resultSource: 'direct', phase: 'generating', resultChapterIndex: snapshot.source.anchorIndex + 1,
+          result: { rawText: '', markdown: '', reasoning: '' } });
+        const scopeKey = `desktop-story:${sessionId}:${generationId}`;
+        const outcome = await (this.dependencies.execute ?? executeArenaDirect)(options, createInitialArenaDraft(),
+          { ...intent, requestId: generationId, generationMode: 'stream' },
+          { scopeKey, reporterInfo: { name: '记者', publication: '魔法少女速报' }, adjudicationResults, story }, completion.signal,
+          partial => completion.retainPartial(partial));
+        if (outcome.requestId !== generationId || outcome.scopeKey !== scopeKey) throw new Error('生成结果身份不匹配，未保存分支');
+        completion.retainPartial(outcome);
+        if (outcome.status !== 'completed') {
+          completion.fail(new Error(`${'message' in outcome ? outcome.message : '本次生成已取消'} 收到的原文仍保留，可导出。`)); return;
+        }
+        // This closure retains the complete outcome; its role/digest/record work
+        // starts only AFTER the same owner has published the completed body.
+        await completion.completeWithProjection(outcome, () => completeDesktopBranchRecords({ snapshot, session, summaryIds,
+          operationId, checkpointId, now: this.now(), source, userGuidance: frozen.userGuidance, outcome, adjudicationResults }), outcome.report.headline);
+      });
+      if (!dispatched) completion.cancel();
+    } catch (cause) { completion.fail(cause); }
+  }
   /** Internal pre-generation read seam. No default binder, model or page caller. */
   async prepareBranchCompletion(input: {
     mode: 'direct' | 'hosted'; generationId: string; operationId: string; sessionId: string; anchor: StoryBranchAnchorRequest;
@@ -528,34 +579,47 @@ export class DesktopArenaStorySession {
     run.controller.signal.addEventListener('abort', () => {
       if (!consumed) fail(new Error('分支候选准备已取消，未提交章节'));
     }, { once: true });
+    const completeWithProjection = async (result: ArenaDirectPartial,
+      project: () => CompletedStoryBranchRecords, initialTitle = '未命名分支章'): Promise<void> => {
+      if (consumed || !ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
+      consumed = true;
+      let title = initialTitle;
+      try {
+        // Keep completed text before role effects, record projection, schema or budget validation.
+        this.publish({ resultSource: 'direct', phase: 'completed', result: { rawText: result.rawText, markdown: result.markdown,
+          reasoning: result.reasoning, usage: result.usage }, resultChapterIndex: identity.source.anchorIndex + 1,
+          pending: { title, evidence: 'not-written', retryable: false, tooLarge: false }, message: '分支生成完成，正在准备本地保存。' });
+        const records = project();
+        title = typeof records?.chapter?.title === 'string' ? records.chapter.title : title;
+        if (records.chapter.generationId !== generationId) throw new Error('分支完成章与原生成身份不一致');
+        const prepared = (this.dependencies.branch!.prepareCommit ?? prepareStoryBranchCommit)(identity, records);
+        if (!ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
+        this.pending = { kind: 'branch', prepared, selection: run.selection, evidence: 'not-written' };
+        this.publish({ pending: { title: records.chapter.title, evidence: 'not-written', retryable: true, tooLarge: false } });
+        await this.savePending();
+      } catch (cause) {
+        if (!ownsRun()) return;
+        const tooLarge = cause instanceof BattleStoryCommitByteLimitError;
+        this.publish({ pending: { title, evidence: 'not-written', retryable: false, tooLarge },
+          message: `分支完成章未保存：${errorText(cause)} 原文保留在当前窗口，可导出；不会重新调用模型。` });
+      } finally { release(); }
+    };
     return Object.freeze({
       signal: run.controller.signal,
+      isReadyForGeneration: () => !consumed && ownsRun() && !run.controller.signal.aborted
+        && run.epoch === this.executionEpoch && run.selection.isCurrent(),
+      retainPartial: (result: ArenaDirectPartial) => {
+        if (!consumed && ownsRun() && !run.controller.signal.aborted && run.epoch === this.executionEpoch) {
+          this.publish({ resultSource: 'direct', result: { rawText: result.rawText, markdown: result.markdown, reasoning: result.reasoning, usage: result.usage } });
+        }
+      },
       cancel: () => run.controller.abort(),
       fail,
-      complete: async (records: CompletedStoryBranchRecords, result: ArenaDirectPartial): Promise<void> => {
-        if (consumed || !ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
-        consumed = true;
-        let title = '未命名分支章';
-        try {
-          title = typeof records?.chapter?.title === 'string' ? records.chapter.title : title;
-          // Keep completed text before schema, graph or byte-budget validation.
-          this.publish({ resultSource: 'direct', phase: 'completed', result: { ...result }, resultChapterIndex: identity.source.anchorIndex + 1,
-            pending: { title, evidence: 'not-written', retryable: false, tooLarge: false }, message: '分支生成完成，正在准备本地保存。' });
-          if (records.chapter.generationId !== generationId) throw new Error('分支完成章与原生成身份不一致');
-          const prepared = (this.dependencies.branch!.prepareCommit ?? prepareStoryBranchCommit)(identity, records);
-          if (!ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
-          this.pending = { kind: 'branch', prepared, selection: run.selection, evidence: 'not-written' };
-          this.publish({ pending: { title: records.chapter.title, evidence: 'not-written', retryable: true, tooLarge: false } });
-          await this.savePending();
-        } catch (cause) {
-          if (!ownsRun()) return;
-          const tooLarge = cause instanceof BattleStoryCommitByteLimitError;
-          this.publish({ pending: { title, evidence: 'not-written', retryable: false, tooLarge },
-            message: `分支完成章未保存：${errorText(cause)} 原文保留在当前窗口，可导出；不会重新调用模型。` });
-        } finally { release(); }
-      },
+      completeWithProjection,
+      complete: (records: CompletedStoryBranchRecords, result: ArenaDirectPartial): Promise<void> => completeWithProjection(result, () => records),
     });
   }
+
   async savePending() {
     const pending = this.pending;
     if (this.disposed || !pending || this.state.saving || this.deletionBlocksWork()) return;

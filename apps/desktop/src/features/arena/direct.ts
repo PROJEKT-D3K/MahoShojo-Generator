@@ -111,7 +111,7 @@ export const executeArenaDirect = async (
   if (!['direct-local', 'direct-remote'].includes(task.mode)
     || !['stream', 'non-stream'].includes(task.generationMode)
     || !story && (!['markdown', 'web'].includes(input.reportFormat) || input.arenaFreeRankingEnabled)
-    || story && (!['start', 'continue'].includes(story.action) || task.generationMode !== 'stream')
+    || story && (!['start', 'continue', 'branch'].includes(story.action) || task.generationMode !== 'stream')
     || !host.scopeKey.trim()
     || !Array.isArray(host.adjudicationResults) || host.adjudicationResults.length > ARENA_CANONICAL_RESOURCE_LIMITS.maxAdjudicationEvents) {
     return failed('invalid-request', '本片仅支持非排位单人 Arena 的 Markdown 或 Web 输出。');

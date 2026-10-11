@@ -4,6 +4,9 @@ import {
 } from '@mahoshojo/domain/arena-battle-story-session';
 import type { BattleStoryArenaSeed } from '@mahoshojo/domain/arena-battle-story-request';
 import { buildCompletedBattleStoryRecords, freezeBattleStoryCommit, projectHostedStoryPendingContent, type BattleStoryCommitSession } from '@mahoshojo/domain/arena-story-commit';
+import { buildCompletedBattleStoryBranchRecords, buildBattleStoryBranchLabel } from '@mahoshojo/domain/arena-story-branch';
+import type { StoryBranchSourceSnapshot } from '../../platform/arena-story-branch-source';
+import { branchCopyId } from '../../platform/arena-story-branch-storage';
 import { getArenaPostBattleWorldLineIndices } from '@mahoshojo/domain/arena-post-battle';
 import { planUnsignedArenaPostBattleCandidates } from '@mahoshojo/domain/arena-post-battle-candidates';
 import type { AdjudicationResult } from '@mahoshojo/domain/arena-types';
@@ -41,9 +44,8 @@ export const captureDesktopStorySeed = (draft: ArenaDraft, product: DesktopArena
 
 /** Uses the canonical copy-on-write effect producer and completed-record assembly.
  * No amplified deep clone, no mutation of the single-shot draft or original card. */
-export const completeDesktopStoryRecords = (input: {
-  session: StorySessionSnapshot; action: 'start' | 'continue'; chapterIndex: number;
-  operationId: string; checkpointId: string; initialCheckpointId?: string;
+export const buildDesktopStoryGeneratedContent = (input: {
+  session: StorySessionSnapshot; chapterIndex: number;
   now: number; source: StorySource; workingCombatants: unknown[]; userGuidance: string;
   outcome: Extract<ArenaDirectOutcome, { status: 'completed' }>; adjudicationResults: AdjudicationResult[];
 }) => {
@@ -69,26 +71,58 @@ export const completeDesktopStoryRecords = (input: {
     ? { ...object(value), data: effects.get(index)!, isNative: false, isPreset: false }
     : value);
   const digest = buildBattleStoryDeterministicDigest({ markdown: outcome.markdown, reportJson: report, impacts: outcome.impacts, chapterIndex: input.chapterIndex });
-  const sessionSummary = buildBattleStorySummaryFallback({ previousSummary: session.sessionSummary, digests: [{ ...digest, index: input.chapterIndex }] });
-  const records = buildCompletedBattleStoryRecords({
+  return { chapterIndex: input.chapterIndex, markdown: outcome.markdown, reportJson: { report, impacts: outcome.impacts },
+    digest, generationId: outcome.requestId, nextWorkingCombatants,
+    cardSnapshot: {
+      reporterInfo: outcome.report.reporterInfo, userGuidance: input.userGuidance,
+      adjudicationResults: input.adjudicationResults, aiUsage: outcome.usage ?? null,
+      aiModel: outcome.report.aiModel ?? input.source.modelId,
+      ...(outcome.reasoning ? { aiReasoning: { status: 'done', source: 'provider', text: outcome.reasoning } } : {}),
+    },
+  };
+};
+
+/** Linear completion keeps its existing immediate deterministic summary advance. */
+export const completeDesktopStoryRecords = (input: Parameters<typeof buildDesktopStoryGeneratedContent>[0] & {
+  action: 'start' | 'continue'; operationId: string; checkpointId: string; initialCheckpointId?: string;
+}) => {
+  const { session, now } = input;
+  const generated = buildDesktopStoryGeneratedContent(input);
+  const sessionSummary = buildBattleStorySummaryFallback({ previousSummary: session.sessionSummary, digests: [{ ...generated.digest, index: input.chapterIndex }] });
+  return freezeBattleStoryCommit(buildCompletedBattleStoryRecords({
     action: input.action, session: { ...session, sessionSummary, summaryMeta: {
       coveredUntilChapterIndex: input.chapterIndex,
       coveredChapterIds: [...(session.summaryMeta?.coveredChapterIds ?? []), input.operationId],
       refreshedAt: now, mode: 'deterministic-fallback' as const,
     } },
     operationId: input.operationId, checkpointId: input.checkpointId, initialCheckpointId: input.initialCheckpointId,
-    now, source: input.source, inputCombatants: workingCombatants,
-    generated: { chapterIndex: input.chapterIndex, markdown: outcome.markdown, reportJson: { report, impacts: outcome.impacts },
-      digest, generationId: outcome.requestId, nextWorkingCombatants,
-      cardSnapshot: {
-        reporterInfo: outcome.report.reporterInfo, userGuidance: input.userGuidance,
-        adjudicationResults: input.adjudicationResults, aiUsage: outcome.usage ?? null,
-        aiModel: outcome.report.aiModel ?? input.source.modelId,
-        ...(outcome.reasoning ? { aiReasoning: { status: 'done', source: 'provider', text: outcome.reasoning } } : {}),
-      },
+    now, source: input.source, inputCombatants: input.workingCombatants, generated,
+  }));
+};
+
+/** Same unsigned effects and Web-consumed branch assembly. The safe inherited
+ * summary is mapped, not advanced with this new chapter before mapping. */
+export const completeDesktopBranchRecords = (input: {
+  snapshot: StoryBranchSourceSnapshot; session: StorySessionSnapshot; summaryIds: Readonly<Record<string, string>>;
+  operationId: string; checkpointId: string; now: number; source: StorySource; userGuidance: string;
+  outcome: Extract<ArenaDirectOutcome, { status: 'completed' }>; adjudicationResults: AdjudicationResult[];
+}) => {
+  const { snapshot, session, now } = input;
+  const generated = buildDesktopStoryGeneratedContent({ ...input, chapterIndex: snapshot.source.anchorIndex + 1,
+    workingCombatants: snapshot.workingCombatants });
+  return freezeBattleStoryCommit(buildCompletedBattleStoryBranchRecords({
+    session: { ...session, title: `${snapshot.session.title || snapshot.anchor.title}（分支）`,
+      updatedAt: now, lastChapterInputCombatants: snapshot.workingCombatants,
+      branchLabel: buildBattleStoryBranchLabel({ chapterIndex: snapshot.anchor.index, chapterTitle: snapshot.anchor.title }),
+      branchOf: { sessionId: snapshot.session.id, chapterId: snapshot.anchor.id, chapterIndex: snapshot.anchor.index,
+        ...(snapshot.anchor.title ? { chapterTitle: snapshot.anchor.title } : {}), createdAt: session.createdAt },
     },
-  });
-  return freezeBattleStoryCommit(records);
+    prefixEndIndex: snapshot.source.anchorIndex,
+    targetAnchorChapterId: branchCopyId(session.id, 'c', snapshot.source.anchorIndex),
+    operationId: input.operationId, checkpointId: input.checkpointId, now, source: input.source,
+    inputCombatants: snapshot.workingCombatants, generated,
+    mapChapterId: id => Object.hasOwn(input.summaryIds, id) ? input.summaryIds[id] : undefined,
+  }));
 };
 
 /** Hosted consumes checked server-role originals. It never invokes the unsigned

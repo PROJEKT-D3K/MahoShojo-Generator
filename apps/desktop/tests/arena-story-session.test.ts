@@ -134,3 +134,22 @@ describe('device-owned continuous story journey',()=>{
     expect(actual).toBe(expected);expect(actual).toContain('第27章');expect(owner.getSnapshot().chapters).toHaveLength(25);
   });
 });
+
+
+describe('safe inherited partial story summaries', () => {
+  it.each([0, 1, 2, -1, 0.5])('validates coverage %s before linear dispatch without claiming full coverage', async coverage => {
+    const { owner, port, execution } = setup();
+    await owner.start({ draft: storyDraft(), product: 'battle' }, execution.prepare);
+    const head = owner.getSnapshot().active!;
+    const key = `${head.id}:session`, doc = port.documents.get(key)!;
+    const value = { ...doc.value, summaryMeta: { coveredUntilChapterIndex: coverage,
+      coveredChapterIds: coverage === 1 ? [head.lastChapterId] : [], refreshedAt: 100, mode: 'deterministic-fallback' } };
+    port.documents.set(key, { value, bytes: new TextEncoder().encode(JSON.stringify(value)) });
+    await owner.continue('原故事续写', execution.prepare);
+    const accepted = coverage === 0 || coverage === 1;
+    expect(execution.requests).toHaveLength(accepted ? 2 : 1);
+    expect(owner.getSnapshot().resultSaved).toBe(accepted);
+    if (accepted) expect(port.documents.get(key)!.value.summaryMeta).toMatchObject({ coveredUntilChapterIndex: 2 });
+    else expect(owner.getSnapshot().message).toContain('摘要覆盖记录无效');
+  });
+});

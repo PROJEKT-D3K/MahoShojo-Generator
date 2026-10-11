@@ -277,8 +277,10 @@ export const observeStorySessionDeletion = async (port: StoryNativePort, target:
     return 'unknown';
   }
 };
-export const listStoryChapters = async (port: StoryNativePort, head: StorySessionHead, cursor: StoryChapterPage['nextCursor'] = null): Promise<StoryChapterPage> => {
-  const page = boundedPage(StoryChapterPageSchema.parse(await port.listChapters(head.id, head.revision, cursor, 25)));
+export const listStoryChapters = async (port: StoryNativePort, head: Pick<StorySessionHead, 'id' | 'revision'>, cursor: StoryChapterPage['nextCursor'] = null, limit = 25): Promise<StoryChapterPage> => {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('章节目录页大小无效');
+  const page = boundedPage(StoryChapterPageSchema.parse(await port.listChapters(head.id, head.revision, cursor, limit)));
+  if (page.rows.length > limit) throw new Error('章节目录页大小不符');
   if (page.sessionId !== head.id || page.revision !== head.revision) throw new Error('章节目录已过时');
   return page;
 };

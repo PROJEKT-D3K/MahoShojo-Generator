@@ -229,6 +229,15 @@ describe('controlled Direct story request seam', () => {
     expect(result).toMatchObject({ status: 'completed', report: { mode: 'daily' } });
     expect(result).not.toHaveProperty('historyCandidate');
   });
+  it('uses the real branch prompt without disguising it as continue', async () => {
+    const request = { ...story(), action: 'branch' as const }, native = harness();
+    const result = await executeArenaDirect(native.options, input(), task(), { ...host(), story: request }, new AbortController().signal);
+    expect(result.status).toBe('completed');
+    const payload = JSON.parse(native.request!.arenaInputJson!);
+    expect(payload.internalGuidance).toBe(buildBattleStoryArenaRequest(request).internalGuidance);
+    expect(payload.internalGuidance).not.toBe(buildBattleStoryArenaRequest(story()).internalGuidance);
+    expect(native.invoke).toHaveBeenCalledTimes(1);
+  });
   it('ordinary drafts cannot inject internal guidance and chapter requests cannot select another output mode', async () => {
     const native = harness();
     await executeArenaDirect(native.options, { ...input(), internalGuidance: 'INJECTED', story: story() } as ArenaGenerationInputSnapshot,

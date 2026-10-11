@@ -4,11 +4,13 @@ import {
 } from '@mahoshojo/contracts/desktop-arena-story-branch';
 import {
   StorySessionDocumentSchema, StorySeedDocumentSchema, StoryCheckpointDocumentSchema, StoryChapterDocumentSchema,
+  type StoryChapterPage,
 } from '@mahoshojo/contracts/desktop-arena-story';
 import { freezeBattleStoryCommit } from '@mahoshojo/domain/arena-story-commit';
 import { resolveAnchoredSummaryState, toBattleStoryRecordCombatants } from '@mahoshojo/domain/arena-story-branch';
 import { projectBattleStoryPromptWindowItem, isBattleStoryChapterPlanLimitReached, type BattleStoryPromptWindowItem } from '@mahoshojo/domain/arena-battle-story-session';
-import { readStoryRecord, type StoryNativePort } from './arena-story-storage';
+import { branchCopyId } from './arena-story-branch-storage';
+import { readStoryRecord, listStoryChapters, type StoryNativePort } from './arena-story-storage';
 
 /** Injected internal read capability. Never installed by the default Tauri binder. */
 export interface StoryBranchSourcePort {
@@ -71,3 +73,38 @@ export async function readStoryBranchSource(port: Pick<StoryNativePort, 'read'>,
     workingCombatants, recentWindow, ...summary });
 }
 export type StoryBranchSourceSnapshot = Awaited<ReturnType<typeof readStoryBranchSource>>;
+
+/** Scan bounded heads only, retaining IDs solely for the inherited summary subset.
+ * Old/missing IDs keep the shared Web filter semantics. Never re-describe a source:
+ * the original descriptor fences restart/restore and source changes after the scan. */
+export async function readStoryBranchSummaryIds(port: StoryNativePort, snapshot: StoryBranchSourceSnapshot,
+  targetSessionId: string, signal?: AbortSignal): Promise<Readonly<Record<string, string>>> {
+  const head = { id: snapshot.source.session.sessionId, revision: snapshot.source.session.revision }, k = snapshot.source.anchorIndex;
+  const wanted = new Set(snapshot.summaryMeta?.coveredChapterIds ?? []);
+  const mapped: Array<[string, string]> = [];
+  if (wanted.size) {
+    let seen = 0, cursor: StoryChapterPage['nextCursor'] = null;
+    while (seen < k) {
+      signal?.throwIfAborted();
+      const page = await listStoryChapters(port, head, cursor, Math.min(50, k - seen));
+      signal?.throwIfAborted();
+      if (!page.rows.length || new Set(page.rows.map(row => row.id)).size !== page.rows.length) throw new Error('分支摘要目录未前进或身份重复');
+      for (const row of page.rows) {
+        if (row.index !== seen + 1 || row.index > k || row.index === k && row.id !== snapshot.anchor.id) throw new Error('分支摘要目录序列不符');
+        seen = row.index;
+        if (wanted.delete(row.id)) mapped.push([row.id, branchCopyId(targetSessionId, 'c', row.index)]);
+      }
+      const last = page.rows.at(-1)!;
+      if (page.nextCursor && (page.nextCursor.index !== last.index || page.nextCursor.id !== last.id)
+        || seen < k && !page.nextCursor) throw new Error('分支摘要目录游标不符');
+      cursor = page.nextCursor;
+    }
+  }
+  signal?.throwIfAborted();
+  // Native checks instance, revision, bytes and digest under its read lock even
+  // for this one byte. This is validation of the original authority, not renewal.
+  const proof = await port.read(snapshot.source.session, 0, 1);
+  signal?.throwIfAborted();
+  if (!(proof instanceof Uint8Array) || proof.byteLength !== 1) throw new Error('分支源封口读取不符');
+  return freezeBattleStoryCommit(Object.fromEntries(mapped));
+}

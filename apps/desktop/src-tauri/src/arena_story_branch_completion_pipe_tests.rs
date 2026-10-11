@@ -113,7 +113,9 @@ fn real_store_branch_completion_pipe() {
         std::env::var_os("MAHO_BRANCH_COMPLETION_PIPE_ROOT").expect("private root"),
     );
     assert!(root.is_absolute() && root.is_dir());
+    crate::restore::recover_pending(&root).unwrap();
     let library = LocalLibrary::open(&root).unwrap();
+    let mut pending_restore = None;
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     loop {
@@ -130,7 +132,32 @@ fn real_store_branch_completion_pipe() {
             "bounded complete frame"
         );
         let request: Value = serde_json::from_str(&line).unwrap();
-        let response = match call(library.stories(), &request) {
+        let result = match request["op"].as_str() {
+            Some("backup") if pending_restore.is_none() => {
+                encoded(crate::backup::create_backup(&library).map_err(|_| StoryError::Io))
+            }
+            Some("prepare-restore") if pending_restore.is_none() => {
+                let prepared = request["backupId"]
+                    .as_str()
+                    .ok_or(StoryError::Invalid)
+                    .and_then(|id| {
+                        crate::restore::prepare_restore(&library, id).map_err(|_| StoryError::Io)
+                    });
+                match prepared {
+                    Ok(prepared) => {
+                        let value = serde_json::to_value(&prepared.response)
+                            .map_err(|_| StoryError::Invalid);
+                        // The real maintenance permit stays held until this process exits.
+                        pending_restore = Some(prepared);
+                        value
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            _ if pending_restore.is_some() => Err(StoryError::Busy),
+            _ => call(library.stories(), &request),
+        };
+        let response = match result {
             Ok(value) => json!({"ok":true,"value":value}),
             Err(error) => json!({"ok":false,"error":error}),
         };
