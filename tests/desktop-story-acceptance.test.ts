@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, linkSync, sy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import { readStoryMockFaults } from '../scripts/desktop-story-acceptance-mock.mjs';
 import { assertToolVersions, acceptancePaths, checkPorts, launchEnvironment, loopbackOrigin, PATCH_FILES, patchSources, preflight, prepare, replaceOnce, validatePrepared } from '../scripts/desktop-story-acceptance.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -76,6 +77,37 @@ describe('disposable Hosted story acceptance adapter', () => {
     expect(() => prepare(plan)).toThrow();
     writeFileSync(path.join(testTree, PATCH_FILES[0]), plan.patched[PATCH_FILES[0]] + '\n// drift\n');
     expect(() => validatePrepared(stateRoot)).toThrow('prepared source changed');
+  });
+  it('binds archived HTTP faults to the exact disposable source patch and rejects altered manifest controls', async () => {
+    const parent = temporary(), source = fixture(parent, 'source'), testTree = fixture(parent, 'test');
+    const faultFile = path.join(parent, 'faults.json');
+    writeFileSync(faultFile, JSON.stringify({ version: 1, roleFault: { kind: 'disconnect', attempts: 1 }, roleDelayMs: 200 }));
+    const mockFaults = await readStoryMockFaults(faultFile);
+    const plan = await preflight({ source, testTree, stateRoot: path.join(parent, 'state'),
+      honoOrigin: 'http://127.0.0.1:24181', nextOrigin: 'http://127.0.0.1:24182', mockFaults });
+    expect(plan.patched).toEqual(patchSources(original, plan, plan.honoOrigin, plan.nextOrigin, mockFaults));
+    prepare(plan);
+    const manifest = validatePrepared(plan.stateRoot);
+    expect(manifest.mockFaults).toEqual(mockFaults);
+    const file = path.join(plan.stateRoot, 'acceptance.json');
+    writeFileSync(file, JSON.stringify({ ...manifest, mockFaults: { ...manifest.mockFaults, roleDelayMs: 201 } }));
+    expect(() => validatePrepared(plan.stateRoot)).toThrow('prepared source changed');
+    for (const invalid of [null, { unknown: true }, { roleFault: { kind: 'foreign', attempts: 1 } }]) {
+      writeFileSync(file, JSON.stringify({ ...manifest, mockFaults: invalid }));
+      expect(() => validatePrepared(plan.stateRoot)).toThrow('Invalid synthetic fault');
+    }
+    expect(git(source, 'status', '--porcelain')).toBe('');
+  });
+  it('rejects fault file typos, oversized input and symlinks without exposing their contents', async () => {
+    const parent = temporary(), file = path.join(parent, 'faults.json');
+    await expect(readStoryMockFaults('relative.json')).rejects.toThrow('absolute');
+    for (const contents of ['{invalid', '{"token":"private-canary"}', ' '.repeat(8193)]) {
+      writeFileSync(file, contents);
+      await expect(readStoryMockFaults(file)).rejects.toThrow(/^Invalid synthetic fault/);
+    }
+    writeFileSync(file, '{}');
+    const linked = path.join(parent, 'linked.json'); symlinkSync(file, linked);
+    await expect(readStoryMockFaults(linked)).rejects.toThrow('Invalid synthetic fault file');
   });
   it('never mutates shared hardlink source inodes, and rejects used/altered isolation', async () => {
     const parent = temporary(), source = fixture(parent, 'source'), testTree = fixture(parent, 'test');

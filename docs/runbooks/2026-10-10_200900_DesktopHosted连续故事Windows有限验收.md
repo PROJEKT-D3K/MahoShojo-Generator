@@ -17,9 +17,9 @@
 3. **harness 准入标准**：在隔离测试构建中明确接入两 origin、共用真实 `Arc<StoryStore>`、真实 Tauri commands/Channel 和实际页面 owner；沿现 factory 的严格 loopback 校验，缺配置直接拒启，禁止回落生产。一般 Cloud/公告请求也在编译前指向其中一个 mock 并补齐其启动响应。保留生产 constructor、endpoint allowlist、TLS、重定向/no-proxy、CSP/ACL、协议和容量；不增加 renderer 任意 URL/凭据/通用文件入口。仅用窄一次性故障点延迟/丢失真实 invoke 回执或模拟隔离 SecretStore 故障，不伪造保存成功。旧 pipe 的 `loopback.cjs` 仅是响应素材，含 Linux 路径且非 Windows 一键服务；须另适配并记录 patch/hash/PID。所需故障点未准备的项目记“阻塞”，不得用 mock JS invoke 冒充真机通过。
 4. **启动和记录**：先记录 commit/tree/dirty patch、Windows/WebView2/Tauri/工具链版本、运行方式、当前 DPI/缩放、两 origin/PID、实际数据目录与合成夹具 hash。确认上述 harness 后才按 D4b 既有绝对路径 `--config` 流程启动真实 Tauri；Vite 1420 冲突就报告，不杀他人进程。使用已有工具链，缺少组件不顺带安装。不改 hosts、DNS、证书信任、代理、防火墙或系统安全设置。
 
-## W01 最小隔离 harness（Windows 仍未测）
+## 隔离 harness 与合成 HTTP 故障（不代替 Windows 验收）
 
-[`scripts/desktop-story-acceptance.mjs`](../../scripts/desktop-story-acceptance.mjs) 只支持两页 **anonymous/system 首章与续章**；账号、preset、故障注入、冷重启及其余 W02–W10 尚未由此脚本提供。脚本合同/HTTP 测试通过不代表真实 Tauri、Channel、OS SecretStore、WebView、落盘或完整 W01 矩阵通过。
+[`scripts/desktop-story-acceptance.mjs`](../../scripts/desktop-story-acceptance.mjs) 默认支持两页 **anonymous/system 首章与续章**，可显式配置下述合成 HTTP 故障；账号、preset、冷重启和本地 Native 故障尚未由此脚本提供。脚本合同/HTTP 测试通过不代表真实 Tauri、Channel、OS SecretStore、WebView、落盘或完整 W01 矩阵通过。
 
 给本地 Agent 的执行顺序：
 
@@ -43,6 +43,31 @@ node $script launch --state-root 'D:\acceptance\story-fresh'
 正常关本次窗口、等待 launcher 退出。状态目录保留 `acceptance.json`、`temporary.patch`、`launched.json` 和 `mock-trace.json`；trace 只记录受限路由、计数、合成 identity、状态与正文摘要，不含原始 header、token、Key 或正文。另核对并记录实际 Native PID、AppData/WebView 数据目录和截图（环境变量检查不能代替 WebView2 实际目录观察）；不要上传整个 WebView/凭据目录。单次已启动状态拒绝重用，不据此测试冷重启。不要清理日常凭据/数据，测试树与证据先保留。
 
 源码维护合同：`pnpm exec vitest run --config vitest.config.ts tests/desktop-story-acceptance.test.ts tests/desktop-story-acceptance-mock.test.ts`。只用微型临时 Git fixture 验隔离变换及双 loopback HTTP，不创建完整测试树、不安装依赖、不编译或启动 Tauri；受测层级必须与 Windows 结果分开。
+
+### 可选 HTTP 故障配置
+
+将 JSON 保存到测试树外的绝对路径，例如 `D:\acceptance\faults.json`，在上述 preflight 和 prepare 参数中都追加 `--fault-config D:\acceptance\faults.json`；launch 只读取 `acceptance.json` 内已归档的配置，不再读取原文件；规范化配置摘要绑定到测试副本的精确补丁，改单独 manifest 即拒启。未配置保持原 happy path；不接受未知字段/故障、任意正文、URL、凭据或代码。独立双 mock CLI 也支持相同 `--fault-config`，但单独启动 mock 不等于启动隔离 Tauri。
+
+先选一个目标场景，每个独立样本使用新的测试树/状态路径。以下示例把正文分为四段并放慢，适合真实页面 Stop/Back/Close 与角色响应前离页：
+
+```json
+{"version":1,"streamDelayMs":800,"markdownChunks":4,"roleDelayMs":3000}
+```
+
+可组合的受限字段：
+
+- `streamDelayMs`：每个 SSE event 前等待，0–10000 ms，默认 600；`markdownChunks`：1–16，默认 1，拼接正文不变；`wireChunkBytes`：0–4096，默认 0（完整 event），非零将 UTF-8 wire 分次写出（网络/Native 可能重新合并，不等于固定 IPC 分帧）
+- `streamFault`：`{"kind":"eof","afterEvents":2,"attempts":100}` 或 kind `disconnect`。在整个 generation 的固定 event 边界提前结束/断连，不能设到 done 之后；`attempts` 1–100，按每个 generation 的 create/replay 订阅累计。1 次故障后原 cursor replay 可完成；100 次可覆盖客户端默认恢复预算，保留窗口原文并进入 interrupted。持续故障不会随每次 replay 向 done 推进
+- `createDelayMs`：0–10000，登记原 request 后、发送 headers 前等待，覆盖无 generationId 的停止；`createDisconnectBeforeHeaders:true` 在同一位置断连，后续只从原 request lookup/replay 恢复
+- `lookupHideFirst` / `statusHideFirst`：每个 generation 前 0–100 次受认证查询返回 404；`lookupDelayMs` / `statusDelayMs`：0–10000。这是服务端生成状态查询，**不是 SQLite 保存 receipt**
+- `withdrawStoryAfterCreate:true`：登记首个 generation 后只撤回 readiness 的 story header，保基本 Hosted capability 和原请求恢复路径
+- `roleDelayMs`：0–10000；`roleFault`：`{"kind":"disconnect","attempts":1}`，kind 另可选 `malformed`、`http-error`。前两者用于 unknown，后者为带合法 reconciliation envelope 的 HTTP 503；计数按每个 generation 的受认证且 roster 匹配的 role POST，耗尽后显式原 generation 重试可成功
+
+服务实现真实停止路由：有 generationId 时 POST `/api/arena/generations/:id/cancel`；无 ID 时 Native 使用 DELETE `/api/arena/generate-stream`，不为 story POST 路由添加虚假 DELETE 别名。202 `cancelling` 是接受停止请求；SSE `done/status=cancelled` 与随后状态读才是合成终态证据。重复停止保首次 reason，已完成后停止不倒退成 cancelled。detach/断连不会偷偷请求停止或新增 model POST。
+
+`mock-trace.json` 保存规范化 fault 配置和每个请求实际触发的固定故障名、相对时刻、发送 event 数/末 cursor、HTTP 状态或断连及取消接受标志；不保存 token、Key、请求原文或角色正文。用 trace 核对是否真正触发以及 POST/lookup/replay/role/cancel 数量，不能仅凭“配置已开”填通过。
+
+覆盖边界：这组控制可解除 W02 的早 EOF/中断、W03 的 Next unknown/明确失败、W05 的慢流与停止、W06 的首头丢失/隐藏 lookup、W10 的 HTTP 晚响应准备阻塞；W09 普通明确放弃可从 interrupted/role unknown 的原候选进入，仍须真实 Windows 操作和原件/计数证据。Native 收到 done/error 会停止读取 HTTP 流，因此延迟 HTTP EOF 或追加晚坏帧不能模拟 invoke 未 settle/晚 reject、缺 IPC stream-end。W02 本地 seal 失败、W04 save ACK/receipt unknown、W09 foreign-retained/SecretStore cleanup-pending，以及 W08 精确文件碰撞仍缺专用 Native 故障点，继续记阻塞；不得改数据库、伪造保存/清理结果或给正式产品加验收逃生门。
 
 ## 十项有限检查
 

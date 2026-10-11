@@ -6,10 +6,11 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startStoryMocks } from '../scripts/desktop-story-acceptance-mock.mjs';
+import { startStoryMocks, validateStoryMockFaults } from '../scripts/desktop-story-acceptance-mock.mjs';
 import { AnnouncementListSchema } from '../packages/contracts/src/announcements';
 import { parseArenaReconciliationResponse } from '../packages/contracts/src/arena-reconciliation';
 import { ArenaStoryCreateRequestSchema } from '../packages/contracts/src/arena-story';
+import { openArenaGenerationStreamClient, type ArenaGenerationConnectionState, type PersistedArenaGeneration } from '../packages/hosted-api/src/arena-generation/client';
 import { applyArenaReconciliationUpdates } from '../packages/domain/src/arena-reconciliation';
 
 const fixture = JSON.parse(readFileSync(new URL('../packages/contracts/fixtures/desktop-arena-hosted.json', import.meta.url), 'utf8'));
@@ -35,7 +36,7 @@ const headers = { 'content-type': 'application/json', [ACTOR]: BOOTSTRAP, [STORY
 const stops: Array<() => Promise<unknown>> = [];
 afterEach(async () => { await Promise.all(stops.splice(0).map((stop) => stop())); });
 
-async function open(options: { streamDelayMs?: number; maxBodyBytes?: number } = {}) {
+async function open(options: { streamDelayMs?: number; maxBodyBytes?: number; faults?: Record<string, unknown> } = {}) {
   const mocks = await startStoryMocks({ honoPort: 0, nextPort: 0, streamDelayMs: 0, ...options });
   stops.push(mocks.close);
   return mocks;
@@ -317,5 +318,206 @@ describe('isolated W01 mock failure and privacy boundaries', () => {
       ['--hono-port', '32102', '--next-port', '32103', '--unknown', '1']]) {
       expect(() => execFileSync(process.execPath, [script, ...args], { cwd: tmpdir(), stdio: 'pipe', timeout: 3000 })).toThrow();
     }
+  });
+});
+
+
+// Real HTTP plus the shared recovery core, not Native IPC or Windows acceptance.
+async function recoveringClient(mocks: Awaited<ReturnType<typeof open>>) {
+  const states: ArenaGenerationConnectionState[] = [], saved: PersistedArenaGeneration[] = [];
+  const response = await openArenaGenerationStreamClient({ endpoint: CREATE, bodyHash: 'synthetic-body',
+    onStateChange: state => { states.push(state); } }, {
+    loadState: () => null, saveState: state => { saved.push(state); }, createRequestId: () => story().generationRequestId,
+    encodeUtf8: value => new TextEncoder().encode(value), waitForReconnectOpportunity: async () => undefined,
+    isInitialCreateOutcomeAmbiguous: error => error instanceof TypeError, classifyExplicitAbort: () => null,
+    prepareCreate: () => undefined, observeResponse: () => undefined,
+    transport: {
+      create: ({ signal, onRoutePinSelected }) => {
+        onRoutePinSelected({ placement: 'hono-primary' });
+        return fetch(mocks.honoOrigin + CREATE, { method: 'POST', headers, body: JSON.stringify(story()), signal });
+      },
+      lookup: ({ generationRequestId, signal }) => fetch(mocks.honoOrigin + `/api/arena/generation-requests/${generationRequestId}`, { headers: { [ACTOR]: BOOTSTRAP }, signal }),
+      resume: ({ generationId, lastEventId, signal }) => fetch(mocks.honoOrigin + `/api/arena/generations/${generationId}/stream${lastEventId ? `?after=${lastEventId}` : ''}`, { headers: { [ACTOR]: BOOTSTRAP }, signal }),
+      cancel: async () => { throw new Error('Unexpected cancel in recovery-only probe'); },
+    },
+  });
+  return { wire: await response.text(), states, saved };
+}
+const parsedEvents = (wire: string) => wire.trim().split('\n\n').filter(Boolean).map(block => ({
+  id: block.split('\n')[0].slice(4), event: block.split('\n')[1].slice(7), data: JSON.parse(block.split('\n')[2].slice(6)),
+}));
+
+describe('explicit synthetic HTTP fault controls', () => {
+  it('rejects unknown, unsafe, malformed or inert-cutoff fault settings before binding', async () => {
+    for (const faults of [null, [], { version: 2 }, { apiKey: 'never-log-this' }, { streamDelayMs: 10_001 },
+      { markdownChunks: 0 }, { wireChunkBytes: 4097 }, { createDelayMs: -1 }, { lookupHideFirst: 101 },
+      { statusDelayMs: 1.5 }, { createDisconnectBeforeHeaders: 'true' },
+      { streamFault: { kind: 'unknown', attempts: 1, afterEvents: 1 } },
+      { streamFault: { kind: 'eof', attempts: 1, afterEvents: 5 } },
+      { streamFault: { kind: 'eof', attempts: 0, afterEvents: 1 } },
+      { roleFault: { kind: 'disconnect', attempts: 1, response: 'secret-canary' } },
+    ]) {
+      // Deliberately cross the typed boundary with malformed external JSON.
+      const invalid = faults as Record<string, unknown>;
+      expect(() => validateStoryMockFaults(invalid)).toThrow('Invalid synthetic fault');
+      await expect(startStoryMocks({ honoPort: 0, nextPort: 0, faults: invalid })).rejects.toThrow('Invalid synthetic fault');
+    }
+  });
+
+  it('splits markdown events and multibyte wire chunks without changing the full text', async () => {
+    const baseline = await create(await open());
+    const mocks = await open({ faults: { markdownChunks: 4, wireChunkBytes: 7 } });
+    const split = await create(mocks);
+    const events = parsedEvents(split.wire);
+    expect(events.filter(event => event.event === 'markdown')).toHaveLength(4);
+    expect(events.filter(event => event.event === 'markdown').map(event => event.data.chunk).join(''))
+      .toBe(parsedEvents(baseline.wire)[0].data.chunk);
+    expect(events.at(-1)?.data.status).toBe('completed');
+    expect(mocks.trace().requests[0].faults).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'wire-chunks' })]));
+    const snapshot = mocks.trace(); snapshot.faultConfig.markdownChunks = 99;
+    expect(mocks.trace().faultConfig.markdownChunks).toBe(4);
+  });
+
+  it.each(['eof', 'disconnect'])('recovers a one-shot %s through the original cursor with no second create', async (kind) => {
+    const mocks = await open({ faults: { streamFault: { kind, afterEvents: 2, attempts: 1 } } });
+    const result = await recoveringClient(mocks);
+    expect(result.states.at(-1)).toBe('completed');
+    expect(parsedEvents(result.wire).map(event => event.id)).toEqual(['1-0', '2-0', '3-0', '4-0', '5-0']);
+    expect(mocks.trace().generationCount).toBe(1);
+    expect(mocks.trace().counts[`hono POST ${CREATE}`]).toBe(1);
+    expect(mocks.trace().counts['hono GET /api/arena/generations/:generationId/stream']).toBe(1);
+    expect(mocks.trace().requests[0].faults).toEqual(expect.arrayContaining([expect.objectContaining({ name: `stream-${kind}` })]));
+  });
+
+  it.each(['eof', 'disconnect'])('keeps a persistent %s at the same boundary until the shared retry budget is exhausted', async (kind) => {
+    const mocks = await open({ faults: { streamFault: { kind, afterEvents: 2, attempts: 100 } } });
+    const result = await recoveringClient(mocks);
+    expect(result.states.at(-1)).toBe('interrupted');
+    expect(parsedEvents(result.wire).map(event => event.id)).toEqual(['1-0', '2-0']);
+    expect(result.wire).not.toContain('event: done');
+    expect(mocks.trace().counts[`hono POST ${CREATE}`]).toBe(1);
+    expect(mocks.trace().counts['hono GET /api/arena/generations/:generationId/stream']).toBe(8);
+    const role = await fetch(mocks.nextOrigin + ROLE, { method: 'POST', headers: { ...headers, [ACTOR]:
+      (await fetch(mocks.honoOrigin + `/api/arena/generation-requests/${story().generationRequestId}`, { headers })).headers.get(ACTOR)!,
+      [RECONCILIATION]: 'arena-reconciliation-v1' }, body: JSON.stringify({ generationId: result.saved.at(-1)?.generationId, combatants }) });
+    expect(role.status).toBe(409);
+  });
+
+  it('recovers lost create headers through hidden then delayed lookup while new-create capability is withdrawn', async () => {
+    const mocks = await open({ faults: { createDisconnectBeforeHeaders: true, lookupHideFirst: 1,
+      lookupDelayMs: 20, withdrawStoryAfterCreate: true } });
+    const before = await fetch(mocks.honoOrigin + '/api/hosted/dr-readiness');
+    expect(before.headers.get(STORY)).toBe('arena-story-v1'); await before.text();
+    const result = await recoveringClient(mocks);
+    expect(result.states.at(-1)).toBe('completed');
+    expect(mocks.trace().generationCount).toBe(1);
+    expect(mocks.trace().counts[`hono POST ${CREATE}`]).toBe(1);
+    const lookups = mocks.trace().requests.filter((entry: { path: string }) => entry.path.includes('generation-requests'));
+    expect(lookups.map((entry: { status: number }) => entry.status)).toEqual([404, 200]);
+    expect(lookups[0].faults.map((fault: { name: string }) => fault.name)).toEqual(['lookup-delay', 'lookup-hidden']);
+    const after = await fetch(mocks.honoOrigin + '/api/hosted/dr-readiness');
+    expect(after.headers.has(STORY)).toBe(false);
+    expect(await after.json()).toEqual(fixture.capability);
+    const trace = JSON.stringify(mocks.trace());
+    expect(trace).not.toContain(BOOTSTRAP);
+    expect(trace).not.toContain(story().generationRequestId);
+  });
+
+  it('hides only authenticated status reads, then returns the original completed generation', async () => {
+    const mocks = await open({ faults: { statusHideFirst: 1, statusDelayMs: 20 } });
+    const created = await create(mocks);
+    const url = mocks.honoOrigin + `/api/arena/generations/${created.id}`;
+    expect((await fetch(url, { headers: { [ACTOR]: otherActor } })).status).toBe(403);
+    expect((await fetch(url, { headers: { [ACTOR]: created.token } })).status).toBe(404);
+    const response = await fetch(url, { headers: { [ACTOR]: created.token } });
+    expect(await response.json()).toMatchObject({ generationId: created.id, status: 'completed' });
+    expect(mocks.trace().generationCount).toBe(1);
+  });
+
+  it.each(['disconnect', 'malformed', 'http-error'])('injects a bounded role %s and lets an explicit same-generation retry succeed', async (kind) => {
+    const mocks = await open({ faults: { roleDelayMs: 20, roleFault: { kind, attempts: 1 } } });
+    const created = await create(mocks);
+    const role = () => fetch(mocks.nextOrigin + ROLE, { method: 'POST', headers: { 'content-type': 'application/json',
+      [ACTOR]: created.token, [RECONCILIATION]: 'arena-reconciliation-v1' }, body: JSON.stringify({ generationId: created.id, combatants }) });
+    if (kind === 'disconnect') await expect(role()).rejects.toThrow();
+    else {
+      const first = await role();
+      expect(first.status).toBe(kind === 'malformed' ? 200 : 503);
+      const wire = await first.text();
+      if (kind === 'malformed') expect(() => parseArenaReconciliationResponse(wire, created.id, combatants.length)).toThrow();
+      else expect(parseArenaReconciliationResponse(wire, created.id, combatants.length)).toMatchObject({ generationId: created.id, code: 'ARENA_RECONCILIATION_UNAVAILABLE' });
+    }
+    const second = await role();
+    expect(parseArenaReconciliationResponse(await second.text(), created.id, combatants.length)).toMatchObject({ success: true });
+    expect(mocks.trace().counts[`next POST ${ROLE}`]).toBe(2);
+    expect(mocks.trace().counts[`hono POST ${CREATE}`]).toBe(1);
+    expect(mocks.trace().requests.find((entry: { path: string }) => entry.path === ROLE).faults)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: `role-${kind}` })]));
+    expect(JSON.stringify(mocks.trace())).not.toContain(created.token);
+  });
+
+  it('accepts stop once during a slow stream and replays a single cancelled terminal, never completed', async () => {
+    const mocks = await open({ streamDelayMs: 50, faults: { markdownChunks: 4, wireChunkBytes: 3 } });
+    const response = await fetch(mocks.honoOrigin + CREATE, { method: 'POST', headers, body: JSON.stringify(story()) });
+    const id = response.headers.get('x-mahoshojo-generation-id')!, token = response.headers.get(ACTOR)!;
+    const wirePromise = response.text();
+    await expect.poll(() => mocks.trace().requests[0].eventsSent).toBeGreaterThanOrEqual(1);
+    const stop = (reason: string) => fetch(mocks.honoOrigin + `/api/arena/generations/${id}/cancel`, {
+      method: 'POST', headers: { 'content-type': 'application/json', [ACTOR]: token }, body: JSON.stringify({ reason }) });
+    const accepted = await stop('user');
+    expect(accepted.status).toBe(202);
+    expect(await accepted.json()).toEqual({ generationId: id, status: 'cancelling', cancelled: true });
+    const duplicate = await stop('content_policy');
+    expect(duplicate.status).toBe(200); expect(await duplicate.json()).toMatchObject({ status: 'cancelled' });
+    const wire = await wirePromise;
+    const terminals = parsedEvents(wire).filter(event => event.event === 'done');
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].data).toEqual({ ok: false, status: 'cancelled', code: 'USER_CANCELLED' });
+    expect(wire).not.toContain('"completed"');
+    const replay = await fetch(mocks.honoOrigin + `/api/arena/generations/${id}/stream`, { headers: { [ACTOR]: token } });
+    expect(await replay.text()).toBe(wire);
+    expect(mocks.trace().generationCount).toBe(1);
+    expect(mocks.trace().requests.filter((entry: { cancelAccepted?: boolean }) => entry.cancelAccepted)).toHaveLength(1);
+  });
+
+  it('stops only the selected request while another generation under the same actor completes', async () => {
+    const mocks = await open({ streamDelayMs: 25 });
+    const first = await fetch(mocks.honoOrigin + CREATE, { method: 'POST', headers, body: JSON.stringify(story('request_product_battle')) });
+    const second = await fetch(mocks.honoOrigin + CREATE, { method: 'POST', headers, body: JSON.stringify({ ...story('request_product_arena'), sessionId: 'other-session' }) });
+    const firstWire = first.text(), secondWire = second.text();
+    const stopped = await fetch(mocks.honoOrigin + '/api/arena/generate-stream', { method: 'DELETE', headers,
+      body: JSON.stringify({ generationRequestId: 'request_product_battle', reason: 'user' }) });
+    expect(stopped.status).toBe(202);
+    expect(await stopped.json()).toMatchObject({ generationId: first.headers.get('x-mahoshojo-generation-id') });
+    expect(await firstWire).toContain('"status":"cancelled"');
+    expect(await secondWire).toContain('"status":"completed"');
+    expect(mocks.trace().generationCount).toBe(2);
+    expect(mocks.trace().requests.filter((entry: { cancelAccepted?: boolean }) => entry.cancelAccepted))
+      .toEqual([expect.objectContaining({ generationId: first.headers.get('x-mahoshojo-generation-id') })]);
+  });
+
+  it('uses the real Native request-id DELETE before headers, rejects wrong actors/reasons/budgets and keeps completed terminal', async () => {
+    const mocks = await open({ faults: { createDelayMs: 200 } });
+    const pending = fetch(mocks.honoOrigin + CREATE, { method: 'POST', headers, body: JSON.stringify(story()) });
+    await expect.poll(() => mocks.trace().generationCount).toBe(1);
+    const cancel = (actor: string, reason = 'content_policy') => fetch(mocks.honoOrigin + '/api/arena/generate-stream', {
+      method: 'DELETE', headers: { 'content-type': 'application/json', [ACTOR]: actor },
+      body: JSON.stringify({ generationRequestId: story().generationRequestId, reason }) });
+    expect((await cancel(otherActor)).status).toBe(403);
+    const invalid = await cancel(BOOTSTRAP, 'invented');
+    expect(await invalid.json()).toMatchObject({ code: 'GENERATION_CANCEL_REASON_INVALID' });
+    const accepted = await cancel(BOOTSTRAP);
+    expect(accepted.status).toBe(202);
+    const first = await pending;
+    expect(parsedEvents(await first.text())).toEqual([expect.objectContaining({ data: { ok: false, status: 'cancelled', code: 'CONTENT_POLICY_CANCELLED' } })]);
+    const id = first.headers.get('x-mahoshojo-generation-id')!;
+    const tooLarge = await raw(mocks.honoOrigin, `/api/arena/generations/${id}/cancel`, { method: 'POST', headers,
+      chunks: [JSON.stringify({ reason: 'user', extra: 'x'.repeat(1024) })] });
+    expect(tooLarge.status).toBe(413); expect(JSON.parse(tooLarge.body).code).toBe('GENERATION_CANCEL_REQUEST_TOO_LARGE');
+    expect((await raw(mocks.honoOrigin, CREATE, { method: 'DELETE', headers, chunks: ['{}'] })).status).toBe(405);
+    const completed = await create(mocks, story('synthetic_request_complete'));
+    const late = await fetch(mocks.honoOrigin + `/api/arena/generations/${completed.id}/cancel`, { method: 'POST', headers: { [ACTOR]: completed.token } });
+    expect(late.status).toBe(200); expect(await late.json()).toEqual({ generationId: completed.id, status: 'completed', cancelled: false });
+    expect(mocks.trace().counts[`hono POST ${CREATE}`]).toBe(2);
   });
 });

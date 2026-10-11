@@ -5,7 +5,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSy
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { startStoryMocks } from './desktop-story-acceptance-mock.mjs';
+import { readStoryMockFaults, startStoryMocks, validateStoryMockFaults } from './desktop-story-acceptance-mock.mjs';
 
 const sourceRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const native = 'apps/desktop/src-tauri/src/';
@@ -55,7 +55,8 @@ function rejectLinks(candidate) {
   }
 }
 
-export function patchSources(original, paths, honoOrigin, nextOrigin) {
+export function patchSources(original, paths, honoOrigin, nextOrigin, mockFaults = {}) {
+  const faultDigest = hash(JSON.stringify(validateStoryMockFaults(mockFaults)));
   const hono = loopbackOrigin(honoOrigin), next = loopbackOrigin(nextOrigin);
   if (hono.port === next.port) fail('Hono and Next ports must differ');
   acceptancePaths(paths.testTree, paths.stateRoot, paths.identifier);
@@ -70,7 +71,7 @@ export function patchSources(original, paths, honoOrigin, nextOrigin) {
   patch('cloud.rs', 'const CLOUD_ORIGIN_PRODUCTION: &str = "https://mahoshojo.colanns.me";',
     `const CLOUD_ORIGIN_PRODUCTION: &str = ${JSON.stringify(next.origin)};`);
   patch('cloud.rs', 'option_env!("MAHOSHOJO_CLOUD_ORIGIN")', `Some(${JSON.stringify(next.origin)})`);
-  const guard = `#[cfg(not(debug_assertions))]\ncompile_error!("Disposable story acceptance checkout cannot build release");\n\n#[cfg_attr(mobile, tauri::mobile_entry_point)]\npub fn run() {\n    // Before Builder, WebView creation, or SecretStore access.\n    let acceptance_context = tauri::generate_context!();\n    assert_eq!(acceptance_context.config().identifier, ${JSON.stringify(paths.identifier)}, "isolated Tauri config required");\n    assert_eq!(secret::SECRET_STORE_SERVICE, ${JSON.stringify(paths.identifier)});\n    assert_eq!(std::env::var("MAHOSHOJO_STORY_ACCEPTANCE").ok().as_deref(), Some(${JSON.stringify(paths.identifier)}), "use the acceptance launcher");\n    let acceptance_webview = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").expect("isolated WebView folder required");\n    assert_eq!(std::fs::canonicalize(acceptance_webview).expect("WebView folder missing"), std::fs::canonicalize(${JSON.stringify(paths.webview)}).expect("expected WebView folder missing"));`;
+  const guard = `// Synthetic HTTP fault configuration SHA-256: ${faultDigest}\n#[cfg(not(debug_assertions))]\ncompile_error!("Disposable story acceptance checkout cannot build release");\n\n#[cfg_attr(mobile, tauri::mobile_entry_point)]\npub fn run() {\n    // Before Builder, WebView creation, or SecretStore access.\n    let acceptance_context = tauri::generate_context!();\n    assert_eq!(acceptance_context.config().identifier, ${JSON.stringify(paths.identifier)}, "isolated Tauri config required");\n    assert_eq!(secret::SECRET_STORE_SERVICE, ${JSON.stringify(paths.identifier)});\n    assert_eq!(std::env::var("MAHOSHOJO_STORY_ACCEPTANCE").ok().as_deref(), Some(${JSON.stringify(paths.identifier)}), "use the acceptance launcher");\n    let acceptance_webview = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").expect("isolated WebView folder required");\n    assert_eq!(std::fs::canonicalize(acceptance_webview).expect("WebView folder missing"), std::fs::canonicalize(${JSON.stringify(paths.webview)}).expect("expected WebView folder missing"));`;
   patch('lib.rs', '#[cfg_attr(mobile, tauri::mobile_entry_point)]\npub fn run() {', guard);
   patch('lib.rs', '.run(tauri::generate_context!())', '.run(acceptance_context)');
   patch('lib.rs', '            // 单实例先于一切本地库访问', `            assert!(data_root.ends_with(${JSON.stringify(paths.identifier)}), "unexpected app data namespace");\n\n            // 单实例先于一切本地库访问`);
@@ -104,7 +105,8 @@ function verifyCheckout(root, expectedTree) {
   }
 }
 
-export async function preflight({ testTree, stateRoot, honoOrigin, nextOrigin, source = sourceRoot }) {
+export async function preflight({ testTree, stateRoot, honoOrigin, nextOrigin, source = sourceRoot, mockFaults = {} }) {
+  mockFaults = validateStoryMockFaults(mockFaults);
   if (!path.isAbsolute(testTree) || !path.isAbsolute(stateRoot)) fail('paths must be absolute');
   source = realpathSync(source); testTree = path.resolve(testTree); stateRoot = path.resolve(stateRoot);
   if (contains(source, testTree) || contains(testTree, source)) fail('use a separate disposable checkout; source tree is never patched');
@@ -118,9 +120,9 @@ export async function preflight({ testTree, stateRoot, honoOrigin, nextOrigin, s
   if (git(testTree, 'status', '--porcelain', '--untracked-files=all')) fail('test checkout must be clean');
   const paths = acceptancePaths(testTree, stateRoot, PREFIX + randomUUID().replaceAll('-', ''));
   const original = Object.fromEntries(PATCH_FILES.map(file => [file, read(path.join(testTree, file))]));
-  const patched = patchSources(original, paths, honoOrigin, nextOrigin);
+  const patched = patchSources(original, paths, honoOrigin, nextOrigin, mockFaults);
   await checkPorts([loopbackOrigin(honoOrigin).port, loopbackOrigin(nextOrigin).port, 1420, { host: '::1', port: 1420 }]);
-  return { version: 1, ...paths, tree, honoOrigin, nextOrigin, original, patched };
+  return { version: 1, ...paths, tree, honoOrigin, nextOrigin, mockFaults, original, patched };
 }
 
 export function prepare(plan) {
@@ -153,6 +155,7 @@ export function validatePrepared(stateRoot) {
   if (!path.isAbsolute(stateRoot)) fail('state root must be absolute');
   stateRoot = path.resolve(stateRoot); rejectLinks(stateRoot);
   const manifest = JSON.parse(read(path.join(stateRoot, 'acceptance.json')));
+  validateStoryMockFaults(manifest.mockFaults === undefined ? {} : manifest.mockFaults);
   const paths = acceptancePaths(manifest.testTree, stateRoot, manifest.identifier);
   for (const [key, value] of Object.entries(paths)) if (manifest[key] !== value) fail(`isolation manifest mismatch: ${key}`);
   if (manifest.version !== 1 || !/^[a-f0-9]{40,64}$/.test(manifest.tree)) fail('invalid acceptance manifest');
@@ -164,7 +167,7 @@ export function validatePrepared(stateRoot) {
   if (JSON.stringify(changed) !== JSON.stringify([...PATCH_FILES].sort())) fail('unexpected test checkout edits');
   // Recompute the allowed patch from immutable HEAD, not just a mutable manifest hash.
   const originals = Object.fromEntries(PATCH_FILES.map(file => [file, execFileSync('git', ['-C', paths.testTree, 'show', `HEAD:${file}`], { encoding: 'utf8' })]));
-  const patched = patchSources(originals, paths, hono.origin, next.origin);
+  const patched = patchSources(originals, paths, hono.origin, next.origin, manifest.mockFaults);
   for (const file of PATCH_FILES) {
     rejectLinks(path.join(paths.testTree, file));
     const actual = read(path.join(paths.testTree, file));
@@ -228,7 +231,7 @@ async function launch(stateRoot) {
   verifyExistingTools(manifest, env);
   await checkPorts([1420, { host: '::1', port: 1420 }]);
   // Bind both mocks before spawning any app. Bind failure closes the first service.
-  const mocks = await startStoryMocks({ honoPort: loopbackOrigin(manifest.honoOrigin).port, nextPort: loopbackOrigin(manifest.nextOrigin).port });
+  const mocks = await startStoryMocks({ honoPort: loopbackOrigin(manifest.honoOrigin).port, nextPort: loopbackOrigin(manifest.nextOrigin).port, faults: manifest.mockFaults });
   try {
     writeFileSync(path.join(stateRoot, 'launched.json'), JSON.stringify({ pid: process.pid, honoOrigin: manifest.honoOrigin, nextOrigin: manifest.nextOrigin }) + '\n', { flag: 'wx' });
     const child = spawn(process.execPath, [cli, 'dev', '--no-watch', '--config', manifest.config, '--', '--locked', '--offline'], { cwd: app, env, stdio: 'inherit', shell: false });
@@ -249,7 +252,7 @@ async function main(args) {
   const mode = ['preflight', 'prepare', 'launch'].includes(args[0]) ? args.shift() : 'preflight';
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
-    if (!['--test-tree', '--state-root', '--hono-origin', '--next-origin'].includes(args[i]) || !args[i + 1] || options[args[i]]) fail('invalid or duplicate option');
+    if (!['--test-tree', '--state-root', '--hono-origin', '--next-origin', '--fault-config'].includes(args[i]) || !args[i + 1] || options[args[i]]) fail('invalid or duplicate option');
     options[args[i]] = args[i + 1];
   }
   if (!options['--state-root']) fail('required: --state-root <absolute new directory>');
@@ -258,9 +261,9 @@ async function main(args) {
     return launch(options['--state-root']);
   }
   if (!options['--test-tree'] || !options['--hono-origin'] || !options['--next-origin']) fail('required: --test-tree, --state-root, --hono-origin and --next-origin');
-  const plan = await preflight({ testTree: options['--test-tree'], stateRoot: options['--state-root'], honoOrigin: options['--hono-origin'], nextOrigin: options['--next-origin'] });
+  const plan = await preflight({ testTree: options['--test-tree'], stateRoot: options['--state-root'], honoOrigin: options['--hono-origin'], nextOrigin: options['--next-origin'], mockFaults: options['--fault-config'] ? await readStoryMockFaults(options['--fault-config']) : {} });
   if (mode === 'prepare') prepare(plan);
-  console.log(JSON.stringify({ mode, testTree: plan.testTree, stateRoot: plan.stateRoot, identifier: plan.identifier, honoOrigin: plan.honoOrigin, nextOrigin: plan.nextOrigin, prepared: mode === 'prepare', applicationStarted: false }, null, 2));
+  console.log(JSON.stringify({ mode, testTree: plan.testTree, stateRoot: plan.stateRoot, identifier: plan.identifier, honoOrigin: plan.honoOrigin, nextOrigin: plan.nextOrigin, mockFaults: plan.mockFaults, prepared: mode === 'prepare', applicationStarted: false }, null, 2));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
