@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { afterAll, beforeEach, describe, expect, vi, test } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, vi, test } from 'vitest';
 import React, { act } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { dispatchMeProfileAvatarUpdated } from '@/lib/me-profile-events';
 
 /**
  * Web 顶栏适配器测试：`GlobalTopBar` 现在只把 Web 宿主事实注入共享
@@ -32,6 +33,11 @@ let topBarMessagesState = {
 };
 
 const routerPushMock = vi.fn();
+const profileFetchMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/auth', () => ({
+  authStorage: { fetch: profileFetchMock },
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: routerPushMock }),
@@ -246,6 +252,127 @@ describe('GlobalTopBar adapter', () => {
       await act(async () => root.unmount());
       container.remove();
     }
+  });
+});
+
+describe('useTopBarProfile request and event cache ownership', () => {
+  const originalAvatar = 'data:image/webp;base64,old-avatar';
+  const updatedAvatar = 'data:image/webp;base64,new-avatar';
+  const response = (avatarDataUrl: string | null) => ({
+    ok: true,
+    json: async () => ({ success: true, profile: { avatarDataUrl } }),
+  });
+  const deferred = <T,>() => {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((yes) => { resolve = yes; });
+    return { promise, resolve };
+  };
+  let useTopBarProfile: typeof import('@/components/navigation/useTopBarProfile').useTopBarProfile;
+  let root: Root;
+  let container: HTMLDivElement;
+  let nextUserId = 100;
+  let userId: number;
+  const Harness = ({ id, enabled }: { id: number | null; enabled: boolean }) => {
+    const { avatarDataUrl } = useTopBarProfile(id, enabled);
+    return <output>{avatarDataUrl ?? 'no-avatar'}</output>;
+  };
+  const render = (id: number | null = userId, enabled = true) => act(async () => {
+    root.render(<Harness id={id} enabled={enabled} />);
+  });
+  const unmount = () => act(async () => { root.render(null); });
+  const expectAvatar = (value: string | null) => expect(container.textContent).toBe(value ?? 'no-avatar');
+
+  beforeEach(async () => {
+    // Exercise the real hook and its module cache without changing the adapter mock above.
+    ({ useTopBarProfile } = await vi.importActual('@/components/navigation/useTopBarProfile'));
+    userId = nextUserId;
+    nextUserId += 2;
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    profileFetchMock.mockReset();
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  test.each([updatedAvatar, null])('keeps event avatar %s cached after an older GET and remount', async (avatarDataUrl) => {
+    const initial = deferred<ReturnType<typeof response>>();
+    profileFetchMock.mockReturnValue(initial.promise);
+    await render();
+    expect(profileFetchMock).toHaveBeenCalledWith('/api/me/profile', expect.objectContaining({ method: 'GET', cache: 'no-store' }));
+    await act(async () => { dispatchMeProfileAvatarUpdated({ userId, avatarDataUrl }); });
+    expectAvatar(avatarDataUrl);
+    await act(async () => { initial.resolve(response(originalAvatar)); });
+    expectAvatar(avatarDataUrl);
+    await unmount();
+    await render();
+    expectAvatar(avatarDataUrl);
+    expect(profileFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps the event avatar when the old GET is still parsing JSON', async () => {
+    const body = deferred<Awaited<ReturnType<ReturnType<typeof response>['json']>>>();
+    profileFetchMock.mockResolvedValue({ ok: true, json: () => body.promise });
+    await render();
+    await act(async () => { dispatchMeProfileAvatarUpdated({ userId, avatarDataUrl: updatedAvatar }); });
+    await act(async () => { body.resolve({ success: true, profile: { avatarDataUrl: originalAvatar } }); });
+    await unmount();
+    await render();
+    expectAvatar(updatedAvatar);
+    expect(profileFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps the event avatar when an older GET fails', async () => {
+    const initial = deferred<{ ok: false; status: number }>();
+    profileFetchMock.mockReturnValue(initial.promise);
+    await render();
+    await act(async () => { dispatchMeProfileAvatarUpdated({ userId, avatarDataUrl: updatedAvatar }); });
+    await act(async () => { initial.resolve({ ok: false, status: 503 }); });
+    expectAvatar(updatedAvatar);
+    await unmount();
+    await render();
+    expectAvatar(updatedAvatar);
+    expect(profileFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(['unmount', 'disable', 'account switch'] as const)('does not seed the cache from a GET cancelled by %s', async (change) => {
+    const initial = deferred<ReturnType<typeof response>>();
+    profileFetchMock.mockReturnValueOnce(initial.promise).mockResolvedValue(response(updatedAvatar));
+    await render();
+    const signal = profileFetchMock.mock.calls[0][1].signal as AbortSignal;
+    if (change === 'unmount') await unmount();
+    else await render(change === 'account switch' ? userId + 1 : userId, change !== 'disable');
+    expect(signal.aborted).toBe(true);
+    await act(async () => { initial.resolve(response(originalAvatar)); });
+    if (change === 'account switch') expectAvatar(updatedAvatar);
+    if (change === 'disable') expectAvatar(null);
+    await render();
+    expectAvatar(updatedAvatar);
+    expect(profileFetchMock).toHaveBeenCalledTimes(change === 'account switch' ? 3 : 2);
+  });
+
+  test.each([originalAvatar, null])('reuses a normal GET cache value %s and ignores another account event', async (avatarDataUrl) => {
+    profileFetchMock.mockResolvedValue(response(avatarDataUrl));
+    await render();
+    expectAvatar(avatarDataUrl);
+    await act(async () => { dispatchMeProfileAvatarUpdated({ userId: userId + 1, avatarDataUrl: updatedAvatar }); });
+    expectAvatar(avatarDataUrl);
+    await unmount();
+    await render();
+    expectAvatar(avatarDataUrl);
+    expect(profileFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not fetch or listen while disabled or signed out', async () => {
+    await render(userId, false);
+    await act(async () => { dispatchMeProfileAvatarUpdated({ userId, avatarDataUrl: updatedAvatar }); });
+    expectAvatar(null);
+    await render(null);
+    expectAvatar(null);
+    expect(profileFetchMock).not.toHaveBeenCalled();
   });
 });
 

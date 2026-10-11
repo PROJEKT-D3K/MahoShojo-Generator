@@ -71,12 +71,12 @@ export function useTopBarProfile(userId: number | null, enabled: boolean) {
         const data = (await response.json().catch(() => null)) as TopBarProfileResponse | null;
         const nextAvatarDataUrl = normalizeAvatarDataUrl(data?.profile?.avatarDataUrl);
 
-        avatarCache.set(userId, nextAvatarDataUrl);
         if (!cancelled && !updatedFromEvent) {
+          avatarCache.set(userId, nextAvatarDataUrl);
           setAvatarDataUrl(nextAvatarDataUrl);
         }
       } catch {
-        if (controller.signal.aborted || cancelled) {
+        if (controller.signal.aborted || cancelled || updatedFromEvent) {
           return;
         }
         setAvatarDataUrl(null);
