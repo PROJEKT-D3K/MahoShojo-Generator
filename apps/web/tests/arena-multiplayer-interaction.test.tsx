@@ -838,9 +838,9 @@ describe('Arena multiplayer panel real React interactions', () => {
     await act(async () => button('配置待处理').click());
 
     expect(document.body.textContent).toContain('自动同步房间配置失败');
-    expect(document.body.textContent).toContain('重试同步房间配置');
+    expect(document.body.textContent).toContain('读取并同步最新房间配置');
 
-    await act(async () => button('重试同步房间配置').click());
+    await act(async () => button('读取并同步最新房间配置').click());
     expect(mocks.syncRoom).toHaveBeenCalledOnce();
   });
 });

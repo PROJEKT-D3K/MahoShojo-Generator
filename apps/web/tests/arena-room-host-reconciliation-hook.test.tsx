@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 
-import React, { act } from 'react';
+import React, { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ArenaRoomSharedConfigSchema } from '@mahoshojo/contracts/arena-room';
-import type { ArenaRoomSharedConfig } from '@mahoshojo/contracts/arena-room';
+import type {
+  ArenaRoomPublishConfigRequest,
+  ArenaRoomSessionResponse,
+  ArenaRoomSharedConfig,
+} from '@mahoshojo/contracts/arena-room';
 
 import {
   useArenaRoomHostReconciliation,
@@ -14,6 +18,7 @@ import {
 import { ArenaRoomReconciliationAbortError, ArenaRoomReconciliationTransientError } from '@/lib/arena-room/host-reconciliation';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 import type {
+  ArenaRoomConfigPublishResult,
   ArenaRoomController,
   ArenaRoomControllerState,
 } from '@/lib/arena-room/controller';
@@ -170,10 +175,17 @@ let root: Root;
 let currentState: ArenaRoomControllerState;
 let latest: ArenaRoomHostReconciliation | null;
 
-const publishConfig = vi.fn(async () => undefined);
+const publishConfig = vi.fn(
+  (_request: ArenaRoomPublishConfigRequest): Promise<ArenaRoomConfigPublishResult> =>
+    Promise.resolve({ kind: 'confirmed', session: currentState.session! }),
+);
+const refreshSession = vi.fn((): Promise<ArenaRoomSessionResponse> =>
+  Promise.resolve(currentState.session!),
+);
 const controller = {
   getSnapshot: () => currentState,
   publishConfig,
+  refreshSession,
 } as unknown as ArenaRoomController;
 
 const Harness = ({
@@ -183,13 +195,16 @@ const Harness = ({
   readonly state: ArenaRoomControllerState;
   readonly workspace: ArenaRoomHostWorkspace;
 }) => {
-  latest = useArenaRoomHostReconciliation({
+  const reconciliation = useArenaRoomHostReconciliation({
     controller,
     controllerState: state,
     hostWorkspace: workspace,
     retryDelayMs: 0,
   });
-  return <span>{latest.state.kind}</span>;
+  useEffect(() => {
+    latest = reconciliation;
+  }, [reconciliation]);
+  return <span>{reconciliation.state.kind}</span>;
 };
 
 const flush = async () => {
@@ -222,7 +237,17 @@ beforeEach(() => {
   root = createRoot(container);
   currentState = stateAt(1, config('classic'));
   latest = null;
-  vi.clearAllMocks();
+  vi.resetAllMocks();
+  mocks.applyAuthority.mockImplementation(async (
+    _config: unknown,
+    options: { readonly commitIf?: () => boolean },
+  ) => {
+    if (options.commitIf && !options.commitIf()) {
+      throw new Error('房间配置同步期间状态已变化，未覆盖新的本地修改');
+    }
+  });
+  publishConfig.mockImplementation(async () => ({ kind: 'confirmed', session: currentState.session! }));
+  refreshSession.mockImplementation(async () => currentState.session!);
 });
 
 afterEach(async () => {
@@ -465,7 +490,7 @@ describe('useArenaRoomHostReconciliation', () => {
     });
   });
 
-  it('自动同步失败后同 revision 可重试：是否落定以 settled baseline 为准而非 observed（回归：瞬时错误永久卡死）', async () => {
+  it('手动发布被明确拒绝时保留草稿，不自动回退到缓存同步', async () => {
     const settledRev1 = authorityOf(stateAt(1, config('classic')));
     let settled: ArenaRoomHostWorkspaceAuthority | null = settledRev1;
     const capturePublished = vi.fn((authority: ArenaRoomHostWorkspaceAuthority) => {
@@ -483,7 +508,7 @@ describe('useArenaRoomHostReconciliation', () => {
     mocks.applyAuthority
       .mockRejectedValueOnce(new Error('公开数据卡暂时无法读取'))
       .mockResolvedValueOnce(undefined);
-    publishConfig.mockRejectedValueOnce(new Error('网络中断'));
+    publishConfig.mockResolvedValueOnce({ kind: 'rejected', error: new Error('ROOM_CONFLICT: 房间配置已发生变化') });
 
     await renderState(currentState, workspace);
     await renderState(stateAt(2, config('daily')), workspace);
@@ -491,21 +516,40 @@ describe('useArenaRoomHostReconciliation', () => {
 
     expect(latest?.state).toMatchObject({ kind: 'error' });
     expect(mocks.applyAuthority).toHaveBeenCalledTimes(1);
+    const compareCallsBeforePublish = workspace.compare.mock.calls.length;
     expect(capturePublished).not.toHaveBeenCalled();
 
-    // 手动发布失败后 finally 的 auto reconcile 会再次运行；此时 observed 已经是
-    // rev2，只有以 settled baseline（rev1）判定「尚未落定」才会重试同一 revision。
+    // 已知拒绝必须保留 draft，不能借 finally 自动用旧缓存重新对账。
     await act(async () => { await latest!.publishLocal(); });
     await flush();
 
-    expect(workspace.compare).toHaveBeenCalledWith(settledRev1, expect.anything());
-    expect(mocks.applyAuthority).toHaveBeenCalledTimes(2);
-    expect(capturePublished).toHaveBeenCalledOnce();
-    expect(capturePublished).toHaveBeenCalledWith(
-      authorityOf(stateAt(2, config('daily'))),
-      expect.anything(),
-    );
-    expect(latest?.state).toMatchObject({ kind: 'synced', revision: 2 });
+    expect(workspace.compare).toHaveBeenCalledTimes(compareCallsBeforePublish);
+    expect(mocks.applyAuthority).toHaveBeenCalledTimes(1);
+    expect(capturePublished).not.toHaveBeenCalled();
+    expect(latest?.state).toMatchObject({ kind: 'error', message: 'ROOM_CONFLICT: 房间配置已发生变化' });
+  });
+
+  it('发布结果未知时保留未知错误，不捕获成功或自动同步缓存', async () => {
+    const capturePublished = vi.fn();
+    const workspace = {
+      settledAuthority: vi.fn(() => authorityOf(currentState)),
+      compare: vi.fn(),
+      startFromRoom: vi.fn(),
+      capturePublished,
+      retainFor: vi.fn(),
+      clear: vi.fn(),
+    } satisfies ArenaRoomHostWorkspace;
+    mocks.buildBundle.mockResolvedValue(bundle(config('daily')));
+    publishConfig.mockResolvedValueOnce({ kind: 'unknown', error: new Error('请求可能已提交，结果未知') });
+
+    await renderState(stateAt(1, config('classic')), workspace);
+    await act(async () => { await latest!.publishLocal(); });
+
+    expect(publishConfig).toHaveBeenCalledOnce();
+    expect(refreshSession).not.toHaveBeenCalled();
+    expect(mocks.applyAuthority).not.toHaveBeenCalled();
+    expect(capturePublished).not.toHaveBeenCalled();
+    expect(latest?.state).toMatchObject({ kind: 'error', message: '请求可能已提交，结果未知' });
   });
 
   it('reconciliation error 后可通过 syncRoom 重试同一 revision（回归：error 恢复入口）', async () => {
@@ -532,12 +576,158 @@ describe('useArenaRoomHostReconciliation', () => {
     expect(latest?.state).toMatchObject({ kind: 'error' });
     expect(mocks.applyAuthority).toHaveBeenCalledTimes(1);
 
+    currentState = stateAt(2, config('daily'));
+    refreshSession.mockImplementationOnce(async () => currentState.session!);
     await act(async () => { await latest!.syncRoom(); });
     await flush();
 
+    expect(refreshSession).toHaveBeenCalledOnce();
     expect(mocks.applyAuthority).toHaveBeenCalledTimes(2);
     expect(capturePublished).toHaveBeenCalledOnce();
     expect(latest?.state).toMatchObject({ kind: 'synced', revision: 2 });
+  });
+
+  it('syncRoom 先读取最新 session，再将最新 authority 同步到编辑区', async () => {
+    const freshState = stateAt(2, config('daily'));
+    const capturePublished = vi.fn();
+    const workspace = {
+      settledAuthority: vi.fn(() => authorityOf(currentState)),
+      compare: vi.fn(),
+      startFromRoom: vi.fn(() => ({ sharedConfig: config('daily'), hostLocalPayloads: [] })),
+      capturePublished,
+      retainFor: vi.fn(),
+      clear: vi.fn(),
+    } satisfies ArenaRoomHostWorkspace;
+    mocks.buildBundle
+      .mockResolvedValueOnce(bundle(config('classic')))
+      .mockResolvedValueOnce(bundle(config('daily')));
+    refreshSession.mockImplementationOnce(async () => {
+      currentState = freshState;
+      return freshState.session!;
+    });
+
+    await renderState(stateAt(1, config('classic')), workspace);
+    await act(async () => { await latest!.syncRoom(); });
+
+    expect(refreshSession).toHaveBeenCalledOnce();
+    expect(mocks.applyAuthority).toHaveBeenCalledWith(config('daily'), expect.anything());
+    expect(capturePublished).toHaveBeenCalledWith(authorityOf(freshState), expect.anything());
+    expect(latest?.state).toMatchObject({ kind: 'synced', revision: 2 });
+  });
+
+  it('syncRoom 的 fresh GET 失败时不物化缓存 authority，也不自动再次同步', async () => {
+    const workspace = {
+      settledAuthority: vi.fn(() => null),
+      compare: vi.fn(),
+      startFromRoom: vi.fn(),
+      capturePublished: vi.fn(),
+      retainFor: vi.fn(),
+      clear: vi.fn(),
+    } satisfies ArenaRoomHostWorkspace;
+    refreshSession.mockRejectedValueOnce(new Error('读取房间状态失败'));
+
+    await renderState(stateAt(1, config('classic')), workspace);
+    await act(async () => { await latest!.syncRoom(); });
+    await flush();
+
+    expect(refreshSession).toHaveBeenCalledOnce();
+    expect(mocks.applyAuthority).not.toHaveBeenCalled();
+    expect(workspace.capturePublished).not.toHaveBeenCalled();
+    expect(latest?.state).toMatchObject({ kind: 'error', message: '读取房间状态失败' });
+  });
+
+  it('fresh GET 期间本地编辑变化时中止物化并保留编辑', async () => {
+    const previousLanguage = useBattleStore.getState().selectedLanguage;
+    let resolveRefresh!: (session: NonNullable<ArenaRoomControllerState['session']>) => void;
+    const refreshPending = new Promise<NonNullable<ArenaRoomControllerState['session']>>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const workspace = {
+      settledAuthority: vi.fn(() => null),
+      compare: vi.fn(),
+      startFromRoom: vi.fn(() => ({ sharedConfig: config('daily'), hostLocalPayloads: [] })),
+      capturePublished: vi.fn(),
+      retainFor: vi.fn(),
+      clear: vi.fn(),
+    } satisfies ArenaRoomHostWorkspace;
+    refreshSession.mockReturnValueOnce(refreshPending);
+
+    try {
+      await renderState(stateAt(1, config('classic')), workspace);
+      let syncing!: Promise<void>;
+      await act(async () => { syncing = latest!.syncRoom(); await Promise.resolve(); });
+      await act(async () => {
+        useBattleStore.setState({ selectedLanguage: 'en-US' });
+      });
+      resolveRefresh(stateAt(2, config('daily')).session!);
+      await act(async () => { await syncing; });
+
+      expect(mocks.applyAuthority).not.toHaveBeenCalled();
+      expect(workspace.capturePublished).not.toHaveBeenCalled();
+      expect(useBattleStore.getState().selectedLanguage).toBe('en-US');
+      expect(latest?.state).toMatchObject({ kind: 'error', message: expect.stringContaining('本地内容已变化') });
+    } finally {
+      await act(async () => { useBattleStore.setState({ selectedLanguage: previousLanguage }); });
+    }
+  });
+
+  it('发布 bundle 期间 controlSeq 前进时使用最新 controlSeq，不重用旧 fence', async () => {
+    let resolveBundle!: (value: ReturnType<typeof bundle>) => void;
+    const bundlePending = new Promise<ReturnType<typeof bundle>>((resolve) => { resolveBundle = resolve; });
+    const capturePublished = vi.fn();
+    const workspace = {
+      settledAuthority: vi.fn(() => authorityOf(currentState)),
+      compare: vi.fn(),
+      startFromRoom: vi.fn(),
+      capturePublished,
+      retainFor: vi.fn(),
+      clear: vi.fn(),
+    } satisfies ArenaRoomHostWorkspace;
+    mocks.buildBundle.mockReturnValueOnce(bundlePending);
+    publishConfig.mockImplementationOnce(async (request) => {
+      expect(request.expectedRevision).toBe(1);
+      expect(request.expectedControlSeq).toBe(7);
+      const published = stateAt(2, config('daily'));
+      published.session!.snapshot.controlSeq = 8;
+      currentState = published;
+      return { kind: 'confirmed', session: published.session! };
+    });
+
+    await renderState(stateAt(1, config('classic')), workspace);
+    let publishing!: Promise<void>;
+    await act(async () => { publishing = latest!.publishLocal(); await Promise.resolve(); });
+    currentState = withControlEventAtSameRevision(currentState, 7);
+    resolveBundle(bundle(config('daily')));
+    await act(async () => { await publishing; });
+
+    expect(publishConfig).toHaveBeenCalledOnce();
+    expect(capturePublished).toHaveBeenCalledWith(authorityOf(currentState), expect.anything());
+    expect(latest?.state).toMatchObject({ kind: 'synced', revision: 2 });
+  });
+
+  it('发布 bundle 期间 revision 前进时拒绝旧草稿且不发请求', async () => {
+    let resolveBundle!: (value: ReturnType<typeof bundle>) => void;
+    const bundlePending = new Promise<ReturnType<typeof bundle>>((resolve) => { resolveBundle = resolve; });
+    const workspace = {
+      settledAuthority: vi.fn(() => authorityOf(currentState)),
+      compare: vi.fn(),
+      startFromRoom: vi.fn(),
+      capturePublished: vi.fn(),
+      retainFor: vi.fn(),
+      clear: vi.fn(),
+    } satisfies ArenaRoomHostWorkspace;
+    mocks.buildBundle.mockReturnValueOnce(bundlePending);
+
+    await renderState(stateAt(1, config('classic')), workspace);
+    let publishing!: Promise<void>;
+    await act(async () => { publishing = latest!.publishLocal(); await Promise.resolve(); });
+    currentState = stateAt(2, config('scenario'));
+    resolveBundle(bundle(config('daily')));
+    await act(async () => { await publishing; });
+
+    expect(publishConfig).not.toHaveBeenCalled();
+    expect(workspace.capturePublished).not.toHaveBeenCalled();
+    expect(latest?.state).toMatchObject({ kind: 'error', message: expect.stringContaining('房间权威状态已变化') });
   });
 
   it('物化期间无关 BattleStore 更新不中止 commit（回归：随机匹配公开角色后房主工作区卡在半同步）', async () => {

@@ -1184,7 +1184,9 @@ describe('Arena Room browser controller', () => {
     });
 
     resolvePublish(published);
-    await Promise.all([first, concurrent]);
+    const [confirmed, blocked] = await Promise.all([first, concurrent]);
+    expect(confirmed).toEqual({ kind: 'confirmed', session: published });
+    expect(blocked).toMatchObject({ kind: 'rejected' });
     expect(controller.getSnapshot()).toMatchObject({
       configPublishPending: false,
       configPublishResultUnknown: false,
@@ -3854,6 +3856,196 @@ describe('Room controller ephemeral presence', () => {
     }
     expect(controller.getSnapshot().session?.snapshot.members).toEqual(snapshot.members);
     expect(controller.getSnapshot().session?.snapshot.controlSeq).toBe(80);
+    controller.dispose();
+  });
+});
+
+
+describe('房间配置发布拒绝与权威恢复', () => {
+  const openHostRoom = async () => {
+    const harness = createHarness();
+    await harness.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+    harness.sockets[0]!.open();
+    return harness;
+  };
+  const publishRequest = {
+    expectedRoomEpoch: 'epoch-1', expectedRevision: 0, expectedControlSeq: 0,
+    sharedConfig: { ...sharedConfig, userGuidance: '本地未发布草稿' },
+  };
+
+  it.each([
+    ['ROOM_CONFLICT', 409, '房间配置已发生变化'],
+    ['ROOM_REFERENCE_STALE', 409, '房间配置引用的数据卡已更新，请重新选择'],
+    ['ROOM_REFERENCE_DENIED', 403, '房间配置引用的数据卡当前不可读取'],
+  ])('明确返回 %s 拒绝，不把错误包装成未知结果或重放发布', async (code, status, message) => {
+    const { controller, client } = await openHostRoom();
+    const error = new ArenaRoomClientError(code, status, message);
+    vi.mocked(client.publishConfig).mockRejectedValueOnce(error);
+    expect(await controller.publishConfig(publishRequest)).toEqual({ kind: 'rejected', error });
+    expect(controller.getSnapshot()).toMatchObject({
+      error: message, configPublishPending: false, configPublishResultUnknown: false,
+      session: { snapshot: { revision: 0, sharedConfig } },
+    });
+    expect(client.publishConfig).toHaveBeenCalledOnce();
+    expect(client.getSession).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it('同配置发布保持 revision 时返回确认，而不是拒绝或未知', async () => {
+    const { controller } = await openHostRoom();
+    expect(await controller.publishConfig({ ...publishRequest, sharedConfig })).toEqual({ kind: 'confirmed', session });
+    expect(controller.getSnapshot().configPublishResultUnknown).toBe(false);
+    controller.dispose();
+  });
+
+  it('本地 controlSeq 已前进时拒绝旧请求，不发送可预知冲突的 POST', async () => {
+    const { controller, client, sockets } = await openHostRoom();
+    sockets[0]!.message(JSON.stringify({ protocolVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1',
+      controlSeq: 1, timestamp: '2026-10-11T15:00:00.000Z', type: 'room.snapshot', payload: { ...snapshot, controlSeq: 1 } }));
+    expect(await controller.publishConfig(publishRequest)).toMatchObject({ kind: 'rejected', error: { code: 'ROOM_CONFLICT' } });
+    expect(client.publishConfig).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it('完整发布响应收敛期间到达的控制事件，并推进复制游标', async () => {
+    const { controller, client, sockets, runNextTimer } = await openHostRoom();
+    let resolve!: (value: typeof session) => void;
+    vi.mocked(client.publishConfig).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const pending = controller.publishConfig(publishRequest);
+    const member = { userId: 'new-member', role: 'member' as const, displayName: '新成员', membershipState: 'active' as const };
+    sockets[0]!.message(JSON.stringify({ protocolVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1',
+      controlSeq: 1, timestamp: '2026-10-11T15:00:00.000Z', type: 'room.member.joined', payload: { member } }));
+    const authoritative = { ...session, snapshot: { ...snapshot, revision: 1, controlSeq: 2,
+      sharedConfig: publishRequest.sharedConfig, members: [...snapshot.members, member] } };
+    resolve(authoritative);
+    expect(await pending).toEqual({ kind: 'confirmed', session: authoritative });
+    controller.reconnect();
+    await runNextTimer();
+    expect(client.issueTicket).toHaveBeenLastCalledWith('room-1', expect.objectContaining({ reconnect: { control: { roomEpoch: 'epoch-1', controlSeq: 2 } } }));
+    controller.dispose();
+  });
+
+  it('读取并安装最新完整 session，随后发布由用户重新发起', async () => {
+    const { controller, client } = await openHostRoom();
+    const error = new ArenaRoomClientError('ROOM_CONFLICT', 409, '房间配置已发生变化');
+    vi.mocked(client.publishConfig).mockRejectedValueOnce(error);
+    await controller.publishConfig(publishRequest);
+    const authoritative = { ...session, snapshot: { ...snapshot, revision: 2, controlSeq: 4,
+      sharedConfig: { ...sharedConfig, userGuidance: '服务器最新配置' } } };
+    vi.mocked(client.getSession).mockResolvedValueOnce(authoritative);
+    expect(await controller.refreshSession()).toEqual(authoritative);
+    expect(controller.getSnapshot()).toMatchObject({ session: authoritative, error: null, configPublishResultUnknown: false });
+    expect(client.getSession).toHaveBeenCalledWith('room-1');
+    expect(client.publishConfig).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it('未知结果经只读 session 核对解锁，不重放原发布请求', async () => {
+    const { controller, client } = await openHostRoom();
+    const error = new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '结果未知');
+    vi.mocked(client.publishConfig).mockRejectedValueOnce(error);
+    expect(await controller.publishConfig(publishRequest)).toEqual({ kind: 'unknown', error });
+    expect(controller.getSnapshot().configPublishResultUnknown).toBe(true);
+    await controller.refreshSession();
+    expect(controller.getSnapshot()).toMatchObject({ configPublishResultUnknown: false, configPublishPending: false });
+    expect(client.publishConfig).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it('同 revision 的完整 session 刷新控制序号与成员，并以新游标恢复复制', async () => {
+    const { controller, client, runNextTimer } = await openHostRoom();
+    const member = { userId: 'new-member', role: 'member' as const, displayName: '新成员', membershipState: 'active' as const };
+    const authoritative = { ...session, snapshot: { ...snapshot, controlSeq: 4, members: [...snapshot.members, member] } };
+    vi.mocked(client.getSession).mockResolvedValueOnce(authoritative);
+    await controller.refreshSession();
+    expect(controller.getSnapshot().session).toEqual(authoritative);
+    controller.reconnect();
+    await runNextTimer();
+    expect(client.issueTicket).toHaveBeenLastCalledWith('room-1', expect.objectContaining({ reconnect: { control: { roomEpoch: 'epoch-1', controlSeq: 4 } } }));
+    controller.dispose();
+  });
+
+  it('读取在途时 WSS 已安装更新配置，较旧 GET 不回退状态', async () => {
+    const { controller, client, sockets } = await openHostRoom();
+    let resolve!: (value: typeof session) => void;
+    vi.mocked(client.getSession).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const pending = controller.refreshSession();
+    const newer = { ...snapshot, revision: 1, controlSeq: 2, sharedConfig: publishRequest.sharedConfig };
+    sockets[0]!.message(JSON.stringify({ protocolVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1',
+      controlSeq: 2, timestamp: '2026-10-11T15:00:00.000Z', type: 'room.snapshot', payload: newer }));
+    resolve(session);
+    expect((await pending).snapshot).toEqual(newer);
+    expect(controller.getSnapshot().session?.snapshot).toEqual(newer);
+    controller.dispose();
+  });
+
+  it.each(['room', 'self', 'membership', 'same-revision-config', 'crossed-cursors'] as const)('拒绝无效 refresh authority：%s', async (fault) => {
+    const { controller, client } = await openHostRoom();
+    const authoritative = {
+      ...session,
+      ...(fault === 'room' ? { roomId: 'different-room' } : {}),
+      self: { ...session.self, ...(fault === 'self' ? { userId: 'other-host' } : {}),
+        ...(fault === 'membership' ? { membershipState: 'revoked' as const } : {}) },
+      snapshot: { ...snapshot,
+        ...(fault === 'same-revision-config' ? { sharedConfig: publishRequest.sharedConfig } : {}),
+        ...(fault === 'crossed-cursors' ? { revision: 1, controlSeq: -1 } : {}) },
+    };
+    vi.mocked(client.getSession).mockResolvedValueOnce(authoritative);
+    await expect(controller.refreshSession()).rejects.toBeInstanceOf(ArenaRoomClientError);
+    expect(controller.getSnapshot().session).toEqual(session);
+    controller.dispose();
+  });
+
+  it('session 读取失败保留旧状态与发布未知标记', async () => {
+    const { controller, client } = await openHostRoom();
+    vi.mocked(client.publishConfig).mockRejectedValueOnce(new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '结果未知'));
+    await controller.publishConfig(publishRequest);
+    const error = new ArenaRoomClientError('ROOM_UNAVAILABLE', 503, '读取失败');
+    vi.mocked(client.getSession).mockRejectedValueOnce(error);
+    await expect(controller.refreshSession()).rejects.toBe(error);
+    expect(controller.getSnapshot()).toMatchObject({ configPublishResultUnknown: true, session });
+    controller.dispose();
+  });
+
+  it.each(['reset', 'dispose', 'access'] as const)('读取期间 %s 后不安装旧身份响应', async (action) => {
+    const { controller, client } = await openHostRoom();
+    let resolve!: (value: typeof session) => void;
+    vi.mocked(client.getSession).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const pending = controller.refreshSession();
+    const failure = expect(pending).rejects.toBeInstanceOf(ArenaRoomClientError);
+    if (action === 'access') controller.setAccess({ enabled: true, authenticated: false });
+    else controller[action]();
+    const before = controller.getSnapshot();
+    resolve({ ...session, snapshot: { ...snapshot, revision: 1, controlSeq: 1, sharedConfig: publishRequest.sharedConfig } });
+    await failure;
+    expect(controller.getSnapshot()).toEqual(before);
+    controller.dispose();
+  });
+
+  it('读取期间有新的配置发布，不以 GET 覆盖发布或清除其围栏', async () => {
+    const { controller, client } = await openHostRoom();
+    let resolve!: (value: typeof session) => void;
+    vi.mocked(client.getSession).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const pending = controller.refreshSession();
+    const failure = expect(pending).rejects.toMatchObject({ code: 'ROOM_CONFLICT' });
+    const published = { ...session, snapshot: { ...snapshot, revision: 1, controlSeq: 1, sharedConfig: publishRequest.sharedConfig } };
+    vi.mocked(client.publishConfig).mockResolvedValueOnce(published);
+    await controller.publishConfig(publishRequest);
+    resolve(session);
+    await failure;
+    expect(controller.getSnapshot().session).toEqual(published);
+    controller.dispose();
+  });
+
+  it('refresh 接受服务器恢复的新 epoch，并重建 socket 复制通道', async () => {
+    const { controller, client, sockets } = await openHostRoom();
+    const authoritative = { ...session, roomEpoch: 'epoch-2', snapshot: { ...snapshot, roomEpoch: 'epoch-2', revision: 0, controlSeq: 0 } };
+    vi.mocked(client.getSession).mockResolvedValueOnce(authoritative);
+    await controller.refreshSession();
+    await vi.waitFor(() => expect(client.issueTicket).toHaveBeenCalledTimes(2));
+    expect(controller.getSnapshot().session).toEqual(authoritative);
+    expect(sockets[0]!.onmessage).toBeNull();
+    expect(client.issueTicket).toHaveBeenLastCalledWith('room-1', expect.objectContaining({ reconnect: { control: { roomEpoch: 'epoch-2', controlSeq: 0 } } }));
     controller.dispose();
   });
 });

@@ -184,7 +184,7 @@ export function ArenaHostConfigPanel({
         >
           <p className="font-medium">{status.message}</p>
           <p className="mt-1 text-xs opacity-90">
-            本地与房间设置的同步结果不确定；请先重试同步房间设置，恢复后再继续生成或发布。
+            请先读取并同步服务器上的最新房间配置；此操作会放弃本地未发布修改。若错误涉及数据卡引用，请先修复或重新选择对应数据卡。
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
@@ -193,7 +193,7 @@ export function ArenaHostConfigPanel({
               disabled={busy}
               onClick={() => { void reconciliation.syncRoom(); }}
             >
-              重试同步房间配置
+              读取并同步最新房间配置
             </button>
           </div>
         </div>

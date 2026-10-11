@@ -173,10 +173,14 @@ export const useArenaRoomHostReconciliation = ({
     authority: ArenaRoomHostWorkspaceAuthority,
     action: 'auto' | 'sync-room',
     operationGeneration: number,
+    expectedSourceRefs?: readonly unknown[],
   ): Promise<void> => {
     setState({ kind: 'synchronizing', action });
     const battleStateAtStart = useBattleStore.getState();
     const sourceRefsAtStart = captureBundleSourceRefs(battleStateAtStart);
+    if (expectedSourceRefs && !sameBundleSourceRefs(expectedSourceRefs, sourceRefsAtStart)) {
+      throw new ArenaRoomReconciliationAbortError('读取房间配置期间本地内容已变化，未覆盖新的本地修改');
+    }
     const currentBundle = await buildArenaRoomHostWorkspaceBundleFromBattleState(
       battleStateAtStart,
     );
@@ -340,28 +344,43 @@ export const useArenaRoomHostReconciliation = ({
     if (actionLockRef.current) return;
     const authority = currentAuthority(controller);
     if (!authority) return;
-    const expectedControlSeq = controller.getSnapshot().session?.snapshot.controlSeq;
-    if (expectedControlSeq === undefined) return;
     const operationGeneration = ++operationGenerationRef.current;
     actionLockRef.current = true;
     setState({ kind: 'synchronizing', action: 'publish' });
+    let publishConfirmed = false;
     try {
+      const stateAtBuildStart = useBattleStore.getState();
+      const sourceRefsAtBuildStart = captureBundleSourceRefs(stateAtBuildStart);
       const bundle = await buildArenaRoomHostWorkspaceBundleFromBattleState(
-        useBattleStore.getState(),
+        stateAtBuildStart,
       );
-      await controller.publishConfig({
+      if (!sameBundleSourceRefs(sourceRefsAtBuildStart, captureBundleSourceRefs(useBattleStore.getState()))) {
+        throw new ArenaRoomReconciliationAbortError('准备发布期间本地内容已变化，请确认最新修改后重试');
+      }
+      const beforePublishState = controller.getSnapshot();
+      const beforePublishAuthority = arenaRoomHostWorkspaceAuthorityFromSession(beforePublishState.session);
+      const expectedControlSeq = beforePublishState.session?.snapshot.controlSeq;
+      if (
+        !beforePublishAuthority
+        || authorityIdentity(beforePublishAuthority) !== authorityIdentity(authority)
+        || beforePublishAuthority.revision !== authority.revision
+        || expectedControlSeq === undefined
+      ) {
+        throw new ArenaRoomReconciliationAbortError('房间权威状态已变化，请先同步最新房间配置');
+      }
+      const result = await controller.publishConfig({
         expectedRoomEpoch: authority.roomEpoch,
         expectedRevision: authority.revision,
         expectedControlSeq,
         sharedConfig: bundle.sharedConfig,
       });
-      const published = currentAuthority(controller);
-      const controllerSnapshot = controller.getSnapshot();
+      if (result.kind !== 'confirmed') throw result.error;
+      const published = arenaRoomHostWorkspaceAuthorityFromSession(result.session);
       if (
         !published
         || operationGenerationRef.current !== operationGeneration
         || authorityIdentity(published) !== authorityIdentity(authority)
-        || controllerSnapshot.configPublishResultUnknown
+        || published.revision < authority.revision
         || !areArenaRoomSharedConfigsEqual(published.sharedConfig, bundle.sharedConfig)
       ) {
         throw new Error('房间尚未确认配置更新结果，请重新连接并核对');
@@ -373,37 +392,54 @@ export const useArenaRoomHostReconciliation = ({
         revision: published.revision,
         message: '房间配置已更新',
       });
+      publishConfirmed = true;
     } catch (error) {
       if (operationGenerationRef.current !== operationGeneration) return;
       setState(reconciliationErrorState(error, '更新房间配置失败'));
     } finally {
       actionLockRef.current = false;
-      // 手动发布期间权威可能又前进（例如提案被接受）；补一次自动对账，
-      // 若当前权威已落定则此调用是空操作。
-      runAutoReconcile();
+      if (publishConfirmed) {
+        // 仅确认成功后才对账；明确拒绝与结果未知都不能借旧缓存自动物化。
+        runAutoReconcile();
+      }
     }
   }, [controller, hostWorkspace, runAutoReconcile]);
 
   const syncRoom = useCallback(async (): Promise<void> => {
     if (actionLockRef.current) return;
-    const authority = currentAuthority(controller);
-    if (!authority) return;
+    const initialAuthority = currentAuthority(controller);
+    if (!initialAuthority) return;
     const operationGeneration = ++operationGenerationRef.current;
+    const expectedSourceRefs = captureBundleSourceRefs(useBattleStore.getState());
     actionLockRef.current = true;
+    setState({ kind: 'synchronizing', action: 'sync-room' });
     try {
-      await installAuthority(authority, 'sync-room', operationGeneration);
+      const refreshedSession = await controller.refreshSession();
+      if (operationGenerationRef.current !== operationGeneration) return;
+      if (!sameBundleSourceRefs(expectedSourceRefs, captureBundleSourceRefs(useBattleStore.getState()))) {
+        throw new ArenaRoomReconciliationAbortError('读取房间配置期间本地内容已变化，未覆盖新的本地修改');
+      }
+      const refreshedAuthority = currentAuthority(controller);
+      const responseAuthority = arenaRoomHostWorkspaceAuthorityFromSession(refreshedSession);
+      if (
+        !refreshedAuthority
+        || !responseAuthority
+        || refreshedAuthority.roomId !== initialAuthority.roomId
+        || refreshedAuthority.ownerUserId !== initialAuthority.ownerUserId
+        || authorityIdentity(responseAuthority) !== authorityIdentity(refreshedAuthority)
+        || (refreshedAuthority.roomEpoch === responseAuthority.roomEpoch
+          && refreshedAuthority.revision < responseAuthority.revision)
+      ) {
+        throw new ArenaRoomReconciliationAbortError('读取到的房间身份或版本已变化，请重新确认房间状态');
+      }
+      await installAuthority(refreshedAuthority, 'sync-room', operationGeneration, expectedSourceRefs);
     } catch (error) {
       if (operationGenerationRef.current !== operationGeneration) return;
-      const failure = reconciliationErrorState(error, '同步房间配置失败');
-      setState(hostWorkspace.needsOnlineRefresh?.(authority)
-        ? { kind: 'synced', refreshFailed: true, revision: authority.revision, message: `房间配置已保存；Arena 编辑区暂未刷新，可手动同步重试：${failure.message}` }
-        : failure);
+      setState(reconciliationErrorState(error, '同步房间配置失败'));
     } finally {
       actionLockRef.current = false;
-      // 同步过程中权威前进时旧任务会被 fence 拒绝；这里对最新权威补一次对账。
-      runAutoReconcile();
     }
-  }, [controller, hostWorkspace, installAuthority, runAutoReconcile]);
+  }, [controller, installAuthority]);
 
   useEffect(() => () => {
     operationGenerationRef.current += 1;

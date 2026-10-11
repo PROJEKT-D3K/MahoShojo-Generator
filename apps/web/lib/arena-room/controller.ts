@@ -149,6 +149,10 @@ type ArenaRoomControllerOptions = {
 
 export type ArenaRoomCreateIntent = Omit<ArenaRoomCreateRequest, 'creationRequestId'>;
 
+export type ArenaRoomConfigPublishResult =
+  | Readonly<{ kind: 'confirmed'; session: ArenaRoomSessionResponse }>
+  | Readonly<{ kind: 'rejected' | 'unknown' | 'superseded'; error: Error }>;
+
 export type ArenaRoomController = {
   getSnapshot(): ArenaRoomControllerState;
   subscribe(listener: () => void): () => void;
@@ -165,7 +169,9 @@ export type ArenaRoomController = {
   submitProposal(request: ArenaRoomProposalSubmitRequest): Promise<void>;
   resolveProposal(proposalId: string, request: ArenaRoomProposalResolveRequest): Promise<void>;
   withdrawProposal(proposalId: string): Promise<void>;
-  publishConfig(request: ArenaRoomPublishConfigRequest): Promise<void>;
+  publishConfig(request: ArenaRoomPublishConfigRequest): Promise<ArenaRoomConfigPublishResult>;
+  /** 只读核对服务器权威，不重放配置发布；显式同步再决定如何处理本地草稿。 */
+  refreshSession(): Promise<ArenaRoomSessionResponse>;
   startGeneration(request: ArenaRoomGenerationStartRequest): Promise<void>;
   retryGenerationStart(): Promise<void>;
   /** 仅重新读取当前 generation，不创建新的 generation intent。 */
@@ -540,6 +546,7 @@ export const createArenaRoomController = (
   let unknownProposalMutation: UnknownProposalMutation | null = null;
   let configPublishOperation = 0;
   let configPublishPending = false;
+  let sessionRefreshOperation = 0;
   let configPublishIntent: Readonly<{
     roomId: string;
     selfUserId: string;
@@ -1688,52 +1695,37 @@ export const createArenaRoomController = (
 
   const runConfigPublish = async (
     input: ArenaRoomPublishConfigRequest,
-  ): Promise<void> => {
-    if (disposed || !access.enabled || !access.authenticated) return;
+  ): Promise<ArenaRoomConfigPublishResult> => {
+    const superseded = (): ArenaRoomConfigPublishResult => ({
+      kind: 'superseded',
+      error: new ArenaRoomClientError('ROOM_CONFLICT', null, '房间会话已变化，请核对最新状态后重试。'),
+    });
+    const reject = (code: string, message: string): ArenaRoomConfigPublishResult => {
+      const error = new ArenaRoomClientError(code, null, message);
+      publish({ notice: null, error: message });
+      return { kind: 'rejected', error };
+    };
+    if (disposed || !access.enabled || !access.authenticated) return superseded();
     const parsed = ArenaRoomPublishConfigRequestSchema.safeParse(input);
-    if (!parsed.success) {
-      publish({
-        configPublishPending: false,
-        configPublishResultUnknown: false,
-        notice: null,
-        error: '房间配置请求无效',
-      });
-      return;
-    }
+    if (!parsed.success) return reject('ROOM_REQUEST_INVALID', '房间配置请求无效');
     const request = parsed.data;
     const current = state.session;
-    if (
-      disposed
-      || !access.enabled
-      || !access.authenticated
-      || !current
-      || configPublishPending
-      || state.configPublishResultUnknown
-    ) return;
-    if (
-      current.self.role !== 'host'
-      || current.self.membershipState !== 'active'
-    ) {
-      publish({
-        configPublishPending: false,
-        configPublishResultUnknown: false,
-        notice: null,
-        error: '只有当前房主可以更新房间配置',
-      });
-      return;
+    if (!current) return superseded();
+    if (configPublishPending) return reject('ROOM_CONFLICT', '房间配置正在发布，请等待本次发布完成。');
+    if (state.configPublishResultUnknown) {
+      return {
+        kind: 'unknown',
+        error: new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', null, '先前的配置发布结果未知，请先同步房间权威状态。'),
+      };
+    }
+    if (current.self.role !== 'host' || current.self.membershipState !== 'active') {
+      return reject('ROOM_FORBIDDEN', '只有当前房主可以更新房间配置');
     }
     if (
       request.expectedRoomEpoch !== current.roomEpoch
       || request.expectedRevision !== current.snapshot.revision
-    ) {
-      publish({
-        configPublishPending: false,
-        configPublishResultUnknown: false,
-        notice: null,
-        error: '房间配置已发生变化，请重新确认后再发布',
-      });
-      return;
-    }
+      || request.expectedControlSeq !== current.snapshot.controlSeq
+    ) return reject('ROOM_CONFLICT', '房间配置已发生变化，请重新确认后再发布');
 
     configPublishPending = true;
     configPublishOperation += 1;
@@ -1745,11 +1737,7 @@ export const createArenaRoomController = (
       controlSeq: current.snapshot.controlSeq,
       selfUserId: current.self.userId,
     };
-    configPublishIntent = {
-      roomId: current.roomId,
-      selfUserId: current.self.userId,
-      request,
-    };
+    configPublishIntent = { roomId: current.roomId, selfUserId: current.self.userId, request };
     publish({
       configPublishPending: true,
       configPublishResultUnknown: false,
@@ -1768,11 +1756,12 @@ export const createArenaRoomController = (
         || latest.self.userId !== captured.selfUserId
         || latest.self.role !== 'host'
         || latest.self.membershipState !== 'active'
-      ) return;
+      ) return superseded();
       const responseMatchesIntent = authoritative.roomId === captured.roomId
         && authoritative.roomEpoch === captured.roomEpoch
         && authoritative.self.userId === captured.selfUserId
         && authoritative.self.role === 'host'
+        && authoritative.self.membershipState === 'active'
         && authoritative.snapshot.controlSeq >= captured.controlSeq
         && (
           authoritative.snapshot.revision === captured.revision
@@ -1780,16 +1769,21 @@ export const createArenaRoomController = (
         )
         && areArenaRoomSharedConfigsSemanticallyEqual(authoritative.snapshot.sharedConfig, request.sharedConfig);
       if (!responseMatchesIntent) {
+        const error = new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', null, '配置同步结果无法确认，请先同步房间权威状态。');
         publish({
           configPublishPending: false,
           configPublishResultUnknown: true,
-          notice: '配置同步结果无法确认，请先重新连接核对房间状态',
+          notice: error.message,
           error: null,
         });
-        return;
+        return { kind: 'unknown', error };
       }
+      // 完整命令响应可以收敛发布期间到达的成员/提案控制事件；只要不回退
+      // revision/controlSeq，就无需依赖另一条 WSS 配置事件才能确认成功。
       const canInstall = latest.snapshot.revision === captured.revision
-        && latest.snapshot.controlSeq === captured.controlSeq;
+        && latest.snapshot.controlSeq <= authoritative.snapshot.controlSeq
+        && (authoritative.snapshot.revision !== latest.snapshot.revision
+          || areArenaRoomSharedConfigsExactlyEqual(latest.snapshot.sharedConfig, authoritative.snapshot.sharedConfig));
       const alreadyInstalled = latest.snapshot.revision === authoritative.snapshot.revision
         && latest.snapshot.controlSeq >= authoritative.snapshot.controlSeq
         && areArenaRoomSharedConfigsExactlyEqual(latest.snapshot.sharedConfig, authoritative.snapshot.sharedConfig);
@@ -1801,24 +1795,30 @@ export const createArenaRoomController = (
           notice: '房间状态已变化，未安装过期的配置响应',
           error: null,
         });
-        return;
+        return superseded();
       }
       configPublishIntent = null;
+      const confirmed = canInstall ? authoritative : latest;
+      if (canInstall) {
+        controlCursor = { roomEpoch: confirmed.roomEpoch, controlSeq: confirmed.snapshot.controlSeq };
+      }
       publish({
-        ...(canInstall ? { session: authoritative } : {}),
+        session: confirmed,
         configPublishPending: false,
         configPublishResultUnknown: false,
         notice: '房间配置已更新',
         error: null,
       });
-    } catch (error) {
+      return { kind: 'confirmed', session: confirmed };
+    } catch (cause) {
       if (
         disposed
         || operation !== configPublishOperation
         || state.session?.roomId !== captured.roomId
         || state.session.roomEpoch !== captured.roomEpoch
         || state.session.self.userId !== captured.selfUserId
-      ) return;
+      ) return superseded();
+      const error = cause instanceof Error ? cause : new Error(safeErrorMessage(cause));
       if (error instanceof ArenaRoomClientError && error.code === 'ROOM_RESULT_UNKNOWN') {
         publish({
           configPublishPending: false,
@@ -1826,15 +1826,16 @@ export const createArenaRoomController = (
           notice: error.message,
           error: null,
         });
-      } else {
-        configPublishIntent = null;
-        publish({
-          configPublishPending: false,
-          configPublishResultUnknown: false,
-          notice: null,
-          error: safeErrorMessage(error),
-        });
+        return { kind: 'unknown', error };
       }
+      configPublishIntent = null;
+      publish({
+        configPublishPending: false,
+        configPublishResultUnknown: false,
+        notice: null,
+        error: error.message,
+      });
+      return { kind: 'rejected', error };
     } finally {
       if (operation === configPublishOperation) configPublishPending = false;
     }
@@ -2046,6 +2047,80 @@ export const createArenaRoomController = (
     });
     if (authoritative.snapshot.activeGeneration) void requestGenerationRecovery('baseline');
     return true;
+  };
+
+  const refreshSession = async (): Promise<ArenaRoomSessionResponse> => {
+    const captured = state.session;
+    const generation = operationGeneration;
+    const configOperation = configPublishOperation;
+    const operation = ++sessionRefreshOperation;
+    const conflict = () => new ArenaRoomClientError(
+      'ROOM_CONFLICT', null, '房间状态已变化，请重新同步房间配置。',
+    );
+    if (!operationIsCurrent(generation) || !captured) throw conflict();
+    if (captured.self.role !== 'host' || captured.self.membershipState !== 'active') {
+      throw new ArenaRoomClientError('ROOM_FORBIDDEN', null, '只有当前房主可以同步房间配置。');
+    }
+    if (configPublishPending || state.managementOperation || state.managementResultUnknown) throw conflict();
+    const authoritative = await options.client.getSession(captured.roomId);
+    const latest = state.session;
+    if (
+      !operationIsCurrent(generation)
+      || operation !== sessionRefreshOperation
+      || configOperation !== configPublishOperation
+      || state.managementOperation
+      || state.managementResultUnknown
+      || !latest
+      || latest.roomId !== captured.roomId
+      || latest.roomEpoch !== captured.roomEpoch
+      || latest.self.userId !== captured.self.userId
+      || latest.self.role !== 'host'
+      || latest.self.membershipState !== 'active'
+    ) throw conflict();
+    if (
+      authoritative.roomId !== captured.roomId
+      || authoritative.snapshot.roomId !== captured.roomId
+      || authoritative.snapshot.roomEpoch !== authoritative.roomEpoch
+      || authoritative.self.userId !== captured.self.userId
+      || authoritative.self.role !== 'host'
+      || authoritative.self.membershipState !== 'active'
+    ) {
+      throw new ArenaRoomClientError('ROOM_RESPONSE_INVALID', null, '房间权威状态身份无效，请重新连接核对。');
+    }
+    let confirmed = authoritative;
+    const epochChanged = authoritative.roomEpoch !== latest.roomEpoch;
+    if (!epochChanged) {
+      if (authoritative.snapshot.revision === latest.snapshot.revision
+        && !areArenaRoomSharedConfigsExactlyEqual(authoritative.snapshot.sharedConfig, latest.snapshot.sharedConfig)) {
+        throw new ArenaRoomClientError('ROOM_RESPONSE_INVALID', null, '同一房间版本的配置不一致，请重新连接核对。');
+      }
+      if (authoritative.snapshot.revision <= latest.snapshot.revision
+        && authoritative.snapshot.controlSeq <= latest.snapshot.controlSeq) {
+        // GET 在途时 WSS 可以先到达更完整的权威；不回退，也不丢弃新提案。
+        confirmed = latest;
+      } else if (authoritative.snapshot.revision < latest.snapshot.revision
+        || authoritative.snapshot.controlSeq < latest.snapshot.controlSeq) throw conflict();
+    }
+    const generationChanged = epochChanged
+      || JSON.stringify(confirmed.snapshot.activeGeneration) !== JSON.stringify(latest.snapshot.activeGeneration);
+    invalidateConfigPublish();
+    controlCursor = { roomEpoch: confirmed.roomEpoch, controlSeq: confirmed.snapshot.controlSeq };
+    if (generationChanged) advanceGenerationFence();
+    publish({
+      session: confirmed,
+      ...(generationChanged ? { generation: generationViewForSnapshot(confirmed.snapshot.activeGeneration, epochChanged) } : {}),
+      configPublishPending: false,
+      configPublishResultUnknown: false,
+      notice: '已读取最新房间配置',
+      error: null,
+    });
+    if (generationChanged && confirmed.snapshot.activeGeneration) void requestGenerationRecovery('baseline');
+    if (epochChanged) {
+      // Room recovery 的新纪元必须重建复制通道，不能继续接受旧 socket 事件。
+      detachSocket(true);
+      void connectSession(confirmed, true, generation);
+    }
+    return confirmed;
   };
 
   /**
@@ -2833,8 +2908,10 @@ export const createArenaRoomController = (
     },
 
     async publishConfig(request) {
-      await runConfigPublish(request);
+      return runConfigPublish(request);
     },
+
+    refreshSession,
 
     async startGeneration(request) {
       await runGenerationStart(request);

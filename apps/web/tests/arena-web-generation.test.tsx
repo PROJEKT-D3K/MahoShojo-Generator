@@ -5,10 +5,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ArenaGenerationConnectionState } from '@/lib/arena/resumable-generation-client';
+import type { ArenaRoomConfigPublishResult, ArenaRoomControllerState } from '@/lib/arena-room/controller';
 
 const mocks = vi.hoisted(() => ({
   openStream: vi.fn(), dispatch: vi.fn(), quickCheck: vi.fn(), shield: vi.fn(),
   updateFromMarkdown: vi.fn(), resolveRandom: vi.fn(), cooldown: vi.fn(), appendHistory: vi.fn(), queryData: vi.fn(),
+  roomRuntime: null as unknown,
 }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ setQueryData: mocks.queryData }) }));
 vi.mock('@/lib/client-route-adapter', () => ({ useClientRouteAdapter: () => ({ push: vi.fn() }) }));
@@ -22,7 +24,7 @@ vi.mock('@/lib/arena-room/narrative-history-runtime', async (importOriginal) => 
   ...await importOriginal<typeof import('@/lib/arena-room/narrative-history-runtime')>(),
   appendArenaNarrativeHistoryResult: mocks.appendHistory,
 }));
-vi.mock('@/components/arena/multiplayer/useArenaRoom', () => ({ useArenaRoomContext: () => null }));
+vi.mock('@/components/arena/multiplayer/useArenaRoom', () => ({ useArenaRoomContext: () => mocks.roomRuntime }));
 vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntentLatch: () => ({ tryAcquire: () => ({ dispatch: mocks.dispatch }) }) }));
 vi.mock('@/lib/arena/resumable-generation-client', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/arena/resumable-generation-client')>(),
@@ -32,6 +34,9 @@ vi.mock('@/lib/arena/resumable-generation-client', async (importOriginal) => ({
 import { useBattleEngine } from '@/components/arena/hooks/useBattleEngine';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 import { BUILTIN_ARENA_NEWS_PACKAGE_REF, createWebPackageOverlay } from '@mahoshojo/web-package';
+import { buildArenaRoomHostWorkspaceBundleFromBattleState } from '@/lib/arena-room/shared-config';
+import { arenaRoomHostWorkspaceAuthorityFromSession } from '@/lib/arena-room/host-workspace';
+import { ArenaRoomClientError } from '@/lib/arena-room/client';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let current: ReturnType<typeof useBattleEngine>;
@@ -52,6 +57,7 @@ const streamHeaders = {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.roomRuntime = null;
   mocks.quickCheck.mockResolvedValue({ hasSensitiveWords: false, matchDetails: [], detectedWords: [] });
   mocks.shield.mockImplementation((text: string) => ({ filteredText: text.replaceAll('SHIELD', '被替换') }));
   mocks.resolveRandom.mockResolvedValue(undefined);
@@ -584,5 +590,63 @@ describe('legacy Web consumer with the actual companion producer', () => {
       else { expect(state.newsReport!.article.body).toBe(html); expect(state.resultWebReady).toBe(true); }
       if (kind === 'package') { expect(state.resultWebPackage).toEqual(artifact); expect(state.newsReport).not.toHaveProperty('webHtml'); }
     }
+  });
+});
+
+
+describe('多人发布确认与拒绝的真实生成入口', () => {
+  const prepareRoom = async () => {
+    await act(async () => useBattleStore.setState({ reportFormat: 'markdown' }));
+    const bundle = await buildArenaRoomHostWorkspaceBundleFromBattleState(useBattleStore.getState());
+    const sharedConfig = bundle.sharedConfig;
+    const host = { userId: 'host-1', role: 'host' as const, displayName: '房主', membershipState: 'active' as const };
+    const state: ArenaRoomControllerState = {
+      phase: 'connected', rooms: [], notice: null, error: null, unknownOperation: null,
+      proposalOperation: null, proposalResultUnknown: false, configPublishPending: false, configPublishResultUnknown: false,
+      managementOperation: null, managementResultUnknown: false,
+      session: { protocolVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1', self: host,
+        snapshot: { protocolVersion: 1, schemaVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1', revision: 4,
+          controlSeq: 8, sharedConfig, members: [host], proposals: [], activeGeneration: null } },
+      generation: { mirror: null, phase: 'idle', status: null, authoritativeMarkdown: '', markdown: '', storyCursor: null,
+        gap: null, finalAuthoritative: false, generationRecordId: null, errorCode: null, recoveryCode: null,
+        pendingRequestId: null, startResultUnknown: false },
+    };
+    const publishConfig = vi.fn(async (): Promise<ArenaRoomConfigPublishResult> => ({ kind: 'confirmed', session: state.session! }));
+    const startGeneration = vi.fn(async () => {});
+    const capturePublished = vi.fn();
+    mocks.roomRuntime = { state, controller: { getSnapshot: () => state, publishConfig, startGeneration },
+      hostWorkspace: { compare: () => ({ kind: 'dirty', reasons: ['baseline-missing'], current: bundle }),
+        canAutoPublish: () => true, settledAuthority: () => arenaRoomHostWorkspaceAuthorityFromSession(state.session), capturePublished },
+      hostReconciliation: { state: { kind: 'synced', revision: 4, message: '已同步' }, reconcilePublished: vi.fn() },
+    };
+    await act(async () => root.render(<Harness />));
+    return { state, bundle, publishConfig, startGeneration, capturePublished };
+  };
+
+  it('相同配置的幂等发布不递增版本也可继续生成一次', async () => {
+    const { state, publishConfig, startGeneration, capturePublished } = await prepareRoom();
+    await act(async () => current.handleGenerate());
+    expect(useBattleStore.getState().error).toBeFalsy();
+    expect(publishConfig).toHaveBeenCalledOnce();
+    expect(capturePublished).toHaveBeenCalledOnce();
+    expect(startGeneration).toHaveBeenCalledOnce();
+    expect(startGeneration).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 4, expectedControlSeq: 8,
+      sharedConfig: state.session!.snapshot.sharedConfig }));
+    expect(mocks.openStream).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['rejected', 'ROOM_CONFLICT', 409, '房间配置已发生变化，请重新同步'],
+    ['rejected', 'ROOM_REFERENCE_STALE', 409, '情景预设已更新，请重新选择对应情景'],
+    ['unknown', 'ROOM_RESULT_UNKNOWN', 503, '请求可能已提交，请先确认房间状态'],
+  ] as const)('%s/%s 保留原始错误，不继续生成或伪造发布成功', async (kind, code, status, message) => {
+    const { publishConfig, startGeneration, capturePublished } = await prepareRoom();
+    publishConfig.mockResolvedValueOnce({ kind, error: new ArenaRoomClientError(code, status, message) });
+    await act(async () => current.handleGenerate());
+    expect(useBattleStore.getState().error).toContain(message);
+    expect(startGeneration).not.toHaveBeenCalled();
+    expect(capturePublished).not.toHaveBeenCalled();
+    expect(publishConfig).toHaveBeenCalledOnce();
+    expect(mocks.openStream).not.toHaveBeenCalled();
   });
 });

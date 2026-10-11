@@ -704,12 +704,13 @@ export const useBattleEngine = () => {
             ) {
               throw new Error('房间配置或提案列表已变化，请确认最新状态后重试。');
             }
-            await arenaRoomRuntime.controller.publishConfig({
+            const publication = await arenaRoomRuntime.controller.publishConfig({
               expectedRoomEpoch: authority.roomEpoch,
               expectedRevision: authority.revision,
               expectedControlSeq: beforePublishControlSeq,
               sharedConfig: comparison.current.sharedConfig,
             });
+            if (publication.kind !== 'confirmed') throw publication.error;
             const publishedState = arenaRoomRuntime.controller.getSnapshot();
             const publishedAuthority = arenaRoomHostWorkspaceAuthorityFromSession(publishedState.session);
             if (
@@ -719,7 +720,8 @@ export const useBattleEngine = () => {
               || publishedAuthority.roomId !== authority.roomId
               || publishedAuthority.roomEpoch !== authority.roomEpoch
               || publishedAuthority.ownerUserId !== authority.ownerUserId
-              || publishedAuthority.revision !== authority.revision + 1
+              || (publishedAuthority.revision !== authority.revision
+                && publishedAuthority.revision !== authority.revision + 1)
               || !areArenaRoomSharedConfigsEqual(
                 publishedAuthority.sharedConfig,
                 comparison.current.sharedConfig,
