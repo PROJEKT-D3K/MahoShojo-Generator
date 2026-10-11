@@ -126,7 +126,8 @@
       "import": "./src/arena-story.ts",
       "default": "./src/arena-story.ts"
     },
-    "./desktop-arena-story-transport": "./src/desktop-arena-story-transport.ts"
+    "./desktop-arena-story-transport": "./src/desktop-arena-story-transport.ts",
+    "./fixtures/desktop-story-branch-copy.json": "./fixtures/desktop-story-branch-copy.json"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

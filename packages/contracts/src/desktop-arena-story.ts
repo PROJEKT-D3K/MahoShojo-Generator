@@ -52,7 +52,7 @@ export const StorySessionHeadSchema = z.object({
   chapterCount: integer.min(1), lastChapterId: id,
 }).strict();
 export const StoryChapterHeadSchema = z.object({
-  id, index: integer.min(1), action: z.enum(['start', 'continue']), status: z.literal('active'), titlePreview: preview, titleTruncated: z.boolean(),
+  id, index: integer.min(1), action: z.enum(['start', 'continue', 'branch']), status: z.literal('active'), titlePreview: preview, titleTruncated: z.boolean(),
   createdAt: integer, markdownByteLength: integer,
 }).strict();
 export const StorySessionPageSchema = z.object({ rows: z.array(StorySessionHeadSchema).max(50), nextCursor: StorySessionCursorSchema.nullable() }).strict();

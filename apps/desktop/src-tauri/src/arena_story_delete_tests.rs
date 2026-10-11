@@ -130,7 +130,7 @@ fn all_own_rows_are_deleted_beyond_pages_with_other_session_bytes_unchanged() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, u64>(0))
             .unwrap(),
-        8
+        crate::store::SCHEMA_VERSION as u64
     );
     audit_relations(&connection).unwrap();
     assert!(!connection

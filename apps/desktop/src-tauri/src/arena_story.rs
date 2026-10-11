@@ -204,6 +204,8 @@ struct StagePart {
 }
 struct Stage {
     manifest: CommitManifest,
+    branch: Option<branch::BranchManifest>,
+    branch_unknown: bool,
     parts: Vec<StagePart>,
     current: usize,
     created_at: Instant,
@@ -379,6 +381,14 @@ impl StoryStore {
         manifest: CommitManifest,
         now: Instant,
     ) -> Result<BeginOutcome, StoryError> {
+        self.begin_stage(manifest, None, now)
+    }
+    fn begin_stage(
+        &self,
+        manifest: CommitManifest,
+        branch: Option<branch::BranchManifest>,
+        now: Instant,
+    ) -> Result<BeginOutcome, StoryError> {
         let total = manifest.validate()?;
         let mut stages = self.stages.lock().map_err(|_| StoryError::Io)?;
         stages.retain(|_, stage| now.saturating_duration_since(stage.created_at) < STAGE_LIFETIME);
@@ -407,6 +417,8 @@ impl StoryStore {
             token.clone(),
             Stage {
                 manifest,
+                branch,
+                branch_unknown: false,
                 parts,
                 current: 0,
                 created_at: now,
@@ -492,6 +504,9 @@ impl StoryStore {
         let stage = stages.get_mut(token).ok_or(StoryError::Stale)?;
         if stage.current != stage.parts.len() {
             return Err(StoryError::Incomplete);
+        }
+        if stage.branch.is_some() {
+            return Err(StoryError::Invalid);
         }
         let validated = validate_stage(stage)?;
         hook("validated")?;
@@ -697,6 +712,25 @@ fn validate_stage(stage: &mut Stage) -> Result<Validated, StoryError> {
         )
     })
 }
+fn validate_chapter_carrier(
+    markdown: &RawValue,
+    report_json: &RawValue,
+    deterministic_digest: &RawValue,
+) -> Result<(), StoryError> {
+    if !markdown.get().starts_with('"')
+        || !report_json.get().starts_with('{')
+        || !deterministic_digest.get().starts_with('{')
+    {
+        return Err(StoryError::Invalid);
+    }
+    Ok(())
+}
+fn validate_checkpoint_carrier(combatants: &RawValue) -> Result<(), StoryError> {
+    if !combatants.get().starts_with('[') {
+        return Err(StoryError::Invalid);
+    }
+    Ok(())
+}
 fn validate_documents(
     manifest: &CommitManifest,
     read: &mut impl FnMut(PartKind) -> Result<String, StoryError>,
@@ -726,12 +760,11 @@ fn validate_documents(
                 }
                 let shape: Shape<'_> =
                     serde_json::from_str(&document).map_err(|_| StoryError::Invalid)?;
-                if !shape.markdown.get().starts_with('"')
-                    || !shape.report_json.get().starts_with('{')
-                    || !shape.deterministic_digest.get().starts_with('{')
-                {
-                    return Err(StoryError::Invalid);
-                }
+                validate_chapter_carrier(
+                    shape.markdown,
+                    shape.report_json,
+                    shape.deterministic_digest,
+                )?;
             }
             PartKind::Checkpoint0 | PartKind::Checkpoint1 => {
                 #[derive(Deserialize)]
@@ -741,9 +774,7 @@ fn validate_documents(
                 }
                 let shape: Shape<'_> =
                     serde_json::from_str(&document).map_err(|_| StoryError::Invalid)?;
-                if !shape.combatants.get().starts_with('[') {
-                    return Err(StoryError::Invalid);
-                }
+                validate_checkpoint_carrier(shape.combatants)?;
             }
             _ => {}
         }
@@ -893,6 +924,13 @@ fn write_documents(
         let digest = &part.digest;
         match part.kind {
             PartKind::Session => {
+                if manifest.expected_revision > 0 {
+                    // Only check the submitted metadata's immutable provenance;
+                    // a continuation does not rescan unchanged historical bodies.
+                    let raw = serde_json::from_str(&document).map_err(|_| StoryError::Invalid)?;
+                    branch::audit::audit_branch_origin(connection, &manifest.session_id, raw)?;
+                }
+
                 if manifest.expected_revision == 0 {
                     connection.execute("INSERT INTO arena_story_session (id,document,document_bytes,document_digest,seed_document,seed_bytes,seed_digest,revision,title_preview,title_truncated,mode,chapter_plan,created_at,updated_at,chapter_count,last_chapter_id,working_checkpoint_id,last_input_checkpoint_id) VALUES (?1,?2,?3,?4,'',0,'',?5,?6,?7,?8,?15,?9,?10,?11,?12,?13,?14)",
                         params![s.id,document,bytes,digest,s.revision,s.title_preview,s.title_truncated,s.mode,s.created_at,s.updated_at,s.chapter_count,s.last_chapter_id,s.working_checkpoint_id,s.last_input_checkpoint_id,s.chapter_plan.as_ref().map(serde_json::to_string).transpose().map_err(|_|StoryError::Invalid)?]).map_err(|_| StoryError::Io)?;
@@ -1084,3 +1122,11 @@ pub mod markdown_export;
 
 #[path = "arena_story_pending.rs"]
 pub mod pending;
+
+// Internal only: no command or write authority until the branch resource gates close.
+#[allow(
+    dead_code,
+    reason = "Native branch IPC stays closed until the resource and owner gates pass"
+)]
+#[path = "arena_story_branch.rs"]
+pub(crate) mod branch;

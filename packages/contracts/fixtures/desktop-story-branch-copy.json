@@ -1,0 +1,294 @@
+{
+  "targetSession": "native-branch-target",
+  "chapters": [
+    {
+      "id": "c1",
+      "sessionId": "source",
+      "index": 1,
+      "action": "start",
+      "status": "active",
+      "sourceChapterId": null,
+      "title": "标题",
+      "titlePreview": "标题",
+      "titleTruncated": false,
+      "createdAt": 1,
+      "markdownByteLength": 0,
+      "markdown": "",
+      "reportJson": {
+        "opaque": {
+          "id": "c1"
+        }
+      },
+      "deterministicDigest": {},
+      "generationId": "historical-1",
+      "extension": {
+        "keep": [
+          "中",
+          "😀",
+          "\u0000"
+        ]
+      }
+    },
+    {
+      "id": "c2",
+      "sessionId": "source",
+      "index": 2,
+      "action": "continue",
+      "status": "active",
+      "sourceChapterId": "c1",
+      "title": "标题",
+      "titlePreview": "标题",
+      "titleTruncated": false,
+      "createdAt": 2,
+      "markdownByteLength": 0,
+      "markdown": "",
+      "reportJson": {
+        "opaque": {
+          "id": "c1"
+        }
+      },
+      "deterministicDigest": {},
+      "generationId": "historical-2",
+      "extension": {
+        "keep": [
+          "中",
+          "😀",
+          "\u0000"
+        ]
+      }
+    },
+    {
+      "id": "c3",
+      "sessionId": "source",
+      "index": 3,
+      "action": "branch",
+      "status": "active",
+      "sourceChapterId": "c2",
+      "title": "标题",
+      "titlePreview": "标题",
+      "titleTruncated": false,
+      "createdAt": 3,
+      "markdownByteLength": 0,
+      "markdown": "",
+      "reportJson": {
+        "opaque": {
+          "id": "c1"
+        }
+      },
+      "deterministicDigest": {},
+      "generationId": "historical-3",
+      "extension": {
+        "keep": [
+          "中",
+          "😀",
+          "\u0000"
+        ]
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "p0",
+      "sessionId": "source",
+      "boundaryIndex": 0,
+      "chapterId": null,
+      "combatants": [
+        {
+          "opaque": {
+            "id": "c1"
+          }
+        }
+      ],
+      "createdAt": 0
+    },
+    {
+      "id": "p1",
+      "sessionId": "source",
+      "boundaryIndex": 1,
+      "chapterId": "c1",
+      "combatants": [
+        {
+          "opaque": {
+            "id": "c1"
+          }
+        }
+      ],
+      "createdAt": 1
+    },
+    {
+      "id": "p2",
+      "sessionId": "source",
+      "boundaryIndex": 2,
+      "chapterId": "c2",
+      "combatants": [
+        {
+          "opaque": {
+            "id": "c1"
+          }
+        }
+      ],
+      "createdAt": 2
+    },
+    {
+      "id": "p3",
+      "sessionId": "source",
+      "boundaryIndex": 3,
+      "chapterId": "c3",
+      "combatants": [
+        {
+          "opaque": {
+            "id": "c1"
+          }
+        }
+      ],
+      "createdAt": 3
+    }
+  ],
+  "expectedChapters": [
+    {
+      "id": "branch_c9ecb188e9fcf1a4385bb02bee2011eb6271df07d30ff55335065fa281791264",
+      "sessionId": "native-branch-target",
+      "index": 1,
+      "action": "start",
+      "status": "active",
+      "sourceChapterId": null,
+      "title": "标题",
+      "titlePreview": "标题",
+      "titleTruncated": false,
+      "createdAt": 1,
+      "markdownByteLength": 0,
+      "markdown": "",
+      "reportJson": {
+        "opaque": {
+          "id": "c1"
+        }
+      },
+      "deterministicDigest": {},
+      "generationId": "historical-1",
+      "extension": {
+        "keep": [
+          "中",
+          "😀",
+          "\u0000"
+        ]
+      },
+      "supersededByChapterId": null
+    },
+    {
+      "id": "branch_cf02e2cf624cf117eafe641ce61f724613286cfbf898f6b15fc516bf29f17c26",
+      "sessionId": "native-branch-target",
+      "index": 2,
+      "action": "continue",
+      "status": "active",
+      "sourceChapterId": "branch_c9ecb188e9fcf1a4385bb02bee2011eb6271df07d30ff55335065fa281791264",
+      "title": "标题",
+      "titlePreview": "标题",
+      "titleTruncated": false,
+      "createdAt": 2,
+      "markdownByteLength": 0,
+      "markdown": "",
+      "reportJson": {
+        "opaque": {
+          "id": "c1"
+        }
+      },
+      "deterministicDigest": {},
+      "generationId": "historical-2",
+      "extension": {
+        "keep": [
+          "中",
+          "😀",
+          "\u0000"
+        ]
+      },
+      "supersededByChapterId": null
+    },
+    {
+      "id": "branch_b544578ad354c811d7da6eaa904a40d003fb606164077ce296648b36b3125062",
+      "sessionId": "native-branch-target",
+      "index": 3,
+      "action": "branch",
+      "status": "active",
+      "sourceChapterId": "branch_cf02e2cf624cf117eafe641ce61f724613286cfbf898f6b15fc516bf29f17c26",
+      "title": "标题",
+      "titlePreview": "标题",
+      "titleTruncated": false,
+      "createdAt": 3,
+      "markdownByteLength": 0,
+      "markdown": "",
+      "reportJson": {
+        "opaque": {
+          "id": "c1"
+        }
+      },
+      "deterministicDigest": {},
+      "generationId": "historical-3",
+      "extension": {
+        "keep": [
+          "中",
+          "😀",
+          "\u0000"
+        ]
+      },
+      "supersededByChapterId": null
+    }
+  ],
+  "expectedCheckpoints": [
+    {
+      "id": "branch_0d6d3270f8ff1aad78477f685a79bc5b19ea25f5bae81e010ffbe6930d286e3b",
+      "sessionId": "native-branch-target",
+      "boundaryIndex": 0,
+      "chapterId": null,
+      "combatants": [
+        {
+          "opaque": {
+            "id": "c1"
+          }
+        }
+      ],
+      "createdAt": 0
+    },
+    {
+      "id": "branch_71d8223de16f6502a2f6fd9d228a3ff8eb4c8df484aab7603637053f066efd97",
+      "sessionId": "native-branch-target",
+      "boundaryIndex": 1,
+      "chapterId": "branch_c9ecb188e9fcf1a4385bb02bee2011eb6271df07d30ff55335065fa281791264",
+      "combatants": [
+        {
+          "opaque": {
+            "id": "c1"
+          }
+        }
+      ],
+      "createdAt": 1
+    },
+    {
+      "id": "branch_7d8a1ee999cd0093c5f0889720fdad7cefc1cab40c82e553119f4ed171669689",
+      "sessionId": "native-branch-target",
+      "boundaryIndex": 2,
+      "chapterId": "branch_cf02e2cf624cf117eafe641ce61f724613286cfbf898f6b15fc516bf29f17c26",
+      "combatants": [
+        {
+          "opaque": {
+            "id": "c1"
+          }
+        }
+      ],
+      "createdAt": 2
+    },
+    {
+      "id": "branch_1a2bb0fcf93131b90f9dc1c0e48f6f9cb75e54ebada3e61f03689da802888ab4",
+      "sessionId": "native-branch-target",
+      "boundaryIndex": 3,
+      "chapterId": "branch_b544578ad354c811d7da6eaa904a40d003fb606164077ce296648b36b3125062",
+      "combatants": [
+        {
+          "opaque": {
+            "id": "c1"
+          }
+        }
+      ],
+      "createdAt": 3
+    }
+  ]
+}

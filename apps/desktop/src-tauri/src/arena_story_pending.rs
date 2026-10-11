@@ -1224,7 +1224,7 @@ fn one_of(raw: &RawValue, values: &[&str]) -> Result<(), StoryError> {
 }
 // Match JavaScript string length/TextEncoder without rejecting a legal lone
 // surrogate escape in an opaque JSON original. Stored bytes are never rewritten.
-fn string_units(raw: &RawValue) -> Result<Vec<u16>, StoryError> {
+pub(super) fn string_units(raw: &RawValue) -> Result<Vec<u16>, StoryError> {
     let raw = raw.get();
     if !raw.starts_with('"') || !raw.ends_with('"') {
         return Err(StoryError::Invalid);
@@ -2021,7 +2021,7 @@ mod tests;
 
 // Equality of JSON values, including unknown object members and lone UTF-16
 // surrogate escapes. No Value tree, string normalization or name-based role match.
-fn members(raw: &RawValue) -> Result<Vec<&str>, StoryError> {
+pub(super) fn members(raw: &RawValue) -> Result<Vec<&str>, StoryError> {
     let text = raw.get();
     if !matches!(text.as_bytes().first(), Some(b'{' | b'[')) {
         return Err(StoryError::Invalid);
@@ -2060,7 +2060,7 @@ fn members(raw: &RawValue) -> Result<Vec<&str>, StoryError> {
     result.push(inner[start..].trim());
     Ok(result)
 }
-fn raw_member(item: &str) -> Result<(Vec<u16>, &RawValue), StoryError> {
+pub(super) fn raw_member(item: &str) -> Result<(Vec<u16>, &RawValue), StoryError> {
     let mut quote = false;
     let mut escape = false;
     let mut colon = None;

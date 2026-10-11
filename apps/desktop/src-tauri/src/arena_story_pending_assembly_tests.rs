@@ -475,7 +475,7 @@ fn local_assembly_new_backup_restore_keeps_explicit_and_legacy_intent() {
         assert_eq!(snapshot.manifest.local_assembly, intent);
         assert_eq!(
             schema_version(&lock_connection(restored.connection()).unwrap()).unwrap(),
-            8
+            crate::store::SCHEMA_VERSION
         );
     }
 }

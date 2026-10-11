@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-11 Native分支存储后继：SQLite9原字节迁移、内部source-CAS逐记录物化、有界v2 receipt/copy及历史backup分派已实现；冻结Native579项/clippy、两项串行资源探针与独审9项复跑通过；修复共享fixture正式export后，完整本地CI通过（10,644 passed / 21原有条件跳过），受测产品/测试源码保持不变。真实129MiB历史复制写锁23.6秒，完整资源与owner/IPC门未关闭，不开放Desktop入口。[分项验收](./reports/2026-10-11_020600_连续故事Native分支持久化底座验收.md)。
+
 2026-10-10 分支首片：[连续故事分支窄合同](./specs/2026-10-10_233200_连续故事分支窄合同.md) / DESK-105 接受预算计量、receipt/历史备份与source CAS边界；当前仅纯投影/Web等价消费，未接Desktop分支、Native迁移或Web原子分支保存，不关闭D5.1b b-2。源码、定向、独审与正规完整CI通过（受测1787741168，21条件容量skip明确保留）；Native未改未重跑，Windows/Tauri待验。分项状态见唯一计划。
 
 

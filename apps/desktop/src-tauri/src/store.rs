@@ -102,7 +102,7 @@ pub fn scalar_i64(connection: &Connection, sql: &str) -> Result<i64, StoreError>
 /// D1 引入 `provider_profile`（版本 1）；D2.0 在**同一个库**上增加本地卡（版本 2）；
 /// D2.1 增加内容寻址 blob 与 Web 包记录（版本 3、4）。刻意不新开数据库文件：Profile、
 /// 本地卡、Web 包与 blob 同属一台设备上的用户资产，分库会让备份、迁移与"重开应用"各自多一套路径。
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// 单条文档的 UTF-8 字节上限。
 ///
@@ -265,6 +265,10 @@ const MIGRATION_STEPS: &[MigrationStep] = &[
         version: 8,
         sql: crate::arena_story::pending::MIGRATION_8,
     },
+    MigrationStep {
+        version: 9,
+        sql: crate::arena_story::branch::schema::MIGRATION_9,
+    },
 ];
 
 #[cfg(test)]
@@ -364,9 +368,13 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
         let _ = connection.execute_batch("ROLLBACK");
         return Err(error);
     }
-    connection
-        .execute_batch("COMMIT")
-        .map_err(|_| StoreError::Failure)
+    if connection.execute_batch("COMMIT").is_err() {
+        // Deferred FK or disk failures can surface only at COMMIT. Do not leave
+        // the migration transaction active with a misleading new user_version.
+        let _ = connection.execute_batch("ROLLBACK");
+        return Err(StoreError::Failure);
+    }
+    Ok(())
 }
 
 /// 迁移步骤。抽出结构是为了让测试能注入一个**故意失败**的步骤，
@@ -652,7 +660,7 @@ mod tests {
 
         let versions = applied_migrations(&store.connection.lock().expect("lock"))
             .expect("migration journal must be readable");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
         // 重复打开同一个库不会重复执行迁移。
         let reopened = LocalStore::open_in_memory().expect("reopen");
@@ -701,7 +709,7 @@ mod tests {
         );
         let versions = applied_migrations(&store.connection.lock().expect("lock"))
             .expect("migration journal must be readable");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -795,7 +803,7 @@ mod tests {
             assert_eq!(store.schema_version().expect("version"), SCHEMA_VERSION);
             let versions = applied_migrations(&store.connection.lock().expect("lock"))
                 .expect("journal must be readable");
-            assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+            assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         }
 
         // 第三次打开：全部已完成，不重复执行。
@@ -803,7 +811,7 @@ mod tests {
             let store = LocalStore::open(&LocalStorePaths::under(&root)).expect("third open");
             assert_eq!(
                 applied_migrations(&store.connection.lock().expect("lock")).expect("journal"),
-                vec![1, 2, 3, 4, 5, 6, 7, 8]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
             );
         }
 
@@ -944,5 +952,21 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deferred_commit_failure_rolls_back_migration_version_journal_and_ddl() {
+        let connection = Connection::open_in_memory().unwrap();
+        configure(&connection).unwrap();
+        let steps = [
+            MigrationStep {version: 1, sql: MIGRATION_1},
+            MigrationStep {version: 2, sql: "CREATE TABLE migration_parent(id INTEGER PRIMARY KEY); CREATE TABLE migration_child(id INTEGER REFERENCES migration_parent(id) DEFERRABLE INITIALLY DEFERRED); INSERT INTO migration_child VALUES(1);"},
+        ];
+        assert_eq!(apply_steps(&connection, &steps), Err(StoreError::Failure));
+        assert!(connection.is_autocommit());
+        assert_eq!(user_version(&connection).unwrap(), 1);
+        assert_eq!(applied_migrations(&connection).unwrap(), vec![1]);
+        assert!(!table_exists(&connection, "migration_parent"));
+        assert!(!table_exists(&connection, "migration_child"));
     }
 }

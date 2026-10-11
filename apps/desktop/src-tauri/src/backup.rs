@@ -648,7 +648,12 @@ fn verify_sqlite(connection: &Connection) -> Result<i64, BackupError> {
     if rows.next().map_err(|_| BackupError::Corrupt)?.is_some() {
         return Err(BackupError::Corrupt);
     }
-    if version >= 5 {
+    if version >= 9 {
+        crate::arena_story::branch::audit::audit_relations(connection)
+            .map_err(|_| BackupError::Corrupt)?;
+    } else if version >= 5 {
+        // Historical backups keep the strict v1-only reader. Never infer branch
+        // support from a receipt discriminant in a schema 5–8 file.
         crate::arena_story::audit_relations(connection).map_err(|_| BackupError::Corrupt)?;
     }
     if version >= 6 {
@@ -1360,5 +1365,27 @@ mod tests {
             .expect("profile is in snapshot");
         assert_eq!(saved, profile);
         assert!(!saved.contains("secretValue"));
+    }
+
+    #[test]
+    fn historical_story_backups_never_dispatch_v2_receipts_to_the_new_reader() {
+        for version in 5..=8 {
+            let connection = crate::arena_story::branch::schema::tests::connection(version);
+            // Use the expanded physical tables without advancing the historical
+            // version/journal. This graph is valid for the NEW reader, so a wrong
+            // dispatch would really pass instead of failing for an unrelated reason.
+            connection.execute_batch("BEGIN").unwrap();
+            connection
+                .execute_batch(crate::arena_story::branch::schema::MIGRATION_9)
+                .unwrap();
+            connection.execute_batch("COMMIT").unwrap();
+            crate::arena_story::branch::schema::tests::fixture(&connection, true);
+            crate::arena_story::branch::audit::audit_relations(&connection).unwrap();
+            assert_eq!(
+                verify_sqlite(&connection),
+                Err(BackupError::Corrupt),
+                "v{version}"
+            );
+        }
     }
 }
