@@ -10,7 +10,7 @@ import BattleDataModal from '@/components/BattleDataModal';
 import { DataCardReportModal } from '@/components/data-card-reports/DataCardReportModal';
 import { ArenaRoomDialog } from '@/components/arena/multiplayer/ArenaRoomDialog';
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('@/lib/useAuth', () => ({
   useAuth: () => ({
@@ -45,7 +45,7 @@ vi.mock('@/lib/localStorage', () => ({
 }));
 
 const card = {
-  id: 'card-1',
+  id: '11111111-1111-4111-8111-111111111111',
   name: '角色一',
   description: '公开角色卡',
   type: 'character',
@@ -379,10 +379,11 @@ describe('BattleDataModal accessibility and capabilities', () => {
   });
 
   it('keeps card details as the topmost keyboard modal and restores its trigger', async () => {
+    const outerClose = vi.fn();
     await act(async () => root.render(
       <BattleDataModal
         isOpen
-        onClose={vi.fn()}
+        onClose={outerClose}
         selectedType="character"
         visibleTabs={['public']}
         selectionMode="single"
@@ -408,17 +409,44 @@ describe('BattleDataModal accessibility and capabilities', () => {
     const detailsClose = detailsDialog?.querySelector<HTMLButtonElement>('button[aria-label^="关闭"]');
     expect(detailsClose).not.toBeNull();
     expect(document.activeElement).toBe(detailsClose);
+    expect(detailsDialog?.textContent).toContain('来源：公开数据卡正文');
 
-    const detailsFocusable = [...(detailsDialog?.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])];
+    const detailsFocusable = [...(detailsDialog?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) ?? [])].filter((element) => !element.matches(':disabled') && !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+    const firstDetailsFocusable = detailsFocusable[0];
     const lastDetailsFocusable = detailsFocusable.at(-1);
-    lastDetailsFocusable?.focus();
-    lastDetailsFocusable?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    // 公开卡头部保留「更多 → 关闭」顺序；初始关闭焦点与 Tab 回环首元素不同。
+    expect(firstDetailsFocusable?.textContent?.trim()).toBe('更多');
+    expect(firstDetailsFocusable).not.toBe(detailsClose);
+    expect(detailsFocusable[1]).toBe(detailsClose);
+    expect(lastDetailsFocusable?.textContent?.trim()).toBe('关闭');
+
+    // jsdom 不执行浏览器默认 Tab 移动；中间元素不应被任何一层强制回环。
+    const middleTab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    await act(async () => detailsClose?.dispatchEvent(middleTab));
+    expect(middleTab.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(detailsClose);
 
+    lastDetailsFocusable?.focus();
+    const forwardTab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    await act(async () => lastDetailsFocusable?.dispatchEvent(forwardTab));
+    expect(forwardTab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(firstDetailsFocusable);
+
+    const reverseTab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    await act(async () => firstDetailsFocusable?.dispatchEvent(reverseTab));
+    expect(reverseTab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(lastDetailsFocusable);
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
+
+    detailsClose?.focus();
     act(() => detailsClose?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(outerClose).not.toHaveBeenCalled();
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     expect(outerDialog?.contains(document.activeElement)).toBe(true);
-    if (document.contains(detailButton)) expect(document.activeElement).toBe(detailButton);
+    expect(document.contains(detailButton ?? null)).toBe(true);
+    expect(document.activeElement).toBe(detailButton);
   });
 
 });

@@ -27,16 +27,50 @@ describe('共源基础详情', () => {
     expect(renderHtml(<CardDetailsBody data={JSON.stringify(Array.from({ length: 1001 }, () => 'x'))} renderMarkdown={markdown} />)).not.toContain('截断');
     expect(renderHtml(<CardDetailsBody data={JSON.stringify(Array.from({ length: 3000 }, () => 'x'))} renderMarkdown={markdown} />)).toContain('截断');
   });
-  it('嵌套详情只消费自己的 Escape', async () => {
+  it.each([false, true])('嵌套详情（头部动作：%s）保留初始焦点、双向 Tab 与顶层 Escape', async (withHeaderAction) => {
     const parent = vi.fn(); const child = vi.fn(); let open = false;
-    const render = () => root.render(<BaseModal isOpen title="父层" onClose={parent}><button id="trigger">打开详情</button>{open && <BasicCardDetailsModal isOpen card={card} source={{ kind: 'local' }} onClose={() => { child(); open = false; render(); }} renderMarkdown={markdown} />}</BaseModal>);
+    const render = () => root.render(<BaseModal isOpen title="父层" onClose={parent}><button id="trigger">打开详情</button>{open && <BasicCardDetailsModal isOpen card={card} source={{ kind: 'local' }} onClose={() => { child(); open = false; render(); }} renderMarkdown={markdown} headerActions={withHeaderAction ? <button type="button">更多</button> : undefined} />}</BaseModal>);
     await act(async () => render());
-    document.querySelector<HTMLButtonElement>('#trigger')!.focus();
+    const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
+    trigger.focus();
     open = true; await act(async () => render());
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭历史详情');
+    const dialogs = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')];
+    expect(dialogs).toHaveLength(2);
+    const details = dialogs.at(-1)!;
+    const close = details.querySelector<HTMLButtonElement>('button[aria-label="关闭历史详情"]')!;
+    expect(close).not.toBeNull();
+    expect(document.activeElement).toBe(close);
+    const focusable = [...details.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter((element) => !element.matches(':disabled') && !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+    const first = focusable[0]!;
+    const last = focusable.at(-1)!;
+    expect(last.textContent).toBe('关闭');
+    if (withHeaderAction) {
+      expect(first.textContent).toBe('更多');
+      expect(first).not.toBe(close);
+      expect(focusable[1]).toBe(close);
+      const middleTab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+      await act(async () => close.dispatchEvent(middleTab));
+      expect(middleTab.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(close);
+    } else {
+      expect(first).toBe(close);
+    }
+    last.focus();
+    const forwardTab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    await act(async () => last.dispatchEvent(forwardTab));
+    expect(forwardTab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(first);
+    const reverseTab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    await act(async () => first.dispatchEvent(reverseTab));
+    expect(reverseTab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(last);
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
     await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(child).toHaveBeenCalledOnce(); expect(parent).not.toHaveBeenCalled();
-    expect(document.activeElement?.id).toBe('trigger');
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(document.activeElement).toBe(trigger);
     await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(parent).toHaveBeenCalledOnce();
   });
