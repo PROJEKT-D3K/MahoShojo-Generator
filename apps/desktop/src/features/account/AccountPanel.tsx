@@ -39,7 +39,7 @@ export const AccountPanel = () => {
   const busy = verification === 'checking' || attempt !== null;
 
   // 面板私有状态：退出结果说明、在线探针、授权 URL 复制提示。
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ epoch: number; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [probeBusy, setProbeBusy] = useState(false);
   const [probe, setProbe] = useState<DesktopCloudOnlineStatus | null>(null);
@@ -62,13 +62,19 @@ export const AccountPanel = () => {
   const signOut = async () => {
     setError(null);
     setNotice(null);
+    const epoch = sessionStore.getCredentialEpoch();
     const result = await sessionStore.signOut();
-    if (result !== null) {
-      setNotice(
-        result.revoked
+    const current = sessionStore.getSnapshot();
+    if (
+      result !== null && sessionStore.getCredentialEpoch() === epoch + 1 &&
+      current.account === null && current.verification === 'signed-out'
+    ) {
+      setNotice({
+        epoch: epoch + 1,
+        text: result.revoked
           ? '已退出登录，服务端会话已同步作废。'
           : '已退出登录：本地凭据已删除，但服务端会话未能确认作废（可能已过期）。',
-      );
+      });
       setProbe(null);
     }
   };
@@ -230,7 +236,9 @@ export const AccountPanel = () => {
         </dl>
       )}
 
-      {notice && <p className="mt-3 text-sm text-(--app-text-muted)">{notice}</p>}
+      {notice && notice.epoch === sessionStore.getCredentialEpoch() && account === null && (
+        <p className="mt-3 text-sm text-(--app-text-muted)">{notice.text}</p>
+      )}
       {panelError && (
         <p role="alert" className="mt-3 text-sm text-(--app-accent-strong)">
           {panelError}

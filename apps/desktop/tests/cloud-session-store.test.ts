@@ -727,3 +727,162 @@ describe('DesktopCloudSessionStore', () => {
     }
   });
 });
+
+const deferredSignOut = <T,>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+};
+
+const createSignOutRaceStore = () => {
+  const oldSignOut = deferredSignOut<unknown>();
+  const beginEntered = deferredSignOut<void>();
+  const beginReleased = deferredSignOut<void>();
+  let holdBegin = false;
+  let signOutCalls = 0;
+  let status: unknown = { state: 'active', account: ACCOUNT, sessionExpiresAt: EXPIRES };
+  let nextAccount = ACCOUNT;
+  let nextOutcome: unknown = null;
+  const invoke = (async (command: string) => {
+    switch (command) {
+      case CLOUD_CACHED_ACCOUNT_COMMAND:
+        return { account: ACCOUNT, sessionExpiresAt: EXPIRES };
+      case CLOUD_AUTH_STATUS_COMMAND:
+        return status;
+      case CLOUD_LOGIN_BEGIN_COMMAND:
+        beginEntered.resolve();
+        if (holdBegin) await beginReleased.promise;
+        return BEGIN_RESULT;
+      case CLOUD_LOGIN_AWAIT_COMMAND:
+        return nextOutcome ?? { status: 'signed-in', account: nextAccount, sessionExpiresAt: EXPIRES };
+      case CLOUD_SIGN_OUT_COMMAND:
+        signOutCalls += 1;
+        return signOutCalls === 1 ? oldSignOut.promise : { revoked: true };
+      default:
+        throw new Error(`unexpected command ${command}`);
+    }
+  }) as InvokeFn;
+  return {
+    store: new DesktopCloudSessionStore({ invoke }), oldSignOut,
+    beginEntered, beginReleased,
+    setStatus: (value: unknown) => { status = value; },
+    setNextAccount: (value: typeof ACCOUNT) => { nextAccount = value; },
+    setNextOutcome: (value: unknown) => { nextOutcome = value; },
+    holdBegin: () => { holdBegin = true; },
+  };
+};
+
+describe('DesktopCloudSessionStore sign-out ownership', () => {
+  it.each([
+    { account: { userId: 8, username: 'madoka', displayName: 'madoka' }, outcome: 'success' },
+    { account: ACCOUNT, outcome: 'success' },
+    { account: { userId: 8, username: 'madoka', displayName: 'madoka' }, outcome: 'failure' },
+    { account: ACCOUNT, outcome: 'failure' },
+  ])('late $outcome cannot change a newer login for user $account.userId', async ({ account, outcome }) => {
+    const race = createSignOutRaceStore();
+    await race.store.bootstrap();
+    const oldExit = race.store.signOut();
+    // A fresh public status read can expire A while its remote sign-out is still pending.
+    race.setStatus({ state: 'expired' });
+    race.setNextAccount(account);
+    await race.store.requestAuth();
+    const current = race.store.getSnapshot();
+    const epoch = race.store.getCredentialEpoch();
+    expect(current.account).toEqual(account);
+    expect(current.verification).toBe('verified');
+
+    if (outcome === 'success') race.oldSignOut.resolve({ revoked: true });
+    else race.oldSignOut.reject({ code: 'storage-unavailable', message: 'old exit failed' });
+    expect(await oldExit).toBeNull();
+    expect(race.store.getSnapshot()).toBe(current);
+    expect(race.store.getCredentialEpoch()).toBe(epoch);
+
+    // Dropping an old completion must not prevent the current account's explicit exit.
+    expect(await race.store.signOut()).toEqual({ revoked: true });
+    expect(race.store.getSnapshot().account).toBeNull();
+    expect(race.store.getCredentialEpoch()).toBe(epoch + 1);
+  });
+
+  it('a later begin promise is a boundary before authenticating or a new credential exists', async () => {
+    const race = createSignOutRaceStore();
+    race.setStatus({ state: 'signed-out' });
+    await race.store.refresh();
+    const oldExit = race.store.signOut();
+    race.holdBegin();
+    const login = race.store.requestAuth();
+    await race.beginEntered.promise;
+    const current = race.store.getSnapshot();
+    expect(current.authFlow.kind).toBe('idle');
+    try {
+      race.oldSignOut.resolve({ revoked: true });
+      expect(await oldExit).toBeNull();
+      expect(race.store.getSnapshot()).toBe(current);
+      expect(race.store.getCredentialEpoch()).toBe(0);
+    } finally {
+      race.beginReleased.resolve();
+      await login;
+    }
+    expect(race.store.getSnapshot().account).toEqual(ACCOUNT);
+  });
+
+  it('a later cancelled public login cannot restore A after an old exit completes', async () => {
+    const race = createSignOutRaceStore();
+    await race.store.bootstrap();
+    const oldExit = race.store.signOut();
+    race.setStatus({ state: 'expired' });
+    race.holdBegin();
+    race.setNextOutcome({ status: 'cancelled' });
+    const login = race.store.requestAuth();
+    await race.beginEntered.promise;
+    // requestAuth enters a new flow only after the public status has removed A.
+    expect(race.store.getSnapshot().account).toBeNull();
+    expect(race.store.getSnapshot().verification).toBe('expired');
+    try {
+      race.oldSignOut.resolve({ revoked: true });
+      expect(await oldExit).toBeNull();
+    } finally {
+      race.beginReleased.resolve();
+      await login;
+    }
+    expect(race.store.getSnapshot().account).toBeNull();
+    expect(race.store.getSnapshot().verification).toBe('expired');
+    expect(race.store.getSnapshot().authFlow.kind).toBe('idle');
+  });
+
+  it('a fresh status owner is protected even before this renderer observes a login epoch', async () => {
+    const race = createSignOutRaceStore();
+    await race.store.bootstrap();
+    const oldExit = race.store.signOut();
+    const nextAccount = { userId: 8, username: 'madoka', displayName: 'madoka' };
+    race.setStatus({ state: 'active', account: nextAccount, sessionExpiresAt: EXPIRES });
+    await race.store.refresh();
+    const current = race.store.getSnapshot();
+    race.oldSignOut.resolve({ revoked: true });
+    expect(await oldExit).toBeNull();
+    expect(race.store.getSnapshot()).toBe(current);
+    expect(race.store.getCredentialEpoch()).toBe(0);
+  });
+
+  it('a current local storage failure remains visible and does not claim deletion', async () => {
+    const race = createSignOutRaceStore();
+    await race.store.bootstrap();
+    const exit = race.store.signOut();
+    race.oldSignOut.reject({ code: 'storage-unavailable', message: '本地凭据删除失败' });
+    expect(await exit).toBeNull();
+    expect(race.store.getSnapshot().account).toEqual(ACCOUNT);
+    expect(race.store.getSnapshot().lastError).toBe('storage-unavailable：本地凭据删除失败');
+    expect(race.store.getCredentialEpoch()).toBe(0);
+  });
+
+  it('Native state-mismatch is a stale receipt, not a current identity error or success', async () => {
+    const race = createSignOutRaceStore();
+    await race.store.bootstrap();
+    const current = race.store.getSnapshot();
+    const oldExit = race.store.signOut();
+    race.oldSignOut.reject({ code: 'state-mismatch', message: '会话已变化' });
+    expect(await oldExit).toBeNull();
+    expect(race.store.getSnapshot()).toBe(current);
+    expect(race.store.getCredentialEpoch()).toBe(0);
+  });
+});

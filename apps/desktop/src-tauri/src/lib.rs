@@ -1537,7 +1537,7 @@ async fn cloud_auth_status(
     cloud::cloud_auth_status(&cloud, secrets.inner().as_ref()).await
 }
 
-/// 登出：本地凭据无条件删除；`revoked` 反映服务端会话是否同步作废。
+/// 登出：仅清理本次退出捕获且仍当前的本地凭据；`revoked` 反映服务端会话是否同步作废。
 #[tauri::command]
 async fn cloud_sign_out(
     cloud: State<'_, cloud::CloudState>,

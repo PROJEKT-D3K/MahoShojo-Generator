@@ -415,11 +415,18 @@ export class DesktopCloudSessionStore {
     }
   };
 
-  /** 登出：本地凭据无条件删除；`revoked` 如实回传给面板解释服务端同步结果。 */
+  /** 仅当前退出意图可清本地身份；`revoked` 如实说明原会话的服务端同步结果。 */
   signOut = async (): Promise<DesktopCloudSignOutResult | null> => {
     const previousUserId = this.state.account?.userId;
+    const epoch = this.credentialEpoch;
+    const login = this.loginPromise;
+    const isCurrent = () =>
+      this.credentialEpoch === epoch &&
+      this.state.account?.userId === previousUserId &&
+      (this.loginPromise === null || this.loginPromise === login);
     try {
       const result = await signOutCloud(this.deps.invoke);
+      if (!isCurrent()) return null;
       // 登出即会话边界：凭据世代推进（在途 status 落地时自然被丢弃）；
       // 已注销账号的头像与消息摘要槽失效，重登后重新拉取。
       this.credentialEpoch += 1;
@@ -435,6 +442,11 @@ export class DesktopCloudSessionStore {
       });
       return result;
     } catch (cause) {
+      // Native 可能先于 renderer 观察到凭据更替；旧退出回执既不能宣称成功，
+      // 也不能把旧失败写入当前身份。
+      if (!isCurrent() || (cause instanceof DesktopCloudError && cause.code === 'state-mismatch')) {
+        return null;
+      }
       this.publish({ lastError: describeCloudSessionError(cause) });
       return null;
     }

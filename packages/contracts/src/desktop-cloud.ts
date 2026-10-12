@@ -325,7 +325,7 @@ export const DesktopCloudClearAvatarResultSchema = z.object({
 }).strict();
 export type DesktopCloudClearAvatarResult = z.infer<typeof DesktopCloudClearAvatarResultSchema>;
 
-/** 登出结果：本地凭据无条件删除，`revoked` 只反映服务端会话是否同步作废。 */
+/** 登出结果：仅删除仍属本次退出的本地凭据；身份已变化时返回 state-mismatch，`revoked` 只反映服务端会话是否同步作废。 */
 export const DesktopCloudSignOutResultSchema = z.object({
   revoked: z.boolean(),
 }).strict();

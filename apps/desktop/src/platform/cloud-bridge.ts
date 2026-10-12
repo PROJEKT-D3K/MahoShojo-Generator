@@ -279,7 +279,7 @@ export const readCloudAuthStatus = async (
   return parseResult(CLOUD_AUTH_STATUS_COMMAND, DesktopCloudSessionStatusSchema, raw);
 };
 
-/** 登出：本地凭据无条件删除；`revoked` 反映服务端会话是否同步作废。 */
+/** 登出：仅删除仍属本次退出的本地凭据；身份已变化时返回 state-mismatch；`revoked` 反映服务端会话是否同步作废。 */
 export const signOutCloud = async (
   invoke: InvokeFn,
 ): Promise<DesktopCloudSignOutResult> => {

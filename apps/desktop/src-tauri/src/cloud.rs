@@ -465,13 +465,6 @@ fn read_profile_session_snapshot(
     load_session_record(secrets, false)
 }
 
-fn clear_session(secrets: &dyn SecretStore) -> Result<(), CloudError> {
-    let _guard = account_session_gate()?;
-    secrets
-        .delete(ACCOUNT_SESSION_REF)
-        .map_err(|error| CloudError::from_secret_store(&error))
-}
-
 /// Arena freezes the actual protected account and detects logout/login generations.
 /// This internal type and accessor are never exposed through IPC.
 pub(crate) struct ArenaAccountSnapshot {
@@ -1506,16 +1499,23 @@ pub async fn cloud_clear_me_profile_avatar(
     write_me_profile_avatar(state, secrets, request.expected_user_id, None).await
 }
 
-/// `cloud_sign_out`：本地凭据无条件删除；服务端注销失败只影响 `revoked` 标记。
+/// `cloud_sign_out`：只删除本次退出捕获的凭据；远端失败不阻止清理原会话。
 pub async fn cloud_sign_out(
     state: &CloudState,
     secrets: &dyn SecretStore,
 ) -> Result<CloudSignOutResult, CloudError> {
-    {
+    let (raw, epoch) = {
         let _guard = account_session_gate()?;
-        state.account_epoch.fetch_add(1, Ordering::SeqCst);
-    }
-    let session = load_session(secrets)?;
+        let epoch = state.account_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let raw = secrets
+            .resolve(ACCOUNT_SESSION_REF)
+            .map_err(|error| CloudError::from_secret_store(&error))?;
+        (raw, epoch)
+    };
+    // 只解析冻结记录；损坏记录也留到带 epoch 的条件清理，不走无世代恢复路径。
+    let session = raw
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<StoredSession>(raw).ok());
     let mut revoked = false;
     if let Some(session) = session {
         let response = authed_request(
@@ -1532,7 +1532,23 @@ pub async fn cloud_sign_out(
         .await;
         revoked = response.map(|r| r.status().is_success()).unwrap_or(false);
     }
-    clear_session(secrets)?;
+    let cleared = if let Some(raw) = raw {
+        clear_session_if_current(secrets, &raw, Some((state, epoch)))?
+    } else {
+        // 空槽退出也有自己的世代，不能把并发登录报告成退出成功。
+        let _guard = account_session_gate()?;
+        state.account_epoch.load(Ordering::SeqCst) == epoch
+            && secrets
+                .resolve(ACCOUNT_SESSION_REF)
+                .map_err(|error| CloudError::from_secret_store(&error))?
+                .is_none()
+    };
+    if !cleared {
+        return Err(CloudError::new(
+            CloudErrorCode::StateMismatch,
+            "账号会话已变化，旧退出操作未删除当前凭据",
+        ));
+    }
     Ok(CloudSignOutResult { revoked })
 }
 
@@ -3497,6 +3513,10 @@ mod tests {
         get_session_override: Mutex<Option<(u16, String)>>,
         get_session_request_seen: Mutex<Option<oneshot::Sender<()>>>,
         get_session_reply_gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        sign_out_requests: Mutex<Vec<(String, serde_json::Value)>>,
+        sign_out_status: Mutex<u16>,
+        sign_out_request_seen: Mutex<Option<oneshot::Sender<()>>>,
+        sign_out_reply_gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
         hosted_sse_body: Mutex<Option<String>>,
         /// `Some((status, body))` 时 readiness 路由返回覆盖响应（测门禁分支）。
         readiness_override: Mutex<Option<(u16, String)>>,
@@ -3535,6 +3555,10 @@ mod tests {
             get_session_override: Mutex::new(None),
             get_session_request_seen: Mutex::new(None),
             get_session_reply_gate: Mutex::new(None),
+            sign_out_requests: Mutex::new(Vec::new()),
+            sign_out_status: Mutex::new(200),
+            sign_out_request_seen: Mutex::new(None),
+            sign_out_reply_gate: Mutex::new(None),
             hosted_sse_body: Mutex::new(None),
             readiness_override: Mutex::new(None),
             hosted_json_response: Mutex::new(None),
@@ -3709,7 +3733,22 @@ mod tests {
                         json(serde_json::json!({"session": null, "user": null}))
                     }
                 }
-                SIGN_OUT_PATH => json(serde_json::json!({"success": true})),
+                SIGN_OUT_PATH => {
+                    self.sign_out_requests
+                        .lock()
+                        .unwrap()
+                        .push((head.to_string(), serde_json::from_slice(body).unwrap()));
+                    if let Some(seen) = self.sign_out_request_seen.lock().unwrap().take() {
+                        let _ = seen.send(());
+                    }
+                    if let Some(wait) = self.sign_out_reply_gate.lock().unwrap().take() {
+                        wait.recv_timeout(Duration::from_secs(3))
+                            .expect("release sign-out response");
+                    }
+                    let mut response = json(serde_json::json!({"success": true}));
+                    response.status = *self.sign_out_status.lock().unwrap();
+                    response
+                }
                 ME_PROFILE_PATH | ME_PROFILE_AVATAR_PATH => {
                     self.me_profile_count
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -3880,6 +3919,274 @@ mod tests {
             .expect("tokio runtime")
     }
 
+    fn defer_sign_out_response(
+        server: &MockServer,
+    ) -> (oneshot::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (seen, ready) = oneshot::channel();
+        *server.sign_out_request_seen.lock().unwrap() = Some(seen);
+        let (release, wait) = std::sync::mpsc::channel();
+        *server.sign_out_reply_gate.lock().unwrap() = Some(wait);
+        (ready, release)
+    }
+
+    fn assert_only_original_sign_out(server: &MockServer, original: &StoredSession) {
+        let requests = server.sign_out_requests.lock().unwrap();
+        assert_eq!(requests.len(), 1, "only the original session is revoked");
+        let (head, body) = &requests[0];
+        assert_eq!(
+            head.lines().next(),
+            Some(format!("POST {SIGN_OUT_PATH} HTTP/1.1").as_str())
+        );
+        let cookies: Vec<_> = head
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+            .map(|(_, value)| value.trim())
+            .collect();
+        assert_eq!(cookies, [original.cookie.as_str()]);
+        assert_eq!(body, &serde_json::json!({}));
+    }
+
+    async fn assert_late_sign_out_keeps_login(replacement: &str, refresh_before_login: bool) {
+        let server = spawn_mock_server();
+        let state = CloudState::with_origin(&server.origin);
+        let secrets = MemorySecrets::new();
+        complete_session_cleanup_login(&state, &secrets).await;
+        let original = load_session(&secrets).unwrap().unwrap();
+        let original_raw = secrets.resolve(ACCOUNT_SESSION_REF).unwrap();
+        let original_epoch = state.account_epoch.load(Ordering::SeqCst);
+        *server.exchange_session_override.lock().unwrap() =
+            Some(next_cleanup_session(&original, replacement));
+        let (ready, release) = defer_sign_out_response(&server);
+        let relogin = async {
+            tokio::time::timeout(Duration::from_secs(3), ready)
+                .await
+                .expect("sign-out request must arrive")
+                .unwrap();
+            assert_only_original_sign_out(&server, &original);
+            assert_eq!(
+                state.account_epoch.load(Ordering::SeqCst),
+                original_epoch + 1
+            );
+
+            if refresh_before_login {
+                // 新 renderer 的 bootstrap/refresh 仍能调用既有 native 命令。
+                // 服务端已作废 A，但退出响应尚未到达；不伪造 renderer 的登录成功。
+                assert_eq!(
+                    cloud_cached_account(&secrets)
+                        .unwrap()
+                        .unwrap()
+                        .account
+                        .user_id,
+                    original.account.user_id
+                );
+                *server.get_session_override.lock().unwrap() =
+                    Some((200, r#"{"session":null,"user":null}"#.into()));
+                assert!(matches!(
+                    cloud_auth_status(&state, &secrets).await.unwrap(),
+                    CloudSessionStatus::Expired
+                ));
+                assert!(matches!(
+                    cloud_auth_status(&state, &secrets).await.unwrap(),
+                    CloudSessionStatus::SignedOut
+                ));
+            }
+
+            // 真实 begin/callback/exchange/await 最终调用 store_login_session，
+            // 同字节重登也必须推进 native epoch；不直接写测试 secret map。
+            complete_session_cleanup_login(&state, &secrets).await;
+            let fresh = secrets.resolve(ACCOUNT_SESSION_REF).unwrap();
+            assert!(fresh.is_some());
+            if replacement == "same-bytes" {
+                assert_eq!(fresh, original_raw, "exercise same-byte ABA");
+            } else {
+                assert_ne!(fresh, original_raw);
+            }
+            let fresh_epoch = state.account_epoch.load(Ordering::SeqCst);
+            assert_eq!(fresh_epoch, original_epoch + 2);
+            let deletions = secrets.deletions.load(Ordering::SeqCst);
+            release.send(()).unwrap();
+            (fresh, fresh_epoch, deletions)
+        };
+        let (result, (fresh, fresh_epoch, deletions)) =
+            tokio::join!(cloud_sign_out(&state, &secrets), relogin);
+        assert_only_original_sign_out(&server, &original);
+        assert_eq!(state.account_epoch.load(Ordering::SeqCst), fresh_epoch);
+        assert_eq!(
+            secrets.resolve(ACCOUNT_SESSION_REF).unwrap(),
+            fresh,
+            "late sign-out must preserve the newer {replacement} login"
+        );
+        assert_eq!(
+            secrets.deletions.load(Ordering::SeqCst),
+            deletions,
+            "late sign-out must not delete after the newer login"
+        );
+        assert_eq!(
+            result
+                .expect_err("stale sign-out must not report local sign-out success")
+                .code,
+            CloudErrorCode::StateMismatch
+        );
+        server.shutdown.cancel();
+    }
+
+    #[test]
+    fn sign_out_late_reply_preserves_new_account_login() {
+        rt().block_on(assert_late_sign_out_keeps_login("new-account", false));
+    }
+
+    #[test]
+    fn sign_out_late_reply_preserves_same_byte_relogin() {
+        rt().block_on(assert_late_sign_out_keeps_login("same-bytes", false));
+    }
+
+    #[test]
+    fn sign_out_late_reply_preserves_login_after_refreshed_account_status() {
+        // Native 链路证明刷新后的可登录前提；不冒称已运行 Tauri/renderer 重载。
+        rt().block_on(assert_late_sign_out_keeps_login("new-account", true));
+    }
+
+    #[test]
+    fn sign_out_current_session_deletes_after_success_or_server_failure() {
+        rt().block_on(async {
+            for status in [200, 503] {
+                let server = spawn_mock_server();
+                let state = CloudState::with_origin(&server.origin);
+                let secrets = MemorySecrets::new();
+                complete_session_cleanup_login(&state, &secrets).await;
+                let original = load_session(&secrets).unwrap().unwrap();
+                let original_raw = secrets.resolve(ACCOUNT_SESSION_REF).unwrap();
+                *server.sign_out_status.lock().unwrap() = status;
+                let (ready, release) = defer_sign_out_response(&server);
+                let check_pending = async {
+                    tokio::time::timeout(Duration::from_secs(3), ready)
+                        .await
+                        .expect("sign-out request must arrive")
+                        .unwrap();
+                    assert_eq!(secrets.resolve(ACCOUNT_SESSION_REF).unwrap(), original_raw);
+                    assert_eq!(secrets.deletions.load(Ordering::SeqCst), 0);
+                    release.send(()).unwrap();
+                };
+                let (result, ()) = tokio::join!(cloud_sign_out(&state, &secrets), check_pending);
+                assert_eq!(result.unwrap().revoked, status == 200);
+                assert_only_original_sign_out(&server, &original);
+                assert!(cloud_cached_account(&secrets).unwrap().is_none());
+                assert_eq!(secrets.deletions.load(Ordering::SeqCst), 1);
+                assert!(!cloud_sign_out(&state, &secrets).await.unwrap().revoked);
+                assert_only_original_sign_out(&server, &original);
+                server.shutdown.cancel();
+            }
+        });
+    }
+
+    #[test]
+    fn sign_out_empty_and_corrupt_sessions_are_local_and_idempotent() {
+        rt().block_on(async {
+            for corrupt in [false, true] {
+                let server = spawn_mock_server();
+                let state = CloudState::with_origin(&server.origin);
+                let secrets = MemorySecrets::new();
+                if corrupt {
+                    secrets.set(ACCOUNT_SESSION_REF, "{broken").unwrap();
+                }
+                assert!(!cloud_sign_out(&state, &secrets).await.unwrap().revoked);
+                assert_eq!(state.account_epoch.load(Ordering::SeqCst), 1);
+                assert!(!secrets.exists(ACCOUNT_SESSION_REF).unwrap());
+                assert_eq!(
+                    secrets.deletions.load(Ordering::SeqCst),
+                    usize::from(corrupt)
+                );
+                assert!(!cloud_sign_out(&state, &secrets).await.unwrap().revoked);
+                assert_eq!(state.account_epoch.load(Ordering::SeqCst), 2);
+                assert!(server.sign_out_requests.lock().unwrap().is_empty());
+                assert_eq!(
+                    secrets.deletions.load(Ordering::SeqCst),
+                    usize::from(corrupt)
+                );
+                server.shutdown.cancel();
+            }
+        });
+    }
+
+    #[test]
+    fn sign_out_storage_failures_preserve_record_and_allow_retry() {
+        struct FaultSecrets {
+            inner: MemorySecrets,
+            fail_read_at: std::sync::atomic::AtomicUsize,
+            fail_delete: std::sync::atomic::AtomicBool,
+        }
+        impl SecretStore for FaultSecrets {
+            fn set(&self, key: &str, value: &str) -> Result<(), SecretStoreError> {
+                self.inner.set(key, value)
+            }
+            fn resolve(&self, key: &str) -> Result<Option<String>, SecretStoreError> {
+                if self.fail_read_at.load(Ordering::SeqCst) > 0
+                    && self.fail_read_at.fetch_sub(1, Ordering::SeqCst) == 1
+                {
+                    return Err(SecretStoreError::failure_for_test());
+                }
+                self.inner.resolve(key)
+            }
+            fn exists(&self, key: &str) -> Result<bool, SecretStoreError> {
+                self.inner.exists(key)
+            }
+            fn delete(&self, key: &str) -> Result<(), SecretStoreError> {
+                if self.fail_delete.swap(false, Ordering::SeqCst) {
+                    return Err(SecretStoreError::failure_for_test());
+                }
+                self.inner.delete(key)
+            }
+        }
+
+        rt().block_on(async {
+            for corrupt in [false, true] {
+                for failure in ["initial-read", "cleanup-read", "delete"] {
+                    let server = spawn_mock_server();
+                    let state = CloudState::with_origin(&server.origin);
+                    let secrets = FaultSecrets {
+                        inner: MemorySecrets::new(),
+                        fail_read_at: std::sync::atomic::AtomicUsize::new(match failure {
+                            "initial-read" => 1,
+                            "cleanup-read" => 2,
+                            _ => 0,
+                        }),
+                        fail_delete: std::sync::atomic::AtomicBool::new(failure == "delete"),
+                    };
+                    if corrupt {
+                        secrets.set(ACCOUNT_SESSION_REF, "{broken").unwrap();
+                    } else {
+                        store_login_session(&state, &secrets, &stored_test_session()).unwrap();
+                    }
+                    let original = secrets.inner.resolve(ACCOUNT_SESSION_REF).unwrap();
+                    let epoch = state.account_epoch.load(Ordering::SeqCst);
+                    let error = cloud_sign_out(&state, &secrets).await.unwrap_err();
+                    assert_eq!(error.code, CloudErrorCode::StorageUnavailable, "{failure}");
+                    assert!(error.message.contains("操作系统凭据存储不可用"));
+                    assert_eq!(
+                        secrets.inner.resolve(ACCOUNT_SESSION_REF).unwrap(),
+                        original
+                    );
+                    assert_eq!(secrets.inner.deletions.load(Ordering::SeqCst), 0);
+                    assert_eq!(state.account_epoch.load(Ordering::SeqCst), epoch + 1);
+                    assert_eq!(
+                        server.sign_out_requests.lock().unwrap().len(),
+                        usize::from(!corrupt && failure != "initial-read")
+                    );
+
+                    // 真正重试命令，证明失败没有毒化 gate，不能仅清掉测试标志后宣称恢复。
+                    assert_eq!(
+                        cloud_sign_out(&state, &secrets).await.unwrap().revoked,
+                        !corrupt
+                    );
+                    assert!(!secrets.inner.exists(ACCOUNT_SESSION_REF).unwrap());
+                    assert_eq!(secrets.inner.deletions.load(Ordering::SeqCst), 1);
+                    server.shutdown.cancel();
+                }
+            }
+        });
+    }
+
     /// 完整链路：begin → 模拟浏览器回跳 → await → exchange → 凭据入库。
     /// 回放在测试侧验证 PKCE verifier 与 authorize_url 中的 challenge 构成
     /// S256 关系，证明两端协议一致。
@@ -3956,7 +4263,7 @@ mod tests {
             }
             assert!(!secrets.exists(ACCOUNT_SESSION_REF).unwrap());
 
-            // 重新放入凭据 → sign_out：本地凭据无条件删除，revoked 反映服务端结果。
+            // 重新放入凭据 → sign_out：仅清理本次退出捕获且仍当前的本地凭据，revoked 反映服务端结果。
             store_session(&secrets, &stored).unwrap();
             let sign_out = cloud_sign_out(&state, &secrets).await.unwrap();
             assert!(sign_out.revoked);
