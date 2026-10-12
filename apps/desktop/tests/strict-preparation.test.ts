@@ -30,8 +30,8 @@ describe('Desktop Strict preparation source and dispatch projection', () => {
     expect(advisory.combatants[0]).not.toHaveProperty('data'); expect(input).toEqual(before);
   });
   it('strips forged/restored/uploaded/cache IDs and same-name scenario files from every new dispatch', () => {
-    const input = draft(); input.combatants = input.combatants.map(card => ({ ...clearDesktopArenaSource(card), data: { ...card.data, cloudRef: { id: 'forged' }, _cardId: 'forged' } }));
-    input.battleMode = 'scenario'; input.scenario = { content: { title: '上传' }, fileName: SCENARIO_PRESET_LIST[0]!.filename };
+    const input: ArenaDraft = { ...draft(), battleMode: 'scenario' }; input.combatants = input.combatants.map(card => ({ ...clearDesktopArenaSource(card), data: { ...card.data, cloudRef: { id: 'forged' }, _cardId: 'forged' } }));
+    input.scenario = { content: { title: '上传' }, fileName: SCENARIO_PRESET_LIST[0]!.filename };
     const generated = buildArenaGenerationInputSnapshot(buildDesktopArenaInput(input));
     expect(generated.combatants.every(card => !card.isPreset && card.sourceDataCardId === undefined)).toBe(true);
     expect(generated.scenarioFileName).toBeNull(); expect(buildDesktopStrictPreflightInput(input, target, 0).combatants.every(card => !card.isPreset && card.sourceDataCardId === null)).toBe(true);
