@@ -16,6 +16,8 @@ export interface CharacterManagerGuideProps {
   readonly capabilities: CharacterManagerCapabilities;
   /** 「保存与导出」条目的正文：Web 是下载/剪贴板，Desktop 是本地库/导出。 */
   readonly saveAndExportText: ReactNode;
+  /** 问卷编辑器的保存去向：默认沿用 Web 云端卡，Desktop 注入本地问卷库。 */
+  readonly questionnaireSaveAndExportText?: ReactNode;
   /** 加载条目的附加说明（如「我的数据卡」入口），可选。 */
   readonly loadExtraText?: ReactNode;
   /** 指南尾部宿主附加说明块（Desktop：本地库/签名语义说明）。 */
@@ -31,6 +33,7 @@ export interface CharacterManagerGuideProps {
 export function CharacterManagerGuide({
   capabilities,
   saveAndExportText,
+  questionnaireSaveAndExportText = '可导出或保存为云端问卷数据卡。',
   loadExtraText,
   extraSections,
   linkComponent: Link,
@@ -65,7 +68,7 @@ export function CharacterManagerGuide({
                 <li><span className="font-semibold">编辑情景：</span>响应用户呼声，现在可以在这里编辑情景文件了。</li>
               ) : null}
               {capabilities.questionnaireEditor && Link ? (
-                <li><span className="font-semibold">问卷编辑器：</span><Link href="/questionnaire-editor" className="text-purple-600 hover:text-purple-700 underline">创建与调整自定义问卷</Link>，可导出或保存为云端问卷数据卡。</li>
+                <li><span className="font-semibold">问卷编辑器：</span><Link href="/questionnaire-editor" className="text-purple-600 hover:text-purple-700 underline">创建与调整自定义问卷</Link>，{questionnaireSaveAndExportText}</li>
               ) : null}
               <li><span className="font-semibold">保存与导出：</span>{saveAndExportText}</li>
             </ul>

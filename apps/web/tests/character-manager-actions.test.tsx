@@ -66,6 +66,16 @@ afterEach(async () => {
 });
 
 describe('Web 角色管理共源动作与本地库接线', () => {
+  it('指南保留原问卷编辑器内链和云端问卷卡说明', async () => {
+    await mount();
+    const link = container.querySelector<HTMLAnchorElement>('a[href="/questionnaire-editor"]')!;
+    expect(link).not.toBeNull();
+    expect(link.parentElement?.textContent).toBe('问卷编辑器：创建与调整自定义问卷，可导出或保存为云端问卷数据卡。');
+    expect(link.tabIndex).toBe(0);
+    expect(container.textContent).not.toContain('保存到本地问卷库');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('未登录且离线时可保存到既有本地库，正文/未知字段/签名证据保持不变，重复保存不增行', async () => {
     await mount(sample, true);
     expect(container.textContent).toContain('已恢复本地草稿（');

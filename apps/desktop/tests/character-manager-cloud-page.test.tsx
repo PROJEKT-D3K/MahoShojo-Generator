@@ -48,12 +48,23 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); });
 describe('Desktop真实角色管理云写宿主与Native模拟边界', () => {
   it('公开上传使用共享表单和owner IPC，未知/失败保稿；唯一关窗守卫同时覆盖本地dirty和云写', async () => {
-    await mount(); expect(listeners.size).toBe(1); const blocked = vi.fn(); await act(async () => { listeners.forEach((listener) => listener({ preventDefault: blocked })); }); expect(blocked).toHaveBeenCalledOnce();
+    const router = await mount(); expect(listeners.size).toBe(1); const blocked = vi.fn(); await act(async () => { listeners.forEach((listener) => listener({ preventDefault: blocked })); }); expect(blocked).toHaveBeenCalledOnce();
     await click('保存到云端'); const pending = deferred<unknown>(); const fallback = mock.invoke.getMockImplementation()!; mock.invoke.mockImplementation((command, args) => command === 'cloud_card_library_request' && args.request.routeId === 'data-cards.create' ? pending.promise : fallback(command, args));
     await act(async () => { (document.querySelector('[role=dialog] input[type=checkbox]') as HTMLInputElement).click(); button('保存').click(); button('保存').click(); });
     expect(requests('data-cards.create')).toHaveLength(1); expect(requests('data-cards.create')[0][1].request).toMatchObject({ expectedUserId: 7, body: { isPublic: 1, data: sample } });
     const nativeBlocked = vi.fn(); await act(async () => { listeners.forEach((listener) => listener({ preventDefault: nativeBlocked })); }); expect(nativeBlocked).toHaveBeenCalledOnce();
     expect(container.querySelector<HTMLFieldSetElement>('fieldset[disabled]')).not.toBeNull();
+    vi.mocked(window.confirm).mockClear().mockReturnValue(true);
+    const guideLink = [...container.querySelectorAll<HTMLAnchorElement>('[data-testid="page-character-manager"] a')].find((link) => link.textContent === '创建与调整自定义问卷')!;
+    expect(guideLink).toBeDefined();
+    expect(guideLink.getAttribute('href')).toMatch(/#\/questionnaire-editor$/);
+    await act(async () => { guideLink.click(); });
+    await act(async () => { guideLink.click(); });
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe('/character-manager');
+    expect(document.querySelector('[role=dialog]')).not.toBeNull();
+    expect(requests('data-cards.create')).toHaveLength(1);
+    expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('本地编辑稿');
     await act(async () => { pending.resolve({ status: 400, body: { error: '容量不足' } }); });
     expect(document.body.textContent).toContain('容量不足'); expect(document.querySelector<HTMLInputElement>('[role=dialog] input')?.value).toBe('本地编辑稿');
     expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('本地编辑稿'); expect(mock.invoke.mock.calls.some(([command]) => command === 'save_local_card')).toBe(false);

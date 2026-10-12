@@ -39,7 +39,7 @@ const ALL_ON: CharacterManagerCapabilities = {
   scenarioEditors: true,
 };
 
-const DESKTOP_SNAPSHOT: CharacterManagerCapabilities = {
+const LIMITED_CAPABILITIES: CharacterManagerCapabilities = {
   cloudCards: 'browse',
   tachie: false,
   questionnaireEditor: false,
@@ -132,10 +132,10 @@ describe('CharacterManagerAccountPanel', () => {
 });
 
 describe('CharacterManagerGuide', () => {
-  it('能力快照未交付的条目不渲染（Desktop：立绘/问卷编辑器/原生性）', () => {
+  it('能力快照未交付的条目不渲染（立绘/问卷编辑器/原生性）', () => {
     render(
       <CharacterManagerGuide
-        capabilities={DESKTOP_SNAPSHOT}
+        capabilities={LIMITED_CAPABILITIES}
         saveAndExportText="保存写入本地库。"
       />,
     );
@@ -159,8 +159,24 @@ describe('CharacterManagerGuide', () => {
     const text = container.textContent ?? '';
     expect(text).toContain('立绘');
     expect(text).toContain('问卷编辑器');
+    expect(text).toContain('可导出或保存为云端问卷数据卡。');
     expect(text).toContain('原生数据');
     expect(container.querySelector('a[href="/questionnaire-editor"]')).not.toBeNull();
+  });
+
+  it('问卷入口复用宿主内链并接受本地保存说明，缺少内链适配时不显示死入口', () => {
+    const props = {
+      capabilities: { ...LIMITED_CAPABILITIES, questionnaireEditor: true },
+      saveAndExportText: '保存写入本地库。',
+      questionnaireSaveAndExportText: '可导出或保存到本地问卷库。',
+    };
+    render(<CharacterManagerGuide {...props} linkComponent={({ href, ...rest }) => <a href={`#${href}`} {...rest} />} />);
+    const link = container.querySelector('a[href="#/questionnaire-editor"]')!;
+    expect(link.textContent).toBe('创建与调整自定义问卷');
+    expect(link.parentElement?.textContent).toBe('问卷编辑器：创建与调整自定义问卷，可导出或保存到本地问卷库。');
+    expect(container.textContent).not.toContain('云端问卷数据卡');
+    render(<CharacterManagerGuide {...props} />);
+    expect(container.textContent).not.toContain('问卷编辑器');
   });
 });
 

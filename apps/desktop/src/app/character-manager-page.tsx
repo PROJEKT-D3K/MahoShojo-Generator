@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useRouter, useSearch } from '@tanstack/react-router';
+import { Link, useRouter, useSearch } from '@tanstack/react-router';
 import { setDataCardFieldValue, type DataCardFieldAddon, type DataCardFieldPath } from '@mahoshojo/ui-web/card-editor';
 import { CanshouCard, GeneralCharacterCard, MagicalGirlCard, resolveMagicalGirlGradient } from '@mahoshojo/ui-web/character-card';
 import { LOCAL_CARD_TYPE_LABELS, LocalCardsPanel, useLocalCardsController, type LocalCardsHost } from '@mahoshojo/ui-web/local-cards';
@@ -30,6 +30,7 @@ import {
   type CharacterManagerAccountStatus,
   type CharacterManagerCapabilities,
   type CharacterManagerFieldPath,
+  type CharacterManagerLinkProps,
 } from '@mahoshojo/ui-web/character-manager';
 import { inferDataCardTemplate, type DataCardTemplate } from '@mahoshojo/domain/data-cards';
 import { randomChooseOneHanaName } from '@mahoshojo/domain/flowers';
@@ -76,18 +77,20 @@ const DESKTOP_ASSET_SOURCE: HomeAssetSource = { baseUrl: '/' };
 
 /**
  * Desktop 的角色管理能力快照（DESK-PARITY-001/005）：已交付的是浏览、载入、显式上传与替换云端卡、
- * 模板选择、结构化情景编辑器与本地库编辑；未交付的（立绘、问卷编辑器、原生性
+ * 模板选择、结构化情景编辑器、本地库编辑与问卷编辑入口；未交付的（立绘、原生性
  * 签名、敏感词）一律不渲染入口，与 Web 喂给同一组组件的只是不同快照。
  */
 const DESKTOP_CHARACTER_MANAGER_CAPABILITIES: CharacterManagerCapabilities = {
   cloudCards: 'write',
   tachie: false,
-  questionnaireEditor: false,
+  questionnaireEditor: true,
   templateSelect: true,
   nativenessInfo: false,
   sensitiveWords: false,
   scenarioEditors: true,
 };
+
+const CharacterManagerLink = ({ href, ...props }: CharacterManagerLinkProps) => <Link to={href} {...props} />;
 
 const actionClass =
   'min-h-11 rounded-lg border border-(--app-border-strong) px-4 py-2 text-sm hover:bg-(--app-surface-90) disabled:cursor-not-allowed disabled:opacity-50';
@@ -126,7 +129,7 @@ const isScenarioTemplate = (template: string): boolean =>
  * 页面骨架（Logo/标题/账号区/使用指南/模板选择/草稿条/导入区/编辑主体/页脚）与
  * Web `/character-manager` 共用 `@mahoshojo/ui-web/character-manager` 同一组实现；
  * 差异经 `CharacterManagerCapabilities` 与宿主插槽投影：本机保存写入本地库（IPC），
- * 云端卡经共源模态框显式新建或版本替换；立绘/问卷编辑器/原生性签名/敏感词这些尚未交付的
+ * 云端卡经共源模态框显式新建或版本替换；问卷入口使用既有本地编辑页；立绘/原生性签名/敏感词这些尚未交付的
  * 能力不渲染入口。
  *
  * 保存规则见 `features/character-manager/editor`。页面草稿自动落到 localStorage
@@ -749,6 +752,8 @@ export function DesktopCharacterManager() {
 
           <CharacterManagerGuide
             capabilities={DESKTOP_CHARACTER_MANAGER_CAPABILITIES}
+            linkComponent={CharacterManagerLink}
+            questionnaireSaveAndExportText="可导出或保存到本地问卷库。"
             saveAndExportText={(
               <>保存写入这台设备的本地库；也可以把当前编辑中的内容下载为 <code>.json</code> 文件或复制到剪贴板。登录后还可选择公开或私有上传，并确认替换已有云端卡。</>
             )}

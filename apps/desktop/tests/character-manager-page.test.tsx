@@ -71,6 +71,27 @@ const click = async (target: Element | undefined) => {
   await act(async () => { target!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
   await settle();
 };
+const questionnaireLink = () => [...container.querySelectorAll<HTMLAnchorElement>('[data-testid="page-character-manager"] a')].find((link) => link.textContent === '创建与调整自定义问卷');
+const activateQuestionnaireLink = async (method: 'click' | 'keyboard') => {
+  const link = questionnaireLink();
+  expect(link).toBeDefined();
+  if (!link) throw new Error('缺少指南问卷入口');
+  expect(link.getAttribute('href')).toMatch(/#\/questionnaire-editor$/);
+  await act(async () => {
+    if (method === 'keyboard') {
+      link.focus();
+      expect(document.activeElement).toBe(link);
+      expect(link.tabIndex).toBe(0);
+      link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    }
+    // jsdom 不执行 Enter 的浏览器默认激活；显式模拟其 detail=0 click，仍走真实 Link/Router。
+    const activation = new MouseEvent('click', { bubbles: true, cancelable: true, detail: method === 'keyboard' ? 0 : 1 });
+    link.dispatchEvent(activation);
+    expect(activation.defaultPrevented).toBe(true);
+    if (method === 'keyboard') link.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+  });
+  await settle();
+};
 const type = (element: HTMLInputElement | HTMLTextAreaElement, value: string) => act(() => {
   const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')!.set!;
   setter.call(element, value);
@@ -114,7 +135,8 @@ beforeEach(async () => {
     return undefined;
   });
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
-  window.location.hash = '#/local-library';
+  // 初始 URL 同步设置；避免迟到的 hash pop 在挂载后误命中已恢复草稿的守卫。
+  window.history.replaceState(null, '', '#/local-library');
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -174,7 +196,7 @@ const deferCardGet = () => {
 
 describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', () => {
   it('与 Web 同一产品骨架：品牌 Logo、使用指南、我的数据卡与内容模板入口齐全', async () => {
-    window.location.hash = '#/character-manager';
+    window.history.replaceState(null, '', '#/character-manager');
     await mount();
     await waitFor(() => container.querySelector('img[src="/character-manager.svg"]') !== null);
     expect(container.querySelector('img[src="/character-manager-white.svg"]')).not.toBeNull();
@@ -185,10 +207,112 @@ describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', 
     // 空页面没有可持久化的内容：不写「空草稿」，也就不显示「已自动保存」。
     expect(container.textContent).not.toContain('已自动保存');
     expect(window.localStorage.getItem(DESKTOP_CHARACTER_MANAGER_DRAFT_KEY)).toBeNull();
-    // 未交付能力不渲染入口：立绘、敏感词、原生性徽章、问卷编辑器均不出现。
+    expect(questionnaireLink()?.parentElement?.textContent).toBe('问卷编辑器：创建与调整自定义问卷，可导出或保存到本地问卷库。');
+    expect(container.textContent).not.toContain('云端问卷数据卡');
+    // 未交付能力不渲染入口：立绘、敏感词、原生性徽章均不出现。
     expect(container.textContent).not.toContain('立绘');
     expect(container.textContent).not.toContain('敏感词检测控制台');
     expect(container.textContent).not.toContain('原生数据');
+  });
+
+  it.each(['click', 'keyboard'] as const)('空角色管理页经指南 %s 激活进入真实本地问卷编辑器，不创建角色草稿或写库', async (method) => {
+    window.history.replaceState(null, '', '#/character-manager');
+    const router = await mount();
+    await waitFor(() => questionnaireLink() !== undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const authQueries = bridge.invoke.mock.calls.filter(([command]) => command === 'cloud_auth_status').length;
+    await activateQuestionnaireLink(method);
+    await waitFor(() => button('另存到本地问卷库') !== undefined);
+    expect(router.state.location.pathname).toBe('/questionnaire-editor');
+    expect(router.state.location.search).toEqual({});
+    expect(container.textContent).toContain('本地问卷库');
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="粘贴问卷 JSON"]')?.value).toBe('');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(DESKTOP_CHARACTER_MANAGER_DRAFT_KEY)).toBeNull();
+    expect(bridge.invoke.mock.calls.filter(([command]) => command === 'cloud_auth_status')).toHaveLength(authQueries);
+    expect(bridge.invoke.mock.calls.some(([command]) => command === SAVE_LOCAL_CARD_COMMAND || command === 'cloud_card_library_request')).toBe(false);
+  });
+
+  it('指南离开取消保全角色草稿，确认后无数据跳转；问卷独立保存后 Back 恢复原草稿和保护', async () => {
+    const edited = { codename: '草稿角色', appearance: { outfit: '黑裙' }, future: { nested: ['保真', 7] }, signature: 'opaque-evidence' };
+    seedAttachedDraft(edited);
+    window.history.replaceState(null, '', `#/character-manager?card=${original.id}`);
+    const router = await mount();
+    await waitFor(() => container.querySelector<HTMLInputElement>('#editor-field-appearance__outfit')?.value === '黑裙');
+    await type(fieldByLabel('记录标题'), '未保存的新标题');
+    const storedPayload = JSON.parse(localStorage.getItem(DESKTOP_CHARACTER_MANAGER_DRAFT_KEY)!).payload;
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await activateQuestionnaireLink('click');
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(router.state.location.pathname).toBe('/character-manager');
+    expect(router.state.location.search).toEqual({ card: original.id });
+    expect(fieldByLabel('记录标题').value).toBe('未保存的新标题');
+    expect(container.querySelector<HTMLInputElement>('#editor-field-appearance__outfit')?.value).toBe('黑裙');
+    expect(JSON.parse(localStorage.getItem(DESKTOP_CHARACTER_MANAGER_DRAFT_KEY)!).payload).toEqual(storedPayload);
+    expect(rows.get(original.id)).toEqual(original);
+
+    confirm.mockReturnValue(true);
+    await activateQuestionnaireLink('keyboard');
+    await waitFor(() => button('另存到本地问卷库') !== undefined);
+    expect(router.state.location.pathname).toBe('/questionnaire-editor');
+    expect(router.state.location.search).toEqual({});
+    expect(container.textContent).not.toContain('草稿角色');
+    const paste = container.querySelector<HTMLTextAreaElement>('[aria-label="粘贴问卷 JSON"]')!;
+    expect(paste.value).toBe('');
+    expect(JSON.parse(localStorage.getItem(DESKTOP_CHARACTER_MANAGER_DRAFT_KEY)!).payload).toEqual(storedPayload);
+    await type(paste, JSON.stringify({ id: 'separate-q', kind: 'magical-girl', title: '独立问卷', nativeAllowed: true, signature: 'not-native', questions: [{ id: 'q1', question: '独立题目' }] }));
+    await click(button('应用粘贴内容'));
+    await click(button('另存到本地问卷库'));
+    await waitFor(() => container.textContent?.includes('已另存为本地未签名问卷') === true);
+    const questionnaire = [...rows.values()].find((record) => record.cardType === 'questionnaire')!;
+    expect(questionnaire).toMatchObject({ storageLocation: 'local', title: '独立问卷', provenance: { kind: 'unsigned', execution: 'imported' }, data: { nativeAllowed: false } });
+    expect(questionnaire.data).not.toHaveProperty('signature');
+    expect(questionnaire.data).not.toHaveProperty('codename');
+    expect(rows.get(original.id)).toEqual(original);
+
+    confirm.mockClear().mockReturnValue(false);
+    await act(async () => { router.history.back(); });
+    await waitFor(() => container.querySelector<HTMLInputElement>('#editor-field-appearance__outfit')?.value === '黑裙');
+    expect(router.state.location.search).toEqual({ card: original.id });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(fieldByLabel('记录标题').value).toBe('未保存的新标题');
+    expect(JSON.parse(localStorage.getItem(DESKTOP_CHARACTER_MANAGER_DRAFT_KEY)!).payload).toEqual(storedPayload);
+    await activateQuestionnaireLink('keyboard');
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(router.state.location.pathname).toBe('/character-manager');
+  });
+
+  it('本地保存仍在进行时重复激活指南入口不能确认绕过，保存完成后才可进入问卷页', async () => {
+    window.history.replaceState(null, '', `#/character-manager?card=${original.id}`);
+    const router = await mount();
+    await waitFor(() => button('保存到本地库') !== undefined);
+    await type(fieldByLabel('记录标题'), '保存中的标题');
+    await waitFor(() => !button('保存到本地库')!.disabled);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const fallback = bridge.invoke.getMockImplementation()!;
+    bridge.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === SAVE_LOCAL_CARD_COMMAND) await pending;
+      return fallback(command, args);
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await click(button('保存到本地库'));
+    await waitFor(() => bridge.invoke.mock.calls.some(([command]) => command === SAVE_LOCAL_CARD_COMMAND));
+    await activateQuestionnaireLink('click');
+    await activateQuestionnaireLink('keyboard');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe('/character-manager');
+    expect(fieldByLabel('记录标题').value).toBe('保存中的标题');
+    expect(rows.get(original.id)).toEqual(original);
+    expect(container.textContent).toContain('保存仍在进行');
+    await act(async () => { release(); });
+    await waitFor(() => container.textContent?.includes('已更新本地库中的记录。') === true);
+    expect(rows.get(original.id)?.title).toBe('保存中的标题');
+    expect(bridge.invoke.mock.calls.filter(([command]) => command === SAVE_LOCAL_CARD_COMMAND)).toHaveLength(1);
+    await activateQuestionnaireLink('click');
+    await waitFor(() => button('另存到本地问卷库') !== undefined);
+    expect(router.state.location.pathname).toBe('/questionnaire-editor');
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it('「我的数据卡」打开共享选择器，默认落在本地页签并列出本地记录', async () => {
@@ -279,7 +403,7 @@ describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', 
   });
 
   it('导出为 JSON 文件走 WebView 下载通道，导出的是草稿内容且不要求先保存', async () => {
-    const createObjectURL = vi.fn(() => 'blob:mock-url');
+    const createObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:mock-url');
     const revokeObjectURL = vi.fn();
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: createObjectURL });
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: revokeObjectURL });
