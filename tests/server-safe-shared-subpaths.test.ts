@@ -288,6 +288,7 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     // `./team` 由两端客户端组队页消费，包含交互状态，不进入服务端导入链。
     // `./arena-story-session-read` 是客户端会话读取生命周期，由宿主装配存储与偏好端口。
     // `./cloud-save` 是含模态生命周期的受控保存表单，仅由两端客户端宿主消费。
+    // `./battle-report-history` 包含筛选 hook 与详情模态框，仅由 Web/Desktop 客户端宿主消费。
     expect(unlisted.sort()).toEqual([
       './ai-provider',
       './announcement',
@@ -296,6 +297,7 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
       './arena-report-text',
       './arena-story-session',
       './arena-story-session-read',
+      './battle-report-history',
       './card-editor',
       './card-forge',
       './card-library',
