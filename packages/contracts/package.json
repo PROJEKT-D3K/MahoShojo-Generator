@@ -136,7 +136,9 @@
     },
     "./desktop-arena-story-branch": "./src/desktop-arena-story-branch.ts",
     "./fixtures/desktop-story-tail-rewrite-storage.json": "./fixtures/desktop-story-tail-rewrite-storage.json",
-    "./fixtures/desktop-story-branch-storage.json": "./fixtures/desktop-story-branch-storage.json"
+    "./fixtures/desktop-story-branch-storage.json": "./fixtures/desktop-story-branch-storage.json",
+    "./battle-report-history": "./src/battle-report-history.ts",
+    "./fixtures/battle-report-history.json": "./fixtures/battle-report-history.json"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

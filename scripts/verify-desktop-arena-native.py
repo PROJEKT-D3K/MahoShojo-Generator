@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = ROOT / "apps/desktop/src-tauri"
 MODULES = ["ai", "blob", "cloud", "library", "local_card", "maintenance", "provider_profile",
            "provider_target", "public_cache", "secret", "sse", "store", "web_package",
-           "package_path", "arena_hosted", "arena_story", "backup", "restore", "export"]
+           "package_path", "arena_hosted", "arena_story", "backup", "restore", "export", "external_link"]
 TEST_MODULES = ["ai_contract_tests", "ai_e2e_tests", "test_fixture"]
 
 
@@ -82,6 +82,8 @@ pub mod ipc {
     paths = [PRODUCT / "src" / f"{name}.rs" for name in MODULES + TEST_MODULES + ["arena_hosted_tests", "arena_hosted_json", "arena_hosted_json_tests"]]
     paths += sorted((PRODUCT / "src").glob("arena_hosted_*.rs"))
     paths += sorted((PRODUCT / "src").glob("arena_story_*.rs"))
+    paths += sorted((PRODUCT / "src/cloud").glob("*.rs"))
+    paths += [ROOT / "packages/contracts/fixtures/battle-report-history.json"]
     paths += sorted((PRODUCT / "src/generated").glob("*.json"))
     paths += sorted((ROOT / "packages/contracts/fixtures").glob("desktop-story-*.json"))
     paths += [ROOT / "packages/contracts/fixtures/desktop-arena-hosted.json",

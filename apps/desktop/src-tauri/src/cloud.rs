@@ -14,6 +14,9 @@
 //! - 兼容探测只发生在主动使用在线能力时，不阻塞离线启动；hosted 生成在
 //!   dispatch 前由 native 强制过这道门禁，而不是靠调用方先自查（DESK-094）。
 
+#[path = "cloud/battle_reports.rs"]
+pub(crate) mod battle_reports;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -182,6 +185,9 @@ const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
 #[serde(rename_all = "kebab-case")]
 pub enum CloudErrorCode {
     NotAuthenticated,
+    Forbidden,
+    NotFound,
+    ResponseTooLarge,
     FlowNotFound,
     FlowInProgress,
     Cancelled,
@@ -4543,6 +4549,9 @@ mod tests {
         // 防止两侧各自手抄一份列表发生漂移。
         let rust_codes: Vec<String> = [
             CloudErrorCode::NotAuthenticated,
+            CloudErrorCode::Forbidden,
+            CloudErrorCode::NotFound,
+            CloudErrorCode::ResponseTooLarge,
             CloudErrorCode::FlowNotFound,
             CloudErrorCode::FlowInProgress,
             CloudErrorCode::Cancelled,

@@ -1,0 +1,108 @@
+{
+  "paths": {
+    "list": "/api/me/battle-reports",
+    "detailPrefix": "/api/me/battle-reports/"
+  },
+  "budgets": {
+    "list": 1048576,
+    "detail": 16777216
+  },
+  "listRequest": {
+    "kind": "list",
+    "expectedUserId": 42,
+    "filters": {
+      "page": 1,
+      "pageSize": 10,
+      "status": "",
+      "mode": "",
+      "generationMode": "",
+      "pvpOnly": false,
+      "sort": "started_at_desc",
+      "q": ""
+    }
+  },
+  "detailRequest": {
+    "kind": "detail",
+    "expectedUserId": 42,
+    "generationId": "generation-1"
+  },
+  "list": {
+    "success": true,
+    "viewerUserId": 42,
+    "page": 1,
+    "pageSize": 10,
+    "total": 1,
+    "records": [
+      {
+        "id": "generation-1",
+        "startedAt": "2026-01-01T10:00:00Z",
+        "status": "completed",
+        "endpoint": "api/arena/generate-stream",
+        "generationMode": "stream",
+        "mode": "classic",
+        "headline": "演示战报",
+        "displayTitle": "演示战报",
+        "winner": "角色甲",
+        "hasPreview": true,
+        "canRegenerate": true,
+        "contentBlocked": false,
+        "errorMessage": null,
+        "outputHasShieldWords": false,
+        "pvpRoomId": null,
+        "pvpMatchId": null,
+        "pvpRoundId": null,
+        "sourceKind": "solo",
+        "arenaParticipantRole": null
+      }
+    ]
+  },
+  "detail": {
+    "success": true,
+    "viewerUserId": 42,
+    "record": {
+      "id": "generation-1",
+      "startedAt": "2026-01-01T10:00:00Z",
+      "status": "completed",
+      "endpoint": "api/arena/generate-stream",
+      "generationMode": "stream",
+      "mode": "classic",
+      "headline": "演示战报",
+      "displayTitle": "演示战报",
+      "winner": "角色甲",
+      "hasPreview": true,
+      "canRegenerate": true,
+      "contentBlocked": false,
+      "errorMessage": null,
+      "outputHasShieldWords": false,
+      "pvpRoomId": null,
+      "pvpMatchId": null,
+      "pvpRoundId": null,
+      "sourceKind": "solo",
+      "arenaParticipantRole": null,
+      "endedAt": "2026-01-01T10:00:01Z",
+      "durationMs": 1000,
+      "scenarioTitle": null,
+      "language": "zh-CN",
+      "storyLength": "standard",
+      "outputPreview": "原始正文 <script>不执行</script> 😀\n末尾",
+      "outputSource": "d1",
+      "outputReadError": null,
+      "contentExpired": false,
+      "accessScope": "owner"
+    },
+    "combatants": [
+      {
+        "sortIndex": 0,
+        "name": "角色甲",
+        "type": "magical-girl",
+        "teamId": null,
+        "templateId": "local",
+        "isNative": true,
+        "isPreset": false,
+        "characterGuidance": "本人指导",
+        "dataCardId": null,
+        "dataCardUpdatedAt": null
+      }
+    ]
+  }
+}

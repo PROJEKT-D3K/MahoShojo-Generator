@@ -1,15 +1,7 @@
-// Desktop `/me`：最小个人页（D5.1d-1）。
-//
-// 范围刻意收敛：账号身份投影（头像 + 名字）+ 会话状态与登录/退出操作面
-// ——后者复用设置页同一块 `AccountPanel`，两份面板读同一个 store，语义
-// 不可能分叉。战报记录等 Web 个人页内容尚未在 Desktop 交付，不在这里
-// 放占位或死链（DESK-PROD-001）。
-//
-// 身份显示遵循与顶栏相同的诚实口径：`account` 是本机凭据投影（不可达
-// 时依然显示并标注离线），绝不把本机缓存冒称服务端验证结果；
-// `verification` 结论由 AccountPanel 的状态徽标如实表达。
+// Desktop `/me`：账号、资料与只读服务器战报历史；身份与内容均按凭据世代隔离。
 
 import { useCallback } from 'react';
+import { BattleReportHistoryPanel } from '../features/battle-reports/BattleReportHistoryPanel';
 import { AccountPanel } from '../features/account/AccountPanel';
 import { ProfileSignaturePanel } from '../features/account/ProfileSignaturePanel';
 import { useDesktopCloudSession } from '../features/account/use-desktop-cloud-session';
@@ -59,6 +51,7 @@ export function DesktopMe() {
 
           <AccountPanel />
           <ProfileSignaturePanel />
+          <BattleReportHistoryPanel />
         </div>
       </div>
     </div>

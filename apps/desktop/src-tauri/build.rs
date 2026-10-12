@@ -90,6 +90,7 @@ fn main() {
             "cloud_login_cancel",
             "cloud_cached_account",
             "cloud_me_profile",
+            "cloud_battle_reports_read",
             "cloud_save_me_profile_signature",
             "cloud_save_me_profile_avatar",
             "cloud_clear_me_profile_avatar",

@@ -1458,6 +1458,16 @@ fn cloud_cached_account(
     cloud::cloud_cached_account(secrets.inner().as_ref())
 }
 
+/// 固定服务器战报历史只读通道，不接受任意 URL、HTTP 方法或凭据。
+#[tauri::command]
+async fn cloud_battle_reports_read(
+    cloud: State<'_, cloud::CloudState>,
+    secrets: State<'_, SharedSecretStore>,
+    request: cloud::battle_reports::BattleReportRequest,
+) -> Result<cloud::battle_reports::BattleReportResponse, cloud::CloudError> {
+    cloud::battle_reports::read_battle_reports(&cloud, secrets.inner().as_ref(), request).await
+}
+
 /// 当前会话账号的资料投影（`/api/me/profile` 固定路由）：顶栏头像与资料
 /// 刷新共用。native 注入会话 cookie，renderer 拿不到 URL 或凭据。
 #[tauri::command]
@@ -2044,6 +2054,7 @@ pub fn run() {
             cloud_login_cancel,
             cloud_cached_account,
             cloud_me_profile,
+            cloud_battle_reports_read,
             cloud_save_me_profile_signature,
             cloud_save_me_profile_avatar,
             cloud_clear_me_profile_avatar,

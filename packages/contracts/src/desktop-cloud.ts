@@ -342,6 +342,9 @@ export type DesktopCloudOnlineStatus = z.infer<typeof DesktopCloudOnlineStatusSc
 
 export const DesktopCloudErrorCodeSchema = z.enum([
   'not-authenticated',
+  'forbidden',
+  'not-found',
+  'response-too-large',
   'flow-not-found',
   'flow-in-progress',
   'cancelled',

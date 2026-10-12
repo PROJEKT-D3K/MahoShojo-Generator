@@ -46,6 +46,9 @@
   ],
   "ipcErrorCodes": [
     "not-authenticated",
+    "forbidden",
+    "not-found",
+    "response-too-large",
     "flow-not-found",
     "flow-in-progress",
     "cancelled",

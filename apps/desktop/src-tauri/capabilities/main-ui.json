@@ -85,6 +85,7 @@
     "allow-cloud-login-cancel",
     "allow-cloud-cached-account",
     "allow-cloud-me-profile",
+    "allow-cloud-battle-reports-read",
     "allow-cloud-save-me-profile-signature",
     "allow-cloud-save-me-profile-avatar",
     "allow-cloud-clear-me-profile-avatar",

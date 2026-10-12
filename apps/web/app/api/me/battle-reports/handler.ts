@@ -1,3 +1,4 @@
+import { checkBattleReportExpectedViewer, type BattleReportList } from '@mahoshojo/contracts/battle-report-history';
 import { getRequestUrl } from '@/lib/request-url';
 import {
   countBattleReportGenerationsByUserId,
@@ -35,6 +36,9 @@ async function handler(req: Request): Promise<Response> {
 
   const auth = await requireAuthUser(req);
   if ('response' in auth) return auth.response;
+
+  const viewerCheck = checkBattleReportExpectedViewer(new URL(req.url).searchParams, auth.user.id);
+  if (viewerCheck) return json({ error: viewerCheck === 'mismatch' ? '账号已变化，请重新载入战报' : 'expectedUserId 无效' }, { status: viewerCheck === 'mismatch' ? 409 : 400 });
 
   const url = getRequestUrl(req);
   const page = clampInt(url.searchParams.get('page'), 1, 1, 10_000);
@@ -96,11 +100,12 @@ async function handler(req: Request): Promise<Response> {
 
   return json({
     success: true,
+    viewerUserId: auth.user.id,
     page,
     pageSize,
     total,
     records,
-  });
+  } satisfies BattleReportList);
 }
 
 export const appRouteHandler = handler;

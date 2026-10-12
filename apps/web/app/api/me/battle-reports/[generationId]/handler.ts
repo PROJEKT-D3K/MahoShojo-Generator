@@ -1,3 +1,4 @@
+import { checkBattleReportExpectedViewer, type BattleReportDetail } from '@mahoshojo/contracts/battle-report-history';
 import {
   getBattleReportGenerationByIdLite,
   updateBattleReportGenerationOutputHasSensitiveWords,
@@ -15,11 +16,14 @@ import { quickCheck } from '@/lib/sensitive-word-filter';
 
 const getGenerationIdFromUrl = (url: string): string | null => {
   try {
-    const parts = new URL(url).pathname.split('/').filter(Boolean);
-    // /api/me/battle-reports/:generationId
-    const idx = parts.findIndex((p) => p === 'battle-reports');
-    if (idx === -1) return null;
-    return parts[idx + 1] || null;
+    const prefix = '/api/me/battle-reports/';
+    const pathname = new URL(url).pathname;
+    if (!pathname.startsWith(prefix)) return null;
+    const segment = pathname.slice(prefix.length);
+    if (!segment || segment.includes('/')) return null;
+    // Decode one segment once. Historical IDs stay opaque DB keys, never a rebuilt URL.
+    const generationId = decodeURIComponent(segment);
+    return generationId && !generationId.includes('/') && !generationId.includes('\\') ? generationId : null;
   } catch {
     return null;
   }
@@ -31,8 +35,11 @@ async function handler(req: Request): Promise<Response> {
   const auth = await requireAuthUser(req);
   if ('response' in auth) return auth.response;
 
+  const viewerCheck = checkBattleReportExpectedViewer(new URL(req.url).searchParams, auth.user.id);
+  if (viewerCheck) return json({ error: viewerCheck === 'mismatch' ? '账号已变化，请重新载入战报' : 'expectedUserId 无效' }, { status: viewerCheck === 'mismatch' ? 409 : 400 });
+
   const generationId = getGenerationIdFromUrl(req.url);
-  if (!generationId) return json({ error: '缺少 generationId' }, { status: 400 });
+  if (!generationId) return json({ error: 'generationId 缺失或编码无效' }, { status: 400 });
 
   const record = await getBattleReportGenerationByIdLite(generationId);
   if (!record) return json({ error: '记录不存在' }, { status: 404 });
@@ -64,6 +71,7 @@ async function handler(req: Request): Promise<Response> {
 
   return json({
     success: true,
+    viewerUserId: auth.user.id,
     record: {
       id: record.id,
       startedAt: record.started_at,
@@ -114,7 +122,7 @@ async function handler(req: Request): Promise<Response> {
       }),
       teamId: c.team_id,
     })),
-  });
+  } satisfies BattleReportDetail);
 }
 
 export const appRouteHandler = handler;

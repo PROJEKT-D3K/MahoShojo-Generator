@@ -1,272 +1,28 @@
 'use client';
-
 import { useQuery } from '@tanstack/react-query';
-
-import { BaseModal } from '@/components/shared/BaseModal';
-import { authStorage } from '@/lib/auth';
-
-type CombatantItem = {
-  sortIndex: number;
-  name: string;
-  type: string | null;
-  templateId?: string | null;
-  isNative?: boolean;
-  isPreset?: boolean;
-  teamId: number | null;
-  characterGuidance?: string | null;
-  dataCardId?: string | null;
-  dataCardUpdatedAt?: string | null;
-};
-
-type DetailResponse = {
-  success: true;
-  record: {
-    id: string;
-    startedAt: string;
-    endedAt: string;
-    durationMs: number;
-    status: string;
-    endpoint: string;
-    generationMode: string;
-    mode: string;
-    scenarioTitle: string | null;
-    language: string | null;
-    storyLength: string | null;
-    headline: string | null;
-    displayTitle: string;
-    winner: string | null;
-    outputPreview: string | null;
-    hasPreview: boolean;
-    contentBlocked: boolean;
-    canRegenerate: boolean;
-    outputSource: 'd1' | 'r2' | 'none';
-    outputReadError: string | null;
-    contentExpired: boolean;
-    errorMessage: string | null;
-    outputHasShieldWords: boolean;
-    pvpRoomId: string | null;
-    pvpMatchId: string | null;
-    pvpRoundId: string | null;
-    accessScope: 'owner' | 'arena-participant' | 'pvp-participant';
-    arenaParticipantRole: 'host' | 'member' | null;
-    sourceKind: 'solo' | 'arena-multiplayer' | 'pvp';
-  };
-  combatants: CombatantItem[];
-};
+import { BattleReportDetailsView } from '@mahoshojo/ui-web/battle-report-history';
+import { readBattleReport, useBattleReportIdentity } from './battle-report-reader';
 
 type Props = {
   isOpen: boolean;
   generationId: string | null;
+  ownerScope: string | null;
   onClose: () => void;
   onRegenerate: (generationId: string) => void;
   isRegenerating?: boolean;
   regenerateError?: string | null;
 };
-
-const formatTime = (iso: string): string => {
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return iso;
-  return new Date(ms).toLocaleString();
-};
-
-const formatDuration = (ms: number): string => {
-  if (!Number.isFinite(ms)) return '未知';
-  if (ms < 1000) return `${ms}ms`;
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const rest = sec % 60;
-  return `${min}m ${rest}s`;
-};
-
-const sourceLabel = (record: DetailResponse['record']): string => {
-  if (record.sourceKind === 'pvp') return 'PVP';
-  if (record.sourceKind === 'arena-multiplayer') {
-    if (record.arenaParticipantRole === 'host') return '多人 · 房主';
-    if (record.arenaParticipantRole === 'member') return '多人 · 成员';
-    return '多人参与';
-  }
-  return '单人';
-};
-
-export function BattleReportDetailsModal({ isOpen, generationId, onClose, onRegenerate, isRegenerating, regenerateError }: Props) {
+export function BattleReportDetailsModal({ ownerScope, ...props }: Props) {
+  const identity = useBattleReportIdentity();
+  const enabled = Boolean(identity.user && identity.scope === ownerScope && props.isOpen && props.generationId);
   const detailQuery = useQuery({
-    queryKey: ['me', 'battle-reports', 'detail', generationId],
-    enabled: Boolean(isOpen && generationId),
-    queryFn: async (): Promise<DetailResponse> => {
-      const res = await authStorage.fetch(`/api/me/battle-reports/${generationId}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || '加载战报详情失败');
-      return data as DetailResponse;
-    },
+    queryKey: ['me', 'battle-reports', identity.scope, 'detail', props.generationId],
+    enabled,
+    queryFn: ({ signal }) => readBattleReport('detail', `/api/me/battle-reports/${encodeURIComponent(props.generationId!)}?expectedUserId=${identity.user!.id}`, identity.user, signal, props.generationId!),
+    retry: false,
+    gcTime: 0,
   });
-
-  const record = detailQuery.data?.record ?? null;
-  const combatants = detailQuery.data?.combatants ?? [];
-
-  return (
-    <BaseModal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={record?.displayTitle || record?.headline || '战报详情'}
-      description={record ? `generationId：${record.id}` : undefined}
-      maxWidthClassName="max-w-5xl"
-      footer={
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-xs text-gray-500">
-            {record?.contentBlocked
-              ? '该记录包含敏感词，已禁止展示正文预览。'
-              : record?.contentExpired
-                ? '战报正文已超过保留期，但历史元数据仍可查看。'
-              : record && !record.canRegenerate
-                ? '该记录当前没有可重生正文；可先查看失败原因或稍后重试。'
-                : '提示：详情仅用于回溯；建议及时下载战报卡片/Markdown。'}
-          </div>
-          <div className="flex items-center gap-2">
-            {generationId ? (
-              <button
-                type="button"
-                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-60"
-                onClick={() => onRegenerate(generationId)}
-                disabled={Boolean(isRegenerating) || Boolean(record && !record.canRegenerate)}
-              >
-                {isRegenerating ? '生成中…' : '重生战报卡片'}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="rounded-lg border bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-              onClick={onClose}
-            >
-              关闭
-            </button>
-          </div>
-        </div>
-      }
-    >
-      {detailQuery.isLoading ? <div className="text-sm text-gray-600">加载中…</div> : null}
-      {detailQuery.error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-          加载失败：{(detailQuery.error as Error).message}
-        </div>
-      ) : null}
-
-      {record ? (
-        <div className="space-y-4">
-          {regenerateError ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              重新生成失败：{regenerateError}
-            </div>
-          ) : null}
-          {!regenerateError && record.errorMessage ? (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              失败原因：{record.errorMessage}
-            </div>
-          ) : null}
-          <div className="grid gap-3 rounded-xl border bg-white p-4 sm:grid-cols-2">
-            <div className="text-sm">
-              <div className="text-xs text-gray-500">状态</div>
-              <div className="font-medium text-gray-900">
-                {record.mode} / {record.status}（{record.generationMode}）
-              </div>
-            </div>
-            <div className="text-sm">
-              <div className="text-xs text-gray-500">胜者</div>
-              <div className="font-medium text-gray-900">{record.winner || '（未知）'}</div>
-            </div>
-            <div className="text-sm">
-              <div className="text-xs text-gray-500">开始时间</div>
-              <div className="font-medium text-gray-900">{formatTime(record.startedAt)}</div>
-            </div>
-            <div className="text-sm">
-              <div className="text-xs text-gray-500">耗时</div>
-              <div className="font-medium text-gray-900">{formatDuration(record.durationMs)}</div>
-            </div>
-            <div className="text-sm">
-              <div className="text-xs text-gray-500">来源</div>
-              <div className="font-medium text-gray-900 break-all">{sourceLabel(record)} · {record.endpoint}</div>
-            </div>
-            <div className="text-sm">
-              <div className="text-xs text-gray-500">PVP 关联</div>
-              <div className="font-medium text-gray-900 break-all">
-                {record.sourceKind === 'pvp' && record.pvpMatchId ? `match=${record.pvpMatchId}` : '无'}
-              </div>
-            </div>
-            <div className="text-sm">
-              <div className="text-xs text-gray-500">正文存储</div>
-              <div className="font-medium text-gray-900">
-                {record.contentExpired ? 'R2 正文已超过保留期' : record.outputSource === 'r2' ? 'R2 外部存储' : record.outputSource === 'd1' ? 'D1 预览' : '无正文'}
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-xl border bg-white p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-semibold text-gray-900">参战者</div>
-              <div className="text-xs text-gray-500">{combatants.length} 位</div>
-            </div>
-            {combatants.length <= 0 ? (
-              <div className="mt-2 text-sm text-gray-600">无参战者明细（可能写入失败或已清理）。</div>
-            ) : (
-              <div className="mt-2 overflow-hidden rounded-lg border">
-                <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-600">
-                  <div className="col-span-5">名称</div>
-                  <div className="col-span-3">类型</div>
-                  <div className="col-span-4">来源</div>
-                </div>
-                <div className="divide-y">
-                  {combatants.map((c) => (
-                    <div key={`${c.sortIndex}:${c.name}`} className="grid grid-cols-12 px-3 py-2 text-sm">
-                      <div className="col-span-5 truncate font-medium text-gray-900">{c.name}</div>
-                      <div className="col-span-3 truncate text-gray-700">{c.type || '未知'}</div>
-                      <div className="col-span-4 truncate text-gray-600">
-                        {record.accessScope === 'arena-participant'
-                          ? '多人共享投影'
-                          : c.dataCardId ? `数据卡 ${c.dataCardId}` : c.isPreset ? '预设角色' : c.isNative ? '本地原生' : '未知'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl border bg-white p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="font-semibold text-gray-900">正文预览</div>
-              {record.contentBlocked ? (
-                <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] text-red-800">
-                  已屏蔽
-                </span>
-              ) : record.outputHasShieldWords ? (
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800">
-                  含屏蔽词
-                </span>
-              ) : null}
-            </div>
-
-            {record.contentBlocked ? (
-              <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                该记录包含敏感词，已禁止浏览内容。
-              </div>
-            ) : record.outputReadError ? (
-              <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                正文读取失败：{record.outputReadError}
-              </div>
-            ) : record.contentExpired ? (
-              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                战报正文已超过保留期，当前仅保留标题、时间、状态和参与身份等历史元数据。
-              </div>
-            ) : record.outputPreview ? (
-              <pre className="mt-2 whitespace-pre-wrap rounded-lg border bg-gray-50 p-3 text-xs leading-relaxed text-gray-800">
-                {record.outputPreview}
-              </pre>
-            ) : (
-              <div className="mt-2 text-sm text-gray-600">暂无可用预览（可能生成失败/已清理/未写入预览）。</div>
-            )}
-          </div>
-        </div>
-      ) : null}
-    </BaseModal>
-  );
+  return <BattleReportDetailsView {...props} isOpen={enabled} data={enabled ? detailQuery.data : undefined}
+    loading={enabled && detailQuery.isLoading} error={enabled && detailQuery.error instanceof Error ? detailQuery.error.message : null}
+    onRetry={() => { if (enabled) void detailQuery.refetch(); }} />;
 }

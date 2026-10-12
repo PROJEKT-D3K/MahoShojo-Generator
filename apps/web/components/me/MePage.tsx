@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { isBattleReportIdentityCurrent, useBattleReportIdentity } from './battle-report-reader';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMutation } from '@tanstack/react-query';
@@ -19,7 +20,11 @@ import { useAuth } from '@/lib/useAuth';
 // `app/me/page.tsx` 的服务端早截获——敏感参数不进客户端生命周期。
 const LEGACY_ME_SETTINGS_TARGET = '/settings?section=account';
 
-export function MePage() {
+function MePageForIdentity() {
+  const reportIdentity = useBattleReportIdentity();
+  const activeScope = useRef(reportIdentity.scope);
+  activeScope.current = reportIdentity.scope;
+  const [reportOwnerScope, setReportOwnerScope] = useState<string | null>(null);
   const generationApiIntentLatch = useGenerationApiIntentLatch();
   const router = useRouter();
   const { user, userBadges, isAuthenticated, loading } = useAuth();
@@ -39,6 +44,8 @@ export function MePage() {
 
   const regenerateMutation = useMutation({
     mutationFn: async (generationId: string) => {
+      const identity = reportIdentity;
+      if (!isBattleReportIdentityCurrent(identity.user)) throw new Error('账号已变化，请重新载入战报');
       const generationIntent = generationApiIntentLatch.tryAcquire();
       if (!generationIntent) throw new Error('已有生成请求正在处理中，请勿重复提交。');
       const res = await generationIntent.dispatch(`/api/me/battle-reports/${generationId}/regenerate`, {
@@ -48,9 +55,12 @@ export function MePage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || '重新生成失败');
-      return data as { report: NewsReport; liveBody?: string; generationId?: string; generationMode?: string | null };
+      if (!isBattleReportIdentityCurrent(identity.user) || activeScope.current !== identity.scope) throw new Error('账号已变化，旧战报结果已忽略');
+      return { data: data as { report: NewsReport; liveBody?: string; generationId?: string; generationMode?: string | null }, identity };
     },
-    onSuccess: (data) => {
+    onSuccess: ({ data, identity }) => {
+      if (!isBattleReportIdentityCurrent(identity.user) || activeScope.current !== identity.scope) return;
+      setReportOwnerScope(identity.scope);
       setGenerated(data);
       setShowCardModal(true);
     },
@@ -104,6 +114,7 @@ export function MePage() {
                 <BattleReportsPanel
                   isAuthenticated={Boolean(isAuthenticated)}
                   onOpenDetails={(generationId) => {
+                    setReportOwnerScope(reportIdentity.scope);
                     setActiveReportId(generationId);
                     setShowReportDetails(true);
                   }}
@@ -120,7 +131,8 @@ export function MePage() {
       </div>
 
       <BattleReportDetailsModal
-        isOpen={showReportDetails}
+        isOpen={showReportDetails && reportOwnerScope === reportIdentity.scope}
+        ownerScope={reportOwnerScope}
         generationId={activeReportId}
         onClose={() => setShowReportDetails(false)}
         onRegenerate={(generationId) => regenerateMutation.mutate(generationId)}
@@ -129,7 +141,7 @@ export function MePage() {
       />
 
       <BattleReportCardModal
-        isOpen={showCardModal}
+        isOpen={showCardModal && reportOwnerScope === reportIdentity.scope}
         generationId={generated?.generationId ?? null}
         generationMode={generated?.generationMode ?? null}
         report={generated?.report ?? null}
@@ -140,4 +152,9 @@ export function MePage() {
       <ProfileCardModal isOpen={showProfileCardModal} onClose={() => setShowProfileCardModal(false)} />
     </>
   );
+}
+
+export function MePage() {
+  const { scope } = useBattleReportIdentity();
+  return <MePageForIdentity key={scope ?? "signed-out"} />;
 }

@@ -109,6 +109,7 @@ describe('battle report detail handler access projection', () => {
     const payload = await response.json() as any;
 
     expect(response.status).toBe(200);
+    expect(payload.viewerUserId).toBe(42);
     expect(payload.record).toMatchObject({
       accessScope: 'arena-participant',
       arenaParticipantRole: 'member',
@@ -149,4 +150,36 @@ describe('battle report detail handler access projection', () => {
     ));
     expect(deniedResponse.status).toBe(403);
   });
+  it.each(['generation:1', 'reconcile.1:2', '旧记录'])('decodes one encoded segment for the original opaque lookup %s', async (id) => {
+    mocks.getBattleReportGenerationByIdLite.mockResolvedValue({ ...record, id });
+    mocks.resolveBattleReportAccess.mockResolvedValue({ scope: 'owner', arenaParticipantRole: null });
+    const response = await appRouteHandler(new Request(`https://example.test/api/me/battle-reports/${encodeURIComponent(id)}`));
+    expect(response.status).toBe(200);
+    expect(mocks.getBattleReportGenerationByIdLite).toHaveBeenCalledWith(id);
+    expect(mocks.resolveBattleReportAccess).toHaveBeenCalledWith(id, 42);
+    expect(mocks.getBattleReportGenerationCombatantsByGenerationId).toHaveBeenCalledWith(id);
+  });
+  it.each(['bad%ZZ', 'bad%E0%A4', 'a%2Fb', 'a%5Cb', 'a/b'])('rejects invalid or non-single-segment encoding %s before reads', async (segment) => {
+    const response = await appRouteHandler(new Request(`https://example.test/api/me/battle-reports/${segment}`));
+    expect(response.status).toBe(400);
+    expect(mocks.getBattleReportGenerationByIdLite).not.toHaveBeenCalled();
+    expect(mocks.quickCheck).not.toHaveBeenCalled();
+  });
+  it('does not decode a double-encoded segment twice or skip ownership', async () => {
+    mocks.resolveBattleReportAccess.mockResolvedValue(null);
+    const response = await appRouteHandler(new Request('https://example.test/api/me/battle-reports/generation%253A1'));
+    expect(response.status).toBe(403);
+    expect(mocks.getBattleReportGenerationByIdLite).toHaveBeenCalledWith('generation%3A1');
+    expect(mocks.resolveBattleReportAccess).toHaveBeenCalledWith('generation%3A1', 42);
+    expect(mocks.loadBattleReportGenerationOutputText).not.toHaveBeenCalled();
+  });
+  it('rejects mismatched expected viewer before record, body or governance reads', async () => {
+    const response = await appRouteHandler(new Request('https://example.test/api/me/battle-reports/generation-1?expectedUserId=7'));
+    expect(response.status).toBe(409);
+    expect(mocks.getBattleReportGenerationByIdLite).not.toHaveBeenCalled();
+    expect(mocks.loadBattleReportGenerationOutputText).not.toHaveBeenCalled();
+    expect(mocks.quickCheck).not.toHaveBeenCalled();
+    expect(mocks.updateBattleReportGenerationOutputHasSensitiveWords).not.toHaveBeenCalled();
+  });
+
 });

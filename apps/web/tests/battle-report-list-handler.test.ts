@@ -81,4 +81,14 @@ describe('battle report list and profile card handlers', () => {
     ]);
     expect(payload[recordsKey][0]).not.toHaveProperty('arenaParticipantGenerationId');
   });
+  it('returns the actual viewer and rejects mismatched or malformed expected viewers before database reads', async () => {
+    const ok = await appRouteHandler(new Request('https://example.test/api/me/battle-reports?expectedUserId=42'));
+    expect((await ok.json()).viewerUserId).toBe(42);
+    mocks.countBattleReportGenerationsByUserId.mockClear(); mocks.getBattleReportGenerationsByUserIdLite.mockClear();
+    for (const [query, status] of [['expectedUserId=43', 409], ['expectedUserId=42&expectedUserId=43', 400], ['expectedUserId=oops', 400]] as const) {
+      expect((await appRouteHandler(new Request(`https://example.test/api/me/battle-reports?${query}`))).status).toBe(status);
+    }
+    expect(mocks.countBattleReportGenerationsByUserId).not.toHaveBeenCalled(); expect(mocks.getBattleReportGenerationsByUserIdLite).not.toHaveBeenCalled();
+  });
+
 });
