@@ -3,7 +3,10 @@ import { PRESET_LIST } from '@/lib/presets';
 import { isStrictRankedModelBlacklisted } from '@/lib/arena/ranked-model-policy';
 import { computeArenaBaseTier, type ArenaBaseTier, type ArenaTier } from '@/lib/arena/tier';
 import { shouldEnforceStrictRangeLimit } from '@/lib/arena/strict-range';
-import { buildArenaTerminalEffectIdempotencyKey } from '@mahoshojo/hosted-runtime/arena-generation';
+import {
+  buildArenaTerminalEffectIdempotencyKey, digestArenaRatingJson,
+  isCurrentArenaPresetRatingBinding, parseArenaRatingEntityBinding,
+} from '@mahoshojo/hosted-runtime/arena-generation';
 
 export type ArenaQueue = 'strict' | 'free';
 export type ArenaEntityType = 'data_card' | 'preset';
@@ -222,6 +225,9 @@ type ArenaRatingsRepoBundle = {
     isPublic: number | boolean | null;
     reviewStatus: string | null;
     deletedAt: string | null;
+    data?: string | null;
+    updatedAt?: string | null;
+    userId?: number;
   }>>;
   getArenaEligibilitySnapshotByGenerationId: (db: unknown, generationId: string) => Promise<ArenaEligibilitySnapshot | null>;
   listGenerationCombatantsByGenerationId: (db: unknown, generationId: string) => Promise<BattleReportGenerationCombatantRow[]>;
@@ -274,14 +280,16 @@ type ArenaRatingsRepoBundle = {
     eventId: string,
     status: ArenaRatingEventStatus,
     options?: { skipReason?: string | null },
-  ) => Promise<void>;
+  ) => Promise<boolean | void>;
   applyArenaRatingsUpdateIfBothMatch: (
     db: unknown,
     queue: ArenaQueue,
     entities: [ArenaEntity, ArenaEntity],
     computed: ArenaRatingEventComputedPayload,
     appliedAtIso: string,
-  ) => Promise<'applied' | 'already-applied' | 'conflict'>;
+    identityGuards?: readonly ArenaRatingIdentityGuard[] | null,
+    eventId?: string,
+  ) => Promise<'applied' | 'already-applied' | 'conflict' | 'identity-conflict' | 'event-skipped'>;
 };
 
 let arenaRatingsRepoBundleForTests: ArenaRatingsRepoBundle | null = null;
@@ -1006,47 +1014,56 @@ export const isFreeEligible = (snapshot: ArenaEligibilitySnapshot): boolean => {
   return true;
 };
 
-const validateStrictPublicDataCardEntities = async (
+type ArenaRatingIdentityGuard = {
+  id: string;
+  data: string;
+  updatedAt: string;
+  authorizedUserId: number | null;
+};
+
+const validateRatingEntityBinding = async (
+  snapshot: ArenaEligibilitySnapshot,
   entities: [ArenaEntity, ArenaEntity],
-  requiredBundle?: ArenaRatingsRepoBundle,
-): Promise<{ ok: true } | { ok: false; skipReason: 'strict-not-public' | 'strict-not-approved' | 'strict-not-character' | 'strict-card-missing' }> => {
-  const dataCardIds = entities
-    .filter((e) => e.entityType === 'data_card')
-    .map((e) => e.entityId)
-    .filter(Boolean);
-
-  if (dataCardIds.length === 0) return { ok: true };
-
-  try {
-    const bundle = requiredBundle ?? await readArenaRatingsRepoBundle();
-    if (!bundle) {
-      if (requiredBundle) throw new Error('ARENA_RATING_REPOSITORY_UNAVAILABLE');
-      return { ok: false, skipReason: 'strict-card-missing' };
-    }
-    const rows = await bundle.getStrictQueueDataCardsByIds(bundle.db, dataCardIds);
-
-    const byId = new Map<string, (typeof rows)[number]>();
-    rows.forEach((row) => {
-      const id = typeof row?.id === 'string' ? row.id.trim() : '';
-      if (!id) return;
-      byId.set(id, row);
-    });
-
-    for (const id of dataCardIds) {
-      const row = byId.get(id);
-      if (!row || row.deletedAt) return { ok: false, skipReason: 'strict-card-missing' };
-      if (row.type !== 'character') return { ok: false, skipReason: 'strict-not-character' };
-      const isPublic = row.isPublic === 1 || row.isPublic === true;
-      if (!isPublic) return { ok: false, skipReason: 'strict-not-public' };
-      if (row.reviewStatus !== 'approved') return { ok: false, skipReason: 'strict-not-approved' };
-    }
-
-    return { ok: true };
-  } catch (error) {
-    if (requiredBundle) throw error;
-    console.warn('校验严格排位数据卡可用性失败（降级为不计 strict）:', error);
-    return { ok: false, skipReason: 'strict-card-missing' };
+  queue: ArenaQueue,
+  repository: ArenaRatingsRepoBundle,
+): Promise<{ ok: true; guards: ArenaRatingIdentityGuard[] } | { ok: false; skipReason: string }> => {
+  let raw: unknown;
+  try { raw = JSON.parse(snapshot.extraJson ?? '{}').ratingEntityBinding; } catch { raw = null; }
+  const binding = parseArenaRatingEntityBinding(raw);
+  if (!binding) return { ok: false, skipReason: 'entity-binding-missing' };
+  if (binding.status !== 'bound') return { ok: false, skipReason: binding.reason };
+  if (entities[0].entityType === entities[1].entityType && entities[0].entityId === entities[1].entityId) {
+    return { ok: false, skipReason: 'entity-body-mismatch' };
   }
+  if (binding.entities.some((bound, index) => bound.entityType !== entities[index].entityType
+    || bound.entityId !== entities[index].entityId)) return { ok: false, skipReason: 'entity-body-mismatch' };
+  const ids = binding.entities.filter((entity) => entity.entityType === 'data_card').map((entity) => entity.entityId);
+  let rows: Awaited<ReturnType<ArenaRatingsRepoBundle['getStrictQueueDataCardsByIds']>>;
+  try { rows = ids.length ? await repository.getStrictQueueDataCardsByIds(repository.db, ids) : []; }
+  catch { return { ok: false, skipReason: 'entity-reference-unavailable' }; }
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const guards: ArenaRatingIdentityGuard[] = [];
+  for (const entity of binding.entities) {
+    if (entity.entityType === 'preset') {
+      if (!isCurrentArenaPresetRatingBinding(entity)) return { ok: false, skipReason: 'entity-version-changed' };
+      continue;
+    }
+    const row = byId.get(entity.entityId);
+    if (!row || row.deletedAt || row.type !== 'character' || typeof row.data !== 'string'
+      || typeof row.updatedAt !== 'string') return { ok: false, skipReason: 'entity-reference-unavailable' };
+    const isPublic = (row.isPublic === 1 || row.isPublic === true) && row.reviewStatus === 'approved';
+    if (queue === 'strict' && !isPublic) return { ok: false, skipReason: 'strict-not-public' };
+    if (!isPublic && row.userId !== entity.authorizedUserId) {
+      return { ok: false, skipReason: 'entity-reference-unavailable' };
+    }
+    let digest: string | null = null;
+    try { digest = await digestArenaRatingJson(JSON.parse(row.data)); } catch { /* fail closed */ }
+    if (row.updatedAt !== entity.updatedAt || digest !== entity.contentDigest) {
+      return { ok: false, skipReason: 'entity-version-changed' };
+    }
+    guards.push({ id: entity.entityId, data: row.data, updatedAt: row.updatedAt, authorizedUserId: entity.authorizedUserId });
+  }
+  return { ok: true, guards };
 };
 
 export async function getArenaEligibilitySnapshotByGenerationId(
@@ -1124,7 +1141,14 @@ export async function settleArenaRatingsForGeneration(
         await repository.markArenaRatingEventApplied(repository.db, eventId, new Date().toISOString());
         return;
       }
-      await repository.markArenaRatingEventStatus(repository.db, eventId, status, options);
+      const changed = await repository.markArenaRatingEventStatus(repository.db, eventId, status, options);
+      if (changed === false && status === 'skipped' && options?.skipReason?.startsWith('entity-')) {
+        const latest = await repository.getArenaRatingEventById(repository.db, eventId);
+        if (latest?.status === 'applied' || latest?.status === 'skipped') return;
+        // A concurrent rating write may have reached after-state. Keep finalization
+        // pending so the normal retry reconciles it; never claim a skipped success.
+        throw new Error('ARENA_RATING_IDENTITY_SETTLEMENT_RETRY');
+      }
     };
     const readCurrentRatings = async (
       queue: ArenaQueue,
@@ -1310,6 +1334,9 @@ export async function settleArenaRatingsForGeneration(
     if (shouldApplyFree) queuesToApply.push('free');
     for (const queue of queuesToApply) {
       const eventId = buildArenaRatingEventId(generationId, queue);
+      const priorEvent = await repository.getArenaRatingEventById(repository.db, eventId);
+      if (priorEvent?.status === 'applied' || priorEvent?.status === 'skipped') continue;
+      if (priorEvent?.status === 'failed') throw new Error('ARENA_RATING_EVENT_FAILED');
 
       if (queue === 'free' && shouldApplyStrict) {
         // strict 命中时同时更新 free：为保持 strict ⊆ free，free 不再额外按 IP 去重。
@@ -1338,6 +1365,24 @@ export async function settleArenaRatingsForGeneration(
           });
           continue;
         }
+      }
+
+      const initialIdentity = await validateRatingEntityBinding(snapshot, [aEntity, bEntity], queue, repository);
+      if (!initialIdentity.ok) {
+        if (!priorEvent) {
+          const insertedSkip = await insertEvent({ id: eventId, generationId, queue, status: 'skipped',
+            skipReason: initialIdentity.skipReason, userId: snapshot.userId,
+            ipAnonymized: snapshot.ipAnonymized, pairKey, a: aEntity, b: bEntity, winnerSlot });
+          if (!insertedSkip) {
+            const latest = await repository.getArenaRatingEventById(repository.db, eventId);
+            if (latest?.status !== 'applied' && latest?.status !== 'skipped') {
+              throw new Error('ARENA_RATING_IDENTITY_SETTLEMENT_RETRY');
+            }
+          }
+          continue;
+        }
+        // Only an already-applied pending event may bypass the new binding rule.
+        // Its computed snapshots below prove reconciliation, not fresh authority.
       }
 
       const inserted = await insertEvent({
@@ -1384,28 +1429,6 @@ export async function settleArenaRatingsForGeneration(
         continue;
       }
 
-      if (queue === 'strict' && isNewStrictPolicy) {
-        const strictEntities = await validateStrictPublicDataCardEntities(
-          [aEntity, bEntity],
-          repository,
-        );
-        if (!strictEntities.ok) {
-          await markEventStatus(eventId, 'skipped', { skipReason: strictEntities.skipReason });
-          continue;
-        }
-
-        const involvesPreset = aEntity.entityType === 'preset' || bEntity.entityType === 'preset';
-        if (!involvesPreset) {
-          const rangeCheck = getStrictRangeCheckResult(
-            { rating: aCurrent.rating, games: aCurrent.games },
-            { rating: bCurrent.rating, games: bCurrent.games },
-          );
-          if (rangeCheck && rangeCheck.exceededBy > 0) {
-            await markEventStatus(eventId, 'skipped', { skipReason: 'strict-out-of-range' });
-            continue;
-          }
-        }
-      }
 
       const aWinInc = winnerSlot === 1 ? 1 : 0;
       const aLossInc = winnerSlot === 2 ? 1 : 0;
@@ -1416,6 +1439,7 @@ export async function settleArenaRatingsForGeneration(
 
       let computed: ArenaRatingEventComputedPayload | null = null;
       let shouldPersistComputedFields = true;
+      let reconcileAlreadyApplied = false;
 
       if (
         existingEvent &&
@@ -1436,6 +1460,7 @@ export async function settleArenaRatingsForGeneration(
           bCurrent.rating === existingEvent.b_after_rating &&
           bCurrent.games === existingEvent.b_after_games;
 
+        reconcileAlreadyApplied = alreadyApplied;
         const matchesBefore =
           aCurrent.rating === existingEvent.a_before_rating &&
           aCurrent.games === existingEvent.a_before_games &&
@@ -1519,6 +1544,29 @@ export async function settleArenaRatingsForGeneration(
         };
       }
 
+      // A pending event whose exact after-state is already present must finish
+      // its existing reconciliation, even if its card has since changed. No new
+      // rating delta is allowed without fresh validation and atomic source guards.
+      const identity = reconcileAlreadyApplied ? null : initialIdentity;
+      if (identity && !identity.ok) {
+        await markEventStatus(eventId, 'skipped', { skipReason: identity.skipReason });
+        continue;
+      }
+
+      if (!reconcileAlreadyApplied && queue === 'strict' && isNewStrictPolicy) {
+        const involvesPreset = aEntity.entityType === 'preset' || bEntity.entityType === 'preset';
+        if (!involvesPreset) {
+          const rangeCheck = getStrictRangeCheckResult(
+            { rating: aCurrent.rating, games: aCurrent.games },
+            { rating: bCurrent.rating, games: bCurrent.games },
+          );
+          if (rangeCheck && rangeCheck.exceededBy > 0) {
+            await markEventStatus(eventId, 'skipped', { skipReason: 'strict-out-of-range' });
+            continue;
+          }
+        }
+      }
+
       if (shouldPersistComputedFields) {
         const updated = await repository.updateArenaRatingEventComputedFields(
           repository.db,
@@ -1534,8 +1582,13 @@ export async function settleArenaRatingsForGeneration(
         [aEntity, bEntity],
         computed,
         new Date().toISOString(),
+        identity?.ok ? identity.guards : null,
+        eventId,
       );
-      if (applied === 'applied' || applied === 'already-applied') {
+      if (applied === 'event-skipped') continue;
+      if (applied === 'identity-conflict') {
+        await markEventStatus(eventId, 'skipped', { skipReason: 'entity-version-changed' });
+      } else if (applied === 'applied' || applied === 'already-applied') {
         await markEventStatus(eventId, 'applied');
       } else {
         await markEventStatus(eventId, 'failed', { skipReason: 'rating-conflict' });

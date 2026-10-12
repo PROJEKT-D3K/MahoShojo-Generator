@@ -6,327 +6,392 @@ export type ArenaPresetAuthorityEntry = Readonly<{
   id: string;
   kind: 'character' | 'scenario';
   versionToken: string;
+  ratingIdentityDigest: string | null;
 }>;
 
 export const ARENA_PRESET_AUTHORITY = [
   {
     "id": "C01_egg.json",
     "kind": "character",
-    "versionToken": "sha256:480fd6fa6781c1ea1b3893160f7fd4e93f7f8802b42549c205d651ac83890084"
+    "versionToken": "sha256:480fd6fa6781c1ea1b3893160f7fd4e93f7f8802b42549c205d651ac83890084",
+    "ratingIdentityDigest": "sha256:1b57bcd3fdc7ebf65f3340115bf7c0ce2212d5fe55f31bf836ba46d035d9c7f2"
   },
   {
     "id": "C02_pupa.json",
     "kind": "character",
-    "versionToken": "sha256:b90c4aa5f92de412b340100d32955ea5e8ff59078dd868b1de133fdefb64299f"
+    "versionToken": "sha256:b90c4aa5f92de412b340100d32955ea5e8ff59078dd868b1de133fdefb64299f",
+    "ratingIdentityDigest": "sha256:35e9be98387e77026b9c8a7232764e2b379f3197427183a1c51a2dbe97f0c6f9"
   },
   {
     "id": "C03_choir_and_dancer.json",
     "kind": "character",
-    "versionToken": "sha256:fb62fece456d0a8a3f6e63983833c11e1d030909dfada314f6829f7a303e9f13"
+    "versionToken": "sha256:fb62fece456d0a8a3f6e63983833c11e1d030909dfada314f6829f7a303e9f13",
+    "ratingIdentityDigest": "sha256:ea8f75ce42b4126772d625a5364eeb79a179135944f60b5253b9600744242013"
   },
   {
     "id": "C04_flesh_spider_web.json",
     "kind": "character",
-    "versionToken": "sha256:0d6cede9c5ba827537a3e4b84a2797a472abeb968ec5054be9b670eb009f63f7"
+    "versionToken": "sha256:0d6cede9c5ba827537a3e4b84a2797a472abeb968ec5054be9b670eb009f63f7",
+    "ratingIdentityDigest": "sha256:aaea5966d70d0550c7e6576cc4bfc604f160ab08ffaffccc5f9367fbc1903f6d"
   },
   {
     "id": "C05_cinder_guard_spider.json",
     "kind": "character",
-    "versionToken": "sha256:10e1872abc3f4ea87591d7fe290fb9a4f363a8b0926e48c21f8fc7e2f6dfdef0"
+    "versionToken": "sha256:10e1872abc3f4ea87591d7fe290fb9a4f363a8b0926e48c21f8fc7e2f6dfdef0",
+    "ratingIdentityDigest": "sha256:5402786d34ab95daa7f6cfe7d311c2ed7ecb690227ee0022d747b63701a52535"
   },
   {
     "id": "C06_moth.json",
     "kind": "character",
-    "versionToken": "sha256:d424e1465c60ece3adc0459ac6724479ea91df7ff8d76f6015fa58c55cd2573a"
+    "versionToken": "sha256:d424e1465c60ece3adc0459ac6724479ea91df7ff8d76f6015fa58c55cd2573a",
+    "ratingIdentityDigest": "sha256:7ca6a5206a82c8001d2ec4fc0ba025442bbc63fcf341471504f8beda7eec8eb3"
   },
   {
     "id": "C07_returning_to_simplicity.json",
     "kind": "character",
-    "versionToken": "sha256:9629ac0698d4baf356ec5b59b691518cf35871d628284aecb75d6a798c392025"
+    "versionToken": "sha256:9629ac0698d4baf356ec5b59b691518cf35871d628284aecb75d6a798c392025",
+    "ratingIdentityDigest": "sha256:34f3bd041d4e8c79761c8096f93cf89c619ac3cdc147205b95b3a49b98b209bc"
   },
   {
     "id": "C08_silent_worm.json",
     "kind": "character",
-    "versionToken": "sha256:a89e4fe671bb8ef2a81c77a287ae4b763e37f88885b685cbdda5c965a8ac34a9"
+    "versionToken": "sha256:a89e4fe671bb8ef2a81c77a287ae4b763e37f88885b685cbdda5c965a8ac34a9",
+    "ratingIdentityDigest": "sha256:12a8af3087d343494e4780cf49e06b5f5270d5a8e0ec22baeddb26e1721ea030"
   },
   {
     "id": "M00_white_lily.json",
     "kind": "character",
-    "versionToken": "sha256:004b2ada13da117ae369bba6c7657c6ef46efbf20a485261f37677aa8bfa0ab8"
+    "versionToken": "sha256:004b2ada13da117ae369bba6c7657c6ef46efbf20a485261f37677aa8bfa0ab8",
+    "ratingIdentityDigest": "sha256:52210815871757120bf8818d52b39ef40ee3aa082b444711dfa862a34f7b6459"
   },
   {
     "id": "M01_centaurea_legacy.json",
     "kind": "character",
-    "versionToken": "sha256:4a5dc93189a18da100822f087efb7498dd85a15ddbdab36b69217ad004f06bb2"
+    "versionToken": "sha256:4a5dc93189a18da100822f087efb7498dd85a15ddbdab36b69217ad004f06bb2",
+    "ratingIdentityDigest": "sha256:6fc48c914e0cfb84d8cfb6ac7cdb333bd1bf0c46e0c7c83c26128890a433a166"
   },
   {
     "id": "M01_centaurea.json",
     "kind": "character",
-    "versionToken": "sha256:223615f4b5f35daa3acbd22f611442d5d560d7e0518785466f7363ce3a91effc"
+    "versionToken": "sha256:223615f4b5f35daa3acbd22f611442d5d560d7e0518785466f7363ce3a91effc",
+    "ratingIdentityDigest": "sha256:223615f4b5f35daa3acbd22f611442d5d560d7e0518785466f7363ce3a91effc"
   },
   {
     "id": "M02_white_rose_legacy.json",
     "kind": "character",
-    "versionToken": "sha256:a4585e472035801c01664039778859bb63c06a6432afaf36c36717307077722c"
+    "versionToken": "sha256:a4585e472035801c01664039778859bb63c06a6432afaf36c36717307077722c",
+    "ratingIdentityDigest": "sha256:66a62f415d14f51fdc7772d28f97213ff2037c91f256f4e75732cfe7d68594de"
   },
   {
     "id": "M02_white_rose.json",
     "kind": "character",
-    "versionToken": "sha256:90bb8c0dcf4f7821a2d8ab01b607a436a0ca9553db7d7174dbefd3676334290c"
+    "versionToken": "sha256:90bb8c0dcf4f7821a2d8ab01b607a436a0ca9553db7d7174dbefd3676334290c",
+    "ratingIdentityDigest": "sha256:90bb8c0dcf4f7821a2d8ab01b607a436a0ca9553db7d7174dbefd3676334290c"
   },
   {
     "id": "M03_little_brocade_legacy.json",
     "kind": "character",
-    "versionToken": "sha256:abb630ead851d52cac39af23e8d3919e84cf3d11b1a19ebad27eeac2a5b9ffd7"
+    "versionToken": "sha256:abb630ead851d52cac39af23e8d3919e84cf3d11b1a19ebad27eeac2a5b9ffd7",
+    "ratingIdentityDigest": "sha256:b22397bfd3a8588819d4f299c7c31856eadda9f0c71d908cf161fbbc3c65f076"
   },
   {
     "id": "M03_little_brocade.json",
     "kind": "character",
-    "versionToken": "sha256:77c6b2c3a2d65b5dec73722eccd068bbbd7e3066d56b6bc4669f5ed2478db8d7"
+    "versionToken": "sha256:77c6b2c3a2d65b5dec73722eccd068bbbd7e3066d56b6bc4669f5ed2478db8d7",
+    "ratingIdentityDigest": "sha256:77c6b2c3a2d65b5dec73722eccd068bbbd7e3066d56b6bc4669f5ed2478db8d7"
   },
   {
     "id": "M04_boxue_legacy.json",
     "kind": "character",
-    "versionToken": "sha256:fc0dd30af50ff21c727954024ca42c6eca54373ce42f86a238592bc9ccc3fab2"
+    "versionToken": "sha256:fc0dd30af50ff21c727954024ca42c6eca54373ce42f86a238592bc9ccc3fab2",
+    "ratingIdentityDigest": "sha256:2bab097a8e09355455c1229c5151508d0ac4827cb16b7926268fe6b5fca19db7"
   },
   {
     "id": "M04_boxue.json",
     "kind": "character",
-    "versionToken": "sha256:f726efe02b1aaf9b984363d44659a80a40029962ef95f8a314fa998e67b34b53"
+    "versionToken": "sha256:f726efe02b1aaf9b984363d44659a80a40029962ef95f8a314fa998e67b34b53",
+    "ratingIdentityDigest": "sha256:f726efe02b1aaf9b984363d44659a80a40029962ef95f8a314fa998e67b34b53"
   },
   {
     "id": "M05_kite_legacy.json",
     "kind": "character",
-    "versionToken": "sha256:e6a209a041a101da42236a36a46c8d4544b2b88e863cec2c990d5d1ebeff5c9e"
+    "versionToken": "sha256:e6a209a041a101da42236a36a46c8d4544b2b88e863cec2c990d5d1ebeff5c9e",
+    "ratingIdentityDigest": "sha256:66f03c48e47819b1fd88b9479459fb26eb9dcf691ac47e183dab193a2cd3aac1"
   },
   {
     "id": "M05_kite.json",
     "kind": "character",
-    "versionToken": "sha256:74c2897950d25bbaa409c49e316944304e0a1d9120126968a12f3ec62c97b9f8"
+    "versionToken": "sha256:74c2897950d25bbaa409c49e316944304e0a1d9120126968a12f3ec62c97b9f8",
+    "ratingIdentityDigest": "sha256:74c2897950d25bbaa409c49e316944304e0a1d9120126968a12f3ec62c97b9f8"
   },
   {
     "id": "M06_sparrow.json",
     "kind": "character",
-    "versionToken": "sha256:9a8477b73f23137a776a0e57c23eba2e6ddeba27f7b62300fa6ec70ae6d34f18"
+    "versionToken": "sha256:9a8477b73f23137a776a0e57c23eba2e6ddeba27f7b62300fa6ec70ae6d34f18",
+    "ratingIdentityDigest": "sha256:8a61e20fd5893c9cf5df34335454df30d3c4bb89aca12828a0136bcbe276f6e4"
   },
   {
     "id": "M07_margaret_legacy.json",
     "kind": "character",
-    "versionToken": "sha256:b91ec085be832ab91c4c0ee26cdd5e64880509a656675a66e686b248fc37eea3"
+    "versionToken": "sha256:b91ec085be832ab91c4c0ee26cdd5e64880509a656675a66e686b248fc37eea3",
+    "ratingIdentityDigest": "sha256:45f3aecc570dad988bedafb997c64e4756d9da128659e5dc8e0dfb64c35831c1"
   },
   {
     "id": "M07_margaret.json",
     "kind": "character",
-    "versionToken": "sha256:63796d5646ed9799d39d98fc08f2b10cf1bd5f2837f654ff16ee5c2969482930"
+    "versionToken": "sha256:63796d5646ed9799d39d98fc08f2b10cf1bd5f2837f654ff16ee5c2969482930",
+    "ratingIdentityDigest": "sha256:63796d5646ed9799d39d98fc08f2b10cf1bd5f2837f654ff16ee5c2969482930"
   },
   {
     "id": "M08_asagao_legacy.json",
     "kind": "character",
-    "versionToken": "sha256:d1d3147777ef9025ea3ae6a59cf65ae7df36caf05f69f9089d7001819e7af7e0"
+    "versionToken": "sha256:d1d3147777ef9025ea3ae6a59cf65ae7df36caf05f69f9089d7001819e7af7e0",
+    "ratingIdentityDigest": "sha256:2cf662c32cda8439adf24b67111575d6a1b2855b42a8353bc1655096fee4723e"
   },
   {
     "id": "M08_asagao.json",
     "kind": "character",
-    "versionToken": "sha256:e614b154f3833a18e5e79c64afcd461e170645c1323f8d0bd73902df71902a3c"
+    "versionToken": "sha256:e614b154f3833a18e5e79c64afcd461e170645c1323f8d0bd73902df71902a3c",
+    "ratingIdentityDigest": "sha256:e614b154f3833a18e5e79c64afcd461e170645c1323f8d0bd73902df71902a3c"
   },
   {
     "id": "M09_pine_flower.json",
     "kind": "character",
-    "versionToken": "sha256:d9dfcd62d7c6c2d23d2e0a92bde6941763af59174940bae9656186c1261b5e35"
+    "versionToken": "sha256:d9dfcd62d7c6c2d23d2e0a92bde6941763af59174940bae9656186c1261b5e35",
+    "ratingIdentityDigest": "sha256:42c5f4872454ed74c110f4f433dcccafa3198e3771e1ce10469bcd50f11b5b0a"
   },
   {
     "id": "M10_mugwort.json",
     "kind": "character",
-    "versionToken": "sha256:bff9af8c1fb7ee1dc4cfa4efeff5edfcf553154d9bb090bf9ead7fd6cfa321c0"
+    "versionToken": "sha256:bff9af8c1fb7ee1dc4cfa4efeff5edfcf553154d9bb090bf9ead7fd6cfa321c0",
+    "ratingIdentityDigest": "sha256:9ce7f97faf8aaf9adaa3944c19c176a62edf2ce578b7d13db55dee66f270ca27"
   },
   {
     "id": "M11_sunflower.json",
     "kind": "character",
-    "versionToken": "sha256:aad1a501f19c1a1ccd1b3c0c51a3c09fc1122b263ac8822486b41fed2a9b5f1c"
+    "versionToken": "sha256:aad1a501f19c1a1ccd1b3c0c51a3c09fc1122b263ac8822486b41fed2a9b5f1c",
+    "ratingIdentityDigest": "sha256:42a5e0e1914ab87b5c8c679cf4100d464ca20818e0d632af54e02e3053bee3e9"
   },
   {
     "id": "M12_greatness_in_simplicity.json",
     "kind": "character",
-    "versionToken": "sha256:8bf44858b77e86b23c5434939f0fd778d6e19c26088ddf70a729c82f116bd5c6"
+    "versionToken": "sha256:8bf44858b77e86b23c5434939f0fd778d6e19c26088ddf70a729c82f116bd5c6",
+    "ratingIdentityDigest": "sha256:97b7e63e7737a7b13637497dfaa1ba3d92a73e643f34e3cdba055d3741b4e413"
   },
   {
     "id": "M13_greatness_in_complexity.json",
     "kind": "character",
-    "versionToken": "sha256:59d35ce04d3d430675a2bfbd8da0c3e7a774f049caad0323687bb1574614606b"
+    "versionToken": "sha256:59d35ce04d3d430675a2bfbd8da0c3e7a774f049caad0323687bb1574614606b",
+    "ratingIdentityDigest": "sha256:9b840fa67d0510aa1a67671f8f7adee49dbad2e3cca4dde7b60a5b503c902c71"
   },
   {
     "id": "M14_centaurea_claw_marks.json",
     "kind": "character",
-    "versionToken": "sha256:05465e4d845ccf8901c036f42c59dd1aad55a577e016b98ab2a95a3bbcdfb126"
+    "versionToken": "sha256:05465e4d845ccf8901c036f42c59dd1aad55a577e016b98ab2a95a3bbcdfb126",
+    "ratingIdentityDigest": "sha256:2aa33f2d3dffcc1e9fa7166a5cd6971fdf79ae30a71c121a521df9d51063f852"
   },
   {
     "id": "M15_centaurea_in_heart.json",
     "kind": "character",
-    "versionToken": "sha256:1554fe8a6c277ac20a55a5bbd8d8c7f94dc4db2c4bed2d0c326c28816815b52a"
+    "versionToken": "sha256:1554fe8a6c277ac20a55a5bbd8d8c7f94dc4db2c4bed2d0c326c28816815b52a",
+    "ratingIdentityDigest": "sha256:565a1abebd8030f67f0ad77bd0825d5e4059682dbebddf510f46b08bf46be917"
   },
   {
     "id": "M16_xuemo.json",
     "kind": "character",
-    "versionToken": "sha256:8d5961082799080fd7fbb93089e09e0031451c0222ba631443579bb806b73f38"
+    "versionToken": "sha256:8d5961082799080fd7fbb93089e09e0031451c0222ba631443579bb806b73f38",
+    "ratingIdentityDigest": "sha256:e9a7ee7a7d5dd0a1e7acf0acdcd79b4b0a6d7ad57eb39dbff71bfb4156438f19"
   },
   {
     "id": "M90_goose.json",
     "kind": "character",
-    "versionToken": "sha256:42f07fd02da3ba5f43e2ae6b9b87677414311cd1df6d8e38feace2a0d2ef1618"
+    "versionToken": "sha256:42f07fd02da3ba5f43e2ae6b9b87677414311cd1df6d8e38feace2a0d2ef1618",
+    "ratingIdentityDigest": "sha256:d2f103455831beb7c9daca6c69f147047d1565cd5d566097db50ce0a17e22225"
   },
   {
     "id": "U_CS_horde_strong.json",
     "kind": "character",
-    "versionToken": "sha256:35a74d3b96dbbd97bfa4d0ab359a31b024dbf4073b0ba5314de32d3c26bb5991"
+    "versionToken": "sha256:35a74d3b96dbbd97bfa4d0ab359a31b024dbf4073b0ba5314de32d3c26bb5991",
+    "ratingIdentityDigest": "sha256:15d6572b56f35bc69e893b9e6239ed4426b6f6dad243b990f72d7f8813af79eb"
   },
   {
     "id": "U_CS_horde_tide.json",
     "kind": "character",
-    "versionToken": "sha256:102a1f30caf5a19e4f8d38b55079ab5d7825bce5b8b524288db3a40f4dbb1ca6"
+    "versionToken": "sha256:102a1f30caf5a19e4f8d38b55079ab5d7825bce5b8b524288db3a40f4dbb1ca6",
+    "ratingIdentityDigest": "sha256:4d178624abc9e92d5b0aeb2d80e546039b81d45a487bea0e96d9bc5ed36e9684"
   },
   {
     "id": "U_CS_horde_weak.json",
     "kind": "character",
-    "versionToken": "sha256:b8c2c1749ef4448234873e9ad5e9bf3e096b60dbef1a55117b7abf63f943944f"
+    "versionToken": "sha256:b8c2c1749ef4448234873e9ad5e9bf3e096b60dbef1a55117b7abf63f943944f",
+    "ratingIdentityDigest": "sha256:90458f89fce731c1648667a33a6101cd82c38ff78c31db3585f9435ad990c804"
   },
   {
     "id": "U_CS_horde.json",
     "kind": "character",
-    "versionToken": "sha256:a928f5e73809a4b94cf60d875b3e5fefc87555d43ffc00975a0b16f9cbb38cea"
+    "versionToken": "sha256:a928f5e73809a4b94cf60d875b3e5fefc87555d43ffc00975a0b16f9cbb38cea",
+    "ratingIdentityDigest": "sha256:4c987b6dba725a3f653aec706565333e9bf75bcd506435d2ec0da2ae8ae5322f"
   },
   {
     "id": "U_CS_solo_boss.json",
     "kind": "character",
-    "versionToken": "sha256:b7201e4f64db7ae303f16fcbcf89ce6700d7927c9c10c844ae2e67f84e584f6b"
+    "versionToken": "sha256:b7201e4f64db7ae303f16fcbcf89ce6700d7927c9c10c844ae2e67f84e584f6b",
+    "ratingIdentityDigest": "sha256:4066b5b96a5560b8491fe3011b26774c4f14caeaee03cbd9a86a07db86a9c46a"
   },
   {
     "id": "U_CS_solo_strong.json",
     "kind": "character",
-    "versionToken": "sha256:84f80ae8ba005f14e5baa497e7f046a387d1cda7c8812fae05204a9575569907"
+    "versionToken": "sha256:84f80ae8ba005f14e5baa497e7f046a387d1cda7c8812fae05204a9575569907",
+    "ratingIdentityDigest": "sha256:030bc27bb9c8733105757c29c97774f3c33b4ed5f165bd3aecc6a703668b6d52"
   },
   {
     "id": "U_CS_solo_weak.json",
     "kind": "character",
-    "versionToken": "sha256:ea37011f3b939f295d6f4f5cae42154eaef9da1bac1652ab09bb6abfefcaf964"
+    "versionToken": "sha256:ea37011f3b939f295d6f4f5cae42154eaef9da1bac1652ab09bb6abfefcaf964",
+    "ratingIdentityDigest": "sha256:c68ffa448444ac1e3b130a68026c9fa9a1851826435c98412a948a0be1d282e8"
   },
   {
     "id": "U_CS_solo.json",
     "kind": "character",
-    "versionToken": "sha256:2d7cbe5f6ec159a72f2d45ddcff0de5a99ba7f67ab14c6c6a62718a1b7667df1"
+    "versionToken": "sha256:2d7cbe5f6ec159a72f2d45ddcff0de5a99ba7f67ab14c6c6a62718a1b7667df1",
+    "ratingIdentityDigest": "sha256:2500b0dcb4e53c4c46c792a355f5b1491f9031db164f994fdcbc09b5a94405c1"
   },
   {
     "id": "U_MG_solo_strong.json",
     "kind": "character",
-    "versionToken": "sha256:36f5c688a8bf28977958a5309243a98731965cfd8332887be450f774f2c5eff6"
+    "versionToken": "sha256:36f5c688a8bf28977958a5309243a98731965cfd8332887be450f774f2c5eff6",
+    "ratingIdentityDigest": "sha256:6e2f4d286a4fa2ff4206676131c7731544fe2c8738758bbbe25ddcba149eece4"
   },
   {
     "id": "U_MG_solo_top.json",
     "kind": "character",
-    "versionToken": "sha256:c805f15974f56c156feb2816a727d27ee601d8504cd79102ce04777e99bdb440"
+    "versionToken": "sha256:c805f15974f56c156feb2816a727d27ee601d8504cd79102ce04777e99bdb440",
+    "ratingIdentityDigest": "sha256:eee71b510b2aca3bbd2f2a4362182d02752d4dd50d8bf80de636193d155e725a"
   },
   {
     "id": "U_MG_solo_weak.json",
     "kind": "character",
-    "versionToken": "sha256:5b8c20a8fb668d08b4b481433b855bc86638ac43369f9d5ce0f537654586b5ea"
+    "versionToken": "sha256:5b8c20a8fb668d08b4b481433b855bc86638ac43369f9d5ce0f537654586b5ea",
+    "ratingIdentityDigest": "sha256:7cddf826a0882055104d49e7c20d75312be7bcee83c1eb24f5e93174f8cacadf"
   },
   {
     "id": "U_MG_solo.json",
     "kind": "character",
-    "versionToken": "sha256:4214f2ac679207d68e9fd373bf75c5ccc42d07908279ad941652d2f6cc597f8e"
+    "versionToken": "sha256:4214f2ac679207d68e9fd373bf75c5ccc42d07908279ad941652d2f6cc597f8e",
+    "ratingIdentityDigest": "sha256:9e8f89c361a070fba1fc0bc70a4a6d28518f6167a2417735ae4d5912c3a2d3f3"
   },
   {
     "id": "U_MG_team_strong.json",
     "kind": "character",
-    "versionToken": "sha256:6c6449bbf2bd53601dc6f9d72467e5678cac1f4f5aed06b57b66a00431c5c014"
+    "versionToken": "sha256:6c6449bbf2bd53601dc6f9d72467e5678cac1f4f5aed06b57b66a00431c5c014",
+    "ratingIdentityDigest": "sha256:2c94e7a0cd331e7898adb40eab61536e639b3db0ad3c832477a4bd838044d16f"
   },
   {
     "id": "U_MG_team_top.json",
     "kind": "character",
-    "versionToken": "sha256:dc531428ed4d4cd5946206e01fbc2e1dd3f56b717945c7262faaa1e64da74d93"
+    "versionToken": "sha256:dc531428ed4d4cd5946206e01fbc2e1dd3f56b717945c7262faaa1e64da74d93",
+    "ratingIdentityDigest": "sha256:c5b8d81709e1770be750b470664024a83d9e942a43657211cb42085e0846e4fc"
   },
   {
     "id": "U_MG_team_weak.json",
     "kind": "character",
-    "versionToken": "sha256:0bf64d84d1bfe75e1061efa288f96abaa821e02bda49afa79f8ee6d573ffc3dd"
+    "versionToken": "sha256:0bf64d84d1bfe75e1061efa288f96abaa821e02bda49afa79f8ee6d573ffc3dd",
+    "ratingIdentityDigest": "sha256:2dcca7b45c0d051d64981aa28969399482768decd35ae1a8d586293da0fb1767"
   },
   {
     "id": "U_MG_team.json",
     "kind": "character",
-    "versionToken": "sha256:76206e5f4b5645495585a5a83c06865b62701b8e48e234bf65fbe5699af19873"
+    "versionToken": "sha256:76206e5f4b5645495585a5a83c06865b62701b8e48e234bf65fbe5699af19873",
+    "ratingIdentityDigest": "sha256:90c157b38d407a8ce9c34463299c00f2209454d7af02d922b8f0d24a64604081"
   },
   {
     "id": "S01_queen_will.json",
     "kind": "scenario",
-    "versionToken": "sha256:5fff1e757e9bc30c33b5f699714438cbc46469899a93d53e472ebdd93c11400f"
+    "versionToken": "sha256:5fff1e757e9bc30c33b5f699714438cbc46469899a93d53e472ebdd93c11400f",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S02_multiverse_human_arena.json",
     "kind": "scenario",
-    "versionToken": "sha256:c619ee1188573a9e13acadafa9b43f755118754b97f5caeed2a045162a3ccf0d"
+    "versionToken": "sha256:c619ee1188573a9e13acadafa9b43f755118754b97f5caeed2a045162a3ccf0d",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S03_arena_original_v1_1.json",
     "kind": "scenario",
-    "versionToken": "sha256:8556ee0fb9eb4177fe08415b06c86dc3f199688f51177c054d9be569bca916a3"
+    "versionToken": "sha256:8556ee0fb9eb4177fe08415b06c86dc3f199688f51177c054d9be569bca916a3",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S04_kengan_gold_tournament_v3.json",
     "kind": "scenario",
-    "versionToken": "sha256:7d861858ea5fb103da3485e54c5b3db4a878f7740fd3326d8f72010d7274f50d"
+    "versionToken": "sha256:7d861858ea5fb103da3485e54c5b3db4a878f7740fd3326d8f72010d7274f50d",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S05_mirror_mundane_v2.json",
     "kind": "scenario",
-    "versionToken": "sha256:441e8b0db364ea55723207f30379090f71671e5e9e2165f13d65522f080a697c"
+    "versionToken": "sha256:441e8b0db364ea55723207f30379090f71671e5e9e2165f13d65522f080a697c",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S06_magical_girl_assessment_day.json",
     "kind": "scenario",
-    "versionToken": "sha256:73768e715647dd7d0a628597f2503b6884ff101f49cf34d856fcaf69e5868ed8"
+    "versionToken": "sha256:73768e715647dd7d0a628597f2503b6884ff101f49cf34d856fcaf69e5868ed8",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S07_galgame_difficulty_analysis.json",
     "kind": "scenario",
-    "versionToken": "sha256:41f88b7789117692fbfe1dac96da3f8073e8cf145477019d541c514847b44f26"
+    "versionToken": "sha256:41f88b7789117692fbfe1dac96da3f8073e8cf145477019d541c514847b44f26",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S08_alice_msg_review_daily.json",
     "kind": "scenario",
-    "versionToken": "sha256:8a86acd8e51dc1c7386c3858aa449292677b5fb74382521ec68f7d9659449f39"
+    "versionToken": "sha256:8a86acd8e51dc1c7386c3858aa449292677b5fb74382521ec68f7d9659449f39",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S09_anko_anime_review_v3.json",
     "kind": "scenario",
-    "versionToken": "sha256:76f669fd340ec406386f49dda28ca514784518ca39c9059e1c1c0bbc3e05fc29"
+    "versionToken": "sha256:76f669fd340ec406386f49dda28ca514784518ca39c9059e1c1c0bbc3e05fc29",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S10_everyday_streaming_v3_1.json",
     "kind": "scenario",
-    "versionToken": "sha256:20a34e1b3b6f5802ab0cf06ad515f401fe38241be37a526221fb1eef8cc0fe67"
+    "versionToken": "sha256:20a34e1b3b6f5802ab0cf06ad515f401fe38241be37a526221fb1eef8cc0fe67",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S11_mayfly_bossfight_v1.json",
     "kind": "scenario",
-    "versionToken": "sha256:a1c57955b32a67a055da94a88bfb4a3070c9b625c5d3e549045f6105d6e91216"
+    "versionToken": "sha256:a1c57955b32a67a055da94a88bfb4a3070c9b625c5d3e549045f6105d6e91216",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S12_system_core_meta_dialogue_v4_2.json",
     "kind": "scenario",
-    "versionToken": "sha256:68bedccd7593c7b6313b789add2c629995c07c5a2153d3754a864cf157eff377"
+    "versionToken": "sha256:68bedccd7593c7b6313b789add2c629995c07c5a2153d3754a864cf157eff377",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S13_wastetrace_encounter.json",
     "kind": "scenario",
-    "versionToken": "sha256:29366138c68b72417b558d6138eb0d55f15aa5248de171d30937b309dfd668df"
+    "versionToken": "sha256:29366138c68b72417b558d6138eb0d55f15aa5248de171d30937b309dfd668df",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S14_wastetrace_route_failure.json",
     "kind": "scenario",
-    "versionToken": "sha256:63c17ceb064b427abd94eb7414ab2f2a7e668d14a0492294c04b76a668af7479"
+    "versionToken": "sha256:63c17ceb064b427abd94eb7414ab2f2a7e668d14a0492294c04b76a668af7479",
+    "ratingIdentityDigest": null
   },
   {
     "id": "S15_wastetrace_blockade_breakout.json",
     "kind": "scenario",
-    "versionToken": "sha256:25e783affaba78b29a9ecc5571f81c942482f8ce5c7ae6942f11fa61903f038b"
+    "versionToken": "sha256:25e783affaba78b29a9ecc5571f81c942482f8ce5c7ae6942f11fa61903f038b",
+    "ratingIdentityDigest": null
   }
 ] as const satisfies readonly ArenaPresetAuthorityEntry[];

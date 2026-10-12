@@ -14,6 +14,7 @@ import {
   type NodeArenaGenerationExecutorOptions,
 } from './node-executor';
 import { createEnvSignatureService } from '../node-runtime/env-signature';
+import { createAuthenticationResolver } from '../node-runtime/authenticated-user';
 import { silentLogger } from '../node-runtime/logger';
 import type { NodeDataD1Client } from '../node-runtime/data-ports';
 import type { SignatureService } from '../signature';
@@ -125,6 +126,10 @@ export const createNodeArenaGenerationService = (
       fetch: options.fetch,
       signatureService: signatures,
       pvpSignatureService: pvpSignatures,
+      getD1Client: options.getD1Client,
+      resolveRatingAuthentication: options.executorOptions?.resolveRatingAuthentication
+        ?? createAuthenticationResolver({ env, fetch: options.fetch, signatures,
+          getD1Client: options.getD1Client, now: options.now, allowActivityToken: false }),
       observer: options.observer,
     });
   }

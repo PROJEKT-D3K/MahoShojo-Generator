@@ -264,6 +264,9 @@ export const getStrictQueueDataCardsByIds = async (
   isPublic: number | boolean | null;
   reviewStatus: string | null;
   deletedAt: string | null;
+  data: string | null;
+  updatedAt: string | null;
+  userId: number;
 }>> => {
   const ids = Array.from(new Set(dataCardIds.map((id) => id.trim()).filter(Boolean)));
   if (ids.length === 0) return [];
@@ -275,6 +278,9 @@ export const getStrictQueueDataCardsByIds = async (
       isPublic: dataCards.isPublic,
       reviewStatus: dataCards.reviewStatus,
       deletedAt: dataCards.deletedAt,
+      data: dataCards.data,
+      updatedAt: dataCards.updatedAt,
+      userId: dataCards.userId,
     })
     .from(dataCards)
     .where(inArray(dataCards.id, ids));
@@ -285,6 +291,9 @@ export const getStrictQueueDataCardsByIds = async (
     isPublic: row.isPublic,
     reviewStatus: row.reviewStatus,
     deletedAt: row.deletedAt,
+    data: row.data,
+    updatedAt: row.updatedAt,
+    userId: row.userId,
   }));
 };
 
@@ -625,22 +634,32 @@ export const markArenaRatingEventStatus = async (
   eventId: string,
   status: ArenaRatingEventStatus,
   options?: { skipReason?: string | null },
-): Promise<void> => {
-  if (options && Object.prototype.hasOwnProperty.call(options, 'skipReason')) {
-    await db
-      .update(arenaRatingEvents)
-      .set({
-        status,
-        skipReason: sql`COALESCE(${options.skipReason ?? null}, ${arenaRatingEvents.skipReason})`,
-      })
-      .where(eq(arenaRatingEvents.id, eventId));
-    return;
-  }
-
-  await db
-    .update(arenaRatingEvents)
-    .set({ status })
-    .where(eq(arenaRatingEvents.id, eventId));
+): Promise<boolean> => {
+  const identitySkip = status === 'skipped' && options?.skipReason?.startsWith('entity-');
+  const updated = await db.update(arenaRatingEvents).set({
+    status,
+    ...(options && Object.prototype.hasOwnProperty.call(options, 'skipReason')
+      ? { skipReason: sql`COALESCE(${options.skipReason ?? null}, ${arenaRatingEvents.skipReason})` }
+      : {}),
+  }).where(and(
+    eq(arenaRatingEvents.id, eventId),
+    status === 'failed' ? eq(arenaRatingEvents.status, 'pending') : undefined,
+    identitySkip ? and(
+      eq(arenaRatingEvents.status, 'pending'),
+      sql`(
+        (${arenaRatingEvents.aBeforeRating} IS NULL AND ${arenaRatingEvents.bBeforeRating} IS NULL)
+        OR (
+          EXISTS (SELECT 1 FROM arena_ratings WHERE queue = ${arenaRatingEvents.queue}
+            AND entity_type = ${arenaRatingEvents.aEntityType} AND entity_id = ${arenaRatingEvents.aEntityId}
+            AND rating = ${arenaRatingEvents.aBeforeRating} AND games = ${arenaRatingEvents.aBeforeGames})
+          AND EXISTS (SELECT 1 FROM arena_ratings WHERE queue = ${arenaRatingEvents.queue}
+            AND entity_type = ${arenaRatingEvents.bEntityType} AND entity_id = ${arenaRatingEvents.bEntityId}
+            AND rating = ${arenaRatingEvents.bBeforeRating} AND games = ${arenaRatingEvents.bBeforeGames})
+        )
+      )`,
+    ) : undefined,
+  )).returning({ id: arenaRatingEvents.id });
+  return updated.length > 0;
 };
 
 export const applyArenaRatingsUpdateIfBothMatch = async (
@@ -649,7 +668,9 @@ export const applyArenaRatingsUpdateIfBothMatch = async (
   entities: [ArenaRatingsEntity, ArenaRatingsEntity],
   computed: ArenaRatingEventComputedPayload,
   appliedAtIso: string,
-): Promise<'applied' | 'already-applied' | 'conflict'> => {
+  identityGuards?: readonly { id: string; data: string; updatedAt: string; authorizedUserId: number | null }[] | null,
+  eventId?: string,
+): Promise<'applied' | 'already-applied' | 'conflict' | 'identity-conflict' | 'event-skipped'> => {
   const [aEntity, bEntity] = entities.map(normalizeEntity) as [ArenaRatingsEntity, ArenaRatingsEntity];
   const buildEntityCase = (column: SQL | AnyColumn, aValue: unknown, bValue: unknown): SQL =>
     sql`CASE
@@ -695,12 +716,45 @@ export const applyArenaRatingsUpdateIfBothMatch = async (
         ),
       );
 
-  const runWithOption = async (includeDelta: boolean): Promise<'applied' | 'already-applied' | 'conflict'> => {
+  const readEventDisposition = async (): Promise<'pending' | 'applied' | 'event-skipped'> => {
+    if (identityGuards === undefined) return 'pending';
+    if (!eventId) throw new Error('ARENA_RATING_EVENT_SETTLEMENT_RETRY');
+    const events = await db.select({ status: arenaRatingEvents.status, queue: arenaRatingEvents.queue,
+      aEntityType: arenaRatingEvents.aEntityType, aEntityId: arenaRatingEvents.aEntityId,
+      bEntityType: arenaRatingEvents.bEntityType, bEntityId: arenaRatingEvents.bEntityId,
+      aBeforeRating: arenaRatingEvents.aBeforeRating, aBeforeGames: arenaRatingEvents.aBeforeGames,
+      aAfterRating: arenaRatingEvents.aAfterRating, aAfterGames: arenaRatingEvents.aAfterGames,
+      bBeforeRating: arenaRatingEvents.bBeforeRating, bBeforeGames: arenaRatingEvents.bBeforeGames,
+      bAfterRating: arenaRatingEvents.bAfterRating, bAfterGames: arenaRatingEvents.bAfterGames,
+      aDelta: arenaRatingEvents.aDelta, bDelta: arenaRatingEvents.bDelta,
+    }).from(arenaRatingEvents).where(eq(arenaRatingEvents.id, eventId));
+    const event = events[0];
+    if (event?.status === 'applied') return 'applied';
+    if (event?.status === 'skipped') return 'event-skipped';
+    if (!event || event.status !== 'pending' || event.queue !== queue
+      || event.aEntityType !== aEntity.entityType || event.aEntityId !== aEntity.entityId
+      || event.bEntityType !== bEntity.entityType || event.bEntityId !== bEntity.entityId
+      || event.aBeforeRating !== computed.aBefore.rating || event.aBeforeGames !== computed.aBefore.games
+      || event.aAfterRating !== computed.aAfter.rating || event.aAfterGames !== computed.aAfter.games
+      || event.bBeforeRating !== computed.bBefore.rating || event.bBeforeGames !== computed.bBefore.games
+      || event.bAfterRating !== computed.bAfter.rating || event.bAfterGames !== computed.bAfter.games
+      || event.aDelta !== computed.deltaA || event.bDelta !== computed.deltaB) {
+      throw new Error('ARENA_RATING_EVENT_SETTLEMENT_RETRY');
+    }
+    return 'pending';
+  };
+
+  const resolveConflict = async (): Promise<'conflict' | 'already-applied' | 'event-skipped'> => {
+    const disposition = await readEventDisposition();
+    return disposition === 'applied' ? 'already-applied' : disposition === 'event-skipped' ? 'event-skipped' : 'conflict';
+  };
+
+  const runWithOption = async (includeDelta: boolean): Promise<'applied' | 'already-applied' | 'conflict' | 'identity-conflict' | 'event-skipped'> => {
     const rows = await readCurrentRows();
 
     const aRow = rows.find((row) => row.entityType === aEntity.entityType && row.entityId === aEntity.entityId);
     const bRow = rows.find((row) => row.entityType === bEntity.entityType && row.entityId === bEntity.entityId);
-    if (!aRow || !bRow) return 'conflict';
+    if (!aRow || !bRow) return resolveConflict();
 
     latestSeasonPeakTierA = typeof aRow.seasonPeakTier === 'string' ? aRow.seasonPeakTier : null;
     latestSeasonPeakTierB = typeof bRow.seasonPeakTier === 'string' ? bRow.seasonPeakTier : null;
@@ -749,7 +803,8 @@ export const applyArenaRatingsUpdateIfBothMatch = async (
       bRating === computed.bAfter.rating &&
       bGames === computed.bAfter.games
     ) {
-      return 'already-applied';
+      const disposition = await readEventDisposition();
+      return disposition === 'event-skipped' ? 'event-skipped' : 'already-applied';
     }
 
     if (
@@ -758,7 +813,7 @@ export const applyArenaRatingsUpdateIfBothMatch = async (
       bRating !== computed.bBefore.rating ||
       bGames !== computed.bBefore.games
     ) {
-      return 'conflict';
+      return resolveConflict();
     }
 
     const seasonPayload =
@@ -869,6 +924,27 @@ export const applyArenaRatingsUpdateIfBothMatch = async (
       .where(
         and(
           eq(arenaRatings.queue, queue),
+          identityGuards === null ? sql`0 = 1` : undefined,
+          identityGuards !== undefined ? (eventId ? sql`EXISTS (
+            SELECT 1 FROM arena_rating_events WHERE id = ${eventId} AND status = 'pending' AND queue = ${queue}
+              AND a_entity_type = ${aEntity.entityType} AND a_entity_id = ${aEntity.entityId}
+              AND b_entity_type = ${bEntity.entityType} AND b_entity_id = ${bEntity.entityId}
+              AND a_before_rating = ${computed.aBefore.rating} AND a_before_games = ${computed.aBefore.games}
+              AND a_after_rating = ${computed.aAfter.rating} AND a_after_games = ${computed.aAfter.games}
+              AND b_before_rating = ${computed.bBefore.rating} AND b_before_games = ${computed.bBefore.games}
+              AND b_after_rating = ${computed.bAfter.rating} AND b_after_games = ${computed.bAfter.games}
+              AND a_delta = ${computed.deltaA} AND b_delta = ${computed.deltaB}
+          )` : sql`0 = 1`) : undefined,
+          // Both card guards apply to the entire two-row UPDATE. A source change
+          // can never update only one participant. Full data protects timestamp collisions.
+          ...(identityGuards?.map((guard) => sql`EXISTS (
+            SELECT 1 FROM data_cards WHERE id = ${guard.id}
+              AND data = ${guard.data} AND updated_at = ${guard.updatedAt}
+              AND type = 'character' AND deleted_at IS NULL
+              AND (${queue} = 'strict' AND is_public = 1 AND review_status = 'approved'
+                OR ${queue} = 'free' AND (user_id = ${guard.authorizedUserId}
+                  OR is_public = 1 AND review_status = 'approved'))
+          )`) ?? []),
           or(
             and(eq(arenaRatings.entityType, aEntity.entityType), eq(arenaRatings.entityId, aEntity.entityId)),
             and(eq(arenaRatings.entityType, bEntity.entityType), eq(arenaRatings.entityId, bEntity.entityId)),
@@ -893,12 +969,12 @@ export const applyArenaRatingsUpdateIfBothMatch = async (
       });
 
     if (updatedRows.length === 2) return 'applied';
-    if (updatedRows.length > 0) return 'conflict';
+    if (updatedRows.length > 0) return resolveConflict();
 
     const afterRows = await readCurrentRows();
     const aAfterRow = afterRows.find((row) => row.entityType === aEntity.entityType && row.entityId === aEntity.entityId);
     const bAfterRow = afterRows.find((row) => row.entityType === bEntity.entityType && row.entityId === bEntity.entityId);
-    if (!aAfterRow || !bAfterRow) return 'conflict';
+    if (!aAfterRow || !bAfterRow) return resolveConflict();
 
     const aAfterRating = toInt(aAfterRow.rating, 0);
     const aAfterGames = toInt(aAfterRow.games, 0);
@@ -910,10 +986,28 @@ export const applyArenaRatingsUpdateIfBothMatch = async (
       bAfterRating === computed.bAfter.rating &&
       bAfterGames === computed.bAfter.games
     ) {
-      return 'already-applied';
+      const disposition = await readEventDisposition();
+      return disposition === 'event-skipped' ? 'event-skipped' : 'already-applied';
     }
 
-    return 'conflict';
+    const eventDisposition = await readEventDisposition();
+    if (eventDisposition === 'applied') return 'already-applied';
+    if (eventDisposition === 'event-skipped') return 'event-skipped';
+    if (identityGuards === null) return 'identity-conflict';
+    if (identityGuards?.length) {
+      const matching = await db.select({ id: dataCards.id }).from(dataCards).where(or(
+        ...identityGuards.map((guard) => and(
+          eq(dataCards.id, guard.id), eq(dataCards.data, guard.data), eq(dataCards.updatedAt, guard.updatedAt),
+          eq(dataCards.type, 'character'), sql`${dataCards.deletedAt} IS NULL`,
+          queue === 'strict'
+            ? and(eq(dataCards.isPublic, true), eq(dataCards.reviewStatus, 'approved'))
+            : or(guard.authorizedUserId === null ? undefined : eq(dataCards.userId, guard.authorizedUserId),
+              and(eq(dataCards.isPublic, true), eq(dataCards.reviewStatus, 'approved'))),
+        )),
+      ));
+      if (matching.length !== identityGuards.length) return 'identity-conflict';
+    }
+    return resolveConflict();
   };
 
   const refreshStrictSeasonPeakTier = async (): Promise<void> => {
@@ -998,12 +1092,12 @@ export const applyArenaRatingsUpdateIfBothMatch = async (
     }
   };
 
-  const shouldRefreshSeasonPeakTier = (result: 'applied' | 'already-applied' | 'conflict'): boolean =>
+  const shouldRefreshSeasonPeakTier = (result: 'applied' | 'already-applied' | 'conflict' | 'identity-conflict' | 'event-skipped'): boolean =>
     result === 'applied' || result === 'already-applied';
 
   const finalizeWithSeasonPeakTierRefresh = async (
-    result: 'applied' | 'already-applied' | 'conflict',
-  ): Promise<'applied' | 'already-applied' | 'conflict'> => {
+    result: 'applied' | 'already-applied' | 'conflict' | 'identity-conflict' | 'event-skipped',
+  ): Promise<'applied' | 'already-applied' | 'conflict' | 'identity-conflict' | 'event-skipped'> => {
     if (shouldRefreshSeasonPeakTier(result)) {
       await refreshStrictSeasonPeakTier();
     }

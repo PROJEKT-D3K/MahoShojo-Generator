@@ -67,6 +67,7 @@ const state = {
   promotionRecoveredByAlreadyApplied: false,
   events: new Map<string, EventRow>(),
   ratings: new Map<QueueEntityKey, RatingSnapshot>(),
+  binding: null as unknown,
 };
 
 const buildSnapshot = () => ({
@@ -89,6 +90,7 @@ const buildSnapshot = () => ({
     narrativeHistoryReadCount: 0,
     rankedMatchOk: true,
     arenaFreeRankingEnabled: false,
+    ratingEntityBinding: state.binding,
   }),
 });
 
@@ -138,9 +140,13 @@ const ensureRating = (queue: Queue, entity: Entity): RatingSnapshot => {
 
 const mockRepo = {
   resetStrictArenaRatingForDataCard: async () => {},
+  removeStrictArenaRatingForDataCard: async () => {},
   countStrictAppliedEventsSince: async () => 0,
   getStrictUserPairAppliedStatsSince: async () => ({ pairUsedToday: 0, latestAppliedAt: null }),
-  getStrictQueueDataCardsByIds: async () => [],
+  getStrictQueueDataCardsByIds: async () => ['card_a', 'card_b'].map((id) => ({
+    id, type: 'character', isPublic: 1, reviewStatus: 'approved', deletedAt: null,
+    data: JSON.stringify({ name: id }), updatedAt: 'version-1', userId: 9527,
+  })),
   getArenaEligibilitySnapshotByGenerationId: async () => buildSnapshot(),
   listGenerationCombatantsByGenerationId: async () => buildCombatants(),
   ensureArenaRatingsExist: async (
@@ -308,6 +314,11 @@ describe('settleArenaRatingsForGeneration retry promotion recovery', () => {
 
   beforeEach(async () => {
     const { setArenaRatingsRepoBundleForTests } = await import('@/lib/database/arena-ratings');
+    const { digestArenaRatingJson } = await import('@mahoshojo/hosted-runtime/arena-generation');
+    state.binding = { version: 1, status: 'bound', entities: await Promise.all(['card_a', 'card_b'].map(async (id) => ({
+      entityType: 'data_card', entityId: id, contentDigest: await digestArenaRatingJson({ name: id }),
+      updatedAt: 'version-1', authorizedUserId: 9527,
+    }))) };
     console.error = () => {};
     state.eventId = `${state.generationId}:strict`;
     state.snapshotStatus = 'completed';

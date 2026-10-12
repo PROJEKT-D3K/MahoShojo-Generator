@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { canonicalArenaRatingJson, projectArenaRatingIdentity } from '../packages/hosted-runtime/src/arena-generation/rating-identity-projection.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputPath = path.join(
@@ -139,6 +140,7 @@ const renderHostedAuthority = (entries) => `${[
   '  id: string;',
   "  kind: 'character' | 'scenario';",
   '  versionToken: string;',
+  '  ratingIdentityDigest: string | null;',
   '}>;',
   '',
   'export const ARENA_PRESET_AUTHORITY = ',
@@ -146,6 +148,9 @@ const renderHostedAuthority = (entries) => `${[
   id: entry.id,
   kind: entry.kind,
   versionToken: entry.versionToken,
+  ratingIdentityDigest: entry.kind === 'character'
+    ? `sha256:${createHash('sha256').update(canonicalArenaRatingJson(projectArenaRatingIdentity(entry.payload))).digest('hex')}`
+    : null,
 })), null, 2)} as const satisfies readonly ArenaPresetAuthorityEntry[];\n`;
 
 const entries = await loadEntries();

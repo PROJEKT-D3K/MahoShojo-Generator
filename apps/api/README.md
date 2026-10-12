@@ -234,6 +234,22 @@ snapshot 与 replay；Redis 不可用时 create 必须在 Provider 前 fail clos
 重试收口，create 遇到该状态必须 fail closed，不能启动第二 Provider。Next/OpenNext DR 没有共享 Redis 时也只允许
 恢复已完成 D1/R2 terminal，不以 process memory 替代 active lifecycle。
 
+### 排位实体与参战正文绑定
+
+Hono 与 Next DR 的共用 Arena executor 在可能计分的请求中验证参战正文与所声明的线上卡/预设来源，
+把服务器生成的有界内容摘要、版本与读取权限证据写入现有终态 manifest。签名或客户端预检不能代替该绑定。
+独立的身份投影只豁免已知顶层传输字段、签名和可变历战/当前状态；未知正文仍参与比较。
+未申请计分的普通生成不新增来源查询；来源缺失或失配不阻断普通生成，但 Strict/Free 均显式不计分。
+Free 保留原有状态读取与非原生角色政策，私有来源只以实际账号认证确认所有者，不以活动 token 提权。
+
+Next 结算消费同一证据，并在双边评分的同一条 SQL 中校验两张线上卡的完整正文、版本与可见性，
+避免生成后更新、撤回或同时间戳改卡把分数记给另一份设定。已计分事件保留历史事实；旧 pending 仅在
+已持久化的双边 after-state 可确认时恢复收口，其他缺证据旧/在途请求不新增评分。
+评分更新与事件 applied 标记目前仍分两步持久化；若标记前崩溃又遇评分重置，现有数值恢复不能可靠重建历史应用状态。
+后续需独立将评分增量与事件完成标记原子持久化，不能把本次来源绑定视为绝对 exactly-once 保证。
+滚动发布宜先更新 Hono 证据生产端，再更新 Next 结算端；混合版本窗口可能出现明确的未计分结果，
+不得为兼容旧生产端而回退信任客户端来源。该变更不需要数据库迁移。
+
 Arena create 先认证，再按原始字节增量读取；超过 12 MiB 的首个字节立即取消并在 Provider 前返回 413。
 combatants 最多 32，裁定事件最多 100，questionnaire/narrative-history 各 50；共享房间配置中的
 aux-scenario 与 material 累计最多 256，四类引用进入 Hosted runtime 后仍合计受 256 项 sanity budget 约束。D1 terminal

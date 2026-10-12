@@ -20,6 +20,18 @@ const render = (value: Readonly<GenerationRankingQueueResult> | null, fallbackRa
   return element;
 };
 
+it.each(['strict', 'free'] as const)('explains server entity-binding failures for %s', (queue) => {
+  for (const [skipReason, message] of [
+    ['entity-binding-missing', '缺少服务器角色来源校验，本局不计分'],
+    ['entity-body-mismatch', '角色正文与所选来源不一致，本局不计分'],
+    ['entity-reference-unavailable', '角色来源当前不可验证，本局不计分'],
+    ['entity-version-changed', '生成后角色来源已更新，本局不计分'],
+  ]) {
+    const element = render(result({ eventStatus: 'skipped', skipReason }), undefined, queue);
+    expect(element.querySelector('[title]')?.getAttribute('title')).toBe(message);
+  }
+});
+
 describe('shared Arena ranking queue feedback', () => {
   it.each([true, false])('uses the recorded event outcome before eligibility=%s', eligible => {
     const common = { eligible, ineligibleReasons: ['need-login'] };

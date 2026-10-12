@@ -3,6 +3,9 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { inferCharacterKind } from '../packages/domain/src/data-cards';
+import { bindArenaRatingEntities } from '../packages/hosted-runtime/src/arena-generation/rating-entity-binding';
+import { projectArenaRatingIdentity } from '../packages/hosted-runtime/src/arena-generation/rating-identity-projection';
 
 const root = process.cwd();
 const generatorPath = resolve(root, 'scripts/generate-arena-room-preset-registry.mjs');
@@ -43,12 +46,58 @@ describe('Arena Room preset registry generation contract', () => {
     expect(entries.some((entry) => entry.id === 'M01_centaurea_legacy.json')).toBe(true);
     const authority = readFileSync(resolve(root, 'packages/hosted-runtime/src/arena-generation/generated/arena-preset-authority.ts'), 'utf8');
     const authorityMatch = authority.match(/export const ARENA_PRESET_AUTHORITY = (\[[\s\S]*\]) as const satisfies/u);
-    expect(JSON.parse(authorityMatch?.[1] ?? 'null')).toEqual(entries.map(({ id, kind, versionToken }) => ({ id, kind, versionToken })));
+    expect(authorityMatch).not.toBeNull();
+    const authorityEntries = JSON.parse(authorityMatch?.[1] ?? 'null') as Array<{
+      id: string; kind: string; versionToken: string; ratingIdentityDigest: string | null;
+    }>;
+    // The existing canonical version token remains the full signed document token.
+    // Rating identity is an additional server-only projection, never its replacement.
+    expect(authorityEntries.map(({ id, kind, versionToken }) => ({ id, kind, versionToken })))
+      .toEqual(entries.map(({ id, kind, versionToken }) => ({ id, kind, versionToken })));
+    for (const entry of authorityEntries) {
+      expect(Object.keys(entry).sort()).toEqual(['id', 'kind', 'ratingIdentityDigest', 'versionToken']);
+      const source = entries.find(({ id, kind }) => id === entry.id && kind === entry.kind);
+      expect(source).toBeDefined();
+      const expectedDigest = entry.kind === 'character'
+        ? `sha256:${createHash('sha256').update(JSON.stringify(canonicalize(projectArenaRatingIdentity(source?.payload)))).digest('hex')}`
+        : null;
+      expect(entry.ratingIdentityDigest, `${entry.kind}:${entry.id}`).toBe(expectedDigest);
+    }
     const catalog = readFileSync(webCatalogPath, 'utf8');
     const catalogMatch = catalog.match(/export const ARENA_ROOM_PRESET_CATALOG = (\[[\s\S]*\]) as const satisfies/u);
     const metadata = JSON.parse(catalogMatch?.[1] ?? 'null') as Array<{ id: string; kind: string; versionToken: string }>;
     expect(metadata.map(({ id, kind, versionToken }) => ({ id, kind, versionToken })))
       .toEqual(entries.map(({ id, kind, versionToken }) => ({ id, kind, versionToken })));
+  });
+
+  it('binds each original character preset and rejects a changed body under the same preset identity', async () => {
+    const sourceDirectory = resolve(root, 'content/presets');
+    const presets = readdirSync(sourceDirectory).filter((name) => name.endsWith('.json')).sort().map((id) => {
+      const data = JSON.parse(readFileSync(resolve(sourceDirectory, id), 'utf8')) as Record<string, unknown>;
+      const kind = inferCharacterKind(data);
+      return { type: kind === 'general' ? 'general-character' : kind, isPreset: true, filename: id, data };
+    });
+    expect(presets.length).toBeGreaterThan(1);
+    const request = new Request('https://example.test/api/arena/generate');
+    for (const preset of presets) {
+      const opponent = presets.find(({ filename }) => filename !== preset.filename)!;
+      const bind = (data: Record<string, unknown>) => bindArenaRatingEntities({
+        request, payload: { combatants: [{ ...preset, data }, opponent] },
+      });
+      const original = structuredClone(preset.data);
+      const binding = await bind(preset.data);
+      expect(binding.status, preset.filename).toBe('bound');
+      if (binding.status === 'bound') {
+        expect(binding.entities.map(({ entityType, entityId }) => ({ entityType, entityId }))).toEqual([
+          { entityType: 'preset', entityId: preset.filename },
+          { entityType: 'preset', entityId: opponent.filename },
+        ]);
+      }
+      const identityField = 'codename' in preset.data ? 'codename' : 'name';
+      expect(await bind({ ...preset.data, [identityField]: 'modified character identity' }), preset.filename)
+        .toEqual({ version: 1, status: 'unbound', reason: 'entity-body-mismatch' });
+      expect(preset.data, 'binding must not rewrite the source document').toEqual(original);
+    }
   });
 
   it('generates a Web-safe metadata catalog from the same source and rejects duplicate identities', () => {

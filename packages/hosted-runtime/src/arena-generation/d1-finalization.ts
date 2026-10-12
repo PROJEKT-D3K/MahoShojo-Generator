@@ -23,6 +23,7 @@ import { isWebArenaOutputContract } from './output-contract';
 import { canArchivePartialOutput, completionDiagnostics } from './completion';
 import { normalizeUsage } from '../node-runtime/usage';
 import type { NodeDataD1Client } from '../node-runtime/data-ports';
+import { parseArenaRatingEntityBinding } from './rating-entity-binding';
 
 const OUTPUT_KIND = 'battle_report_generation_output';
 const LOCAL_RECONCILIATION_MAX_BYTES = 64 * 1_024;
@@ -438,6 +439,9 @@ const buildExtraJson = async (
       reason: 'manifest_budget_exceeded',
     };
   const authority = {
+    // Server-owned admission evidence stays bounded and survives compact fallback.
+    ratingEntityBinding: parseArenaRatingEntityBinding(serverContext?.ratingEntityBinding),
+    arenaFreeRankingEnabled: !reportOnly && input.payload.arenaFreeRankingEnabled === true,
     arenaMultiplayer: extractArenaMultiplayerParticipation(input.payload.multiplayerGenerationSnapshot, input.actorKey),
     generationRequestId: boundedString(input.generationRequestId, 128),
     generationOwnerHash: await sha256(input.actorKey),
@@ -454,7 +458,6 @@ const buildExtraJson = async (
   const candidate = {
     ...authority,
     arenaStrictPolicy: seasonAuthorityAvailable ? '1+3:v1' : null,
-    arenaFreeRankingEnabled: !reportOnly && input.payload.arenaFreeRankingEnabled === true,
     seasonId: seasonAuthorityAvailable ? boundedString(season?.seasonId, 128) : null,
     seasonMode: seasonAuthorityAvailable && boundedString(season?.mode, 64) !== 'classic'
       ? boundedString(season?.mode, 64)

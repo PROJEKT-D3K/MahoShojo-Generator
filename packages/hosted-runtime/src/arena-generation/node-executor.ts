@@ -55,6 +55,9 @@ import { isAiPreDispatchRetrySafe } from '../node-runtime/retry-safety';
 import { normalizeUsage } from '../node-runtime/usage';
 import { normalizeFinishReason } from './completion';
 import type { SignatureService } from '../signature';
+import type { AuthenticationResolver } from '../node-runtime/authenticated-user';
+import type { NodeDataD1Client } from '../node-runtime/data-ports';
+import { bindArenaRatingEntities, mayRequestArenaRating } from './rating-entity-binding';
 import {
   LoadBalanceStrategy,
   type AiTelemetry,
@@ -83,6 +86,8 @@ export type NodeArenaSafetyInput = {
 };
 
 export type NodeArenaGenerationExecutorOptions = {
+  getD1Client?(): NodeDataD1Client | null;
+  resolveRatingAuthentication?: AuthenticationResolver;
   env?: Readonly<Record<string, string | undefined>>;
   fetch?: typeof fetch;
   logger?: NodeAiLogger;
@@ -656,13 +661,24 @@ export const createNodeArenaGenerationExecutor = (
           error: 'Arena season authority unavailable',
         }, 503);
       }
+      if (requestAuditContext.deliveryMode === 'non-stream') {
+        normalized.userGuidance = readString(normalized.userGuidance).slice(0, 200) || null;
+      }
       const fundingMode: ArenaHostedFundingMode = customProviderResolution.value
         && customProviderResolution.value.provider.id !== 'system'
         ? 'hosted-byok'
         : 'hosted-system';
+      const ipAnonymized = anonymizeIp(requestIp(request));
+      const ratingEntityBinding = mayRequestArenaRating({ payload: normalized, actorKey, ipAnonymized, season })
+        ? await bindArenaRatingEntities({
+          payload: normalized, request, getD1Client: options.getD1Client,
+          resolveAuthentication: options.resolveRatingAuthentication,
+        })
+        : null;
       normalized.__arenaServerContextV1 = {
         startedAt,
-        ipAnonymized: anonymizeIp(requestIp(request)),
+        ipAnonymized,
+        ratingEntityBinding,
         ...requestAuditContext,
         fundingMode,
         ...(trustedPvpContext ? { trustedPvpContext } : {}),
@@ -671,9 +687,6 @@ export const createNodeArenaGenerationExecutor = (
           ? await signatures.verifySignature(normalized.scenario)
           : true,
       };
-      if (requestAuditContext.deliveryMode === 'non-stream') {
-        normalized.userGuidance = readString(normalized.userGuidance).slice(0, 200) || null;
-      }
       return normalized;
     },
     checkSafety: async ({ request, actorKey, payload }) => {

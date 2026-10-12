@@ -1021,10 +1021,12 @@ describe('Arena D1/R2 finalization ports', () => {
       ...claimInput,
       payload: {
         ...claimInput.payload,
+        arenaFreeRankingEnabled: false,
         combatants,
         questionnaireLoreIds: Array.from({ length: 500 }, (_, index) => `q-${index}-${'x'.repeat(500)}`),
         materialSourceTypes: Array.from({ length: 500 }, (_, index) => `m-${index}-${'x'.repeat(500)}`),
         __arenaServerContextV1: {
+          ratingEntityBinding: { version: 1, status: 'unbound', reason: 'entity-body-mismatch' },
           season: {
             authorityAvailable: true,
             storyGuidance: 'x'.repeat(500_000),
@@ -1066,6 +1068,10 @@ describe('Arena D1/R2 finalization ports', () => {
     expect(serializedExtra).toEqual(expect.any(String));
     expect(new TextEncoder().encode(serializedExtra as string).byteLength)
       .toBeLessThanOrEqual(MAX_ARENA_TERMINAL_EXTRA_JSON_BYTES);
+    expect(JSON.parse(serializedExtra as string).arenaFreeRankingEnabled).toBe(false);
+    expect(JSON.parse(serializedExtra as string).ratingEntityBinding).toEqual({
+      version: 1, status: 'unbound', reason: 'entity-body-mismatch',
+    });
     expect(JSON.parse(serializedExtra as string).combatantsFallback)
       .toHaveLength(MAX_ARENA_TERMINAL_COMBATANTS);
     expect(JSON.parse(serializedExtra as string).battleReportRenderSnapshotV1.adjudicationResults)
@@ -1088,6 +1094,34 @@ describe('Arena D1/R2 finalization ports', () => {
       idempotencyKey: 'arena-terminal:another-generation:combatants',
     })).rejects.toThrow('ARENA_COMBATANTS_IDEMPOTENCY_KEY_INVALID');
     expect(client.prepare).not.toHaveBeenCalled();
+  });
+
+  it('keeps bound identities and explicit Free opt-out when the terminal uses compact fallback', async () => {
+    const client = sequentialD1([result([], 1)]);
+    const ports = createNodeArenaGenerationFinalizationPorts({ getD1Client: () => client });
+    const binding = { version: 1, status: 'bound', entities: ['a', 'b'].map((id) => ({
+      entityType: 'data_card', entityId: id, contentDigest: `sha256:${'a'.repeat(64)}`,
+      updatedAt: 'version-1', authorizedUserId: 42,
+    })) };
+    await ports.claimTerminal({
+      ...claimInput,
+      payload: { ...claimInput.payload, arenaFreeRankingEnabled: false,
+        __arenaServerContextV1: { season: { authorityAvailable: true }, ratingEntityBinding: binding } },
+      metadata: {
+        userGuidance: 'x'.repeat(32_000),
+        adjudicationResults: Array.from({ length: 6 }, () => ({ depth: 0, description: 'event',
+          type: 'binary', roll: 50, outcome: 'result', details: 'x'.repeat(2_000) })),
+        streamMeta: { report: { winner: 'A' }, impacts: Array.from({ length: 14 }, () => ({
+          characterName: 'A', impact: 'x'.repeat(1_900), currentStateSummary: 'x'.repeat(1_900),
+        })) },
+      },
+    });
+    const encoded = client.boundCalls.flat().find((value) => typeof value === 'string' && value.includes('generationOwnerHash'));
+    const extra = JSON.parse(encoded as string);
+    expect(extra.arenaStrictPolicy).toBeUndefined(); // Proves the compact path was used.
+    expect(extra.arenaFreeRankingEnabled).toBe(false);
+    expect(extra.ratingEntityBinding).toEqual(binding);
+    expect(extra.combatantsFallback).toHaveLength(2);
   });
 
   it('executes combatant idempotency SQL against SQLite and keeps one row per generation slot', async () => {
