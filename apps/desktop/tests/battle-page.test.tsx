@@ -152,13 +152,47 @@ describe('Desktop /battle journey against loopback fixture', () => {
       await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
       expect(received.at(-1)!.requestKind).toBe('arena'); expect(JSON.parse(received.at(-1)!.arenaInputJson!).mode).toBe(mode);
       expect(docs.size).toBe(0); expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(text);
-      await click('另存战后角色副本'); await click('保存叙事历史到本地库'); expect(docs.size).toBe(3);
+      await click('另存战后角色副本');
+      await vi.waitFor(() => { expect(docs.size).toBe(2); expect(button('保存叙事历史到本地库').disabled).toBe(false); });
+      await click('保存叙事历史到本地库');
+      await vi.waitFor(() => { expect(docs.size).toBe(3); expect(button('保存叙事历史到本地库').disabled).toBe(false); });
       await click('完整导出 JSON'); expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).result.rawText).toContain('车站重逢');
       await act(async () => router.navigate({ to: '/local-library' })); await settle(); expect(window.location.hash).toContain('/local-library');
       await act(async () => router.navigate({ to: '/battle' })); await settle(); await click('恢复草稿'); await click('引用本地叙事历史');
       await vi.waitFor(() => expect(document.body.textContent).toContain('车站重逢')); expect(calls()).toHaveLength(output === 'stream' ? 2 : 1);
       await act(async () => root.unmount()); root = createRoot(container); docs.clear();
     }
+  });
+  it('waits for the character save acknowledgement before accepting a history save', async () => {
+    const acknowledge = deferred<void>();
+    const invoke = mocks.invoke.getMockImplementation()!;
+    let awaitingAcknowledgement = false;
+    const writes = () => mocks.invoke.mock.calls.filter(([command]) => command === 'save_local_card')
+      .map(([, raw]) => JSON.parse(raw.request.document) as LocalCardRecordV1);
+    mocks.invoke.mockImplementation(async (...args) => {
+      const result = await invoke(...args);
+      if (args[0] === 'save_local_card' && docs.size === 2) {
+        awaitingAcknowledgement = true;
+        await acknowledge.promise;
+      }
+      return result;
+    });
+    saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿');
+    await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
+    try {
+      await click('另存战后角色副本');
+      await vi.waitFor(() => expect(awaitingAcknowledgement).toBe(true));
+      expect(docs.size).toBe(2); expect(button('保存叙事历史到本地库').disabled).toBe(true);
+      await click('保存叙事历史到本地库');
+      expect(writes().map((card) => card.cardType)).toEqual(['character', 'character']);
+      expect(docs.size).toBe(2);
+    } finally { await act(async () => acknowledge.resolve()); }
+    await vi.waitFor(() => expect(button('保存叙事历史到本地库').disabled).toBe(false));
+    expect(writes().map((card) => card.cardType)).toEqual(['character', 'character']);
+    await click('保存叙事历史到本地库');
+    await vi.waitFor(() => { expect(docs.size).toBe(3); expect(button('保存叙事历史到本地库').disabled).toBe(false); });
+    expect(writes().map((card) => card.cardType)).toEqual(['character', 'character', 'history']);
+    expect(calls()).toHaveLength(1);
   });
   it.each(['non-stream', 'stream'] as const)('%s result links use the existing confirmation boundary, never native href fallback', async (output) => {
     markdownSuffix = '\n\n[外部说明](https://example.test/report)\n\n[邮件目标](mailto:test@example.test)';
