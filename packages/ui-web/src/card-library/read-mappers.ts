@@ -21,6 +21,7 @@ export type DataCardDetailsModalCard = {
   author?: string;
   createdAt?: string;
   updatedAt?: string;
+  tagIds?: string[];
 };
 
 export type BattleSelectionPayload = Record<string, unknown> & {
@@ -220,6 +221,7 @@ export const mapPublicDataCardRowToDetailsCard = (
     author,
     createdAt: readString(row, ['created_at', 'createdAt']) ?? undefined,
     updatedAt: readString(row, ['updated_at', 'updatedAt']) ?? undefined,
+    tagIds: Array.isArray(row.tagIds) ? row.tagIds.filter((id): id is string => typeof id === 'string') : undefined,
   };
 };
 

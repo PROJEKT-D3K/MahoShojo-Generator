@@ -31,6 +31,7 @@ import { requestCardLibraryRoute } from './card-library-bridge';
 import { createCloudCard } from './private-cloud-save';
 import { DesktopCloudError, type InvokeFn } from './cloud-bridge';
 import { queryPublicReadCache, readPublicCacheCard } from './public-cache-bridge';
+import { DesktopCardDetailsModal } from '../features/card-details/card-details-modal';
 import { downloadTextFile } from './download-text-file';
 import { IpcLocalCardRepository } from './local-card-bridge';
 import { navigateByProductHref, resolveInternalHrefForHashHistory } from '../app/hash-history-fragment';
@@ -411,8 +412,8 @@ export const createDesktopPublicCachePort = (
 });
 
 const desktopSlots: CardLibrarySlots = {
-  // 详情/卡组插槽暂不注入：Desktop 尚无对应 UI——共享组件会把这些入口隐藏，
-  // 而不是渲染点击无反应的按钮（端口契约的「不提供即无入口」语义）。
+  CardDetailsModal: DesktopCardDetailsModal,
+  // 卡组操作仍只在提供对应插槽后开放。
   renderLocalLibraryBanner: () => (
     <p className="text-xs text-(--app-text-muted)">
       本地库数据只保存在这台设备上，不参与线上同步；登录状态不影响本地库的使用。
@@ -439,7 +440,8 @@ const desktopSlots: CardLibrarySlots = {
  * 的主动使用探测）。本地面不依赖登录态。
  */
 export function useDesktopCardLibraryHost(): CardLibraryHost {
-  const { state } = useDesktopCloudSession();
+  const { state, store } = useDesktopCloudSession();
+  const credentialEpoch = store.getCredentialEpoch();
   const router = useRouter();
   /**
    * 三态投影（D5.0e-r1 → D5.2 正交会话后口径不变）：
@@ -461,6 +463,7 @@ export function useDesktopCardLibraryHost(): CardLibraryHost {
         status: authStatus,
         userId: state.account?.userId ?? null,
         userBadges: [],
+        credentialEpoch,
       },
       online: createDesktopCardLibraryOnlinePort((command, args) => invoke(command, args as never), state.account?.userId),
       local: {
@@ -475,6 +478,6 @@ export function useDesktopCardLibraryHost(): CardLibraryHost {
         () => navigateByProductHref(router, '/settings?section=data'),
       ),
     }),
-    [state.account, authStatus, router],
+    [state.account, authStatus, credentialEpoch, router],
   );
 }

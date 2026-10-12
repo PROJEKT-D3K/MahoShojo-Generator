@@ -810,6 +810,7 @@ function DataCardsModalScope({
       {/* 详情模态框 */}
       {selectedCard && DataCardDetailsModal && (
         <DataCardDetailsModal
+          source={{ kind: 'owned' }}
           isOpen={showDetailsModal}
           onClose={() => {
             setShowDetailsModal(false);
@@ -828,7 +829,8 @@ function DataCardsModalScope({
             favoriteCount: selectedCard.favorite_count,
             author: '我',
             createdAt: selectedCard.created_at,
-            updatedAt: selectedCard.updated_at
+            updatedAt: selectedCard.updated_at,
+            tagIds: selectedCard.tagIds ?? selectedCard.tag_ids
           }}
           pendingNotice={selectedCard.pending_data ? '线上版本仍为旧版，新版审核通过后生效' : undefined}
         />

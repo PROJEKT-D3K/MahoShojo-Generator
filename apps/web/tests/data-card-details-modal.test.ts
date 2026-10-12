@@ -28,6 +28,7 @@ describe('DataCardDetailsModal', () => {
     const html = renderToStaticMarkup(
       React.createElement(DataCardDetailsModal, {
         isOpen: true,
+        source: { kind: 'local' },
         onClose: () => {},
         card: {
           id: 'c1',
@@ -112,6 +113,7 @@ describe('DataCardDetailsModal', () => {
     const html = renderToStaticMarkup(
       React.createElement(DataCardDetailsModal, {
         isOpen: true,
+        source: { kind: 'public' },
         onClose: () => {},
         metaCardId: '00000000-0000-4000-8000-000000000001',
         card: {
@@ -133,6 +135,7 @@ describe('DataCardDetailsModal', () => {
     const html = renderToStaticMarkup(
       React.createElement(DataCardDetailsModal, {
         isOpen: true,
+        source: { kind: 'public' },
         onClose: () => {},
         isOwner: true,
         initialReportCapability: {
@@ -173,6 +176,7 @@ describe('DataCardDetailsModal', () => {
     const html = renderToStaticMarkup(
       React.createElement(DataCardDetailsModal, {
         isOpen: true,
+        source: { kind: 'public' },
         onClose: () => {},
         isOwner: true,
         initialReportCapability: {
@@ -213,6 +217,7 @@ describe('DataCardDetailsModal', () => {
     const html = renderToStaticMarkup(
       React.createElement(DataCardDetailsModal, {
         isOpen: true,
+        source: { kind: 'public' },
         onClose: () => {},
         isOwner: true,
         initialReportCapability: {

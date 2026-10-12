@@ -168,6 +168,7 @@ export function ArenaRoomReferenceDetailsDialog({
   }
   return (
     <DataCardDetailsModal
+      source={request.source === 'data-card' ? { kind: 'public' } : { kind: 'preset' }}
       isOpen
       onClose={onClose}
       card={card}

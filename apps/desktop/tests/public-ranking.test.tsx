@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRoot, type Root } from 'react-dom/client';
@@ -8,8 +8,9 @@ import fixture from '@mahoshojo/contracts/fixtures/public-ranking.json';
 import { PublicRankingRequestSchema, type PublicRankingRequest } from '@mahoshojo/contracts/public-ranking';
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, Channel: class {} }));
-vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate: vi.fn() }) }));
+vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate: vi.fn() }), Link: ({ children }: { children: ReactNode }) => <span>{children}</span> }));
 vi.mock('../src/features/account/use-desktop-cloud-session', () => ({ useDesktopCloudSession: () => { throw new Error('Public ranking must not read account state'); } }));
+vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openContent: vi.fn() }) }));
 import { DesktopRanking } from '../src/app/ranking-page';
 import { readPublicRanking } from '../src/platform/public-ranking-bridge';
 let root: Root; let container: HTMLDivElement;
@@ -31,15 +32,33 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 describe('Desktop actual anonymous ranking browser', () => {
-  it('reads only public metadata, renders actual shared controls and offers no fake details', async () => {
+  it('reads only public metadata, renders actual shared controls and offers real details without reading their bodies eagerly', async () => {
     await render(); expect(container.textContent).toContain('合成排行角色');
-    expect(container.querySelector('[aria-label^="查看角色详情"]')).toBeNull();
+    expect(container.querySelector('[aria-label^="查看角色详情"]')).not.toBeNull();
     expect(container.textContent).toContain('赛季最高段位');
     expect(mocks.invoke.mock.calls.map((call) => call[0])).toEqual(Array(3).fill('cloud_public_ranking_read'));
     expect(mocks.invoke.mock.calls.map((call) => call[1].request.kind).sort()).toEqual(['leaderboard', 'seasons', 'tags']);
     await search(); expect(container.textContent).toContain('#—'); expect(container.textContent).not.toContain('#0');
-    expect([...container.querySelectorAll('button')].some((node) => node.textContent?.includes('#—'))).toBe(false);
-    expect(container.textContent).not.toContain('查看详情');
+    expect([...container.querySelectorAll('button')].some((node) => node.textContent?.includes('#—'))).toBe(true);
+    expect(container.textContent).toContain('查看详情');
+  });
+  it('从实际榜单延迟打开公开正文，不拉 metadata，关闭后焦点回原详情按钮', async () => {
+    await render();
+    const opener = container.querySelector<HTMLButtonElement>('[aria-label^="查看角色详情"]')!; opener.focus();
+    const pending = deferred<unknown>();
+    mocks.invoke.mockImplementation(async (command, { request }) => command === 'cloud_card_library_request' ? pending.promise : response(request));
+    await act(async () => opener.click()); expect(document.body.textContent).toContain('正在加载角色详情');
+    const request = mocks.invoke.mock.lastCall?.[1].request;
+    expect(request.routeId).toBe('public-data-cards.query'); expect(request.query.id).toBe(fixture.responses.leaderboard.items[0]!.entityId);
+    await act(async () => pending.resolve({ status: 200, body: { success: true, card: { id: request.query.id, name: '榜单完整正文', type: 'character', description: '', data: '{"name":"公开主记录"}', is_public: 1 } } }));
+    expect(document.body.textContent).toContain('公开主记录'); expect(document.body.textContent).toContain('不代表历史赛季正文快照');
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.activeElement).toBe(opener);
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'cloud_card_library_request')).toHaveLength(1);
+  });
+  it('未收录的历史预设保持摘要，不渲染假详情入口', async () => {
+    mocks.invoke.mockImplementation(async (_command, { request }) => request.kind === 'leaderboard' ? { kind: 'leaderboard', data: { success: true, items: [{ ...fixture.responses.leaderboard.items[0], entityType: 'preset', entityId: 'legacy-not-bundled.json', displayName: '旧预设' }] } } : response(request));
+    await render(); expect(container.textContent).toContain('旧预设'); expect(container.querySelector('[aria-label="查看角色详情：旧预设"]')).toBeNull(); expect(container.querySelector('[title*="未收录"]')).not.toBeNull();
   });
   it('keeps draft queue/sort changes unapplied until Apply and uses a single bounded page', async () => {
     await render(); await select(1, 'free'); await select(2, 'tech'); await select(3, 'asc');

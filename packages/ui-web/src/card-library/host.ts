@@ -1,3 +1,4 @@
+import type { CardDetailsSource } from '../card-details';
 import type { ComponentType, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
@@ -276,6 +277,8 @@ export interface CardLibraryAuthState {
   userId: number | null;
   /** 当前用户佩戴的徽章（未登录为空数组）。 */
   userBadges: readonly UserBadge[];
+  /** 同账号凭据更换时，使私有详情读取与已开正文失效。 */
+  credentialEpoch?: number;
 }
 
 /**
@@ -321,6 +324,7 @@ export interface CardLibraryDetailsCard {
   authorBadges?: BadgeDefinition[];
   createdAt?: string;
   updatedAt?: string;
+  tagIds?: string[];
 }
 
 /** 详情模态框插槽的 props 契约（Web 由 `DataCardDetailsModal` 满足）。 */
@@ -328,8 +332,9 @@ export interface CardLibraryDetailsModalProps {
   isOpen: boolean;
   onClose: () => void;
   card: CardLibraryDetailsCard;
+  source: CardDetailsSource;
   /** 「存到本地库」动作；缺省表示这张卡不提供复制入口（本地行）。 */
-  onSaveCopyToLocalLibrary?: () => void;
+  onSaveCopyToLocalLibrary?: () => Promise<void> | void;
   localLibrarySaveState?: { busy: boolean; message: string | null };
   fallbackFocusRef?: RefObject<HTMLElement | null>;
 }

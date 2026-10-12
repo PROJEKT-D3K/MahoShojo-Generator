@@ -2,8 +2,10 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DesktopCardDetailsModal } from '../src/features/card-details/card-details-modal';
 import { DesktopOwnedCardsModal } from '../src/features/cloud-save/owned-cards-modal';
-const mocks = vi.hoisted(() => ({ accountId: 7, epoch: 1, fetch: vi.fn(), load: vi.fn(), capacity: vi.fn(), createPort: vi.fn(), download: vi.fn() }));
+const mocks = vi.hoisted(() => ({ accountId: 7, epoch: 1, details: false, fetch: vi.fn(), load: vi.fn(), capacity: vi.fn(), createPort: vi.fn(), download: vi.fn() }));
+vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openContent: vi.fn() }) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('../src/platform/private-cloud-save', () => ({ readPrivateCloudCapacity: mocks.capacity }));
 vi.mock('../src/features/account/use-desktop-cloud-session', () => ({ useDesktopCloudSession: () => ({ state: { account: { userId: mocks.accountId }, verification: 'verified', authFlow: { kind: 'idle' } }, store: {
@@ -12,14 +14,14 @@ vi.mock('../src/features/account/use-desktop-cloud-session', () => ({ useDesktop
 const platform = { Link: ({ children, ...props }: any) => <a {...props}>{children}</a>, marks: { isLiked: () => false, markLiked: () => true }, copyText: vi.fn(), downloadJson: mocks.download };
 vi.mock('../src/platform/card-library-host', () => ({
   createDesktopCardLibraryOnlinePort: (...args: unknown[]) => { mocks.createPort(...args); return { fetchSummaryPage: mocks.fetch, loadFullCard: mocks.load }; },
-  useDesktopCardLibraryHost: () => ({ platform, slots: {} }),
+  useDesktopCardLibraryHost: () => ({ platform, slots: mocks.details ? { CardDetailsModal: DesktopCardDetailsModal } : {} }),
 }));
 let root: Root; let container: HTMLDivElement;
 const card = { id: 'owned', type: 'character', user_id: 7, name: '云端雾灯', description: '', is_public: 0, review_status: 'approved', roleType: 'general', usage_count: 0, like_count: 0, favorite_count: 0 };
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent?.trim() === label)!;
 const render = (replace = vi.fn(), load = vi.fn()) => act(async () => { root.render(<DesktopOwnedCardsModal isOpen expectedUserId={7} onClose={() => {}} onReplaceCard={replace} onSelectCard={load} />); });
 beforeEach(() => {
-  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; mocks.accountId = 7; mocks.epoch = 1;
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; mocks.accountId = 7; mocks.epoch = 1; mocks.details = false;
   mocks.fetch.mockResolvedValue({ success: true, cards: [card], total: 1, nextOffset: null }); mocks.load.mockResolvedValue({ ...card, data: '{"name":"正文"}' }); mocks.capacity.mockResolvedValue(null);
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
@@ -38,4 +40,14 @@ describe('Desktop 我的卡宿主回用共享管理模态框', () => {
     mocks.accountId = 8; mocks.epoch += 1; await render(replace); await act(async () => { resolve({ ...card, data: '{}' }); });
     expect(document.querySelector('[role=dialog]')).toBeNull(); expect(replace).not.toHaveBeenCalled();
   });
+});
+
+it('真实我的卡详情直接消费已加载私有正文，不额外 HTTP，凭据世代更换后销毁', async () => {
+  mocks.details = true; const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  try {
+    await render(); await act(async () => button('详情').click());
+    expect(document.body.textContent).toContain('来源：我的云端数据卡正文'); expect(document.body.textContent).toContain('正文');
+    expect(mocks.load).toHaveBeenCalledOnce(); expect(fetch).not.toHaveBeenCalled(); expect(button('下载 JSON')).toBeDefined();
+    mocks.epoch += 1; await render(); expect(button('下载 JSON')).toBeUndefined();
+  } finally { vi.unstubAllGlobals(); }
 });

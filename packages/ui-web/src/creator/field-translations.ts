@@ -251,7 +251,7 @@ export const FIELD_TRANSLATIONS: Record<string, string> = {
 
 // 获取字段的中文名称，如果没有映射则返回原字段名
 export function getFieldDisplayName(fieldName: string): string {
-  return FIELD_TRANSLATIONS[fieldName] || fieldName;
+  return Object.prototype.hasOwnProperty.call(FIELD_TRANSLATIONS, fieldName) ? FIELD_TRANSLATIONS[fieldName] : fieldName;
 }
 
 // 批量翻译对象的键名

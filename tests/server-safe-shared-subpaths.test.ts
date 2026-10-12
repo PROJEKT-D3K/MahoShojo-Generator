@@ -298,6 +298,7 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
       './arena-story-session',
       './arena-story-session-read',
       './battle-report-history',
+      './card-details',
       './card-editor',
       './card-forge',
       './card-library',

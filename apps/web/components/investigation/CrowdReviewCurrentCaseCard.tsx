@@ -304,6 +304,7 @@ export function CrowdReviewCurrentCaseCard({
       />
       {snapshotDetailsCard ? (
         <DataCardDetailsModal
+          source={{ kind: 'local', label: '举报时保存的正文快照' }}
           isOpen
           onClose={() => setSnapshotDetailsCard(null)}
           card={snapshotDetailsCard}

@@ -231,6 +231,7 @@ export function QuestionnaireLorePanel() {
 
       {questionnaireDetailsCard && (
         <DataCardDetailsModal
+          source={{ kind: 'local', label: '当前问卷副本' }}
           isOpen={showQuestionnaireDetailsModal}
           onClose={() => {
             setShowQuestionnaireDetailsModal(false);

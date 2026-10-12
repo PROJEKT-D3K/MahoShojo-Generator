@@ -30,6 +30,22 @@ describe('public ranking actual sources and browser boundaries', () => {
     const routes = readFileSync(resolve(root, 'apps/desktop/src/app/routes.tsx'), 'utf8');
     expect(routes).toContain("path: '/ranking'"); expect(routes).toContain("import('./ranking-page')"); expect(routes).toContain('  rankingRoute,');
     expect(readFileSync(resolve(root, 'apps/desktop/src/app/delivered-routes.ts'), 'utf8')).toContain("'/ranking'");
-    expect(readFileSync(resolve(root, 'apps/desktop/src/app/ranking-page.tsx'), 'utf8')).not.toContain('onOpenEntityDetails');
+    const desktop = readFileSync(resolve(root, 'apps/desktop/src/app/ranking-page.tsx'), 'utf8');
+    expect(desktop).toContain('onOpenEntityDetails={setEntity}');
+    expect(desktop).toContain('canOpenEntityDetails={canOpenDesktopRankingDetails}');
+    expect(desktop).not.toContain('useDesktopCloudSession');
+  });
+});
+
+
+describe('basic card details shared boundary', () => {
+  it('both real hosts consume one modal without embedding platform/auth/request policy', async () => {
+    for (const file of ['apps/web/components/DataCardDetailsModal.tsx', 'apps/desktop/src/features/card-details/card-details-modal.tsx']) {
+      const source = readFileSync(resolve(root, file), 'utf8');
+      expect(source).toContain("from '@mahoshojo/ui-web/card-details'"); expect(source).toContain('<BasicCardDetailsModal');
+    }
+    const result = await build({ entryPoints: [resolve(root, 'packages/ui-web/src/card-details/index.ts')], bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true });
+    expect(Object.keys(result.metafile!.inputs).some((file) => /apps\/|hosted-runtime|@tauri|next\//.test(file))).toBe(false);
+    expect(readFileSync(resolve(root, 'packages/ui-web/src/card-details/BasicCardDetailsModal.tsx'), 'utf8')).not.toMatch(/fetch\(|authStorage|invoke\(/);
   });
 });

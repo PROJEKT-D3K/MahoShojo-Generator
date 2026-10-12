@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Info, Star, Heart, Download, ChevronDown, ChevronUp, Flag, MoreHorizontal, Layers, HardDrive } from 'lucide-react';
+import { Download, ChevronDown, ChevronUp, Flag, MoreHorizontal, Layers, HardDrive } from 'lucide-react';
 import { MarkdownBlock } from '@/components/MarkdownBlock';
 import { DataCardReportModal } from '@/components/data-card-reports/DataCardReportModal';
-import { getFieldDisplayName } from '@/lib/fieldTranslations';
 import { formatDateTime } from '@/lib/constants';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import { authStorage } from '@/lib/auth';
@@ -10,12 +9,10 @@ import { upsertArenaRankCacheFromMeta } from '@/lib/arena/rank-cache';
 import { EntityRatingHistoryButton } from '@/components/ranking/EntityRatingHistoryButton';
 import { TierBadge } from '@/components/ranking/TierBadge';
 import type { DataCardReportCapabilityDto, DataCardReportDraft } from '@/lib/data-card-reports/types';
-import { buildTitleDisplay } from '@/lib/text';
-import Badge from '@/components/badge/Badge';
 import type { BadgeDefinition } from '@/types/badge';
 import type { OnlineDataCardType } from '@mahoshojo/contracts/data-cards';
 import { isReducedMotionActive } from '@mahoshojo/ui-web/device-preferences';
-import { useBaseModalAccessibility } from '@mahoshojo/ui-web/modal';
+import { BasicCardDetailsModal, type CardDetailsSource } from '@mahoshojo/ui-web/card-details';
 
 type ApiTag = {
   id: string;
@@ -123,10 +120,6 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 
 const META_EXPANDED_STORAGE_KEY = 'mahoshojo.data-card-details.meta-expanded.v1';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const isUuid = (value: string) => UUID_PATTERN.test(value.trim());
-
 export const shouldLoadReportCapability = ({
   isCloudDataCard,
   isPublic,
@@ -145,6 +138,7 @@ const sanitizeDownloadFilename = (value: string) => {
 
 interface DataCardDetailsModalProps {
   isOpen: boolean;
+  source: CardDetailsSource;
   onClose: () => void;
   isOwner?: boolean;
   adminTagEditor?: boolean;
@@ -179,10 +173,16 @@ interface DataCardDetailsModalProps {
   localLibrarySaveState?: { busy: boolean; message: string | null };
 }
 
-export default function DataCardDetailsModal({
+export default function DataCardDetailsModal(props: DataCardDetailsModalProps) {
+  // 每次打开/切来源/切卡的私有宿主状态独立；关闭即销毁请求与治理子层。
+  return props.isOpen ? <DataCardDetailsModalScope key={`${props.source.kind}:${props.card.id}`} {...props} /> : null;
+}
+
+function DataCardDetailsModalScope({
   isOpen,
   onClose,
   card,
+  source,
   pendingNotice,
   metaCardId,
   ratingHistoryEntity,
@@ -193,16 +193,25 @@ export default function DataCardDetailsModal({
   onSaveCopyToLocalLibrary,
   localLibrarySaveState,
 }: DataCardDetailsModalProps) {
-  const { titleId, dialogRef, initialFocusRef: closeButtonRef } = useBaseModalAccessibility({ isOpen, onClose, fallbackFocusRef });
-  const canEditTags = isOwner || adminTagEditor;
+  const canEditTags = (source.kind === 'owned' || source.kind === 'public') && (isOwner || adminTagEditor);
   const [tagScope, setTagScope] = useState<'user' | 'system' | 'admin'>(adminTagEditor ? 'admin' : 'user');
   const [metaNonce, setMetaNonce] = useState(0);
-  const [meta, setMeta] = useState<Extract<ApiMetaResponse, { success: true }> | null>(null);
+  const [loadedMeta, setMeta] = useState<Extract<ApiMetaResponse, { success: true }> | null>(null);
+  const isCloudSource = source.kind === 'public' || source.kind === 'owned';
+  const requestedMetaId = isCloudSource ? (metaCardId === undefined ? card.id : metaCardId) : null;
+  const meta = loadedMeta?.dataCardId === card.id && requestedMetaId === card.id ? loadedMeta : null;
   const [metaLoading, setMetaLoading] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
   const metaRequestIdRef = useRef(0);
   const metaAbortRef = useRef<AbortController | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [localCopyError, setLocalCopyError] = useState<string | null>(null);
+  const localCopyRequestRef = useRef(0);
+  useEffect(() => {
+    localCopyRequestRef.current += 1;
+    setLocalCopyError(null);
+    return () => { localCopyRequestRef.current += 1; };
+  }, [card.data]);
   const [reportCapability, setReportCapability] = useState<DataCardReportCapabilityDto | null>(initialReportCapability);
   const [reportCapabilityLoading, setReportCapabilityLoading] = useState(false);
   const [reportCapabilityError, setReportCapabilityError] = useState<string | null>(null);
@@ -222,21 +231,11 @@ export default function DataCardDetailsModal({
   const [savingTags, setSavingTags] = useState(false);
   const [saveTagsError, setSaveTagsError] = useState<string | null>(null);
   const [isMetaExpanded, setIsMetaExpanded] = useState(true);
-  const { display: displayName, full: fullName } = buildTitleDisplay(card.name || '未命名');
   const ownerModerationSummary = reportCapability?.ownerModerationSummary ?? null;
   const showOwnerModerationSummary =
     isOwner &&
     ownerModerationSummary != null &&
     (ownerModerationSummary.canAppeal || ownerModerationSummary.activeAppealId != null);
-  const cardTypeLabel =
-    card.type === 'character'
-      ? '角色'
-      : card.type === 'scenario'
-        ? '剧本'
-        : card.type === 'history'
-          ? '历史'
-          : '问卷';
-  const descriptionText = card.description?.trim() ? card.description : '暂无简介';
   const tagSectionRef = useRef<HTMLDivElement | null>(null);
   const tagSearchInputRef = useRef<HTMLInputElement | null>(null);
   const moreActionsButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -262,8 +261,8 @@ export default function DataCardDetailsModal({
         signal: controller.signal,
       });
       if (controller.signal.aborted || requestId !== metaRequestIdRef.current) return;
-      if (json && (json as any).success === true) {
-        setMeta(json as Extract<ApiMetaResponse, { success: true }>);
+      if (json?.success === true && json.dataCardId === dataCardId) {
+        setMeta(json);
       } else {
         setMeta(null);
         setMetaError((json as any)?.error ?? '无法加载指标');
@@ -308,9 +307,9 @@ export default function DataCardDetailsModal({
     }
   }, []);
 
-  const resolvedMetaCardId = metaCardId === undefined ? card?.id : metaCardId;
+  const resolvedMetaCardId = requestedMetaId;
   const resolvedCloudCardId = typeof resolvedMetaCardId === 'string' ? resolvedMetaCardId.trim() : '';
-  const isCloudDataCard = Boolean(resolvedCloudCardId) && isUuid(resolvedCloudCardId);
+  const isCloudDataCard = isCloudSource && Boolean(resolvedCloudCardId);
   const resolvedRatingHistoryEntity = useMemo(() => {
     if (ratingHistoryEntity === null) return null;
     if (ratingHistoryEntity?.entityId?.trim()) {
@@ -334,6 +333,8 @@ export default function DataCardDetailsModal({
   });
   const canShowReportActions = isCloudDataCard && card.isPublic;
   const canDownloadCard = isCloudDataCard ? (Boolean(meta) || isOwner) : true;
+  // 这里只绑定服务端指标的展示版本，时间戳不是写权限或本机验签证明。
+  const bodyMatchesMetrics = Boolean(meta?.metrics && !meta.metrics.isStale && card.updatedAt && meta.metrics.dataCardUpdatedAt === card.updatedAt);
 
   useEffect(() => {
     if (!isCloudDataCard) return;
@@ -399,6 +400,12 @@ export default function DataCardDetailsModal({
     setIsMoreActionsOpen(false);
     setIsReportModalOpen(false);
     setReportSubmitError(null);
+    return () => {
+      metaAbortRef.current?.abort();
+      reportAbortRef.current?.abort();
+      metaRequestIdRef.current += 1;
+      reportRequestIdRef.current += 1;
+    };
   }, [isOpen, metaNonce, reloadMeta, reloadReportCapability, resolvedMetaCardId, shouldFetchReportCapability]);
 
   useEffect(() => {
@@ -462,10 +469,10 @@ export default function DataCardDetailsModal({
     if (metaError) return '指标加载失败';
     if (!meta) return '暂无指标';
     const parts: string[] = [];
-    if (meta.metrics) {
+    if (meta.metrics && bodyMatchesMetrics) {
       parts.push(`技术值 ${meta.metrics.techScore}${meta.metrics.techLevel ? `/${meta.metrics.techLevel}` : ''}`);
     } else {
-      parts.push('技术值 —');
+      parts.push('技术值 未确认');
     }
     if (card.type === 'character') {
       const strictRating = meta.ratings.strict?.rating ?? '—';
@@ -474,7 +481,7 @@ export default function DataCardDetailsModal({
     }
     parts.push(`标签 ${visibleTags.length}`);
     return parts.join(' · ');
-  }, [card.type, meta, metaError, metaLoading, visibleTags.length]);
+  }, [bodyMatchesMetrics, card.type, meta, metaError, metaLoading, visibleTags.length]);
 
   const formatSignedDelta = (value: number) => (value >= 0 ? `+${value}` : String(value));
 
@@ -664,112 +671,12 @@ export default function DataCardDetailsModal({
 
   if (!isOpen) return null;
 
-  let parsedData: any = {};
-  try {
-    parsedData = JSON.parse(card.data);
-  } catch (error) {
-    console.error('解析数据卡内容失败:', error);
-  }
-
-  // 递归渲染对象内容
-  const renderObjectContent = (obj: any, level: number = 0): React.ReactNode => {
-    if (typeof obj === 'string') {
-      if (!obj.trim()) return <span className="text-gray-500">（空）</span>;
-
-      return (
-        <MarkdownBlock
-          content={obj}
-          variant="light"
-          className="text-sm"
-        />
-      );
-    }
-
-    if (typeof obj === 'number' || typeof obj === 'boolean') {
-      return <span className="text-gray-700">{String(obj)}</span>;
-    }
-
-    if (Array.isArray(obj)) {
-      return (
-        <div className="space-y-1">
-          {obj.map((item, index) => (
-            <div key={index} className="flex items-start gap-2">
-              <span className="text-gray-500 text-sm">•</span>
-              <div className="flex-1">
-                {renderObjectContent(item, level + 1)}
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    if (typeof obj === 'object' && obj !== null) {
-      return (
-        <div className="space-y-2">
-          {Object.entries(obj).map(([key, value]) => {
-            // 跳过内部字段
-            if (key.startsWith('_')) return null;
-            // 跳过 metadata 字段
-            if (key === 'metadata') return null;
-            // 跳过问卷答案字段
-            if (key === 'userAnswers') return null;
-
-            return (
-              <div key={key} className="border-l-2 border-gray-200 pl-3">
-                <div className="font-medium text-gray-600 text-sm mb-1">
-                  {getFieldDisplayName(key)}:
-                </div>
-                <div className="ml-2">
-                  {renderObjectContent(value, level + 1)}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      );
-    }
-
-    return <span className="text-gray-500">无数据</span>;
-  };
-
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal={isReportModalOpen ? undefined : 'true'}
-        aria-hidden={isReportModalOpen ? 'true' : undefined}
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
-      >
-        {/* 头部 */}
-        <div className="flex items-center justify-between p-6 border-b">
-          <div className="flex items-center gap-3">
-            <div
-              className={`p-2 mt-1 rounded-lg ${
-                card.type === 'character' ? 'bg-pink-100' : card.type === 'scenario' ? 'bg-purple-100' : 'bg-emerald-100'
-              }`}
-            >
-              <Info
-                className={`w-5 h-5 ${
-                  card.type === 'character'
-                    ? 'text-pink-600'
-                    : card.type === 'scenario'
-                      ? 'text-purple-600'
-                      : 'text-emerald-700'
-                }`}
-              />
-            </div>
-            <div>
-              <h2 id={titleId} className="text-xl font-bold text-gray-800" title={fullName}>
-                {displayName}
-              </h2>
-              <p className="text-xs text-gray-500 mt-1">类型：{cardTypeLabel}</p>
-            </div>
-          </div>
-          <div className="relative flex items-center gap-2">
+    <>
+      <BasicCardDetailsModal isOpen={isOpen} onClose={onClose} card={card} source={source} fallbackFocusRef={fallbackFocusRef}
+        obscured={isReportModalOpen}
+        renderMarkdown={(content) => <MarkdownBlock content={content} variant="light" className="text-sm" />}
+        headerActions={<>
             {canShowReportActions ? (
               <button
                 ref={moreActionsButtonRef}
@@ -781,16 +688,6 @@ export default function DataCardDetailsModal({
                 <span>更多</span>
               </button>
             ) : null}
-            <button
-              type="button"
-              ref={closeButtonRef}
-              onClick={onClose}
-              aria-label={`关闭${cardTypeLabel}详情`}
-              className="text-gray-400 hover:text-gray-600 p-2 rounded-lg hover:bg-gray-100"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
             {canShowReportActions && isMoreActionsOpen ? (
               <div className="absolute right-12 top-12 z-10 w-72 rounded-xl border border-gray-200 bg-white p-2 shadow-xl">
                 <button
@@ -820,11 +717,8 @@ export default function DataCardDetailsModal({
                 ) : null}
               </div>
             ) : null}
-          </div>
-        </div>
-
-        {/* 内容区 */}
-        <div className="flex-1 overflow-auto p-6 space-y-6">
+        </>}
+        beforeOverview={<>
           {pendingNotice && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-sm px-3 py-2">
               {pendingNotice}
@@ -846,35 +740,10 @@ export default function DataCardDetailsModal({
             </div>
           ) : null}
 
-          <section className="space-y-2">
-            <h3 className="font-medium text-gray-700 flex items-center gap-2">
-              <span>概览</span>
-            </h3>
-            <p className="text-sm text-gray-600 whitespace-pre-wrap">
-              {descriptionText}
-            </p>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
-              <span className="flex items-center gap-1"><Heart className="w-3 h-3" />{card.likeCount ?? 0}</span>
-              <span className="flex items-center gap-1"><Star className="w-3 h-3" />{card.favoriteCount ?? 0}</span>
-              <span className="flex items-center gap-1"><Download className="w-3 h-3" />{card.usageCount ?? 0}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-4 text-[11px] text-gray-500">
-              <span className="inline-flex items-center gap-1">
-                作者：{card.author ?? '未知'}
-                {card.authorBadges && card.authorBadges.length > 0 && (
-                  <span className="inline-flex items-center gap-0.5">
-                    {card.authorBadges.map((badge) => (
-                      <Badge key={badge.id} badge={badge} size="sm" />
-                    ))}
-                  </span>
-                )}
-              </span>
-              <span>创建：{formatDateTime(card.createdAt)}</span>
-              <span>更新：{formatDateTime(card.updatedAt)}</span>
-            </div>
-          </section>
-
+        </>}
+        metadata={isCloudSource || resolvedRatingHistoryEntity ? <>
           <section className="space-y-2" ref={tagSectionRef}>
+            {!isCloudSource && <p className="text-xs text-gray-500">原生：未确认（本机未验证）；未查询线上指标</p>}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h3 className="font-medium text-gray-700 flex items-center gap-2">
                 <span>技术与标签</span>
@@ -913,7 +782,7 @@ export default function DataCardDetailsModal({
                   <>
                     <div className="flex flex-wrap gap-x-4 gap-y-1">
                       <span>
-                        技术值：{meta.metrics ? `${meta.metrics.techScore}（${meta.metrics.techLevel}）` : '—'}
+                        技术值：{bodyMatchesMetrics && meta.metrics ? `${meta.metrics.techScore}（${meta.metrics.techLevel}）` : '未确认（未取得对应正文的同版指标）'}
                         {meta.metrics?.isStale ? <span className="ml-1 text-amber-700">（已触发重算）</span> : null}
                       </span>
                       <a
@@ -925,7 +794,7 @@ export default function DataCardDetailsModal({
                         了解技术值
                       </a>
                       <span>
-                        原生：{meta.metrics?.isNative == null ? '未知' : meta.metrics.isNative ? '是' : '否'}
+                        原生（服务器判断）：{!bodyMatchesMetrics || meta.metrics?.isNative == null ? '未确认（未取得对应正文的同版指标）' : meta.metrics.isNative ? '是' : '否'}
                       </span>
                       {card.type === 'character' && (
                         <div className="flex flex-col gap-1">
@@ -1110,28 +979,13 @@ export default function DataCardDetailsModal({
           )}
           </section>
 
-          <section className="space-y-2">
-            <h3 className="font-medium text-gray-700 flex items-center gap-2">
-              <span>{card.type === 'history' ? '内容' : '详细设定'}</span>
-            </h3>
-            <div className="bg-gray-50 rounded-lg p-4">
-              {Object.keys(parsedData).length > 0 ? (
-                renderObjectContent(parsedData)
-              ) : (
-                <p className="text-gray-500 text-center py-8">
-                  暂无详细设定数据
-                </p>
-              )}
-            </div>
-          </section>
-        </div>
-
-        {/* 底部 */}
-        <div className="p-6 border-t bg-gray-50 flex items-center justify-between gap-3 flex-wrap">
+        </> : <p className="text-xs text-gray-500">原生：未确认（本机未验证）；未查询线上指标</p>}
+        footer={<>
           <div className="min-h-[18px]">
             {downloadError && (
               <div className="text-xs text-red-600">{downloadError}</div>
             )}
+            {localCopyError && <div role="alert" className="text-xs text-red-600">{localCopyError}</div>}
             {localLibrarySaveState?.message && (
               <div className="text-xs text-gray-600" role="status">{localLibrarySaveState.message}</div>
             )}
@@ -1183,9 +1037,15 @@ export default function DataCardDetailsModal({
                     : '不可下载'}
               </span>
             </button>
-            {onSaveCopyToLocalLibrary && isCloudDataCard ? (
+            {onSaveCopyToLocalLibrary ? (
               <button
-                onClick={() => { void onSaveCopyToLocalLibrary(); }}
+                onClick={() => {
+                  const request = ++localCopyRequestRef.current;
+                  setLocalCopyError(null);
+                  void Promise.resolve().then(onSaveCopyToLocalLibrary).catch((cause: unknown) => {
+                    if (request === localCopyRequestRef.current) setLocalCopyError(cause instanceof Error ? cause.message : '保存本地副本失败');
+                  });
+                }}
                 disabled={localLibrarySaveState?.busy === true}
                 className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 title="把这张数据卡的正文复制一份存入本机本地库，不会影响线上记录"
@@ -1194,15 +1054,9 @@ export default function DataCardDetailsModal({
                 <span>{localLibrarySaveState?.busy === true ? '保存中...' : '存到本地库'}</span>
               </button>
             ) : null}
-            <button
-              onClick={onClose}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
-            >
-              关闭
-            </button>
           </div>
-        </div>
-      </div>
+        </>}
+      />
       <DataCardReportModal
         isOpen={isReportModalOpen}
         fallbackFocusRef={moreActionsButtonRef}
@@ -1219,6 +1073,6 @@ export default function DataCardDetailsModal({
           void submitReport(draft);
         }}
       />
-    </div>
+    </>
   );
 }

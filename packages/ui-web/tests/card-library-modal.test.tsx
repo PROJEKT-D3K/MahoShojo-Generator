@@ -7,6 +7,7 @@ import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import { AnnouncementCenter } from '../src/announcement/AnnouncementCenter';
 import { BaseModal } from '../src/modal/BaseModal';
+import { BasicCardDetailsModal } from '../src/card-details';
 
 import {
   CardLibraryModal,
@@ -587,6 +588,7 @@ test('缓存快照行选择：cache 作用域、无服务器身份、不触发�
 
 test('仅摘要缓存行不可选：入口禁用且不发起任何读取', async () => {
   const { host } = createHost([]);
+  host.slots.CardDetailsModal = actualDetails;
   const cache = createCachePort([cachedEntry('card-s', false)]);
   host.publicCache = cache;
   const onSelectCard = vi.fn();
@@ -1167,4 +1169,75 @@ test('browse-only own public cards never select, load body, or report usage on r
   expect(document.querySelector('[title="点赞"]')).toBeNull();
   expect(onSelectCard).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
   expect(online.loadFullCard).not.toHaveBeenCalled(); expect(online.reportCardStat).not.toHaveBeenCalled();
+});
+
+
+const detailsButton = () => [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent?.trim() === '详情')!;
+const actualDetails: NonNullable<CardLibraryHost['slots']['CardDetailsModal']> = (props) => <BasicCardDetailsModal {...props} renderMarkdown={(content) => <p>{content}</p>} />;
+test('真实卡库→共源详情保留本地作者日期，零线上正文/metadata，Escape只关子层', async () => {
+  const item = record('local-uuid');
+  const { host, online } = createHost([item]); host.slots.CardDetailsModal = actualDetails;
+  const close = vi.fn();
+  await render({ host, isOpen: true, onClose: close, selectedType: 'character', initialTab: 'local', visibleTabs: ['local'] }); await settle();
+  const calls = Object.values(online).map((fn) => vi.mocked(fn).mock.calls.length);
+  await click(detailsButton()); await settle();
+  expect(document.body.textContent).toContain('作者：本机'); expect(document.body.textContent).toContain('来源：本地库');
+  expect(document.querySelector('[title="2026-10-01T00:00:00.000Z"]')).not.toBeNull();
+  expect(Object.values(online).map((fn) => vi.mocked(fn).mock.calls.length)).toEqual(calls);
+  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  expect(close).not.toHaveBeenCalled(); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+});
+test('真实缓存详情保留快照来源与最近成功时间，不把旧正文升级成线上身份', async () => {
+  const { host } = createHost([]); host.slots.CardDetailsModal = actualDetails; host.publicCache = createCachePort([cachedEntry('cached-detail')]);
+  await render({ host, isOpen: true, onClose: vi.fn(), selectedType: 'character', initialTab: 'public' }); await settle();
+  await click(detailsButton()); await settle();
+  expect(document.body.textContent).toContain('来源：公开库缓存快照'); expect(document.body.textContent).toContain('最近成功读取'); expect(document.body.textContent).not.toContain('来源：公开数据卡正文');
+});
+test.each(['owner', 'epoch'] as const)('已打开私有详情在 %s 更换时同步清空，迟到读取不复活', async (change) => {
+  const item = { ...publicCard('private-detail'), user_id: 7, is_public: 0, data: '{"name":"私有正文"}' };
+  const { host, online } = createHost([], { auth: { status: 'authenticated', userId: 7, userBadges: [], credentialEpoch: 1 }, online: { fetchSummaryPage: vi.fn(async () => ({ success: true as const, cards: [DataCardSummarySchema.parse(item)], total: 1, nextOffset: null })), loadFullCard: vi.fn(async () => item) } });
+  host.slots.CardDetailsModal = actualDetails;
+  const props = { host, isOpen: true, onClose: vi.fn(), selectedType: 'character' as const, initialTab: 'my' as const, visibleTabs: ['my'] as Array<'my'> };
+  await render(props); await settle(); await click(detailsButton()); await settle(); expect(document.body.textContent).toContain('私有正文');
+  const next = { ...host, auth: { ...host.auth, userId: change === 'owner' ? 8 : 7, credentialEpoch: 2 } };
+  await render({ ...props, host: next }); expect(document.body.textContent).not.toContain('私有正文');
+  const pending = deferred<unknown>(); vi.mocked(online.loadFullCard).mockImplementation(async () => pending.promise);
+  await settle(); await click(detailsButton());
+  await render({ ...props, host: { ...next, auth: { ...next.auth, credentialEpoch: 3 } } });
+  await act(async () => pending.resolve(item)); expect(document.body.textContent).not.toContain('私有正文');
+});
+
+test('关闭父卡库后重开不复活上次详情，父层关闭后晚响应也不认领', async () => {
+  const { host } = createHost([record('reopen')]); host.slots.CardDetailsModal = actualDetails;
+  const props = { host, isOpen: true, onClose: vi.fn(), selectedType: 'character' as const, initialTab: 'local' as const, visibleTabs: ['local'] as Array<'local'> };
+  await render(props); await settle(); await click(detailsButton()); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
+  await render({ ...props, isOpen: false }); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
+  await render(props); await settle(); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+});
+
+test('详情内保存坏正文直接显示错误，不被背后卡库遮住', async () => {
+  const { host } = createHost([], { online: {
+    fetchPublicCards: vi.fn(async () => ({ ok: true, status: 200, data: { success: true, cards: [publicCard('broken')], total: 1 } })),
+    loadFullCard: vi.fn(async () => ({ ...publicCard('broken'), data: 'null' })),
+  } });
+  host.slots.CardDetailsModal = (props) => <BasicCardDetailsModal {...props} renderMarkdown={(content) => <p>{content}</p>} footer={<><p role="status">{props.localLibrarySaveState?.message}</p><button onClick={() => void props.onSaveCopyToLocalLibrary?.()}>保存详情副本</button></>} />;
+  await render({ host, isOpen: true, onClose: vi.fn(), selectedType: 'character', initialTab: 'public' }); await settle(); await click(detailsButton());
+  await click([...document.querySelectorAll('button')].find((node) => node.textContent === '保存详情副本')!);
+  const dialogs = document.querySelectorAll('[role="dialog"]'); expect(dialogs[dialogs.length - 1]!.textContent).toContain('没有可保存的正文');
+});
+
+test('保存 A 的迟到反馈不落入后来打开的 B 详情', async () => {
+  const { host } = createHost([], { online: {
+    fetchPublicCards: vi.fn(async () => ({ ok: true, status: 200, data: { success: true, cards: [publicCard('copy-a'), publicCard('copy-b')], total: 2 } })),
+    loadFullCard: vi.fn(async (row: unknown) => ({ ...(row as Record<string, unknown>), data: JSON.stringify({ name: (row as { id: string }).id }) })),
+  } });
+  const saving = deferred<void>(); host.local.repository.put = vi.fn(() => saving.promise);
+  host.slots.CardDetailsModal = (props) => <BasicCardDetailsModal {...props} renderMarkdown={(content) => <p>{content}</p>} footer={<><p role="status">{props.localLibrarySaveState?.message}</p><button onClick={() => void props.onSaveCopyToLocalLibrary?.()}>保存详情副本</button></>} />;
+  await render({ host, isOpen: true, onClose: vi.fn(), selectedType: 'character', initialTab: 'public' }); await settle(); await click(detailsButton());
+  await click([...document.querySelectorAll('button')].find((node) => node.textContent === '保存详情副本')!);
+  await vi.waitFor(() => expect(host.local.repository.put).toHaveBeenCalledOnce());
+  await click(document.querySelector('[aria-label="关闭角色详情"]')!);
+  const buttons = [...document.querySelectorAll('button')].filter((node) => node.textContent?.trim() === '详情'); await click(buttons[1]!);
+  await act(async () => saving.resolve()); await settle();
+  const dialogs = document.querySelectorAll('[role="dialog"]'); expect(dialogs[dialogs.length - 1]!.textContent).toContain('copy-b'); expect(dialogs[dialogs.length - 1]!.textContent).not.toContain('已保存到本地库');
 });

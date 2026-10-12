@@ -1740,6 +1740,7 @@ export const CanshouPage: React.FC = () => {
 
       {questionnaireDetailsCard && (
         <DataCardDetailsModal
+          source={{ kind: 'local', label: '当前问卷副本' }}
           isOpen={showQuestionnaireDetailsModal}
           onClose={() => {
             setShowQuestionnaireDetailsModal(false);

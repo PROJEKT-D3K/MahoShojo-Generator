@@ -420,6 +420,7 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
 
       {selectedCombatant && (
         <DataCardDetailsModal
+          source={selectedCombatant.isPreset ? { kind: 'preset' } : { kind: 'local', label: '当前输入副本' }}
           isOpen
           onClose={() => setSelectedCombatant(null)}
           metaCardId={selectedCombatant.sourceDataCardId ? selectedCombatant.sourceDataCardId : null}

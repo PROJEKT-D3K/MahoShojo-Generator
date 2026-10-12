@@ -1,3 +1,5 @@
+import type { CardDetailsSource } from '../card-details';
+import { describeLocalCardProvenance } from '../local-cards/presentation';
 // card-library/CardLibraryModal.tsx
 //
 // 共享数据卡选择器（原 apps/web/components/BattleDataModal.tsx，D5.0e 抽取）。
@@ -222,7 +224,7 @@ export function CardLibraryModal({
    * 被丢弃时 ref 不随快照回滚）。
    */
   const confirmedAccountKey = isAuthenticated
-    ? `account:${userId}`
+    ? `account:${userId}:${host.auth.credentialEpoch ?? 0}`
     : authStatus === 'unauthenticated'
       ? 'session:unauthenticated'
       : null;
@@ -256,6 +258,11 @@ export function CardLibraryModal({
   const [sortBy, setSortBy] = useState<'likes' | 'usage' | 'favorites' | 'created_at'>('created_at');
   const [selectedCard, setSelectedCard] = useState<any | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [selectedCardSource, setSelectedCardSource] = useState<CardDetailsSource>({ kind: 'public' });
+  if (!isOpen && selectedCard !== null) {
+    setSelectedCard(null);
+    setShowDetailsModal(false);
+  }
   const detailsModalOpenRef = useRef(false);
   detailsModalOpenRef.current = allowCardDetails && Boolean(host.slots.CardDetailsModal) && showDetailsModal && selectedCard !== null;
   /**
@@ -511,6 +518,10 @@ export function CardLibraryModal({
   const [pendingLocalRemoval, setPendingLocalRemoval] = useState<LocalDataCardRow | null>(null);
   const libraryAutoSave = useLocalLibraryAutoSave(host.local.repository);
   const [libraryCopyMessage, setLibraryCopyMessage] = useState<string | null>(null);
+  const libraryCopyRequestRef = useRef(0);
+  useIsomorphicLayoutEffect(() => {
+    libraryCopyRequestRef.current += 1;
+  }, [isOpen, selectedCard, accountKey]);
 
   /**
    * 账号身份切换的清场（render-phase adjust）：渲染途中发现身份已更换时，
@@ -523,6 +534,10 @@ export function CardLibraryModal({
   const [appliedAccountKey, setAppliedAccountKey] = useState(accountKey);
   if (appliedAccountKey !== accountKey) {
     setAppliedAccountKey(accountKey);
+    if (selectedCardSource.kind === 'owned') {
+      setShowDetailsModal(false);
+      setSelectedCard(null);
+    }
     setShowDecksModal(false);
     setLocalActionError(null);
     setLocalActionNotice(null);
@@ -541,7 +556,7 @@ export function CardLibraryModal({
       cardDetailControllerRef.current?.abort();
       cardDetailControllerRef.current = null;
     };
-  }, [isOpen, activeTab, userId]);
+  }, [isOpen, activeTab, userId, host.auth.credentialEpoch]);
   useEffect(() => {
     if (!isOpen || isPublicTab) return;
     const status = activeTab === 'my' ? myPage.status : activeTab === 'favorites' ? favoritesPage.status : null;
@@ -1511,6 +1526,8 @@ export function CardLibraryModal({
    */
   const handleSaveCardToLibrary = useCallback(async (card: any) => {
     setLocalActionError(null);
+    setLibraryCopyMessage(null);
+    const requestId = ++libraryCopyRequestRef.current;
     // 详情弹窗用 `void onSaveCopyToLocalLibrary()` 调用：这里抛出去就是未处理
     // rejection，用户既看不到提示，弹窗也不会关。
     let payload: unknown;
@@ -1536,7 +1553,7 @@ export function CardLibraryModal({
       execution: 'downloaded',
       cloudRef: cloudCardId ? { cardId: cloudCardId } : undefined,
     }]);
-    if (libraryAutoSave.error) setLocalActionError(libraryAutoSave.error);
+    if (requestId !== libraryCopyRequestRef.current) return;
     setLibraryCopyMessage(summary.saved > 0
       ? `已保存到本地库：${summary.saved} 张。`
       : summary.updated > 0
@@ -1557,15 +1574,19 @@ export function CardLibraryModal({
   // 查看详情：与 DataCardsModal.withFullCard 一致，新动作 abort 旧动作，
   // 避免连续点击 A、B 时先返回的 A 覆盖最后点击的 B。
   const openCardDetails = useCallback(async (card: any) => {
+    setLibraryCopyMessage(null);
+    setLocalActionError(null);
     cardDetailControllerRef.current?.abort();
     const controller = new AbortController();
     cardDetailControllerRef.current = controller;
     const { signal } = controller;
+    const ownerKey = accountKey;
     try {
       if (isLocalDataCardRow(card)) {
         const record = localRecordById.get(card.id);
         if (!record) throw new Error('本地库中的这张数据卡已不可用。');
         if (signal.aborted) return;
+        setSelectedCardSource({ kind: 'local', label: '本地库', provenance: describeLocalCardProvenance(record) });
         setSelectedCard(mapLocalCardRecordToDetailsCard(record));
         setShowDetailsModal(true);
         return;
@@ -1575,6 +1596,10 @@ export function CardLibraryModal({
         ? (await loadCachedCardBody(card.id, signal)).card
         : await host.online.loadFullCard(card, activeTab === 'my' ? 'my' : 'public', signal);
       if (signal.aborted) return;
+      if (activeTab === 'my' && ownerKey !== latestAccountKeyRef.current) return;
+      setSelectedCardSource(isCachedDataCardRow(full)
+        ? { kind: 'cache', lastSuccessAt: getCachedDataCardRowMeta(full)?.lastSuccessAt ?? null }
+        : { kind: activeTab === 'my' ? 'owned' : 'public' });
       setSelectedCard(full);
       setShowDetailsModal(true);
     } catch (error) {
@@ -1583,7 +1608,7 @@ export function CardLibraryModal({
     } finally {
       if (cardDetailControllerRef.current === controller) cardDetailControllerRef.current = null;
     }
-  }, [activeTab, host.online, localRecordById, loadCachedCardBody]);
+  }, [activeTab, accountKey, host.online, localRecordById, loadCachedCardBody]);
 
   // 【新增】处理高级筛选输入变化
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -2695,8 +2720,10 @@ export function CardLibraryModal({
 	  {/* 详情模态框 */}
       {allowCardDetails && selectedCard && host.slots.CardDetailsModal && (
         <host.slots.CardDetailsModal
+          key={`${accountKey}:${selectedCardSource.kind}:${selectedCard.id}`}
+          source={selectedCardSource}
           onSaveCopyToLocalLibrary={isLocalDataCardRow(selectedCard) ? undefined : handleSaveSelectedCardToLibrary}
-          localLibrarySaveState={{ busy: libraryAutoSave.busy, message: libraryCopyMessage }}
+          localLibrarySaveState={{ busy: libraryAutoSave.busy, message: localActionError ?? libraryCopyMessage }}
           isOpen={showDetailsModal}
           fallbackFocusRef={closeButtonRef}
           onClose={() => {
@@ -2711,13 +2738,14 @@ export function CardLibraryModal({
             type: selectedCard.type,
             data: selectedCard.data,
             isPublic: getDataCardStatus(selectedCard).status === 'public',
-            usageCount: selectedCard.usage_count,
-            likeCount: selectedCard.like_count,
-            favoriteCount: selectedCard.favorite_count,
-            author: activeTab === 'my' ? '我' : (selectedCard.username || '未知'),
-            authorBadges: activeTab === 'my' ? currentUserEquippedBadges : (authorBadgesById[selectedCard.user_id] ?? []),
-            createdAt: selectedCard.created_at,
-            updatedAt: selectedCard.updated_at
+            usageCount: selectedCard.usage_count ?? selectedCard.usageCount,
+            likeCount: selectedCard.like_count ?? selectedCard.likeCount,
+            favoriteCount: selectedCard.favorite_count ?? selectedCard.favoriteCount,
+            author: selectedCard.author || selectedCard.username || (selectedCardSource.kind === 'owned' ? '我' : '未知'),
+            authorBadges: selectedCardSource.kind === 'owned' ? currentUserEquippedBadges : (authorBadgesById[selectedCard.user_id] ?? []),
+            createdAt: selectedCard.created_at ?? selectedCard.createdAt,
+            updatedAt: selectedCard.updated_at ?? selectedCard.updatedAt,
+            tagIds: selectedCard.tagIds ?? selectedCard.tag_ids
           }}
         />
 	  )}

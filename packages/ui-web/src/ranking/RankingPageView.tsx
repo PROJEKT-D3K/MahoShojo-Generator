@@ -27,10 +27,11 @@ export type RankingPageViewProps = {
   Link: ComponentType<RankingLinkProps>;
   cache?: RankingRankCache;
   onOpenEntityDetails?: (target: RankingDetailsTarget) => void;
+  canOpenEntityDetails?: (target: Pick<RankingDetailsTarget, 'entityType' | 'entityId'>) => boolean;
   canOpenScenarioPresets?: boolean;
 };
 
-export function RankingPageView({ useRankingQuery, readRanking, Link, cache, onOpenEntityDetails, canOpenScenarioPresets = false }: RankingPageViewProps) {
+export function RankingPageView({ useRankingQuery, readRanking, Link, cache, onOpenEntityDetails, canOpenEntityDetails, canOpenScenarioPresets = false }: RankingPageViewProps) {
   const [draftFilters, setDraftFilters] = useState<RankingFilters>(defaultFilters);
   const [appliedFilters, setAppliedFilters] = useState<RankingFilters>(defaultFilters);
   const [offset, setOffset] = useState(0);
@@ -41,7 +42,8 @@ export function RankingPageView({ useRankingQuery, readRanking, Link, cache, onO
   const [searchError, setSearchError] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [focusRowKey, setFocusRowKey] = useState<string | null>(null);
-  const setDetailsEntity = onOpenEntityDetails;
+  const canViewDetails = (target: Pick<RankingDetailsTarget, 'entityType' | 'entityId'>) => Boolean(onOpenEntityDetails) && (canOpenEntityDetails?.(target) ?? true);
+  const setDetailsEntity = (target: RankingDetailsTarget) => { if (canViewDetails(target)) onOpenEntityDetails?.(target); };
   const viewRef = useRef<HTMLDivElement | null>(null);
   const lastAutoScrolledRowKeyRef = useRef<string | null>(null);
   const focusTimerRef = useRef<number | null>(null);
@@ -1075,13 +1077,13 @@ export function RankingPageView({ useRankingQuery, readRanking, Link, cache, onO
                                 const rankTitle = rank > 0 ? `${isArchiveMode ? '快照' : 'Top300'} #${rank}` : '名次仅在 Top300 展示';
                                 const rankLabel = rank > 0 ? `#${rank}` : '#—';
                                 const canJump = rank > 0;
-                                const SearchResult = canJump || onOpenEntityDetails ? 'button' : 'div';
+                                const SearchResult = canJump || canViewDetails(item) ? 'button' : 'div';
                                 const { display: displayName, full: fullName } = buildTitleDisplay(item.displayName || '未命名');
                                 return (
                                   <SearchResult
                                     key={`search:${item.entityType}:${item.entityId}:${item.rank}`}
-                                    type={canJump || onOpenEntityDetails ? 'button' : undefined}
-                                    onClick={canJump || onOpenEntityDetails ? () => jumpToResult(item) : undefined}
+                                    type={canJump || canViewDetails(item) ? 'button' : undefined}
+                                    onClick={canJump || canViewDetails(item) ? () => jumpToResult(item) : undefined}
                                     className="flex w-full flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-left hover:bg-gray-50"
                                   >
                                     <div className="min-w-0">
@@ -1098,7 +1100,7 @@ export function RankingPageView({ useRankingQuery, readRanking, Link, cache, onO
                                         <span className="hidden md:inline">id：{item.entityId}</span>
                                       </div>
                                     </div>
-                                    <span className="text-xs text-gray-500">{canJump ? '点击跳转' : onOpenEntityDetails ? '查看详情' : '公开排行摘要'}</span>
+                                    <span className="text-xs text-gray-500">{canJump ? '点击跳转' : canViewDetails(item) ? '查看详情' : '正文未收录'}</span>
                                   </SearchResult>
                                 );
                               })}
@@ -1161,7 +1163,7 @@ export function RankingPageView({ useRankingQuery, readRanking, Link, cache, onO
 	                                const winRate = item.games > 0 ? Math.round((item.wins / item.games) * 1000) / 10 : null;
 	                                const authorName = formatAuthorLabel(item);
 	                                const { display: displayName, full: fullName } = buildTitleDisplay(item.displayName || '未命名');
-                                    const EntityName = onOpenEntityDetails ? 'button' : 'span';
+                                    const EntityName = canViewDetails(item) ? 'button' : 'span';
 	                                const tagPreviewIds = item.tagIds.slice(0, 4);
 	                                const remainingTagCount = Math.max(0, item.tagIds.length - tagPreviewIds.length);
 	                                const nativeBadge = item.isNative == null ? (
@@ -1185,8 +1187,8 @@ export function RankingPageView({ useRankingQuery, readRanking, Link, cache, onO
 	                                    <td className="px-4 py-3 pr-3">
 	                                      <div className="min-w-0">
 	                                        <EntityName
-	                                          type={onOpenEntityDetails ? 'button' : undefined}
-	                                          onClick={onOpenEntityDetails ? () => {
+	                                          type={canViewDetails(item) ? 'button' : undefined}
+	                                          onClick={canViewDetails(item) ? () => {
 	                                            const detailsNotice = `${isArchiveMode ? (isHistoryMode ? '历史快照' : '快照测试') : '当前榜单'}：#${item.rank} · 段位 ${item.tier} · 分 ${item.rating} · 局 ${item.games} · W/L/D ${item.wins}/${item.losses}/${item.draws}${winRate == null ? '' : ` · 胜率 ${winRate}%`}`;
 	                                            setDetailsEntity?.({
 	                                              entityType: item.entityType,
@@ -1196,9 +1198,9 @@ export function RankingPageView({ useRankingQuery, readRanking, Link, cache, onO
 	                                              pendingNotice: detailsNotice,
 	                                            });
 	                                          } : undefined}
-	                                          className={`block w-full truncate text-left font-medium text-gray-900 ${onOpenEntityDetails ? 'hover:underline underline-offset-2' : ''}`}
-	                                          aria-label={onOpenEntityDetails ? `查看角色详情：${fullName}` : undefined}
-	                                          title={fullName}
+	                                          className={`block w-full truncate text-left font-medium text-gray-900 ${canViewDetails(item) ? 'hover:underline underline-offset-2' : ''}`}
+	                                          aria-label={canViewDetails(item) ? `查看角色详情：${fullName}` : undefined}
+	                                          title={canViewDetails(item) ? fullName : `${fullName}（此客户端未收录该正文）`}
 	                                        >
 	                                          {displayName}
 	                                        </EntityName>

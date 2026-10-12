@@ -1,5 +1,8 @@
 'use client';
 
+import { BaseModal } from '@mahoshojo/ui-web/modal';
+import type { CardDetailsSource } from '@mahoshojo/ui-web/card-details';
+
 import type { ComponentProps } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -18,6 +21,7 @@ export type LeaderboardEntityDetailsTarget = {
 };
 
 type CacheEntry = {
+  source: CardDetailsSource;
   card: ComponentProps<typeof DataCardDetailsModal>['card'];
   metaCardId: string | null | undefined;
   pendingNotice: string | null;
@@ -47,6 +51,7 @@ export const loadLeaderboardEntityDetails = async (
     }
 
     return {
+      source: result.source === 'network' ? { kind: 'public' } : { kind: 'cache', lastSuccessAt: null },
       card: mapPublicDataCardRowToDetailsCard(result.card, {
         id: entity.entityId,
         name: entity.displayName,
@@ -87,18 +92,26 @@ export const loadLeaderboardEntityDetails = async (
       likeCount: 0,
       favoriteCount: 0,
     },
+    source: { kind: 'preset' },
     metaCardId: null,
     pendingNotice,
   };
 };
 
-export function LeaderboardEntityDetailsModal(props: {
+type LeaderboardEntityDetailsModalProps = {
   isOpen: boolean;
   onClose: () => void;
   entity: LeaderboardEntityDetailsTarget | null;
-}) {
+};
+
+export function LeaderboardEntityDetailsModal(props: LeaderboardEntityDetailsModalProps) {
+  return props.isOpen && props.entity ? <LeaderboardEntityDetailsScope key={`${props.entity.entityType}:${props.entity.entityId}`} {...props} /> : null;
+}
+
+function LeaderboardEntityDetailsScope(props: LeaderboardEntityDetailsModalProps) {
   const { isOpen, onClose, entity } = props;
   const [detailsCard, setDetailsCard] = useState<ComponentProps<typeof DataCardDetailsModal>['card'] | null>(null);
+  const [detailsSource, setDetailsSource] = useState<CardDetailsSource>({ kind: 'public' });
   const [detailsMetaCardId, setDetailsMetaCardId] = useState<string | null | undefined>(undefined);
   const [detailsPendingNotice, setDetailsPendingNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -136,6 +149,7 @@ export function LeaderboardEntityDetailsModal(props: {
 
         if (controller.signal.aborted || requestId !== requestIdRef.current) return;
         setDetailsCard(entry.card);
+        setDetailsSource(entry.source);
         setDetailsMetaCardId(entry.metaCardId);
         setDetailsPendingNotice(entry.pendingNotice);
       } catch (err) {
@@ -154,18 +168,7 @@ export function LeaderboardEntityDetailsModal(props: {
 
   if (isLoading || !detailsCard) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-        <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-base font-semibold text-gray-900">{modalTitle}</div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md px-2 py-1 text-sm text-gray-600 hover:bg-gray-100"
-            >
-              关闭
-            </button>
-          </div>
+      <BaseModal isOpen onClose={onClose} title={modalTitle} maxWidthClassName="max-w-md">
           {detailsPendingNotice ? (
             <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {detailsPendingNotice}
@@ -187,13 +190,13 @@ export function LeaderboardEntityDetailsModal(props: {
               '正在加载角色详情...'
             )}
           </div>
-        </div>
-      </div>
+      </BaseModal>
     );
   }
 
   return (
     <DataCardDetailsModal
+      source={detailsSource}
       isOpen
       onClose={onClose}
       card={detailsCard}
