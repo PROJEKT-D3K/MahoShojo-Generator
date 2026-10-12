@@ -4,12 +4,13 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GenerationRankingParticipant, GenerationRankingQueueResult } from '@mahoshojo/contracts/arena-generation-ranking';
 
 import { CombatantList } from '@/components/arena/components/CombatantList';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 import type { CombatantData } from '@/components/arena/types';
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const dataCombatant = (filename: string, codename: string, teamId?: number): CombatantData => ({
   type: 'magical-girl',
@@ -74,6 +75,58 @@ afterEach(async () => {
 });
 
 describe('shared Arena roster section via solo adapter', () => {
+  const seedMeta = (id: string, rating: number) => queryClient.setQueryData(['arenaDataCardMeta', id], {
+    success: true, metrics: { techScore: 77, techLevel: 'A' },
+    ratings: { strict: { queue: 'strict', rating, games: 4, wins: 2, losses: 1, draws: 1, tier: '无牌' }, free: null },
+  });
+  const queue = (patch: Partial<GenerationRankingQueueResult> = {}): GenerationRankingQueueResult => ({
+    eligible: false, ineligibleReasons: ['need-login'], eventStatus: 'applied', skipReason: null,
+    rating: null, games: null, tier: null, delta: null, rank: null, total: null, rankDelta: null, ...patch,
+  });
+  const participant = (entityId: string, strict: GenerationRankingQueueResult): GenerationRankingParticipant => ({
+    displayName: '服务器旧名称', entityType: 'data_card', entityId, entityKey: `data_card:${entityId}`,
+    dataCardId: entityId, presetId: null, techScore: null, techLevel: null,
+    queues: { strict, free: queue({ rating: 0, delta: 0 }) },
+  });
+
+  it('keeps existing metadata ratings without a settlement suffix when no result exists', () => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    seedMeta('alpha', 1210);
+    useBattleStore.setState({ combatants: [{ ...dataCombatant('alpha.json', '阿尔法'), sourceDataCardId: 'alpha' }] });
+    renderList();
+    const row = container.querySelector('.group')!;
+    expect(row.textContent).toContain('严格：1210');
+    expect(row.textContent).toContain('自由：-');
+    expect(row.textContent).toContain('技术值：77');
+    expect(row.textContent).not.toMatch(/已计分|未计分|结算中|暂无结算记录|不符合计分资格/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('uses shared settlement rows while preserving entity matching, metadata fallback, badges and prediction', () => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    seedMeta('alpha', 1210); seedMeta('beta', 1300);
+    queryClient.setQueryData(['arenaGenerationRanking', 'generation-test'], {
+      success: true, generationId: 'generation-test', state: 'ready', snapshot: { status: 'completed', combatantCount: 2 },
+      participants: [participant('beta', queue({ rating: 1250, delta: -5 })), participant('alpha', queue())],
+    });
+    useBattleStore.setState({ lastGenerationId: 'generation-test', combatants: [
+      { ...dataCombatant('alpha.json', '阿尔法'), sourceDataCardId: 'alpha' },
+      { ...dataCombatant('beta.json', '贝塔'), sourceDataCardId: 'beta' },
+    ] });
+    renderList();
+    const rows = [...container.querySelectorAll('.group')];
+    const alpha = rows.find(row => row.textContent?.includes('阿尔法'))!;
+    const beta = rows.find(row => row.textContent?.includes('贝塔'))!;
+    expect(alpha.textContent).toContain('严格：1210（已计分；本局变化未返回）');
+    expect(beta.textContent).toContain('严格：1250（已计分；本局变化：Δ-5）');
+    expect(alpha.textContent).toContain('自由：0（已计分；本局变化：Δ+0）');
+    expect(alpha.textContent).toContain('技术值：77');
+    expect(alpha.textContent).toContain('无牌');
+    expect(alpha.querySelector('[title="预计胜率（Elo · 严格）：44%（1210 vs 1250）"]')).not.toBeNull();
+    expect(alpha.textContent).not.toContain('需登录');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('渲染 roster 行与计数，并支持全局重排', () => {
     useBattleStore.setState({
       combatants: [dataCombatant('alpha.json', '阿尔法'), dataCombatant('beta.json', '贝塔')],
@@ -89,7 +142,7 @@ describe('shared Arena roster section via solo adapter', () => {
     if (!moveDown) throw new Error('move button not found');
     act(() => moveDown.click());
 
-    expect(useBattleStore.getState().combatants.map((item) => 'filename' in item ? item.filename : item.id))
+    expect(useBattleStore.getState().combatants.map((item) => item.filename))
       .toEqual(['beta.json', 'alpha.json']);
   });
 
@@ -178,7 +231,8 @@ describe('shared Arena roster section via solo adapter', () => {
     if (!guidance) throw new Error('guidance textarea not found');
     act(() => setValue(guidance, '优先保护同伴'));
 
-    expect(useBattleStore.getState().combatants[0]?.characterGuidance).toBe('优先保护同伴');
+    const combatant = useBattleStore.getState().combatants[0];
+    expect(combatant && 'data' in combatant ? combatant.characterGuidance : undefined).toBe('优先保护同伴');
   });
 
   it('随机占位、移除与清空列表保持单人能力', () => {

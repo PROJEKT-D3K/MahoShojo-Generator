@@ -2,6 +2,7 @@
 /** Real router/shared DOM/session/Hosted adapter/C0/bridge → synthetic IPC → loopback HTTP.
  * Not Rust, real Tauri, OS credential, production account or model acceptance. */
 import { ArenaReconciliationRequestSchema } from '@mahoshojo/contracts/arena-reconciliation';
+import type { GenerationRankingParticipant, GenerationRankingQueueResult, GenerationRankingResponse } from '@mahoshojo/contracts/arena-generation-ranking';
 import { ARENA_COMPANION_PROTOCOL_VERSION, ARENA_COMPANION_PROTOCOL_HEADER, ArenaCompanionEnvelopeSchema, type ArenaCompanionEnvelope } from '@mahoshojo/contracts/arena-companion';
 import { DesktopArenaHostedJsonCreateRequestSchema, DesktopArenaHostedJsonChannelEventSchema, DesktopArenaHostedAnyRecoveryPointerSchema, type DesktopArenaHostedJsonCreateRequest } from '@mahoshojo/contracts/desktop-arena-hosted-json';
 import { act, StrictMode } from 'react';
@@ -238,8 +239,61 @@ describe('Desktop Hosted real-route loopback journey', () => {
     rankingFeedback = value; configure(); saveDraft(draft('daily', 'markdown'), 'battle'); await mount(); await restoreAndSelectStream();
     await click('生成战报'); await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     expect(container.querySelector('[aria-label="本次排位结算反馈"]')?.textContent).toContain(text);
+    expect(container.querySelector('[aria-label="本次参战者排位结算"]')).toBeNull();
+    if (value && 'state' in value && value.state === 'ready') expect(container.textContent).toContain('服务器未返回参战者结算明细');
     expect(streamRequests).toHaveLength(1); expect(roleRequests).toHaveLength(0); expect(docs.size).toBe(0);
   });
+
+  it.each(['battle', 'arena'] as const)('/%s renders frozen ready participants after editing and removing draft combatants', async product => {
+    const queue = (patch: Partial<GenerationRankingQueueResult> = {}): GenerationRankingQueueResult => ({
+      eligible: false, ineligibleReasons: ['need-login'], eventStatus: 'applied', skipReason: null,
+      rating: 1012, games: 1, tier: null, delta: null, rank: null, total: null, rankDelta: null, ...patch,
+    });
+    const participant = (displayName: string, entityKey: string | null, strict: GenerationRankingQueueResult): GenerationRankingParticipant => ({
+      displayName, entityType: 'unknown', entityId: null, entityKey, dataCardId: null, presetId: null, techScore: null, techLevel: null,
+      queues: { strict, free: queue({ rating: null, eventStatus: 'missing', ineligibleReasons: ['free-disabled'] }) },
+    });
+    const feedback: GenerationRankingResponse = {
+      success: true, generationId, state: 'ready', snapshot: { status: 'completed', combatantCount: 4 },
+      participants: [
+        participant('<img src="ranking-test">', null, queue()),
+        participant('<img src="ranking-test">', null, queue({ delta: 0 })),
+        participant(' ', 'duplicate', queue({ eventStatus: 'failed', skipReason: '__proto__' })),
+        participant('冻结乙', 'duplicate', queue({ eventStatus: 'skipped', skipReason: 'winner-empty' })),
+      ],
+    };
+    const consoleError = vi.spyOn(console, 'error');
+    rankingFeedback = feedback; saveDraft(draft(), product); await mount(product); await restoreAndSelectStream();
+    await click('生成战报'); await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
+    const feedbackList = () => container.querySelector('[aria-label="本次参战者排位结算"]')!;
+    const before = feedbackList().textContent;
+    expect(feedbackList().querySelectorAll('li')).toHaveLength(4);
+    expect(before).toContain('已计分；本局变化未返回'); expect(before).toContain('本局变化：Δ+0');
+    expect(before).toContain('参战者 3'); expect(before).toContain('结算失败：__proto__');
+    expect(before).toContain('未计分：战报未给出胜者'); expect(before).toContain('未开启自由排位；暂无结算记录');
+    expect(feedbackList().querySelector('img, script, [role="status"], [aria-live]')).toBeNull();
+    const requestsBefore = httpRequests.length;
+    await openSection('已选角色 / 分队');
+    const row = container.querySelector('[aria-label="移除 乙"]')!.closest('.group')!;
+    await click('行动', row);
+    const field = row.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, '下一局改变行动');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="移除 甲"]')!.click());
+    await settle();
+    expect(feedbackList().textContent).toBe(before);
+    const exported = await exportResult();
+    expect(exported.draft.combatants).toHaveLength(1);
+    expect(exported.draft.combatants[0].characterGuidance).toBe('下一局改变行动');
+    expect(exported.result.hosted.ranking).toEqual(feedback);
+    expect(httpRequests).toHaveLength(requestsBefore); expect(streamRequests).toHaveLength(1);
+    expect(roleRequests).toHaveLength(0); expect(controlRequests).toHaveLength(0); expect(docs.size).toBe(0);
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'save_local_card')).toBe(false);
+    expect(consoleError.mock.calls.some(args => args.some(value => typeof value === 'string' && /same key|unique.*key/i.test(value)))).toBe(false);
+  });
+
   it.each(matrix)('/$product $mode $format $delivery account=$account funding=$funding uses controls → create → explicit save → reopen', async ({ product, mode, format, account, funding, delivery }) => {
     accountId = account ? 42 : null; configure(funding); const original = draft(mode, format); saveDraft(original, product); const router = await mount(product); if (delivery === 'stream') await restoreAndSelectStream(); else { await click('恢复草稿'); await openSection('⚡ 生成方式'); expect(button('非流式')!.getAttribute('aria-pressed')).toBe('true'); }
     await openSection(product === 'arena' ? '⚙️ 读写设置' : '🧠 故事');

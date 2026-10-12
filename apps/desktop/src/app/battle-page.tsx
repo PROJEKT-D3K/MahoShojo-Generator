@@ -11,7 +11,7 @@ import { normalizeCustomStoryLength } from '@mahoshojo/domain/story-length';
 import { parseCombatantsFromText } from '@mahoshojo/domain/arena-file-parser';
 import { buildArenaMaterialState, type ArenaMaterialState } from '@mahoshojo/domain/arena-materials';
 import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-operations';
-import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
+import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
 import { ArenaReportFormatSelectorView, BattleReportCard, StreamingBattleReportCard, CombatantUpdatesPresentation } from '@mahoshojo/ui-web/arena-report';
 import { CardLibraryModal, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { NarrativeHistoryPicker } from '@mahoshojo/ui-web/narrative-history';
@@ -319,6 +319,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const reasoning = state.hosted?.delivery === 'non-stream' && state.report?.aiReasoning ? state.report.aiReasoning : state.reasoning ? { status: state.phase === 'generating' ? 'thinking' as const : 'done' as const, source: 'provider' as const, text: state.reasoning } : null;
   const download = (filename: string, text: string, mimeType: string) => { try { downloadTextFile(filename, text, mimeType); } catch (cause) { reportError(cause); } };
   const exportAll = () => download('arena-complete.json', session.exportDocument(), 'application/json');
+  const ranking = state.hosted?.ranking;
   const hostedSummary = state.hosted ? (({ companion: _companion, ...summary }) => summary)(state.hosted) : null;
   const result = (state.rawText || state.reasoning || state.report) ? <section ref={resultRef} className="mt-6 space-y-4" aria-label="战报结果">
     {state.resultFormat === 'web' ? <><DesktopArenaWebResult key={`${scope}:${state.generation?.intent.requestId ?? 'restored'}`} state={state} owner={packageOwner} disabled={disabled} />{reasoning ? <AiReasoningPanel reasoning={reasoning} /> : null}</> : state.report && state.activeGenerationMode !== 'stream' ? <BattleReportCard report={{ ...state.report, aiReasoning: reasoning }} mode={state.report.mode} ports={{ mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: openContent, downloadMarkdown: (text: string, filename: string) => download(filename, text, 'text/markdown;charset=utf-8') }} />
@@ -330,7 +331,18 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       <p role="status" aria-label="本次排位结算反馈">{!state.hosted.ranking ? '本次排位结算结果尚未取得，不能据此判断是否计分。'
         : !state.hosted.ranking.success ? '本次排位结算结果读取失败，是否已计分尚未确认。'
         : state.hosted.ranking.state === 'pending' ? '服务器返回本次排位仍待结算；当前未继续查询。'
-        : '已取得本次服务器排位结算反馈；具体队列状态可在“服务器公开元数据与终态”中查看。'}</p>
+        : '已取得本次服务器排位结算反馈。'}</p>
+      {ranking?.success && ranking.state === 'ready' ? (
+        ranking.participants.length ? <ul className="space-y-2" aria-label="本次参战者排位结算">
+          {ranking.participants.map((participant, index) => <li key={`${ranking.generationId}:${index}`}>
+            <p className="font-semibold break-words">{participant.displayName.trim() || `参战者 ${index + 1}`}</p>
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              <ArenaRankingQueueFeedback queue="strict" result={participant.queues.strict} />
+              <ArenaRankingQueueFeedback queue="free" result={participant.queues.free} />
+            </div>
+          </li>)}
+        </ul> : <p>服务器未返回参战者结算明细，不能据此判断是否计分。</p>
+      ) : null}
       {state.hosted.metadataState !== 'available' ? <p role="status">本次判定、记者等附加元数据未取得；服务器可能已经执行判定，恢复时不会在本机重掷。</p> : null}
       {state.hosted.recoveryCredentialState === 'memory-only' ? <p role="alert">匿名恢复凭据保存失败，当前任务可继续；关闭应用后可能无法恢复，请完整导出。</p> : null}
       {state.hosted.validationMessage ? <p role="status">{state.hosted.validationMessage}</p> : null}

@@ -1,3 +1,4 @@
+export { ArenaRankingQueueFeedback, type ArenaRankingQueueFeedbackProps } from './presentation/ArenaRankingQueueFeedback';
 export { ArenaRosterSection } from './features/roster/ArenaRosterSection';
 export type { ArenaRosterTeamView, ArenaRosterRowView, ArenaRosterRowExtras, ArenaRosterSectionCapabilities, ArenaRosterPlaceholderType, ArenaRosterSectionActions, ArenaRosterSectionModel } from './features/roster/roster-contract';
 export { ArenaRosterRow, ArenaRosterList, type ArenaRosterItemView, type ArenaRosterCapabilities } from './presentation/ArenaRoster';
