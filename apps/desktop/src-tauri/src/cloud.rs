@@ -151,6 +151,10 @@ const HOSTED_CONTRACT_VERSION: &str = "g25e1-v1";
 
 /// 账号会话凭据的 keyring 引用。与 `provider-key:*` 命名空间完全隔离（DESK-092）。
 const ACCOUNT_SESSION_REF: &str = "account-session:web-v1";
+// Only serializes this process's account-session writers and conditional cleanup.
+// The managed CloudState owns its epoch; independent stores must not share generations.
+// This is not a cross-process/keyring CAS and is never held across network awaits.
+static ACCOUNT_SESSION_GATE: Mutex<()> = Mutex::new(());
 
 /// hosted 流允许转发的事件名（与 fixture `hostedGenerationEventNames` 同源）。
 const HOSTED_EVENT_NAMES: &[&str] = &[
@@ -326,12 +330,80 @@ impl From<&CloudAccountRecord> for CloudAccountSummary {
     }
 }
 
-fn store_session(secrets: &dyn SecretStore, session: &StoredSession) -> Result<(), CloudError> {
+fn account_session_gate() -> Result<std::sync::MutexGuard<'static, ()>, CloudError> {
+    ACCOUNT_SESSION_GATE
+        .lock()
+        .map_err(|_| CloudError::new(CloudErrorCode::InternalError, "会话状态锁不可用"))
+}
+
+fn write_session_record(
+    _guard: &std::sync::MutexGuard<'_, ()>,
+    secrets: &dyn SecretStore,
+    session: &StoredSession,
+) -> Result<(), CloudError> {
     let value = serde_json::to_string(session)
         .map_err(|_| CloudError::new(CloudErrorCode::InternalError, "会话记录序列化失败"))?;
     secrets
         .set(ACCOUNT_SESSION_REF, &value)
         .map_err(|error| CloudError::from_secret_store(&error))
+}
+
+fn store_login_session(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+    session: &StoredSession,
+) -> Result<(), CloudError> {
+    let guard = account_session_gate()?;
+    write_session_record(&guard, secrets, session)?;
+    // Publish the new record and generation together, including same-byte relogins.
+    state.account_epoch.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
+#[cfg(test)]
+fn store_session(secrets: &dyn SecretStore, session: &StoredSession) -> Result<(), CloudError> {
+    let guard = account_session_gate()?;
+    write_session_record(&guard, secrets, session)
+}
+
+/// A stale automatic cleanup may only remove the record it actually observed.
+/// The comparison and deletion share the same gate as every in-process writer.
+fn clear_session_if_current(
+    secrets: &dyn SecretStore,
+    raw: &str,
+    epoch: Option<(&CloudState, u64)>,
+) -> Result<bool, CloudError> {
+    let _guard = account_session_gate()?;
+    if epoch.is_some_and(|(state, epoch)| state.account_epoch.load(Ordering::SeqCst) != epoch) {
+        return Ok(false);
+    }
+    let current = secrets
+        .resolve(ACCOUNT_SESSION_REF)
+        .map_err(|error| CloudError::from_secret_store(&error))?;
+    if current.as_deref() != Some(raw) {
+        return Ok(false);
+    }
+    secrets
+        .delete(ACCOUNT_SESSION_REF)
+        .map_err(|error| CloudError::from_secret_store(&error))?;
+    Ok(true)
+}
+
+fn decode_session_record(
+    secrets: &dyn SecretStore,
+    raw: &str,
+    clear_corrupt: bool,
+) -> Option<StoredSession> {
+    match serde_json::from_str::<StoredSession>(raw) {
+        Ok(session) => Some(session),
+        // Preserve corrupt-record recovery, but never delete a later valid record.
+        Err(_) => {
+            if clear_corrupt {
+                let _ = clear_session_if_current(secrets, raw, None);
+            }
+            None
+        }
+    }
 }
 
 fn load_session_record(
@@ -341,17 +413,35 @@ fn load_session_record(
     let raw = secrets
         .resolve(ACCOUNT_SESSION_REF)
         .map_err(|error| CloudError::from_secret_store(&error))?;
+    Ok(raw.and_then(|raw| decode_session_record(secrets, &raw, clear_corrupt)))
+}
+
+struct SessionSnapshot {
+    session: StoredSession,
+    raw: String,
+    epoch: u64,
+}
+
+fn load_session_snapshot(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+) -> Result<Option<SessionSnapshot>, CloudError> {
+    let (raw, epoch) = {
+        let _guard = account_session_gate()?;
+        let raw = secrets
+            .resolve(ACCOUNT_SESSION_REF)
+            .map_err(|error| CloudError::from_secret_store(&error))?;
+        (raw, state.account_epoch.load(Ordering::SeqCst))
+    };
     let Some(raw) = raw else { return Ok(None) };
-    match serde_json::from_str::<StoredSession>(&raw) {
-        Ok(session) => Ok(Some(session)),
-        // 记录损坏视为未登录而不是崩溃：损坏数据不可用，但也不该再留着误导后续判断。
-        Err(_) => {
-            if clear_corrupt {
-                let _ = secrets.delete(ACCOUNT_SESSION_REF);
-            }
-            Ok(None)
-        }
-    }
+    // Decoding/conditional corrupt cleanup runs after releasing the non-reentrant gate.
+    Ok(
+        decode_session_record(secrets, &raw, true).map(|session| SessionSnapshot {
+            session,
+            raw,
+            epoch,
+        }),
+    )
 }
 
 fn load_session(secrets: &dyn SecretStore) -> Result<Option<StoredSession>, CloudError> {
@@ -366,6 +456,7 @@ fn read_profile_session_snapshot(
 }
 
 fn clear_session(secrets: &dyn SecretStore) -> Result<(), CloudError> {
+    let _guard = account_session_gate()?;
     secrets
         .delete(ACCOUNT_SESSION_REF)
         .map_err(|error| CloudError::from_secret_store(&error))
@@ -915,8 +1006,7 @@ pub async fn cloud_login_await(
             result = exchange_grant(state, &callback.code, &flow.verifier) => result,
         }?;
 
-        store_session(secrets, &session)?;
-        state.account_epoch.fetch_add(1, Ordering::SeqCst);
+        store_login_session(state, secrets, &session)?;
         Ok(session)
     }
     .await;
@@ -984,16 +1074,17 @@ pub async fn cloud_auth_status(
     state: &CloudState,
     secrets: &dyn SecretStore,
 ) -> Result<CloudSessionStatus, CloudError> {
-    let Some(session) = load_session(secrets)? else {
+    let Some(snapshot) = load_session_snapshot(state, secrets)? else {
         return Ok(CloudSessionStatus::SignedOut);
     };
 
+    let session = &snapshot.session;
     let response = authed_request(
         &state.http,
         reqwest::Method::GET,
         &state.origin,
         GET_SESSION_PATH,
-        &session,
+        session,
     )
     .timeout(SHORT_REQUEST_TIMEOUT)
     .send()
@@ -1005,8 +1096,8 @@ pub async fn cloud_auth_status(
     };
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        // 服务端明确否认会话：本地凭据已无意义，清掉并如实报告。
-        clear_session(secrets)?;
+        // 服务端否认本次快照；仅清理仍属该快照的凭据，并如实报告。
+        clear_session_if_current(secrets, &snapshot.raw, Some((state, snapshot.epoch)))?;
         return Ok(CloudSessionStatus::Expired);
     }
     if !response.status().is_success() {
@@ -1024,7 +1115,7 @@ pub async fn cloud_auth_status(
             session_expires_at: session.session_expires_at.clone(),
         }),
         _ => {
-            clear_session(secrets)?;
+            clear_session_if_current(secrets, &snapshot.raw, Some((state, snapshot.epoch)))?;
             Ok(CloudSessionStatus::Expired)
         }
     }
@@ -1410,7 +1501,10 @@ pub async fn cloud_sign_out(
     state: &CloudState,
     secrets: &dyn SecretStore,
 ) -> Result<CloudSignOutResult, CloudError> {
-    state.account_epoch.fetch_add(1, Ordering::SeqCst);
+    {
+        let _guard = account_session_gate()?;
+        state.account_epoch.fetch_add(1, Ordering::SeqCst);
+    }
     let session = load_session(secrets)?;
     let mut revoked = false;
     if let Some(session) = session {
@@ -2952,7 +3046,8 @@ async fn dispatch_cloud_route(
         return Err(invalid_request("账号标识超出允许范围"));
     }
     // 本次请求只使用这个凭据快照；在途账号切换不能改变发送的 cookie。
-    let session = load_session(env.secrets)?;
+    let snapshot = load_session_snapshot(env.state, env.secrets)?;
+    let session = snapshot.as_ref().map(|snapshot| &snapshot.session);
     if request
         .expected_user_id
         .is_some_and(|id| session.as_ref().map(|session| session.account.user_id) != Some(id))
@@ -3054,13 +3149,19 @@ async fn dispatch_cloud_route(
 
     let status = response.status().as_u16();
     // Fenced 请求及所有创建请求的迟到 401 只报告，不能删掉切换后的会话。
-    // 不采用非原子的 compare-then-delete；旧读取/消息请求保留兼容语义。
+    // 旧读取/消息请求仍清理失效凭据，但只清理原 raw + generation。
     if route.auth == CloudRouteAuth::Required
         && status == 401
         && request.expected_user_id.is_none()
         && route.id != "data-cards.create"
     {
-        clear_session(env.secrets)?;
+        if let Some(snapshot) = &snapshot {
+            clear_session_if_current(
+                env.secrets,
+                &snapshot.raw,
+                Some((env.state, snapshot.epoch)),
+            )?;
+        }
     }
 
     // `Cache-Control` 是缓存的存储许可证据，必须在 body 流被消费前取出。
@@ -3379,9 +3480,13 @@ mod tests {
     struct MockServer {
         origin: String,
         last_exchange_body: Mutex<Option<serde_json::Value>>,
+        exchange_session_override: Mutex<Option<StoredSession>>,
         last_generate_body: Mutex<Option<serde_json::Value>>,
         last_generate_headers: Mutex<Option<String>>,
         get_session_ok: std::sync::atomic::AtomicBool,
+        get_session_override: Mutex<Option<(u16, String)>>,
+        get_session_request_seen: Mutex<Option<oneshot::Sender<()>>>,
+        get_session_reply_gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
         hosted_sse_body: Mutex<Option<String>>,
         /// `Some((status, body))` 时 readiness 路由返回覆盖响应（测门禁分支）。
         readiness_override: Mutex<Option<(u16, String)>>,
@@ -3393,6 +3498,7 @@ mod tests {
         card_response_override: Mutex<Option<(u16, String)>>,
         card_request_count: std::sync::atomic::AtomicUsize,
         card_reply_gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        card_request_seen: Mutex<Option<oneshot::Sender<()>>>,
         /// 卡库路由响应附加头（K1：注入 `Cache-Control` 存储许可证据）。
         card_extra_headers: Mutex<Vec<(String, String)>>,
         /// 最近一次 `/api/me/profile` 请求的原始 head（断言 cookie 注入）。
@@ -3412,9 +3518,13 @@ mod tests {
         let server = Arc::new(MockServer {
             origin: format!("http://127.0.0.1:{port}"),
             last_exchange_body: Mutex::new(None),
+            exchange_session_override: Mutex::new(None),
             last_generate_body: Mutex::new(None),
             last_generate_headers: Mutex::new(None),
             get_session_ok: std::sync::atomic::AtomicBool::new(true),
+            get_session_override: Mutex::new(None),
+            get_session_request_seen: Mutex::new(None),
+            get_session_reply_gate: Mutex::new(None),
             hosted_sse_body: Mutex::new(None),
             readiness_override: Mutex::new(None),
             hosted_json_response: Mutex::new(None),
@@ -3422,6 +3532,7 @@ mod tests {
             card_response_override: Mutex::new(None),
             card_request_count: std::sync::atomic::AtomicUsize::new(0),
             card_reply_gate: Mutex::new(None),
+            card_request_seen: Mutex::new(None),
             card_extra_headers: Mutex::new(Vec::new()),
             last_me_profile_head: Mutex::new(None),
             last_me_profile_body: Mutex::new(None),
@@ -3529,25 +3640,53 @@ mod tests {
                             body: r#"{"error":"invalid grant","code":"invalid-grant"}"#.to_string(),
                         };
                     }
+                    let session = self
+                        .exchange_session_override
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .unwrap_or(StoredSession {
+                            cookie: "better-auth.session_token=native.tok".into(),
+                            session_expires_at: Some("2026-10-12T00:00:00.000Z".into()),
+                            account: CloudAccountRecord {
+                                user_id: 7,
+                                username: "homura".into(),
+                                display_name: Some("homura".into()),
+                            },
+                        });
                     MockResponse {
                         status: 200,
                         headers: vec![
                             ("Content-Type".to_string(), "application/json".to_string()),
                             (
                                 "Set-Cookie".to_string(),
-                                "better-auth.session_token=native.tok; Path=/; HttpOnly"
-                                    .to_string(),
+                                format!("{}; Path=/; HttpOnly", session.cookie),
                             ),
                         ],
                         body: serde_json::json!({
                             "protocolVersion": "desktop-auth-v1",
-                            "account": {"userId": 7, "username": "homura", "displayName": "homura"},
-                            "sessionExpiresAt": "2026-10-12T00:00:00.000Z"
+                            "account": session.account,
+                            "sessionExpiresAt": session.session_expires_at
                         })
                         .to_string(),
                     }
                 }
                 GET_SESSION_PATH => {
+                    if let Some(seen) = self.get_session_request_seen.lock().unwrap().take() {
+                        let _ = seen.send(());
+                    }
+                    if let Some(wait) = self.get_session_reply_gate.lock().unwrap().take() {
+                        wait.recv_timeout(Duration::from_secs(3))
+                            .expect("release session response");
+                    }
+                    if let Some((status, body)) = self.get_session_override.lock().unwrap().clone()
+                    {
+                        return MockResponse {
+                            status,
+                            headers: vec![("Content-Type".into(), "application/json".into())],
+                            body,
+                        };
+                    }
                     if self
                         .get_session_ok
                         .load(std::sync::atomic::Ordering::SeqCst)
@@ -3604,6 +3743,9 @@ mod tests {
                     ));
                     self.card_request_count
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(seen) = self.card_request_seen.lock().unwrap().take() {
+                        let _ = seen.send(());
+                    }
                     if let Some(wait) = self.card_reply_gate.lock().unwrap().take() {
                         wait.recv_timeout(Duration::from_secs(3))
                             .expect("release card reply");
@@ -7341,4 +7483,5 @@ mod tests {
         });
     }
     include!("cloud_profile_avatar_tests.rs");
+    include!("cloud_session_cleanup_tests.rs");
 }

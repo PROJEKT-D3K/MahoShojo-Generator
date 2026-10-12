@@ -322,6 +322,20 @@ describe('DesktopCloudSessionStore', () => {
     expect(native.calls.filter((call) => call.command === CLOUD_AUTH_STATUS_COMMAND)).toHaveLength(1);
   });
 
+  it('requestAuth waits for an already pending status read before starting login', async () => {
+    const native = createNativeStub({ state: 'signed-out' });
+    native.holdStatus();
+    const store = new DesktopCloudSessionStore({ invoke: native.invoke });
+    const status = store.refresh();
+    const auth = store.requestAuth();
+
+    expect(native.calls.filter((call) => call.command === CLOUD_AUTH_STATUS_COMMAND)).toHaveLength(1);
+    expect(native.calls.filter((call) => call.command === CLOUD_LOGIN_BEGIN_COMMAND)).toHaveLength(0);
+    native.releaseStatus();
+    await Promise.all([status, auth]);
+    expect(native.calls.filter((call) => call.command === CLOUD_LOGIN_BEGIN_COMMAND)).toHaveLength(1);
+  });
+
   it('maps a status-read failure to unreachable rather than signed-out', async () => {
     // 契约层明确「unreachable ≠ 已注销」：本地凭据仍在，投影必须保留这个区分
     // （DESK-ONLINE-012 的同一个判据，renderer 侧再守一次）。
