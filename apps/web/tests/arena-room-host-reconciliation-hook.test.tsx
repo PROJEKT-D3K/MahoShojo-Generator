@@ -17,6 +17,7 @@ import {
 } from '@/components/arena/multiplayer/useArenaRoomHostReconciliation';
 import { ArenaRoomReconciliationAbortError, ArenaRoomReconciliationTransientError } from '@/lib/arena-room/host-reconciliation';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
+import type { AuthIdentity } from '@/lib/auth-identity';
 import type {
   ArenaRoomConfigPublishResult,
   ArenaRoomController,
@@ -191,7 +192,9 @@ const controller = {
 const Harness = ({
   state,
   workspace,
+  identity,
 }: {
+  readonly identity?: AuthIdentity;
   readonly state: ArenaRoomControllerState;
   readonly workspace: ArenaRoomHostWorkspace;
 }) => {
@@ -199,6 +202,7 @@ const Harness = ({
     controller,
     controllerState: state,
     hostWorkspace: workspace,
+    identity,
     retryDelayMs: 0,
   });
   useEffect(() => {
@@ -980,4 +984,35 @@ describe('发布成功后的 latest 正文刷新', () => {
     expect(latest?.state).toMatchObject({ kind: 'synced', message: expect.stringContaining('房间配置已保存') });
     expect(workspace.compare(authorityOf(published), bundle(oldConfig())).kind).toBe('clean');
   });
+});
+
+
+it('身份围栏在物化 await 后阻止旧房间写回 BattleStore', async () => {
+  let current = true;
+  const identity = { epoch: 1, isCurrent: () => current };
+  const authority = authorityOf(currentState);
+  const workspace = {
+    settledAuthority: vi.fn(() => authority),
+    compare: vi.fn(() => ({ kind: 'clean', start: bundle(config('classic')) })),
+    startFromRoom: vi.fn(() => bundle(config('classic'))),
+    capturePublished: vi.fn(),
+    retainFor: vi.fn(),
+    clear: vi.fn(),
+  } satisfies ArenaRoomHostWorkspace;
+  mocks.buildBundle.mockResolvedValue(bundle(config('classic')));
+  let release!: () => void;
+  const write = vi.fn();
+  mocks.applyAuthority.mockImplementation(async (_config, options) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    if (!options.commitIf?.()) throw new ArenaRoomReconciliationAbortError('身份已变化');
+    write();
+  });
+  await act(async () => root.render(<Harness state={currentState} workspace={workspace} identity={identity} />));
+  let pending!: Promise<void>;
+  await act(async () => { pending = latest!.syncRoom(); await Promise.resolve(); });
+  expect(mocks.applyAuthority).toHaveBeenCalledOnce();
+  current = false;
+  await act(async () => { release(); await pending; });
+  expect(write).not.toHaveBeenCalled();
+  expect(workspace.capturePublished).not.toHaveBeenCalled();
 });

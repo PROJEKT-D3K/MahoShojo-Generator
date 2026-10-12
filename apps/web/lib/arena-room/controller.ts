@@ -28,6 +28,7 @@ import {
   type ArenaRoomClient,
 } from './client';
 import { secureRandomUUID } from '@/lib/crypto';
+import { captureAuthIdentity, subscribeAuthIdentity, type AuthIdentity } from '@/lib/auth-identity';
 import {
   areArenaRoomSharedConfigsExactlyEqual,
   areArenaRoomSharedConfigsSemanticallyEqual,
@@ -132,6 +133,7 @@ export type ArenaRoomSocket = {
 };
 
 type ArenaRoomControllerOptions = {
+  readonly identity?: AuthIdentity;
   readonly client: ArenaRoomClient;
   readonly createSocket: (url: string, protocol: string | string[]) => ArenaRoomSocket;
   readonly initialAccess?: { readonly enabled: boolean; readonly authenticated: boolean };
@@ -215,6 +217,11 @@ const READY_STATE: ArenaRoomControllerState = Object.freeze({
   managementOperation: null,
   managementResultUnknown: false,
   generation: EMPTY_GENERATION_VIEW,
+});
+
+const UNAUTHENTICATED_STATE: ArenaRoomControllerState = Object.freeze({
+  ...READY_STATE,
+  phase: 'unauthenticated',
 });
 
 const phaseForAccess = (access: { enabled: boolean; authenticated: boolean }) => (
@@ -505,6 +512,7 @@ const reduceGenerationControl = (
 export const createArenaRoomController = (
   options: ArenaRoomControllerOptions,
 ): ArenaRoomController => {
+  const identity = options.identity ?? options.client.identity ?? captureAuthIdentity();
   const maxReconnectAttempts = options.maxReconnectAttempts ?? 8;
   if (!Number.isSafeInteger(maxReconnectAttempts) || maxReconnectAttempts < 1) {
     throw new Error('maxReconnectAttempts 必须是正安全整数');
@@ -556,6 +564,8 @@ export const createArenaRoomController = (
   let managementMutationPending = false;
   let unknownManagementMutation: UnknownManagementMutation | null = null;
   let disposed = false;
+  let identityInvalidated = false;
+  let unsubscribeIdentity: (() => void) | null = null;
   let unresolvedCreateResult = false;
   let unresolvedCreateNotice: string | null = null;
   let pendingCreateRequest: ArenaRoomCreateRequest | null = null;
@@ -564,8 +574,19 @@ export const createArenaRoomController = (
   const generationRecoveries = new Map<string, GenerationRecoveryEntry>();
   const listeners = new Set<() => void>();
 
+  const isActive = (): boolean => {
+    if (disposed || identityInvalidated) return false;
+    // 只在订阅/操作边界激活监听器，getSnapshot 保持纯读取。
+    unsubscribeIdentity ??= subscribeAuthIdentity(() => {
+      if (!identity.isCurrent()) invalidateIdentity();
+    });
+    if (identity.isCurrent()) return true;
+    invalidateIdentity();
+    return false;
+  };
+
   const publish = (patch: Partial<ArenaRoomControllerState>): void => {
-    if (disposed) return;
+    if (!isActive()) return;
     const next = { ...state, ...patch };
     if (next.phase !== 'connected' || !next.session
       || next.session.roomId !== state.session?.roomId
@@ -578,7 +599,7 @@ export const createArenaRoomController = (
   };
 
   const operationIsCurrent = (generation: number): boolean => (
-    !disposed
+    isActive()
     && generation === operationGeneration
     && access.enabled
     && access.authenticated
@@ -650,6 +671,34 @@ export const createArenaRoomController = (
     if (close) current.close(1000, 'client-disconnect');
   };
 
+  const invalidateIdentity = (): void => {
+    if (disposed || identityInvalidated) return;
+    identityInvalidated = true;
+    unsubscribeIdentity?.();
+    unsubscribeIdentity = null;
+    operationGeneration += 1;
+    proposalMutationGeneration += 1;
+    generationStartOperation += 1;
+    sessionRefreshOperation += 1;
+    advanceGenerationFence(true);
+    invalidateConfigPublish();
+    invalidateManagementMutation();
+    proposalMutationPending = false;
+    generationStartPending = false;
+    pendingGenerationStartRequest = null;
+    pendingCreateRequest = null;
+    pendingJoinRoomId = null;
+    unknownProposalMutation = null;
+    unresolvedCreateResult = false;
+    unresolvedCreateNotice = null;
+    clearReconnectTimer();
+    detachSocket(true);
+    reconnectAttempts = 0;
+    controlCursor = undefined;
+    state = UNAUTHENTICATED_STATE;
+    for (const listener of listeners) listener();
+  };
+
   const finishRoomSession = (input: {
     readonly notice: string;
     readonly phase?: ArenaRoomControllerPhase;
@@ -692,7 +741,7 @@ export const createArenaRoomController = (
   };
 
   const scheduleReconnect = (degraded: boolean): void => {
-    if (disposed || !access.enabled || !access.authenticated || !state.session) return;
+    if (!isActive() || !access.enabled || !access.authenticated || !state.session) return;
     clearReconnectTimer();
     detachSocket(true);
     if (reconnectAttempts >= maxReconnectAttempts) {
@@ -708,7 +757,7 @@ export const createArenaRoomController = (
     const generation = operationGeneration;
     reconnectTimer = setTimer(() => {
       reconnectTimer = null;
-      if (disposed || generation !== operationGeneration || !state.session) return;
+      if (!isActive() || generation !== operationGeneration || !state.session) return;
       void connectSession(state.session, true, generation);
     }, reconnectDelayMs(reconnectAttempts));
   };
@@ -741,7 +790,7 @@ export const createArenaRoomController = (
     readonly fence: number;
   }): boolean => {
     const active = state.session?.snapshot.activeGeneration;
-    return !disposed
+    return isActive()
       && generationFence === input.fence
       && state.session?.roomId === input.roomId
       && state.session.roomEpoch === input.roomEpoch
@@ -824,7 +873,7 @@ export const createArenaRoomController = (
   ): Promise<void> | null => {
     const current = state.session;
     const mirror = current?.snapshot.activeGeneration;
-    if (!current || !mirror || disposed) return null;
+    if (!current || !mirror || !isActive()) return null;
     const key = recoveryKeyFor(current.roomId, current.roomEpoch, mirror);
     const existing = generationRecoveries.get(key);
     if (existing) {
@@ -1063,7 +1112,7 @@ export const createArenaRoomController = (
       .finally(() => {
         if (generationRecoveries.get(key) !== entry) return;
         generationRecoveries.delete(key);
-        if (entry.rerunAfterFlight && !disposed) void requestGenerationRecovery('terminal');
+        if (entry.rerunAfterFlight && isActive()) void requestGenerationRecovery('terminal');
       });
     generationRecoveries.set(key, entry);
     return entry.promise;
@@ -1367,6 +1416,7 @@ export const createArenaRoomController = (
   };
 
   const handleMessage = (raw: unknown): void => {
+    if (!isActive()) return;
     let message: RoomServerTransportMessage;
     try {
       if (typeof raw !== 'string' && !(raw instanceof Uint8Array)) {
@@ -1408,7 +1458,7 @@ export const createArenaRoomController = (
     reconnecting: boolean,
     generation: number,
   ): Promise<void> {
-    if (disposed || generation !== operationGeneration) return;
+    if (!isActive() || generation !== operationGeneration) return;
     publish({
       session,
       phase: reconnecting ? 'reconnecting' : 'connecting',
@@ -1428,7 +1478,7 @@ export const createArenaRoomController = (
       const issued = await options.client.issueTicket(session.roomId, {
         ...(reconnect && Object.keys(reconnect).length > 0 ? { reconnect } : {}),
       });
-      if (disposed || generation !== operationGeneration) return;
+      if (!isActive() || generation !== operationGeneration) return;
       const current = options.createSocket(
         options.client.buildWebSocketUrl(issued),
         [ARENA_ROOM_PRESENCE_WEBSOCKET_PROTOCOL, issued.websocket.protocol],
@@ -1436,19 +1486,19 @@ export const createArenaRoomController = (
       detachSocket(true);
       socket = current;
       current.onopen = () => {
-        if (socket !== current || disposed) return;
+        if (socket !== current || !isActive()) return;
         publish({ phase: 'connected', notice: null, error: null });
       };
       current.onmessage = (event) => {
-        if (socket === current && !disposed) handleMessage(event.data);
+        if (socket === current && isActive()) handleMessage(event.data);
       };
       current.onerror = () => {
-        if (socket === current && !disposed) {
+        if (socket === current && isActive()) {
           publish({ presence: null, notice: '房间运行时暂不可用，正在重试' });
         }
       };
       current.onclose = (event) => {
-        if (socket !== current || disposed) return;
+        if (socket !== current || !isActive()) return;
         socket = null;
         if (event.code === 1000 && event.reason === 'room-closed') {
           finishRoomSession({
@@ -1467,7 +1517,7 @@ export const createArenaRoomController = (
         scheduleReconnect(event.code === 1008 && event.reason !== 'room-epoch-stale');
       };
     } catch {
-      if (disposed || generation !== operationGeneration) return;
+      if (!isActive() || generation !== operationGeneration) return;
       scheduleReconnect(true);
     }
   }
@@ -1504,6 +1554,7 @@ export const createArenaRoomController = (
     current: ArenaRoomSessionResponse,
     generation: number,
   ): Promise<void> => {
+    if (!operationIsCurrent(generation)) return;
     clearReconnectTimer();
     detachSocket(true);
     publish({
@@ -1516,7 +1567,7 @@ export const createArenaRoomController = (
       const hadConfigUnknown = state.configPublishResultUnknown;
       const authoritative = await options.client.getSession(current.roomId);
       if (
-        disposed
+        !isActive()
         || generation !== operationGeneration
         || authoritative.roomId !== current.roomId
         || authoritative.self.userId !== current.self.userId
@@ -1564,7 +1615,7 @@ export const createArenaRoomController = (
       if (authoritative.snapshot.activeGeneration) void requestGenerationRecovery('baseline');
       await connectSession(authoritative, true, generation);
     } catch {
-      if (disposed || generation !== operationGeneration) return;
+      if (!isActive() || generation !== operationGeneration) return;
       scheduleReconnect(true);
     }
   };
@@ -1613,7 +1664,7 @@ export const createArenaRoomController = (
   ): Promise<void> => {
     const current = state.session;
     if (
-      disposed
+      !isActive()
       || !access.enabled
       || !access.authenticated
       || !current
@@ -1637,7 +1688,7 @@ export const createArenaRoomController = (
     try {
       const response = await execute(current);
       if (
-        disposed
+        !isActive()
         || generation !== proposalMutationGeneration
         || state.session?.roomId !== current.roomId
         || state.session.roomEpoch !== current.roomEpoch
@@ -1666,7 +1717,7 @@ export const createArenaRoomController = (
       unknownProposalMutation = null;
     } catch (error) {
       if (
-        disposed
+        !isActive()
         || generation !== proposalMutationGeneration
         || state.session?.roomId !== current.roomId
         || state.session.roomEpoch !== current.roomEpoch
@@ -1705,7 +1756,7 @@ export const createArenaRoomController = (
       publish({ notice: null, error: message });
       return { kind: 'rejected', error };
     };
-    if (disposed || !access.enabled || !access.authenticated) return superseded();
+    if (!isActive() || !access.enabled || !access.authenticated) return superseded();
     const parsed = ArenaRoomPublishConfigRequestSchema.safeParse(input);
     if (!parsed.success) return reject('ROOM_REQUEST_INVALID', '房间配置请求无效');
     const request = parsed.data;
@@ -1748,7 +1799,7 @@ export const createArenaRoomController = (
       const authoritative = await options.client.publishConfig(current.roomId, request);
       const latest = state.session;
       if (
-        disposed
+        !isActive()
         || operation !== configPublishOperation
         || !latest
         || latest.roomId !== captured.roomId
@@ -1812,7 +1863,7 @@ export const createArenaRoomController = (
       return { kind: 'confirmed', session: confirmed };
     } catch (cause) {
       if (
-        disposed
+        !isActive()
         || operation !== configPublishOperation
         || state.session?.roomId !== captured.roomId
         || state.session.roomEpoch !== captured.roomEpoch
@@ -1845,7 +1896,7 @@ export const createArenaRoomController = (
     const current = state.session;
     const target = current?.snapshot.members.find((member) => member.userId === targetUserId);
     if (
-      disposed
+      !isActive()
       || !access.enabled
       || !access.authenticated
       || !current
@@ -1881,7 +1932,7 @@ export const createArenaRoomController = (
         captured.roomEpoch,
       );
       if (
-        disposed
+        !isActive()
         || operation !== managementMutationGeneration
         || state.session?.roomId !== captured.roomId
         || state.session.roomEpoch !== captured.roomEpoch
@@ -1900,7 +1951,7 @@ export const createArenaRoomController = (
       });
     } catch (error) {
       if (
-        disposed
+        !isActive()
         || operation !== managementMutationGeneration
         || state.session?.roomId !== captured.roomId
         || state.session.roomEpoch !== captured.roomEpoch
@@ -1933,7 +1984,7 @@ export const createArenaRoomController = (
     const current = state.session;
     const active = current?.snapshot.activeGeneration;
     if (
-      disposed
+      !isActive()
       || !access.enabled
       || !access.authenticated
       || !current
@@ -1968,7 +2019,7 @@ export const createArenaRoomController = (
         captured.roomEpoch,
       );
       if (
-        disposed
+        !isActive()
         || operation !== managementMutationGeneration
         || state.session?.roomId !== captured.roomId
         || state.session.roomEpoch !== captured.roomEpoch
@@ -1989,7 +2040,7 @@ export const createArenaRoomController = (
       }
     } catch (error) {
       if (
-        disposed
+        !isActive()
         || operation !== managementMutationGeneration
         || state.session?.roomId !== captured.roomId
         || state.session.roomEpoch !== captured.roomEpoch
@@ -2134,7 +2185,7 @@ export const createArenaRoomController = (
    */
   const reconcileUnknownLeave = async (operation: number): Promise<void> => {
     const current = state.session;
-    if (!current || disposed) return;
+    if (!current || !isActive()) return;
     publish({ notice: '正在重放退出请求以确认结果…', error: null });
     const exitNoticeFor = (error: ArenaRoomClientError): string => (
       error.code === 'ROOM_NOT_FOUND'
@@ -2149,7 +2200,7 @@ export const createArenaRoomController = (
       try {
         await options.client.leave(current.roomId, expectedEpoch);
       } catch (replayError) {
-        if (disposed || operation !== managementMutationGeneration) return;
+        if (!isActive() || operation !== managementMutationGeneration) return;
         if (
           replayError instanceof ArenaRoomClientError
           && isExitConfirmed(replayError)
@@ -2176,7 +2227,7 @@ export const createArenaRoomController = (
         try {
           authoritative = await options.client.getSession(current.roomId);
         } catch (sessionError) {
-          if (disposed || operation !== managementMutationGeneration) return;
+          if (!isActive() || operation !== managementMutationGeneration) return;
           if (
             sessionError instanceof ArenaRoomClientError
             && isExitConfirmed(sessionError)
@@ -2193,7 +2244,7 @@ export const createArenaRoomController = (
           return;
         }
         if (
-          disposed
+          !isActive()
           || operation !== managementMutationGeneration
           || authoritative.roomId !== current.roomId
           || authoritative.self.userId !== current.self.userId
@@ -2205,7 +2256,7 @@ export const createArenaRoomController = (
         expectedEpoch = authoritative.roomEpoch;
         continue;
       }
-      if (disposed || operation !== managementMutationGeneration) return;
+      if (!isActive() || operation !== managementMutationGeneration) return;
       finishRoomSession({ notice: '已离开房间' });
       return;
     }
@@ -2214,7 +2265,7 @@ export const createArenaRoomController = (
   const reconcileUnknownManagementMutation = async (): Promise<void> => {
     const current = state.session;
     const intent = unknownManagementMutation;
-    if (!current || !intent || disposed) return;
+    if (!current || !intent || !isActive()) return;
     const operation = managementMutationGeneration;
     const reconnectGeneration = operationGeneration;
     publish({ notice: '正在核对服务器状态并确认上次操作…', error: null });
@@ -2224,7 +2275,7 @@ export const createArenaRoomController = (
       if (intent.operation === 'kick') {
         const authoritative = await options.client.getSession(current.roomId);
         if (
-          disposed
+          !isActive()
           || operation !== managementMutationGeneration
           || state.session?.roomId !== current.roomId
           || authoritative.roomId !== current.roomId
@@ -2263,7 +2314,7 @@ export const createArenaRoomController = (
           authoritative.roomEpoch,
         );
         if (
-          disposed
+          !isActive()
           || operation !== managementMutationGeneration
           || state.session?.roomId !== current.roomId
           || state.session.roomEpoch !== authoritative.roomEpoch
@@ -2296,7 +2347,7 @@ export const createArenaRoomController = (
       if (intent.operation === 'close') {
         const authoritative = await options.client.getSession(current.roomId);
         if (
-          disposed
+          !isActive()
           || operation !== managementMutationGeneration
           || authoritative.roomId !== current.roomId
           || authoritative.self.userId !== current.self.userId
@@ -2315,7 +2366,7 @@ export const createArenaRoomController = (
         resubmitted = true;
         await options.client.close(current.roomId, authoritative.roomEpoch);
         if (
-          disposed
+          !isActive()
           || operation !== managementMutationGeneration
           || state.session?.roomId !== current.roomId
           || state.session.roomEpoch !== authoritative.roomEpoch
@@ -2331,7 +2382,7 @@ export const createArenaRoomController = (
         intent.generationId,
       );
       if (
-        disposed
+        !isActive()
         || operation !== managementMutationGeneration
         || state.session?.roomId !== current.roomId
         || state.session.roomEpoch !== current.roomEpoch
@@ -2341,7 +2392,7 @@ export const createArenaRoomController = (
         // 让房主基于新实例重新执行（或等待生成权威终态自然出现）。
         const rebased = await options.client.getSession(current.roomId);
         if (
-          disposed
+          !isActive()
           || operation !== managementMutationGeneration
           || rebased.roomId !== current.roomId
           || rebased.self.userId !== current.self.userId
@@ -2381,7 +2432,7 @@ export const createArenaRoomController = (
         });
       }
     } catch (error) {
-      if (disposed || operation !== managementMutationGeneration) return;
+      if (!isActive() || operation !== managementMutationGeneration) return;
       if (
         intent.operation !== 'cancel-generation'
         && error instanceof ArenaRoomClientError
@@ -2448,7 +2499,7 @@ export const createArenaRoomController = (
       )
     );
     if (
-      disposed
+      !isActive()
       || !access.enabled
       || !access.authenticated
       || !current
@@ -2481,7 +2532,7 @@ export const createArenaRoomController = (
     try {
       const view = await options.client.startGeneration(current.roomId, effectiveRequest);
       if (
-        disposed
+        !isActive()
         || operation !== generationStartOperation
         || state.session?.roomId !== expectedRoomId
         || state.session.roomEpoch !== expectedRoomEpoch
@@ -2496,7 +2547,7 @@ export const createArenaRoomController = (
       publish({ notice: '多人生成已开始', error: null });
     } catch (error) {
       if (
-        disposed
+        !isActive()
         || operation !== generationStartOperation
         || state.session?.roomId !== expectedRoomId
         || state.session.roomEpoch !== expectedRoomEpoch
@@ -2532,14 +2583,18 @@ export const createArenaRoomController = (
   };
 
   return Object.freeze({
-    getSnapshot: () => state,
+    getSnapshot: () => (
+      disposed || identityInvalidated || identity.isCurrent() ? state : UNAUTHENTICATED_STATE
+    ),
 
     subscribe(listener) {
+      isActive();
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
 
     setAccess(nextAccess) {
+      if (!isActive()) return;
       if (
         access.enabled === nextAccess.enabled
         && access.authenticated === nextAccess.authenticated
@@ -2567,7 +2622,7 @@ export const createArenaRoomController = (
     },
 
     async discover() {
-      if (disposed || !access.enabled || !access.authenticated) return;
+      if (!isActive() || !access.enabled || !access.authenticated) return;
       operationGeneration += 1;
       const generation = operationGeneration;
       publish({
@@ -2597,7 +2652,7 @@ export const createArenaRoomController = (
     },
 
     async discoverMore() {
-      if (disposed || !access.enabled || !access.authenticated) return;
+      if (!isActive() || !access.enabled || !access.authenticated) return;
       const cursor = state.directoryNextCursor;
       if (!cursor || state.directoryLoadingMore || state.phase !== 'ready') return;
       operationGeneration += 1;
@@ -2624,7 +2679,7 @@ export const createArenaRoomController = (
     },
 
     async create(request) {
-      if (disposed || !access.enabled || !access.authenticated) return;
+      if (!isActive() || !access.enabled || !access.authenticated) return;
       if (unresolvedCreateResult) return;
       const requestWithId: ArenaRoomCreateRequest = {
         ...request,
@@ -2664,7 +2719,7 @@ export const createArenaRoomController = (
     },
 
     async join(roomId, displayName) {
-      if (disposed || !access.enabled || !access.authenticated) return;
+      if (!isActive() || !access.enabled || !access.authenticated) return;
       if (unresolvedCreateResult) return;
       operationGeneration += 1;
       proposalMutationGeneration += 1;
@@ -2692,6 +2747,7 @@ export const createArenaRoomController = (
         if (!operationIsCurrent(generation)) return;
         await startSession(nextSession);
       } catch (error) {
+        if (!operationIsCurrent(generation)) return;
         if (error instanceof ArenaRoomClientError && error.code === 'ROOM_RESULT_UNKNOWN') {
           try {
             const reconciled = await options.client.getSession(roomId);
@@ -2708,7 +2764,7 @@ export const createArenaRoomController = (
     },
 
     async retryUnknownOperation() {
-      if (disposed || !access.enabled || !access.authenticated || state.phase !== 'unknown') return;
+      if (!isActive() || !access.enabled || !access.authenticated || state.phase !== 'unknown') return;
       const createRequest = pendingCreateRequest;
       const joinRoomId = pendingJoinRoomId;
       if (state.unknownOperation === 'create' && createRequest !== null) {
@@ -2747,7 +2803,7 @@ export const createArenaRoomController = (
     async leave() {
       if (
         !state.session
-        || disposed
+        || !isActive()
         || managementMutationPending
         || state.managementOperation !== null
         || state.managementResultUnknown
@@ -2816,7 +2872,7 @@ export const createArenaRoomController = (
       if (
         !state.session
         || state.session.self.role !== 'host'
-        || disposed
+        || !isActive()
         || managementMutationPending
         || state.managementOperation !== null
         || state.managementResultUnknown
@@ -2932,7 +2988,7 @@ export const createArenaRoomController = (
         || !mirror
         || !recoveryCode
         || recoveryCode === GENERATION_RECOVERY_NOT_FOUND_CODE
-        || disposed
+        || !isActive()
         || !access.enabled
         || !access.authenticated
       ) return;
@@ -2944,7 +3000,7 @@ export const createArenaRoomController = (
       const latest = state.session?.snapshot.activeGeneration;
       if (
         existing !== undefined
-        && !disposed
+        && isActive()
         && state.generation.recoveryCode === recoveryCode
         && state.session?.roomId === current.roomId
         && state.session.roomEpoch === current.roomEpoch
@@ -2957,7 +3013,7 @@ export const createArenaRoomController = (
     },
 
     reconnect() {
-      if (!state.session || disposed || !access.enabled || !access.authenticated) return;
+      if (!state.session || !isActive() || !access.enabled || !access.authenticated) return;
       operationGeneration += 1;
       proposalMutationGeneration += 1;
       proposalMutationPending = false;
@@ -2974,6 +3030,7 @@ export const createArenaRoomController = (
     },
 
     reset() {
+      if (!isActive()) return;
       operationGeneration += 1;
       proposalMutationGeneration += 1;
       generationStartOperation += 1;
@@ -2997,6 +3054,8 @@ export const createArenaRoomController = (
 
     dispose() {
       if (disposed) return;
+      unsubscribeIdentity?.();
+      unsubscribeIdentity = null;
       operationGeneration += 1;
       proposalMutationGeneration += 1;
       generationStartOperation += 1;
@@ -3011,6 +3070,7 @@ export const createArenaRoomController = (
       unknownProposalMutation = null;
       clearReconnectTimer();
       detachSocket(true);
+      state = { ...READY_STATE, phase: 'closed' };
       listeners.clear();
       disposed = true;
     },

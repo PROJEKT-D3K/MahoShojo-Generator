@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
+import * as authIdentity from '@/lib/auth-identity';
 
 import {
   ArenaRoomClientError,
@@ -252,6 +254,7 @@ const createHarness = (overrides: HarnessOverrides = {}) => {
   const scheduledDelays: number[] = [];
   const controller = createArenaRoomController({
     client,
+    identity: { epoch: 0, isCurrent: () => true },
     createSocket: vi.fn((url, protocol) => {
       expect(url).toMatch(/^wss:\/\/room\.test\/ws\?ticket=ticket-/u);
       expect(protocol).toEqual(['mahoshojo.arena-room.presence.v1', 'mahoshojo.arena-room.v1']);
@@ -2721,9 +2724,10 @@ describe('Arena Room browser controller', () => {
       markdown: 'dispose 后不得写入',
     });
     await Promise.resolve();
-    expect(controller.getSnapshot().generation).toMatchObject({
-      mirror: { generationId: 'generation-2' },
-      markdown: '',
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'closed',
+      session: null,
+      generation: { mirror: null, markdown: '' },
     });
   });
 
@@ -4047,5 +4051,140 @@ describe('房间配置发布拒绝与权威恢复', () => {
     expect(sockets[0]!.onmessage).toBeNull();
     expect(client.issueTicket).toHaveBeenLastCalledWith('room-1', expect.objectContaining({ reconnect: { control: { roomEpoch: 'epoch-2', controlSeq: 0 } } }));
     controller.dispose();
+  });
+});
+
+
+describe('Arena Room identity invalidation', () => {
+  it('只读 snapshot 不持有身份订阅，真正激活后 dispose 释放监听器', () => {
+    const actualSubscribe = authIdentity.subscribeAuthIdentity;
+    const unsubscribed = vi.fn();
+    const subscribe = vi.spyOn(authIdentity, 'subscribeAuthIdentity').mockImplementation((listener) => {
+      const stop = actualSubscribe(listener);
+      return () => { unsubscribed(); stop(); };
+    });
+    let current = true;
+    const discarded = createHarness({ identity: { epoch: 1, isCurrent: () => current } });
+    discarded.controller.getSnapshot();
+    discarded.controller.getSnapshot();
+    expect(subscribe).not.toHaveBeenCalled();
+    current = false;
+    expect(discarded.controller.getSnapshot()).toMatchObject({ phase: 'unauthenticated', session: null });
+    expect(subscribe).not.toHaveBeenCalled();
+    discarded.controller.dispose();
+
+    const active = createHarness();
+    const stop = active.controller.subscribe(vi.fn());
+    active.controller.getSnapshot();
+    active.controller.setAccess({ enabled: true, authenticated: true });
+    expect(subscribe).toHaveBeenCalledOnce();
+    stop();
+    active.controller.dispose();
+    expect(unsubscribed).toHaveBeenCalledOnce();
+    subscribe.mockRestore();
+  });
+
+  it.each(['action', 'socket'] as const)('raw storage 变化后的纯 snapshot 不触发清理，随后 %s 边界安全清理', async (boundary) => {
+    const storageKey = authIdentity.AUTH_STORAGE_KEY;
+    const previousAuth = localStorage.getItem(storageKey);
+    localStorage.setItem(storageKey, 'account-a');
+    const { controller, client, sockets, queued } = createHarness({ identity: authIdentity.captureAuthIdentity() });
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    try {
+      await controller.join('room-1', '房主');
+      const socket = sockets[0]!;
+      socket.open();
+      const onmessage = socket.onmessage!;
+      listener.mockClear();
+      localStorage.setItem(storageKey, 'account-b');
+      // 不派发 storage event，也不调用 capture/observe：getter 自己返回稳定 fail-closed 投影。
+      const rejected = controller.getSnapshot();
+      expect(rejected).toMatchObject({ phase: 'unauthenticated', session: null, generation: { mirror: null } });
+      expect(controller.getSnapshot()).toBe(rejected);
+      expect(controller.getSnapshot()).toBe(rejected);
+      expect(socket.close).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
+
+      if (boundary === 'action') await controller.leave();
+      else onmessage({ data: 'old frame must not be processed' });
+      expect(client.leave).not.toHaveBeenCalled();
+      expect(client.join).toHaveBeenCalledOnce();
+      expect(client.issueTicket).toHaveBeenCalledOnce();
+      expect(socket.close).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenCalledOnce();
+      expect(queued).toHaveLength(0);
+      expect(controller.getSnapshot()).toBe(rejected);
+    } finally {
+      controller.dispose();
+      if (previousAuth === null) localStorage.removeItem(storageKey);
+      else localStorage.setItem(storageKey, previousAuth);
+    }
+  });
+
+  it('旧 controller 操作清空权威且不会用新身份退出同一房间', async () => {
+    let current = true;
+    const { controller, client, sockets } = createHarness({ identity: { epoch: 1, isCurrent: () => current } });
+    await controller.join('room-1', '房主');
+    sockets[0]!.open();
+    current = false;
+    await controller.leave();
+    expect(client.leave).not.toHaveBeenCalled();
+    expect(sockets[0]!.close).toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'unauthenticated', session: null });
+    controller.setAccess({ enabled: true, authenticated: true });
+    controller.reset();
+    await controller.join('room-1', '新身份');
+    expect(client.join).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().session).toBeNull();
+    controller.dispose();
+  });
+
+  it('join 晚响应不再申请 ticket 或打开 socket', async () => {
+    let current = true;
+    let complete!: (value: ArenaRoomSessionResponse) => void;
+    const { controller, client, sockets } = createHarness({ identity: { epoch: 1, isCurrent: () => current } });
+    vi.mocked(client.join).mockReturnValue(new Promise((resolve) => { complete = resolve; }));
+    const pending = controller.join('room-1', '房主');
+    current = false;
+    complete(session);
+    await pending;
+    expect(client.issueTicket).not.toHaveBeenCalled();
+    expect(sockets).toHaveLength(0);
+    expect(controller.getSnapshot().session).toBeNull();
+    controller.dispose();
+  });
+
+  it('ticket 晚响应与已经捕获的 socket 回调都被身份围栏拒绝', async () => {
+    let current = true;
+    const first = createHarness({ identity: { epoch: 1, isCurrent: () => current } });
+    await first.controller.join('room-1', '房主');
+    const socket = first.sockets[0]!;
+    const onopen = socket.onopen!;
+    const onmessage = socket.onmessage!;
+    const onclose = socket.onclose!;
+    const onerror = socket.onerror!;
+    current = false;
+    onopen();
+    onmessage({ data: 'invalid old frame' });
+    onerror();
+    onclose({ code: 1006, reason: 'old transport' });
+    expect(first.controller.getSnapshot().session).toBeNull();
+    expect(first.queued).toHaveLength(0);
+    expect(socket.close).toHaveBeenCalled();
+    first.controller.dispose();
+
+    current = true;
+    let complete!: (value: ReturnType<typeof ticket>) => void;
+    const second = createHarness({ identity: { epoch: 2, isCurrent: () => current } });
+    vi.mocked(second.client.issueTicket).mockReturnValue(new Promise((resolve) => { complete = resolve; }));
+    const pending = second.controller.join('room-1', '房主');
+    await Promise.resolve();
+    current = false;
+    complete(ticket('late-ticket'));
+    await pending;
+    expect(second.sockets).toHaveLength(0);
+    expect(second.controller.getSnapshot().session).toBeNull();
+    second.controller.dispose();
   });
 });

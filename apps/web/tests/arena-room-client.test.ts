@@ -8,6 +8,8 @@ import {
   areArenaRoomSharedConfigsSemanticallyEqual,
 } from '@/lib/arena-room/shared-config-equality';
 
+const currentIdentity = Object.freeze({ epoch: 0, isCurrent: () => true });
+
 const snapshot = {
   protocolVersion: 1,
   schemaVersion: 1,
@@ -153,6 +155,7 @@ describe('Arena Room browser client', () => {
   it('没有 verified bearer 时不发请求', async () => {
     const fetcher = vi.fn<typeof fetch>();
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'http://127.0.0.1:8787',
       fetch: fetcher,
       getAuthHeader: async () => null,
@@ -167,6 +170,7 @@ describe('Arena Room browser client', () => {
   it('create 只发送一次、使用 credentials omit，并严格解析 session', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(session, { status: 201 }));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'http://127.0.0.1:8787',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -196,6 +200,7 @@ describe('Arena Room browser client', () => {
       throw new TypeError('connection reset after write');
     });
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'http://127.0.0.1:8787',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -213,6 +218,7 @@ describe('Arena Room browser client', () => {
   it('create/join 的畸形成功响应也标记为结果未知', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => Response.json({ ok: true }, { status: 201 }));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'http://127.0.0.1:8787',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -234,6 +240,7 @@ describe('Arena Room browser client', () => {
       retryAfterSeconds: 1,
     }, { status: 503 }));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'http://127.0.0.1:8787',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -254,6 +261,7 @@ describe('Arena Room browser client', () => {
       outcome: 'left',
     }));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'http://127.0.0.1:8787',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -276,6 +284,7 @@ describe('Arena Room browser client', () => {
       },
     }));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -298,6 +307,7 @@ describe('Arena Room browser client', () => {
       },
     }));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: hostedDrClientRouting.primaryOrigin,
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -327,6 +337,7 @@ describe('Arena Room browser client', () => {
     };
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(response));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'http://127.0.0.1:8787',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -398,6 +409,7 @@ describe('Arena Room browser client', () => {
     for (const outcome of outcomes) {
       const fetcher = vi.fn<typeof fetch>(outcome);
       const client = createArenaRoomClient({
+      identity: currentIdentity,
         origin: 'http://127.0.0.1:8787',
         fetch: fetcher,
         getAuthHeader: async () => 'Bearer verified-key',
@@ -428,6 +440,7 @@ describe('Arena Room browser client', () => {
     };
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(published));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -454,6 +467,7 @@ describe('Arena Room browser client', () => {
     });
     const published = { ...session, snapshot: { ...snapshot, revision: 1, sharedConfig: config('v2') } };
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: vi.fn<typeof fetch>(async () => Response.json(published)),
       getAuthHeader: async () => 'Bearer verified-key',
@@ -513,6 +527,7 @@ describe('Arena Room browser client', () => {
     for (const outcome of outcomes) {
       const fetcher = vi.fn<typeof fetch>(outcome);
       const client = createArenaRoomClient({
+      identity: currentIdentity,
         origin: 'https://api.example.test',
         fetch: fetcher,
         getAuthHeader: async () => 'Bearer verified-key',
@@ -527,6 +542,7 @@ describe('Arena Room browser client', () => {
   it('generation start 只发送一次完整 transient payload，并严格使用 bearer/omit/encoded URL', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(generationView, { status: 202 }));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -575,6 +591,7 @@ describe('Arena Room browser client', () => {
     for (const outcome of outcomes) {
       const fetcher = vi.fn<typeof fetch>(outcome);
       const client = createArenaRoomClient({
+      identity: currentIdentity,
         origin: 'https://api.example.test',
         fetch: fetcher,
         getAuthHeader: async () => 'Bearer verified-key',
@@ -589,6 +606,7 @@ describe('Arena Room browser client', () => {
   it('generation view 使用纯 GET 严格解析 member-safe projection 与请求 identity', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(generationView));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -624,6 +642,7 @@ describe('Arena Room browser client', () => {
   it('generation history 对 room path 编码并严格验证 room identity', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(generationHistory));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -635,6 +654,7 @@ describe('Arena Room browser client', () => {
     );
 
     const mismatched = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: vi.fn<typeof fetch>(async () => Response.json({ ...generationHistory, roomId: 'other-room' })),
       getAuthHeader: async () => 'Bearer verified-key',
@@ -647,6 +667,7 @@ describe('Arena Room browser client', () => {
   it('generation history detail 使用显式安全视图并校验 generation identity', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(generationHistoryView));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -676,6 +697,7 @@ describe('Arena Room browser client', () => {
       .mockResolvedValueOnce(Response.json(kickedSession))
       .mockResolvedValueOnce(Response.json(generationView));
     const client = createArenaRoomClient({
+      identity: currentIdentity,
       origin: 'https://api.example.test',
       fetch: fetcher,
       getAuthHeader: async () => 'Bearer verified-key',
@@ -709,6 +731,7 @@ describe('Arena Room browser client', () => {
     for (const outcome of outcomes) {
       const fetcher = vi.fn<typeof fetch>(outcome);
       const client = createArenaRoomClient({
+      identity: currentIdentity,
         origin: 'https://api.example.test',
         fetch: fetcher,
         getAuthHeader: async () => 'Bearer verified-key',
@@ -728,12 +751,72 @@ describe('override resolve transport failure', () => {
         ? Response.json({ code: 'ROOM_UNAVAILABLE', error: '暂不可用' }, { status: 503 })
         : Response.json({ malformed: true });
     });
-    const client = createArenaRoomClient({ origin: 'http://127.0.0.1:8787', fetch: fetcher,
+    const client = createArenaRoomClient({
+      identity: currentIdentity, origin: 'http://127.0.0.1:8787', fetch: fetcher,
       getAuthHeader: async () => 'Bearer test-key' });
     const request = { expectedRoomEpoch: 'epoch-1', expectedRevision: 1, resolution: 'accept-selected' as const,
       selectedChangeIds: ['guidance-1'], overrideChangeIds: ['guidance-1'] };
     await expect(client.resolveProposal('room-1', 'proposal-1', request)).rejects.toMatchObject({ code: 'ROOM_RESULT_UNKNOWN' });
     expect(fetcher).toHaveBeenCalledOnce();
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(request);
+  });
+});
+
+
+describe('Arena Room immutable identity fence', () => {
+  it('旧 client 在入口拒绝读取新凭据', async () => {
+    const getAuthHeader = vi.fn(async () => 'Bearer account-b');
+    const fetcher = vi.fn<typeof fetch>();
+    const client = createArenaRoomClient({
+      origin: 'https://room.test', fetch: fetcher, getAuthHeader,
+      identity: { epoch: 1, isCurrent: () => false },
+    });
+    await expect(client.leave('room-1', 'epoch-1')).rejects.toMatchObject({ code: 'ROOM_AUTH_IDENTITY_CHANGED' });
+    expect(getAuthHeader).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('取得 bearer 期间身份变化时不派发请求', async () => {
+    let current = true;
+    let resolveHeader!: (value: string) => void;
+    const fetcher = vi.fn<typeof fetch>();
+    const client = createArenaRoomClient({
+      origin: 'https://room.test', fetch: fetcher,
+      identity: { epoch: 1, isCurrent: () => current },
+      getAuthHeader: () => new Promise((resolve) => { resolveHeader = resolve; }),
+    });
+    const pending = client.leave('room-1', 'epoch-1');
+    current = false;
+    resolveHeader('Bearer account-b');
+    await expect(pending).rejects.toMatchObject({ code: 'ROOM_AUTH_IDENTITY_CHANGED' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(['success', 'network', 'json'] as const)('%s 异步边界后拒绝旧身份结果', async (boundary) => {
+    let current = true;
+    let finish!: () => void;
+    const fetcher = vi.fn<typeof fetch>(() => new Promise((resolve, reject) => {
+      if (boundary === 'json') {
+        resolve({ ok: true, status: 200, json: () => new Promise((resolveJson) => {
+          finish = () => resolveJson(session);
+        }) } as Response);
+      } else {
+        finish = () => boundary === 'network'
+          ? reject(new TypeError('late network failure'))
+          : resolve(Response.json(session));
+      }
+    }));
+    const client = createArenaRoomClient({
+      origin: 'https://room.test', fetch: fetcher,
+      identity: { epoch: 1, isCurrent: () => current },
+      getAuthHeader: async () => 'Bearer account-a',
+    });
+    const pending = client.getSession('room-1');
+    await Promise.resolve();
+    await Promise.resolve();
+    current = false;
+    finish();
+    await expect(pending).rejects.toMatchObject({ code: 'ROOM_AUTH_IDENTITY_CHANGED' });
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 });

@@ -23,6 +23,7 @@ import type {
 } from '@mahoshojo/contracts/arena-room';
 
 import { createArenaRoomClient } from '@/lib/arena-room/client';
+import { getAuthIdentitySnapshot, subscribeAuthIdentity, type AuthIdentity } from '@/lib/auth-identity';
 import {
   arenaRoomHostWorkspaceAuthorityFromSession,
   createArenaRoomHostWorkspace,
@@ -70,10 +71,16 @@ export type ArenaRoomPanelUi = Readonly<{
 }>;
 
 export const useArenaRoom = (options: UseArenaRoomOptions) => {
+  const identity = useSyncExternalStore(
+    subscribeAuthIdentity,
+    getAuthIdentitySnapshot,
+    getAuthIdentitySnapshot,
+  );
   const { client, controller, hostWorkspace } = useMemo(() => {
-    const client = createArenaRoomClient({ origin: options.origin });
+    const client = createArenaRoomClient({ origin: options.origin, identity });
     const nextController = createArenaRoomController({
       client,
+      identity,
       createSocket: (url, protocol) => (
         new WebSocket(url, protocol) as unknown as ArenaRoomSocket
       ),
@@ -83,14 +90,43 @@ export const useArenaRoom = (options: UseArenaRoomOptions) => {
       controller: nextController,
       hostWorkspace: createArenaRoomHostWorkspace(),
     };
-  }, [options.origin]);
+  }, [identity, options.origin]);
   const lifecycle = useRef<LifecycleToken | null>(null);
   const proposalEditorRef = useRef<RoomProposalArenaEditorSession | null>(null);
-  const [proposalEditor, setProposalEditor] = useState<RoomProposalArenaEditorSession | null>(null);
-  const [panelUiState, setPanelUiState] = useState<{ configOpen: boolean; proposalsOpen: boolean }>({
+  const [proposalEditorState, setProposalEditorState] = useState<{
+    identity: AuthIdentity;
+    editor: RoomProposalArenaEditorSession | null;
+  }>({ identity, editor: null });
+  const setProposalEditor = useCallback((editor: RoomProposalArenaEditorSession | null) => {
+    if (identity.isCurrent()) setProposalEditorState({ identity, editor });
+  }, [identity]);
+  const proposalEditor = proposalEditorState.identity === identity && identity.isCurrent()
+    ? proposalEditorState.editor : null;
+  const [panelUiState, setPanelUiState] = useState<{ identity: AuthIdentity; configOpen: boolean; proposalsOpen: boolean }>({
+    identity,
     configOpen: false,
     proposalsOpen: false,
   });
+
+  useEffect(() => {
+    const clearRoomWorkspace = () => {
+      hostWorkspace.retainFor(null);
+      proposalEditorRef.current?.dispose();
+      proposalEditorRef.current = null;
+    };
+    const unsubscribe = subscribeAuthIdentity(() => {
+      if (!identity.isCurrent()) clearRoomWorkspace();
+    });
+    return () => {
+      unsubscribe();
+      clearRoomWorkspace();
+    };
+  }, [hostWorkspace, identity]);
+
+  useEffect(() => {
+    setProposalEditorState({ identity, editor: null });
+    setPanelUiState({ identity, configOpen: false, proposalsOpen: false });
+  }, [identity]);
 
   useEffect(() => {
     controller.setAccess({
@@ -121,13 +157,16 @@ export const useArenaRoom = (options: UseArenaRoomOptions) => {
     controller.getSnapshot,
     controller.getSnapshot,
   );
-  useArenaRoomNarrativeHistoryResultWriter(state);
+  useArenaRoomNarrativeHistoryResultWriter(state, undefined, identity);
 
   useEffect(() => {
-    hostWorkspace.retainFor(arenaRoomHostWorkspaceAuthorityFromSession(state.session));
-  }, [hostWorkspace, state.session]);
+    if (identity.isCurrent()) {
+      hostWorkspace.retainFor(arenaRoomHostWorkspaceAuthorityFromSession(state.session));
+    }
+  }, [hostWorkspace, identity, state.session]);
 
   useEffect(() => {
+    if (!identity.isCurrent()) return;
     const session = state.session;
     const editor = proposalEditorRef.current;
     if (!session || session.self.role !== 'member') {
@@ -145,7 +184,7 @@ export const useArenaRoom = (options: UseArenaRoomOptions) => {
     const next = createRoomProposalArenaEditorSession(session.snapshot);
     proposalEditorRef.current = next;
     setProposalEditor(next);
-  }, [state.session]);
+  }, [identity, setProposalEditor, state.session]);
 
   useEffect(() => () => {
     proposalEditorRef.current?.dispose();
@@ -155,6 +194,7 @@ export const useArenaRoom = (options: UseArenaRoomOptions) => {
   const proposalWorkspace = useMemo<ArenaRoomProposalWorkspace>(() => Object.freeze({
     editor: proposalEditor,
     syncFromRoom() {
+      if (!identity.isCurrent()) return;
       const session = controller.getSnapshot().session;
       if (!session || session.self.role !== 'member') return;
       proposalEditorRef.current?.dispose();
@@ -162,15 +202,17 @@ export const useArenaRoom = (options: UseArenaRoomOptions) => {
       proposalEditorRef.current = next;
       setProposalEditor(next);
     },
-  }), [controller, proposalEditor]);
+  }), [controller, identity, proposalEditor, setProposalEditor]);
 
   const generationHistory = useMemo<ArenaRoomGenerationHistoryReader>(() => {
     const captureSession = () => {
+      if (!identity.isCurrent()) throw new Error('登录身份已变化，请重新进入房间');
       const session = controller.getSnapshot().session;
       if (!session) throw new Error('当前不在多人房间中');
       return session;
     };
     const assertSameSession = (captured: ReturnType<typeof captureSession>) => {
+      if (!identity.isCurrent()) throw new Error('登录身份已变化，请重新进入房间');
       const current = controller.getSnapshot().session;
       if (
         !current
@@ -200,12 +242,13 @@ export const useArenaRoom = (options: UseArenaRoomOptions) => {
         return result;
       },
     });
-  }, [client, controller]);
+  }, [client, controller, identity]);
 
   const hostReconciliation = useArenaRoomHostReconciliation({
     controller,
     controllerState: state,
     hostWorkspace,
+    identity,
   });
 
   const activeGeneration = state.session?.snapshot.activeGeneration;
@@ -217,6 +260,7 @@ export const useArenaRoom = (options: UseArenaRoomOptions) => {
 
   const latestGenerationHistory = useArenaRoomLatestCompletedHistory({
     reader: generationHistory,
+    identity,
     sessionKey: state.session
       ? `${state.session.roomId}\n${state.session.roomEpoch}\n${state.session.self.userId}`
       : null,
@@ -224,27 +268,30 @@ export const useArenaRoom = (options: UseArenaRoomOptions) => {
     enabled: state.generation.phase === 'idle' && !state.generation.markdown,
   });
 
-  // 两个 setter 独立稳定（deps []）：作为 ArenaRoomPanelUi 的公共 API，
-  // 引用永远不变，子组件不会因 panelUi 值对象换新而获得新 setter；
-  // 幂等 bail out 同时切断 View 侧 proposalWorkspaceActive 同步 effect
-  // 与 useCallback/memo 引用链可能形成的无限 Effect 循环。
+  // setter 在同一身份内稳定；旧 UI 闭包不能控制新身份的 Room modal。
   const setPanelUiConfigOpen = useCallback((open: boolean) => {
-    setPanelUiState((current) => current.configOpen === open
-      ? current
-      : { ...current, configOpen: open });
-  }, []);
+    if (!identity.isCurrent()) return;
+    setPanelUiState((current) => current.identity !== identity
+      ? { identity, configOpen: open, proposalsOpen: false }
+      : current.configOpen === open
+        ? current
+        : { ...current, configOpen: open });
+  }, [identity]);
   const setPanelUiProposalsOpen = useCallback((open: boolean) => {
-    setPanelUiState((current) => current.proposalsOpen === open
-      ? current
-      : { ...current, proposalsOpen: open });
-  }, []);
+    if (!identity.isCurrent()) return;
+    setPanelUiState((current) => current.identity !== identity
+      ? { identity, configOpen: false, proposalsOpen: open }
+      : current.proposalsOpen === open
+        ? current
+        : { ...current, proposalsOpen: open });
+  }, [identity]);
 
   const panelUi = useMemo<ArenaRoomPanelUi>(() => Object.freeze({
-    configOpen: panelUiState.configOpen,
-    proposalsOpen: panelUiState.proposalsOpen,
+    configOpen: panelUiState.identity === identity && identity.isCurrent() && panelUiState.configOpen,
+    proposalsOpen: panelUiState.identity === identity && identity.isCurrent() && panelUiState.proposalsOpen,
     setConfigOpen: setPanelUiConfigOpen,
     setProposalsOpen: setPanelUiProposalsOpen,
-  }), [panelUiState, setPanelUiConfigOpen, setPanelUiProposalsOpen]);
+  }), [identity, panelUiState, setPanelUiConfigOpen, setPanelUiProposalsOpen]);
 
   return {
     controller,

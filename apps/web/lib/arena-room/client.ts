@@ -43,6 +43,7 @@ import {
 } from '@mahoshojo/contracts/arena-room';
 
 import { authStorage } from '@/lib/auth';
+import { captureAuthIdentity, type AuthIdentity } from '@/lib/auth-identity';
 import { areArenaRoomSharedConfigsSemanticallyEqual } from './shared-config-equality';
 
 export type ArenaRoomClientErrorCode =
@@ -65,6 +66,7 @@ export class ArenaRoomClientError extends Error {
 }
 
 export type ArenaRoomClient = {
+  readonly identity?: AuthIdentity;
   discover(query?: Partial<RoomDirectoryPageQuery>): Promise<RoomDirectoryPage>;
   create(request: ArenaRoomCreateRequest): Promise<ArenaRoomSessionResponse>;
   join(roomId: string, request: ArenaRoomJoinRequest): Promise<ArenaRoomSessionResponse>;
@@ -118,6 +120,7 @@ export type ArenaRoomClient = {
 };
 
 type ClientOptions = {
+  readonly identity?: AuthIdentity;
   readonly origin: string;
   readonly fetch?: typeof fetch;
   readonly getAuthHeader?: () => Promise<string | null>;
@@ -138,6 +141,12 @@ const parseResponse = <T>(schema: ResponseSchema<T>, value: unknown): T => {
 };
 
 export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient => {
+  const identity = options.identity ?? captureAuthIdentity();
+  const assertIdentity = (): void => {
+    if (!identity.isCurrent()) {
+      throw new ArenaRoomClientError('ROOM_AUTH_IDENTITY_CHANGED', null, '登录身份已变化，请重新进入房间');
+    }
+  };
   const fetcher = options.fetch ?? globalThis.fetch;
   const getAuthHeader = options.getAuthHeader ?? (() => authStorage.getAuthHeader());
   const base = new URL(options.origin);
@@ -160,7 +169,15 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     readonly unknownResult?: boolean;
     readonly signal?: AbortSignal;
   }): Promise<T> => {
-    const authHeader = await getAuthHeader();
+    assertIdentity();
+    let authHeader: string | null;
+    try {
+      authHeader = await getAuthHeader();
+    } catch (error) {
+      assertIdentity();
+      throw error;
+    }
+    assertIdentity();
     if (!authHeader) {
       throw new ArenaRoomClientError(
         'ROOM_AUTHENTICATION_REQUIRED',
@@ -182,6 +199,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
     } catch {
+      assertIdentity();
       throw new ArenaRoomClientError(
         input.unknownResult ? 'ROOM_RESULT_UNKNOWN' : 'ROOM_UNAVAILABLE',
         null,
@@ -191,10 +209,12 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         undefined,
       );
     }
+    assertIdentity();
     let payload: unknown = null;
     try {
       payload = await response.json();
     } catch {
+      assertIdentity();
       if (input.signal?.aborted) {
         throw new ArenaRoomClientError(
           'ROOM_UNAVAILABLE',
@@ -203,6 +223,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         );
       }
     }
+    assertIdentity();
     if (!response.ok) {
       if (input.unknownResult && response.status >= 500) {
         throw new ArenaRoomClientError(
@@ -264,7 +285,10 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
   };
 
   return Object.freeze({
+    identity,
+
     async discover(input = {}) {
+      assertIdentity();
       const query = RoomDirectoryPageQuerySchema.parse(input);
       const params = new URLSearchParams({ limit: String(query.limit) });
       if (query.cursor) params.set('cursor', query.cursor);
@@ -275,6 +299,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async create(input) {
+      assertIdentity();
       return request({
         path: ARENA_ROOM_HTTP_BASE_PATH,
         method: 'POST',
@@ -285,6 +310,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async join(roomId, input) {
+      assertIdentity();
       return request({
         path: pathFor(roomId, 'join'),
         method: 'POST',
@@ -295,6 +321,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async getSession(roomId, signal) {
+      assertIdentity();
       return request({
         path: pathFor(roomId, 'session'),
         schema: ArenaRoomSessionResponseSchema,
@@ -303,6 +330,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async issueTicket(roomId, input) {
+      assertIdentity();
       return request({
         path: pathFor(roomId, 'ticket'),
         method: 'POST',
@@ -312,6 +340,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async leave(roomId, expectedRoomEpoch) {
+      assertIdentity();
       const result = await request({
         path: pathFor(roomId, 'leave'),
         method: 'POST',
@@ -319,6 +348,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         schema: ArenaRoomLeaveResponseSchema,
         unknownResult: true,
       });
+      assertIdentity();
       if (result.roomId !== roomId || result.outcome !== 'left') {
         throw new ArenaRoomClientError(
           'ROOM_RESULT_UNKNOWN',
@@ -330,6 +360,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async close(roomId, expectedRoomEpoch) {
+      assertIdentity();
       const result = await request({
         path: pathFor(roomId, 'close'),
         method: 'POST',
@@ -337,6 +368,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         schema: ArenaRoomLeaveResponseSchema,
         unknownResult: true,
       });
+      assertIdentity();
       if (result.roomId !== roomId || result.outcome !== 'closed') {
         throw new ArenaRoomClientError(
           'ROOM_RESULT_UNKNOWN',
@@ -348,6 +380,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async kick(roomId, targetUserId, expectedRoomEpoch) {
+      assertIdentity();
       const parsed = ArenaRoomMemberKickRequestSchema.parse({ expectedRoomEpoch });
       const nextSession = await request({
         path: pathFor(roomId, `members/${encodeURIComponent(targetUserId)}/kick`),
@@ -356,6 +389,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         schema: ArenaRoomSessionResponseSchema,
         unknownResult: true,
       });
+      assertIdentity();
       const targetStillActive = nextSession.snapshot.members.some((member) => (
         member.userId === targetUserId && member.membershipState === 'active'
       ));
@@ -377,6 +411,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async submitProposal(roomId, input) {
+      assertIdentity();
       return request({
         path: pathFor(roomId, 'proposals'),
         method: 'POST',
@@ -387,6 +422,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async resolveProposal(roomId, proposalId, input) {
+      assertIdentity();
       return request({
         path: proposalPathFor(roomId, proposalId, 'resolve'),
         method: 'POST',
@@ -397,6 +433,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async withdrawProposal(roomId, proposalId, expectedRoomEpoch) {
+      assertIdentity();
       return request({
         path: proposalPathFor(roomId, proposalId, 'withdraw'),
         method: 'POST',
@@ -407,6 +444,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async publishConfig(roomId, input) {
+      assertIdentity();
       const parsed = ArenaRoomPublishConfigRequestSchema.parse(input);
       const session = await request({
         path: pathFor(roomId, 'config'),
@@ -415,6 +453,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         schema: ArenaRoomSessionResponseSchema,
         unknownResult: true,
       });
+      assertIdentity();
       if (
         session.roomId !== roomId
         || session.roomEpoch !== parsed.expectedRoomEpoch
@@ -435,6 +474,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async startGeneration(roomId, input) {
+      assertIdentity();
       const parsed = ArenaRoomGenerationStartRequestSchema.parse(input);
       const view = await request({
         path: pathFor(roomId, 'generations'),
@@ -443,6 +483,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         schema: ArenaRoomGenerationViewResponseSchema,
         unknownResult: true,
       });
+      assertIdentity();
       if (
         view.roomId !== roomId
         || view.roomEpoch !== parsed.expectedRoomEpoch
@@ -458,10 +499,12 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async listGenerationHistory(roomId) {
+      assertIdentity();
       const history = await request({
         path: pathFor(roomId, 'generations'),
         schema: ArenaRoomGenerationHistoryResponseSchema,
       });
+      assertIdentity();
       if (history.roomId !== roomId) {
         throw new ArenaRoomClientError(
           'ROOM_RESPONSE_INVALID',
@@ -473,10 +516,12 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async getGenerationHistoryView(roomId, generationId) {
+      assertIdentity();
       const history = await request({
         path: `${pathFor(roomId, `generations/${encodeURIComponent(generationId)}`)}?view=history`,
         schema: ArenaRoomGenerationHistoryViewResponseSchema,
       });
+      assertIdentity();
       if (history.roomId !== roomId || history.generation.generationId !== generationId) {
         throw new ArenaRoomClientError(
           'ROOM_RESPONSE_INVALID',
@@ -488,15 +533,18 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     async getGenerationView(roomId, generationId, signal) {
+      assertIdentity();
       const view = await request({
         path: pathFor(roomId, `generations/${encodeURIComponent(generationId)}`),
         schema: ArenaRoomGenerationViewResponseSchema,
         signal,
       });
+      assertIdentity();
       return assertGenerationViewIdentity(view, roomId, generationId);
     },
 
     async cancelGeneration(roomId, generationId, expectedRoomEpoch) {
+      assertIdentity();
       const parsed = ArenaRoomGenerationCancelRequestSchema.parse({ expectedRoomEpoch });
       const view = await request({
         path: pathFor(roomId, `generations/${encodeURIComponent(generationId)}/cancel`),
@@ -505,6 +553,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
         schema: ArenaRoomGenerationViewResponseSchema,
         unknownResult: true,
       });
+      assertIdentity();
       if (
         view.roomId !== roomId
         || view.roomEpoch !== parsed.expectedRoomEpoch
@@ -520,6 +569,7 @@ export const createArenaRoomClient = (options: ClientOptions): ArenaRoomClient =
     },
 
     buildWebSocketUrl(ticket) {
+      assertIdentity();
       const parsed = ArenaRoomTicketResponseSchema.parse(ticket);
       const url = new URL(parsed.websocket.path, base);
       url.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';

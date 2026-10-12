@@ -191,7 +191,7 @@ describe('GMR10Q-F-NARRATIVE-HISTORY-PARITY result writer', () => {
     await act(async () => root.render(<Harness state={hostState} write={write} />));
     await act(async () => root.render(<Harness state={hostState} write={write} />));
     expect(write).toHaveBeenCalledOnce();
-    expect(write).toHaveBeenCalledWith(expect.objectContaining({ generationId: 'generation-1' }));
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({ generationId: 'generation-1' }), expect.any(Function));
 
     await act(async () => root.render(<Harness state={roomState('member')} write={write} />));
     expect(write).toHaveBeenCalledOnce();

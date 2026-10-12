@@ -1,5 +1,7 @@
 'use client';
 
+import { AuthStorageError } from '@/lib/auth-identity';
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -562,7 +564,10 @@ export const CharacterManagerPage: React.FC = () => {
     };
 
     const handleLogout = useCallback(() => {
-        logout();
+        void logout().catch((error: unknown) => {
+            if (error instanceof AuthStorageError && !error.isCurrent()) return;
+            setMessage({ type: 'error', text: '本机登录信息清除失败，请检查浏览器存储设置后重试' });
+        });
         setAuthMigrationStatus(null);
         setAuthMigrationError(null);
         setAuthMigrationLoading(false);

@@ -20,6 +20,7 @@ export function useAuth() {
   }, []);
 
   return {
+    identityEpoch: snapshot.identityEpoch,
     user: snapshot.user,
     userBadges: snapshot.userBadges,
     loading: snapshot.loading,

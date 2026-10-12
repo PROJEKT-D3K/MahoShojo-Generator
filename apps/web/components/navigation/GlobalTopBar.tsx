@@ -16,6 +16,7 @@ import { useTopBarMessages } from '@/components/navigation/useTopBarMessages';
 import { useTopBarProfile } from '@/components/navigation/useTopBarProfile';
 import UserTitle from '@/components/UserTitle';
 import { useAuth } from '@/lib/useAuth';
+import { AuthStorageError } from '@/lib/auth-identity';
 
 /**
  * Web 宿主侧能力快照：产品导航、顶栏路径在 Web 全部已交付——
@@ -138,7 +139,11 @@ export function GlobalTopBar({ pathname, defaultMobileOpen = false }: GlobalTopB
         onNavigateExternal={() => undefined}
         onRequestAuth={openAuthModal}
         onSignOut={() => {
-          void logout();
+          void logout().catch((error: unknown) => {
+            if (error instanceof AuthStorageError && !error.isCurrent()) return;
+            setAuthMessage({ type: 'error', text: '本机登录信息清除失败，请检查浏览器存储设置后重试' });
+            setShowAuthModal(true);
+          });
         }}
         defaultMobileOpen={defaultMobileOpen}
       />

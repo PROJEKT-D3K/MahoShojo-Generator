@@ -1,6 +1,7 @@
 import { authApi, authStorage, type AuthSessionSource } from '@/lib/auth';
 import { getUserBadges } from '@/lib/userBadges';
 import type { UserBadge } from '@/types/badge';
+import { AuthStorageError, beginAuthIdentityTransition, captureAuthIdentity, checkAuthIdentityOwner, subscribeAuthIdentity, type AuthIdentityOwner } from '@/lib/auth-identity';
 
 export interface User {
   id: number;
@@ -9,6 +10,7 @@ export interface User {
 }
 
 export interface AuthSnapshot {
+  identityEpoch: number;
   user: User | null;
   userBadges: UserBadge[];
   loading: boolean;
@@ -21,6 +23,7 @@ export interface AuthSnapshot {
 }
 
 const createInitialAuthSnapshot = (): AuthSnapshot => ({
+  identityEpoch: captureAuthIdentity().epoch,
   user: null,
   userBadges: [],
   loading: true,
@@ -38,8 +41,9 @@ const authModeToSessionSource = (
       : null;
 
 let authSnapshot = createInitialAuthSnapshot();
-let authCheckPromise: Promise<void> | null = null;
+let authCheck: { owner: AuthIdentityOwner; promise: Promise<void> } | null = null;
 const authListeners = new Set<() => void>();
+let activeTransition: AuthIdentityOwner | null = null;
 
 const emitAuthSnapshot = () => {
   for (const listener of authListeners) {
@@ -59,24 +63,29 @@ const mergeAuthSnapshot = (patch: Partial<AuthSnapshot>) => {
   }));
 };
 
-const loadAuthUserBadges = async (): Promise<UserBadge[]> => {
+const loadAuthUserBadges = async (owner: AuthIdentityOwner): Promise<UserBadge[]> => {
+  if (!checkAuthIdentityOwner(owner)) return [];
   mergeAuthSnapshot({ badgesLoading: true });
 
   try {
     const badges = await getUserBadges();
+    if (!checkAuthIdentityOwner(owner)) return [];
     mergeAuthSnapshot({ userBadges: badges });
     return badges;
   } finally {
-    mergeAuthSnapshot({ badgesLoading: false });
+    if (owner.identity.isCurrent()) mergeAuthSnapshot({ badgesLoading: false });
   }
 };
 
 const syncVerifiedAuthState = async (
   result: Awaited<ReturnType<typeof authApi.verify>>,
   fallbackAuthExists: boolean,
+  owner: AuthIdentityOwner,
 ) => {
+  if (!checkAuthIdentityOwner(owner)) return;
   if (result.success && result.user) {
     mergeAuthSnapshot({
+      identityEpoch: owner.identity.epoch,
       user: result.user,
       loading: false,
       authSource: result.authSource ?? null,
@@ -90,15 +99,17 @@ const syncVerifiedAuthState = async (
       return;
     }
 
-    await loadAuthUserBadges();
+    await loadAuthUserBadges(owner);
     return;
   }
 
   if (fallbackAuthExists) {
-    authStorage.clearAuth();
+    authStorage.clearAuth(owner);
+    if (!checkAuthIdentityOwner(owner)) return;
   }
 
   mergeAuthSnapshot({
+    identityEpoch: owner.identity.epoch,
     user: null,
     userBadges: [],
     loading: false,
@@ -116,22 +127,77 @@ export const subscribeAuthSnapshot = (listener: () => void): (() => void) => {
   };
 };
 
+// 存储事件先同步撤销所有共享消费者；自身提交由其 owner 完成本轮验证，避免递归 ensure。
+subscribeAuthIdentity((event) => {
+  authCheck = null;
+  if (activeTransition && !activeTransition.identity.isCurrent()) activeTransition = null;
+  authSnapshot = {
+    ...authSnapshot,
+    identityEpoch: event.identity.epoch,
+    user: null,
+    userBadges: [],
+    loading: event.reason !== 'unavailable',
+    badgesLoading: false,
+    authSource: null,
+  };
+  emitAuthSnapshot();
+  if ((event.reason === 'external' || event.revalidate) && event.identity.isCurrent() && authListeners.size > 0) {
+    void ensureAuthState();
+  }
+});
+
 export const ensureAuthState = async (): Promise<void> => {
-  if (!authSnapshot.loading) {
+  const identity = captureAuthIdentity();
+  if (!identity.isCurrent()) {
+    mergeAuthSnapshot({ loading: false });
     return;
   }
-
-  if (!authCheckPromise) {
-    authCheckPromise = (async () => {
-      const legacyAuth = await authStorage.getAuth();
-      const result = await authApi.verify();
-      await syncVerifiedAuthState(result, legacyAuth !== null);
-    })().finally(() => {
-      authCheckPromise = null;
-    });
+  if (!authSnapshot.loading || activeTransition?.identity.isCurrent()) return;
+  if (!authCheck?.owner.identity.isCurrent()) {
+    const owner = { identity, settlesSnapshot: true };
+    const entry = {
+      owner,
+      promise: (async () => {
+        try {
+          const legacyAuth = await authStorage.getAuth();
+          if (!checkAuthIdentityOwner(owner)) return;
+          const result = await authApi.verify({ owner });
+          await syncVerifiedAuthState(result, legacyAuth !== null, owner);
+        } catch {
+          if (owner.identity.isCurrent()) await syncVerifiedAuthState({ success: false }, false, owner);
+        }
+      })(),
+    };
+    authCheck = entry;
+    try {
+      await entry.promise;
+    } finally {
+      if (authCheck === entry) authCheck = null;
+    }
+    return;
   }
+  await authCheck.promise;
+};
 
-  await authCheckPromise;
+const finishAuthResult = <T extends { success: boolean; error?: string }>(owner: AuthIdentityOwner, result: T) => {
+  try {
+    if (checkAuthIdentityOwner(owner)) return result;
+  } catch (error) {
+    if (!(error instanceof AuthStorageError)) throw error;
+  }
+  if (owner.failure?.isCurrent()) return { success: false as const, error: owner.failure.message };
+  return { success: false as const, error: '登录身份已变化，请重试' };
+};
+
+const beginStoreTransition = (): AuthIdentityOwner => {
+  const owner = { ...beginAuthIdentityTransition(), settlesSnapshot: true };
+  activeTransition = owner;
+  return owner;
+};
+const restoreAfterFailedTransition = async (owner: AuthIdentityOwner) => {
+  if (!checkAuthIdentityOwner(owner)) return;
+  const result = await authApi.verify({ owner });
+  await syncVerifiedAuthState(result, false, owner);
 };
 
 export const registerAndSyncAuthState = async (
@@ -140,14 +206,20 @@ export const registerAndSyncAuthState = async (
   turnstileToken: string,
   password: string,
 ) => {
-  const result = await authApi.register(username, email, turnstileToken, password);
-
-  if (result.success) {
-    const verifyResult = await authApi.verify();
-    await syncVerifiedAuthState(verifyResult, false);
+  const owner = beginStoreTransition();
+  try {
+    const result = await authApi.register(username, email, turnstileToken, password, owner);
+    if (!owner.identity.isCurrent()) return finishAuthResult(owner, result);
+    const verifyResult = await authApi.verify({ owner });
+    await syncVerifiedAuthState(verifyResult, false, owner);
+    return finishAuthResult(owner, result);
+  } catch (error) {
+    if (!(error instanceof AuthStorageError)) throw error;
+    return finishAuthResult(owner, { success: false, error: error.message });
+  } finally {
+    if (activeTransition === owner) activeTransition = null;
+    if (owner.identity.isCurrent()) mergeAuthSnapshot({ loading: false });
   }
-
-  return result;
 };
 
 export const loginAndSyncAuthState = async (
@@ -155,38 +227,64 @@ export const loginAndSyncAuthState = async (
   credential: string,
   turnstileToken: string,
   mode: 'password' | 'legacy' = 'password',
-) => {
-  const result = await authApi.login(identifier, credential, turnstileToken, mode);
-
-  if (result.success && result.user) {
-    mergeAuthSnapshot({
-      user: result.user,
-      loading: false,
-      authSource: authModeToSessionSource(result.authMode),
-    });
-    await loadAuthUserBadges();
+): Promise<Awaited<ReturnType<typeof authApi.login>>> => {
+  const owner = beginStoreTransition();
+  try {
+    const result = await authApi.login(identifier, credential, turnstileToken, mode, owner);
+    if (!owner.identity.isCurrent()) return finishAuthResult(owner, result);
+    if (result.success && result.user) {
+      const storedAuth = await authStorage.getAuth();
+      if (!owner.identity.isCurrent()) return finishAuthResult(owner, result);
+      if (!storedAuth?.authKey) {
+        const verified = await authApi.verify({ owner });
+        await syncVerifiedAuthState(verified, false, owner);
+        return finishAuthResult(owner, result);
+      }
+      mergeAuthSnapshot({
+        identityEpoch: owner.identity.epoch,
+        user: result.user,
+        loading: false,
+        authSource: authModeToSessionSource(result.authMode),
+      });
+      await loadAuthUserBadges(owner);
+    } else {
+      await restoreAfterFailedTransition(owner);
+    }
+    return finishAuthResult(owner, result);
+  } catch (error) {
+    if (!(error instanceof AuthStorageError)) throw error;
+    return finishAuthResult(owner, { success: false, error: error.message });
+  } finally {
+    if (activeTransition === owner) activeTransition = null;
+    if (owner.identity.isCurrent()) mergeAuthSnapshot({ loading: false });
   }
-
-  return result;
 };
 
 export const logoutAndSyncAuthState = async () => {
-  await authApi.logout();
-  mergeAuthSnapshot({
-    user: null,
-    userBadges: [],
-    loading: false,
-    badgesLoading: false,
-    authSource: null,
-  });
+  const owner = beginStoreTransition();
+  try {
+    await authApi.logout(owner);
+  } catch (error) {
+    if (!(error instanceof AuthStorageError) || error.isCurrent()) throw error;
+  } finally {
+    if (activeTransition === owner) activeTransition = null;
+    if (owner.identity.isCurrent()) await syncVerifiedAuthState({ success: false }, false, owner);
+  }
 };
 
 export const refreshAuthBadges = async () => {
-  await loadAuthUserBadges();
+  const identity = captureAuthIdentity();
+  if (!authSnapshot.user || authSnapshot.loading) return;
+  try {
+    await loadAuthUserBadges({ identity });
+  } catch (error) {
+    if (!(error instanceof AuthStorageError)) throw error;
+  }
 };
 
 export const resetAuthStoreForTests = () => {
   authSnapshot = createInitialAuthSnapshot();
-  authCheckPromise = null;
+  authCheck = null;
+  activeTransition = null;
   emitAuthSnapshot();
 };

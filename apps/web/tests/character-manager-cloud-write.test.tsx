@@ -4,13 +4,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CharacterManagerPage } from '@/components/character/CharacterManagerPage';
 import { writeCharacterManagerPageDraft } from '@/lib/character-manager-page-draft';
+import { AuthStorageError } from '@/lib/auth-identity';
 import { authStorage, dataCardApi } from '@/lib/auth';
 import * as cardClient from '@/lib/data-card-list-client';
 import type { OwnedDataCardReplacementTarget } from '@mahoshojo/contracts/data-cards';
-const state = vi.hoisted(() => ({ userId: 7, users: { 7: { id: 7, username: 'tester' }, 8: { id: 8, username: 'tester' } } as Record<number, { id: number; username: string }>, push: vi.fn(), resign: vi.fn() }));
+const state = vi.hoisted(() => ({ userId: 7, users: { 7: { id: 7, username: 'tester' }, 8: { id: 8, username: 'tester' } } as Record<number, { id: number; username: string }>, push: vi.fn(), resign: vi.fn(), logout: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: state.push }) }));
 vi.mock('next/link', () => ({ default: ({ children, ...props }: any) => <a {...props}>{children}</a> }));
-vi.mock('@/lib/useAuth', () => ({ useAuth: () => ({ user: state.users[state.userId], loading: false, isAuthenticated: true, authSource: 'better-auth-session' }) }));
+vi.mock('@/lib/useAuth', () => ({ useAuth: () => ({ user: state.users[state.userId], loading: false, isAuthenticated: true, authSource: 'better-auth-session', logout: state.logout }) }));
 vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: async () => ({ hasSensitiveWords: false, matchDetails: [] }) }));
 vi.mock('@/components/Footer', () => ({ default: () => null }));
 vi.mock('@/components/MagicalGirlCard', () => ({ default: () => null }));
@@ -31,7 +32,7 @@ const mount = async (isNative = false) => {
 };
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; };
 beforeEach(() => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true; state.userId = 7; state.resign.mockReset(); state.push.mockClear(); localStorage.clear();
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true; state.userId = 7; state.resign.mockReset(); state.push.mockClear(); state.logout.mockReset().mockResolvedValue(undefined); localStorage.clear();
   vi.spyOn(authStorage, 'getAuth').mockImplementation(async () => ({ userId: state.userId, username: 'tester' })); vi.spyOn(authStorage, 'getAuthHeader').mockResolvedValue(null);
   vi.spyOn(dataCardApi, 'getUserCapacity').mockResolvedValue({ capacity: 20, usedSlots: 0 }); vi.spyOn(dataCardApi, 'getRecycleBin').mockResolvedValue([]);
   vi.spyOn(dataCardApi, 'createCard').mockResolvedValue({ success: true, id: 'new-card' }); vi.spyOn(dataCardApi, 'readOwnedReplacementTarget').mockResolvedValue({ success: true, target }); vi.spyOn(dataCardApi, 'replaceOwnedCard').mockResolvedValue({ success: true, pendingReview: true });
@@ -43,6 +44,16 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 
 describe('Web真实角色管理普通角色/情景云写宿主', () => {
+  it('退出时本地清除失败用既有页面消息准确提示，不清掉编辑正文', async () => {
+    await mount();
+    state.logout.mockRejectedValueOnce(new AuthStorageError());
+    await click('退出登录');
+    expect(container.textContent).toContain('本机登录信息清除失败，请检查浏览器存储设置后重试');
+    expect(container.textContent).not.toContain('服务器登出失败');
+    expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('雾灯');
+    expect(state.logout).toHaveBeenCalledOnce();
+  });
+
   it('保存表单可取消重开、设为公开，提交仍走原签名准备与owner围栏；重复点击只提交一次', async () => {
     await mount(true); await click('保存到云端'); await click('取消'); expect(document.querySelector('[role=dialog]')).toBeNull(); await click('保存到云端');
     await act(async () => { (document.querySelector('[role=dialog] input[type=checkbox]') as HTMLInputElement).click(); button('保存').click(); button('保存').click(); });

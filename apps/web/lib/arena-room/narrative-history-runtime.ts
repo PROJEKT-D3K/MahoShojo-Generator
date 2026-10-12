@@ -45,8 +45,10 @@ export const selectArenaRoomNarrativeHistoryResultWrite = (
 
 export const appendArenaNarrativeHistoryResult = async (
   payload: ArenaNarrativeHistoryResultWrite,
+  commitIf: () => boolean = () => true,
 ): Promise<void> => {
   try {
+    if (!commitIf()) return;
     const title = payload.title.trim();
     const content = payload.contentMarkdown.trim();
     if (!content) return;
@@ -54,6 +56,7 @@ export const appendArenaNarrativeHistoryResult = async (
       quickCheck(title || '未命名战报'),
       quickCheck(content),
     ]);
+    if (!commitIf()) return;
     useNarrativeHistoryStore.getState().appendEntry({
       title: (titleCheck.filteredText || title || '未命名战报').trim(),
       content: (contentCheck.filteredText || content).trim(),

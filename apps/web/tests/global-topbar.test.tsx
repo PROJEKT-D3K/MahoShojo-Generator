@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, vi, test } from 'vit
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { AuthStorageError, beginAuthIdentityTransition } from '@/lib/auth-identity';
 import { dispatchMeProfileAvatarUpdated } from '@/lib/me-profile-events';
 
 /**
@@ -56,8 +57,8 @@ vi.mock('@/components/navigation/useTopBarMessages', () => ({
 }));
 
 vi.mock('@/components/CharManager/AuthModal', () => ({
-  default: ({ isOpen }: { isOpen: boolean }) => (
-    <div data-auth-modal="true" data-auth-modal-open={String(isOpen)} />
+  default: ({ isOpen, authMessage }: { isOpen: boolean; authMessage?: { text: string } | null }) => (
+    <div data-auth-modal="true" data-auth-modal-open={String(isOpen)}>{isOpen ? authMessage?.text : null}</div>
   ),
 }));
 
@@ -206,6 +207,39 @@ describe('GlobalTopBar adapter', () => {
 
     expect(html).toContain('data-auth-modal="true"');
     expect(html).toContain('data-auth-modal-open="false"');
+  });
+
+  test.each([false, true])('本地退出清除失败复用错误区；已换代=%s 时不打扰新身份', async (stale) => {
+    const { GlobalTopBar } = await import('@/components/navigation/GlobalTopBar');
+    const failure = new AuthStorageError();
+    let reject!: (_error: Error) => void;
+    const pending = new Promise<void>((_resolve, fail) => { reject = fail; });
+    authState = { ...authState, user: { id: 7, username: 'A' }, isAuthenticated: true, logout: () => pending };
+    const container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<GlobalTopBar pathname="/" />));
+      const button = [...container.querySelectorAll('button')].find((node) => node.textContent?.trim() === '退出登录');
+      expect(button).toBeDefined();
+      await act(async () => button!.click());
+      if (stale) {
+        beginAuthIdentityTransition();
+        authState = { ...authState, user: { id: 8, username: 'B' } };
+        await act(async () => root.render(<GlobalTopBar pathname="/" />));
+      }
+      await act(async () => reject(failure));
+      if (stale) {
+        expect(container.textContent).not.toContain('本机登录信息清除失败');
+        expect(authState.user?.id).toBe(8);
+      } else {
+        expect(container.textContent).toContain('本机登录信息清除失败，请检查浏览器存储设置后重试');
+        expect(container.querySelector('[data-auth-modal-open="true"]')).not.toBeNull();
+        expect(container.textContent).not.toContain('服务器登出失败');
+      }
+    } finally {
+      reject(failure);
+      await act(async () => root.unmount()); container.remove();
+    }
   });
 
   test('leaves modifier clicks on internal links to native anchor semantics', async () => {

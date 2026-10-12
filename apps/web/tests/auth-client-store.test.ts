@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { beforeEach, describe, expect, vi, test } from 'vitest';
 
 let loginResult: {
@@ -27,7 +29,7 @@ vi.mock('@/lib/auth', () => ({
     }),
   },
   authStorage: {
-    getAuth: vi.fn(async () => null),
+    getAuth: vi.fn(async () => ({ username: 'fixture', authKey: 'synthetic-fixture' })),
     clearAuth: vi.fn(() => undefined),
   },
 }));

@@ -6,7 +6,7 @@ import { resolveApiErrorMessage } from '@/lib/client/apiError';
 import { mapDeckDetailPayload, mapDeckListPayload } from '@/lib/deck-client-mappers';
 import { DATA_CARD_LIST_PAGE_SIZE } from '@/lib/data-card-list-page';
 
-const STORAGE_KEY = 'mahoshojo_auth';
+import { AUTH_STORAGE_KEY as STORAGE_KEY, AuthStorageError, beginAuthIdentityTransition, captureAuthIdentity, checkAuthIdentityOwner, commitAuthIdentity, type AuthIdentity, type AuthIdentityOwner } from '@/lib/auth-identity';
 const ENCRYPTION_KEY = 'mahoshojo_2024_secret_encryption_key';
 
 export interface AuthData {
@@ -81,7 +81,9 @@ const cryptoHelper = new CryptoHelper();
 let cachedEncryptedValue: string | null = null;
 let cachedAuthValue: AuthData | null = null;
 let cachedAuthPromise: Promise<AuthData | null> | null = null;
-let sessionBootstrapPromise: Promise<AuthData | null> | null = null;
+let cachedIdentity: AuthIdentity | null = null;
+type BootstrapResult = { auth: AuthData; identity: AuthIdentity };
+let sessionBootstrap: { identity: AuthIdentity; promise: Promise<BootstrapResult | null> } | null = null;
 
 /**
  * 当前身份由哪类凭据证明（与服务端 `AuthUserSource` 对齐，客户端侧不 import server 模块）。
@@ -133,8 +135,10 @@ const fetchVerifyAuthState = async (authHeader: string | null): Promise<VerifyAu
 const persistVerifyAuthState = async (
   data: VerifyAuthResponse,
   fallbackAuth: AuthData | null,
+  owner: AuthIdentityOwner,
 ): Promise<AuthData | null> => {
-  if (!data?.success || !data.user || typeof data.user.username !== 'string') {
+  if (!data?.success || !data.user || typeof data.user.username !== 'string'
+    || !Number.isSafeInteger(data.user.id) || data.user.id <= 0) {
     return null;
   }
 
@@ -142,58 +146,81 @@ const persistVerifyAuthState = async (
     username: data.user.username,
   };
 
-  const authKey = normalizeAuthKey(data.authKey) ?? normalizeAuthKey(fallbackAuth?.authKey);
+  // 不将旧账号的兼容 key 拼接到服务端返回的另一个账号。
+  const sameUserFallback = data.user.id === fallbackAuth?.userId ? fallbackAuth : null;
+  const verifiedBearerFallback = data.authSource === 'legacy-bearer' ? fallbackAuth : sameUserFallback;
+  const authKey = normalizeAuthKey(data.authKey) ?? normalizeAuthKey(verifiedBearerFallback?.authKey);
   if (authKey) {
     nextAuth.authKey = authKey;
   }
 
   if (typeof data.user.id === 'number' && Number.isSafeInteger(data.user.id) && data.user.id > 0) {
     nextAuth.userId = data.user.id;
-  } else if (typeof fallbackAuth?.userId === 'number' && Number.isSafeInteger(fallbackAuth.userId) && fallbackAuth.userId > 0) {
-    nextAuth.userId = fallbackAuth.userId;
   }
 
-  const activityToken = normalizeActivityToken(data.activityToken) ?? normalizeActivityToken(fallbackAuth?.activityToken);
+  const activityToken = normalizeActivityToken(data.activityToken) ?? normalizeActivityToken(sameUserFallback?.activityToken);
   if (activityToken) {
     nextAuth.activityToken = activityToken;
   }
 
-  await authStorage.setAuth(nextAuth);
-  return nextAuth;
+  if (!owner.identity.isCurrent()) return null;
+  const sameCredentials = nextAuth.userId === fallbackAuth?.userId
+    && nextAuth.authKey === fallbackAuth?.authKey;
+  if (sameCredentials) {
+    // 普通页面校验只刷新本页非授权元数据。随机密文/活动 token 续期不能令其他标签页退房。
+    // 重载后的 ensure 会重新从服务器取得活动 token，不更改持久化格式。
+    const encrypted = localStorage.getItem(STORAGE_KEY);
+    if (!owner.identity.isCurrent()) return null;
+    cachedEncryptedValue = encrypted;
+    cachedIdentity = owner.identity;
+    cachedAuthValue = nextAuth;
+    cachedAuthPromise = null;
+  } else {
+    await authStorage.setAuth(nextAuth, owner);
+  }
+  return owner.identity.isCurrent() ? nextAuth : null;
 };
 
-const bootstrapAuthFromSession = async (): Promise<AuthData | null> => {
-  if (sessionBootstrapPromise) {
-    return await sessionBootstrapPromise;
-  }
-
-  sessionBootstrapPromise = (async () => {
-    const data = await fetchVerifyAuthState(null);
-    return persistVerifyAuthState(data, null);
-  })();
-
+const bootstrapAuthFromSession = async (): Promise<BootstrapResult | null> => {
+  if (sessionBootstrap?.identity.isCurrent()) return sessionBootstrap.promise;
+  const owner = { identity: captureAuthIdentity() };
+  if (!owner.identity.isCurrent()) return null;
+  const entry = {
+    identity: owner.identity,
+    promise: (async (): Promise<BootstrapResult | null> => {
+      try {
+        const data = await fetchVerifyAuthState(null);
+        if (!owner.identity.isCurrent()) return null;
+        const auth = await persistVerifyAuthState(data, null, owner);
+        return auth && owner.identity.isCurrent() ? { auth, identity: owner.identity } : null;
+      } catch {
+        return null;
+      }
+    })(),
+  };
+  sessionBootstrap = entry;
   try {
-    return await sessionBootstrapPromise;
-  } catch (error) {
-    console.error('Session auth bootstrap error:', error);
-    return null;
+    return await entry.promise;
   } finally {
-    sessionBootstrapPromise = null;
+    if (sessionBootstrap === entry) sessionBootstrap = null;
   }
 };
 
 export const authStorage = {
-  // 加密存储认证信息
-  async setAuth(data: AuthData): Promise<void> {
+  // 加密前后的 owner 检查令旧异步登录/验证不能覆盖另一标签页的新身份。
+  async setAuth(data: AuthData, owner: AuthIdentityOwner = beginAuthIdentityTransition()): Promise<void> {
+    if (!checkAuthIdentityOwner(owner)) return;
     const encrypted = await cryptoHelper.encrypt(JSON.stringify(data));
-    localStorage.setItem(STORAGE_KEY, encrypted);
+    if (!commitAuthIdentity(owner, encrypted)) return;
     cachedEncryptedValue = encrypted;
+    cachedIdentity = owner.identity;
     cachedAuthValue = data;
     cachedAuthPromise = null;
   },
 
-  // 获取并解密认证信息
   async getAuth(): Promise<AuthData | null> {
+    const identity = captureAuthIdentity();
+    if (!identity.isCurrent()) return null;
     try {
       const encrypted = localStorage.getItem(STORAGE_KEY);
       if (!encrypted) {
@@ -202,61 +229,64 @@ export const authStorage = {
         cachedAuthPromise = null;
         return null;
       }
-
-      if (encrypted === cachedEncryptedValue) {
-        if (cachedAuthPromise) return await cachedAuthPromise;
-        return cachedAuthValue;
+      if (encrypted === cachedEncryptedValue && cachedIdentity?.isCurrent()) {
+        const value = cachedAuthPromise ? await cachedAuthPromise : cachedAuthValue;
+        return identity.isCurrent() ? value : null;
       }
-
       cachedEncryptedValue = encrypted;
-      cachedAuthPromise = (async () => {
+      cachedIdentity = identity;
+      const promise = (async () => {
         const decryptedStr = await cryptoHelper.decrypt(encrypted);
-        if (!decryptedStr) {
-          cachedAuthValue = null;
-          return null;
-        }
+        if (!identity.isCurrent()) return null;
         try {
-          cachedAuthValue = JSON.parse(decryptedStr) as AuthData;
-          return cachedAuthValue;
-        } catch (error) {
-          console.error('Failed to parse auth data:', error);
-          cachedAuthValue = null;
+          const value = decryptedStr ? JSON.parse(decryptedStr) as AuthData : null;
+          if (cachedEncryptedValue === encrypted) cachedAuthValue = value;
+          return value;
+        } catch {
+          if (cachedEncryptedValue === encrypted) cachedAuthValue = null;
           return null;
-        } finally {
-          cachedAuthPromise = null;
         }
       })();
-
-      return await cachedAuthPromise;
-
-    } catch (error) {
-      console.error('Failed to decrypt auth data:', error);
+      cachedAuthPromise = promise;
+      try {
+        const value = await promise;
+        return identity.isCurrent() ? value : null;
+      } finally {
+        if (cachedAuthPromise === promise) cachedAuthPromise = null;
+      }
+    } catch {
       return null;
     }
   },
 
-  // 清除认证信息
-  clearAuth(): void {
-    localStorage.removeItem(STORAGE_KEY);
+  clearAuth(owner: AuthIdentityOwner = beginAuthIdentityTransition()): void {
+    if (!commitAuthIdentity(owner, null)) return;
     cachedEncryptedValue = null;
+    cachedIdentity = null;
     cachedAuthValue = null;
     cachedAuthPromise = null;
-    sessionBootstrapPromise = null;
+    sessionBootstrap = null;
   },
 
-  // 获取认证头
   async getAuthHeader(): Promise<string | null> {
+    const identity = captureAuthIdentity();
     const auth = await this.getAuth();
+    if (!identity.isCurrent()) return null;
     const cachedHeader = readStoredAuthHeader(auth);
     if (cachedHeader) return cachedHeader;
-
-    const bootstrappedAuth = await bootstrapAuthFromSession();
-    return readStoredAuthHeader(bootstrappedAuth);
+    const bootstrapped = await bootstrapAuthFromSession();
+    return bootstrapped?.identity.isCurrent() ? readStoredAuthHeader(bootstrapped.auth) : null;
   },
 
   // 获取“活跃统计”头（不依赖额外 D1 读取）
   async getActivityHeaders(): Promise<Record<string, string>> {
-    const auth = (await this.getAuth()) ?? (await bootstrapAuthFromSession());
+    const identity = captureAuthIdentity();
+    let auth = await this.getAuth();
+    if (!identity.isCurrent()) return {};
+    if (!auth) {
+      const bootstrapped = await bootstrapAuthFromSession();
+      auth = bootstrapped?.identity.isCurrent() ? bootstrapped.auth : null;
+    }
     if (!auth) return {};
 
     const headers: Record<string, string> = {};
@@ -370,7 +400,7 @@ const fetchDataCardsDetailed = async (
 // API 请求工具函数
 export const authApi = {
   // 注册
-  async register(username: string, email: string, turnstileToken: string, password: string): Promise<{
+  async register(username: string, email: string, turnstileToken: string, password: string, owner: AuthIdentityOwner = beginAuthIdentityTransition()): Promise<{
     success: boolean;
     authKey?: string;
     authMode?: 'better-auth' | 'legacy';
@@ -380,13 +410,16 @@ export const authApi = {
     activityToken?: string | null;
   }> {
     try {
+      if (!checkAuthIdentityOwner(owner)) return { success: false, error: '登录身份已变化，请重试' };
       const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, email, password, turnstileToken })
       });
 
+      if (!checkAuthIdentityOwner(owner)) return { success: false, error: '登录身份已变化，请重试' };
       const data = await response.json();
+      if (!checkAuthIdentityOwner(owner)) return { success: false, error: '登录身份已变化，请重试' };
       
       if (response.ok && data.success) {
         const nextAuthKey = typeof data.authKey === 'string' && data.authKey.trim().length > 0 ? data.authKey.trim() : null;
@@ -396,15 +429,16 @@ export const authApi = {
             authKey: nextAuthKey,
             userId: typeof data.user?.id === 'number' ? data.user.id : undefined,
             activityToken: typeof data.activityToken === 'string' ? data.activityToken : undefined,
-          });
+          }, owner);
         } else {
-          authStorage.clearAuth();
+          authStorage.clearAuth(owner);
         }
-        return data;
+        return checkAuthIdentityOwner(owner) ? data : { success: false, error: '登录身份已变化，请重试' };
       }
       
       return { success: false, error: data.error || '注册失败' };
     } catch (error) {
+      if (error instanceof AuthStorageError) return { success: false, error: error.message };
       console.error('Register error:', error);
       return { success: false, error: '网络错误' };
     }
@@ -416,6 +450,7 @@ export const authApi = {
     credential: string,
     turnstileToken: string,
     mode: 'password' | 'legacy' = 'password',
+    owner: AuthIdentityOwner = beginAuthIdentityTransition(),
   ): Promise<{
     success: boolean;
     authMode?: 'better-auth' | 'legacy';
@@ -426,13 +461,16 @@ export const authApi = {
     error?: string;
   }> {
     try {
+      if (!checkAuthIdentityOwner(owner)) return { success: false, error: '登录身份已变化，请重试' };
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, credential, mode, turnstileToken })
       });
 
+      if (!checkAuthIdentityOwner(owner)) return { success: false, error: '登录身份已变化，请重试' };
       const data = await response.json();
+      if (!checkAuthIdentityOwner(owner)) return { success: false, error: '登录身份已变化，请重试' };
       
       if (response.ok && data.success) {
         const fromServerAuthKey = typeof data.authKey === 'string' && data.authKey.trim().length > 0 ? data.authKey.trim() : null;
@@ -450,11 +488,11 @@ export const authApi = {
             authKey: persistedAuthKey,
             userId: typeof data.user?.id === 'number' ? data.user.id : undefined,
             activityToken: typeof data.activityToken === 'string' ? data.activityToken : undefined,
-          });
+          }, owner);
         } else {
-          authStorage.clearAuth();
+          authStorage.clearAuth(owner);
         }
-        return data;
+        return checkAuthIdentityOwner(owner) ? data : { success: false, error: '登录身份已变化，请重试' };
       }
       
       return {
@@ -463,32 +501,35 @@ export const authApi = {
         requiresTurnstile: data.requiresTurnstile === true,
       };
     } catch (error) {
+      if (error instanceof AuthStorageError) return { success: false, error: error.message };
       console.error('Login error:', error);
       return { success: false, error: '网络错误' };
     }
   },
 
-  // 验证当前认证状态
-  async verify(): Promise<VerifyAuthResponse> {
+  // 普通相同凭据校验仅更新内存，不因 activityToken 刷新打断其他标签页。
+  async verify(options: { owner?: AuthIdentityOwner } = {}): Promise<VerifyAuthResponse> {
+    const owner = options.owner ?? { identity: captureAuthIdentity() };
     const auth = await authStorage.getAuth();
+    if (!owner.identity.isCurrent()) return { success: false };
     const authHeader = readStoredAuthHeader(auth);
-
     try {
       const data = await fetchVerifyAuthState(authHeader);
+      if (!owner.identity.isCurrent()) return { success: false };
       if (data?.success && data?.user?.id) {
-        await persistVerifyAuthState(data, auth);
+        const persisted = await persistVerifyAuthState(data, auth, owner);
+        if (!persisted) return { success: false };
       }
-      return data;
-    } catch (error) {
-      console.error('Verify error:', error);
+      return owner.identity.isCurrent() ? data : { success: false };
+    } catch {
       return { success: false };
     }
   },
 
-  // 退出登录
-  async logout(): Promise<void> {
+  async logout(owner: AuthIdentityOwner = beginAuthIdentityTransition()): Promise<void> {
+    if (!checkAuthIdentityOwner(owner)) return;
     await signOutBetterAuthSession();
-    authStorage.clearAuth();
+    if (checkAuthIdentityOwner(owner)) authStorage.clearAuth(owner);
   }
 };
 

@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
+
+import { captureAuthIdentity, type AuthIdentity } from '@/lib/auth-identity';
 
 import type { ArenaRoomGenerationHistoryViewResponse } from '@mahoshojo/contracts/arena-room';
 
@@ -32,16 +34,35 @@ const initialLatestHistory: ArenaRoomLatestCompletedHistory = {
  */
 export const useArenaRoomLatestCompletedHistory = (input: {
   readonly reader: ArenaRoomGenerationHistoryReader;
+  readonly identity?: AuthIdentity;
   readonly sessionKey: string | null;
   readonly refreshKey?: string;
   readonly enabled: boolean;
 }): ArenaRoomLatestCompletedHistory => {
-  const [state, setState] = useState<ArenaRoomLatestCompletedHistory>(initialLatestHistory);
+  const identity = useMemo(() => input.identity ?? captureAuthIdentity(), [input.identity]);
+  const [stored, setStored] = useState({ identity, state: initialLatestHistory });
+  const setState = useCallback((next: SetStateAction<ArenaRoomLatestCompletedHistory>) => {
+    if (!identity.isCurrent()) return;
+    setStored((previous) => ({
+      identity,
+      state: typeof next === 'function'
+        ? next(previous.identity === identity ? previous.state : initialLatestHistory)
+        : next,
+    }));
+  }, [identity]);
   const loadGenerationRef = useRef(0);
   const loadedSessionKeyRef = useRef<string | null>(null);
   const loadedRefreshKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
+    loadedSessionKeyRef.current = null;
+    loadedRefreshKeyRef.current = null;
+    loadGenerationRef.current += 1;
+    return () => { loadGenerationRef.current += 1; };
+  }, [identity]);
+
+  useEffect(() => {
+    if (!identity.isCurrent()) return;
     if (!input.sessionKey) {
       loadedSessionKeyRef.current = null;
       loadedRefreshKeyRef.current = null;
@@ -68,7 +89,7 @@ export const useArenaRoomLatestCompletedHistory = (input: {
       void (async () => {
         try {
           const history = await input.reader.list();
-          if (loadGenerationRef.current !== generation) return;
+          if (!identity.isCurrent() || loadGenerationRef.current !== generation) return;
           setState((previous) => ({
             status: 'ready',
             latest: previous.latest,
@@ -85,7 +106,7 @@ export const useArenaRoomLatestCompletedHistory = (input: {
       let listedCount: number | null = null;
       try {
         const history = await input.reader.list();
-        if (loadGenerationRef.current !== generation) return;
+        if (!identity.isCurrent() || loadGenerationRef.current !== generation) return;
         listedCount = history.items.length;
         const latestItem = history.items[0] ?? null;
         if (!latestItem) {
@@ -93,14 +114,14 @@ export const useArenaRoomLatestCompletedHistory = (input: {
           return;
         }
         const view = await input.reader.read(latestItem.generationId);
-        if (loadGenerationRef.current !== generation) return;
+        if (!identity.isCurrent() || loadGenerationRef.current !== generation) return;
         setState({
           status: 'ready',
           latest: view,
           completedCount: listedCount,
         });
       } catch {
-        if (loadGenerationRef.current !== generation) return;
+        if (!identity.isCurrent() || loadGenerationRef.current !== generation) return;
         // list 已成功时保留正确计数，仅将最近战报区域标记为失败。
         setState({
           status: 'failed',
@@ -109,7 +130,7 @@ export const useArenaRoomLatestCompletedHistory = (input: {
         });
       }
     })();
-  }, [input.enabled, input.reader, input.refreshKey, input.sessionKey]);
+  }, [identity, input.enabled, input.reader, input.refreshKey, input.sessionKey, setState]);
 
-  return state;
+  return stored.identity === identity && identity.isCurrent() ? stored.state : initialLatestHistory;
 };
