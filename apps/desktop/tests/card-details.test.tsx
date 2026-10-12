@@ -27,6 +27,9 @@ describe('Desktop 真实基础详情', () => {
     await act(async () => container.querySelector<HTMLAnchorElement>('a[href="relative.md"]')!.click()); expect(mocks.open).toHaveBeenCalledWith('relative.md');
     await act(async () => button('下载 JSON').click()); expect(mocks.download).toHaveBeenCalledWith('桌面详情.json', JSON.stringify(JSON.parse(card.data), null, 2));
   });
+  it.each([{ kind: 'local' }, { kind: 'cache', lastSuccessAt: null }, { kind: 'owned' }, { kind: 'public' }, { kind: 'preset' }] as const)('generic $kind details never infer history from the card ID or source', async (source) => {
+    await render({ source }); expect(button('最近严格排位')).toBeUndefined(); expect(read).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
   it('下载/保存失败直接在详情内可见', async () => {
     mocks.download.mockImplementationOnce(() => { throw new Error('磁盘下载失败'); }); await render({ onSaveCopyToLocalLibrary: async () => { throw new Error('本地存储写入失败'); } });
     await act(async () => button('下载 JSON').click()); expect(container.textContent).toContain('磁盘下载失败');

@@ -184,6 +184,71 @@ describe('Desktop actual anonymous ranking browser', () => {
   });
 });
 
+describe('Desktop actual recent strict history entry', () => {
+  const body = { status: 200, body: { success: true, card: { id: 'public-card', name: '榜单正文', type: 'character', description: '', data: '{"name":"公开原件"}', is_public: 1 } } };
+  const historyButton = () => [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent === '最近严格排位')!;
+  const openDetails = async () => { const node = container.querySelector<HTMLButtonElement>('[aria-label^="查看角色详情"]')!; node.focus(); await act(async () => node.click()); return node; };
+  const escape = () => act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  it('historical ranking details load current strict summaries only on click, with nested focus and no authority escalation', async () => {
+    mocks.invoke.mockImplementation(async (command, { request }) => command === 'cloud_card_library_request' ? body : response(request));
+    await render(); await select(0, 'S3'); const opener = await openDetails();
+    expect(mocks.invoke.mock.calls.filter((call) => call[1].request.kind === 'ratingHistory')).toHaveLength(0);
+    const history = historyButton(); history.focus(); await act(async () => history.click());
+    expect(mocks.invoke.mock.lastCall).toEqual(['cloud_public_ranking_read', { request: { kind: 'ratingHistory', entityType: 'data_card', entityId: 'public-card' } }]);
+    expect(document.body.textContent).toContain('历史对手甲'); expect(document.body.textContent).toContain('不按当前所选赛季筛选');
+    expect(document.querySelector('[role="dialog"]')?.getAttribute('aria-hidden')).toBe('true');
+    await escape(); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(document.activeElement).toBe(history);
+    await escape(); expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.activeElement).toBe(opener);
+  });
+  it('closing/reopening the same details fences a late Native result rather than caching it', async () => {
+    const old = deferred<unknown>(); let first = true;
+    mocks.invoke.mockImplementation(async (command, { request }) => {
+      if (command === 'cloud_card_library_request') return body;
+      if (request.kind === 'ratingHistory' && first) { first = false; return old.promise; }
+      return response(request);
+    });
+    await render(); await openDetails(); await act(async () => historyButton().click());
+    await escape(); await escape(); await openDetails(); await act(async () => historyButton().click());
+    await act(async () => old.resolve({ kind: 'ratingHistory', data: { ...fixture.responses.ratingHistory, items: [] } }));
+    expect(document.body.textContent).toContain('历史对手甲'); expect(document.body.textContent).not.toContain('暂无严格排位记录');
+    expect(mocks.invoke.mock.calls.filter((call) => call[1].request.kind === 'ratingHistory')).toHaveLength(2);
+  });
+  it('preset ranking details query only their explicit preset entity, not the local card identifier', async () => {
+    const id = 'M01_centaurea.json';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"name":"内置正文"}')));
+    try {
+      mocks.invoke.mockImplementation(async (_command, { request }) => request.kind === 'leaderboard'
+        ? { kind: 'leaderboard', data: { success: true, items: [{ ...fixture.responses.leaderboard.items[0], entityType: 'preset', entityId: id }] } }
+        : request.kind === 'ratingHistory' ? { kind: 'ratingHistory', data: { ...fixture.responses.ratingHistory, entityType: 'preset', entityId: id } } : response(request));
+      await render(); await openDetails(); await act(async () => historyButton().click());
+      expect(mocks.invoke.mock.lastCall?.[1]).toEqual({ request: { kind: 'ratingHistory', entityType: 'preset', entityId: id } });
+      expect(document.body.textContent).toContain('历史对手甲');
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it('shows transport failures distinctly and retries the same fixed target', async () => {
+    mocks.invoke.mockImplementation(async (command, { request }) => {
+      if (command === 'cloud_card_library_request') return body;
+      if (request.kind === 'ratingHistory') throw { code: 'server-unavailable', message: '请求过于频繁，请稍后重试' };
+      return response(request);
+    });
+    await render(); await openDetails(); await act(async () => historyButton().click()); expect(document.body.textContent).toContain('请求过于频繁'); expect(document.body.textContent).not.toContain('暂无严格排位记录');
+    mocks.invoke.mockImplementation(async (_command, { request }) => response(request));
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent === '重试')!.click());
+    expect(document.body.textContent).toContain('历史对手甲');
+  });
+  it.skipIf(!process.env.PUBLIC_RANKING_NATIVE_WIRE_INPUT)('consumes actual Native ratingHistory loopback Serialize through TS bridge and real ranking details', async () => {
+    const native = (kind: string): unknown => JSON.parse(readFileSync(join(process.env.PUBLIC_RANKING_NATIVE_WIRE_INPUT!, `${kind}.json`), 'utf8'));
+    mocks.invoke.mockImplementation(async (command, { request }) => command === 'cloud_card_library_request' ? body : native(request.kind));
+    await render(); await openDetails(); expect(mocks.invoke.mock.calls.some((call) => call[1].request.kind === 'ratingHistory')).toBe(false);
+    await act(async () => historyButton().click()); expect(document.body.textContent).toContain('历史对手甲'); expect(document.body.textContent).toContain('赛后 -10');
+    const projected = await readPublicRanking(mocks.invoke, { kind: 'ratingHistory', entityType: 'data_card', entityId: ' public-card ' });
+    expect(JSON.stringify(projected)).not.toContain('DROP'); expect(projected.items[0]?.appliedAt).toBeNull();
+    mocks.invoke.mockImplementation(async () => native('ratingHistory-preset'));
+    const preset = await readPublicRanking(mocks.invoke, { kind: 'ratingHistory', entityType: 'preset', entityId: ' 旧 / ?&+%😀.json ' });
+    expect(preset.entityId).toBe('旧 / ?&+%😀.json'); expect(preset.items[2]?.delta).toBe(0);
+  });
+});
+
 describe('typed public ranking bridge', () => {
   it('rejects extras/path escape/arrays before invoke and fences wrong kind/ranks/season', async () => {
     for (const request of [{ kind: 'tags', token: 'x' }, { kind: 'archive', seasonId: '../S3' }, [], { ...fixture.requests.leaderboard, filters: [] }]) {
@@ -197,4 +262,15 @@ describe('typed public ranking bridge', () => {
     mocks.invoke.mockResolvedValue({ kind: 'archive', data: fixture.responses.archive });
     await expect(readPublicRanking(mocks.invoke, { kind: 'archive', seasonId: 'S4' })).rejects.toMatchObject({ code: 'invalid-response' });
   });
+  it('rejects expanded history requests before invoke and mismatched summaries after invoke', async () => {
+    const request = { kind: 'ratingHistory', entityType: 'data_card', entityId: 'public-card' } as const;
+    for (const key of ['queue', 'limit', 'seasonId', 'url', 'headers', 'credentials']) {
+      await expect(readPublicRanking(mocks.invoke, { ...request, [key]: 'forbidden' })).rejects.toMatchObject({ code: 'invalid-request' });
+    }
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    for (const data of [{ ...fixture.responses.ratingHistory, entityId: 'wrong' }, { ...fixture.responses.ratingHistory, entityType: 'preset' }, { ...fixture.responses.ratingHistory, queue: 'free' }, { ...fixture.responses.ratingHistory, items: Array(11).fill(fixture.responses.ratingHistory.items[0]) }]) {
+      mocks.invoke.mockResolvedValue({ kind: 'ratingHistory', data }); await expect(readPublicRanking(mocks.invoke, request)).rejects.toMatchObject({ code: 'invalid-response' });
+    }
+  });
+
 });

@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import fixture from '@mahoshojo/contracts/fixtures/public-ranking.json';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,7 +8,8 @@ import type { CardDetailsSource } from '@mahoshojo/ui-web/card-details';
 const mocks = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock('@/lib/public-card-cache/shared-loader', () => ({ getPublicCardByIdWithSharedCache: mocks.read }));
 vi.mock('@/lib/auth', () => ({ authStorage: { getAuthHeader: async () => null, buildAuthenticatedRequestInit: async (init: RequestInit) => init } }));
-vi.mock('@/lib/arena/rank-cache', () => ({ upsertArenaRankCacheFromMeta: vi.fn() }));
+vi.mock('@/lib/arena/rank-cache', async (importOriginal) => ({ ...await importOriginal<typeof import('@/lib/arena/rank-cache')>(), upsertArenaRankCacheFromMeta: vi.fn() }));
+import { RankingPage } from '@/components/ranking/RankingPage';
 import DataCardDetailsModal from '@/components/DataCardDetailsModal';
 import { LeaderboardEntityDetailsModal } from '@/components/ranking/LeaderboardEntityDetailsModal';
 let root: Root; let container: HTMLDivElement;
@@ -29,11 +32,11 @@ describe('Web 原详情实际消费 shared，宿主 metadata 有版本与生命�
     await render(source); expect(fetch).not.toHaveBeenCalled(); expect(container.textContent).toContain('本机未验证'); expect(container.textContent).toContain('完整正文'); expect(container.textContent).not.toContain('服务器判断）：是'); expect(container.textContent).not.toContain('更多');
   });
   it('预设保持宿主的排位历史入口，只有点击才读取历史且不查 metadata', async () => {
-    vi.mocked(fetch).mockResolvedValue(response({ success: true, items: [] }));
+    vi.mocked(fetch).mockResolvedValue(response({ success: true, entityType: 'preset', entityId: 'preset.json', queue: 'strict', items: [] }));
     await act(async () => root.render(<DataCardDetailsModal isOpen onClose={() => {}} card={card} source={{ kind: 'preset' }} ratingHistoryEntity={{ entityType: 'preset', entityId: 'preset.json' }} />));
     expect(fetch).not.toHaveBeenCalled();
     const history = [...container.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent === '最近严格排位')!;
-    await act(async () => history.click()); expect(fetch).toHaveBeenCalledWith('/api/arena/entity-rating-history?entityType=preset&entityId=preset.json', expect.anything());
+    await act(async () => history.click()); expect(fetch).toHaveBeenCalledWith('/api/arena/entity-rating-history?entityType=preset&entityId=preset.json&queue=strict', expect.anything());
   });
   it('本地保存 callback 的失败显示在 Web 详情内', async () => {
     await act(async () => root.render(<DataCardDetailsModal isOpen onClose={() => {}} card={card} source={{ kind: 'cache', lastSuccessAt: date }} onSaveCopyToLocalLibrary={async () => { throw new Error('本地副本写入失败'); }} />));
@@ -69,4 +72,44 @@ describe('Web 原详情实际消费 shared，宿主 metadata 有版本与生命�
     await act(async () => a.resolve(response(meta()))); expect(container.textContent).not.toContain('123（A）');
     await render({ kind: 'public' }, next, false); await act(async () => b.resolve(response(meta(next.id)))); expect(container.textContent).toBe('');
   });
+  it('显式禁止优先于public/owned推导，原Web已有入口与未知本地来源保持边界', async () => {
+    for (const source of [{ kind: 'public' }, { kind: 'owned' }] as CardDetailsSource[]) {
+      await act(async () => root.render(<DataCardDetailsModal isOpen onClose={() => {}} card={card} source={source} ratingHistoryEntity={null} />));
+      expect(container.textContent).not.toContain('最近严格排位');
+      await render(source); expect(container.textContent).toContain('最近严格排位');
+    }
+    for (const source of [{ kind: 'local', label: '本地' }, { kind: 'cache', lastSuccessAt: date }, { kind: 'preset' }] as CardDetailsSource[]) {
+      await render(source); expect(container.textContent).not.toContain('最近严格排位');
+    }
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('entity-rating-history'))).toBe(false);
+  });
+  it('实际Web历史榜单→缓存正文详情→独立历史摘要共源，Escape逐层还原焦点', async () => {
+    mocks.read.mockResolvedValue({ card: { ...card, id: 'public-card', name: '缓存正文卡' }, source: 'cache' });
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      const path = String(url);
+      return response(path.includes('entity-rating-history') ? fixture.responses.ratingHistory : path === '/api/tags' ? fixture.responses.tags : path === '/config/seasons.json' ? fixture.responses.seasons : path.includes('/data/seasons/') ? fixture.responses.archive : path.includes('/api/arena/leaderboard') ? fixture.responses.leaderboard : { canReport: false, reasons: [] });
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => { root.render(<QueryClientProvider client={client}><RankingPage /></QueryClientProvider>); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await act(async () => { const season = container.querySelector('select')!; season.value = 'S3'; season.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    const opener = container.querySelector<HTMLButtonElement>('[aria-label^="查看角色详情"]')!; opener.focus();
+    await act(async () => opener.click());
+    expect(document.body.textContent).toContain('缓存正文卡');
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('entity-rating-history'))).toBe(false);
+    const history = [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent === '最近严格排位')!; history.focus();
+    await act(async () => history.click());
+    const request = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes('entity-rating-history'))!;
+    expect(request[0]).toBe('/api/arena/entity-rating-history?entityType=data_card&entityId=public-card&queue=strict');
+    expect(request[1]).toMatchObject({ credentials: 'omit', redirect: 'error' });
+    expect(document.body.textContent).toContain('历史对手甲'); expect(document.body.textContent).toContain('不按当前所选赛季筛选');
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2); expect(document.querySelector('[role="dialog"]')?.getAttribute('aria-hidden')).toBe('true');
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(document.activeElement).toBe(history);
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.activeElement).toBe(opener);
+    client.clear();
+  });
+
 });

@@ -310,6 +310,7 @@ function DataCardDetailsModalScope({
   const resolvedMetaCardId = requestedMetaId;
   const resolvedCloudCardId = typeof resolvedMetaCardId === 'string' ? resolvedMetaCardId.trim() : '';
   const isCloudDataCard = isCloudSource && Boolean(resolvedCloudCardId);
+  const [isRatingHistoryOpen, setIsRatingHistoryOpen] = useState(false);
   const resolvedRatingHistoryEntity = useMemo(() => {
     if (ratingHistoryEntity === null) return null;
     if (ratingHistoryEntity?.entityId?.trim()) {
@@ -674,7 +675,7 @@ function DataCardDetailsModalScope({
   return (
     <>
       <BasicCardDetailsModal isOpen={isOpen} onClose={onClose} card={card} source={source} fallbackFocusRef={fallbackFocusRef}
-        obscured={isReportModalOpen}
+        obscured={isReportModalOpen || isRatingHistoryOpen}
         renderMarkdown={(content) => <MarkdownBlock content={content} variant="light" className="text-sm" />}
         headerActions={<>
             {canShowReportActions ? (
@@ -753,6 +754,7 @@ function DataCardDetailsModalScope({
                   <EntityRatingHistoryButton
                     entityType={resolvedRatingHistoryEntity.entityType}
                     entityId={resolvedRatingHistoryEntity.entityId}
+                    onOpenChange={setIsRatingHistoryOpen}
                   />
                 ) : null}
                 <button

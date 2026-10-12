@@ -7,6 +7,9 @@ const LEADERBOARD_PATH: &str = "/api/arena/leaderboard";
 const SEARCH_PATH: &str = "/api/arena/leaderboard/search";
 const TAGS_PATH: &str = "/api/tags";
 const SEASONS_PATH: &str = "/config/seasons.json";
+const RATING_HISTORY_PATH: &str = "/api/arena/entity-rating-history";
+// Client transport guard, not a server eligibility or historical-record cap.
+const RATING_HISTORY_MAX_BYTES: usize = 256 * 1024;
 const LEADERBOARD_MAX_BYTES: usize = 1024 * 1024;
 const SEARCH_MAX_BYTES: usize = 256 * 1024;
 const TAGS_MAX_BYTES: usize = 1024 * 1024;
@@ -128,7 +131,9 @@ query_enum!(Queue { Strict => "strict", Free => "free" });
 query_enum!(Sort { Rating => "rating", Tech => "tech" });
 query_enum!(Order { Desc => "desc", Asc => "asc" });
 query_enum!(NativeFilter { Any => "any", Yes => "1", No => "0" });
-string_enum!(EntityType { DataCard => "data_card", Preset => "preset" });
+query_enum!(EntityType { DataCard => "data_card", Preset => "preset" });
+string_enum!(StrictQueue { Strict => "strict" });
+string_enum!(RatingResult { Win => "win", Loss => "loss", Draw => "draw" });
 string_enum!(Tier { Unranked => "无牌", White => "白牌", Word => "字牌", Flower => "花牌", Wand => "权杖" });
 string_enum!(TagScope { User => "user", System => "system", Admin => "admin" });
 string_enum!(BattleMode { Classic => "classic", Kizuna => "kizuna", Daily => "daily", Scenario => "scenario" });
@@ -170,6 +175,12 @@ enum Operation {
         filters: RankingFilters,
         q: String,
         limit: SafeInteger,
+    },
+    RatingHistory {
+        #[serde(rename = "entityType")]
+        entity_type: EntityType,
+        #[serde(rename = "entityId")]
+        entity_id: String,
     },
     Tags {},
     Seasons {},
@@ -224,6 +235,25 @@ impl PublicRankingRequest {
     fn route(&self) -> Result<(String, usize), CloudError> {
         let invalid = || CloudError::new(CloudErrorCode::InvalidRequest, "排行榜读取参数无效");
         let (filters, limit, path, extra, budget) = match &self.0 {
+            Operation::RatingHistory {
+                entity_type,
+                entity_id,
+            } => {
+                let id = trim_query(entity_id);
+                if id.is_empty() {
+                    return Err(invalid());
+                }
+                let mut query = url::form_urlencoded::Serializer::new(String::new());
+                query.extend_pairs([
+                    ("entityType", entity_type.wire()),
+                    ("entityId", id),
+                    ("queue", "strict"),
+                ]);
+                return Ok((
+                    format!("{RATING_HISTORY_PATH}?{}", query.finish()),
+                    RATING_HISTORY_MAX_BYTES,
+                ));
+            }
             Operation::Tags {} => return Ok((TAGS_PATH.to_string(), TAGS_MAX_BYTES)),
             Operation::Seasons {} => return Ok((SEASONS_PATH.to_string(), SEASONS_MAX_BYTES)),
             Operation::Archive { season_id } => {
@@ -306,7 +336,38 @@ impl PublicRankingRequest {
 }
 
 // Only these public fields cross IPC. Unknown upstream keys are discarded at
-// every object level, including author IDs, descriptions and card body snapshots.
+// every object level. Only declared public identifiers and summary facts survive.
+object! { struct RatingOpponent { entity_type: EntityType, entity_id: String, display_name: String, } }
+object! {
+    struct RatingInitiator {
+        #[serde(deserialize_with = "nullable")]
+        user_id: Option<SafeInteger>,
+        #[serde(deserialize_with = "nullable")]
+        username: Option<String>,
+    }
+}
+object! {
+    struct RatingHistoryItem {
+        generation_id: String,
+        created_at: String,
+        #[serde(deserialize_with = "nullable")]
+        applied_at: Option<String>,
+        opponent: RatingOpponent,
+        result: RatingResult,
+        delta: SafeInteger,
+        after_rating: SafeInteger,
+        initiator: RatingInitiator,
+    }
+}
+object! {
+    pub struct RatingHistory {
+        success: bool,
+        entity_type: EntityType,
+        entity_id: String,
+        queue: StrictQueue,
+        items: Vec<RatingHistoryItem>,
+    }
+}
 object! { struct SeasonExtreme { rating: f64, games: f64, occurred_at: String, tier: Tier, } }
 object! {
     pub struct RankingItem {
@@ -522,6 +583,7 @@ pub enum PublicRankingResponse {
     Tags(RankingTags),
     Seasons(Seasons),
     Archive(Box<SeasonArchive>),
+    RatingHistory(RatingHistory),
 }
 
 pub async fn read_public_ranking(
@@ -594,6 +656,20 @@ pub async fn read_public_ranking(
             }
             Ok(PublicRankingResponse::Search(data))
         }
+        Operation::RatingHistory {
+            entity_type,
+            entity_id,
+        } => {
+            let data: RatingHistory = serde_json::from_slice(&bytes).map_err(|_| incompatible())?;
+            if !data.success
+                || data.entity_type.wire() != entity_type.wire()
+                || data.entity_id != trim_query(&entity_id)
+                || data.items.len() > 10
+            {
+                return Err(incompatible());
+            }
+            Ok(PublicRankingResponse::RatingHistory(data))
+        }
         Operation::Tags {} => {
             let data: RankingTags = serde_json::from_slice(&bytes).map_err(|_| incompatible())?;
             if !data.success {
@@ -621,7 +697,14 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
 
-    const KINDS: [&str; 5] = ["leaderboard", "search", "tags", "seasons", "archive"];
+    const KINDS: [&str; 6] = [
+        "leaderboard",
+        "search",
+        "tags",
+        "seasons",
+        "archive",
+        "ratingHistory",
+    ];
     fn fixture() -> Value {
         serde_json::from_str(include_str!(
             "../../../../../packages/contracts/fixtures/public-ranking.json"
@@ -748,6 +831,7 @@ mod tests {
             ("tags", TAGS_MAX_BYTES),
             ("seasons", SEASONS_MAX_BYTES),
             ("archive", ARCHIVE_MAX_BYTES),
+            ("ratingHistory", RATING_HISTORY_MAX_BYTES),
         ] {
             let route = request(kind).route().unwrap();
             assert_eq!(route.1, budget);
@@ -1190,5 +1274,123 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+    #[tokio::test]
+    async fn rating_history_exact_target_nullable_signed_facts_and_no_extra_authority() {
+        for field in ["queue", "seasonId", "limit", "credentials", "token"] {
+            let mut value = fixture()["requests"]["ratingHistory"].clone();
+            value[field] = json!("forbidden");
+            assert!(invalid_request(value), "{field}");
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let state = CloudState::with_origin(&format!("http://{}", listener.local_addr().unwrap()));
+        let mut value = fixture()["requests"]["ratingHistory"].clone();
+        value["entityId"] = json!(" \u{feff}\n");
+        assert_eq!(
+            read_public_ranking(&state, serde_json::from_value(value).unwrap())
+                .await
+                .unwrap_err()
+                .code,
+            CloudErrorCode::InvalidRequest
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept())
+                .await
+                .is_err()
+        );
+
+        let id = "旧 / ?&+%😀.json";
+        let request = serde_json::from_value(json!({"kind":"ratingHistory","entityType":"preset","entityId":format!(" \u{feff}{id}\n")})).unwrap();
+        let mut body = fixture()["responses"]["ratingHistory"].clone();
+        body["entityType"] = json!("preset");
+        body["entityId"] = json!(id);
+        let (origin, seen, task) = server(200, serde_json::to_vec(&body).unwrap(), "").await;
+        let output = read_public_ranking(&CloudState::with_origin(&origin), request)
+            .await
+            .unwrap();
+        let head = seen.await.unwrap();
+        let url = url::Url::parse(&format!(
+            "{origin}{}",
+            head.split_whitespace().nth(1).unwrap()
+        ))
+        .unwrap();
+        assert_eq!(url.path(), RATING_HISTORY_PATH);
+        assert_eq!(
+            url.query_pairs().into_owned().collect::<Vec<_>>(),
+            vec![
+                ("entityType".to_string(), "preset".to_string()),
+                ("entityId".to_string(), id.to_string()),
+                ("queue".to_string(), "strict".to_string())
+            ]
+        );
+        let output = serde_json::to_value(output).unwrap();
+        assert_eq!(output["data"]["items"][0]["appliedAt"], Value::Null);
+        assert_eq!(output["data"]["items"][2]["delta"], 0);
+        assert_eq!(output["data"]["items"][2]["afterRating"], -10);
+        assert_eq!(output["data"]["items"][2]["initiator"]["userId"], -1);
+        probe("ratingHistory-preset", &output);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rating_history_rejects_mismatches_missing_facts_and_overlong_results() {
+        let original = fixture()["responses"]["ratingHistory"].clone();
+        for (path, value) in [
+            ("/success", json!(false)),
+            ("/entityType", json!("preset")),
+            ("/entityId", json!("another")),
+            ("/queue", json!("free")),
+            ("/items/0/result", json!("constructor")),
+            ("/items/0/result", json!("__proto__")),
+            ("/items/0/delta", json!(1.5)),
+            ("/items/0/afterRating", json!(9_007_199_254_740_992_u64)),
+            ("/items/0/initiator/userId", json!(1.5)),
+            ("/items/0/initiator/username", json!(3)),
+            ("/items/0/appliedAt", json!(3)),
+            ("/items/0/createdAt", json!(null)),
+        ] {
+            let mut body = original.clone();
+            *body.pointer_mut(path).unwrap() = value;
+            assert_eq!(
+                read("ratingHistory", body).await.unwrap_err().code,
+                CloudErrorCode::ProtocolMismatch,
+                "{path}"
+            );
+        }
+        for (parent, key) in [
+            ("/items/0", "appliedAt"),
+            ("/items/0", "delta"),
+            ("/items/0", "afterRating"),
+            ("/items/0/initiator", "userId"),
+            ("/items/0/initiator", "username"),
+        ] {
+            let mut body = original.clone();
+            body.pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+            assert_eq!(
+                read("ratingHistory", body).await.unwrap_err().code,
+                CloudErrorCode::ProtocolMismatch,
+                "missing {parent}/{key}"
+            );
+        }
+        for size in [0, 10, 11] {
+            let mut body = original.clone();
+            body["items"] = json!(vec![original["items"][0].clone(); size]);
+            assert_eq!(read("ratingHistory", body).await.is_ok(), size <= 10);
+        }
+        for (status, expected) in [
+            (404, CloudErrorCode::NotFound),
+            (429, CloudErrorCode::ServerUnavailable),
+            (500, CloudErrorCode::ServerUnavailable),
+        ] {
+            let error = read_bytes("ratingHistory", status, b"private debug".to_vec())
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, expected);
+            assert!(!error.message.contains("private"));
+        }
     }
 }

@@ -47,7 +47,7 @@ function RankingDetailsScope({ entity, onClose, host }: { entity: RankingDetails
     return () => controller.abort();
   }, [entity, host.online, retry]);
   if (!loaded) return <BaseModal isOpen onClose={onClose} title="角色详情" maxWidthClassName="max-w-md"><p className="text-sm text-gray-600">{entity.pendingNotice}</p>{error ? <div role="alert" className="mt-3 text-sm text-red-700"><p>{error}</p><button type="button" onClick={() => setRetry((value) => value + 1)} className="mt-2 rounded border px-3 py-2">重试</button></div> : <p role="status" className="mt-3">正在加载角色详情…</p>}</BaseModal>;
-  return <DesktopCardDetailsModal isOpen onClose={onClose} {...loaded} pendingNotice={entity.pendingNotice} localLibrarySaveState={saveState}
+  return <DesktopCardDetailsModal isOpen onClose={onClose} {...loaded} ratingHistoryEntity={{ entityType: entity.entityType, entityId: entity.entityId }} pendingNotice={entity.pendingNotice} localLibrarySaveState={saveState}
     onSaveCopyToLocalLibrary={async () => {
       setSaveState({ busy: true, message: null });
       try {

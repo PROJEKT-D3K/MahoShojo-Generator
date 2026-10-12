@@ -1,15 +1,20 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { EntityRatingHistoryButton, type RankingDetailsTarget } from '@mahoshojo/ui-web/ranking';
+import { readDesktopRanking } from '../ranking/use-ranking-query';
 import { BasicCardDetailsModal } from '@mahoshojo/ui-web/card-details';
 import type { CardLibraryDetailsModalProps } from '@mahoshojo/ui-web/card-library';
 import { DENY_EXTERNAL_MEDIA, MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import { useExternalLinks } from '../external-links/external-links-provider';
 import { downloadTextFile } from '../../platform/download-text-file';
 
-export function DesktopCardDetailsModal(props: CardLibraryDetailsModalProps & { pendingNotice?: string }) {
+type DesktopCardDetailsProps = CardLibraryDetailsModalProps & { pendingNotice?: string; ratingHistoryEntity?: Pick<RankingDetailsTarget, 'entityType' | 'entityId'> };
+
+export function DesktopCardDetailsModal(props: DesktopCardDetailsProps) {
   return props.isOpen ? <DesktopCardDetailsScope key={`${props.source.kind}:${props.card.id}`} {...props} /> : null;
 }
 
-function DesktopCardDetailsScope({ card, source, onSaveCopyToLocalLibrary, localLibrarySaveState, pendingNotice, ...props }: CardLibraryDetailsModalProps & { pendingNotice?: string }) {
+function DesktopCardDetailsScope({ card, source, onSaveCopyToLocalLibrary, localLibrarySaveState, pendingNotice, ratingHistoryEntity, ...props }: DesktopCardDetailsProps) {
+  const [isRatingHistoryOpen, setIsRatingHistoryOpen] = useState(false);
   const { openContent } = useExternalLinks();
   const scope = useMemo(() => ({}), [card.id, card.data, source.kind]);
   const currentScope = useRef<object | null>(scope);
@@ -34,7 +39,7 @@ function DesktopCardDetailsScope({ card, source, onSaveCopyToLocalLibrary, local
       }
     }
   };
-  return <BasicCardDetailsModal {...props} card={card} source={source}
+  return <BasicCardDetailsModal {...props} card={card} source={source} obscured={isRatingHistoryOpen}
     renderMarkdown={(content) => <div onClickCapture={(event) => {
       // 相对链接也不能绕开内容链接确认/校验而直接导航 WebView。
       const anchor = event.target instanceof Element ? event.target.closest('a') : null;
@@ -43,7 +48,7 @@ function DesktopCardDetailsScope({ card, source, onSaveCopyToLocalLibrary, local
       openContent(anchor.getAttribute('href') ?? '');
     }}><MarkdownBlock content={content} variant="light" className="text-sm" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} /></div>}
     beforeOverview={pendingNotice ? <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{pendingNotice}</p> : undefined}
-    metadata={<section className="space-y-2 text-xs text-gray-500"><p>原生：未确认（本机未验证）；未查询线上指标</p>{card.tagIds?.length ? <p>标签 ID（未取得名称）：{card.tagIds.join('、')}</p> : null}</section>}
+    metadata={<section className="space-y-2 text-xs text-gray-500">{ratingHistoryEntity && <EntityRatingHistoryButton {...ratingHistoryEntity} readRanking={readDesktopRanking} onOpenChange={setIsRatingHistoryOpen} />}<p>原生：未确认（本机未验证）；未查询线上指标</p>{card.tagIds?.length ? <p>标签 ID（未取得名称）：{card.tagIds.join('、')}</p> : null}</section>}
     footer={<>
       <div className="mr-auto">{actionError && <p role="alert" className="text-sm text-red-700">{actionError}</p>}{localLibrarySaveState?.message && <p role="status" className="text-sm text-gray-600">{localLibrarySaveState.message}</p>}</div>
       <button type="button" disabled={busy} className="rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-50" onClick={() => void run(async () => {

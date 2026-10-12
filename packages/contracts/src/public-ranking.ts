@@ -1,7 +1,7 @@
 import { z } from './zod';
 
 /** Public read transport budgets, never a cap on server eligibility or historical records. */
-export const PUBLIC_RANKING_BODY_BUDGETS = { leaderboard: 1024 * 1024, search: 256 * 1024, tags: 1024 * 1024, seasons: 256 * 1024, archive: 4 * 1024 * 1024 } as const;
+export const PUBLIC_RANKING_BODY_BUDGETS = { leaderboard: 1024 * 1024, search: 256 * 1024, tags: 1024 * 1024, seasons: 256 * 1024, archive: 4 * 1024 * 1024, ratingHistory: 256 * 1024 } as const;
 const integer = z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER);
 const text = z.string();
 const nullableText = text.nullable();
@@ -21,6 +21,7 @@ export const PublicRankingRequestSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tags') }).strict(),
   z.object({ kind: z.literal('seasons') }).strict(),
   z.object({ kind: z.literal('archive'), seasonId: PublicRankingSeasonIdSchema }).strict(),
+  z.object({ kind: z.literal('ratingHistory'), entityType, entityId: text.trim().min(1) }).strict(),
 ]);
 export type PublicRankingRequest = z.infer<typeof PublicRankingRequestSchema>;
 export const PublicRankingSeasonExtremeSchema = z.object({ rating: z.number(), games: z.number(), occurredAt: text, tier: z.enum(['无牌', '白牌', '字牌', '花牌', '权杖']) });
@@ -69,18 +70,32 @@ export const PublicSeasonArchiveSchema = z.discriminatedUnion('schemaVersion', [
   ]), totalEligible: z.object({ strict: integer.min(0), free: integer.min(0) }) }),
 ]);
 export type PublicSeasonArchive = z.infer<typeof PublicSeasonArchiveSchema>;
+/** Public strict/applied summaries only; unknown upstream fields never cross the reader boundary. */
+export const EntityRatingHistoryItemSchema = z.object({
+  generationId: text, createdAt: text, appliedAt: nullableText,
+  opponent: z.object({ entityType, entityId: text, displayName: text }),
+  result: z.enum(['win', 'loss', 'draw']), delta: integer, afterRating: integer,
+  initiator: z.object({ userId: integer.nullable(), username: nullableText }),
+});
+export type EntityRatingHistoryItem = z.infer<typeof EntityRatingHistoryItemSchema>;
+export const EntityRatingHistorySchema = z.object({
+  success: z.literal(true), entityType, entityId: text, queue: z.literal('strict'),
+  items: z.array(EntityRatingHistoryItemSchema).max(10),
+});
+export type EntityRatingHistory = z.infer<typeof EntityRatingHistorySchema>;
 export const PublicRankingResponseSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('leaderboard'), data: PublicRankingListSchema }).strict(),
   z.object({ kind: z.literal('search'), data: PublicRankingListSchema.extend({ items: z.array(PublicRankingItemSchema).max(20) }) }).strict(),
   z.object({ kind: z.literal('tags'), data: PublicRankingTagsSchema }).strict(),
   z.object({ kind: z.literal('seasons'), data: PublicSeasonsSchema }).strict(),
   z.object({ kind: z.literal('archive'), data: PublicSeasonArchiveSchema }).strict(),
+  z.object({ kind: z.literal('ratingHistory'), data: EntityRatingHistorySchema }).strict(),
 ]);
 export type PublicRankingResponse = z.infer<typeof PublicRankingResponseSchema>;
 export type PublicRankingKind = PublicRankingRequest['kind'];
 export type PublicRankingDataMap = {
   leaderboard: z.infer<typeof PublicRankingListSchema>; search: z.infer<typeof PublicRankingListSchema>;
-  tags: z.infer<typeof PublicRankingTagsSchema>; seasons: PublicSeasonsConfig; archive: PublicSeasonArchive;
+  tags: z.infer<typeof PublicRankingTagsSchema>; seasons: PublicSeasonsConfig; archive: PublicSeasonArchive; ratingHistory: EntityRatingHistory;
 };
 export type PublicRankingData<K extends PublicRankingKind> = PublicRankingDataMap[K];
 
@@ -89,6 +104,7 @@ export function publicRankingPath(request: PublicRankingRequest): string {
   if (request.kind === 'tags') return '/api/tags';
   if (request.kind === 'seasons') return '/config/seasons.json';
   if (request.kind === 'archive') return `/data/seasons/archive_${PublicRankingSeasonIdSchema.parse(request.seasonId)}.json`;
+  if (request.kind === 'ratingHistory') return `/api/arena/entity-rating-history?${new URLSearchParams({ entityType: request.entityType, entityId: request.entityId.trim(), queue: 'strict' })}`;
   const f = request.filters;
   const params = new URLSearchParams({ queue: f.queue, sort: f.sort, order: f.order, includePresets: f.includePresets ? '1' : '0', isNative: f.isNative, limit: String(request.limit) });
   if (request.kind === 'search') params.set('q', request.q);
@@ -105,6 +121,7 @@ export function publicRankingPath(request: PublicRankingRequest): string {
 export function parsePublicRankingResponse<R extends PublicRankingRequest>(request: R, raw: unknown): PublicRankingData<R['kind']> {
   const result = PublicRankingResponseSchema.parse(raw);
   if (result.kind !== request.kind
+    || (request.kind === 'ratingHistory' && result.kind === 'ratingHistory' && (result.data.entityType !== request.entityType || result.data.entityId !== request.entityId.trim()))
     || (request.kind === 'archive' && result.kind === 'archive' && result.data.season.id !== request.seasonId)
     || (request.kind === 'leaderboard' && result.kind === 'leaderboard' && (result.data.items.length > Math.min(request.limit, 300 - request.offset)
       || result.data.items.some((item, index) => item.rank !== request.offset + index + 1)))

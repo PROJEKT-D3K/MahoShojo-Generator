@@ -7,7 +7,8 @@ import fixture from '@mahoshojo/contracts/fixtures/public-ranking.json';
 import { PublicRankingRequestSchema, PUBLIC_RANKING_BODY_BUDGETS } from '@mahoshojo/contracts/public-ranking';
 vi.mock('next/link', () => ({ default: ({ href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => <a href={href} {...props} /> }));
 vi.mock('@/components/ranking/LeaderboardEntityDetailsModal', () => ({ LeaderboardEntityDetailsModal: ({ entity }: { entity: { displayName: string } | null }) => entity ? <div role="dialog">详情：{entity.displayName}</div> : null }));
-import { RankingPage, readWebRanking } from '@/components/ranking/RankingPage';
+import { RankingPage } from '@/components/ranking/RankingPage';
+import { readWebRanking } from '@/lib/arena/read-public-ranking';
 let root: Root; let container: HTMLDivElement; let client: QueryClient;
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((yes) => { resolve = yes; }); return { promise, resolve }; };
 const respond = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -83,4 +84,16 @@ describe('Web bounded public reader', () => {
     fetcher.mockResolvedValue(respond({ error: 'private server debug' }, status));
     await expect(readWebRanking(PublicRankingRequestSchema.parse(fixture.requests.search))).rejects.toThrow(`HTTP ${status}`);
   });
+  it('ratingHistory enforces its streamed byte budget and validates exact identity without disclosing errors', async () => {
+    const request = PublicRankingRequestSchema.parse(fixture.requests.ratingHistory);
+    const budget = PUBLIC_RANKING_BODY_BUDGETS.ratingHistory;
+    const json = JSON.stringify(fixture.responses.ratingHistory); const bytes = new TextEncoder().encode(json);
+    const exact = new Uint8Array(budget).fill(32); exact.set(bytes);
+    fetcher.mockResolvedValueOnce(new Response(exact)); expect(JSON.stringify(await readWebRanking(request))).not.toContain('DROP');
+    const overflow = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(exact); controller.enqueue(new Uint8Array([32])); controller.close(); } });
+    fetcher.mockResolvedValueOnce(new Response(overflow)); await expect(readWebRanking(request)).rejects.toThrow('排行榜响应过大');
+    fetcher.mockResolvedValueOnce(respond({ ...fixture.responses.ratingHistory, entityId: 'wrong' })); await expect(readWebRanking(request)).rejects.toThrow('排行榜响应协议无效');
+    fetcher.mockResolvedValueOnce(respond({ error: 'private error' }, 500)); await expect(readWebRanking(request)).rejects.toThrow('HTTP 500');
+  });
+
 });

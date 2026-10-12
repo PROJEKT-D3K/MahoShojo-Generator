@@ -49,3 +49,19 @@ describe('basic card details shared boundary', () => {
     expect(readFileSync(resolve(root, 'packages/ui-web/src/card-details/BasicCardDetailsModal.tsx'), 'utf8')).not.toMatch(/fetch\(|authStorage|invoke\(/);
   });
 });
+
+
+describe('recent strict history shared boundary', () => {
+  it('both hosts use the shared button and Web reader stays independent from its page', async () => {
+    const web = readFileSync(resolve(root, 'apps/web/components/ranking/EntityRatingHistoryButton.tsx'), 'utf8');
+    const desktop = readFileSync(resolve(root, 'apps/desktop/src/features/card-details/card-details-modal.tsx'), 'utf8');
+    expect(web).toContain("from '@mahoshojo/ui-web/ranking'"); expect(web).toContain('readRanking={readWebRanking}');
+    expect(desktop).toContain('ratingHistoryEntity && <EntityRatingHistoryButton'); expect(desktop).toContain('readRanking={readDesktopRanking}');
+    expect(web).not.toContain('RankingPage');
+    const reader = readFileSync(resolve(root, 'apps/web/lib/arena/read-public-ranking.ts'), 'utf8');
+    expect(reader).not.toMatch(/components\/|authStorage|useQuery|localStorage/);
+    const shared = await build({ entryPoints: [resolve(root, 'packages/ui-web/src/ranking/EntityRatingHistoryButton.tsx')], bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true });
+    expect(Object.keys(shared.metafile!.inputs).some((file) => /apps\/|hosted-runtime|@tauri|next\//.test(file))).toBe(false);
+    expect(readFileSync(resolve(root, 'packages/ui-web/src/ranking/EntityRatingHistoryButton.tsx'), 'utf8')).not.toMatch(/fetch\(|invoke\(|localStorage|useQuery/);
+  });
+});

@@ -49,6 +49,11 @@
     "archive": {
       "kind": "archive",
       "seasonId": "S3"
+    },
+    "ratingHistory": {
+      "kind": "ratingHistory",
+      "entityType": "data_card",
+      "entityId": "public-card"
     }
   },
   "responses": {
@@ -232,6 +237,69 @@
         }
       ],
       "privateArchive": "DROP"
+    },
+    "ratingHistory": {
+      "success": true,
+      "entityType": "data_card",
+      "entityId": "public-card",
+      "queue": "strict",
+      "items": [
+        {
+          "generationId": "generation-a",
+          "createdAt": "2026-04-25T10:00:00Z",
+          "appliedAt": null,
+          "opponent": {
+            "entityType": "preset",
+            "entityId": "legacy-opponent.json",
+            "displayName": "历史对手甲",
+            "privateBody": "DROP"
+          },
+          "result": "loss",
+          "delta": -14,
+          "afterRating": 1004,
+          "initiator": {
+            "userId": null,
+            "username": null,
+            "email": "DROP"
+          },
+          "model": "DROP"
+        },
+        {
+          "generationId": "generation-b",
+          "createdAt": "2026-04-24T10:00:00Z",
+          "appliedAt": "2026-04-24T10:00:01Z",
+          "opponent": {
+            "entityType": "data_card",
+            "entityId": "opponent-b",
+            "displayName": "历史对手乙"
+          },
+          "result": "win",
+          "delta": 18,
+          "afterRating": 1018,
+          "initiator": {
+            "userId": 42,
+            "username": "公开用户名"
+          }
+        },
+        {
+          "generationId": "generation-c",
+          "createdAt": "legacy-date",
+          "appliedAt": null,
+          "opponent": {
+            "entityType": "preset",
+            "entityId": "legacy-id",
+            "displayName": ""
+          },
+          "result": "draw",
+          "delta": 0,
+          "afterRating": -10,
+          "initiator": {
+            "userId": -1,
+            "username": " "
+          }
+        }
+      ],
+      "privateMetadata": "DROP"
     }
   },
   "budgets": {
@@ -239,13 +307,15 @@
     "search": 262144,
     "tags": 1048576,
     "seasons": 262144,
-    "archive": 4194304
+    "archive": 4194304,
+    "ratingHistory": 262144
   },
   "paths": {
     "leaderboard": "/api/arena/leaderboard",
     "search": "/api/arena/leaderboard/search",
     "tags": "/api/tags",
     "seasons": "/config/seasons.json",
-    "archive": "/data/seasons/archive_S3.json"
+    "archive": "/data/seasons/archive_S3.json",
+    "ratingHistory": "/api/arena/entity-rating-history"
   }
 }
