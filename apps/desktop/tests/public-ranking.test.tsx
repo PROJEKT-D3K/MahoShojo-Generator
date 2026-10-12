@@ -1,0 +1,181 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fixture from '@mahoshojo/contracts/fixtures/public-ranking.json';
+import { PublicRankingRequestSchema, type PublicRankingRequest } from '@mahoshojo/contracts/public-ranking';
+const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, Channel: class {} }));
+vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate: vi.fn() }) }));
+vi.mock('../src/features/account/use-desktop-cloud-session', () => ({ useDesktopCloudSession: () => { throw new Error('Public ranking must not read account state'); } }));
+import { DesktopRanking } from '../src/app/ranking-page';
+import { readPublicRanking } from '../src/platform/public-ranking-bridge';
+let root: Root; let container: HTMLDivElement;
+const deferred = <T,>() => { let resolve!: (value: T) => void; let reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+const response = (request: PublicRankingRequest) => ({ kind: request.kind, data: fixture.responses[request.kind] });
+const render = () => act(async () => root.render(<DesktopRanking />));
+const button = (text: string) => [...container.querySelectorAll('button')].find((node) => node.textContent?.trim() === text)!;
+const click = (text: string) => act(async () => button(text).click());
+const select = (index: number, value: string) => act(async () => { const node = container.querySelectorAll('select')[index]!; node.value = value; node.dispatchEvent(new Event('change', { bubbles: true })); });
+const search = async (value = '角色') => {
+  await act(async () => { const input = container.querySelector<HTMLInputElement>('[aria-label="排行榜搜索"]')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  await click('搜索');
+};
+beforeEach(() => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.invoke.mockReset(); mocks.invoke.mockImplementation(async (_command, { request }) => response(request));
+  container = document.createElement('div'); document.body.append(container); root = createRoot(container);
+});
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+
+describe('Desktop actual anonymous ranking browser', () => {
+  it('reads only public metadata, renders actual shared controls and offers no fake details', async () => {
+    await render(); expect(container.textContent).toContain('合成排行角色');
+    expect(container.querySelector('[aria-label^="查看角色详情"]')).toBeNull();
+    expect(container.textContent).toContain('赛季最高段位');
+    expect(mocks.invoke.mock.calls.map((call) => call[0])).toEqual(Array(3).fill('cloud_public_ranking_read'));
+    expect(mocks.invoke.mock.calls.map((call) => call[1].request.kind).sort()).toEqual(['leaderboard', 'seasons', 'tags']);
+    await search(); expect(container.textContent).toContain('#—'); expect(container.textContent).not.toContain('#0');
+    expect([...container.querySelectorAll('button')].some((node) => node.textContent?.includes('#—'))).toBe(false);
+    expect(container.textContent).not.toContain('查看详情');
+  });
+  it('keeps draft queue/sort changes unapplied until Apply and uses a single bounded page', async () => {
+    await render(); await select(1, 'free'); await select(2, 'tech'); await select(3, 'asc');
+    expect(mocks.invoke).toHaveBeenCalledTimes(3);
+    await click('应用筛选');
+    expect(mocks.invoke.mock.lastCall?.[1].request).toMatchObject({ kind: 'leaderboard', offset: 0, limit: 50, filters: { queue: 'free', sort: 'tech', order: 'asc' } });
+    expect(container.textContent).not.toContain('赛季最高段位');
+  });
+  it('paginates the real list only through Top300 without total or background traversal', async () => {
+    mocks.invoke.mockImplementation(async (_command, { request }) => request.kind !== 'leaderboard' ? response(request) : ({ kind: request.kind, data: { success: true, items: Array.from({ length: 50 }, (_, index) => ({ ...fixture.responses.leaderboard.items[0], rank: request.offset + index + 1, entityId: `row-${request.offset + index}` })) } }));
+    await render(); expect(mocks.invoke).toHaveBeenCalledTimes(3);
+    for (let i = 0; i < 5; i++) await click('下一页');
+    expect(container.textContent).toContain('第 6 页'); expect(button('下一页').disabled).toBe(true);
+    expect(mocks.invoke.mock.calls.filter((call) => call[1].request.kind === 'leaderboard').map((call) => call[1].request.offset)).toEqual([0, 50, 100, 150, 200, 250]);
+    await click('上一页'); expect(container.textContent).toContain('第 5 页');
+  });
+  it.each(['filter', 'season', 'clear'] as const)('ignores a late search after %s changes', async (change) => {
+    await render(); const old = deferred<unknown>();
+    mocks.invoke.mockImplementation(async (_command, { request }) => request.kind === 'search' ? old.promise : response(request));
+    await search();
+    if (change === 'filter') { await select(1, 'free'); await click('应用筛选'); }
+    if (change === 'season') await select(0, 'S3');
+    if (change === 'clear') await click('清空');
+    await act(async () => old.resolve({ kind: 'search', data: { success: true, items: [{ ...fixture.responses.search.items[0], displayName: '迟到搜索不可见' }] } }));
+    expect(container.textContent).not.toContain('迟到搜索不可见'); expect(container.textContent).not.toContain('搜索中…');
+  });
+  it('shows archive scope/current rules, local search and missing-current archive errors', async () => {
+    await render(); await select(0, 'S3');
+    expect(container.textContent).toContain('归档排行角色'); expect(container.textContent).toContain('全量快照'); expect(container.textContent).toContain('段位/排序按当前版本规则重算');
+    const count = mocks.invoke.mock.calls.length; await search('归档'); expect(mocks.invoke).toHaveBeenCalledTimes(count);
+    await select(0, 'S4');
+    mocks.invoke.mockImplementation(async (_command, { request }) => { if (request.kind === 'archive') throw { code: 'not-found', message: '排行榜数据不存在或尚未归档' }; return response(request); });
+    await click('查看快照（测试）'); expect(container.textContent).toContain('此赛季尚无归档快照'); expect(container.textContent).not.toContain('暂无数据');
+  });
+  it('paginates archive facts by 50, limits local search to 10 and jumps to a known archived rank', async () => {
+    const originalScroll = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const originalFrame = window.requestAnimationFrame; const originalCancel = window.cancelAnimationFrame;
+    window.requestAnimationFrame = (callback) => window.setTimeout(() => callback(0), 0);
+    window.cancelAnimationFrame = (id) => window.clearTimeout(id);
+    try {
+      mocks.invoke.mockImplementation(async (_command, { request }) => request.kind !== 'archive' ? response(request) : ({ kind: 'archive', data: { ...fixture.responses.archive,
+        entities: Array.from({ length: 60 }, (_, index) => ({ ...fixture.responses.archive.entities[0], entityId: `archive-${index}`,
+          displayName: index === 54 ? '目标归档' : `归档角色${index}`, queues: { strict: { ...fixture.responses.archive.entities[0]!.queues.strict, rating: 2000 - index } } })),
+        totalEligible: { strict: 60, free: 0 },
+      } }));
+      await render(); await select(0, 'S3'); expect(container.querySelectorAll('tbody tr')).toHaveLength(50);
+      const calls = mocks.invoke.mock.calls.length;
+      await search('归档角色'); expect([...container.querySelectorAll('button')].filter((node) => node.textContent?.includes('点击跳转'))).toHaveLength(10);
+      await search('目标归档');
+      const hit = [...container.querySelectorAll('button')].find((node) => node.textContent?.includes('#55'))!;
+      await act(async () => { hit.click(); await new Promise((resolve) => setTimeout(resolve, 5)); });
+      expect(container.textContent).toContain('第 2 页'); expect(container.querySelectorAll('tbody tr')).toHaveLength(10);
+      expect(container.querySelector('[data-row-key="data_card:archive-54"]')).not.toBeNull();
+      expect(mocks.invoke).toHaveBeenCalledTimes(calls);
+    } finally { HTMLElement.prototype.scrollIntoView = originalScroll; window.requestAnimationFrame = originalFrame; window.cancelAnimationFrame = originalCancel; }
+  });
+  it('distinguishes empty, rate limit and failure, then retries without account refresh', async () => {
+    mocks.invoke.mockImplementation(async (_command, { request }) => request.kind === 'leaderboard' ? { kind: 'leaderboard', data: { success: true, items: [] } } : response(request));
+    await render(); expect(container.textContent).toContain('暂无数据');
+    mocks.invoke.mockImplementation(async (_command, { request }) => { if (request.kind === 'search') throw { code: 'server-unavailable', message: '排行榜请求过于频繁，请稍后重试' }; return response(request); });
+    await search(); expect(container.textContent).toContain('请求过于频繁');
+    mocks.invoke.mockImplementation(async (_command, { request }) => { if (request.kind === 'leaderboard') throw { code: 'network-error', message: '离线' }; return response(request); });
+    await select(1, 'free'); await click('应用筛选'); expect(container.textContent).toContain('排行榜加载失败'); expect(container.textContent).not.toContain('暂无数据');
+    mocks.invoke.mockImplementation(async (_command, { request }) => response(request)); await click('重试'); expect(container.textContent).toContain('合成排行角色');
+  });
+  it('unmount ignores a pending search with no subsequent requests', async () => {
+    await render(); const old = deferred<unknown>(); mocks.invoke.mockImplementation(async (_command, { request }) => request.kind === 'search' ? old.promise : response(request));
+    await search(); const count = mocks.invoke.mock.calls.length; await act(async () => root.render(null));
+    await act(async () => old.resolve({ kind: 'search', data: fixture.responses.search }));
+    expect(container.textContent).toBe(''); expect(mocks.invoke).toHaveBeenCalledTimes(count);
+  });
+  it('isolates a late leaderboard across queue A→B→A and fetches the new A rather than reviving old data', async () => {
+    const old = deferred<unknown>(); let first = true;
+    mocks.invoke.mockImplementation(async (_command, { request }) => {
+      if (request.kind !== 'leaderboard') return response(request);
+      if (first) { first = false; return old.promise; }
+      return { kind: 'leaderboard', data: { success: true, items: [{ ...fixture.responses.leaderboard.items[0], displayName: `新${request.filters.queue}列表` }] } };
+    });
+    await render(); await select(1, 'free'); await click('应用筛选'); expect(container.textContent).toContain('新free列表');
+    await act(async () => old.resolve({ kind: 'leaderboard', data: { success: true, items: [{ ...fixture.responses.leaderboard.items[0], displayName: '迟到旧strict列表' }] } }));
+    expect(container.textContent).not.toContain('迟到旧strict列表');
+    await select(1, 'strict'); await click('应用筛选'); expect(container.textContent).toContain('新strict列表');
+    expect(container.textContent).not.toContain('迟到旧strict列表');
+    expect(mocks.invoke.mock.calls.filter((call) => call[1].request.kind === 'leaderboard')).toHaveLength(3);
+  });
+  it('isolates a late archive after switching back to the current live season and does not cache the cancelled archive', async () => {
+    await render(); const old = deferred<unknown>(); let first = true;
+    mocks.invoke.mockImplementation(async (_command, { request }) => {
+      if (request.kind === 'archive' && first) { first = false; return old.promise; }
+      return response(request);
+    });
+    await select(0, 'S3'); await select(0, 'S4');
+    await act(async () => old.resolve({ kind: 'archive', data: { ...fixture.responses.archive, entities: [{ ...fixture.responses.archive.entities[0], displayName: '迟到旧归档' }] } }));
+    expect(container.textContent).toContain('合成排行角色'); expect(container.textContent).not.toContain('迟到旧归档');
+    await select(0, 'S3'); expect(container.textContent).toContain('归档排行角色'); expect(container.textContent).not.toContain('迟到旧归档');
+    expect(mocks.invoke.mock.calls.filter((call) => call[1].request.kind === 'archive')).toHaveLength(2);
+  });
+  it('unmount ignores a pending leaderboard with no subsequent requests', async () => {
+    const old = deferred<unknown>();
+    mocks.invoke.mockImplementation(async (_command, { request }) => request.kind === 'leaderboard' ? old.promise : response(request));
+    await render(); const count = mocks.invoke.mock.calls.length; await act(async () => root.render(null));
+    await act(async () => old.resolve({ kind: 'leaderboard', data: fixture.responses.leaderboard }));
+    expect(container.textContent).toBe(''); expect(mocks.invoke).toHaveBeenCalledTimes(count);
+  });
+  it.skipIf(!process.env.PUBLIC_RANKING_NATIVE_WIRE_INPUT)('consumes five actual Native loopback Serialize wires through TS bridge and actual Desktop', async () => {
+    const native = (kind: string): unknown => JSON.parse(readFileSync(join(process.env.PUBLIC_RANKING_NATIVE_WIRE_INPUT!, `${kind}.json`), 'utf8'));
+    mocks.invoke.mockImplementation(async (command, { request }) => { expect(command).toBe('cloud_public_ranking_read'); return native(request.kind); });
+    await render(); expect(container.textContent).toContain('合成排行角色'); expect(container.textContent).toContain('测试标签');
+    await search(fixture.requests.search.q); expect(container.textContent).toContain('#—'); expect(container.textContent).not.toContain('#0');
+    await select(0, 'S3'); expect(container.textContent).toContain('归档排行角色'); expect(container.textContent).toContain('全量快照');
+    for (const kind of ['leaderboard', 'search', 'tags', 'seasons', 'archive'] as const) {
+      const result = await readPublicRanking(mocks.invoke, PublicRankingRequestSchema.parse(fixture.requests[kind]));
+      expect(JSON.stringify(result)).not.toContain('DROP');
+    }
+    for (const [name, label] of [['archive-v2', 'Top 1 + Bottom 0'], ['archive-full', '全量快照'], ['archive-top-bottom', 'Top 3 + Bottom 3']]) {
+      await act(async () => root.render(null));
+      mocks.invoke.mockImplementation(async (_command, { request }) => native(request.kind === 'archive' ? name! : request.kind));
+      await render(); await select(0, 'S3');
+      expect(container.textContent).toContain('归档排行角色'); expect(container.textContent).toContain(label);
+      expect(container.textContent).toContain('段位/排序按当前版本规则重算');
+    }
+  });
+});
+
+describe('typed public ranking bridge', () => {
+  it('rejects extras/path escape/arrays before invoke and fences wrong kind/ranks/season', async () => {
+    for (const request of [{ kind: 'tags', token: 'x' }, { kind: 'archive', seasonId: '../S3' }, [], { ...fixture.requests.leaderboard, filters: [] }]) {
+      await expect(readPublicRanking(mocks.invoke, request as PublicRankingRequest)).rejects.toMatchObject({ code: 'invalid-request' });
+    }
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    const request = PublicRankingRequestSchema.parse(fixture.requests.leaderboard);
+    for (const raw of [{ kind: 'tags', data: fixture.responses.tags }, { kind: 'leaderboard', data: { success: true, items: [{ ...fixture.responses.leaderboard.items[0], rank: 0 }] } }]) {
+      mocks.invoke.mockResolvedValue(raw); await expect(readPublicRanking(mocks.invoke, request)).rejects.toMatchObject({ code: 'invalid-response' });
+    }
+    mocks.invoke.mockResolvedValue({ kind: 'archive', data: fixture.responses.archive });
+    await expect(readPublicRanking(mocks.invoke, { kind: 'archive', seasonId: 'S4' })).rejects.toMatchObject({ code: 'invalid-response' });
+  });
+});

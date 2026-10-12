@@ -1,0 +1,251 @@
+{
+  "requests": {
+    "leaderboard": {
+      "kind": "leaderboard",
+      "filters": {
+        "queue": "strict",
+        "sort": "rating",
+        "order": "desc",
+        "includePresets": true,
+        "isNative": "any",
+        "includeTagIds": [],
+        "excludeTagIds": [],
+        "minRating": null,
+        "maxRating": null,
+        "minGames": null,
+        "maxGames": null,
+        "minTechScore": null,
+        "maxTechScore": null
+      },
+      "offset": 0,
+      "limit": 50
+    },
+    "search": {
+      "kind": "search",
+      "filters": {
+        "queue": "strict",
+        "sort": "rating",
+        "order": "desc",
+        "includePresets": true,
+        "isNative": "any",
+        "includeTagIds": [],
+        "excludeTagIds": [],
+        "minRating": null,
+        "maxRating": null,
+        "minGames": null,
+        "maxGames": null,
+        "minTechScore": null,
+        "maxTechScore": null
+      },
+      "q": "名称 & / ? 中文",
+      "limit": 10
+    },
+    "tags": {
+      "kind": "tags"
+    },
+    "seasons": {
+      "kind": "seasons"
+    },
+    "archive": {
+      "kind": "archive",
+      "seasonId": "S3"
+    }
+  },
+  "responses": {
+    "leaderboard": {
+      "success": true,
+      "items": [
+        {
+          "rank": 1,
+          "entityType": "data_card",
+          "entityId": "public-card",
+          "displayName": "合成排行角色",
+          "authorName": null,
+          "rating": 1700,
+          "games": 20,
+          "wins": 12,
+          "losses": 7,
+          "draws": 1,
+          "tier": "女王",
+          "techScore": null,
+          "techLevel": null,
+          "isNative": null,
+          "tagIds": [
+            "t-1"
+          ],
+          "seasonPeak": {
+            "rating": 1800,
+            "games": 18,
+            "occurredAt": "2026-03-01T00:00:00Z",
+            "tier": "权杖",
+            "privateNested": "DROP"
+          },
+          "seasonPeakTier": "女王",
+          "seasonLow": null,
+          "privateToken": "DROP"
+        }
+      ],
+      "privateEnvelope": "DROP"
+    },
+    "search": {
+      "success": true,
+      "items": [
+        {
+          "rank": 0,
+          "entityType": "data_card",
+          "entityId": "public-card",
+          "displayName": "合成排行角色",
+          "authorName": null,
+          "rating": 1700,
+          "games": 20,
+          "wins": 12,
+          "losses": 7,
+          "draws": 1,
+          "tier": "女王",
+          "techScore": null,
+          "techLevel": null,
+          "isNative": null,
+          "tagIds": [
+            "t-1"
+          ],
+          "seasonPeak": {
+            "rating": 1800,
+            "games": 18,
+            "occurredAt": "2026-03-01T00:00:00Z",
+            "tier": "权杖",
+            "privateNested": "DROP"
+          },
+          "seasonPeakTier": "女王",
+          "seasonLow": null,
+          "privateToken": "DROP"
+        }
+      ],
+      "privateEnvelope": "DROP"
+    },
+    "tags": {
+      "success": true,
+      "tags": [
+        {
+          "id": "t-1",
+          "name": "测试标签",
+          "description": null,
+          "category": null,
+          "scope": "user",
+          "isActive": true,
+          "privateTag": "DROP"
+        }
+      ],
+      "privateEnvelope": "DROP"
+    },
+    "seasons": {
+      "schemaVersion": 1,
+      "seasons": [
+        {
+          "id": "S4",
+          "name": "当前赛季",
+          "startsAt": "2026-04-01",
+          "status": "current",
+          "description": "当前尚无归档",
+          "privateSeason": "DROP"
+        },
+        {
+          "id": "S3",
+          "name": "第三赛季",
+          "startsAt": "2026-02-01",
+          "endsAt": "2026-03-31",
+          "description": "合成归档测试",
+          "specialRules": {
+            "mode": "scenario",
+            "storyGuidance": "合成引导",
+            "scenarioPresetFilename": "S03_arena_original_v1_1.json",
+            "privateRule": "DROP"
+          },
+          "privateSeason": "DROP",
+          "status": "history"
+        }
+      ],
+      "privateConfig": "DROP"
+    },
+    "archive": {
+      "schemaVersion": 3,
+      "generatedAt": "2026-04-01T00:00:00Z",
+      "season": {
+        "id": "S3",
+        "name": "第三赛季",
+        "startsAt": "2026-02-01",
+        "endsAt": "2026-03-31",
+        "description": "合成归档测试",
+        "specialRules": {
+          "mode": "scenario",
+          "storyGuidance": "合成引导",
+          "scenarioPresetFilename": "S03_arena_original_v1_1.json",
+          "privateRule": "DROP"
+        },
+        "privateSeason": "DROP"
+      },
+      "snapshotPolicy": {
+        "mode": "full",
+        "privatePolicy": "DROP"
+      },
+      "totalEligible": {
+        "strict": 3,
+        "free": 3,
+        "privateTotal": "DROP"
+      },
+      "entities": [
+        {
+          "entityType": "data_card",
+          "entityId": "public-card",
+          "displayName": "归档排行角色",
+          "techScore": null,
+          "techLevel": null,
+          "isNative": null,
+          "tagIds": [
+            "t-1"
+          ],
+          "queues": {
+            "strict": {
+              "rating": 1700,
+              "games": 20,
+              "wins": 12,
+              "losses": 7,
+              "draws": 1,
+              "ratingUpdatedAt": "2026-03-01T00:00:00Z",
+              "privateQueue": "DROP"
+            },
+            "free": {
+              "rating": 1700,
+              "games": 20,
+              "wins": 12,
+              "losses": 7,
+              "draws": 1,
+              "ratingUpdatedAt": "2026-03-01T00:00:00Z",
+              "privateQueue": "DROP"
+            },
+            "privateQueue": "DROP"
+          },
+          "authorId": 99,
+          "description": "DROP",
+          "data": {
+            "privateBody": "DROP"
+          }
+        }
+      ],
+      "privateArchive": "DROP"
+    }
+  },
+  "budgets": {
+    "leaderboard": 1048576,
+    "search": 262144,
+    "tags": 1048576,
+    "seasons": 262144,
+    "archive": 4194304
+  },
+  "paths": {
+    "leaderboard": "/api/arena/leaderboard",
+    "search": "/api/arena/leaderboard/search",
+    "tags": "/api/tags",
+    "seasons": "/config/seasons.json",
+    "archive": "/data/seasons/archive_S3.json"
+  }
+}

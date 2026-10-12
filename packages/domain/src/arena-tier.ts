@@ -1,0 +1,52 @@
+export type ArenaQueue = 'strict' | 'free';
+export type ArenaEntityType = 'data_card' | 'preset';
+
+export type ArenaEntityRef = {
+  entityType: ArenaEntityType;
+  entityId: string;
+};
+
+export type ArenaBaseTier = '无牌' | '白牌' | '字牌' | '花牌' | '权杖';
+export type ArenaTier = ArenaBaseTier | '女王';
+
+export const ARENA_PLACEMENT_GAMES = 5;
+export const ARENA_SCEPTER_MIN_RATING = 1500;
+export const ARENA_QUEEN_MIN_SCEPTER_COUNT = 3;
+
+export function computeArenaBaseTier(rating: number, games: number): ArenaBaseTier {
+  if (games < ARENA_PLACEMENT_GAMES || rating < 800) return '无牌';
+  if (rating < 1000) return '白牌';
+  if (rating < 1200) return '字牌';
+  if (rating < 1500) return '花牌';
+  return '权杖';
+}
+
+export function getArenaTierRank(tier: ArenaTier | null | undefined): number {
+  if (tier === '无牌') return 0;
+  if (tier === '白牌') return 1;
+  if (tier === '字牌') return 2;
+  if (tier === '花牌') return 3;
+  if (tier === '权杖') return 4;
+  if (tier === '女王') return 5;
+  return -1;
+}
+
+export function compareArenaTier(a: ArenaTier | null | undefined, b: ArenaTier | null | undefined): number {
+  return getArenaTierRank(a) - getArenaTierRank(b);
+}
+
+export function pickHigherArenaTier(
+  current: ArenaTier | null | undefined,
+  next: ArenaTier | null | undefined,
+): ArenaTier | null | undefined {
+  return compareArenaTier(current, next) >= 0 ? current : next;
+}
+
+export function applyQueenTier(baseTier: ArenaBaseTier, isQueen: boolean): ArenaTier {
+  if (!isQueen) return baseTier;
+  return baseTier === '权杖' ? '女王' : baseTier;
+}
+
+export function isArenaScepterTier(rating: number, games: number): boolean {
+  return games >= ARENA_PLACEMENT_GAMES && rating >= ARENA_SCEPTER_MIN_RATING;
+}

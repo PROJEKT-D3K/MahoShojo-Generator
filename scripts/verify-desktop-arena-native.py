@@ -83,7 +83,9 @@ pub mod ipc {
     paths += sorted((PRODUCT / "src").glob("arena_hosted_*.rs"))
     paths += sorted((PRODUCT / "src").glob("arena_story_*.rs"))
     paths += sorted((PRODUCT / "src/cloud").glob("*.rs"))
-    paths += [ROOT / "packages/contracts/fixtures/battle-report-history.json"]
+    paths += [ROOT / "packages/contracts/fixtures/battle-report-history.json",
+              ROOT / "packages/contracts/fixtures/public-ranking.json",
+              PRODUCT / "src/lib.rs", PRODUCT / "build.rs", PRODUCT / "capabilities/main-ui.json"]
     paths += sorted((PRODUCT / "src/generated").glob("*.json"))
     paths += sorted((ROOT / "packages/contracts/fixtures").glob("desktop-story-*.json"))
     paths += [ROOT / "packages/contracts/fixtures/desktop-arena-hosted.json",

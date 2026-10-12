@@ -1468,6 +1468,15 @@ async fn cloud_battle_reports_read(
     cloud::battle_reports::read_battle_reports(&cloud, secrets.inner().as_ref(), request).await
 }
 
+/// 匿名排行榜只读通道：固定公开路由，无凭据或账号存储依赖。
+#[tauri::command]
+async fn cloud_public_ranking_read(
+    cloud: State<'_, cloud::CloudState>,
+    request: cloud::public_ranking::PublicRankingRequest,
+) -> Result<cloud::public_ranking::PublicRankingResponse, cloud::CloudError> {
+    cloud::public_ranking::read_public_ranking(&cloud, request).await
+}
+
 /// 当前会话账号的资料投影（`/api/me/profile` 固定路由）：顶栏头像与资料
 /// 刷新共用。native 注入会话 cookie，renderer 拿不到 URL 或凭据。
 #[tauri::command]
@@ -2055,6 +2064,7 @@ pub fn run() {
             cloud_cached_account,
             cloud_me_profile,
             cloud_battle_reports_read,
+            cloud_public_ranking_read,
             cloud_save_me_profile_signature,
             cloud_save_me_profile_avatar,
             cloud_clear_me_profile_avatar,

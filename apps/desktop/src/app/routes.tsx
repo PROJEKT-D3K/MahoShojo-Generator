@@ -100,7 +100,7 @@ const ESCAPE_MENU_ENTRIES: readonly ShellEscapeMenuEntry[] = (
   ] as const
 ).filter((entry) => readCapability(CAPABILITIES, entry.href).kind === 'available');
 
-const FULL_BLEED_PATHS = new Set(['/', '/details', '/canshou', '/free', '/scenario', '/sublimation', '/battle', '/arena', '/tavern', '/character-party', '/questionnaire-editor', '/card-forge', '/creator', '/character-manager', '/encyclopedia', '/messages', '/settings', '/me', '/local-library']);
+const FULL_BLEED_PATHS = new Set(['/', '/details', '/canshou', '/free', '/scenario', '/sublimation', '/battle', '/arena', '/ranking', '/tavern', '/character-party', '/questionnaire-editor', '/card-forge', '/creator', '/character-manager', '/encyclopedia', '/messages', '/settings', '/me', '/local-library']);
 
 /** 条目页是前缀而不是字面路径：`/encyclopedia/<slug>`。 */
 const isFullBleedPath = (pathname: string) =>
@@ -432,6 +432,8 @@ const sublimationRoute = createRoute({
 const advancedArenaRoute = createRoute({ getParentRoute: () => rootRoute, path: '/arena', component: lazyRouteComponent(() => import('./battle-page'), 'DesktopAdvancedArena') });
 const battleRoute = createRoute({ getParentRoute: () => rootRoute, path: '/battle', component: lazyRouteComponent(() => import('./battle-page'), 'DesktopBattle') });
 
+const rankingRoute = createRoute({ getParentRoute: () => rootRoute, path: '/ranking', component: lazyRouteComponent(() => import('./ranking-page'), 'DesktopRanking') });
+
 const creatorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/creator',
@@ -452,6 +454,7 @@ export const routeTree = rootRoute.addChildren([
   sublimationRoute,
   battleRoute,
   advancedArenaRoute,
+  rankingRoute,
   tavernRoute,
   partyRoute,
   questionnaireEditorRoute, cardForgeRoute,

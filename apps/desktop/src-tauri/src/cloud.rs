@@ -16,6 +16,8 @@
 
 #[path = "cloud/battle_reports.rs"]
 pub(crate) mod battle_reports;
+#[path = "cloud/public_ranking.rs"]
+pub(crate) mod public_ranking;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

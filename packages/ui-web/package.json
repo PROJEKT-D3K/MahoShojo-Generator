@@ -218,7 +218,8 @@
       "types": "./src/battle-report-history/index.ts",
       "import": "./src/battle-report-history/index.ts",
       "default": "./src/battle-report-history/index.ts"
-    }
+    },
+    "./ranking": "./src/ranking/index.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",
