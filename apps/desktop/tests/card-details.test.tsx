@@ -47,9 +47,46 @@ describe('Desktop 真实基础详情', () => {
     expect(container.textContent).not.toContain('旧操作错误不可见');
   });
   it('榜单现 public 主记录直读并解释历史来源，不查 meta，保存复用 unsigned/downloaded/去重路径', async () => {
+    const saved = deferred<void>();
+    vi.mocked(host.local.repository.put).mockImplementationOnce(async () => { saved.resolve(); });
     await act(async () => root.render(<DesktopRankingDetailsModal entity={target} host={host} onClose={() => {}} />));
     expect(read).toHaveBeenCalledWith(card.id, expect.any(AbortSignal)); expect(container.textContent).toContain('不代表历史赛季正文快照'); expect(container.textContent).toContain('角色正文'); expect(fetch).not.toHaveBeenCalled();
-    await act(async () => button('存到本地库').click()); expect(host.local.repository.put).toHaveBeenCalledWith(expect.objectContaining({ provenance: { kind: 'unsigned', execution: 'downloaded' }, cloudRef: expect.objectContaining({ cardId: card.id }) })); expect(container.textContent).toContain('已保存到本地库');
+    // click() returns void; act alone cannot await the external WebCrypto task.
+    await act(async () => { button('存到本地库').click(); await saved.promise; });
+    expect(host.local.repository.put).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ data: JSON.parse(card.data), provenance: { kind: 'unsigned', execution: 'downloaded' }, cloudRef: expect.objectContaining({ cardId: card.id }) })); expect(container.textContent).toContain('已保存到本地库');
+  });
+  it('保存等待真实摘要和写入回执；点击 act 完成不代表保存完成', async () => {
+    const releaseDigest = deferred<void>(), writeEntered = deferred<void>(), acknowledgeWrite = deferred<void>();
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    const digestSpy = vi.spyOn(crypto.subtle, 'digest').mockImplementationOnce(async (...args) => {
+      await releaseDigest.promise;
+      return digest(...args);
+    });
+    vi.mocked(host.local.repository.put).mockImplementationOnce(async () => {
+      writeEntered.resolve();
+      await acknowledgeWrite.promise;
+    });
+    try {
+      await act(async () => root.render(<DesktopRankingDetailsModal entity={target} host={host} onClose={() => {}} />));
+      await act(async () => button('存到本地库').click());
+      expect(digestSpy).toHaveBeenCalledTimes(1);
+      expect(host.local.repository.get).not.toHaveBeenCalled();
+      expect(host.local.repository.put).not.toHaveBeenCalled();
+      expect(button('处理中…').disabled).toBe(true);
+      expect(container.textContent).not.toContain('已保存到本地库');
+
+      await act(async () => { releaseDigest.resolve(); await writeEntered.promise; });
+      expect(host.local.repository.put).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ data: JSON.parse(card.data), provenance: { kind: 'unsigned', execution: 'downloaded' }, cloudRef: expect.objectContaining({ cardId: card.id }) }));
+      expect(button('处理中…').disabled).toBe(true);
+      expect(container.textContent).not.toContain('已保存到本地库');
+
+      await act(async () => { acknowledgeWrite.resolve(); });
+      expect(container.textContent).toContain('已保存到本地库');
+      expect(button('存到本地库').disabled).toBe(false);
+      expect(host.local.repository.put).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseDigest.resolve(); acknowledgeWrite.resolve(); digestSpy.mockRestore();
+    }
   });
   it.each([{ status: 404, data: { success: false, code: PUBLIC_DATA_CARD_NOT_FOUND_CODE }, text: '已撤回' }, { status: 503, data: { success: false }, text: 'HTTP 503' }, { status: 500, data: { success: false }, text: 'HTTP 500' }, { status: 404, data: { success: false }, text: 'HTTP 404' }, { status: 200, data: { success: true, card: { id: card.id } }, text: '缺少数据卡正文' }])('榜单错误分态 $text', async ({ status, data, text }) => {
     read.mockResolvedValue({ ok: status === 200, status, data }); await act(async () => root.render(<DesktopRankingDetailsModal entity={target} host={host} onClose={() => {}} />)); expect(document.body.textContent).toContain(text); expect(button('重试')).toBeDefined(); expect(button('下载 JSON')).toBeUndefined();
