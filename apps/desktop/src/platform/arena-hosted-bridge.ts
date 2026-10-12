@@ -102,6 +102,7 @@ export const openArenaHostedStream = (
   let responded = false, acceptsSse = false, ended = false, detached = false;
   let nativeSettled = false, channelEnded = false, completedTerminal = false;
   let completionError: ArenaHostedBridgeError | null = null;
+  let generationId = request.operation === 'resume' ? request.generationId : null;
   let streamController: ReadableStreamDefaultController<Uint8Array>;
   let resolveResponse!: (response: Response) => void, rejectResponse!: (error: unknown) => void;
   const result = new Promise<Response>((resolve, reject) => { resolveResponse = resolve; rejectResponse = reject; });
@@ -140,6 +141,7 @@ export const openArenaHostedStream = (
         if (responded) throw new ArenaHostedBridgeError('protocol');
         if (event.generationRequestId && event.generationRequestId !== request.requestId) throw new ArenaHostedBridgeError('protocol');
         if (request.operation === 'resume' && event.generationId && event.generationId !== request.generationId) throw new ArenaHostedBridgeError('protocol');
+        generationId = event.generationId ?? generationId;
         const headers = new Headers();
         if (event.generationId) headers.set('X-Mahoshojo-Generation-Id', event.generationId);
         if (event.generationRequestId) headers.set('X-Mahoshojo-Generation-Request-Id', event.generationRequestId);
@@ -159,6 +161,11 @@ export const openArenaHostedStream = (
         if (event.final) {
           const parsed = parseDesktopArenaHostedSseBlock(fragment);
           if (parsed.event === 'done' && parsed.data.status === 'completed' && parsed.data.ok) completedTerminal = true;
+          if (parsed.event === 'ranking') {
+            const ranking = parsed.data?.generationId === generationId ? parsed.data : null;
+            // Never send the original string after validating a stripping public projection.
+            fragment = `id: ${parsed.id}\nevent: ranking\ndata: ${JSON.stringify(ranking)}\n\n`;
+          }
           // A cancelled reader stops local delivery only. Validate all remaining Channel frames
           // until the original invoke settles, including the explicit stream-end and its sequence.
           if (!ended) streamController.enqueue(encoder.encode(fragment)); fragment = ''; fragmentBytes = 0;

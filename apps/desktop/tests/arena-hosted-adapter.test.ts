@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+const ranking = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/arena-generation-ranking.json', import.meta.url), 'utf8'));
 import { buildArenaGenerationInputSnapshot, type ArenaGenerationInputSnapshot } from '@mahoshojo/ai-core/arena-generation';
 import {
   DESKTOP_ARENA_HOSTED_PROTOCOL_VERSION, DesktopArenaHostedChannelEventSchema, DesktopArenaHostedControlRequestSchema,
@@ -118,6 +120,41 @@ async function packageBase(target = 'data/report.json', mediaType = 'application
 const combinations = (['classic', 'kizuna', 'daily', 'scenario'] as const).flatMap(mode => (['markdown', 'web'] as const).map(format => ({ mode, format })));
 
 describe('Desktop Hosted adapter through real C0 and Native bridge', () => {
+  it.each([ranking, { ...ranking, participants: [] },
+    { success: true, generationId, state: 'pending', message: '等待' },
+    { success: false, generationId, error: '读取失败' }, null,
+  ])('keeps settlement feedback separate from the completed report and single create', async value => {
+    const { host } = context(); const h = native([peer => {
+      peer.response(); peer.emit(textEvent()); peer.emit(event('2-0', 'ranking', value)); peer.emit(doneEvent('3-0')); peer.end();
+    }]);
+    const result = await execute(h, host);
+    expect(result).toMatchObject({ status: 'completed', generationId, hosted: { ranking: value } });
+    expect(h.streamRequests.map(request => request.operation)).toEqual(['create-stream']); expect(h.controlRequests).toHaveLength(0);
+  });
+  it('deduplicates replayed ranking and preserves it through same-generation snapshot recovery', async () => {
+    const { host } = context(); const partials: ArenaHostedPartial[] = [];
+    const h = native([peer => {
+      peer.response(); peer.emit(textEvent()); peer.emit(event('2-0', 'ranking', ranking)); peer.end();
+    }, peer => {
+      peer.response(); peer.emit(event('2-0', 'ranking', null));
+      peer.emit(event('3-0', 'snapshot', { status: 'completed', markdown: source, reasoning: '', lastEventId: '2-0', updatedAt: now }));
+      peer.emit(doneEvent('4-0')); peer.end();
+    }]);
+    expect(await execute(h, host, input(), intent(), undefined, partial => partials.push(partial))).toMatchObject({ status: 'completed', hosted: { ranking } });
+    expect(h.streamRequests.map(request => request.operation)).toEqual(['create-stream', 'resume']);
+    expect(h.streamRequests[1]).toMatchObject({ after: '2-0' });
+    expect(partials.filter(value => value.hosted.ranking === null).every(value => !value.markdown || value.hosted.terminal === null)).toBe(true);
+  });
+  it('resumes beyond unavailable ranking and ignores the old replay without recreating', async () => {
+    const { host } = context(); const h = native([peer => {
+      peer.response(); peer.emit(textEvent()); peer.emit(event('2-0', 'ranking', null)); peer.end();
+    }, peer => {
+      peer.response(); peer.emit(event('2-0', 'ranking', ranking)); peer.emit(doneEvent('3-0')); peer.end();
+    }]);
+    expect(await execute(h, host)).toMatchObject({ status: 'completed', hosted: { ranking: null } });
+    expect(h.streamRequests.map(request => request.operation)).toEqual(['create-stream', 'resume']);
+    expect(h.streamRequests[1]).toMatchObject({ after: '2-0' });
+  });
   it.each(combinations)('$mode / $format keeps one create and the independent pointer across product/funding/actor combinations', async ({ mode, format }) => {
     for (const product of ['battle', 'arena'] as const) for (const funding of ['system', 'preset'] as const) for (const actor of [{ kind: 'anonymous' }, { kind: 'account', expectedUserId: 42 }] satisfies DesktopArenaHostedActor[]) {
       const { host, store } = context({ product, actor }); const value = input(mode, format); const original = structuredClone(value);

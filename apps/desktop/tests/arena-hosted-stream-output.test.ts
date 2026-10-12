@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { collectArenaHostedStreamOutput, createArenaHostedStreamOutput } from '../src/features/arena/hosted-stream-output';
+import { readFileSync } from 'node:fs';
+const ranking = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/arena-generation-ranking.json', import.meta.url), 'utf8'));
 
 // Exercise the real budget branches with tiny in-memory inputs, without large output fixtures.
 vi.mock('@mahoshojo/contracts/desktop-arena-hosted', async importOriginal => {
@@ -12,6 +14,20 @@ const snapshot = (telemetry?: unknown) => ({ markdown: '替换正文', reasoning
   lastEventId: '1-0', updatedAt: '2026-10-10T00:00:00.000Z', ...(telemetry !== undefined ? { telemetry } : {}) });
 
 describe('shared Hosted C0 output collector', () => {
+  it('binds ranking to the response generation, ignores late feedback and keeps report authority independent', async () => {
+    const pending = { success: true, generationId: ranking.generationId, state: 'pending', message: '等待' };
+    const response = (text: string) => new Response(text, { headers: { 'X-Mahoshojo-Generation-Id': ranking.generationId } });
+    // Use small pending/failed DTOs because this suite intentionally has a tiny wire budget.
+    const output = await collectArenaHostedStreamOutput(response(wire('ranking', pending)
+      + wire('markdown', { chunk: '正文' }, '2-0') + wire('done', { status: 'completed', ok: true }, '3-0')
+      + wire('ranking', { success: false, generationId: ranking.generationId, error: 'late' }, '4-0')), options());
+    expect(output.ranking).toEqual(pending); expect(output.terminal?.event).toBe('done');
+    expect((await collectArenaHostedStreamOutput(response(wire('ranking', { ...pending, generationId: 'foreign' })), options())).ranking).toBeNull();
+    const feedbackOnly = await collectArenaHostedStreamOutput(response(wire('ranking', pending)), options());
+    expect(feedbackOnly.terminal).toBeNull(); expect(feedbackOnly.serverStatus).toBeNull();
+    const cold = await collectArenaHostedStreamOutput(response(wire('snapshot', snapshot()) + wire('done', { status: 'completed', ok: true }, '2-0')), options());
+    expect(cold.ranking).toBeNull();
+  });
   it('retains nullable and boolean telemetry separately from the existing numeric usage projection', async () => {
     const telemetry = { version: 1, usage: { promptTokens: null, completionTokens: 8, completionTokensIncludesReasoning: false } };
     const meta = { parseOk: true, meta: { report: { headline: '标题' } }, raw: '原元数据', rawTruncated: false };

@@ -218,6 +218,253 @@ fn standard_wire() -> String {
     event("1-0", "markdown", json!({"chunk":"正文🪄"}))
         + &event("2-0", "done", json!({"ok":true,"status":"completed"}))
 }
+fn ranking_fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../../packages/contracts/fixtures/arena-generation-ranking.json"
+    ))
+    .unwrap()
+}
+
+#[test]
+fn ranking_public_projection_matches_shared_json_and_isolates_business_failures() {
+    let ready = ranking_fixture();
+    let id = gid();
+    let mut private = ready.clone();
+    private["snapshot"]["private"] = json!(KEY);
+    private["participants"][0]["queues"]["strict"]["private"] = json!(KEY);
+    private["participants"][0]["private"] = json!(KEY);
+    private["participants"][0]["queues"]["private"] = json!(KEY);
+    private["private"] = json!(KEY);
+    assert_eq!(ranking::project(&private, Some(&id)), Some(ready.clone()));
+    for value in [
+        ready.clone(),
+        json!({"success":true,"generationId":id,"state":"ready","snapshot":{"status":null,"combatantCount":-1.5},"participants":[]}),
+        json!({"success":true,"generationId":id,"state":"pending","message":"等待"}),
+        json!({"success":false,"generationId":id,"error":"读取失败"}),
+    ] {
+        assert_eq!(ranking::project(&value, Some(&id)), Some(value));
+    }
+    for value in [
+        Value::Null,
+        json!([]),
+        json!(7),
+        json!(true),
+        json!("secret-canary"),
+        json!({}),
+        json!({"success":true,"generationId":id,"state":"ready","snapshot":{},"participants":[]}),
+    ] {
+        assert_eq!(ranking::project(&value, Some(&id)), None);
+        let parsed = parse_frame(&event("2-0", "ranking", value))
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.id, "2-0");
+    }
+    assert_eq!(ranking::project(&ready, None), None);
+    assert_eq!(ranking::project(&ready, Some("foreign")), None);
+    for status in ["missing", "pending", "applied", "skipped", "failed"] {
+        let mut value = ready.clone();
+        value["participants"][0]["queues"]["strict"]["eventStatus"] = json!(status);
+        assert_eq!(ranking::project(&value, Some(&id)), Some(value));
+    }
+    for path in [
+        "eligible",
+        "ineligibleReasons",
+        "eventStatus",
+        "skipReason",
+        "rating",
+        "games",
+        "tier",
+        "delta",
+        "rank",
+        "total",
+        "rankDelta",
+    ] {
+        let mut invalid = ready.clone();
+        invalid["participants"][0]["queues"]["strict"]
+            .as_object_mut()
+            .unwrap()
+            .remove(path);
+        assert_eq!(ranking::project(&invalid, Some(&id)), None);
+    }
+    assert!(parse_frame("id: 2-0\nevent: ranking\ndata: {\n\n").is_err());
+    assert!(parse_frame(&event("bad-id", "ranking", ready.clone())).is_err());
+    assert!(parse_frame(&event("2-0", "unknown", ready)).is_err());
+}
+
+#[tokio::test]
+async fn real_runtime_ranking_wire_reaches_native_channel_before_done() {
+    let wire = if let Ok(path) = std::env::var("ARENA_NATIVE_RANKING_WIRE_INPUT") {
+        std::fs::read_to_string(path).unwrap()
+    } else {
+        event("1-0", "markdown", json!({"chunk":"# 合成战报\n\n完整正文"}))
+            + &event("2-0", "ranking", ranking_fixture())
+            + &event("3-0", "done", json!({"ok":true,"status":"completed"}))
+    };
+    let srv = server(2, move |i, _| {
+        if i == 0 {
+            capability()
+        } else {
+            Reply::sse(wire.clone())
+        }
+    })
+    .await;
+    let state = ArenaState::with_origin(srv.origin);
+    let sink = Sink::default();
+    stream(
+        &state,
+        &CloudState::new().unwrap(),
+        &Secrets::default(),
+        create(false, false),
+        &sink,
+    )
+    .await
+    .unwrap();
+    let events = ArenaParser::default().push(sink.wire().as_bytes()).unwrap();
+    assert_eq!(events[events.len() - 2].name, "ranking");
+    assert_eq!(events[events.len() - 2].data, ranking_fixture());
+    assert_eq!(events.last().unwrap().name, "done");
+    if let Ok(path) = std::env::var("ARENA_NATIVE_RANKING_EVENTS_OUTPUT") {
+        std::fs::write(
+            path,
+            serde_json::to_vec(&*sink.events.lock().unwrap()).unwrap(),
+        )
+        .unwrap();
+    }
+    srv.task.await.unwrap();
+    assert_eq!(
+        srv.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == "POST")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn ranking_bad_business_data_advances_cursor_and_never_leaks_private_fields() {
+    let mut private = ranking_fixture();
+    private["private"] = json!(KEY);
+    private["snapshot"]["private"] = json!(COOKIE);
+    private["participants"][0]["queues"]["free"]["private"] = json!(KEY);
+    let mut mismatch = private.clone();
+    mismatch["generationId"] = json!(format!("arena_{}", "b".repeat(64)));
+    for (value, expected) in [
+        (private, ranking_fixture()),
+        (mismatch, Value::Null),
+        (json!({}), Value::Null),
+        (json!([]), Value::Null),
+    ] {
+        let wire = event("1-0", "markdown", json!({"chunk":"完整正文"}))
+            + &event("2-0", "ranking", value)
+            + &event("3-0", "done", json!({"ok":true,"status":"completed"}));
+        let srv = server(2, move |i, _| {
+            if i == 0 {
+                capability()
+            } else {
+                Reply::sse(wire.clone())
+            }
+        })
+        .await;
+        let state = ArenaState::with_origin(srv.origin);
+        let secrets = Secrets::default();
+        login(&secrets, 42);
+        secrets.set("preset:kourichat:api-key", KEY).unwrap();
+        let sink = Sink::default();
+        stream(
+            &state,
+            &CloudState::new().unwrap(),
+            &secrets,
+            create(true, true),
+            &sink,
+        )
+        .await
+        .unwrap();
+        let wire = sink.wire();
+        assert!(!wire.contains(KEY));
+        assert!(!wire.contains(COOKIE));
+        let events = ArenaParser::default().push(wire.as_bytes()).unwrap();
+        assert_eq!(events[1].data, expected);
+        assert_eq!(events[1].id, "2-0");
+        let flight = state.flights.lock().unwrap()[&Product::Battle].clone();
+        assert_eq!(flight.lock().unwrap().budget.cursor.as_deref(), Some("3-0"));
+        assert!(flight.lock().unwrap().terminal);
+        srv.task.await.unwrap();
+    }
+    // Secrets in permitted public strings still hit the existing secret-echo fail-closed gate.
+    let wire = event(
+        "1-0",
+        "ranking",
+        json!({"success":false,"generationId":gid(),"error":KEY}),
+    );
+    let srv = server(2, move |i, _| {
+        if i == 0 {
+            capability()
+        } else {
+            Reply::sse(wire.clone())
+        }
+    })
+    .await;
+    let state = ArenaState::with_origin(srv.origin);
+    let secrets = Secrets::default();
+    login(&secrets, 42);
+    secrets.set("preset:kourichat:api-key", KEY).unwrap();
+    let sink = Sink::default();
+    assert!(stream(
+        &state,
+        &CloudState::new().unwrap(),
+        &secrets,
+        create(true, true),
+        &sink
+    )
+    .await
+    .is_err());
+    assert!(!sink.wire().contains(KEY));
+    srv.task.await.unwrap();
+}
+
+#[tokio::test]
+async fn bad_ranking_at_disconnect_advances_native_resume_high_water_without_recreate() {
+    let srv = server(3, |i, _| match i {
+        0 => capability(),
+        1 => Reply::sse(
+            event("1-0", "markdown", json!({"chunk":"正文"}))
+                + &event("2-0", "ranking", json!({"private":KEY})),
+        ),
+        _ => Reply::sse(
+            event("2-0", "ranking", ranking_fixture())
+                + &event("3-0", "done", json!({"ok":true,"status":"completed"})),
+        ),
+    })
+    .await;
+    let state = ArenaState::with_origin(srv.origin);
+    let cloud = CloudState::new().unwrap();
+    let secrets = Secrets::default();
+    let first = Sink::default();
+    stream(&state, &cloud, &secrets, create(false, false), &first)
+        .await
+        .unwrap();
+    let flight = state.flights.lock().unwrap()[&Product::Battle].clone();
+    assert_eq!(flight.lock().unwrap().budget.cursor.as_deref(), Some("2-0"));
+    assert!(!flight.lock().unwrap().terminal);
+    assert!(first.wire().contains("event: ranking\ndata: null"));
+    let request = json!({"operation":"resume","product":"battle","requestId":RID,"actor":{"kind":"anonymous"},"generationId":gid(),"after":"2-0"});
+    stream(
+        &state,
+        &cloud,
+        &secrets,
+        serde_json::from_value(request).unwrap(),
+        &Sink::default(),
+    )
+    .await
+    .unwrap();
+    assert!(flight.lock().unwrap().terminal);
+    srv.task.await.unwrap();
+    let requests = srv.requests.lock().unwrap();
+    assert_eq!(requests.iter().filter(|r| r.method == "POST").count(), 1);
+    assert!(requests[2].path.ends_with("/stream?after=2-0"));
+}
 fn capability() -> Reply {
     Reply::json(200, fixture()["capability"].clone())
 }

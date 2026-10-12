@@ -26,7 +26,7 @@ export const runArenaHostedJson = async (
   frozenBase: ResolvedWebPackage | undefined, recover: () => Promise<ArenaHostedOutcome>,
 ): Promise<ArenaHostedOutcome> => {
   let generationId: string | null = null, markdown = '', reasoning = '';
-  let details: ArenaHostedDetails = { connectionState: 'connecting', serverStatus: null, telemetry: null,
+  let details: ArenaHostedDetails = { connectionState: 'connecting', serverStatus: null, ranking: null, telemetry: null,
     metadataState: 'missing', headerMeta: null, recoveryCredentialState: 'stored', metaEvent: null, terminal: null,
     outputValidation: 'pending', validationMessage: null, restored: false, delivery: 'non-stream', companionState: 'unavailable', companion: null };
   const current = () => context.isCurrent?.() !== false;

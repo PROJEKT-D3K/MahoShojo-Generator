@@ -189,7 +189,7 @@ export class DesktopArenaSession {
     if (!this.pending || this.isBusy()) return;
     const saved = this.pending; this.pending = null; this.hostedResultScope = null; this.roleContext = null; this.roleCandidates = null;
     this.resultMode = saved.output?.executionMode === 'hosted' ? 'hosted' : saved.output?.executionMode === 'direct-remote' ? 'direct-remote' : saved.output?.executionMode === 'direct-local' ? 'direct-local' : undefined;
-    const hosted = parseArenaHostedDetails(saved.output?.hosted);
+    const hosted = parseArenaHostedDetails(saved.output?.hosted, typeof saved.output?.hostedGenerationId === 'string' ? saved.output.hostedGenerationId : null);
     this.publish({ roleUpdates: { status: 'restored', message: '本机草稿中的签名字段未经本机验证；恢复不会自动同步角色。', items: [] }, hosted, hostedGenerationId: typeof saved.output?.hostedGenerationId === 'string' ? saved.output.hostedGenerationId : null, draft: { ...saved.draft, combatants: saved.draft.combatants.map(item => ({ ...item, isValid: false })) }, pendingRestore: false, restored: true, generation: null, draftSaved: true,
       rawText: String(saved.output?.rawText ?? ''), markdown: String(saved.output?.markdown ?? ''), reasoning: String(saved.output?.reasoning ?? ''),
       resultFormat: saved.output?.reportFormat === 'web' ? 'web' : 'markdown', renderSnapshot: parseBattleReportRenderSnapshotV1(saved.output?.renderSnapshot),

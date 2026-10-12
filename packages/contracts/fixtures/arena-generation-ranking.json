@@ -1,0 +1,26 @@
+{
+  "success": true,
+  "generationId": "arena_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state": "ready",
+  "snapshot": { "status": "completed", "combatantCount": 2 },
+  "participants": [{
+    "displayName": "预设角色甲",
+    "entityType": "preset",
+    "entityId": "M01_centaurea",
+    "entityKey": "preset:M01_centaurea",
+    "dataCardId": null,
+    "presetId": "M01_centaurea",
+    "techScore": 100,
+    "techLevel": "A",
+    "queues": {
+      "strict": {
+        "eligible": true, "ineligibleReasons": [], "eventStatus": "applied", "skipReason": null,
+        "rating": 1012, "games": 1, "tier": "无牌", "delta": 12, "rank": 1, "total": 2, "rankDelta": null
+      },
+      "free": {
+        "eligible": false, "ineligibleReasons": ["free-disabled"], "eventStatus": "missing", "skipReason": null,
+        "rating": null, "games": null, "tier": null, "delta": null, "rank": null, "total": null, "rankDelta": null
+      }
+    }
+  }]
+}

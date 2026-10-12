@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { parseArenaHostedDetails } from '../src/features/arena/hosted';
+const readyRanking = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/arena-generation-ranking.json', import.meta.url), 'utf8'));
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
 import type { DesktopArenaHostedChannelEvent, DesktopArenaHostedOperation } from '@mahoshojo/contracts/desktop-arena-hosted';
@@ -18,13 +21,13 @@ function storage() {
   return { data, fail: () => { fail = true; }, recover: () => { fail = false; }, getItem: (key: string) => data.get(key) ?? null,
     setItem: (key: string, value: string) => { if (fail) throw new Error('disk failed'); data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
 }
-function fixture(product: 'battle' | 'arena' = 'battle', saved = storage()) {
+function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feedback: { ranking?: unknown; nativeEvents?: DesktopArenaHostedChannelEvent[]; rejectAfterDone?: boolean; omitDone?: boolean; lateRanking?: unknown } = {}) {
   const records = new Map<string, LocalCardRecordV1>(); let failSave = false, hold = false, release: (() => void) | undefined;
   const repository = { get: async (id: string) => records.get(id) ?? null, putIfAbsent: vi.fn(async (record: LocalCardRecordV1) => {
     if (failSave) throw new Error('disk failed'); if (records.has(record.id)) return { alreadyPresent: true }; records.set(record.id, record); return { written: true };
   }) } as unknown as CardRepository;
   const random = vi.fn(() => 0);
-  const session = new DesktopArenaSession({ product, repository, storage: saved, now: () => now, requestId: () => 'hosted-session-1', random,
+  const session = new DesktopArenaSession({ product, repository, storage: saved, now: () => now, requestId: () => feedback.nativeEvents?.[0]?.requestId ?? 'hosted-session-1', random,
     hostedTestPorts: { createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: 0 } }); session.setScope('actor-A:target-A');
   const operations: DesktopArenaHostedOperation[] = [];
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
@@ -34,11 +37,16 @@ function fixture(product: 'battle' | 'arena' = 'battle', saved = storage()) {
       recoveryCredentialState: 'stored', body: { generationId, generationRequestId: request.requestId, status: request.operation === 'stop' ? 'cancelling' : 'completed' } };
     if (request.operation !== 'create-stream' && request.operation !== 'resume') throw new Error('unexpected command');
     const channel = args!.onEvent as { onmessage(event: DesktopArenaHostedChannelEvent): void }; let sequence = 0;
+    if (feedback.nativeEvents) { for (const event of feedback.nativeEvents) channel.onmessage(event); return; }
     const send = (value: Record<string, unknown>) => channel.onmessage({ requestId: request.requestId, sequence: sequence++, ...value } as DesktopArenaHostedChannelEvent);
     send({ kind: 'response', status: 200, generationId, generationRequestId: request.requestId, metadataState: 'missing', recoveryCredentialState: 'stored' });
     send({ kind: 'sse-fragment', final: true, text: `id: 1-0\nevent: snapshot\ndata: ${JSON.stringify({ markdown: body, reasoning: '独立推理', status: hold ? 'running' : 'completed', telemetry: null, lastEventId: '1-0', updatedAt: now })}\n\n` });
+    if ('ranking' in feedback) send({ kind: 'sse-fragment', final: true, text: `id: 1-1\nevent: ranking\ndata: ${JSON.stringify(feedback.ranking)}\n\n` });
     if (hold) await new Promise<void>((resolve) => { release = resolve; });
+    if ('lateRanking' in feedback) send({ kind: 'sse-fragment', final: true, text: `id: 1-2\nevent: ranking\ndata: ${JSON.stringify(feedback.lateRanking)}\n\n` });
+    if (feedback.omitDone) { send({ kind: 'stream-end' }); return; }
     send({ kind: 'sse-fragment', final: true, text: 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); send({ kind: 'stream-end' });
+    if (feedback.rejectAfterDone) throw new Error('late-native-secret-canary');
   });
   return { session, saved, records, repository, invoke, operations, random, setHold: () => { hold = true; }, failSave: () => { failSave = true; }, recoverSave: () => { failSave = false; } };
 }
@@ -114,4 +122,55 @@ it.each(['cancel', 'detach', 'scope'] as const)('clears the transient soft warni
     expect(f.session.getSnapshot().phase).toBe('cancelled');
     expect(f.operations.filter(op => op.operation === 'stop')).toHaveLength(action === 'cancel' ? 1 : 0);
   } finally { f.session.detach(); await run; f.session.dispose(); vi.useRealTimers(); }
+});
+
+
+describe('Hosted ranking is feedback, never owner authority', () => {
+  const ranking = { ...readyRanking, generationId };
+  it('freezes generation feedback, keeps old drafts readable and never retries local effects', async () => {
+    const f = fixture('battle', storage(), { ranking }); const input = draft();
+    f.session.updateDraft(input); await f.session.generateHosted({ invoke: f.invoke }, input, intent, actor);
+    expect(f.session.getSnapshot()).toMatchObject({ phase: 'completed', hosted: { ranking } });
+    expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1);
+    f.session.updateDraft({ ...f.session.getSnapshot().draft, combatants: [] });
+    expect(f.session.getSnapshot().hosted?.ranking).toEqual(ranking);
+    f.session.appendHostedHistory(); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1);
+    expect(f.operations.map(op => op.operation)).toEqual(['create-stream']); expect(f.records.size).toBe(0);
+    const details = f.session.getSnapshot().hosted!;
+    expect(parseArenaHostedDetails({ ...details, ranking: undefined }, generationId)?.ranking).toBeNull();
+    expect(parseArenaHostedDetails(details, readyRanking.generationId)?.ranking).toBeNull();
+    expect(parseArenaHostedDetails(details, generationId)?.ranking).toEqual(ranking);
+    f.session.retryDraftSave(); f.session.dispose();
+    const restored = fixture('battle', f.saved); restored.session.restoreDraft();
+    expect(restored.session.getSnapshot().hosted?.ranking).toEqual(ranking);
+    expect(restored.operations).toHaveLength(0); expect(restored.records.size).toBe(0); restored.session.dispose();
+  });
+  it.each(['missing-done', 'late-native-rejection'] as const)('ranking cannot authorize completion/history/save after %s', async fault => {
+    const f = fixture('battle', storage(), { ranking, omitDone: fault === 'missing-done', rejectAfterDone: fault === 'late-native-rejection' });
+    const input = draft(); f.session.updateDraft(input); await f.session.generateHosted({ invoke: f.invoke }, input, intent, actor);
+    expect(f.session.getSnapshot().phase).toBe('failed'); expect(f.session.getSnapshot().hosted?.ranking).toEqual(ranking);
+    expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(0);
+    expect(await f.session.save('history')).toBe(false); expect(await f.session.save('characters')).toBe(false);
+    expect(f.records.size).toBe(0); expect(f.operations.map(op => op.operation)).toEqual(['create-stream']); f.session.dispose();
+  });
+  it.each(['cancel', 'scope', 'dispose'] as const)('late feedback cannot cross %s or trigger effects', async action => {
+    const f = fixture('battle', storage(), { ranking, lateRanking: { success: false, generationId, error: 'late ranking' } }); f.setHold();
+    const input = draft(); f.session.updateDraft(input); const run = f.session.generateHosted({ invoke: f.invoke }, input, intent, actor);
+    await vi.waitFor(() => expect(f.session.getSnapshot().hosted?.ranking).toEqual(ranking));
+    if (action === 'scope') f.session.setScope('other-account'); else if (action === 'dispose') f.session.dispose(); else f.session.cancel();
+    await run; expect(f.session.getSnapshot().hosted?.ranking).toEqual(ranking);
+    expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(0); expect(f.records.size).toBe(0); f.session.dispose();
+  });
+});
+
+const nativeRankingFixture = process.env.ARENA_NATIVE_RANKING_EVENTS_OUTPUT;
+it.skipIf(!nativeRankingFixture)('consumes real runtime → Native loopback → unchanged Channel through the completion owner', async () => {
+  const nativeEvents = JSON.parse(readFileSync(nativeRankingFixture!, 'utf8')) as DesktopArenaHostedChannelEvent[];
+  const f = fixture('battle', storage(), { nativeEvents }); const input = draft(); f.session.updateDraft(input);
+  await f.session.generateHosted({ invoke: f.invoke }, input, intent, actor);
+  expect(f.session.getSnapshot()).toMatchObject({ phase: 'completed', hostedGenerationId: readyRanking.generationId, hosted: { ranking: readyRanking } });
+  expect(f.session.getSnapshot().markdown).toContain('合成战报');
+  expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1);
+  expect(f.operations.map(op => op.operation)).toEqual(['create-stream']); expect(f.records.size).toBe(0);
+  f.session.appendHostedHistory(); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1); f.session.dispose();
 });

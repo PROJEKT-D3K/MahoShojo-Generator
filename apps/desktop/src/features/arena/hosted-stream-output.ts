@@ -5,6 +5,7 @@ import {
 import {
   DESKTOP_ARENA_HOSTED_LIMITS, parseDesktopArenaHostedSseBlock, type DesktopArenaHostedSseEvent,
 } from '@mahoshojo/contracts/desktop-arena-hosted';
+import type { GenerationRankingResponse } from '@mahoshojo/contracts/arena-generation-ranking';
 import type { AiExecutionUsage } from '@mahoshojo/contracts/ai-execution';
 
 export interface ArenaHostedStreamOutput {
@@ -12,13 +13,14 @@ export interface ArenaHostedStreamOutput {
   reasoning: string;
   usage?: AiExecutionUsage;
   serverStatus: string | null;
+  ranking: GenerationRankingResponse | null;
   /** Preserve the wire telemetry, including nullable token counts and boolean flags. */
   telemetry: Extract<DesktopArenaHostedSseEvent, { event: 'telemetry' }>['data'] | null;
   metaEvent: Extract<DesktopArenaHostedSseEvent, { event: 'meta' | 'meta_error' }> | null;
   terminal: Extract<DesktopArenaHostedSseEvent, { event: 'done' | 'error' }> | null;
 }
 export const createArenaHostedStreamOutput = (): ArenaHostedStreamOutput => ({
-  markdown: '', reasoning: '', serverStatus: null, telemetry: null, metaEvent: null, terminal: null,
+  markdown: '', reasoning: '', serverStatus: null, ranking: null, telemetry: null, metaEvent: null, terminal: null,
 });
 export interface ArenaHostedStreamOutputOptions {
   /** An optional caller-owned accumulator keeps received originals available after a read failure. */
@@ -38,6 +40,8 @@ export const collectArenaHostedStreamOutput = async (
 ): Promise<ArenaHostedStreamOutput> => {
   if (!response.ok || !response.body) throw new Error('服务器暂未提供可读取的战报，请稍后按原请求恢复。');
   const output = options.output ?? createArenaHostedStreamOutput();
+  const generationId = response.headers.get('X-Mahoshojo-Generation-Id');
+  if (output.ranking?.generationId !== generationId) output.ranking = null;
   const readWithTimeout = createStreamReadWithTimeout({ mode: 'soft', label: '战报流式生成',
     idleTimeoutMs: DEFAULT_STREAM_READ_IDLE_TIMEOUT_MS, totalTimeoutMs: DEFAULT_STREAM_READ_TOTAL_TIMEOUT_MS,
     onSoftTimeout: (event) => {
@@ -59,6 +63,8 @@ export const collectArenaHostedStreamOutput = async (
         else if (event.event === 'reasoning') output.reasoning += event.data.chunk;
         else if (event.event === 'snapshot') {
           output.markdown = event.data.markdown; output.reasoning = event.data.reasoning; output.serverStatus = event.data.status;
+        } else if (event.event === 'ranking') {
+          if (!output.terminal) output.ranking = event.data?.generationId === generationId ? event.data : null;
         } else if (event.event === 'meta' || event.event === 'meta_error') output.metaEvent = event;
         else if (event.event === 'done' || event.event === 'error') { output.terminal = event; output.serverStatus = event.data.status; }
         if (event.event === 'telemetry' || event.event === 'snapshot') {

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { DESKTOP_ARENA_HOSTED_LIMITS, DesktopArenaHostedBodySchema, parseDesktopArenaHostedSseBlock } from '@mahoshojo/contracts/desktop-arena-hosted';
 import { encodeGenerationSseEvent, projectArenaGenerationEventForClient } from '@mahoshojo/hosted-api/arena-generation/sse';
 import { createArenaGenerationService } from '@mahoshojo/hosted-api/arena-generation/service';
@@ -11,8 +11,32 @@ import { createArenaStreamProjector } from '../src/arena-generation/stream-proje
 
 // Shared data fixture only; no cross-package source import.
 const fixture = JSON.parse(readFileSync(new URL('../../contracts/fixtures/desktop-arena-hosted.json', import.meta.url), 'utf8'));
+const ranking = JSON.parse(readFileSync(new URL('../../contracts/fixtures/arena-generation-ranking.json', import.meta.url), 'utf8'));
 const textDecoder = new TextDecoder();
 describe('Arena Hosted real producer/wire budget evidence', () => {
+  it('accepts real runtime ranking before done without generating or finalizing twice', async () => {
+    const generate = vi.fn(async () => ({ body: new Response('# 合成战报\n\n完整正文').body!, telemetry: { model: 'synthetic-model' } }));
+    const finalize = vi.fn(async () => ({ resultRef: null, ranking }));
+    const service = createArenaGenerationService({
+      store: createMemoryGenerationReplayStore(),
+      executor: createArenaGenerationRuntime({ checkSafety: async () => null,
+        buildPrompt: async () => ({ prompt: 'synthetic', metadata: { mode: 'daily' } }), generate, finalize }),
+      resolveActor: async () => ({ actorKey: 'user:42' }), deriveGenerationId: async () => ranking.generationId,
+      hashPayload: async () => 'a'.repeat(64), now: () => new Date('2026-10-10T00:00:00.000Z'), replayPollMs: 1,
+    });
+    const response = await service.create(new Request('https://synthetic.test/api/arena/generate-stream', {
+      method: 'POST', body: JSON.stringify({ ...fixture.validOperations[0].body, generationRequestId: 'arena_request_1234' }),
+    }));
+    expect(response.status).toBe(200);
+    const wire = await response.text();
+    // Optional small evidence file feeds the existing real Native loopback, never a live service.
+    if (process.env.ARENA_NATIVE_RANKING_WIRE_INPUT) writeFileSync(process.env.ARENA_NATIVE_RANKING_WIRE_INPUT, wire);
+    const events = wire.split('\n\n').filter(Boolean).map(block => parseDesktopArenaHostedSseBlock(`${block}\n\n`));
+    expect(events.slice(-3).map(event => event.event)).toEqual(['telemetry', 'ranking', 'done']);
+    expect(events.at(-2)?.data).toEqual(ranking);
+    expect(events.at(-1)).toMatchObject({ event: 'done', data: { status: 'completed', ok: true } });
+    expect(generate).toHaveBeenCalledTimes(1); expect(finalize).toHaveBeenCalledTimes(1);
+  });
   it('keeps the actual normalized Gemini/reasoning usage fields through public wire projection', () => {
     const usage = normalizeUsage({ usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 7, thoughtsTokenCount: 3, completionTokensIncludesReasoning: true } });
     expect(usage).toMatchObject({ textTokens: 7, completionTokensIncludesReasoning: true });

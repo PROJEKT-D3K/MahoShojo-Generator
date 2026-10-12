@@ -1,3 +1,4 @@
+import { parseGenerationRankingResponse, type GenerationRankingResponse } from '@mahoshojo/contracts/arena-generation-ranking';
 import { ARENA_COMPANION_PROTOCOL_VERSION, ArenaCompanionEnvelopeSchema, type ArenaCompanionEnvelope } from '@mahoshojo/contracts/arena-companion';
 import { DesktopArenaHostedJsonCreateRequestSchema } from '@mahoshojo/contracts/desktop-arena-hosted-json';
 import { runArenaHostedJson } from './hosted-json';
@@ -41,6 +42,8 @@ const encoder = new TextEncoder();
 export interface ArenaHostedDetails {
   connectionState: ArenaGenerationConnectionState;
   serverStatus: string | null;
+  /** Optional for old local drafts; public feedback only, never completion authority. */
+  ranking?: GenerationRankingResponse | null;
   telemetry: Extract<DesktopArenaHostedSseEvent, { event: 'telemetry' }>['data'] | null;
   metadataState: ArenaHostedHandshake['metadataState'];
   headerMeta: ArenaHostedHandshake['headerMeta'] | null;
@@ -56,7 +59,7 @@ export interface ArenaHostedDetails {
   companionState?: 'complete' | 'recovered-model-only' | 'unavailable';
 }
 /** Draft data is public output only; parse it again without restoring execution authority. */
-export const parseArenaHostedDetails = (value: unknown): ArenaHostedDetails | null => {
+export const parseArenaHostedDetails = (value: unknown, generationId?: string | null): ArenaHostedDetails | null => {
   if (value === null || value === undefined) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Hosted output');
   const v = value as Record<string, unknown>;
@@ -69,11 +72,13 @@ export const parseArenaHostedDetails = (value: unknown): ArenaHostedDetails | nu
     || !(v.validationMessage === null || typeof v.validationMessage === 'string') || typeof v.restored !== 'boolean') throw new Error('Hosted output');
   if (v.delivery !== undefined && v.delivery !== 'stream' && v.delivery !== 'non-stream') throw new Error('Hosted delivery');
   if (v.companionState !== undefined && (typeof v.companionState !== 'string' || !['complete', 'recovered-model-only', 'unavailable'].includes(v.companionState))) throw new Error('Hosted companion state');
+  const ranking = parseGenerationRankingResponse(v.ranking);
   const companion = v.companion == null ? null : ArenaCompanionEnvelopeSchema.parse(v.companion);
   const metaEvent = v.metaEvent === null ? null : DesktopArenaHostedSseEventSchema.parse(v.metaEvent);
   const terminal = v.terminal === null ? null : DesktopArenaHostedSseEventSchema.parse(v.terminal);
   if ((metaEvent && metaEvent.event !== 'meta' && metaEvent.event !== 'meta_error') || (terminal && terminal.event !== 'done' && terminal.event !== 'error')) throw new Error('Hosted output');
   return { connectionState: v.connectionState as ArenaHostedDetails['connectionState'], serverStatus: v.serverStatus,
+    ranking: ranking?.generationId === generationId ? ranking : null,
     telemetry: v.telemetry === null ? null : DesktopArenaHostedTelemetrySchema.parse(v.telemetry),
     metadataState: v.metadataState as ArenaHostedDetails['metadataState'], headerMeta: v.headerMeta === null ? null : DesktopArenaHostedHeaderMetaSchema.parse(v.headerMeta),
     recoveryCredentialState: v.recoveryCredentialState as ArenaHostedDetails['recoveryCredentialState'], metaEvent, terminal,
@@ -167,7 +172,7 @@ const runHosted = async (
   const scope = { product: pointer.product, requestId: pointer.requestId, actor: pointer.actor };
   let generationId = pointer.generationId ?? null;
   const output = createArenaHostedStreamOutput();
-  let details: ArenaHostedDetails = { connectionState: create ? 'connecting' : 'resuming', serverStatus: null, telemetry: null,
+  let details: ArenaHostedDetails = { connectionState: create ? 'connecting' : 'resuming', serverStatus: null, ranking: null, telemetry: null,
     metadataState: 'missing', headerMeta: null, recoveryCredentialState: 'stored', metaEvent: null, terminal: null,
     outputValidation: 'pending', validationMessage: null, restored: !create && !automaticRecovery,
     ...(nonStream ? { delivery: 'non-stream', companionState: 'recovered-model-only', companion: null } as const : {}) };
@@ -248,7 +253,7 @@ const runHosted = async (
     });
     await collectArenaHostedStreamOutput(response, { output, signal, userStopReason: ARENA_HOSTED_USER_STOP, assertCurrent,
       onEvent: (_event, value) => {
-        details = { ...details, serverStatus: value.serverStatus, telemetry: value.telemetry, metaEvent: value.metaEvent, terminal: value.terminal }; publish();
+        details = { ...details, serverStatus: value.serverStatus, ranking: value.ranking, telemetry: value.telemetry, metaEvent: value.metaEvent, terminal: value.terminal }; publish();
       },
       onSoftTimeout: (message) => {
         if (!isCurrent() || signal.aborted) return;

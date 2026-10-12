@@ -38,6 +38,7 @@ let saveBarrier: Promise<void> | null = null;
 let releaseSave: (() => void) | null = null;
 let accountId: number | null, hold: boolean, failSave: boolean, activeCloseHandles: number;
 let webOverride: string | null;
+let rankingFeedback: unknown;
 let streamRequests: (DesktopArenaHostedStreamRequest | DesktopArenaHostedJsonCreateRequest)[], controlRequests: DesktopArenaHostedControlRequest[];
 let roleRequests: Record<string, unknown>[];
 let httpRequests: { method: string; path: string; body: Record<string, unknown> | null }[];
@@ -86,7 +87,10 @@ beforeAll(async () => {
         res.setHeader('content-type', 'text/event-stream'); res.setHeader('X-Mahoshojo-Generation-Id', generationId); res.setHeader('X-Mahoshojo-Generation-Request-Id', output.requestId);
         if (holdFirstChunk) { res.flushHeaders(); released.push(() => { res.write(wire('1-0', 'markdown', { chunk: output.text })); res.end(wire('2-0', 'done', { ok: true, status: 'completed' })); }); return; }
         res.write(wire('1-0', 'markdown', { chunk: output.text }));
-        const finish = () => res.end(wire('2-0', 'done', { ok: true, status: 'completed' }));
+        const finish = () => {
+          if (rankingFeedback !== undefined) res.write(wire('1-1', 'ranking', rankingFeedback));
+          res.end(wire('2-0', 'done', { ok: true, status: 'completed' }));
+        };
         if (hold) released.push(finish); else finish(); return;
       }
       res.setHeader('content-type', 'application/json');
@@ -131,7 +135,7 @@ const releaseAll = () => { released.splice(0).forEach(finish => finish()); };
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks(); localStorage.clear(); holdFirstChunk = false; nativeResponseCount = 0; saveBarrier = null; releaseSave = null; accountId = null; hold = false; failSave = false; activeCloseHandles = 0; webOverride = null;
-  companion = null; roleRequests = []; streamRequests = []; controlRequests = []; httpRequests = []; docs = new Map(); released = []; pendingNative = new Set(); configure(); resetDesktopCloudSessionStoreForTests();
+  companion = null; rankingFeedback = undefined; roleRequests = []; streamRequests = []; controlRequests = []; httpRequests = []; docs = new Map(); released = []; pendingNative = new Set(); configure(); resetDesktopCloudSessionStoreForTests();
   mocks.hint.mockReset().mockImplementation(async (product: Product) => ({ product, state: 'none' }));
   mocks.listen.mockImplementation(async () => { activeCloseHandles += 1; return vi.fn(() => { activeCloseHandles -= 1; }); }); mocks.download.mockResolvedValue(undefined);
   mocks.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
@@ -225,6 +229,17 @@ const matrix = (['battle', 'arena'] as const).flatMap(product =>
       (['system', 'preset'] as const).flatMap(funding =>
         [false, true].flatMap(account => (['stream', 'non-stream'] as const).map(delivery => ({ product, mode, format, account, funding, delivery })))))));
 describe('Desktop Hosted real-route loopback journey', () => {
+  it.each([
+    [null, '不能据此判断是否计分'],
+    [{ success: false, generationId, error: '读取失败' }, '是否已计分尚未确认'],
+    [{ success: true, generationId, state: 'pending', message: '等待' }, '仍待结算'],
+    [{ success: true, generationId, state: 'ready', snapshot: { status: 'completed', combatantCount: 2 }, participants: [] }, '已取得本次服务器排位结算反馈'],
+  ])('shows honest settlement feedback %j without changing generation/save effects', async (value, text) => {
+    rankingFeedback = value; configure(); saveDraft(draft('daily', 'markdown'), 'battle'); await mount(); await restoreAndSelectStream();
+    await click('生成战报'); await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
+    expect(container.querySelector('[aria-label="本次排位结算反馈"]')?.textContent).toContain(text);
+    expect(streamRequests).toHaveLength(1); expect(roleRequests).toHaveLength(0); expect(docs.size).toBe(0);
+  });
   it.each(matrix)('/$product $mode $format $delivery account=$account funding=$funding uses controls → create → explicit save → reopen', async ({ product, mode, format, account, funding, delivery }) => {
     accountId = account ? 42 : null; configure(funding); const original = draft(mode, format); saveDraft(original, product); const router = await mount(product); if (delivery === 'stream') await restoreAndSelectStream(); else { await click('恢复草稿'); await openSection('⚡ 生成方式'); expect(button('非流式')!.getAttribute('aria-pressed')).toBe('true'); }
     await openSection(product === 'arena' ? '⚙️ 读写设置' : '🧠 故事');
@@ -235,6 +250,8 @@ describe('Desktop Hosted real-route loopback journey', () => {
     expect(random).not.toHaveBeenCalled(); expect(streamRequests).toHaveLength(1); expect(httpRequests.filter(request => request.method === 'POST' && request.path === (delivery === 'stream' ? '/api/arena/generate-stream' : '/api/generate-battle-story'))).toHaveLength(1);
     expect(streamRequests[0]).toMatchObject({ operation: delivery === 'stream' ? 'create-stream' : 'create-json', product, actor: account ? { kind: 'account', expectedUserId: 42 } : { kind: 'anonymous' }, body: { mode, reportFormat: format, writeArenaHistory: false, writeCurrentState: false, adjudicationEvents: original.adjudicationEvents } });
     expect(streamRequests[0]).toHaveProperty(funding === 'system' ? 'systemConfig' : 'presetConfig'); expect(streamRequests[0]).not.toHaveProperty('body.adjudicationResults');
+    expect(container.textContent).toContain('可能计入严格排位');
+    expect(container.querySelector('[aria-label="本次排位结算反馈"]')?.textContent).toContain('不能据此判断是否计分');
     expect(docs.size).toBe(0); expect(activeCloseHandles).toBe(1); expect(button('另存战后角色副本')).toBeUndefined();
     expect(container.querySelector('[aria-label="服务器生成状态"]')?.textContent).toContain(delivery === 'stream' ? '本次判定、记者等附加元数据未取得' : '完整非流式报告与附加元数据已保留');
     if (delivery === 'non-stream' && format === 'markdown') expect(container.textContent).toContain('服务端未知类型记录');

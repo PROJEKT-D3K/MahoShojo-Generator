@@ -327,6 +327,10 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     <details><summary>{state.hosted ? '服务器收到的正文（控制元数据单独保留）' : '完整原始输出（含元数据）'}</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all">{state.rawText}</pre></details>
     {state.hosted ? <div className="space-y-2" aria-label="服务器生成状态">
       <p role="status">连接：{state.hosted.connectionState}；{state.hosted.terminal?.event === 'done' || (state.hosted.companionState === 'complete' && state.hosted.serverStatus === 'completed') ? '服务器任务终态' : '最近服务响应状态'}：{state.hosted.serverStatus ?? '尚未确认'}。连接或恢复错误不表示任务已取消。</p>
+      <p role="status" aria-label="本次排位结算反馈">{!state.hosted.ranking ? '本次排位结算结果尚未取得，不能据此判断是否计分。'
+        : !state.hosted.ranking.success ? '本次排位结算结果读取失败，是否已计分尚未确认。'
+        : state.hosted.ranking.state === 'pending' ? '服务器返回本次排位仍待结算；当前未继续查询。'
+        : '已取得本次服务器排位结算反馈；具体队列状态可在“服务器公开元数据与终态”中查看。'}</p>
       {state.hosted.metadataState !== 'available' ? <p role="status">本次判定、记者等附加元数据未取得；服务器可能已经执行判定，恢复时不会在本机重掷。</p> : null}
       {state.hosted.recoveryCredentialState === 'memory-only' ? <p role="alert">匿名恢复凭据保存失败，当前任务可继续；关闭应用后可能无法恢复，请完整导出。</p> : null}
       {state.hosted.validationMessage ? <p role="status">{state.hosted.validationMessage}</p> : null}
@@ -390,7 +394,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           <p className="text-xs">{product === 'arena' ? '手动及角色、主辅情景' : '角色与主情景继承'} {inheritedAdjudication.events.length} {hostedTarget ? '个随机判定由服务器在创建时执行，本机不会重掷；素材内判定不执行。' : '个随机判定每次生成只在本机掷骰一次，非服务器权威；素材内判定不执行。'}</p>
           {inheritedAdjudication.skippedLegacy ? <p role="status">{inheritedAdjudication.skippedLegacy} 个旧版随机事件格式不受支持，保留原字段但不执行。</p> : null}
           <fieldset disabled={!guard.ready} className="min-w-0"><DesktopAiProviderPanel generationMode={draft.generationMode} onDirtyChange={onAiDirty} showConnectionTest={false} copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请配置客户端连接。', serverFootnote: 'Arena 服务器支持流式或完整非流式报告；恢复与停止沿原请求，角色更新使用本次创建时冻结的选择。', payloadNoun: '角色与故事设定' }} /></fieldset>
-          {hostedTarget ? <p role="status">官方服务器生成。创建前验证所选交付协议与原账号；不会自动改为客户端执行。</p> : null}
+          {hostedTarget ? <p role="status">官方服务器生成。创建前验证所选交付协议与原账号；不会自动改为客户端执行。符合服务器规则的对局可能计入严格排位，是否计分以服务器结算为准。</p> : null}
         </>,
         generationMode: <>
           <ArenaReportFormatSelectorView value={draft.reportFormat} disabled={disabled} onChange={(reportFormat) => update({ reportFormat })} webDescription="生成网页或包目标源码；本片仅验证、保存与导出，隔离运行待 D4 验收。" />

@@ -1803,6 +1803,15 @@ impl Budget {
             .cursor
             .as_deref()
             .is_none_or(|id| cursor_cmp(&event.id, id) == std::cmp::Ordering::Greater);
+        // The caller has already projected optional ranking to its public DTO or null.
+        // It still advances the same cursor, so a bad business payload cannot replay forever.
+        if event.name == "ranking" {
+            if advances {
+                self.cursor = Some(event.id.clone());
+                self.observed = true;
+            }
+            return Ok(advances);
+        }
         let data = event.data.as_object_mut().ok_or_else(protocol)?;
         let mut markdown = self.markdown_bytes;
         let mut reasoning = self.reasoning_bytes;
@@ -2281,6 +2290,7 @@ fn parse_frame(frame: &str) -> Result<Option<ParsedEvent>, ArenaError> {
         "reasoning",
         "reasoning_done",
         "telemetry",
+        "ranking",
         "snapshot",
         "meta",
         "meta_error",
@@ -2292,7 +2302,7 @@ fn parse_frame(frame: &str) -> Result<Option<ParsedEvent>, ArenaError> {
         return Err(protocol());
     }
     let data: Value = serde_json::from_str(&data.join("\n")).map_err(|_| protocol())?;
-    if !data.is_object() {
+    if name != "ranking" && !data.is_object() {
         return Err(protocol());
     }
     Ok(Some(ParsedEvent { id, name, data }))
@@ -2933,6 +2943,13 @@ async fn stream_inner(
             state.is_current(product, &flight, cloud, secrets)?;
             for chunk in chunk.chunks(IPC_TEXT_BYTES) {
                 for mut event in parser.push(chunk)? {
+                    if event.name == "ranking" {
+                        event.data = ranking::project(
+                            &event.data,
+                            flight.lock().map_err(|_| stale())?.generation_id.as_deref(),
+                        )
+                        .unwrap_or(Value::Null);
+                    }
                     let mut budget = flight.lock().map_err(|_| stale())?.budget.clone();
                     budget.accept(&mut event)?;
                     let block = format!(
@@ -2997,6 +3014,9 @@ async fn stream_inner(
 #[cfg(test)]
 #[path = "arena_hosted_tests.rs"]
 mod tests;
+
+#[path = "arena_hosted_ranking.rs"]
+mod ranking;
 
 #[path = "arena_hosted_json.rs"]
 mod json_delivery;

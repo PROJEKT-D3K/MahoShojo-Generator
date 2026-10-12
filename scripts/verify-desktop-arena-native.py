@@ -85,6 +85,7 @@ pub mod ipc {
     paths += sorted((PRODUCT / "src/generated").glob("*.json"))
     paths += sorted((ROOT / "packages/contracts/fixtures").glob("desktop-story-*.json"))
     paths += [ROOT / "packages/contracts/fixtures/desktop-arena-hosted.json",
+              ROOT / "packages/contracts/fixtures/arena-generation-ranking.json",
               ROOT / "packages/contracts/fixtures/arena-companion.json", ROOT / "packages/contracts/fixtures/desktop-arena-hosted-json.json",
               ROOT / "packages/contracts/fixtures/arena-companion-utf16.json", ROOT / "packages/contracts/fixtures/arena-companion-error-utf16.json", PRODUCT / "Cargo.toml", PRODUCT / "Cargo.lock", Path(__file__).resolve()]
     hashes = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}

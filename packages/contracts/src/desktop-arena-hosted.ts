@@ -1,4 +1,5 @@
 import { z } from './zod';
+import { GenerationRankingResponseSchema, parseGenerationRankingResponse } from './arena-generation-ranking';
 import { JsonValueSchema, type JsonValue } from './json-value';
 import { jsonUtf8ByteLength, utf8ByteLimitedStringSchema } from './wire-size';
 import { DesktopHostedPresetConfigSchema, DesktopHostedSystemConfigSchema } from './desktop-cloud';
@@ -200,6 +201,7 @@ export const DesktopArenaHostedSseEventSchema = z.discriminatedUnion('event', [
   z.object({ id: DesktopArenaHostedCursorSchema, event: z.literal('reasoning'), data: z.object({ chunk: z.string(), source: z.literal('sdk').optional(), status: z.literal('thinking').optional() }).strict() }).strict(),
   z.object({ id: DesktopArenaHostedCursorSchema, event: z.literal('reasoning_done'), data: z.object({ source: z.literal('sdk'), status: z.enum(['done', 'unavailable']) }).strict() }).strict(),
   z.object({ id: DesktopArenaHostedCursorSchema, event: z.literal('telemetry'), data: DesktopArenaHostedTelemetrySchema }).strict(),
+  z.object({ id: DesktopArenaHostedCursorSchema, event: z.literal('ranking'), data: GenerationRankingResponseSchema.nullable() }).strict(),
   z.object({ id: DesktopArenaHostedCursorSchema, event: z.literal('snapshot'), data: z.object({
     status: GenerationStatusSchema, markdown: z.string(), reasoning: z.string(), lastEventId: DesktopArenaHostedCursorSchema.nullable(),
     updatedAt: z.string().datetime({ offset: true }), telemetry: DesktopArenaHostedTelemetrySchema.nullable().optional(),
@@ -228,7 +230,9 @@ export const parseDesktopArenaHostedSseBlock = (block: string): DesktopArenaHost
   if (lines.length !== 3 || !lines[0]?.startsWith('id: ') || !lines[1]?.startsWith('event: ') || !lines[2]?.startsWith('data: ')) {
     throw new Error('ARENA_HOSTED_PROTOCOL_INVALID');
   }
-  return DesktopArenaHostedSseEventSchema.parse({ id: lines[0].slice(4), event: lines[1].slice(7), data: JSON.parse(lines[2].slice(6)) });
+  const event = lines[1].slice(7), data: unknown = JSON.parse(lines[2].slice(6));
+  // Ranking is optional business feedback. Keep its cursor even when its payload is unavailable.
+  return DesktopArenaHostedSseEventSchema.parse({ id: lines[0].slice(4), event, data: event === 'ranking' ? parseGenerationRankingResponse(data) : data });
 };
 
 /** Safe Native failure evidence; only unknown may enter C0 first-response recovery. */

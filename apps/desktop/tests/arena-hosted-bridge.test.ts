@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { dirname, join } from 'node:path';
 const fixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-arena-hosted.json', import.meta.url), 'utf8'));
+const ranking = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/arena-generation-ranking.json', import.meta.url), 'utf8'));
 import {
   ARENA_HOSTED_CONTROL_COMMAND, ARENA_HOSTED_DETACH_COMMAND, ARENA_HOSTED_STREAM_COMMAND,
   ArenaHostedBridgeError, readArenaHostedRecoveryHint, controlArenaHosted, openArenaHostedStream, type ArenaHostedChannel,
@@ -25,6 +26,16 @@ function harness() {
 }
 
 describe('Arena Native Channel to C0 response bridge', () => {
+  it.each([ranking, { ...ranking, generationId: `arena_${'b'.repeat(64)}` }, {}, null, [], 'secret-canary'])('projects ranking before C0, retaining its cursor without leaking unknown fields', async value => {
+    const h = harness(), opened = h.start(); h.channel.onmessage(response); const res = await opened;
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? { ...value, private: 'secret-canary' } : value;
+    h.send(1, { kind: 'sse-fragment', text: block('ranking', source), final: true });
+    h.send(2, { kind: 'sse-fragment', text: block('done', { status: 'completed', ok: true }).replace('1-0', '2-0'), final: true });
+    h.send(3, { kind: 'stream-end' }); h.resolve();
+    const wire = await res.text(); expect(wire).not.toContain('secret-canary');
+    expect(parseDesktopArenaHostedSseBlock(wire.split('\n\n')[0] + '\n\n')).toEqual({ id: '1-0', event: 'ranking', data: value === ranking ? ranking : null });
+    expect(h.invoke.mock.calls.map(([command]) => command)).toEqual([ARENA_HOSTED_STREAM_COMMAND]);
+  });
   it('joins validated ordered fragments and exposes only the public generation handshake', async () => {
     const h = harness(); const promise = h.start(); h.channel.onmessage(response); const res = await promise;
     const text = block(); h.send(1, { kind: 'sse-fragment', text: text.slice(0, 20), final: false });
