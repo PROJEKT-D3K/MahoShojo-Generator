@@ -71,6 +71,12 @@ D5.1-T 卡牌工坊共源：`domain/card-forge-document`、`domain/game-card-ima
 Desktop 的媒体输入/画布预算与原件下载属于宿主，不能下沉为共享字段长度限制。
 
 
+D5.1-T 茶会交换格式：`domain/magic-tea-party/types` 与 `domain/magic-tea-party/transfer`
+承载既有会话类型、JSON 导出投影和 SillyTavern JSONL 映射，Web 原入口兼容回用。
+Blob/ZIP、文件、敏感词和会话仓储仍归 Web；格式核不新增预算、运行时校验或媒体读取。
+JSONL 的重建与字段损耗保持原语义，不把导出字段保留称为导入无损恢复。
+
+
 D5.1b b1-A 前置：`ai-core/arena-generation` 持有 Arena 纯 Prompt/schema、输入与结果投影，
 Hosted 原生产链与 Web `/battle`、`/arena` 的实际 hook 共同回用；不携带 Provider/secret、
 随机执行、资格或签名能力。`domain/narrative-history-operations` 复用条目构造/去重/读取投影，

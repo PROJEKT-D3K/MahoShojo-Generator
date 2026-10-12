@@ -229,6 +229,8 @@
     "./tavern-card/scenario": "./src/tavern-card/scenario.ts",
     "./tavern-card/limits": "./src/tavern-card/limits.ts",
     "./tavern-card/recommend": "./src/tavern-card/recommend.ts",
+    "./magic-tea-party/types": "./src/magic-tea-party/types.ts",
+    "./magic-tea-party/transfer": "./src/magic-tea-party/transfer.ts",
     "./team-merge": "./src/team-merge.ts",
     "./team-input": "./src/team-input.ts",
     "./questionnaire-editor": "./src/questionnaire-editor.ts",

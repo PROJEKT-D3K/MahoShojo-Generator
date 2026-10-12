@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseSillyTavernJsonl, stringifySillyTavernJsonl } from '@/lib/magic-tea-party/transfer';
+import {
+  buildMagicTeaPartySessionExport as sharedBuildSessionExport,
+  parseSillyTavernJsonl as sharedParseJsonl,
+  stringifySillyTavernJsonl as sharedStringifyJsonl,
+} from '@mahoshojo/domain/magic-tea-party/transfer';
+import { buildMagicTeaPartySessionExport, parseSillyTavernJsonl, stringifySillyTavernJsonl } from '@/lib/magic-tea-party/transfer';
 import type { MagicTeaPartyMessage } from '@/lib/magic-tea-party/types';
 
 describe('magic tea party transfer', () => {
+  it('Web 兼容出口直接复用共享格式函数', () => {
+    expect(buildMagicTeaPartySessionExport).toBe(sharedBuildSessionExport);
+    expect(parseSillyTavernJsonl).toBe(sharedParseJsonl);
+    expect(stringifySillyTavernJsonl).toBe(sharedStringifyJsonl);
+  });
+
   it('可以导入 SillyTavern JSONL', () => {
     const text = [
       '{"user_name":"旅人","character_name":"Narrator","create_date":"2024-01-01 @00h 00m 00s 000ms"}',
