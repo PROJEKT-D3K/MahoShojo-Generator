@@ -352,6 +352,8 @@ export function BattleIllustrationPanel({
           <div className="pt-1">
             <TachieGenerator
               prompt={prompt}
+              recommendedPrompt={suggested.prompt}
+              onUseRecommendedPrompt={handleResetPrompt}
               mode="illustration"
               onImageUrlChange={(imageUrl) => {
                 setGeneratedImageUrl(imageUrl);

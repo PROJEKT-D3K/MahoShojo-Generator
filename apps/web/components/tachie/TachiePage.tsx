@@ -47,7 +47,7 @@ export function TachiePage() {
           立绘生成
         </h1>
         <p className="text-center text-sm text-gray-600 mb-4">
-          推荐截取 .json 文件中的 appearance 的部分，否则会报错
+          可以填写角色外观描述，或截取 .json 文件中的 appearance 部分；NovelAI 支持单独编辑最终提示词。
         </p>
         <div className="input-group">
           <label htmlFor="prompt" className="input-label">
@@ -68,14 +68,14 @@ export function TachiePage() {
             }}
           />
         </div>
-        <TachieGenerator prompt={`${prompt}, Xiabanmo, 二次元, 魔法少女`} />
+        <TachieGenerator prompt={prompt.trim() ? `${prompt}, Xiabanmo, 二次元, 魔法少女` : ''} />
 
         <div className="mt-12 text-center">
           <p className="text-sm text-gray-600">
             这是一个测试页面，用于测试 TachieGenerator 组件的功能
           </p>
           <p className="text-xs text-gray-500 mt-2">
-            支持 LibLib（Access Key + Secret Key）与 ModelScope（Token）两种图片生成
+            支持 LibLib、ModelScope 与 NovelAI；NovelAI 使用 Persistent API Token，由浏览器直接生成图片。
           </p>
         </div>
       </div>

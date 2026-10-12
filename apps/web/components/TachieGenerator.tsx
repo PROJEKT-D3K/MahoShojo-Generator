@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { generateTachieWithProgress, type TachieGenerationResult, type TachieSource } from "@/lib/tachie/manager";
 import { ErrorMessage } from "@/components/ErrorMessage";
 import { normalizeModelScopeToken } from "@/lib/tachie/modelscope/error";
+import { DEFAULT_NOVELAI_SETTINGS, normalizeNovelAIToken } from '@/lib/tachie/novelai';
+import { NovelAISettingsFields } from '@/components/tachie/NovelAISettings';
 
 const MODELSCOPE_SIZE_OPTIONS = [
   { value: "928x1664", label: "16:9 竖屏（928×1664）" },
@@ -16,12 +18,16 @@ const MODELSCOPE_SIZE_OPTIONS = [
 type ModelScopePresetSize = (typeof MODELSCOPE_SIZE_OPTIONS)[number]["value"];
 
 const DEFAULT_MODELSCOPE_SIZE: ModelScopePresetSize = "1328x1328";
+const NOVELAI_TOKEN_KEY = 'tachie_novelai_token';
 
 const isModelScopePresetSize = (value: unknown): value is ModelScopePresetSize =>
   typeof value === "string" && MODELSCOPE_SIZE_OPTIONS.some((option) => option.value === value);
 
 interface TachieGeneratorProps {
   prompt: string;
+  textProviderStorageNamespace?: string;
+  recommendedPrompt?: string;
+  onUseRecommendedPrompt?: () => void;
   mode?: 'tachie' | 'illustration';
   workflowUuid?: string;
   templateUuid?: string;
@@ -34,6 +40,9 @@ interface TachieGeneratorProps {
 
 export default function TachieGenerator({
   prompt,
+  textProviderStorageNamespace,
+  recommendedPrompt,
+  onUseRecommendedPrompt,
   mode,
   workflowUuid,
   templateUuid,
@@ -49,12 +58,34 @@ export default function TachieGenerator({
   const [modelscopeToken, setModelscopeToken] = useState("");
   const [modelscopeModel, setModelscopeModel] = useState("Stonego/XiabanmostyleV3");
   const [modelscopeSize, setModelscopeSize] = useState<ModelScopePresetSize>(DEFAULT_MODELSCOPE_SIZE);
+  const [novelaiToken, setNovelaiToken] = useState('');
+  const [novelaiStorageError, setNovelaiStorageError] = useState('');
+  const [novelaiCustomMode, setNovelaiCustomMode] = useState(false);
+  const [novelaiPrompt, setNovelaiPrompt] = useState('');
+  const [novelaiSettings, setNovelaiSettings] = useState({ ...DEFAULT_NOVELAI_SETTINGS });
+  const generationRef = useRef<AbortController | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isOptimizingPrompt, setIsOptimizingPrompt] = useState(false);
   const [result, setResult] = useState<TachieGenerationResult | null>(null);
   const [rememberCredentials, setRememberCredentials] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressStatus, setProgressStatus] = useState("");
   const normalizedModelScopeToken = normalizeModelScopeToken(modelscopeToken);
+
+  useEffect(() => {
+    try { setNovelaiToken(localStorage.getItem(NOVELAI_TOKEN_KEY) ?? ''); }
+    catch { setNovelaiStorageError('浏览器不允许读取本地存储，请重新填写 Token。'); }
+  }, []);
+  const updateNovelaiToken = (value: string) => {
+    setNovelaiToken(value);
+    try {
+      const token = normalizeNovelAIToken(value);
+      if (token) localStorage.setItem(NOVELAI_TOKEN_KEY, token);
+      else localStorage.removeItem(NOVELAI_TOKEN_KEY);
+      setNovelaiStorageError('');
+    } catch { setNovelaiStorageError('Token 无法保存到本地存储，本次仍可使用，刷新后需重新填写。'); }
+  };
+  useEffect(() => () => { generationRef.current?.abort(); generationRef.current = null; }, []);
 
   // localStorage keys
   const CREDENTIALS_KEY = 'tachie_credentials';
@@ -96,6 +127,7 @@ export default function TachieGenerator({
 
   // 保存凭据到localStorage
   const saveCredentials = () => {
+    if (source === 'novelai') return;
     if (typeof window !== 'undefined') {
       if (rememberCredentials) {
         localStorage.setItem(CREDENTIALS_KEY, JSON.stringify({
@@ -131,9 +163,10 @@ export default function TachieGenerator({
 
   const requiredCredentialsReady = source === 'liblib'
     ? Boolean(accessKey.trim() && secretKey.trim())
-    : Boolean(normalizedModelScopeToken);
+    : source === 'novelai' ? Boolean(normalizeNovelAIToken(novelaiToken)) : Boolean(normalizedModelScopeToken);
 
   const handleGenerate = async () => {
+    if (generationRef.current || isOptimizingPrompt) return;
     if (source === 'liblib' && (!accessKey.trim() || !secretKey.trim())) {
       const nextResult = {
         success: false,
@@ -156,7 +189,7 @@ export default function TachieGenerator({
       return;
     }
 
-    const normalizedPrompt = prompt.trim();
+    const normalizedPrompt = (source === 'novelai' ? novelaiPrompt : prompt).trim();
     if (!normalizedPrompt) {
       const nextResult = {
         success: false,
@@ -170,6 +203,9 @@ export default function TachieGenerator({
 
     // 保存凭据（如果用户选择记住）
     saveCredentials();
+
+    const controller = new AbortController();
+    generationRef.current = controller;
 
     setIsGenerating(true);
     setResult(null);
@@ -185,6 +221,11 @@ export default function TachieGenerator({
         modelscopeToken: normalizedModelScopeToken,
         modelscopeModel: modelscopeModel.trim() || undefined,
         modelscopeSize,
+        novelaiToken,
+        novelaiSettings: novelaiCustomMode ? novelaiSettings : {
+          ...DEFAULT_NOVELAI_SETTINGS, model: novelaiSettings.model, baseUrl: novelaiSettings.baseUrl,
+        },
+        signal: controller.signal,
         prompt: normalizedPrompt,
         mode,
         workflowUuid,
@@ -193,13 +234,16 @@ export default function TachieGenerator({
         negativePrompt,
         negativePromptNodeId,
       }, (progress, status) => {
+        if (generationRef.current !== controller) return;
         setProgress(progress);
         setProgressStatus(status);
       });
+      if (generationRef.current !== controller) return;
       setResult(generationResult);
       onResult?.(generationResult);
       onImageUrlChange?.(generationResult.success ? (generationResult.imageUrl ?? null) : null);
     } catch (error) {
+      if (generationRef.current !== controller) return;
       const nextResult = {
         success: false,
         error: error instanceof Error ? error.message : "生成失败",
@@ -208,9 +252,12 @@ export default function TachieGenerator({
       onResult?.(nextResult);
       onImageUrlChange?.(null);
     } finally {
-      setIsGenerating(false);
-      setProgress(0);
-      setProgressStatus("");
+      if (generationRef.current === controller) {
+        generationRef.current = null;
+        setIsGenerating(false);
+        setProgress(0);
+        setProgressStatus("");
+      }
     }
   };
 
@@ -218,25 +265,24 @@ export default function TachieGenerator({
     <div>
       <div className="input-group">
         <label className="input-label">图片生成来源</label>
-        <div className="flex gap-2">
-          <button
+        <div className="flex flex-wrap gap-2">
+          {(['modelscope', 'liblib', 'novelai'] as const).map((item) => <button
+            key={item}
             type="button"
-            onClick={() => setSource('modelscope')}
-            disabled={isGenerating}
-            className={source === 'modelscope' ? 'generate-button !mb-0 !py-2 !px-4 !text-sm' : 'bg-white border border-pink-200 text-pink-600 rounded-lg px-4 py-2 text-sm font-medium hover:bg-pink-50 disabled:opacity-50'}
+            onClick={() => setSource(item)}
+            disabled={isGenerating || isOptimizingPrompt}
+            aria-pressed={source === item}
+            className={`shrink-0 rounded-lg border px-4 py-2 text-sm font-medium disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pink-500 ${source === item ? 'border-pink-500 bg-pink-500 text-white' : 'border-pink-200 bg-white text-pink-600 hover:bg-pink-50'}`}
           >
-            ModelScope
-          </button>
-          <button
-            type="button"
-            onClick={() => setSource('liblib')}
-            disabled={isGenerating}
-            className={source === 'liblib' ? 'generate-button !mb-0 !py-2 !px-4 !text-sm' : 'bg-white border border-pink-200 text-pink-600 rounded-lg px-4 py-2 text-sm font-medium hover:bg-pink-50 disabled:opacity-50'}
-          >
-            LibLib
-          </button>
+            {item === 'modelscope' ? 'ModelScope' : item === 'liblib' ? 'LibLib' : 'NovelAI'}
+          </button>)}
         </div>
       </div>
+
+      {source === 'novelai' && <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        <p className="font-semibold">NovelAI 的使用具有一定的门槛，不推荐直接使用默认提示词。</p>
+        <p className="mt-1">请自行编写适合所选模型的提示词，或导入角色与剧情后使用「LLM 优化提示词」。仅提供 V4.5 Curated 和 V5 Curated。</p>
+      </div>}
 
       <div style={{ marginBottom: '1.5rem' }}>
         <p className="text-center text-sm text-gray-500 mt-4 leading-relaxed">
@@ -254,6 +300,11 @@ export default function TachieGenerator({
               </a>
               &nbsp;获取 Access Key 和 Secret Key
             </>
+          ) : source === 'novelai' ? (
+            <>
+              &nbsp;<a href="https://novelai.net" target="_blank" rel="noopener noreferrer" className="footer-link">NovelAI</a>
+              &nbsp;的用户设置 → Account → Get Persistent API Token 获取令牌
+            </>
           ) : (
             <>
               &nbsp;
@@ -269,7 +320,7 @@ export default function TachieGenerator({
             </>
           )}
           <br />
-          本系统代码已开源，不会存储您的凭据，请放心食用~
+          {source === 'novelai' ? '无需填写 NovelAI 账号密码。' : '勾选“记住凭据”后，凭据将保存在此浏览器的本地存储中。'}
         </p>
       </div>
 
@@ -305,6 +356,19 @@ export default function TachieGenerator({
                 disabled={isGenerating}
               />
             </div>
+          </>
+        ) : source === 'novelai' ? (
+          <><NovelAISettingsFields token={novelaiToken} onTokenChange={updateNovelaiToken}
+            textProviderStorageNamespace={textProviderStorageNamespace}
+            prompt={novelaiPrompt} onPromptChange={setNovelaiPrompt}
+            onUseRecommendedPrompt={recommendedPrompt?.trim() ? () => {
+              setNovelaiPrompt(recommendedPrompt);
+              onUseRecommendedPrompt?.();
+            } : undefined}
+            customMode={novelaiCustomMode} onCustomModeChange={setNovelaiCustomMode}
+            onOptimizerBusyChange={setIsOptimizingPrompt}
+            settings={novelaiSettings} onChange={setNovelaiSettings} disabled={isGenerating} />
+            {novelaiStorageError && <p role="alert" className="mt-2 text-xs text-amber-700">{novelaiStorageError}</p>}
           </>
         ) : (
           <>
@@ -352,7 +416,7 @@ export default function TachieGenerator({
       </div>
 
       {/* 记住凭据选项 */}
-      <div className="input-group flex items-center justify-between">
+      {source !== 'novelai' && <div className="input-group flex items-center justify-between">
         <label className="flex items-center cursor-pointer text-sm text-gray-500">
           <input
             type="checkbox"
@@ -371,18 +435,25 @@ export default function TachieGenerator({
             清除已保存的凭据
           </button>
         )}
-      </div>
+      </div>}
 
       <button
+        type="button"
         onClick={handleGenerate}
-        disabled={isGenerating || !requiredCredentialsReady || !prompt.trim()}
+        disabled={isGenerating || isOptimizingPrompt || !requiredCredentialsReady || !(source === 'novelai' ? novelaiPrompt : prompt).trim()}
         className="generate-button"
       >
-        {isGenerating ? "立绘生成中，请稍后捏 (≖ᴗ≖)✧✨" : `✨ 使用 ${source === 'liblib' ? 'LibLib' : 'ModelScope'} 生成立绘 ✨`}
+        {isGenerating ? "立绘生成中，请稍后捏 (≖ᴗ≖)✧✨" : `✨ 使用 ${source === 'liblib' ? 'LibLib' : source === 'novelai' ? 'NovelAI' : 'ModelScope'} 生成立绘 ✨`}
       </button>
 
+      {isGenerating && source === 'novelai' && (
+        <button type="button" className="text-sm text-pink-700 underline" onClick={() => generationRef.current?.abort()}>
+          取消等待（已提交的任务可能仍会计费）
+        </button>
+      )}
+
       {isGenerating && (
-        <div className="mt-4 p-4 rounded-2xl border border-pink-200 bg-white/90 text-center">
+        <div role="status" className="mt-4 p-4 rounded-2xl border border-pink-200 bg-white/90 text-center">
           <div style={{ marginBottom: '0.75rem' }}>
             <span className="text-sm font-semibold text-pink-600">
               {progressStatus || "立绘生成中，请稍后捏 (≖ᴗ≖)✧"}
@@ -403,7 +474,7 @@ export default function TachieGenerator({
 
           {/* 进度百分比 */}
           <div className="text-xs text-gray-500">
-            {progress > 0 ? `${progress}%` : "准备中..."}
+            {source === 'novelai' ? '等待图片返回，暂无进度百分比' : progress > 0 ? `${progress}%` : "准备中..."}
           </div>
         </div>
       )}
@@ -422,7 +493,7 @@ export default function TachieGenerator({
                 <p style={{ fontSize: '0.875rem', color: 'white', fontWeight: '600', margin: 0 }}>
                   ✨ 生成成功！
                 </p>
-                {result.seed && (
+                {result.seed !== undefined && (
                   <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.9)', margin: '0.25rem 0 0 0' }}>
                     种子值: {result.seed}
                   </p>
@@ -445,6 +516,9 @@ export default function TachieGenerator({
                     }}
                   />
                 </div>
+              )}
+              {result.imageUrl?.startsWith('data:image/png;base64,') && (
+                <a href={result.imageUrl} download={`novelai-${result.seed ?? 'image'}.png`} className="mt-3 inline-block text-sm text-pink-700 underline">下载 PNG</a>
               )}
             </div>
           ) : (

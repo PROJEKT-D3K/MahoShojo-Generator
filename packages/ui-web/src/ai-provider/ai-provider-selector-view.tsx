@@ -40,8 +40,11 @@ export interface AiProviderSelectorViewProps {
   /** 宿主持久化端口（Web: localStorage；Desktop: 注入自己的端口或不使用本视图）。 */
   storage: AiProviderStoragePort;
   storageNamespace?: string;
+  providers?: readonly AIProviderOption[];
   allowSystemProvider?: boolean;
   label?: string;
+  /** 固定生成参数的调用方可隐藏不会生效的高级设置。 */
+  showAdvancedSettings?: boolean;
   /** 可用性数据源；缺省则整个组件不渲染可用性徽章（静默跳过）。 */
   loadChannelAvailability?: () => Promise<readonly AiChannelAvailabilityEntry[] | null | undefined>;
   /** 可用性徽章渲染（宿主决定样式；缺省不渲染）。 */
@@ -58,8 +61,10 @@ export const AiProviderSelectorView = ({
   onConfigChange,
   storage,
   storageNamespace = DEFAULT_AI_PROVIDER_STORAGE_NAMESPACE,
+  providers,
   allowSystemProvider = true,
   label = '自定义 AI 能力提供商 (可选)',
+  showAdvancedSettings = true,
   loadChannelAvailability,
   renderAvailabilityBadge,
   renderDocsLink,
@@ -69,6 +74,7 @@ export const AiProviderSelectorView = ({
   const selection = useAiProviderSelection({
     storage,
     storageNamespace,
+    providers,
     allowSystemProvider,
     onConfigChange,
     subscribeSync,
@@ -133,6 +139,7 @@ export const AiProviderSelectorView = ({
   return (
     <AiProviderSelectorForm
       label={label}
+      advancedFootnote={showAdvancedSettings ? undefined : null}
       providerSelect={
         <AiProviderCustomSelect
           options={providerSelectOptions}
@@ -200,7 +207,7 @@ export const AiProviderSelectorView = ({
           : undefined
       }
       advancedSettings={
-        <AdvancedGenerationSettings
+        showAdvancedSettings ? <AdvancedGenerationSettings
           value={generationOverrides}
           onChange={updateGenerationOverrides}
           temperatureSupported={
@@ -216,7 +223,7 @@ export const AiProviderSelectorView = ({
                 activeCapabilities.thinking.canDisable !== false
               : true
           }
-        />
+        /> : undefined
       }
     />
   );
