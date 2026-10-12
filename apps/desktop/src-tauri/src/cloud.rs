@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -74,6 +74,7 @@ const EXCHANGE_PATH: &str = "/api/auth/native/exchange";
 const GET_SESSION_PATH: &str = "/api/auth/get-session";
 const SIGN_OUT_PATH: &str = "/api/auth/sign-out";
 const ME_PROFILE_PATH: &str = "/api/me/profile";
+const ME_PROFILE_AVATAR_PATH: &str = "/api/me/profile/avatar";
 const DR_READINESS_PATH: &str = "/api/hosted/dr-readiness";
 const HOSTED_GENERATE_DETAILS_STREAM_PATH: &str = "/api/generate-magical-girl-details-stream";
 const HOSTED_ROUTE_DETAILS_STREAM: &str = "generate-magical-girl-details-stream";
@@ -333,7 +334,10 @@ fn store_session(secrets: &dyn SecretStore, session: &StoredSession) -> Result<(
         .map_err(|error| CloudError::from_secret_store(&error))
 }
 
-fn load_session(secrets: &dyn SecretStore) -> Result<Option<StoredSession>, CloudError> {
+fn load_session_record(
+    secrets: &dyn SecretStore,
+    clear_corrupt: bool,
+) -> Result<Option<StoredSession>, CloudError> {
     let raw = secrets
         .resolve(ACCOUNT_SESSION_REF)
         .map_err(|error| CloudError::from_secret_store(&error))?;
@@ -342,10 +346,23 @@ fn load_session(secrets: &dyn SecretStore) -> Result<Option<StoredSession>, Clou
         Ok(session) => Ok(Some(session)),
         // 记录损坏视为未登录而不是崩溃：损坏数据不可用，但也不该再留着误导后续判断。
         Err(_) => {
-            let _ = secrets.delete(ACCOUNT_SESSION_REF);
+            if clear_corrupt {
+                let _ = secrets.delete(ACCOUNT_SESSION_REF);
+            }
             Ok(None)
         }
     }
+}
+
+fn load_session(secrets: &dyn SecretStore) -> Result<Option<StoredSession>, CloudError> {
+    load_session_record(secrets, true)
+}
+
+/// 资料请求只冻结快照；损坏记录也不能让旧读取删除并发写入的新凭据。
+fn read_profile_session_snapshot(
+    secrets: &dyn SecretStore,
+) -> Result<Option<StoredSession>, CloudError> {
+    load_session_record(secrets, false)
 }
 
 fn clear_session(secrets: &dyn SecretStore) -> Result<(), CloudError> {
@@ -1052,7 +1069,7 @@ fn is_webp_data_url(url: &str) -> bool {
 ///
 /// - renderer 拿不到 URL/method/cookie——全部是 native 常量与凭据存储；
 /// - 无本地会话直接 `not-authenticated`，不产生网络请求；服务端 401 与
-///   `cloud_auth_status` 同一语义（清本地凭据）；
+///   只报告认证失败，由宿主核对仍属当前会话后请求统一状态验证；
 /// - 响应有界读取 + 形状校验；头像只投影 `data:image/webp;base64,`；
 /// - `userId` 取自本地凭据的账号记录：renderer 据此做 stale-response
 ///   fence，登出/换号竞态下达的迟到响应不会写进错误账号的缓存槽。
@@ -1060,7 +1077,7 @@ pub async fn cloud_me_profile(
     state: &CloudState,
     secrets: &dyn SecretStore,
 ) -> Result<CloudMeProfile, CloudError> {
-    let session = load_session(secrets)?.ok_or_else(|| {
+    let session = read_profile_session_snapshot(secrets)?.ok_or_else(|| {
         CloudError::new(CloudErrorCode::NotAuthenticated, "该操作需要登录云端账号")
     })?;
 
@@ -1078,8 +1095,8 @@ pub async fn cloud_me_profile(
 
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        // 服务端明确否认会话：与 `cloud_auth_status` 一致清除本地凭据。
-        clear_session(secrets)?;
+        // 不在资料请求中删除凭据：该响应可能属于登录前的旧会话。
+        // 宿主先隔离旧 owner，再由统一会话查询验证当前凭据。
         return Err(CloudError::new(
             CloudErrorCode::NotAuthenticated,
             "会话已被服务端否认",
@@ -1234,6 +1251,158 @@ pub async fn cloud_save_me_profile_signature(
         user_id: session.account.user_id,
         signature: confirmed_signature(&body)?,
     })
+}
+
+/// Web JSON 路径的现有压缩输出上限；不新增原图大小或像素限制。
+const PROFILE_AVATAR_MAX_BASE64_LENGTH: usize = 350_000;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudSaveAvatarRequest {
+    pub expected_user_id: u64,
+    pub avatar_webp_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudClearAvatarRequest {
+    pub expected_user_id: u64,
+}
+
+fn valid_avatar_base64(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= PROFILE_AVATAR_MAX_BASE64_LENGTH
+        && STANDARD.decode(value).is_ok()
+}
+
+fn validate_profile_owner(user_id: u64) -> Result<(), CloudError> {
+    if user_id == 0 || user_id > MAX_SAFE_USER_ID {
+        return Err(CloudError::new(
+            CloudErrorCode::InvalidRequest,
+            "头像请求账号无效",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAvatarResult {
+    pub user_id: u64,
+    /// null 仅由成功 DELETE 投影；PUT 必须有服务端确认的 WebP data URL。
+    pub avatar_data_url: Option<String>,
+}
+
+fn confirmed_avatar(body: &serde_json::Value, clear: bool) -> Result<Option<String>, CloudError> {
+    if body.get("success") != Some(&serde_json::Value::Bool(true)) {
+        return Err(CloudError::invalid_response("头像保存"));
+    }
+    if clear {
+        return Ok(None);
+    }
+    let value = body
+        .get("avatarDataUrl")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| {
+            value
+                .strip_prefix("data:image/webp;base64,")
+                .is_some_and(valid_avatar_base64)
+        })
+        .ok_or_else(|| CloudError::invalid_response("头像保存"))?;
+    Ok(Some(value.to_string()))
+}
+
+/// 私有窄实现只由两个固定命令调用；renderer 无法选择方法、路径或凭据。
+async fn write_me_profile_avatar(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+    expected_user_id: u64,
+    avatar_webp_base64: Option<String>,
+) -> Result<CloudAvatarResult, CloudError> {
+    validate_profile_owner(expected_user_id)?;
+    if avatar_webp_base64
+        .as_deref()
+        .is_some_and(|value| !valid_avatar_base64(value))
+    {
+        return Err(CloudError::new(
+            CloudErrorCode::InvalidRequest,
+            "头像必须是有界、完整的纯 base64",
+        ));
+    }
+    let session = read_profile_session_snapshot(secrets)?.ok_or_else(|| {
+        CloudError::new(CloudErrorCode::NotAuthenticated, "该操作需要登录云端账号")
+    })?;
+    if session.account.user_id != expected_user_id {
+        return Err(CloudError::new(
+            CloudErrorCode::NotAuthenticated,
+            "当前账号已改变，请重新确认头像所属账号",
+        ));
+    }
+    let http = cloud_client_builder()
+        .retry(reqwest::retry::never())
+        .build()
+        .map_err(|_| CloudError::new(CloudErrorCode::InternalError, "头像保存客户端初始化失败"))?;
+    let clear = avatar_webp_base64.is_none();
+    let mut builder = authed_request(
+        &http,
+        if clear {
+            reqwest::Method::DELETE
+        } else {
+            reqwest::Method::PUT
+        },
+        &state.origin,
+        ME_PROFILE_AVATAR_PATH,
+        &session,
+    )
+    .timeout(SHORT_REQUEST_TIMEOUT);
+    if let Some(value) = avatar_webp_base64 {
+        builder = builder.json(&serde_json::json!({ "avatarWebpBase64": value }));
+    }
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| CloudError::network("头像保存", &error))?;
+    let status = response.status();
+    // 写操作不清凭据，不做 compare-then-delete，也不在未知结果后重放。
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(CloudError::new(
+            CloudErrorCode::NotAuthenticated,
+            "会话已被服务端否认，请重新验证账号",
+        ));
+    }
+    if !status.is_success() {
+        return Err(CloudError::new(
+            CloudErrorCode::ServerUnavailable,
+            format!("头像保存返回 {status}"),
+        ));
+    }
+    let body = read_bounded_json(response, "头像保存", ME_PROFILE_RESPONSE_MAX_BYTES).await?;
+    Ok(CloudAvatarResult {
+        user_id: session.account.user_id,
+        avatar_data_url: confirmed_avatar(&body, clear)?,
+    })
+}
+
+pub async fn cloud_save_me_profile_avatar(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+    request: CloudSaveAvatarRequest,
+) -> Result<CloudAvatarResult, CloudError> {
+    write_me_profile_avatar(
+        state,
+        secrets,
+        request.expected_user_id,
+        Some(request.avatar_webp_base64),
+    )
+    .await
+}
+
+pub async fn cloud_clear_me_profile_avatar(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+    request: CloudClearAvatarRequest,
+) -> Result<CloudAvatarResult, CloudError> {
+    write_me_profile_avatar(state, secrets, request.expected_user_id, None).await
 }
 
 /// `cloud_sign_out`：本地凭据无条件删除；服务端注销失败只影响 `revoked` 标记。
@@ -3030,12 +3199,14 @@ mod tests {
 
     struct MemorySecrets {
         entries: Mutex<BTreeMap<String, String>>,
+        deletions: std::sync::atomic::AtomicUsize,
     }
 
     impl MemorySecrets {
         fn new() -> Self {
             Self {
                 entries: Mutex::new(BTreeMap::new()),
+                deletions: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
@@ -3052,6 +3223,7 @@ mod tests {
             Ok(self.entries.lock().unwrap().contains_key(secret_ref))
         }
         fn delete(&self, secret_ref: &str) -> Result<(), SecretStoreError> {
+            self.deletions.fetch_add(1, Ordering::SeqCst);
             self.entries.lock().unwrap().remove(secret_ref);
             Ok(())
         }
@@ -3389,7 +3561,7 @@ mod tests {
                     }
                 }
                 SIGN_OUT_PATH => json(serde_json::json!({"success": true})),
-                ME_PROFILE_PATH => {
+                ME_PROFILE_PATH | ME_PROFILE_AVATAR_PATH => {
                     self.me_profile_count
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     *self.last_me_profile_body.lock().unwrap() = serde_json::from_slice(body).ok();
@@ -3785,7 +3957,7 @@ mod tests {
     }
 
     #[test]
-    fn me_profile_requires_session_and_401_clears_it() {
+    fn me_profile_requires_session_and_401_reports_without_deleting_credentials() {
         rt().block_on(async {
             let server = spawn_mock_server();
             let state = CloudState::with_origin(&server.origin);
@@ -3796,13 +3968,13 @@ mod tests {
             assert_eq!(error.code, CloudErrorCode::NotAuthenticated);
             assert!(server.last_me_profile_head.lock().unwrap().is_none());
 
-            // 服务端 401：与 `cloud_auth_status` 同语义清本地凭据。
+            // 资料 401 只报告，由 renderer 核对 owner 后请求当前会话验证。
             store_session(&secrets, &stored_test_session()).unwrap();
             *server.me_profile_override.lock().unwrap() =
                 Some((401, r#"{"error":"unauthorized"}"#.to_string()));
             let error = cloud_me_profile(&state, &secrets).await.unwrap_err();
             assert_eq!(error.code, CloudErrorCode::NotAuthenticated);
-            assert!(!secrets.exists(ACCOUNT_SESSION_REF).unwrap());
+            assert!(secrets.exists(ACCOUNT_SESSION_REF).unwrap());
         });
     }
 
@@ -4108,6 +4280,10 @@ mod tests {
         assert_eq!(
             fixture["paths"]["meProfile"].as_str(),
             Some(ME_PROFILE_PATH)
+        );
+        assert_eq!(
+            fixture["paths"]["meProfileAvatar"].as_str(),
+            Some(ME_PROFILE_AVATAR_PATH)
         );
         assert_eq!(
             fixture["paths"]["hostedDrReadiness"].as_str(),
@@ -7164,4 +7340,5 @@ mod tests {
             assert!(server.last_card_request.lock().unwrap().is_none());
         });
     }
+    include!("cloud_profile_avatar_tests.rs");
 }

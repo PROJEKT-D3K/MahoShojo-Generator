@@ -138,13 +138,14 @@ const DesktopShellInner = () => {
   usePublicCachePolicySync();
   // 头像是有身份后的后台资料刷新（`cloud_me_profile` 固定路由）：不在启动
   // 关键路径，取不到就回退首字母——共享顶栏的 avatarDataUrl 插槽本就如此。
-  // `not-authenticated`（native 401 已清凭据）只上报一次会话收束信号，
+  // `not-authenticated`（资料请求不会清凭据）只上报一次会话收束信号，
   // 投影结论仍由 store 统一下。
   const convergeSessionProjection = useCallback(() => {
     void cloudSessionStore.refresh();
   }, [cloudSessionStore]);
   const avatarDataUrl = useTopbarAvatar(cloudSession.account, {
     onSessionRejected: convergeSessionProjection,
+    credentialEpoch: cloudSessionStore.getCredentialEpoch(),
   });
   // 消息摘要同属「有身份后的后台刷新」（90s 新鲜度 + 窗口可见时补过期）：
   // 只把服务端返回的未读数喂给共享顶栏的 messages 槽位，没有数据就按

@@ -17,7 +17,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { invokeMock, defaultInvokeImpl } = vi.hoisted(() => {
-  const impl = async (command: string): Promise<unknown> => {
+  const impl = async (command: string, _args?: Record<string, unknown>): Promise<unknown> => {
     if (command === 'cloud_cached_account') return null;
     if (command === 'cloud_auth_status') return { state: 'signed-out' as const };
     if (command === 'announcements_get_cached') return null;
@@ -817,4 +817,43 @@ describe.each([DESKTOP_DETAILS_PREFERENCES, DESKTOP_CANSHOU_PREFERENCES])('$page
     expect(findButton(card, '重置该页偏好')?.disabled).toBe(true);
     expect(window.localStorage.getItem(source.storageKey)).toBe(raw);
   });
+
+});
+
+
+describe('desktop profile avatar routes', () => {
+  it.each(['/me', '/settings?section=account'])('real %s edits shared avatar and updates the shell cache', async (path) => {
+    const account = { userId: 7, username: 'avatar-owner' };
+    const avatar = 'data:image/webp;base64,QUJD'; const updated = 'data:image/webp;base64,bmV3';
+    vi.stubGlobal('FileReader', class { result = 'data:image/png;base64,aW1n'; onload: (() => void) | null = null; readAsDataURL() { queueMicrotask(() => this.onload?.()); } });
+    vi.stubGlobal('Image', class { naturalWidth = 128; naturalHeight = 128; onload: (() => void) | null = null; set src(_value: string) { queueMicrotask(() => this.onload?.()); } });
+    const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    const encoded = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(updated);
+    invokeMock.mockImplementation(async (command) => {
+      if (command === 'cloud_cached_account') return { account };
+      if (command === 'cloud_auth_status') return { state: 'active', account };
+      if (command === 'cloud_me_profile') return { userId: 7, signature: 'real signature', avatarDataUrl: avatar };
+      if (command === 'cloud_save_me_profile_avatar') return { userId: 7, avatarDataUrl: updated };
+      if (command === 'cloud_clear_me_profile_avatar') return { userId: 7, avatarDataUrl: null };
+      return defaultInvokeImpl(command);
+    });
+    try {
+      const router = await mountAt(path);
+      const panel = container.querySelector('section[aria-label="个人资料"]')!;
+      expect(panel.querySelector('textarea')?.value).toBe('real signature');
+      const input = panel.querySelector<HTMLInputElement>('input[type="file"]')!;
+      expect(input.accept).toBe('image/*');
+      await act(async () => { Object.defineProperty(input, 'files', { configurable: true, value: [new File(['x'], 'avatar.png', { type: 'image/png' })] }); input.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+      expect(invokeMock.mock.calls.filter(([command]) => command === 'cloud_save_me_profile_avatar')).toEqual([['cloud_save_me_profile_avatar', { request: { expectedUserId: 7, avatarWebpBase64: 'bmV3' } }]]);
+      // 真实 shell 顶栏与页内 preview 从同一个缓存得到更新。
+      expect([...container.querySelectorAll('img')].filter((img) => img.getAttribute('src') === updated).length).toBeGreaterThanOrEqual(2);
+      expect(panel.textContent).toContain('头像已更新');
+      await click([...panel.querySelectorAll('button')].find((button) => button.textContent === '清除头像')!);
+      expect([...container.querySelectorAll('img')].filter((img) => img.getAttribute('src') === updated)).toHaveLength(0);
+      await act(async () => router.navigate({ to: path.startsWith('/me') ? '/settings' : '/me' })); await settle();
+      expect(container.querySelector('section[aria-label="个人资料"] textarea')?.textContent).toBe('real signature');
+      expect(invokeMock.mock.calls.filter(([command]) => command === 'cloud_me_profile')).toHaveLength(1);
+    } finally { canvas.mockRestore(); encoded.mockRestore(); vi.unstubAllGlobals(); }
+  });
+
 });

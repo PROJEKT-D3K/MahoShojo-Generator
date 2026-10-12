@@ -7,6 +7,7 @@
     "getSession": "/api/auth/get-session",
     "signOut": "/api/auth/sign-out",
     "meProfile": "/api/me/profile",
+    "meProfileAvatar": "/api/me/profile/avatar",
     "messages": "/api/messages",
     "messagesSummary": "/api/messages/summary",
     "messagesRead": "/api/messages/read",

@@ -1,162 +1,162 @@
-// 顶栏与资料共用：userId → 非秘密 profile 的进程级缓存（D5.2 / DESK-ONLINE-008 r2）。
-//
-// - 头像属于「有身份后的后台资料刷新」：只在 `account` 存在时发起
-//   `cloud_me_profile`（固定路由窄命令，native 注入会话 cookie），不进入
-//   启动关键路径；失败一律回退首字母，不升级成会话结论——会话真相仍归
-//   `DesktopCloudSessionStore`；
-// - 按 userId 缓存而不是按「当前登录态」：换账号自然取不同键，同一用户
-//   重登仍可用（头像非凭据，不存在跨账号泄漏面）；
-// - `checked` 标记「成功读取过」（含「无头像」）——重挂载不重拉；读取失败
-//   不标记，下次挂载重试一次（有界、由用户动作驱动）；
-// - 失效由会话边界驱动（登出/新登录成功 → `invalidateTopbarAvatar`）：
-//   每 userId 的世代号 +1 让在途响应自然过期，Web 侧换了头像不会把
-//   同进程旧缓存留到下一次登录。
-// - 个性签名保存只合并服务端确认文本；沿用头像同一缓存和失效世代。
-
-import { useEffect, useSyncExternalStore } from 'react';
+// 顶栏与两处资料面共用一份按 userId 隔离的非秘密缓存。
+// 身份 epoch、GET 世代、同字段写意图分别排序，异字段确认不会互相作废。
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-
 import type { DesktopCloudAccountSummary, DesktopCloudMeProfile } from '@mahoshojo/contracts/desktop-cloud';
-
 import { DesktopCloudError, readMyProfile, type InvokeFn } from '../../platform/cloud-bridge';
 
 const profiles = new Map<number, DesktopCloudMeProfile>();
 const profileErrors = new Map<number, string>();
+// checked 只表示完整 GET 已成功；单字段确认不能伪造另一个未知字段。
 const checked = new Set<number>();
-// 在途请求按世代登记（d-1-r1）：裸 `Set<userId>` 会让旧世代在途请求挡住
-// 新世代——快速重登后旧响应被世代闸丢弃、新请求又从未发出，头像会空白到
-// 下一次挂载。登记世代 + token 后：同世代幂等、跨世代放行，旧请求结算只
-// 清自己的槽。
-const inflight = new Map<number, { generation: number; token: object }>();
-// 每 userId 的世代号：invalidate 时 +1；在途请求带回发起时的世代，
-// 结算时世代不一致即丢弃，防止旧响应复活刚被失效的缓存槽。
 const generations = new Map<number, number>();
+const identityEpochs = new Map<number, number>();
+type ProfileField = 'signature' | 'avatar';
+const intents = new Map<number, Record<ProfileField, number>>();
+const inflight = new Map<number, {
+  generation: number; callbacks: Set<() => void>;
+}>();
 const listeners = new Set<() => void>();
-
 const notify = (): void => listeners.forEach((listener) => listener());
-
 export const subscribeTopbarAvatar = (listener: () => void): (() => void) => {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  listeners.add(listener); return () => listeners.delete(listener);
 };
-
-export const getTopbarAvatar = (userId: number | null): string | null =>
-  userId === null ? null : (profiles.get(userId)?.avatarDataUrl ?? null);
-
-/**
- * 失效某账号的头像缓存（登出/新登录成功等会话边界调用）。
- * 已发出的请求不中断：世代号前进一格，迟到响应结算时自然被丢弃。
- */
-export const invalidateTopbarAvatar = (userId: number): void => {
-  generations.set(userId, (generations.get(userId) ?? 0) + 1);
-  // 两个槽都要清（|| 会短路掉第二个 delete）。
-  const hadAvatar = profiles.delete(userId);
-  const hadError = profileErrors.delete(userId);
-  const hadChecked = checked.delete(userId);
-  if (hadAvatar || hadChecked || hadError) notify();
-};
-
-/**
- * 后台拉取一次头像（single-flight、幂等）。成功（含「无头像」）后不再
- * 自动重拉；失败保持未标记，由下一次挂载决定是否重试。
- */
-export const ensureTopbarAvatar = (
-  userId: number,
-  invoke: InvokeFn = tauriInvoke,
-  onSessionRejected?: () => void,
-): void => {
-  if (checked.has(userId)) return;
-  const generation = generations.get(userId) ?? 0;
-  const current = inflight.get(userId);
-  // 同世代在途即幂等；旧世代请求不挡路——等它等于无人补拉。
-  if (current !== undefined && current.generation === generation) return;
-  const token = {};
-  inflight.set(userId, { generation, token });
-  void readMyProfile(invoke)
-    .then((profile) => {
-      // stale-response fence 两道闸：响应携带的账号 id（native 按当前
-      // 凭据填）必须与请求目标一致，且请求期间世代未被 invalidate 推进——
-      // 否则是登出/换号竞态下的迟到响应，不写回也不标记 checked。
-      if (profile.userId !== userId) return;
-      if ((generations.get(userId) ?? 0) !== generation) return;
-      checked.add(userId);
-      profiles.set(userId, profile);
-      profileErrors.delete(userId);
-    })
-    .catch((cause: unknown) => {
-      // 头像失败不升级：顶栏回退首字母。只有 `not-authenticated`（native 401
-      // 清凭据）值得上报一次——宿主据此触发 `refresh` 让投影收束；会话结论
-      // 仍由 `DesktopCloudSessionStore` 统一下，这里不另建清理路径。收敛是
-      // 有界的：每次失败至多触发一次，refresh 本身是 single-flight。
-      if ((generations.get(userId) ?? 0) !== generation) return;
-      profileErrors.set(userId, '资料未能载入，请重试。');
-      if (cause instanceof DesktopCloudError && cause.code === 'not-authenticated') {
-        onSessionRejected?.();
-      }
-    })
-    .finally(() => {
-      // token 闸：只清自己的槽——旧世代请求不得误删新请求的登记。
-      if (inflight.get(userId)?.token === token) {
-        inflight.delete(userId);
-      }
-      notify();
-    });
-};
-
-/** 仅供测试：清空头像缓存、世代与在途标记。 */
-export const resetTopbarAvatarForTests = (): void => {
-  profiles.clear();
-  profileErrors.clear();
-  checked.clear();
-  inflight.clear();
-  generations.clear();
-};
-
-/** 顶栏头像 hook：`account` 存在即后台取一次，返回缓存的 data URL 或 null。 */
-export const useTopbarAvatar = (
-  account: DesktopCloudAccountSummary | null,
-  options?: { readonly onSessionRejected?: () => void },
-): string | null => {
-  const userId = account?.userId ?? null;
-  const onSessionRejected = options?.onSessionRejected;
-  const avatar = useSyncExternalStore(subscribeTopbarAvatar, () =>
-    getTopbarAvatar(userId),
-  );
-  useEffect(() => {
-    if (userId !== null) ensureTopbarAvatar(userId, tauriInvoke, onSessionRejected);
-  }, [userId, onSessionRejected]);
-  return avatar;
-};
-
-/** 资料与顶栏共享同一份非秘密、按账号隔离的缓存。 */
 export const getCachedMyProfile = (userId: number | null): DesktopCloudMeProfile | null =>
   userId === null ? null : profiles.get(userId) ?? null;
+export const getTopbarAvatar = (userId: number | null): string | null =>
+  getCachedMyProfile(userId)?.avatarDataUrl ?? null;
 export const getMyProfileGeneration = (userId: number): number => generations.get(userId) ?? 0;
 
-/** 已确认 PUT 推进读取世代，迟到 GET 不得把新签名倒退回去。 */
-export const acceptSavedProfileSignature = (userId: number, signature: string, generation: number): boolean => {
-  if (getMyProfileGeneration(userId) !== generation) return false;
-  generations.set(userId, generation + 1);
-  profiles.set(userId, { ...profiles.get(userId), userId, signature });
-  checked.add(userId);
+/** 会话边界使读、写与订阅回调全部过期。 */
+export const invalidateTopbarAvatar = (userId: number): void => {
+  identityEpochs.set(userId, (identityEpochs.get(userId) ?? 0) + 1);
+  generations.set(userId, getMyProfileGeneration(userId) + 1);
+  profiles.delete(userId);
+  profileErrors.delete(userId);
+  checked.delete(userId);
+  // 读取世代也被存活顶栏订阅，即使槽原本为空仍须通知。
+  notify();
+};
+
+/** 同世代 single-flight；每个宿主可独立附加/撤销身份拒绝回调。 */
+export const ensureTopbarAvatar = (
+  userId: number, invoke: InvokeFn = tauriInvoke, onSessionRejected?: () => void,
+): (() => void) => {
+  if (checked.has(userId)) return () => {};
+  const generation = getMyProfileGeneration(userId);
+  const current = inflight.get(userId);
+  if (current?.generation === generation) {
+    if (onSessionRejected) current.callbacks.add(onSessionRejected);
+    return () => { if (onSessionRejected) current.callbacks.delete(onSessionRejected); };
+  }
+  const flight = { generation, callbacks: new Set<() => void>() };
+  if (onSessionRejected) flight.callbacks.add(onSessionRejected);
+  inflight.set(userId, flight);
+  void readMyProfile(invoke).then((profile) => {
+    if (profile.userId !== userId || getMyProfileGeneration(userId) !== generation) return;
+    checked.add(userId);
+    // 完整 GET 的缺省签名是已知空值；头像单字段确认不会走这里。
+    profiles.set(userId, { ...profile, signature: profile.signature ?? '' });
+    profileErrors.delete(userId);
+  }).catch((cause: unknown) => {
+    if (getMyProfileGeneration(userId) !== generation) return;
+    const rejected = cause instanceof DesktopCloudError && cause.code === 'not-authenticated';
+    profileErrors.set(userId, rejected ? '账号验证已失效，请重新验证后载入资料。' : '资料未能载入，请重试。');
+    if (rejected) {
+      // 一次请求只触发一次收束；每个回调自身仍核对当前 owner。
+      for (const callback of flight.callbacks) callback();
+    }
+  }).finally(() => {
+    if (inflight.get(userId) === flight) inflight.delete(userId);
+    flight.callbacks.clear();
+    notify();
+  });
+  return () => { if (onSessionRejected) flight.callbacks.delete(onSessionRejected); };
+};
+
+export type ProfileMutationFence = Readonly<{
+  userId: number; identityEpoch: number; field: ProfileField; intent: number;
+}>;
+export const beginMyProfileMutation = (userId: number, field: ProfileField): ProfileMutationFence => {
+  const next = { ...(intents.get(userId) ?? { signature: 0, avatar: 0 }) };
+  next[field] += 1; intents.set(userId, next);
+  return { userId, identityEpoch: identityEpochs.get(userId) ?? 0, field, intent: next[field] };
+};
+const accepts = (userId: number, field: ProfileField, fence: ProfileMutationFence): boolean =>
+  fence.userId === userId && fence.field === field
+  && fence.identityEpoch === (identityEpochs.get(userId) ?? 0)
+  && fence.intent === intents.get(userId)?.[field];
+const publishConfirmedField = (userId: number, patch: Partial<DesktopCloudMeProfile>): void => {
+  generations.set(userId, getMyProfileGeneration(userId) + 1);
+  profiles.set(userId, { ...profiles.get(userId), userId, ...patch });
   profileErrors.delete(userId);
   notify();
-  return true;
+};
+export const acceptSavedProfileSignature = (userId: number, signature: string, fence: ProfileMutationFence): boolean => {
+  if (!accepts(userId, 'signature', fence)) return false;
+  publishConfirmedField(userId, { signature }); return true;
+};
+export const acceptSavedProfileAvatar = (userId: number, avatarDataUrl: string | null, fence: ProfileMutationFence): boolean => {
+  if (!accepts(userId, 'avatar', fence)) return false;
+  publishConfirmedField(userId, { avatarDataUrl: avatarDataUrl ?? undefined }); return true;
 };
 
-/** 用户显式读回；保留缓存/编辑草稿，只使旧读取失效，不发送写入。 */
-export const refreshMyProfile = (userId: number, invoke: InvokeFn = tauriInvoke): void => {
+/** 显式读回只失效读取，不作废尚在途的异字段写入，也不重放写入。 */
+export const refreshMyProfile = (userId: number, invoke: InvokeFn = tauriInvoke, onSessionRejected?: () => void): void => {
   if (inflight.get(userId)?.generation === getMyProfileGeneration(userId)) return;
   generations.set(userId, getMyProfileGeneration(userId) + 1);
-  checked.delete(userId);
-  profileErrors.delete(userId);
-  ensureTopbarAvatar(userId, invoke);
+  checked.delete(userId); profileErrors.delete(userId);
+  ensureTopbarAvatar(userId, invoke, onSessionRejected);
+  notify();
 };
 
-export const useMyProfile = (account: DesktopCloudAccountSummary | null, epoch = 0) => {
+export const resetTopbarAvatarForTests = (): void => {
+  profiles.clear(); profileErrors.clear(); checked.clear(); inflight.clear();
+  generations.clear(); identityEpochs.clear(); intents.clear();
+};
+
+/** 同账号重登也以 credential epoch 隔离，卸载后撤销该宿主回调。 */
+const useProfileOwner = (userId: number | null, epoch: number) => {
+  const owner = useRef({ userId, epoch });
+  useEffect(() => () => { owner.current = { ...owner.current }; }, []);
+  if (owner.current.userId !== userId || owner.current.epoch !== epoch) owner.current = { userId, epoch };
+  return owner;
+};
+export const useTopbarAvatar = (
+  account: DesktopCloudAccountSummary | null,
+  options?: { readonly onSessionRejected?: () => void; readonly credentialEpoch?: number },
+): string | null => {
   const userId = account?.userId ?? null;
+  const epoch = options?.credentialEpoch ?? 0;
+  const owner = useProfileOwner(userId, epoch);
+  const onSessionRejected = options?.onSessionRejected;
+  const avatar = useSyncExternalStore(subscribeTopbarAvatar, () => getTopbarAvatar(userId));
+  // 资料面确认/显式读回开启新 GET 时，存活顶栏须转订新 flight。
+  const generation = useSyncExternalStore(subscribeTopbarAvatar, () => userId === null ? 0 : getMyProfileGeneration(userId));
+  useEffect(() => {
+    const startedOwner = owner.current;
+    if (userId !== null) return ensureTopbarAvatar(userId, tauriInvoke, () => {
+      if (owner.current === startedOwner) onSessionRejected?.();
+    });
+  }, [userId, epoch, generation, owner, onSessionRejected]);
+  return avatar;
+};
+export const useMyProfile = (account: DesktopCloudAccountSummary | null, epoch = 0, onSessionRejected?: () => void) => {
+  const userId = account?.userId ?? null;
+  const owner = useProfileOwner(userId, epoch);
   const profile = useSyncExternalStore(subscribeTopbarAvatar, () => getCachedMyProfile(userId));
   const error = useSyncExternalStore(subscribeTopbarAvatar, () => userId === null ? null : profileErrors.get(userId) ?? null);
-  useEffect(() => { if (userId !== null) ensureTopbarAvatar(userId); }, [userId, epoch]);
-  return { profile, error, retry: () => { if (userId !== null) refreshMyProfile(userId); } };
+  useEffect(() => {
+    const startedOwner = owner.current;
+    if (userId !== null) return ensureTopbarAvatar(userId, tauriInvoke, () => {
+      if (owner.current === startedOwner) onSessionRejected?.();
+    });
+    // 单字段确认改变 profile；完整资料仍未知时，补一次真实 GET。
+  }, [userId, epoch, profile, owner, onSessionRejected]);
+  return { profile, error, retry: () => {
+    const startedOwner = owner.current;
+    if (userId !== null) refreshMyProfile(userId, tauriInvoke, () => {
+      if (owner.current === startedOwner) onSessionRejected?.();
+    });
+  } };
 };

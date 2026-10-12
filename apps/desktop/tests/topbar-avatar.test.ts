@@ -4,7 +4,8 @@ import type { InvokeFn } from '../src/platform/cloud-bridge';
 import {
   ensureTopbarAvatar,
   getCachedMyProfile,
-  getMyProfileGeneration,
+  beginMyProfileMutation,
+  acceptSavedProfileAvatar,
   acceptSavedProfileSignature,
   refreshMyProfile,
   getTopbarAvatar,
@@ -175,7 +176,7 @@ describe('topbar avatar cache', () => {
   });
 
   it('reports not-authenticated once via onSessionRejected so the session projection can converge', async () => {
-    // native 在 401 时已清凭据：头像面不下会话结论，但要把「凭据被拒」上报
+    // native 在资料 401 时保留凭据：头像面不下会话结论，但要把「凭据被拒」上报
     // 给宿主——宿主触发 `refresh` 统一收束。其他失败（网络抖动等）不上报。
     const rejected = vi.fn();
     const invoke = vi.fn(async () => {
@@ -267,19 +268,65 @@ describe('topbar avatar cache', () => {
     let finish!: (profile: unknown) => void;
     const invoke = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
     ensureTopbarAvatar(7, invoke);
-    expect(acceptSavedProfileSignature(7, '新签名', getMyProfileGeneration(7))).toBe(true);
+    expect(acceptSavedProfileSignature(7, '新签名', beginMyProfileMutation(7, 'signature'))).toBe(true);
     finish({ userId: 7, signature: '旧签名', avatarDataUrl: WEBP_AVATAR }); await flush();
     expect(getCachedMyProfile(7)?.signature).toBe('新签名');
   });
-  it('an explicit readback single-flights and never writes; stale generations cannot publish', async () => {
+  it('an explicit readback single-flights and does not invalidate a pending write', async () => {
     const initial = vi.fn(async () => ({ userId: 7, signature: '旧签名', avatarDataUrl: WEBP_AVATAR }));
-    ensureTopbarAvatar(7, initial); await flush(); const generation = getMyProfileGeneration(7);
+    ensureTopbarAvatar(7, initial); await flush(); const generation = beginMyProfileMutation(7, 'signature');
     let finish!: (profile: unknown) => void; const read = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
     refreshMyProfile(7, read); refreshMyProfile(7, read); expect(read).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledWith('cloud_me_profile');
-    expect(acceptSavedProfileSignature(7, '过期结果', generation)).toBe(false);
+    expect(acceptSavedProfileSignature(7, '已确认写入', generation)).toBe(true);
     finish({ userId: 7, signature: '线上确认', avatarDataUrl: WEBP_AVATAR }); await flush();
-    expect(getCachedMyProfile(7)?.signature).toBe('线上确认'); expect(getTopbarAvatar(7)).toBe(WEBP_AVATAR);
+    expect(getCachedMyProfile(7)?.signature).toBe('已确认写入'); expect(getTopbarAvatar(7)).toBe(WEBP_AVATAR);
+  });
+
+  it('a later single-flight reader can attach and release a session rejection callback', async () => {
+    let fail!: (reason: unknown) => void;
+    const invoke = vi.fn(() => new Promise((_resolve, reject) => { fail = reject; }));
+    ensureTopbarAvatar(7, invoke);
+    const rejected = vi.fn();
+    ensureTopbarAvatar(7, invoke, rejected);
+    fail({ code: 'not-authenticated', message: 'rejected' }); await flush();
+    expect(invoke).toHaveBeenCalledOnce(); expect(rejected).toHaveBeenCalledOnce();
+  });
+
+  it.each(['avatar-first', 'signature-first'] as const)('merges distinct fields in either confirmation order: %s', async (order) => {
+    ensureTopbarAvatar(7, vi.fn(async () => ({ userId: 7, signature: 'old', avatarDataUrl: WEBP_AVATAR }))); await flush();
+    const avatar = beginMyProfileMutation(7, 'avatar'); const signature = beginMyProfileMutation(7, 'signature');
+    const acceptAvatar = () => expect(acceptSavedProfileAvatar(7, 'data:image/webp;base64,bmV3', avatar)).toBe(true);
+    const acceptSignature = () => expect(acceptSavedProfileSignature(7, 'new', signature)).toBe(true);
+    if (order === 'avatar-first') { acceptAvatar(); acceptSignature(); } else { acceptSignature(); acceptAvatar(); }
+    expect(getCachedMyProfile(7)).toEqual({ userId: 7, signature: 'new', avatarDataUrl: 'data:image/webp;base64,bmV3' });
+  });
+  it('avatar-only success keeps unknown signature unknown and fences old GET', async () => {
+    let finish!: (value: unknown) => void;
+    ensureTopbarAvatar(7, vi.fn(() => new Promise((resolve) => { finish = resolve; })));
+    expect(acceptSavedProfileAvatar(7, WEBP_AVATAR, beginMyProfileMutation(7, 'avatar'))).toBe(true);
+    expect(getCachedMyProfile(7)?.signature).toBeUndefined();
+    finish({ userId: 7, signature: 'old', avatarDataUrl: 'data:image/webp;base64,b2xk' }); await flush();
+    expect(getCachedMyProfile(7)?.signature).toBeUndefined(); expect(getTopbarAvatar(7)).toBe(WEBP_AVATAR);
+    const read = vi.fn(async () => ({ userId: 7, signature: 'real', avatarDataUrl: WEBP_AVATAR }));
+    ensureTopbarAvatar(7, read); await flush(); expect(read).toHaveBeenCalledOnce(); expect(getCachedMyProfile(7)?.signature).toBe('real');
+  });
+  it('clear/upload share an intent fence while identity invalidates both fields', () => {
+    const upload = beginMyProfileMutation(7, 'avatar'); const clear = beginMyProfileMutation(7, 'avatar');
+    expect(acceptSavedProfileAvatar(7, WEBP_AVATAR, upload)).toBe(false);
+    expect(acceptSavedProfileAvatar(7, null, clear)).toBe(true);
+    const signature = beginMyProfileMutation(7, 'signature'); invalidateTopbarAvatar(7);
+    expect(acceptSavedProfileAvatar(7, WEBP_AVATAR, clear)).toBe(false);
+    expect(acceptSavedProfileSignature(7, 'stale', signature)).toBe(false);
+  });
+  it('released and stale-generation callbacks do not react to late 401', async () => {
+    let fail!: (reason: unknown) => void;
+    const invoke = vi.fn(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const released = vi.fn(); const stale = vi.fn();
+    const release = ensureTopbarAvatar(7, invoke, released); ensureTopbarAvatar(7, invoke, stale);
+    release(); invalidateTopbarAvatar(7);
+    fail({ code: 'not-authenticated', message: 'old' }); await flush();
+    expect(released).not.toHaveBeenCalled(); expect(stale).not.toHaveBeenCalled();
   });
 
 });

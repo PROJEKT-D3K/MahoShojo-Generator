@@ -1478,6 +1478,25 @@ async fn cloud_save_me_profile_signature(
     cloud::cloud_save_me_profile_signature(&cloud, secrets.inner().as_ref(), request).await
 }
 
+/// 显式上传/清除当前账号头像：只允许压缩后的图片字段与期望账号。
+#[tauri::command]
+async fn cloud_save_me_profile_avatar(
+    cloud: State<'_, cloud::CloudState>,
+    secrets: State<'_, SharedSecretStore>,
+    request: cloud::CloudSaveAvatarRequest,
+) -> Result<cloud::CloudAvatarResult, cloud::CloudError> {
+    cloud::cloud_save_me_profile_avatar(&cloud, secrets.inner().as_ref(), request).await
+}
+
+#[tauri::command]
+async fn cloud_clear_me_profile_avatar(
+    cloud: State<'_, cloud::CloudState>,
+    secrets: State<'_, SharedSecretStore>,
+    request: cloud::CloudClearAvatarRequest,
+) -> Result<cloud::CloudAvatarResult, cloud::CloudError> {
+    cloud::cloud_clear_me_profile_avatar(&cloud, secrets.inner().as_ref(), request).await
+}
+
 /// 查询账号会话状态：signed-out / active / expired / unreachable。
 /// `expired` 表示服务端明确拒绝会话（本地凭据随之清除）；`unreachable` 只是
 /// 服务暂时联系不上，凭据保留。
@@ -2016,6 +2035,8 @@ pub fn run() {
             cloud_cached_account,
             cloud_me_profile,
             cloud_save_me_profile_signature,
+            cloud_save_me_profile_avatar,
+            cloud_clear_me_profile_avatar,
             cloud_auth_status,
             cloud_sign_out,
             cloud_online_status,

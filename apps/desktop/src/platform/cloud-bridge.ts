@@ -5,6 +5,10 @@ import {
   DesktopCloudLoginBeginResponseSchema,
   DesktopCloudLoginOutcomeSchema,
   DesktopCloudMeProfileSchema,
+  DesktopCloudSaveAvatarRequestSchema,
+  DesktopCloudSaveAvatarResultSchema,
+  DesktopCloudClearAvatarRequestSchema,
+  DesktopCloudClearAvatarResultSchema,
   DesktopCloudSaveSignatureRequestSchema,
   DesktopCloudSaveSignatureResultSchema,
   DesktopCloudOnlineStatusSchema,
@@ -21,6 +25,10 @@ import type {
   DesktopCloudLoginBeginResponse,
   DesktopCloudLoginOutcome,
   DesktopCloudMeProfile,
+  DesktopCloudSaveAvatarRequest,
+  DesktopCloudSaveAvatarResult,
+  DesktopCloudClearAvatarRequest,
+  DesktopCloudClearAvatarResult,
   DesktopCloudSaveSignatureRequest,
   DesktopCloudSaveSignatureResult,
   DesktopCloudOnlineStatus,
@@ -48,6 +56,8 @@ export const CLOUD_LOGIN_CANCEL_COMMAND = 'cloud_login_cancel' as const;
 export const CLOUD_CACHED_ACCOUNT_COMMAND = 'cloud_cached_account' as const;
 export const CLOUD_ME_PROFILE_COMMAND = 'cloud_me_profile' as const;
 export const CLOUD_SAVE_ME_PROFILE_SIGNATURE_COMMAND = 'cloud_save_me_profile_signature' as const;
+export const CLOUD_SAVE_ME_PROFILE_AVATAR_COMMAND = 'cloud_save_me_profile_avatar' as const;
+export const CLOUD_CLEAR_ME_PROFILE_AVATAR_COMMAND = 'cloud_clear_me_profile_avatar' as const;
 export const CLOUD_AUTH_STATUS_COMMAND = 'cloud_auth_status' as const;
 export const CLOUD_SIGN_OUT_COMMAND = 'cloud_sign_out' as const;
 export const CLOUD_ONLINE_STATUS_COMMAND = 'cloud_online_status' as const;
@@ -196,6 +206,34 @@ export const readMyProfile = async (invoke: InvokeFn): Promise<DesktopCloudMePro
     throw toCloudError(CLOUD_ME_PROFILE_COMMAND, cause);
   }
   return parseResult(CLOUD_ME_PROFILE_COMMAND, DesktopCloudMeProfileSchema, raw);
+};
+
+/** 固定单次 invoke；头像成功值仅来自 Native 确认，不自动重试。 */
+export const saveMyProfileAvatar = async (
+  invoke: InvokeFn, request: DesktopCloudSaveAvatarRequest,
+): Promise<DesktopCloudSaveAvatarResult> => {
+  const parsed = DesktopCloudSaveAvatarRequestSchema.parse(request);
+  let raw: unknown;
+  try { raw = await invoke(CLOUD_SAVE_ME_PROFILE_AVATAR_COMMAND, { request: parsed }); }
+  catch (cause) { throw toCloudError(CLOUD_SAVE_ME_PROFILE_AVATAR_COMMAND, cause); }
+  const result = parseResult(CLOUD_SAVE_ME_PROFILE_AVATAR_COMMAND, DesktopCloudSaveAvatarResultSchema, raw);
+  if (result.userId !== parsed.expectedUserId) throw new DesktopCloudError(
+    CLOUD_SAVE_ME_PROFILE_AVATAR_COMMAND, 'bridge-invalid', 'native 返回的头像不属于本次请求账号',
+  );
+  return result;
+};
+export const clearMyProfileAvatar = async (
+  invoke: InvokeFn, request: DesktopCloudClearAvatarRequest,
+): Promise<DesktopCloudClearAvatarResult> => {
+  const parsed = DesktopCloudClearAvatarRequestSchema.parse(request);
+  let raw: unknown;
+  try { raw = await invoke(CLOUD_CLEAR_ME_PROFILE_AVATAR_COMMAND, { request: parsed }); }
+  catch (cause) { throw toCloudError(CLOUD_CLEAR_ME_PROFILE_AVATAR_COMMAND, cause); }
+  const result = parseResult(CLOUD_CLEAR_ME_PROFILE_AVATAR_COMMAND, DesktopCloudClearAvatarResultSchema, raw);
+  if (result.userId !== parsed.expectedUserId) throw new DesktopCloudError(
+    CLOUD_CLEAR_ME_PROFILE_AVATAR_COMMAND, 'bridge-invalid', 'native 返回的头像不属于本次请求账号',
+  );
+  return result;
 };
 
 /**

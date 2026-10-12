@@ -91,6 +91,8 @@ fn main() {
             "cloud_cached_account",
             "cloud_me_profile",
             "cloud_save_me_profile_signature",
+            "cloud_save_me_profile_avatar",
+            "cloud_clear_me_profile_avatar",
             "cloud_auth_status",
             "cloud_sign_out",
             "cloud_online_status",

@@ -1,0 +1,97 @@
+{
+  "maxBase64Length": 350000,
+  "validPayloads": [
+    "QUJD",
+    "AA==",
+    "AAA=",
+    "+/8="
+  ],
+  "invalidPayloads": [
+    "",
+    "A",
+    "AA",
+    "AAA",
+    "A===",
+    "=AAA",
+    "AA=A",
+    "AB==",
+    "AAB=",
+    "data:image/webp;base64,QUJD",
+    "QU JD",
+    "QUJD\n",
+    "_-AA",
+    "中文AA"
+  ],
+  "validSaveRequests": [
+    {
+      "expectedUserId": 7,
+      "avatarWebpBase64": "QUJD"
+    },
+    {
+      "expectedUserId": 9007199254740991,
+      "avatarWebpBase64": "AA=="
+    }
+  ],
+  "validClearRequests": [
+    {
+      "expectedUserId": 7
+    }
+  ],
+  "invalidOwners": [
+    0,
+    -1,
+    1.5,
+    9007199254740992,
+    "7",
+    null
+  ],
+  "forbiddenFields": {
+    "url": "https://example.test",
+    "method": "PUT",
+    "Cookie": "secret",
+    "token": "secret",
+    "path": "/other",
+    "profile": {},
+    "signature": "other",
+    "avatarDataUrl": "data:image/webp;base64,QUJD"
+  },
+  "validSaveResult": {
+    "userId": 7,
+    "avatarDataUrl": "data:image/webp;base64,QUJD"
+  },
+  "validClearResult": {
+    "userId": 7,
+    "avatarDataUrl": null
+  },
+  "invalidSaveResponses": [
+    {},
+    {
+      "success": false,
+      "avatarDataUrl": "data:image/webp;base64,QUJD"
+    },
+    {
+      "success": true
+    },
+    {
+      "success": true,
+      "avatarDataUrl": null
+    },
+    {
+      "success": true,
+      "avatarDataUrl": "data:image/png;base64,QUJD"
+    },
+    {
+      "success": true,
+      "avatarDataUrl": "data:image/webp;base64,AB=="
+    }
+  ],
+  "invalidClearResponses": [
+    {},
+    {
+      "success": false
+    },
+    {
+      "success": "true"
+    }
+  ]
+}

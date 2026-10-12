@@ -9,6 +9,7 @@
 // 时依然显示并标注离线），绝不把本机缓存冒称服务端验证结果；
 // `verification` 结论由 AccountPanel 的状态徽标如实表达。
 
+import { useCallback } from 'react';
 import { AccountPanel } from '../features/account/AccountPanel';
 import { ProfileSignaturePanel } from '../features/account/ProfileSignaturePanel';
 import { useDesktopCloudSession } from '../features/account/use-desktop-cloud-session';
@@ -17,8 +18,10 @@ import { useTopbarAvatar } from '../features/account/use-topbar-avatar';
 export function DesktopMe() {
   const { state: cloudSession, store: sessionStore } = useDesktopCloudSession();
   const account = cloudSession.account;
+  const convergeSession = useCallback(() => { void sessionStore.refresh(); }, [sessionStore]);
   const avatarDataUrl = useTopbarAvatar(account, {
-    onSessionRejected: () => void sessionStore.refresh(),
+    onSessionRejected: convergeSession,
+    credentialEpoch: sessionStore.getCredentialEpoch(),
   });
 
   const displayName = account?.displayName ?? account?.username ?? null;

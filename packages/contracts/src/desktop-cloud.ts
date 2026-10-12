@@ -291,6 +291,40 @@ export const DesktopCloudSaveSignatureResultSchema = z.object({
 }).strict();
 export type DesktopCloudSaveSignatureResult = z.infer<typeof DesktopCloudSaveSignatureResultSchema>;
 
+/** 头像写入只接受浏览器压缩后的纯 base64；不是任意图片 URL/HTTP 入口。 */
+export const DESKTOP_PROFILE_AVATAR_MAX_BASE64_LENGTH = 350_000;
+const DesktopAvatarBase64Schema = z.string().min(4).max(DESKTOP_PROFILE_AVATAR_MAX_BASE64_LENGTH)
+  .refine((value) => {
+    if (value.length > DESKTOP_PROFILE_AVATAR_MAX_BASE64_LENGTH || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+    // 与 Rust STANDARD decoder 相同：padding 前未使用的位必须为零。
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    if (value.endsWith('==')) return (alphabet.indexOf(value.at(-3)!) & 15) === 0;
+    if (value.endsWith('=')) return (alphabet.indexOf(value.at(-2)!) & 3) === 0;
+    return true;
+  }, '头像必须是有界、完整的纯 base64');
+const DesktopAvatarDataUrlSchema = z.string()
+  .max(DESKTOP_ME_PROFILE_AVATAR_DATA_URL_PREFIX.length + DESKTOP_PROFILE_AVATAR_MAX_BASE64_LENGTH)
+  .startsWith(DESKTOP_ME_PROFILE_AVATAR_DATA_URL_PREFIX)
+  .refine((value) => DesktopAvatarBase64Schema.safeParse(
+    value.slice(DESKTOP_ME_PROFILE_AVATAR_DATA_URL_PREFIX.length),
+  ).success, '头像必须是 WebP data URL');
+const DesktopProfileOwnerSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+export const DesktopCloudSaveAvatarRequestSchema = z.object({
+  expectedUserId: DesktopProfileOwnerSchema,
+  avatarWebpBase64: DesktopAvatarBase64Schema,
+}).strict();
+export type DesktopCloudSaveAvatarRequest = z.infer<typeof DesktopCloudSaveAvatarRequestSchema>;
+export const DesktopCloudClearAvatarRequestSchema = z.object({ expectedUserId: DesktopProfileOwnerSchema }).strict();
+export type DesktopCloudClearAvatarRequest = z.infer<typeof DesktopCloudClearAvatarRequestSchema>;
+export const DesktopCloudSaveAvatarResultSchema = z.object({
+  userId: DesktopProfileOwnerSchema, avatarDataUrl: DesktopAvatarDataUrlSchema,
+}).strict();
+export type DesktopCloudSaveAvatarResult = z.infer<typeof DesktopCloudSaveAvatarResultSchema>;
+export const DesktopCloudClearAvatarResultSchema = z.object({
+  userId: DesktopProfileOwnerSchema, avatarDataUrl: z.null(),
+}).strict();
+export type DesktopCloudClearAvatarResult = z.infer<typeof DesktopCloudClearAvatarResultSchema>;
+
 /** 登出结果：本地凭据无条件删除，`revoked` 只反映服务端会话是否同步作废。 */
 export const DesktopCloudSignOutResultSchema = z.object({
   revoked: z.boolean(),
