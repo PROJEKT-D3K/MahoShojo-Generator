@@ -11,10 +11,10 @@ export const DEFAULT_NOVELAI_SETTINGS = {
   baseUrl: '',
   model: NOVELAI_MODELS[0] as string,
   size: NOVELAI_SIZES[0] as string,
-  steps: 23,
-  scale: 5,
+  steps: 28,
+  scale: 7,
   seed: '',
-  negativePrompt: '',
+  negativePrompt: 'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page',
 };
 
 export type NovelAISettings = typeof DEFAULT_NOVELAI_SETTINGS;

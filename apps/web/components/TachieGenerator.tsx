@@ -362,7 +362,8 @@ export default function TachieGenerator({
             textProviderStorageNamespace={textProviderStorageNamespace}
             prompt={novelaiPrompt} onPromptChange={setNovelaiPrompt}
             onUseRecommendedPrompt={recommendedPrompt?.trim() ? () => {
-              setNovelaiPrompt(recommendedPrompt);
+              const qualityTags = novelaiSettings.model === 'nai-diffusion-5-curated' ? 'very aesthetic, masterpiece,' : 'masterpiece,';
+              setNovelaiPrompt(`0.9::Ixy::,\n${qualityTags}\n${recommendedPrompt}`);
               onUseRecommendedPrompt?.();
             } : undefined}
             customMode={novelaiCustomMode} onCustomModeChange={setNovelaiCustomMode}

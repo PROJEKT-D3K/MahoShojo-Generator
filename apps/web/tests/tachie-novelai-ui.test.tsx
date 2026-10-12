@@ -74,6 +74,7 @@ it('取消等待传递 AbortSignal，恢复按钮且不重发请求', async () =
 });
 
 it('默认简单模式；自定义参数仅在开启时生效，切回简单模式恢复默认请求', async () => {
+  const defaultNegative = 'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page';
   const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
     images: [{ image: 'iVBORw0KGgo=', seed: 0 }],
   }), { headers: { 'Content-Type': 'application/json' } }));
@@ -87,6 +88,8 @@ it('默认简单模式；自定义参数仅在开启时生效，切回简单模�
   await setInput('NovelAI Persistent API Token', 'token');
   await setInput('提示词', '1girl');
   await act(async () => customToggle().click());
+  expect(container.querySelectorAll('textarea')[1].value).toBe(defaultNegative);
+  await setInput('负面提示词（可选）', '');
   await setInput('步数（1–50）', '30');
   await setInput('种子（留空随机）', '42');
   await act(async () => button('使用 NovelAI').click());
@@ -94,12 +97,18 @@ it('默认简单模式；自定义参数仅在开启时生效，切回简单模�
   await act(async () => customToggle().click());
   expect(container.querySelector('input[list]')).toBeNull();
   await act(async () => button('使用 NovelAI').click());
-  expect(JSON.parse(fetchMock.mock.calls[1][1].body).parameters).toMatchObject({ steps: 23, scale: 5, negative_prompt: '' });
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body).parameters).toMatchObject({
+    steps: 28, scale: 7, negative_prompt: defaultNegative,
+    v4_negative_prompt: { caption: { base_caption: defaultNegative, char_captions: [] } },
+  });
   await act(async () => customToggle().click());
   expect(container.querySelector<HTMLInputElement>('input[type=number]')?.value).toBe('30');
 });
 
-it('复用推荐内容并通知上层重置，读取最新推荐，只有生图点击才发送网络请求', async () => {
+it.each([
+  ['nai-diffusion-4-5-curated', 'masterpiece,'],
+  ['nai-diffusion-5-curated', 'very aesthetic, masterpiece,'],
+])('%s 使用对应推荐质量词并通知上层重置，只有生图点击才发送网络请求', async (model, qualityTags) => {
   const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
     images: [{ image: 'iVBORw0KGgo=', seed: 0 }],
   }), { headers: { 'Content-Type': 'application/json' } }));
@@ -107,20 +116,21 @@ it('复用推荐内容并通知上层重置，读取最新推荐，只有生图�
   const reset = vi.fn();
   await act(async () => root.render(<TachieGenerator prompt="原始描述" recommendedPrompt="角色外观与剧情推荐" onUseRecommendedPrompt={reset} />));
   await act(async () => button('NovelAI').click());
+  await setInput('模型版本', model);
   const promptInput = () => container.querySelector<HTMLTextAreaElement>('textarea')!;
   expect(promptInput().value).toBe('');
   await act(async () => button('使用推荐提示词').click());
-  expect(promptInput().value).toBe('角色外观与剧情推荐');
+  expect(promptInput().value).toBe(`0.9::Ixy::,\n${qualityTags}\n角色外观与剧情推荐`);
   expect(reset).toHaveBeenCalledTimes(1);
   await act(async () => root.render(<TachieGenerator prompt="原始描述" recommendedPrompt="新剧情推荐" onUseRecommendedPrompt={reset} />));
-  expect(promptInput().value).toBe('角色外观与剧情推荐');
+  expect(promptInput().value).toBe(`0.9::Ixy::,\n${qualityTags}\n角色外观与剧情推荐`);
   await act(async () => button('使用推荐提示词').click());
-  expect(promptInput().value).toBe('新剧情推荐');
+  expect(promptInput().value).toBe(`0.9::Ixy::,\n${qualityTags}\n新剧情推荐`);
   expect(fetchMock).not.toHaveBeenCalled();
   await setInput('NovelAI Persistent API Token', 'token');
   if (!container.querySelector<HTMLTextAreaElement>('textarea')!.value) await setInput('提示词', '1girl');
   await act(async () => button('使用 NovelAI').click());
-  expect(JSON.parse(fetchMock.mock.calls[0][1].body).input).toBe('新剧情推荐');
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).input).toBe(`0.9::Ixy::,\n${qualityTags}\n新剧情推荐`);
 });
 
 it('战报插图现有推荐提示词可直接用于 NovelAI，并同步恢复上层编辑区', async () => {
@@ -140,7 +150,7 @@ it('战报插图现有推荐提示词可直接用于 NovelAI，并同步恢复�
   const novelaiPrompt = container.querySelectorAll('textarea')[1];
   expect(novelaiPrompt.value).toBe('');
   await act(async () => button('使用推荐提示词').click());
-  expect(novelaiPrompt.value).toBe(original);
+  expect(novelaiPrompt.value).toBe(`0.9::Ixy::,\nmasterpiece,\n${original}`);
   expect(upstream.value).toBe(original);
   expect(fetchMock).not.toHaveBeenCalled();
 });

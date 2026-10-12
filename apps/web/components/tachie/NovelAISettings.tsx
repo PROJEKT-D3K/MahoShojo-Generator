@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useState } from 'react';
-import { NOVELAI_MODELS, NOVELAI_SIZES, type NovelAISettings } from '@/lib/tachie/novelai';
+import { DEFAULT_NOVELAI_SETTINGS, NOVELAI_MODELS, NOVELAI_SIZES, type NovelAISettings } from '@/lib/tachie/novelai';
 import { NovelAIPromptOptimizer } from './NovelAIPromptOptimizer';
 
 export function NovelAISettingsFields({ token, onTokenChange, prompt, onPromptChange, onUseRecommendedPrompt, settings, onChange, customMode, onCustomModeChange, disabled, onOptimizerBusyChange, textProviderStorageNamespace }: {
@@ -68,7 +68,7 @@ export function NovelAISettingsFields({ token, onTokenChange, prompt, onPromptCh
           aria-controls={`${id}-custom`} aria-expanded={customMode} />
         自定义模式
       </label>
-      {!customMode && <p className="text-xs text-gray-500">简单模式：使用上方所选模型 · 竖图 832 × 1216 · 23 步 · 强度 5 · 随机种子。</p>}
+      {!customMode && <p className="text-xs text-gray-500">简单模式：使用上方所选模型 · 竖图 832 × 1216 · {DEFAULT_NOVELAI_SETTINGS.steps} 步 · 强度 {DEFAULT_NOVELAI_SETTINGS.scale} · 随机种子。</p>}
       {customMode && <div id={`${id}-custom`} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>

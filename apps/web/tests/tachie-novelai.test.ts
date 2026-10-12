@@ -28,7 +28,7 @@ describe('NovelAI browser direct generation', () => {
     expect(init.headers).toEqual({ Authorization: 'Bearer test-token', 'Content-Type': 'application/json', Accept: 'application/json' });
     const body = JSON.parse(init.body);
     expect(body).toMatchObject({ action: 'generate', input: '1girl', model: 'nai-diffusion-4-5-curated', parameters: {
-      width: 1216, height: 832, seed: 42, steps: 23, scale: 5, n_samples: 1, image_format: 'png',
+      width: 1216, height: 832, seed: 42, steps: 28, scale: 7, n_samples: 1, image_format: 'png',
       negative_prompt: 'blurry', v4_prompt: { caption: { base_caption: '1girl', char_captions: [] } },
       v4_negative_prompt: { caption: { base_caption: 'blurry', char_captions: [] } },
     } });
