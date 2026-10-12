@@ -4,6 +4,7 @@ import { buildGeneralMarkdown } from './general';
 import { MAX_TAVERN_FILE_BYTES, MAX_TAVERN_TEXT_BYTES } from './limits';
 import { isLikelyTavernCard, normalizeTavernCard } from './normalize';
 import { parseTavernCardFromPngBytes } from './parse';
+import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, type TavernPlaceholderPreference } from './placeholders';
 import type { TavernCardCandidate, TavernParseResult } from './types';
 
 export interface TavernLocalDocument {
@@ -49,9 +50,13 @@ export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json
 }
 
 /** Conversion is an unsigned projection, with the complete inert original retained separately. */
-export function convertTavernToGeneralCard(candidate: TavernCardCandidate) {
+export function convertTavernToGeneralCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
   const raw = validateTavernRaw(candidate.parsed);
-  const { normalized } = normalizeTavernCard(candidate);
+  const source = normalizeTavernCard(candidate).normalized;
+  const normalized = preference ? applyTavernPlaceholderReplacement(source, {
+    enabled: preference.enabled, userReplacement: preference.userReplacement,
+    charReplacement: resolveTavernCharReplacement(source.name, preference),
+  }) : source;
   return {
     templateId: GENERAL_CHARACTER_TEMPLATE_ID,
     name: normalized.name,

@@ -12,3 +12,4 @@ export * from './recommend';
 export * from './general';
 export * from './document';
 export * from './export';
+export * from './placeholders';

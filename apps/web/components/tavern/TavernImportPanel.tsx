@@ -1,7 +1,7 @@
 import { saveImportedUnsignedCharacter } from '@mahoshojo/local-library/imported-unsigned-card';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
-import { TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernGeneralProjection } from '@mahoshojo/ui-web/tavern';
-import { buildGeneralMarkdown } from '@mahoshojo/domain/tavern-card';
+import { TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernGeneralProjection } from '@mahoshojo/ui-web/tavern';
+import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown } from '@mahoshojo/domain/tavern-card';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -39,7 +39,6 @@ import {
   buildTavernAiAttachment,
   normalizeTavernCard,
   type TavernCardCandidate,
-  type TavernCardNormalized,
   type TavernCloudSavePreset,
   type TavernImportMeta,
   type TavernParseResult,
@@ -56,15 +55,6 @@ type ConvertMode = 'rules' | 'ai';
 type ImageSaveMode = 'download' | 'modal';
 type JsonSaveMode = 'download' | 'text';
 type DeviceType = 'mobile' | 'desktop' | 'unknown';
-
-type PlaceholderReplaceMode = 'auto' | 'custom';
-
-interface PlaceholderPreference {
-  enabled: boolean;
-  userReplacement: string;
-  charReplacementMode: PlaceholderReplaceMode;
-  customCharReplacement: string;
-}
 
 interface ImportState {
   step: ImportStep;
@@ -108,9 +98,9 @@ function reducer(state: ImportState, action: ImportAction): ImportState {
     case 'reset':
       return { ...initialState };
     case 'parsing':
-      return { ...state, step: 'parsing', error: null, parseResult: null, outputDataCard: null, outputKey: null };
+      return { ...state, step: 'parsing', error: null };
     case 'parseError':
-      return { ...state, step: 'error', error: action.message, parseResult: null, outputDataCard: null, outputKey: null };
+      return { ...state, step: state.parseResult ? 'parsed' : 'error', error: action.message };
     case 'setError':
       return { ...state, error: action.message };
     case 'parsed':
@@ -182,56 +172,6 @@ const guessTemplate = (result: TavernParseResult): DataCardTemplate => {
   if (/(残兽|怪物|monster|beast|abomination)/i.test(text)) return 'canshou';
   if (/(魔法少女|mahou|magical girl)/i.test(text)) return 'magical-girl';
   return 'general';
-};
-
-const PLACEHOLDER_PREFERENCE_KEY = 'mahoshojo.tavern.import.placeholder.v1';
-const DEFAULT_USER_REPLACEMENT = '【某人】';
-const DEFAULT_CHAR_FALLBACK = '角色';
-
-const replacePlaceholderToken = (input: string, token: string, replacement: string): string => {
-  if (!input.includes(token)) return input;
-  return input.split(token).join(replacement);
-};
-
-const applyPlaceholderReplacement = (
-  value: string | undefined,
-  config: { enabled: boolean; userReplacement: string; charReplacement: string }
-): string | undefined => {
-  if (!config.enabled || typeof value !== 'string') return value;
-  let next = value;
-  next = replacePlaceholderToken(next, '{{user}}', config.userReplacement);
-  next = replacePlaceholderToken(next, '{{char}}', config.charReplacement);
-  return next;
-};
-
-const applyPlaceholderReplacementToList = (
-  value: string[] | undefined,
-  config: { enabled: boolean; userReplacement: string; charReplacement: string }
-): string[] | undefined => {
-  if (!config.enabled || !Array.isArray(value)) return value;
-  return value.map((item) => applyPlaceholderReplacement(item, config) ?? '');
-};
-
-const applyPlaceholderReplacementToNormalized = (
-  normalized: TavernCardNormalized,
-  config: { enabled: boolean; userReplacement: string; charReplacement: string }
-): TavernCardNormalized => {
-  if (!config.enabled) return normalized;
-  return {
-    ...normalized,
-    name: applyPlaceholderReplacement(normalized.name, config) ?? normalized.name,
-    description: applyPlaceholderReplacement(normalized.description, config),
-    personality: applyPlaceholderReplacement(normalized.personality, config),
-    scenario: applyPlaceholderReplacement(normalized.scenario, config),
-    firstMes: applyPlaceholderReplacement(normalized.firstMes, config),
-    mesExample: applyPlaceholderReplacement(normalized.mesExample, config),
-    creatorComment: applyPlaceholderReplacement(normalized.creatorComment, config),
-    creatorNotes: applyPlaceholderReplacement(normalized.creatorNotes, config),
-    systemPrompt: applyPlaceholderReplacement(normalized.systemPrompt, config),
-    postHistoryInstructions: applyPlaceholderReplacement(normalized.postHistoryInstructions, config),
-    alternateGreetings: applyPlaceholderReplacementToList(normalized.alternateGreetings, config),
-    groupOnlyGreetings: applyPlaceholderReplacementToList(normalized.groupOnlyGreetings, config),
-  };
 };
 
 const buildGeneralScenarioMarkdown = (normalized: TavernParseResult['normalized']): string => {
@@ -373,10 +313,10 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
   const [showImageModal, setShowImageModal] = useState(false);
   const [savedImageUrl, setSavedImageUrl] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [placeholderEnabled, setPlaceholderEnabled] = useState(true);
-  const [userReplacement, setUserReplacement] = useState(DEFAULT_USER_REPLACEMENT);
-  const [charReplacementMode, setCharReplacementMode] = useState<PlaceholderReplaceMode>('auto');
-  const [customCharReplacement, setCustomCharReplacement] = useState('');
+  const copyAttempt = useRef(0);
+  useEffect(() => () => { copyAttempt.current += 1; }, []);
+  const { preference: placeholderPreference, setPreference: setPlaceholderPreference, isHydrated: placeholderHydrated } = useTavernPlaceholderPreference();
+  const { enabled: placeholderEnabled, userReplacement, charReplacementMode, customCharReplacement } = placeholderPreference;
 
   const recommendedImageMode: ImageSaveMode = deviceType === 'mobile' ? 'modal' : 'download';
   const recommendedJsonMode: JsonSaveMode = deviceType === 'mobile' ? 'text' : 'download';
@@ -405,38 +345,6 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
     setJsonSaveMode(isMobile ? 'text' : 'download');
   }, []);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const saved = window.localStorage.getItem(PLACEHOLDER_PREFERENCE_KEY);
-      if (!saved) return;
-      const parsed = JSON.parse(saved) as Partial<PlaceholderPreference>;
-      if (typeof parsed?.enabled === 'boolean') setPlaceholderEnabled(parsed.enabled);
-      if (typeof parsed?.userReplacement === 'string') setUserReplacement(parsed.userReplacement);
-      if (parsed?.charReplacementMode === 'auto' || parsed?.charReplacementMode === 'custom') {
-        setCharReplacementMode(parsed.charReplacementMode);
-      }
-      if (typeof parsed?.customCharReplacement === 'string') setCustomCharReplacement(parsed.customCharReplacement);
-    } catch {
-      // localStorage 可能不可用或内容损坏，忽略
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const payload: PlaceholderPreference = {
-        enabled: placeholderEnabled,
-        userReplacement,
-        charReplacementMode,
-        customCharReplacement,
-      };
-      window.localStorage.setItem(PLACEHOLDER_PREFERENCE_KEY, JSON.stringify(payload));
-    } catch {
-      // localStorage 可能不可用，忽略
-    }
-  }, [placeholderEnabled, userReplacement, charReplacementMode, customCharReplacement]);
-
   const selectedCandidate = useMemo(() => {
     if (!state.parseResult) return null;
     return state.parseResult.candidates[state.selectedCandidateIndex] ?? state.parseResult.selected;
@@ -447,24 +355,18 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
     return normalizeTavernCard(selectedCandidate).normalized;
   }, [selectedCandidate]);
 
-  const resolvedCharReplacement = useMemo(() => {
-    if (charReplacementMode === 'custom') return customCharReplacement;
-    const name = (selectedNormalized?.name ?? '').trim();
-    const hasPlaceholder = name.includes('{{user}}') || name.includes('{{char}}');
-    const safeName = hasPlaceholder ? '' : name;
-    return safeName || DEFAULT_CHAR_FALLBACK;
-  }, [charReplacementMode, customCharReplacement, selectedNormalized?.name]);
-
-  const placeholderConfig = useMemo(() => ({
-    enabled: placeholderEnabled,
-    userReplacement,
-    charReplacement: resolvedCharReplacement,
-  }), [placeholderEnabled, userReplacement, resolvedCharReplacement]);
-
-  const normalizedForConvert = useMemo(() => {
-    if (!selectedNormalized) return null;
-    return applyPlaceholderReplacementToNormalized(selectedNormalized, placeholderConfig);
-  }, [selectedNormalized, placeholderConfig]);
+  const resolvedCharReplacement = resolveTavernCharReplacement(selectedNormalized?.name, placeholderPreference);
+  const replacement = useMemo(() => {
+    if (!selectedNormalized) return { normalized: null, error: null };
+    try {
+      return { normalized: applyTavernPlaceholderReplacement(selectedNormalized, {
+        enabled: placeholderEnabled, userReplacement, charReplacement: resolvedCharReplacement,
+      }), error: null };
+    } catch (error) {
+      return { normalized: null, error: error instanceof Error ? error.message : '占位符替换失败，原件仍保留。' };
+    }
+  }, [selectedNormalized, placeholderEnabled, userReplacement, resolvedCharReplacement]);
+  const normalizedForConvert = replacement.normalized;
 
   const isScenarioTemplate = state.targetTemplate === 'scenario' || state.targetTemplate === 'general-scenario';
   const targetLabel = isScenarioTemplate ? '情景' : '角色';
@@ -504,6 +406,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
   const imageSaveButtonLabel = imageSaveMode === 'download' ? '💾 一键保存长图' : '📱 打开长按保存弹窗';
 
   const resetGeneratedPreview = () => {
+    copyAttempt.current += 1;
     resultNavigationRef.current?.cancel();
     setStreamingMarkdown(null);
     setStreamedGeneralCard(null);
@@ -512,6 +415,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
   };
 
   const handleAiProviderConfigChange = useCallback((config: UserAIProviderConfig | null) => {
+    copyAttempt.current += 1;
     resultNavigationRef.current?.cancel();
     setUserProviderConfig(config);
     setStreamingMarkdown(null);
@@ -554,8 +458,8 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
 
   const onFileSelected = async (file: TavernInputFile | null) => {
     if (!file) return;
+    copyAttempt.current += 1;
     const epoch = sourceSelection.begin();
-    setOriginalPng(undefined);
     resultNavigationRef.current?.cancel();
     dispatch({ type: 'parsing' });
     setStreamingMarkdown(null);
@@ -602,13 +506,14 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
       parts.push(`model=${modelId}`);
     }
 
-    return parts.join('|');
+    return JSON.stringify(parts);
   };
 
   const convertToDataCard = async (
     requestController?: AbortController,
     revealGeneratedResult?: ReturnType<typeof beginResultNavigation>,
   ): Promise<unknown> => {
+    if (replacement.error) throw new Error(replacement.error);
     if (!state.parseResult || !selectedCandidate || !selectedNormalized || !normalizedForConvert) {
       throw new Error('尚未解析到可用的 SillyTavern 候选块');
     }
@@ -849,6 +754,8 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
   };
 
   const ensureConverted = async (): Promise<{ output: unknown; outputKey: string } | null> => {
+    if (state.step === 'parsing') return null;
+    if (replacement.error) throw new Error(replacement.error);
     const outputKey = buildOutputKey();
     if (!outputKey) return null;
     if (state.outputDataCard && state.outputKey === outputKey) {
@@ -905,24 +812,29 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
   };
 
   const onCopyJson = async () => {
-    if (!state.parseResult || !selectedCandidate || !selectedNormalized) return;
+    if (state.step === 'parsing' || !state.parseResult || !selectedCandidate || !selectedNormalized) return;
+    const attempt = ++copyAttempt.current;
     try {
       const result = await ensureConverted();
-      if (!result) return;
+      if (!result || attempt !== copyAttempt.current) return;
       if (typeof navigator === 'undefined' || !navigator.clipboard) {
         throw new Error('当前环境不支持剪贴板');
       }
       await navigator.clipboard.writeText(JSON.stringify(result.output, null, 2));
+      if (attempt !== copyAttempt.current) return;
       setCopyStatus('success');
-      setTimeout(() => setCopyStatus('idle'), 2000);
+      setTimeout(() => { if (attempt === copyAttempt.current) setCopyStatus('idle'); }, 2000);
     } catch (error) {
+      if (attempt !== copyAttempt.current) return;
       setCopyStatus('error');
       dispatch({ type: 'parseError', message: error instanceof Error ? error.message : '复制失败' });
     }
   };
 
   const currentOutputKey = buildOutputKey();
-  const outputDataCard = currentOutputKey && state.outputKey === currentOutputKey ? state.outputDataCard : null;
+  // Keep the previous result recoverable on read failure, but do not expose any
+  // old result actions (including images/cloud) while a new source is parsing.
+  const outputDataCard = state.step !== 'parsing' && !replacement.error && currentOutputKey && state.outputKey === currentOutputKey ? state.outputDataCard : null;
   const outputTemplateForPreview: DataCardTemplate =
     state.convertMode === 'ai' && generationMode === 'stream'
       ? (state.targetTemplate === 'scenario' || state.targetTemplate === 'general-scenario' ? 'general-scenario' : 'general')
@@ -1044,7 +956,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
         <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="space-y-4">
             <TavernCandidateSelector candidates={state.parseResult.candidates} selectedIndex={state.selectedCandidateIndex}
-              disabled={state.step === 'converting'} onSelect={(index) => { sourceSelection.begin(); dispatch({ type: 'selectCandidate', index }); resetGeneratedPreview(); }} />
+              disabled={state.step === 'converting' || state.step === 'parsing'} onSelect={(index) => { sourceSelection.begin(); dispatch({ type: 'selectCandidate', index }); resetGeneratedPreview(); }} />
 
             <div className="rounded-xl border border-pink-200 bg-white/70 p-4">
               <div className="grid gap-4">
@@ -1057,7 +969,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                       dispatch({ type: 'setTemplate', template: e.target.value as DataCardTemplate });
                       resetGeneratedPreview();
                     }}
-                    disabled={state.step === 'converting'}
+                    disabled={state.step === 'converting' || state.step === 'parsing'}
                   >
                     <option value="general">通用角色（最稳，推荐）</option>
                     <option value="general-scenario">通用情景（规则映射推荐）</option>
@@ -1083,7 +995,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                         dispatch({ type: 'setKeepRaw', value: e.target.checked });
                         resetGeneratedPreview();
                       }}
-                      disabled={state.step === 'converting'}
+                      disabled={state.step === 'converting' || state.step === 'parsing'}
                     />
                     <div className="min-w-0">
                       <div className="text-sm text-gray-900">同时保存 `_tavern.raw`（体积很大，仅建议本地下载）</div>
@@ -1108,7 +1020,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                         dispatch({ type: 'setConvertMode', mode: 'rules' });
                         resetGeneratedPreview();
                       }}
-                      disabled={state.step === 'converting'}
+                      disabled={state.step === 'converting' || state.step === 'parsing'}
                     />
                     <div className="min-w-0">
                       <div className="text-sm text-gray-900">规则映射（不调用 AI）</div>
@@ -1126,7 +1038,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                         dispatch({ type: 'setConvertMode', mode: 'ai' });
                         resetGeneratedPreview();
                       }}
-                      disabled={state.step === 'converting'}
+                      disabled={state.step === 'converting' || state.step === 'parsing'}
                     />
                     <div className="min-w-0">
                       <div className="text-sm text-gray-900">AI 深度转换（可选）</div>
@@ -1146,7 +1058,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                         type="button"
                         className="flex w-full items-center justify-between text-left text-sm font-semibold text-pink-700"
                         onClick={() => setShowLanguageSection(!showLanguageSection)}
-                        disabled={state.step === 'converting'}
+                        disabled={state.step === 'converting' || state.step === 'parsing'}
                       >
                         <span>生成语言</span>
                         <span className="text-xs">{showLanguageSection ? '▲' : '▼'}</span>
@@ -1160,7 +1072,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                               setSelectedLanguage(e.target.value);
                               resetGeneratedPreview();
                             }}
-                            disabled={state.step === 'converting'}
+                            disabled={state.step === 'converting' || state.step === 'parsing'}
                           >
                             {languages.map((lang) => (
                               <option key={lang.code} value={lang.code}>
@@ -1178,7 +1090,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                       <GenerationModeSwitcher
                         label="生成方式"
                         value={generationMode}
-                        disabled={state.step === 'converting'}
+                        disabled={state.step === 'converting' || state.step === 'parsing'}
                         helper={false}
                         onChange={(mode) => {
                           setGenerationMode(mode);
@@ -1212,7 +1124,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                 <button
                   type="button"
                   className="generate-button mb-0 w-full"
-                  disabled={state.step === 'converting' || (state.convertMode === 'ai' && isCooldown)}
+                  disabled={state.step === 'converting' || state.step === 'parsing' || !placeholderHydrated || !!replacement.error || (state.convertMode === 'ai' && isCooldown)}
                   onClick={onGenerate}
                 >
                   {state.step === 'converting'
@@ -1234,90 +1146,18 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                   </div>
                 ) : null}
 
-                <div>
-                  <label className="block text-sm font-semibold text-pink-700">占位符替换</label>
-                  <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-xl border border-pink-100 bg-white/80 p-3">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={placeholderEnabled}
-                      onChange={(e) => {
-                        setPlaceholderEnabled(e.target.checked);
-                        resetGeneratedPreview();
-                      }}
-                      disabled={state.step === 'converting'}
-                    />
-                    <div className="min-w-0">
-                      <div className="text-sm text-gray-900">
-                        替换 <code>{'{{user}}'}</code> / <code>{'{{char}}'}</code>
-                      </div>
-                      <div className="mt-1 text-xs text-gray-600">
-                        规则映射与 AI 输入都会使用替换后的文本，避免导入后出现角色/用户占位符残留。
-                      </div>
-                    </div>
-                  </label>
-
-                  <div className="mt-3 grid gap-3">
-                    <div>
-                      <div className="text-xs font-semibold text-gray-700">
-                        <code>{'{{user}}'}</code> →
-                      </div>
-                      <input
-                        className="mt-1 w-full rounded-lg border border-pink-100 bg-white/80 px-3 py-2 text-sm text-gray-900"
-                        value={userReplacement}
-                        onChange={(e) => {
-                          setUserReplacement(e.target.value);
-                          resetGeneratedPreview();
-                        }}
-                        disabled={!placeholderEnabled || state.step === 'converting'}
-                      />
-                      <div className="mt-1 text-[11px] text-gray-500">默认：{DEFAULT_USER_REPLACEMENT}</div>
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between text-xs font-semibold text-gray-700">
-                        <span>
-                          <code>{'{{char}}'}</code> →
-                        </span>
-                        <label className="flex items-center gap-2 text-[11px] font-normal text-gray-600">
-                          <input
-                            type="checkbox"
-                            checked={charReplacementMode === 'auto'}
-                            onChange={(e) => {
-                              const nextAuto = e.target.checked;
-                              if (!nextAuto && !customCharReplacement.trim()) {
-                                const fallback = selectedNormalized?.name?.trim() || DEFAULT_CHAR_FALLBACK;
-                                setCustomCharReplacement(fallback);
-                              }
-                              setCharReplacementMode(nextAuto ? 'auto' : 'custom');
-                              resetGeneratedPreview();
-                            }}
-                            disabled={!placeholderEnabled || state.step === 'converting'}
-                          />
-                          使用角色名
-                        </label>
-                      </div>
-                      <input
-                        className="mt-1 w-full rounded-lg border border-pink-100 bg-white/80 px-3 py-2 text-sm text-gray-900"
-                        value={charReplacementMode === 'auto' ? resolvedCharReplacement : customCharReplacement}
-                        onChange={(e) => {
-                          setCustomCharReplacement(e.target.value);
-                          setCharReplacementMode('custom');
-                          resetGeneratedPreview();
-                        }}
-                        disabled={!placeholderEnabled || charReplacementMode === 'auto' || state.step === 'converting'}
-                      />
-                      <div className="mt-1 text-[11px] text-gray-500">默认：角色名（{resolvedCharReplacement}）</div>
-                    </div>
-                  </div>
-                </div>
+                <TavernPlaceholderFields preference={placeholderPreference} name={selectedNormalized.name}
+                  disabled={state.step === 'converting' || state.step === 'parsing' || !placeholderHydrated}
+                  description="规则映射与 AI 输入都会使用替换后的文本，避免导入后出现角色/用户占位符残留。"
+                  onChange={(next) => { setPlaceholderPreference(next); resetGeneratedPreview(); }} />
+                {replacement.error ? <div role="alert" className="mt-3 text-sm text-red-700">{replacement.error}</div> : null}
               </div>
             </div>
           </div>
 
           <div className="space-y-4">
             <TavernCardPreview normalized={selectedNormalized} warnings={combinedWarnings} />
-            <TavernOriginalExport candidate={selectedCandidate} basePngBytes={originalPng} disabled={state.step === 'converting'}
+            <TavernOriginalExport candidate={selectedCandidate} basePngBytes={originalPng} disabled={state.step === 'converting' || state.step === 'parsing'}
               exportFile={({ name, bytes, mimeType }) => { downloadBlob(new Blob([new Uint8Array(bytes)], { type: mimeType }), name); }} />
 
 
@@ -1374,7 +1214,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                 )}
 
                 {outputDataCard && state.convertMode === 'rules' && state.targetTemplate === 'general' ? (
-                  <TavernLocalProjection data={outputDataCard as TavernGeneralProjection} hideExport
+                  <TavernLocalProjection data={outputDataCard as TavernGeneralProjection} hideExport disabled={state.step === 'parsing' || state.step === 'converting'}
                     exportFile={({ name, bytes, mimeType }) => { downloadBlob(new Blob([new Uint8Array(bytes)], { type: mimeType }), name); }}
                     saveCard={(data) => saveImportedUnsignedCharacter(getLocalCardRepository(), data, data.name)} />
                 ) : null}
