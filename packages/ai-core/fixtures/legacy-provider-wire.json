@@ -160,7 +160,7 @@
   },
   {
     "id": "yiye",
-    "baseUrl": "https://88996.cloud/v1",
+    "baseUrl": "https://88996api.cloud/v1",
     "type": "openai",
     "models": [
       "gemini-3.8-flash",

@@ -1070,7 +1070,7 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
         name: '一叶知秋 API',
         description: '一叶知秋 API 为用户提供了国内外广泛的模型库，性价比高但不太稳定。',
         docsUrl: 'https://88996.cloud/register?aff=ITPX',
-        baseUrl: 'https://88996.cloud/v1',
+        baseUrl: 'https://88996api.cloud/v1',
         type: 'openai',
         mode: 'json',
         endpointKind: 'provider-public',

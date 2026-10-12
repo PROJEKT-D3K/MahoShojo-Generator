@@ -480,7 +480,7 @@
   {
     "id": "yiye",
     "name": "一叶知秋 API",
-    "baseUrl": "https://88996.cloud/v1",
+    "baseUrl": "https://88996api.cloud/v1",
     "providerType": "openai",
     "modelAliases": {},
     "endpointKind": "provider-public",
