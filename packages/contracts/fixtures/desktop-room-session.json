@@ -1,0 +1,1631 @@
+{
+  "fixtureVersion": 1,
+  "protocolVersion": "desktop-room-session-v1",
+  "expectedUserId": 42,
+  "headers": {
+    "x-mahoshojo-desktop-room-protocol": "desktop-room-session-v1",
+    "x-mahoshojo-room-expected-user-id": "v1:42"
+  },
+  "limits": {
+    "originalRequestBodyBytes": 65536,
+    "requestBodyBytes": 66560,
+    "responseBodyBytes": 262144,
+    "websocketMessageBytes": 65536,
+    "maxJsonDepth": 64,
+    "retryAfterSeconds": 86400
+  },
+  "operations": {
+    "discover": {
+      "method": "GET",
+      "path": "/api/arena/rooms/v1",
+      "request": null,
+      "success": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "result": {
+          "items": [
+            {
+              "roomId": "room_01JARENAEXAMPLE",
+              "title": "多人房间😀",
+              "visibility": "public",
+              "status": "open",
+              "createdAt": "2026-10-12T00:00:00.000Z",
+              "lastActivityAt": "2026-10-12T00:01:00.000Z",
+              "hostDisplayName": "房主😀 \"第一队\"",
+              "memberCount": 2,
+              "memberLimit": 32
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "error": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "error": {
+          "code": "ROOM_RATE_LIMITED",
+          "message": "房间请求过于频繁，请稍后重试。",
+          "outcome": "not-applicable",
+          "retryAfterSeconds": 3
+        }
+      }
+    },
+    "create": {
+      "method": "POST",
+      "path": "/api/arena/rooms/v1",
+      "request": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "expectedUserId": 42,
+          "createMode": "new"
+        },
+        "request": {
+          "creationRequestId": "desktop-create-0001",
+          "displayName": "房主😀 \"第一队\"",
+          "directory": {
+            "title": "多人房间😀",
+            "visibility": "public"
+          },
+          "sharedConfig": {
+            "battleMode": "scenario",
+            "combatants": [
+              {
+                "key": "data-card:character-001",
+                "ref": {
+                  "id": "character-001",
+                  "kind": "character",
+                  "versionToken": "v2026-08-22-001"
+                },
+                "characterGuidance": "优先保护队友"
+              },
+              {
+                "key": "host-local:character-opaque-1",
+                "displayName": "房主本地角色",
+                "type": "magical-girl",
+                "source": "host-local",
+                "characterGuidance": "保持谨慎"
+              }
+            ],
+            "teams": [
+              {
+                "key": "team-alpha",
+                "displayName": "第一队",
+                "combatantKeys": [
+                  "data-card:character-001"
+                ]
+              }
+            ],
+            "scenario": {
+              "key": "data-card:scenario-001",
+              "ref": {
+                "id": "scenario-001",
+                "kind": "scenario",
+                "versionToken": "v2026-08-22-scenario-001"
+              }
+            },
+            "auxScenarios": [
+              {
+                "key": "data-card:scenario-aux-001",
+                "ref": {
+                  "id": "scenario-aux-001",
+                  "kind": "scenario",
+                  "versionToken": "v2026-08-22-scenario-aux-001"
+                }
+              }
+            ],
+            "materials": [
+              {
+                "key": "data-card:material-001",
+                "ref": {
+                  "id": "material-001",
+                  "kind": "material",
+                  "versionToken": "v2026-08-22-material-001"
+                }
+              }
+            ],
+            "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+            "storyLength": "standard",
+            "customStoryLength": null,
+            "selectedLanguage": "zh-CN",
+            "historySettings": {
+              "readArenaHistory": true,
+              "readArenaHistoryLimit": 3,
+              "isArenaHistoryUnlimited": false,
+              "writeArenaHistory": true,
+              "readCurrentState": true,
+              "writeCurrentState": true,
+              "readNarrativeHistory": false,
+              "readNarrativeHistoryLimit": 10,
+              "isNarrativeHistoryUnlimited": false,
+              "writeNarrativeHistory": false
+            },
+            "reportFormat": "markdown"
+          }
+        }
+      },
+      "success": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "result": {
+          "protocolVersion": 1,
+          "roomId": "room_01JARENAEXAMPLE",
+          "roomEpoch": "epoch_01JARENA",
+          "self": {
+            "userId": "user-host",
+            "role": "host",
+            "displayName": "房主😀 \"第一队\"",
+            "membershipState": "active"
+          },
+          "snapshot": {
+            "protocolVersion": 1,
+            "schemaVersion": 1,
+            "roomId": "room_01JARENAEXAMPLE",
+            "roomEpoch": "epoch_01JARENA",
+            "controlSeq": 24,
+            "revision": 7,
+            "sharedConfig": {
+              "battleMode": "scenario",
+              "reportFormat": "markdown",
+              "combatants": [
+                {
+                  "key": "data-card:character-001",
+                  "ref": {
+                    "id": "character-001",
+                    "kind": "character",
+                    "versionToken": "v2026-08-22-001"
+                  },
+                  "characterGuidance": "优先保护队友"
+                },
+                {
+                  "key": "host-local:character-opaque-1",
+                  "displayName": "房主本地角色",
+                  "type": "magical-girl",
+                  "source": "host-local",
+                  "characterGuidance": "保持谨慎"
+                }
+              ],
+              "teams": [
+                {
+                  "key": "team-alpha",
+                  "displayName": "第一队",
+                  "combatantKeys": [
+                    "data-card:character-001"
+                  ]
+                }
+              ],
+              "scenario": {
+                "key": "data-card:scenario-001",
+                "ref": {
+                  "id": "scenario-001",
+                  "kind": "scenario",
+                  "versionToken": "v2026-08-22-scenario-001"
+                }
+              },
+              "auxScenarios": [
+                {
+                  "key": "data-card:scenario-aux-001",
+                  "ref": {
+                    "id": "scenario-aux-001",
+                    "kind": "scenario",
+                    "versionToken": "v2026-08-22-scenario-aux-001"
+                  }
+                }
+              ],
+              "materials": [
+                {
+                  "key": "data-card:material-001",
+                  "ref": {
+                    "id": "material-001",
+                    "kind": "material",
+                    "versionToken": "v2026-08-22-material-001"
+                  }
+                }
+              ],
+              "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+              "storyLength": "standard",
+              "customStoryLength": null,
+              "selectedLanguage": "zh-CN",
+              "historySettings": {
+                "readArenaHistory": true,
+                "readArenaHistoryLimit": 3,
+                "isArenaHistoryUnlimited": false,
+                "writeArenaHistory": true,
+                "readCurrentState": true,
+                "writeCurrentState": true,
+                "readNarrativeHistory": false,
+                "readNarrativeHistoryLimit": 10,
+                "isNarrativeHistoryUnlimited": false,
+                "writeNarrativeHistory": false
+              }
+            },
+            "members": [
+              {
+                "userId": "user-host",
+                "role": "host",
+                "displayName": "房主😀 \"第一队\"",
+                "membershipState": "active"
+              },
+              {
+                "userId": "user-member",
+                "role": "member",
+                "displayName": "成员",
+                "membershipState": "active"
+              }
+            ],
+            "proposals": [],
+            "activeGeneration": null
+          }
+        }
+      },
+      "error": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "error": {
+          "code": "ROOM_RATE_LIMITED",
+          "message": "房间请求过于频繁，请稍后重试。",
+          "outcome": "not-applied",
+          "retryAfterSeconds": 3
+        }
+      }
+    },
+    "join": {
+      "method": "POST",
+      "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/join",
+      "request": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "expectedUserId": 42
+        },
+        "request": {
+          "displayName": "成员😀"
+        }
+      },
+      "success": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "result": {
+          "protocolVersion": 1,
+          "roomId": "room_01JARENAEXAMPLE",
+          "roomEpoch": "epoch_01JARENA",
+          "self": {
+            "userId": "user-host",
+            "role": "host",
+            "displayName": "房主😀 \"第一队\"",
+            "membershipState": "active"
+          },
+          "snapshot": {
+            "protocolVersion": 1,
+            "schemaVersion": 1,
+            "roomId": "room_01JARENAEXAMPLE",
+            "roomEpoch": "epoch_01JARENA",
+            "controlSeq": 24,
+            "revision": 7,
+            "sharedConfig": {
+              "battleMode": "scenario",
+              "reportFormat": "markdown",
+              "combatants": [
+                {
+                  "key": "data-card:character-001",
+                  "ref": {
+                    "id": "character-001",
+                    "kind": "character",
+                    "versionToken": "v2026-08-22-001"
+                  },
+                  "characterGuidance": "优先保护队友"
+                },
+                {
+                  "key": "host-local:character-opaque-1",
+                  "displayName": "房主本地角色",
+                  "type": "magical-girl",
+                  "source": "host-local",
+                  "characterGuidance": "保持谨慎"
+                }
+              ],
+              "teams": [
+                {
+                  "key": "team-alpha",
+                  "displayName": "第一队",
+                  "combatantKeys": [
+                    "data-card:character-001"
+                  ]
+                }
+              ],
+              "scenario": {
+                "key": "data-card:scenario-001",
+                "ref": {
+                  "id": "scenario-001",
+                  "kind": "scenario",
+                  "versionToken": "v2026-08-22-scenario-001"
+                }
+              },
+              "auxScenarios": [
+                {
+                  "key": "data-card:scenario-aux-001",
+                  "ref": {
+                    "id": "scenario-aux-001",
+                    "kind": "scenario",
+                    "versionToken": "v2026-08-22-scenario-aux-001"
+                  }
+                }
+              ],
+              "materials": [
+                {
+                  "key": "data-card:material-001",
+                  "ref": {
+                    "id": "material-001",
+                    "kind": "material",
+                    "versionToken": "v2026-08-22-material-001"
+                  }
+                }
+              ],
+              "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+              "storyLength": "standard",
+              "customStoryLength": null,
+              "selectedLanguage": "zh-CN",
+              "historySettings": {
+                "readArenaHistory": true,
+                "readArenaHistoryLimit": 3,
+                "isArenaHistoryUnlimited": false,
+                "writeArenaHistory": true,
+                "readCurrentState": true,
+                "writeCurrentState": true,
+                "readNarrativeHistory": false,
+                "readNarrativeHistoryLimit": 10,
+                "isNarrativeHistoryUnlimited": false,
+                "writeNarrativeHistory": false
+              }
+            },
+            "members": [
+              {
+                "userId": "user-host",
+                "role": "host",
+                "displayName": "房主😀 \"第一队\"",
+                "membershipState": "active"
+              },
+              {
+                "userId": "user-member",
+                "role": "member",
+                "displayName": "成员",
+                "membershipState": "active"
+              }
+            ],
+            "proposals": [],
+            "activeGeneration": null
+          }
+        }
+      },
+      "error": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "error": {
+          "code": "ROOM_RATE_LIMITED",
+          "message": "房间请求过于频繁，请稍后重试。",
+          "outcome": "not-applied",
+          "retryAfterSeconds": 3
+        }
+      }
+    },
+    "session": {
+      "method": "GET",
+      "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/session",
+      "request": null,
+      "success": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "result": {
+          "protocolVersion": 1,
+          "roomId": "room_01JARENAEXAMPLE",
+          "roomEpoch": "epoch_01JARENA",
+          "self": {
+            "userId": "user-host",
+            "role": "host",
+            "displayName": "房主😀 \"第一队\"",
+            "membershipState": "active"
+          },
+          "snapshot": {
+            "protocolVersion": 1,
+            "schemaVersion": 1,
+            "roomId": "room_01JARENAEXAMPLE",
+            "roomEpoch": "epoch_01JARENA",
+            "controlSeq": 24,
+            "revision": 7,
+            "sharedConfig": {
+              "battleMode": "scenario",
+              "reportFormat": "markdown",
+              "combatants": [
+                {
+                  "key": "data-card:character-001",
+                  "ref": {
+                    "id": "character-001",
+                    "kind": "character",
+                    "versionToken": "v2026-08-22-001"
+                  },
+                  "characterGuidance": "优先保护队友"
+                },
+                {
+                  "key": "host-local:character-opaque-1",
+                  "displayName": "房主本地角色",
+                  "type": "magical-girl",
+                  "source": "host-local",
+                  "characterGuidance": "保持谨慎"
+                }
+              ],
+              "teams": [
+                {
+                  "key": "team-alpha",
+                  "displayName": "第一队",
+                  "combatantKeys": [
+                    "data-card:character-001"
+                  ]
+                }
+              ],
+              "scenario": {
+                "key": "data-card:scenario-001",
+                "ref": {
+                  "id": "scenario-001",
+                  "kind": "scenario",
+                  "versionToken": "v2026-08-22-scenario-001"
+                }
+              },
+              "auxScenarios": [
+                {
+                  "key": "data-card:scenario-aux-001",
+                  "ref": {
+                    "id": "scenario-aux-001",
+                    "kind": "scenario",
+                    "versionToken": "v2026-08-22-scenario-aux-001"
+                  }
+                }
+              ],
+              "materials": [
+                {
+                  "key": "data-card:material-001",
+                  "ref": {
+                    "id": "material-001",
+                    "kind": "material",
+                    "versionToken": "v2026-08-22-material-001"
+                  }
+                }
+              ],
+              "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+              "storyLength": "standard",
+              "customStoryLength": null,
+              "selectedLanguage": "zh-CN",
+              "historySettings": {
+                "readArenaHistory": true,
+                "readArenaHistoryLimit": 3,
+                "isArenaHistoryUnlimited": false,
+                "writeArenaHistory": true,
+                "readCurrentState": true,
+                "writeCurrentState": true,
+                "readNarrativeHistory": false,
+                "readNarrativeHistoryLimit": 10,
+                "isNarrativeHistoryUnlimited": false,
+                "writeNarrativeHistory": false
+              }
+            },
+            "members": [
+              {
+                "userId": "user-host",
+                "role": "host",
+                "displayName": "房主😀 \"第一队\"",
+                "membershipState": "active"
+              },
+              {
+                "userId": "user-member",
+                "role": "member",
+                "displayName": "成员",
+                "membershipState": "active"
+              }
+            ],
+            "proposals": [],
+            "activeGeneration": null
+          }
+        }
+      },
+      "error": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "error": {
+          "code": "ROOM_RATE_LIMITED",
+          "message": "房间请求过于频繁，请稍后重试。",
+          "outcome": "not-applicable",
+          "retryAfterSeconds": 3
+        }
+      }
+    },
+    "ticket": {
+      "method": "POST",
+      "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/ticket",
+      "request": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "expectedUserId": 42
+        },
+        "request": {
+          "reconnect": {
+            "control": {
+              "roomEpoch": "epoch_01JARENA",
+              "controlSeq": 24
+            }
+          }
+        }
+      },
+      "success": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "result": {
+          "protocolVersion": 1,
+          "ticket": "synthetic-one-time-ticket-for-contract-tests",
+          "expiresInSeconds": 45,
+          "websocket": {
+            "path": "/api/arena/rooms/v1/ws",
+            "protocol": "mahoshojo.arena-room.v1"
+          }
+        }
+      },
+      "error": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "error": {
+          "code": "ROOM_RATE_LIMITED",
+          "message": "房间请求过于频繁，请稍后重试。",
+          "outcome": "not-applied",
+          "retryAfterSeconds": 3
+        }
+      }
+    },
+    "leave": {
+      "method": "POST",
+      "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/leave",
+      "request": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "expectedUserId": 42
+        },
+        "request": {
+          "expectedRoomEpoch": "epoch_01JARENA"
+        }
+      },
+      "success": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "result": {
+          "protocolVersion": 1,
+          "roomId": "room_01JARENAEXAMPLE",
+          "outcome": "left"
+        }
+      },
+      "error": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "error": {
+          "code": "ROOM_RATE_LIMITED",
+          "message": "房间请求过于频繁，请稍后重试。",
+          "outcome": "not-applied",
+          "retryAfterSeconds": 3
+        }
+      }
+    },
+    "close": {
+      "method": "POST",
+      "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/close",
+      "request": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "expectedUserId": 42
+        },
+        "request": {
+          "expectedRoomEpoch": "epoch_01JARENA"
+        }
+      },
+      "success": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "result": {
+          "protocolVersion": 1,
+          "roomId": "room_01JARENAEXAMPLE",
+          "outcome": "closed"
+        }
+      },
+      "error": {
+        "desktopRoom": {
+          "version": "desktop-room-session-v1",
+          "viewerUserId": 42
+        },
+        "error": {
+          "code": "ROOM_RATE_LIMITED",
+          "message": "房间请求过于频繁，请稍后重试。",
+          "outcome": "not-applied",
+          "retryAfterSeconds": 3
+        }
+      }
+    }
+  },
+  "createResumeOnlyRequest": {
+    "desktopRoom": {
+      "version": "desktop-room-session-v1",
+      "expectedUserId": 42,
+      "createMode": "resume-only"
+    },
+    "request": {
+      "creationRequestId": "desktop-create-0001",
+      "displayName": "房主😀 \"第一队\"",
+      "directory": {
+        "title": "多人房间😀",
+        "visibility": "public"
+      },
+      "sharedConfig": {
+        "battleMode": "scenario",
+        "combatants": [
+          {
+            "key": "data-card:character-001",
+            "ref": {
+              "id": "character-001",
+              "kind": "character",
+              "versionToken": "v2026-08-22-001"
+            },
+            "characterGuidance": "优先保护队友"
+          },
+          {
+            "key": "host-local:character-opaque-1",
+            "displayName": "房主本地角色",
+            "type": "magical-girl",
+            "source": "host-local",
+            "characterGuidance": "保持谨慎"
+          }
+        ],
+        "teams": [
+          {
+            "key": "team-alpha",
+            "displayName": "第一队",
+            "combatantKeys": [
+              "data-card:character-001"
+            ]
+          }
+        ],
+        "scenario": {
+          "key": "data-card:scenario-001",
+          "ref": {
+            "id": "scenario-001",
+            "kind": "scenario",
+            "versionToken": "v2026-08-22-scenario-001"
+          }
+        },
+        "auxScenarios": [
+          {
+            "key": "data-card:scenario-aux-001",
+            "ref": {
+              "id": "scenario-aux-001",
+              "kind": "scenario",
+              "versionToken": "v2026-08-22-scenario-aux-001"
+            }
+          }
+        ],
+        "materials": [
+          {
+            "key": "data-card:material-001",
+            "ref": {
+              "id": "material-001",
+              "kind": "material",
+              "versionToken": "v2026-08-22-material-001"
+            }
+          }
+        ],
+        "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+        "storyLength": "standard",
+        "customStoryLength": null,
+        "selectedLanguage": "zh-CN",
+        "historySettings": {
+          "readArenaHistory": true,
+          "readArenaHistoryLimit": 3,
+          "isArenaHistoryUnlimited": false,
+          "writeArenaHistory": true,
+          "readCurrentState": true,
+          "writeCurrentState": true,
+          "readNarrativeHistory": false,
+          "readNarrativeHistoryLimit": 10,
+          "isNarrativeHistoryUnlimited": false,
+          "writeNarrativeHistory": false
+        },
+        "reportFormat": "markdown"
+      }
+    }
+  },
+  "unpairedOwnerMismatch": {
+    "desktopRoom": {
+      "version": "desktop-room-session-v1",
+      "viewerUserId": null
+    },
+    "error": {
+      "code": "ROOM_DESKTOP_OWNER_MISMATCH",
+      "message": "登录身份已变化，请重新进入房间",
+      "outcome": "not-applied"
+    }
+  },
+  "boundaryExamples": {
+    "sessionWith32Members": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "result": {
+        "protocolVersion": 1,
+        "roomId": "room_01JARENAEXAMPLE",
+        "roomEpoch": "epoch_01JARENA",
+        "self": {
+          "userId": "user-host",
+          "role": "host",
+          "displayName": "房主😀 \"第一队\"",
+          "membershipState": "active"
+        },
+        "snapshot": {
+          "protocolVersion": 1,
+          "schemaVersion": 1,
+          "roomId": "room_01JARENAEXAMPLE",
+          "roomEpoch": "epoch_01JARENA",
+          "revision": 7,
+          "controlSeq": 24,
+          "sharedConfig": {
+            "battleMode": "scenario",
+            "combatants": [
+              {
+                "key": "data-card:character-001",
+                "ref": {
+                  "id": "character-001",
+                  "kind": "character",
+                  "versionToken": "v2026-08-22-001"
+                },
+                "characterGuidance": "优先保护队友"
+              },
+              {
+                "key": "host-local:character-opaque-1",
+                "displayName": "房主本地角色",
+                "type": "magical-girl",
+                "source": "host-local",
+                "characterGuidance": "保持谨慎"
+              }
+            ],
+            "teams": [
+              {
+                "key": "team-alpha",
+                "displayName": "第一队",
+                "combatantKeys": [
+                  "data-card:character-001"
+                ]
+              }
+            ],
+            "scenario": {
+              "key": "data-card:scenario-001",
+              "ref": {
+                "id": "scenario-001",
+                "kind": "scenario",
+                "versionToken": "v2026-08-22-scenario-001"
+              }
+            },
+            "auxScenarios": [
+              {
+                "key": "data-card:scenario-aux-001",
+                "ref": {
+                  "id": "scenario-aux-001",
+                  "kind": "scenario",
+                  "versionToken": "v2026-08-22-scenario-aux-001"
+                }
+              }
+            ],
+            "materials": [
+              {
+                "key": "data-card:material-001",
+                "ref": {
+                  "id": "material-001",
+                  "kind": "material",
+                  "versionToken": "v2026-08-22-material-001"
+                }
+              }
+            ],
+            "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+            "storyLength": "standard",
+            "customStoryLength": null,
+            "selectedLanguage": "zh-CN",
+            "historySettings": {
+              "readArenaHistory": true,
+              "readArenaHistoryLimit": 3,
+              "isArenaHistoryUnlimited": false,
+              "writeArenaHistory": true,
+              "readCurrentState": true,
+              "writeCurrentState": true,
+              "readNarrativeHistory": false,
+              "readNarrativeHistoryLimit": 10,
+              "isNarrativeHistoryUnlimited": false,
+              "writeNarrativeHistory": false
+            },
+            "reportFormat": "markdown"
+          },
+          "members": [
+            {
+              "userId": "user-host",
+              "role": "host",
+              "displayName": "房主😀 \"第一队\"",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-1",
+              "role": "member",
+              "displayName": "成员 1",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-2",
+              "role": "member",
+              "displayName": "成员 2",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-3",
+              "role": "member",
+              "displayName": "成员 3",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-4",
+              "role": "member",
+              "displayName": "成员 4",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-5",
+              "role": "member",
+              "displayName": "成员 5",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-6",
+              "role": "member",
+              "displayName": "成员 6",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-7",
+              "role": "member",
+              "displayName": "成员 7",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-8",
+              "role": "member",
+              "displayName": "成员 8",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-9",
+              "role": "member",
+              "displayName": "成员 9",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-10",
+              "role": "member",
+              "displayName": "成员 10",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-11",
+              "role": "member",
+              "displayName": "成员 11",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-12",
+              "role": "member",
+              "displayName": "成员 12",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-13",
+              "role": "member",
+              "displayName": "成员 13",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-14",
+              "role": "member",
+              "displayName": "成员 14",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-15",
+              "role": "member",
+              "displayName": "成员 15",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-16",
+              "role": "member",
+              "displayName": "成员 16",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-17",
+              "role": "member",
+              "displayName": "成员 17",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-18",
+              "role": "member",
+              "displayName": "成员 18",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-19",
+              "role": "member",
+              "displayName": "成员 19",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-20",
+              "role": "member",
+              "displayName": "成员 20",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-21",
+              "role": "member",
+              "displayName": "成员 21",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-22",
+              "role": "member",
+              "displayName": "成员 22",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-23",
+              "role": "member",
+              "displayName": "成员 23",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-24",
+              "role": "member",
+              "displayName": "成员 24",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-25",
+              "role": "member",
+              "displayName": "成员 25",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-26",
+              "role": "member",
+              "displayName": "成员 26",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-27",
+              "role": "member",
+              "displayName": "成员 27",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-28",
+              "role": "member",
+              "displayName": "成员 28",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-29",
+              "role": "member",
+              "displayName": "成员 29",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-30",
+              "role": "member",
+              "displayName": "成员 30",
+              "membershipState": "active"
+            },
+            {
+              "userId": "member-31",
+              "role": "member",
+              "displayName": "成员 31",
+              "membershipState": "active"
+            }
+          ],
+          "proposals": [],
+          "activeGeneration": null
+        }
+      }
+    },
+    "directoryWith50Items": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "result": {
+        "items": [
+          {
+            "roomId": "room-0",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-1",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-2",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-3",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-4",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-5",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-6",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-7",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-8",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-9",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-10",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-11",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-12",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-13",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-14",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-15",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-16",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-17",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-18",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-19",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-20",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-21",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-22",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-23",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-24",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-25",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-26",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-27",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-28",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-29",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-30",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-31",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-32",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-33",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-34",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-35",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-36",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-37",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-38",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-39",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-40",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-41",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-42",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-43",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-44",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-45",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-46",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-47",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-48",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          },
+          {
+            "roomId": "room-49",
+            "title": "多人房间😀",
+            "visibility": "public",
+            "status": "open",
+            "createdAt": "2026-10-12T00:00:00.000Z",
+            "lastActivityAt": "2026-10-12T00:01:00.000Z",
+            "hostDisplayName": "房主😀 \"第一队\"",
+            "memberCount": 2,
+            "memberLimit": 32
+          }
+        ],
+        "nextCursor": "next-page"
+      }
+    }
+  }
+}

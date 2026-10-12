@@ -142,7 +142,9 @@
     "./battle-report-history": "./src/battle-report-history.ts",
     "./fixtures/battle-report-history.json": "./fixtures/battle-report-history.json",
     "./public-ranking": "./src/public-ranking.ts",
-    "./fixtures/public-ranking.json": "./fixtures/public-ranking.json"
+    "./fixtures/public-ranking.json": "./fixtures/public-ranking.json",
+    "./desktop-room-session": "./src/desktop-room-session.ts",
+    "./fixtures/desktop-room-session.json": "./fixtures/desktop-room-session.json"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

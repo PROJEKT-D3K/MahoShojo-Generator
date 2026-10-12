@@ -944,3 +944,50 @@ describe('Arena Room membership service', () => {
     });
   });
 });
+
+
+describe('Desktop resume-only creation receipt boundary', () => {
+  it.each(['missing', 'expired', 'closed', 'body-mismatch', 'owner-mismatch'] as const)(
+    '%s receipt never reaches actor creation', async (scenario) => {
+      const { service, store, registry } = createHarness();
+      const input = {
+        accountUserId: 101,
+        creationRequestId: 'desktop-resume-original-1',
+        displayName: 'Host',
+        directory: { title: 'Original room', visibility: 'unlisted' as const },
+        sharedConfig: createArenaRoomState().snapshot.sharedConfig,
+      };
+      if (scenario !== 'missing') await service.create(input);
+      // Simulate a TTL-expired/missing receipt at the actual service port; no Redis timer claim.
+      if (scenario === 'expired') store.receipts.clear();
+      if (scenario === 'closed') {
+        await service.close({ roomId: 'room-1', accountUserId: 101, expectedRoomEpoch: 'epoch-1' });
+      }
+      const create = vi.spyOn(registry, 'create');
+      await expect(service.create({
+        ...input,
+        requireExistingCreationReceipt: true,
+        ...(scenario === 'body-mismatch' ? { displayName: 'Changed intent' } : {}),
+        ...(scenario === 'owner-mismatch' ? { accountUserId: 202 } : {}),
+      })).rejects.toMatchObject({ code: 'ROOM_CREATION_REQUEST_CONFLICT' });
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('matching live receipt resolves the original room without actor creation', async () => {
+    const { service, registry } = createHarness();
+    const input = {
+      accountUserId: 101,
+      creationRequestId: 'desktop-resume-original-1',
+      displayName: 'Host',
+      directory: { title: 'Original room', visibility: 'unlisted' as const },
+      sharedConfig: createArenaRoomState().snapshot.sharedConfig,
+    };
+    const original = await service.create(input);
+    const create = vi.spyOn(registry, 'create');
+    const recovered = await service.create({ ...input, requireExistingCreationReceipt: true });
+    expect(recovered.roomId).toBe(original.roomId);
+    expect(recovered.member.userId).toBe(original.member.userId);
+    expect(create).not.toHaveBeenCalled();
+  });
+});
