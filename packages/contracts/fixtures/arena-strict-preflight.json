@@ -1,0 +1,71 @@
+{
+  "path": "/api/arena/strict-preflight",
+  "maxBytes": 65536,
+  "request": {
+    "expectedUserId": 42,
+    "body": {
+      "battleMode": "classic",
+      "language": "zh-CN",
+      "storyLength": "default",
+      "scenarioEnabled": false,
+      "scenarioFileName": null,
+      "auxScenarioCount": 0,
+      "materialCount": 0,
+      "questionnaireLoreEnabled": false,
+      "questionnaireLoreIds": [],
+      "settings": {
+        "userGuidance": "",
+        "readArenaHistory": false,
+        "readCurrentState": false,
+        "readNarrativeHistory": false
+      },
+      "combatants": [
+        {
+          "isPreset": false,
+          "filename": null,
+          "sourceDataCardId": "card-a",
+          "characterGuidance": null
+        },
+        {
+          "isPreset": false,
+          "filename": null,
+          "sourceDataCardId": "card-b",
+          "characterGuidance": null
+        }
+      ],
+      "adjudicationEventCount": 0
+    }
+  },
+  "response": {
+    "success": true,
+    "preflightVersion": "desktop-strict-preflight-v1",
+    "viewerUserId": 42,
+    "willCount": true,
+    "reasons": [],
+    "range": {
+      "absDiff": 25,
+      "maxAbsDiff": 200,
+      "exceededBy": 0,
+      "aRating": 1025,
+      "bRating": 1000,
+      "aGames": 7,
+      "bGames": 8,
+      "lowGamesTightened": false
+    },
+    "daily": {
+      "used": 1,
+      "limit": 20,
+      "exceeded": false,
+      "sinceIso": "2026-10-12T00:00:00.000Z"
+    },
+    "pair": {
+      "used": 0,
+      "limit": 3,
+      "exceeded": false,
+      "recentDeduped": false,
+      "recentAppliedAtIso": null,
+      "nextEligibleAtIso": null,
+      "windowMinutes": 60
+    }
+  }
+}

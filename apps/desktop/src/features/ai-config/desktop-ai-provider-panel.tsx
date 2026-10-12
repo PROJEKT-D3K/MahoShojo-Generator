@@ -29,21 +29,24 @@ export interface DesktopAiProviderPanelProps {
   /** Optional page owner hook; the panel never installs a second native close guard. */
   onDirtyChange?: (dirty: boolean) => void;
   showConnectionTest?: boolean;
+  /** Temporary page-owned lock; ordinary configuration remains untouched. */
+  executionConstraint?: { location: 'server'; reason: string };
 }
 
-export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDirtyChange, showConnectionTest = true }: DesktopAiProviderPanelProps) => {
+export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDirtyChange, showConnectionTest = true, executionConstraint }: DesktopAiProviderPanelProps) => {
   const { state, store } = useDesktopAiConfig();
   const router = useRouter();
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [customModel, setCustomModel] = useState(false);
-  const target = resolveDesktopAiTarget(state.selection, state.profiles, state.generationOverrides, state.modelsByProfileId, state.presetsByProviderId);
-  const identity = selectedProviderTarget(state.selection);
+  const selection = executionConstraint ? { ...state.selection, executionPreference: executionConstraint.location } : state.selection;
+  const target = resolveDesktopAiTarget(selection, state.profiles, state.generationOverrides, state.modelsByProfileId, state.presetsByProviderId);
+  const identity = selectedProviderTarget(selection);
   const preset = target.preset;
   const profile = target.profile;
   const isSystem = identity?.kind === 'system';
-  const disabled = state.overlayState !== 'ready' || state.generationActive || state.savingCredential || state.savingConnection || state.deletingConnection;
+  const disabled = !!executionConstraint || state.overlayState !== 'ready' || state.generationActive || state.savingCredential || state.savingConnection || state.deletingConnection;
   const presetId = identity?.kind === 'preset' ? identity.providerId : null;
   const keyDraft = presetId ? store.getPresetKeyDraft(presetId) : '';
   const identityKey = JSON.stringify(identity);
@@ -52,7 +55,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
   useEffect(() => { setCustomModel(false); setError(null); }, [identityKey, target.location]);
   useEffect(() => { if (presetId) void store.refreshPresetSecret(presetId); }, [presetId, store]);
 
-  const act = (fn: () => void) => { try { fn(); setError(null); } catch (cause) { setError(cause instanceof Error ? cause.message : '配置更新失败'); } };
+  const act = (fn: () => void) => { if (disabled) return; try { fn(); setError(null); } catch (cause) { setError(cause instanceof Error ? cause.message : '配置更新失败'); } };
   const closeEditing = () => { setEditing(null); setEditorDirty(false); };
   const confirmDiscardEditing = () => !editorDirty || window.confirm('连接配置有未保存的更改（包括已输入的 API Key），确认放弃？');
   const openEditor = (next: EditingState) => { if (confirmDiscardEditing()) setEditing(next); };
@@ -84,15 +87,16 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
   const capabilities = scope && target.modelId ? getModelGenerationCapabilities(scope, target.modelId) : undefined;
   const status = presetId ? state.presetSecretStatus[presetId] : profile ? state.secretStatus[profile.id] : undefined;
   const statusLabel = status === 'present' ? '已配置 API Key' : status === 'error' ? '凭据状态读取失败' : status === 'absent' ? '尚未配置 API Key' : '正在确认凭据状态';
-  const asyncAct = (fn: () => Promise<void>) => { void fn().then(() => setError(null)).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : '凭据操作失败')); };
+  const asyncAct = (fn: () => Promise<void>) => { if (disabled) return; void fn().then(() => setError(null)).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : '凭据操作失败')); };
 
-  return <>
+  return <fieldset disabled={disabled} className="min-w-0 border-0 p-0">
     <AiExecutionLocationField value={target.location} client={{ enabled: !disabled }} server={{ enabled: !disabled }} onChange={(location) => act(() => {
       if (!confirmDiscardEditing()) return;
       // 易失 Key 按预设身份保留，切换位置或供应商不会转移给另一目标。
       store.selectExecutionLocation(location);
       closeEditing();
     })} />
+    {executionConstraint ? <p role="status" className="text-xs">{executionConstraint.reason} 退出严格排位准备后可调整 AI 配置。</p> : null}
     {controlsSlot}
     <AiProviderSelectorForm
       label="AI 提供商"
@@ -112,6 +116,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
           ...(!management ? [{ id: 'manage', label: '管理连接（打开设置）' }] : []),
         ]}
         onAction={(id) => {
+          if (disabled) return;
           if (id === 'new') openNew();
           if (id === 'edit') openEdit();
           if (id === 'copy') copyPreset();
@@ -149,8 +154,8 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
     >
       {showConnectionTest && profile && target.mode && <ConnectionTestSection target={target} />}
     </AiProviderSelectorForm>
-    {(error || state.modelInputError) && <p role="alert">{error ?? state.modelInputError}</p>}
+    {(error || (!executionConstraint && state.modelInputError)) && <p role="alert">{error ?? state.modelInputError}</p>}
     {target.unavailableReason && <p role="status">{target.unavailableReason}</p>}
-    {editing && <ConnectionEditor editing={editing} existingSecretKnown={state.secretStatus[editing.draft.id] === 'present'} saving={state.savingConnection || state.generationActive} saveLabel={editing.isExisting ? '保存连接' : '保存并使用'} onCancel={closeEditing} onDirtyChange={setEditorDirty} onSave={async (draft) => { await saveConnectionDraft(store, draft, { activate: !editing.isExisting }); closeEditing(); }} />}
-  </>;
+    {editing && <ConnectionEditor editing={editing} existingSecretKnown={state.secretStatus[editing.draft.id] === 'present'} saving={state.savingConnection || state.generationActive} saveLabel={editing.isExisting ? '保存连接' : '保存并使用'} onCancel={closeEditing} onDirtyChange={setEditorDirty} onSave={async (draft) => { if (disabled) throw new Error('当前 AI 配置已锁定，请先退出严格排位准备或等待当前操作完成。'); await saveConnectionDraft(store, draft, { activate: !editing.isExisting }); closeEditing(); }} />}
+  </fieldset>;
 };

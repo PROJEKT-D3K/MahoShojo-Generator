@@ -85,6 +85,7 @@ pub mod ipc {
     paths += sorted((PRODUCT / "src/cloud").glob("*.rs"))
     paths += [ROOT / "packages/contracts/fixtures/battle-report-history.json",
               ROOT / "packages/contracts/fixtures/public-ranking.json",
+              ROOT / "packages/contracts/fixtures/arena-strict-preflight.json",
               PRODUCT / "src/lib.rs", PRODUCT / "build.rs", PRODUCT / "capabilities/main-ui.json"]
     paths += sorted((PRODUCT / "src/generated").glob("*.json"))
     paths += sorted((ROOT / "packages/contracts/fixtures").glob("desktop-story-*.json"))

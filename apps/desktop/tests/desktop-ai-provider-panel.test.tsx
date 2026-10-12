@@ -551,3 +551,28 @@ describe('DesktopAiProviderPanel', () => {
     expect(container.textContent).not.toContain('编辑连接');
   });
 });
+
+describe('temporary Strict execution panel lock', () => {
+  it('shows the effective server target and freezes advanced controls and an already open editor without changing ordinary config', async () => {
+    await mount();
+    await act(async () => button('高级生成设置')!.click()); await settle();
+    await act(async () => triggers()[0]!.click()); await settle();
+    await act(async () => button('编辑「一号」')!.click()); await settle();
+    expect(container.textContent).toContain('编辑连接');
+    const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+    await act(async () => root.render(<StrictMode><DesktopAiProviderPanel generationMode="non-stream" copy={copy} executionConstraint={{ location: 'server', reason: '严格排位锁定' }} /></StrictMode>));
+    expect(container.textContent).toContain('使用系统默认配置'); expect(container.textContent).toContain('严格排位锁定');
+    const numeric = container.querySelector<HTMLInputElement>('input[type="number"]')!;
+    expect(numeric).toBeTruthy(); expect(numeric.matches(':disabled')).toBe(true);
+    expect(button('保存连接')!.matches(':disabled')).toBe(true);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(numeric, '0.8');
+      numeric.dispatchEvent(new Event('input', { bubbles: true })); button('保存连接')!.click();
+    });
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before); expect(mocks.saveProfile).not.toHaveBeenCalled();
+    await act(async () => root.render(<StrictMode><DesktopAiProviderPanel generationMode="non-stream" copy={copy} /></StrictMode>));
+    expect(getDesktopAiConfigStore().getSnapshot().selection).toMatchObject({ executionPreference: 'client', clientTarget: { kind: 'custom', profileId: 'p1' } });
+    expect(container.textContent).toContain('接收方：http://127.0.0.1:11434/v1'); expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+    expect(button('保存连接')!.matches(':disabled')).toBe(false);
+  });
+});

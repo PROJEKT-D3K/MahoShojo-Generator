@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import { SCENARIO_PRESET_LIST } from '@mahoshojo/domain/scenario-presets';
 import rankingFixture from '@mahoshojo/contracts/fixtures/public-ranking.json';
 import { StoryPendingSnapshotSchema } from '@mahoshojo/contracts/desktop-arena-story';
 import { DesktopArenaHostedRecoveryPointerSchema } from '@mahoshojo/contracts/desktop-arena-hosted';
@@ -1210,5 +1211,134 @@ describe('Desktop Direct branch routes through actual default factories', () => 
     expect(reader().getAttribute('data-story-session-id')).toBe(target);
     expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain('已保存');
     expect(received).toHaveLength(1); expect(fixture.begin).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('Desktop Strict preparation and real dispatch boundary', () => {
+  const advisory = () => ({ success: true, preflightVersion: 'desktop-strict-preflight-v1', viewerUserId: 7,
+    willCount: true, reasons: [], range: null, daily: { used: 0, limit: 10, exceeded: false, sinceIso: null },
+    pair: { used: 0, limit: 3, exceeded: false, recentDeduped: false, recentAppliedAtIso: null, nextEligibleAtIso: null, windowMinutes: 10 } });
+  const creates = () => mocks.invoke.mock.calls.filter(([command, args]) => command === 'arena_hosted_stream' && ['create-json', 'create-stream'].includes(args.request.operation));
+  const prepare = async (product: 'battle' | 'arena', presetFunding = false) => {
+    cloudAccount = { userId: 7, username: 'fixture-seven' }; window.location.hash = `#/${product}`;
+    const base = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => {
+      if (command === 'cloud_public_ranking_read') return Promise.resolve({ kind: 'seasons', data: { schemaVersion: 1, seasons: [{ id: 'S1', name: '合成赛季', status: 'current', startsAt: '2026-01-01', description: '' }] } });
+      if (command === 'cloud_arena_strict_preflight') return Promise.resolve(advisory());
+      if (command === 'arena_hosted_stream' && ['create-json', 'create-stream'].includes(args.request.operation))
+        throw { code: 'capability-unavailable', message: 'synthetic dispatch boundary', dispatchState: 'not-dispatched', intentOwnership: 'current-owned' };
+      return base(command, args, options);
+    });
+    await mount();
+    if (presetFunding) await act(async () => {
+      const store = getDesktopAiConfigStore(); store.selectExecutionLocation('server'); store.selectProviderTarget({ kind: 'preset', providerId: 'deepseek' });
+      store.selectPresetModel('deepseek', 'deepseek-chat'); store.setPresetKeyDraft('deepseek', 'synthetic-prepared-key'); store.selectExecutionLocation('client');
+    });
+    for (const index of [0, 1]) {
+      const preset = container.querySelectorAll<HTMLButtonElement>('[aria-label^="选择预设角色："]')[index]!;
+      expect(preset).toBeTruthy(); await act(async () => preset.click()); await settle();
+    }
+    const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+    const details = container.querySelector<HTMLDetailsElement>('details[aria-label="严格排位配置检查"]')!;
+    await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); }); await settle();
+    await click('一键严格设置并锁定服务器');
+    await vi.waitFor(() => expect(container.textContent).toContain('本次执行锁定为服务器'));
+    expect(getDesktopAiConfigStore().getSnapshot().selection.executionPreference).toBe('client');
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+    expect(button('客户端').disabled).toBe(true); expect(button('服务器').disabled).toBe(true);
+    expect(button('生成战报').disabled).toBe(true);
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'cloud_arena_strict_preflight')).toBe(false);
+    return before;
+  };
+  it.each(['battle', 'arena'] as const)('%s prepares the actual server target, preflights, dispatches Native Hosted only and restores preference on exit', async product => {
+    const before = await prepare(product);
+    const owner = vi.spyOn(getDesktopAiConfigStore(), 'withPreparedGeneration');
+    await click('检查服务器计分条件'); expect(button('生成战报').disabled).toBe(false);
+    await click('生成战报'); await vi.waitFor(() => expect(creates()).toHaveLength(1));
+    expect(owner.mock.calls[0]?.[1]).toEqual({ executionLocation: 'server' });
+    expect(creates()[0]![1].request).toMatchObject({ product, actor: { kind: 'account', expectedUserId: 7 }, body: { arenaFreeRankingEnabled: false, readArenaHistory: false, readCurrentState: false, combatants: [{ isPreset: true }, { isPreset: true }] } });
+    expect(calls()).toHaveLength(0); expect(received).toHaveLength(0);
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+    await click('退出严格排位准备'); expect(button('客户端').disabled).toBe(false);
+    expect(getDesktopAiConfigStore().getSnapshot().selection).toMatchObject({ executionPreference: 'client', clientTarget: { kind: 'custom', profileId: 'loopback' } });
+  });
+  it.each(['battle', 'arena'] as const)('%s persists its exact pending preset Key without invalidating its own checked dispatch', async product => {
+    const before = await prepare(product, true); await click('检查服务器计分条件');
+    expect(button('生成战报').disabled).toBe(false); await click('生成战报');
+    await vi.waitFor(() => expect(creates()).toHaveLength(1));
+    expect(creates()[0]![1].request).toMatchObject({ presetConfig: { providerId: 'deepseek', modelId: 'deepseek-chat' } });
+    expect(getDesktopAiConfigStore().getPresetKeyDraft('deepseek')).toBe('');
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'set_provider_secret')).toHaveLength(1);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_arena_strict_preflight')).toHaveLength(1);
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before); expect(calls()).toHaveLength(0);
+  });
+  it('blocks a newly authenticating account during Key preparation even before its viewer changes', async () => {
+    await prepare('battle', true); await click('检查服务器计分条件');
+    const gate = deferred<boolean>(), base = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => command === 'has_provider_secret' ? gate.promise : base(command, args, options));
+    release = () => gate.resolve(true); await click('生成战报');
+    expect(getDesktopAiConfigStore().isPreparingGeneration()).toBe(true);
+    const cloud = getDesktopCloudSessionStore(), previous = cloud.getSnapshot();
+    vi.spyOn(cloud, 'getSnapshot').mockReturnValue({ ...previous, authFlow: { kind: 'authenticating', flowId: 'new-login', authorizeUrl: 'https://example.invalid' } });
+    await act(async () => gate.resolve(true)); await settle();
+    expect(creates()).toHaveLength(0); expect(calls()).toHaveLength(0);
+  });
+  it('ignores a preflight result after account change and leaves the next account unchecked', async () => {
+    await prepare('battle'); const gate = deferred<ReturnType<typeof advisory>>(), base = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => command === 'cloud_arena_strict_preflight' ? gate.promise : base(command, args, options));
+    await click('检查服务器计分条件'); cloudAccount = { userId: 8, username: 'fixture-eight' };
+    await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+    await act(async () => gate.resolve(advisory())); await settle();
+    expect(container.textContent).not.toContain('当前服务器预检未发现计分阻断'); expect(button('生成战报').disabled).toBe(true); expect(creates()).toHaveLength(0);
+  });
+  it('rejects a same-turn server override change before the old generate handler can dispatch', async () => {
+    await prepare('battle'); await click('检查服务器计分条件');
+    const generate = button('生成战报'); expect(generate.disabled).toBe(false);
+    await act(async () => { getDesktopAiConfigStore().setGenerationOverrides('system', 'default', { temperature: 0.3 }); generate.click(); });
+    await settle(); expect(creates()).toHaveLength(0); expect(calls()).toHaveLength(0); expect(button('生成战报').disabled).toBe(true);
+  });
+  it.each(['close', 'config', 'account'] as const)('does not apply delayed public preparation after %s changes its owner', async changeKind => {
+    const filename = SCENARIO_PRESET_LIST[0]!.filename, gate = deferred<Response>(), base = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => command === 'cloud_public_ranking_read'
+      ? Promise.resolve({ kind: 'seasons', data: { schemaVersion: 1, seasons: [{ id: 'S1', name: '合成情景赛季', status: 'current', startsAt: '', description: '', specialRules: { mode: 'scenario', scenarioPresetFilename: filename } }] } })
+      : base(command, args, options));
+    const baseFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => String(input) === `/scenario-presets/${filename}` ? gate.promise : baseFetch(input, init));
+    saveDraft(draft('daily', 'non-stream')); await mount(); await click('恢复草稿');
+    const details = container.querySelector<HTMLDetailsElement>('details[aria-label="严格排位配置检查"]')!;
+    await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); }); await settle();
+    await click('一键严格设置并锁定服务器');
+    expect(container.textContent).not.toContain('退出严格排位准备');
+    await act(async () => {
+      if (changeKind === 'close') { details.open = false; details.dispatchEvent(new Event('toggle')); }
+      else if (changeKind === 'config') getDesktopAiConfigStore().setGenerationOverrides('system', 'default', { temperature: 0.6 });
+      else { const cloud = getDesktopCloudSessionStore(); vi.spyOn(cloud, 'getSnapshot').mockReturnValue({ ...cloud.getSnapshot(), account: { userId: 8, username: 'new-viewer' } }); }
+      gate.resolve(new Response(JSON.stringify({ templateId: '通用情景', title: '迟到', content: '迟到正文' })));
+    }); await settle();
+    expect(container.textContent).not.toContain('退出严格排位准备');
+    expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.battleMode).toBe('daily'); expect(creates()).toHaveLength(0);
+  });
+  it('withdraws prior success before a same-turn recheck and never dispatches on its late failure', async () => {
+    await prepare('battle'); await click('检查服务器计分条件'); expect(button('生成战报').disabled).toBe(false);
+    let reject!: (reason: unknown) => void;
+    const pending = new Promise((_resolve, fail) => { reject = fail; }), base = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => command === 'cloud_arena_strict_preflight' ? pending : base(command, args, options));
+    await act(async () => { button('检查服务器计分条件').click(); button('生成战报').click(); });
+    expect(creates()).toHaveLength(0); expect(calls()).toHaveLength(0); expect(button('生成战报').disabled).toBe(true);
+    await act(async () => reject({ code: 'network-error', message: 'synthetic read failed' })); await settle();
+    expect(button('生成战报').disabled).toBe(true); await click('生成战报'); expect(creates()).toHaveLength(0);
+  });
+  it('requires a fresh check after a guidance edit and does not use restored provenance', async () => {
+    await prepare('arena'); await click('检查服务器计分条件');
+    await change('#arena-story-guidance', '修改引导');
+    expect(button('生成战报').disabled).toBe(true);
+    await click('退出严格排位准备');
+    const key = ADVANCED_ARENA_DRAFT_KEY, saved = JSON.parse(localStorage.getItem(key)!);
+    expect(saved.draft.combatants.every((card: { desktopSource?: string }) => card.desktopSource === 'preset')).toBe(true);
+    await act(async () => root.unmount()); root = createRoot(container); await mount(); await click('恢复草稿');
+    const details = container.querySelector<HTMLDetailsElement>('details[aria-label="严格排位配置检查"]')!;
+    await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); }); await settle();
+    expect(container.textContent).toContain('线上角色身份尚未确认'); expect(container.textContent).not.toContain('退出严格排位准备');
   });
 });

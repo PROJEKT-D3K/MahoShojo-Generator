@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildStrictSetupMissingReasons, deriveSeasonStrictRules, normalizeStrictStoryGuidance, type StrictSetupInput } from '../src/arena-strict-setup';
+import { buildStrictSetupConfiguration, buildStrictSetupMissingReasons, deriveSeasonStrictRules, normalizeStrictStoryGuidance, projectStrictSetupQuestionnaires, type StrictSetupInput } from '../src/arena-strict-setup';
+import type { QuestionnaireDefinition } from '../src/questionnaire-definition';
+import type { QuestionnaireSelection } from '../src/questionnaire-selection';
 import { SCENARIO_PRESET_LIST } from '../src/scenario-presets';
 
 const ready = (): StrictSetupInput => ({
@@ -53,5 +55,100 @@ describe('shared Strict basic setup, not server eligibility', () => {
     expect(rules.questionnaireLoreAllowed).toBe(true);
     expect(normalizeStrictStoryGuidance(` ${'😀'.repeat(120)} `)).toBe(rules.storyGuidance);
     expect(deriveSeasonStrictRules({ specialRules: { mode: 'scenario', scenarioPresetFilename: 'unknown-future.json' } }).scenarioPresetFilename).toBeNull();
+  });
+});
+
+const questionnaire = (id: string, loreMarkdown = '设定'): QuestionnaireDefinition => ({
+  id, kind: 'magical-girl', title: `问卷 ${id}`, questions: [], loreMarkdown,
+});
+const projectLore = (
+  selectedQuestionnaires: QuestionnaireSelection[],
+  requiredIds: string[],
+  loaded = requiredIds.map((presetId) => ({ presetId, questionnaire: questionnaire(presetId) })),
+  allowed = true,
+) => projectStrictSetupQuestionnaires({
+  rules: { questionnaireLoreAllowed: allowed, questionnaireLorePresetIds: requiredIds },
+  selectedQuestionnaires, loadedPresets: loaded, createSelectionSuffix: () => 'unique',
+});
+
+describe('one-time Strict setup projections shared by Web and Desktop', () => {
+  it('projects only Strict configuration and keeps scenario selection under the host', () => {
+    const rules = { ...deriveSeasonStrictRules(null), mode: 'daily' as const, storyGuidance: '赛季引导' };
+    const filenames = ['a.json', 'b.json'];
+    const before = structuredClone({ rules, filenames });
+    expect(buildStrictSetupConfiguration(rules, filenames)).toEqual({
+      battleMode: 'daily', selectedLanguage: 'zh-CN',
+      settings: { userGuidance: '赛季引导', readArenaHistory: false, readCurrentState: false, readNarrativeHistory: false },
+      adjudicationEvents: [], characterGuidanceUpdates: [
+        { filename: 'a.json', characterGuidance: '' }, { filename: 'b.json', characterGuidance: '' },
+      ], clearScenario: true, clearAuxScenarios: true, clearMaterials: true,
+    });
+    expect(buildStrictSetupConfiguration({ ...rules, mode: 'scenario' }, []).clearScenario).toBe(false);
+    expect({ rules, filenames }).toEqual(before);
+  });
+
+  it('retains allowed Lore and does not alter inert selections when none is injecting', () => {
+    const selections: QuestionnaireSelection[] = [{ source: 'upload', questionnaire: questionnaire('optional') }];
+    const allowed = projectLore(selections, []);
+    expect(allowed).toEqual({ selections, changed: false, addedQuestionnaireLoreCount: 0, disabledQuestionnaireLoreCount: 0 });
+    expect(allowed.selections[0]).toBe(selections[0]);
+    const inert: QuestionnaireSelection[] = [{ source: 'database', questionnaire: questionnaire('empty', '') }];
+    expect(projectLore(inert, [], [], false)).toMatchObject({ selections: inert, changed: false });
+  });
+
+  it('disables forbidden injection while preserving questionnaire payloads and selection metadata', () => {
+    const selections: QuestionnaireSelection[] = [
+      { source: 'upload', questionnaire: questionnaire('injecting'), selectionId: 'local' },
+      { source: 'database', questionnaire: questionnaire('disabled'), useLore: false, dataCardId: 'card' },
+      { source: 'preset', questionnaire: questionnaire('no-lore', '') },
+    ];
+    const before = structuredClone(selections);
+    const projected = projectLore(selections, [], [], false);
+    expect(projected).toMatchObject({ changed: true, addedQuestionnaireLoreCount: 0, disabledQuestionnaireLoreCount: 1 });
+    expect(projected.selections.map((selection) => selection.useLore)).toEqual([false, false, false]);
+    expect(projected.selections[0]!.selectionId).toBe('local');
+    expect(projected.selections[1]).toBe(selections[1]);
+    expect(projected.selections[0]!.questionnaire).toBe(selections[0]!.questionnaire);
+    expect(selections).toEqual(before);
+  });
+
+  it('refreshes actual presets, disables duplicates and same-ID uploads, and appends only missing presets', () => {
+    const selections: QuestionnaireSelection[] = [
+      { source: 'upload', questionnaire: questionnaire('a', '同名上传'), selectionId: 'a' },
+      { source: 'preset', questionnaire: questionnaire('a', '旧预设'), selectionId: 'official-a', useLore: false },
+      { source: 'preset', questionnaire: questionnaire('a', '重复预设'), selectionId: 'duplicate-a' },
+      { source: 'database', questionnaire: questionnaire('b', '同名数据库卡'), selectionId: 'b' },
+      { source: 'preset', questionnaire: questionnaire('extra'), selectionId: 'extra' },
+    ];
+    const before = structuredClone(selections);
+    const projected = projectLore(selections, ['a', 'b', 'b']);
+    expect(projected).toMatchObject({ changed: true, addedQuestionnaireLoreCount: 1, disabledQuestionnaireLoreCount: 4 });
+    expect(projected.selections.map((selection) => [selection.source, selection.questionnaire.id, selection.selectionId, selection.useLore])).toEqual([
+      ['upload', 'a', 'a', false], ['preset', 'a', 'official-a', true], ['preset', 'a', 'duplicate-a', false],
+      ['database', 'b', 'b', false], ['preset', 'extra', 'extra', false], ['preset', 'b', 'b::season', true],
+    ]);
+    expect(projected.selections[1]!.questionnaire.loreMarkdown).toBe('设定');
+    expect(projectLore(projected.selections, ['a', 'b'])).toMatchObject({
+      selections: projected.selections, addedQuestionnaireLoreCount: 0, disabledQuestionnaireLoreCount: 0,
+    });
+    expect(selections).toEqual(before);
+  });
+
+  it('allocates new preset selection IDs without replacing colliding local selections', () => {
+    const selections: QuestionnaireSelection[] = [
+      { source: 'upload', questionnaire: questionnaire('a'), selectionId: 'a' },
+      { source: 'database', questionnaire: questionnaire('other'), selectionId: 'a::season' },
+    ];
+    expect(projectLore(selections, ['a']).selections[2]).toMatchObject({ source: 'preset', selectionId: 'a::unique', useLore: true });
+  });
+
+  it('requires loaded preset resources even if an existing selection claims the required ID or source', () => {
+    const selections: QuestionnaireSelection[] = [{ source: 'preset', questionnaire: questionnaire('required') }];
+    const before = structuredClone(selections);
+    expect(() => projectLore(selections, ['required'], [])).toThrow('未找到赛季指定的预设问卷：required');
+    expect(() => projectLore(selections, ['required'], [{ presetId: 'other', questionnaire: questionnaire('required') }])).toThrow('未找到赛季指定的预设问卷：required');
+    expect(() => projectLore(selections, ['required'], [{ presetId: 'required', questionnaire: questionnaire('different') }])).toThrow('预设问卷标识不匹配：required');
+    expect(() => projectLore(selections, ['required'], [{ presetId: 'required', questionnaire: questionnaire('required', '  ') }])).toThrow('不包含 loreMarkdown');
+    expect(selections).toEqual(before);
   });
 });

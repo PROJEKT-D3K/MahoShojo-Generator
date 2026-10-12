@@ -242,3 +242,39 @@ it('sends only a validated stable target, never a renderer endpoint or key, to t
   expect(args).not.toHaveProperty('apiKey');
   expect(args).not.toHaveProperty('baseUrl');
 });
+
+
+describe('temporary page execution constraints', () => {
+  it('prepares the server target inside the real dispatch owner without changing ordinary preference', async () => {
+    const { store, data, invoke } = await create();
+    const before = data.get(DESKTOP_AI_CONFIG_STORAGE_KEY), selection = structuredClone(store.getSnapshot().selection);
+    const run = vi.fn(async (_target: ReturnType<typeof resolved>) => undefined);
+    await store.withPreparedGeneration(run, { executionLocation: 'server' });
+    expect(run).toHaveBeenCalledOnce(); expect(run.mock.calls[0]![0]).toMatchObject({ location: 'server', providerTarget: { kind: 'system' }, modelId: 'default' });
+    expect(store.getSnapshot().selection).toEqual(selection); expect(data.get(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+    expect(invoke.mock.calls.some(([command]) => command === 'set_provider_secret')).toBe(false);
+    expect(resolved(store)).toMatchObject({ location: 'client', providerTarget: { kind: 'preset', providerId: 'deepseek' } });
+  });
+  it('requires the selected server preset credential instead of falling back to system', async () => {
+    const { store } = await create();
+    store.selectExecutionLocation('server'); store.selectProviderTarget({ kind: 'preset', providerId: 'deepseek' });
+    store.selectExecutionLocation('client');
+    const run = vi.fn(async () => undefined);
+    await expect(store.withPreparedGeneration(run, { executionLocation: 'server' })).rejects.toThrow('API Key');
+    expect(run).not.toHaveBeenCalled(); expect(store.getSnapshot().selection.executionPreference).toBe('client');
+  });
+});
+
+
+it('preserves frozen credential intent when its exact pending Key is saved, but changes it for a user replacement or clear', async () => {
+  const { store } = await create(); store.selectExecutionLocation('server'); store.selectProviderTarget({ kind: 'preset', providerId: 'deepseek' });
+  store.selectExecutionLocation('client'); store.setPresetKeyDraft('deepseek', 'synthetic-pending-key');
+  const intent = store.getCredentialIntentRevision(), draftRevision = store.getSnapshot().credentialDraftRevision;
+  const run = vi.fn(async () => { expect(store.getCredentialIntentRevision()).toBe(intent); });
+  await store.withPreparedGeneration(run, { executionLocation: 'server' });
+  expect(run).toHaveBeenCalledOnce(); expect(store.getPresetKeyDraft('deepseek')).toBe('');
+  expect(store.getSnapshot().credentialDraftRevision).toBeGreaterThan(draftRevision);
+  expect(store.getCredentialIntentRevision()).toBe(intent);
+  store.setPresetKeyDraft('deepseek', 'different-synthetic-key'); expect(store.getCredentialIntentRevision()).toBeGreaterThan(intent);
+  const replaced = store.getCredentialIntentRevision(); await store.clearPresetKey('deepseek'); expect(store.getCredentialIntentRevision()).toBeGreaterThan(replaced);
+});

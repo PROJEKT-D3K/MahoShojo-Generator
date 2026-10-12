@@ -179,6 +179,9 @@ export class DesktopAiConfigStore {
   private readonly presetProbeEpoch = new Map<string, number>();
   private readonly presetKeyDrafts = new Map<string, string>();
   private generationEpoch = 0;
+  // User credential intent, unlike draft cleanup after persisting that exact Key.
+  private credentialIntentRevision = 0;
+  getCredentialIntentRevision = (): number => this.credentialIntentRevision;
   private preparing = false;
   private profilesPromise: Promise<void> | null = null;
   /** 已确认删除会推进版本，拒绝删除前启动的读取回填旧 Profile。 */
@@ -494,6 +497,7 @@ export class DesktopAiConfigStore {
   setPresetKeyDraft = (providerId: string, value: string): void => {
     if (this.state.generationActive || this.state.savingCredential) throw new Error('生成期间请勿更换凭据');
     this.presetKeyDrafts.set(providerId, value);
+    this.credentialIntentRevision += 1;
     this.publish({ credentialDraftRevision: this.state.credentialDraftRevision + 1 });
   };
   private setPresetStatus(providerId: string, status: DesktopSecretPresence): void {
@@ -543,6 +547,7 @@ export class DesktopAiConfigStore {
   }
   clearPresetKey = async (providerId: string): Promise<void> => {
     if (this.state.generationActive || this.state.savingCredential) throw new Error('生成期间请勿清除凭据');
+    this.credentialIntentRevision += 1;
     this.publish({ savingCredential: true });
     try {
       this.invalidatePresetProbe(providerId);
@@ -563,14 +568,16 @@ export class DesktopAiConfigStore {
     // 取消派发不等于撤销 native 凭据写入。写入返回前仍持有互斥锁，避免重试混用 Key。
     this.publish({ generationActive: this.state.generationActive });
   };
-  withPreparedGeneration = async (run: (target: ResolvedDesktopAiTarget) => Promise<unknown>): Promise<void> => {
+  withPreparedGeneration = async (run: (target: ResolvedDesktopAiTarget) => Promise<unknown>, constraint?: { executionLocation: 'server' }): Promise<void> => {
     if (this.state.generationActive) return;
     if (!this.overlayWritable) throw new Error('AI 配置尚未就绪');
     if (this.state.savingCredential) throw new Error('凭据正在保存，请稍后生成');
     if (this.saveConnectionInFlight) throw new Error('连接正在保存，请稍后生成');
     if (this.state.deletingConnection) throw new Error('连接正在删除，请稍后生成');
-    if (this.state.modelInputError) throw new Error(this.state.modelInputError);
-    const target = resolveDesktopAiTarget(this.state.selection, this.state.profiles, this.state.generationOverrides, this.state.modelsByProfileId, this.state.presetsByProviderId);
+    if (this.state.modelInputError && (!constraint || this.state.selection.executionPreference === 'server')) throw new Error(this.state.modelInputError);
+    // A page constraint changes this dispatch only, never the persisted ordinary preference.
+    const selection = constraint ? { ...this.state.selection, executionPreference: constraint.executionLocation } : this.state.selection;
+    const target = resolveDesktopAiTarget(selection, this.state.profiles, this.state.generationOverrides, this.state.modelsByProfileId, this.state.presetsByProviderId);
     if (target.unavailableReason || !target.providerTarget) throw new Error(target.unavailableReason ?? '请选择供应商');
     const epoch = ++this.generationEpoch;
     this.preparing = true;

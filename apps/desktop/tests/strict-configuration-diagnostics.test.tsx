@@ -7,7 +7,9 @@ import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { SCENARIO_PRESET_LIST } from '@mahoshojo/domain/scenario-presets';
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, Channel: class {} }));
-import { DesktopStrictConfigurationDiagnostics } from '../src/features/arena/strict-configuration-diagnostics';
+import { resolveDesktopAiTarget } from '../src/features/ai-config/desktop-ai-config';
+import type { DesktopStrictPreflightResponse } from '@mahoshojo/contracts/arena-strict-preflight';
+import { DesktopStrictConfigurationDiagnostics, type DesktopStrictJourney } from '../src/features/arena/strict-configuration-diagnostics';
 import { describeDesktopStrictSetup, type DesktopStrictSetupInput } from '../src/features/arena/strict-setup';
 import { createInitialArenaDraft } from '../src/features/arena/session';
 
@@ -15,7 +17,7 @@ const season: PublicSeasonMeta = { id: 'S1', name: '合成赛季', status: 'curr
 const reply = (seasons: PublicSeasonMeta[] = [season]) => ({ kind: 'seasons', data: { schemaVersion: 1, seasons } satisfies PublicSeasonsConfig });
 const input = (): DesktopStrictSetupInput => {
   const draft = createInitialArenaDraft();
-  return { draft: { ...draft, combatants: PRESET_LIST.slice(0, 2).map((preset) => ({ type: 'general-character', data: { name: '角色' }, isValid: false, isPreset: true, filename: preset.filename })),
+  return { draft: { ...draft, combatants: PRESET_LIST.slice(0, 2).map((preset) => ({ type: 'general-character', data: { name: '角色' }, isValid: false, isPreset: true, desktopSource: 'preset' as const, filename: preset.filename })),
     settings: { ...draft.settings, readArenaHistory: false, readCurrentState: false, readNarrativeHistory: false } },
   isAuthenticated: true, executionLocation: 'server', modelId: 'default', modelUnavailable: false, adjudicationEventCount: 0 };
 };
@@ -140,5 +142,68 @@ describe('Desktop diagnostic source projection', () => {
     expect(describeDesktopStrictSetup({ ...typed, draft: { ...typed.draft, selectedQuestionnaires: [{ ...selected[0]!, useLore: true }] } }, required).reasons).not.toContain('需启用赛季指定的「问卷/设定卡 Lore 注入」');
     const legacy = { ...props, draft: { ...props.draft, questionnaires: [{ id: 'old', loreMarkdown: '旧草稿设定' }] } };
     expect(describeDesktopStrictSetup(legacy, season).reasons).toContain('需关闭「问卷/设定卡 Lore 注入」');
+  });
+});
+
+
+const preflight = (): DesktopStrictPreflightResponse => ({ success: true, preflightVersion: 'desktop-strict-preflight-v1', viewerUserId: 7,
+  willCount: true, reasons: [], range: null, daily: { used: 0, limit: 10, exceeded: false, sinceIso: null },
+  pair: { used: 0, limit: 3, exceeded: false, recentDeduped: false, recentAppliedAtIso: null, nextEligibleAtIso: null, windowMinutes: 10 } });
+const strictJourney = (): DesktopStrictJourney => ({ active: true, disabled: false, snapshotKey: {}, expectedUserId: 7,
+  target: resolveDesktopAiTarget({ executionPreference: 'server', clientConnectionId: null }, [], {}, {}, {}),
+  isCurrent: () => true, prepare: vi.fn(async () => undefined), exit: vi.fn(), invalidate: vi.fn(), checked: vi.fn() });
+const renderJourney = (journey: DesktopStrictJourney, props = input()) => act(async () => root.render(<DesktopStrictConfigurationDiagnostics {...props} journey={journey} />));
+const findButton = (label: string) => [...container.querySelectorAll('button')].find(button => button.textContent === label)!;
+
+describe('Desktop explicit Strict server advisory', () => {
+  it('does not preflight on opening or preparation; exact explicit click freezes the minimal current request', async () => {
+    const journey = strictJourney(); journey.active = false;
+    await renderJourney(journey); await toggle(true);
+    await act(async () => findButton('一键严格设置并锁定服务器').click());
+    expect(journey.prepare).toHaveBeenCalledWith(season); expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    journey.active = true; await renderJourney(journey);
+    mocks.invoke.mockResolvedValue(preflight());
+    await act(async () => findButton('检查服务器计分条件').click());
+    expect(mocks.invoke.mock.calls.at(-1)?.[0]).toBe('cloud_arena_strict_preflight');
+    expect(mocks.invoke.mock.calls.at(-1)?.[1].request).toMatchObject({ expectedUserId: 7, body: { combatants: [
+      { isPreset: true, filename: PRESET_LIST[0]!.filename, sourceDataCardId: null }, { isPreset: true, filename: PRESET_LIST[1]!.filename, sourceDataCardId: null } ] } });
+    expect(JSON.stringify(mocks.invoke.mock.calls.at(-1))).not.toContain('data');
+    expect(journey.checked).toHaveBeenCalledWith({ key: journey.snapshotKey, season, result: preflight() });
+    expect(container.textContent).toContain('当前服务器预检未发现计分阻断');
+  });
+  it('coalesces immediate clicks and ignores old success after edits before the next effect', async () => {
+    const journey = strictJourney(); await renderJourney(journey); await toggle(true);
+    const pending = deferred<DesktopStrictPreflightResponse>(); mocks.invoke.mockReturnValue(pending.promise);
+    const button = findButton('检查服务器计分条件');
+    await act(async () => { button.click(); button.click(); });
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_arena_strict_preflight')).toHaveLength(1);
+    await renderJourney({ ...journey, snapshotKey: {} }, { ...input(), adjudicationEventCount: 1 });
+    await act(async () => pending.resolve(preflight()));
+    expect(journey.checked).not.toHaveBeenCalledWith(expect.objectContaining({ result: expect.anything() })); expect(container.textContent).not.toContain('当前服务器预检未发现计分阻断');
+  });
+  it('masks success on configuration changes and closing releases the old request', async () => {
+    const journey = strictJourney(); await renderJourney(journey); await toggle(true);
+    mocks.invoke.mockResolvedValue(preflight()); await act(async () => findButton('检查服务器计分条件').click());
+    await renderJourney({ ...journey, snapshotKey: {} }); expect(container.textContent).not.toContain('当前服务器预检未发现计分阻断');
+    const pending = deferred<DesktopStrictPreflightResponse>(); mocks.invoke.mockReturnValue(pending.promise);
+    await act(async () => findButton('检查服务器计分条件').click());
+    await toggle(false); await act(async () => pending.resolve(preflight()));
+    expect(journey.invalidate).toHaveBeenCalledOnce(); expect(vi.mocked(journey.checked).mock.calls.filter(([value]) => value !== null)).toHaveLength(1);
+  });
+  it('rejects same-user credential change immediately and does not publish a late failed response', async () => {
+    let current = true; const journey = { ...strictJourney(), isCurrent: () => current };
+    await renderJourney(journey); await toggle(true);
+    let reject!: (value: unknown) => void; const pending = new Promise((_resolve, fail) => { reject = fail; });
+    mocks.invoke.mockReturnValue(pending); await act(async () => findButton('检查服务器计分条件').click());
+    current = false; await act(async () => reject({ code: 'not-authenticated', message: 'old account failure' }));
+    expect(journey.checked).not.toHaveBeenCalledWith(expect.objectContaining({ result: expect.anything() })); expect(container.textContent).not.toContain('old account failure');
+  });
+  it('keeps old-server/mismatched-owner responses unavailable rather than promoting local readiness', async () => {
+    const journey = strictJourney(); await renderJourney(journey); await toggle(true);
+    const { preflightVersion: _version, ...old } = preflight(); mocks.invoke.mockResolvedValue(old);
+    await act(async () => findButton('检查服务器计分条件').click());
+    expect(journey.checked).not.toHaveBeenCalledWith(expect.objectContaining({ result: expect.anything() })); expect(container.textContent).toContain('服务器尚未提供此版本');
+    mocks.invoke.mockResolvedValue({ ...preflight(), viewerUserId: 8 }); await act(async () => findButton('检查服务器计分条件').click());
+    expect(journey.checked).not.toHaveBeenCalledWith(expect.objectContaining({ result: expect.anything() }));
   });
 });

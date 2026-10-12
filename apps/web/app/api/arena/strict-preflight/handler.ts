@@ -1,3 +1,4 @@
+import { DesktopStrictPreflightRequestSchema, STRICT_PREFLIGHT_MAX_BYTES, STRICT_PREFLIGHT_VERSION } from '@mahoshojo/contracts/arena-strict-preflight';
 import { getRequestUrl } from '@/lib/request-url';
 import type { NextRequest } from 'next/server';
 
@@ -121,7 +122,29 @@ async function handler(req: NextRequest) {
   }
 
   try {
-    const body = (await req.json()) as any;
+    const incoming = (await req.json()) as any;
+    // Legacy Web remains unchanged. Guarded Desktop callers require both an
+    // asserted owner and an explicit server receipt, so old deployments fail closed.
+    const guarded = incoming && typeof incoming === 'object' && Object.prototype.hasOwnProperty.call(incoming, 'expectedUserId');
+    let body = incoming;
+    let expectedUserId: number | null = null;
+    if (guarded) {
+      const { expectedUserId: expected, ...input } = incoming;
+      const parsed = DesktopStrictPreflightRequestSchema.safeParse({ expectedUserId: expected, body: input });
+      if (!parsed.success) return new Response(JSON.stringify({ success: false, error: '严格排位预检参数无效' } satisfies ApiErrorResponse), {
+        status: 400, headers: { 'Content-Type': 'application/json' },
+      });
+      const wire = { ...parsed.data.body, expectedUserId: parsed.data.expectedUserId };
+      if (new TextEncoder().encode(JSON.stringify(wire)).byteLength > STRICT_PREFLIGHT_MAX_BYTES) return new Response(JSON.stringify({ success: false, error: '严格排位预检输入超过传输上限' } satisfies ApiErrorResponse), {
+        status: 413, headers: { 'Content-Type': 'application/json' },
+      });
+      expectedUserId = parsed.data.expectedUserId; body = parsed.data.body;
+    }
+    const user = await createRequestAuthUserResolver(req).getUser();
+    if (guarded && (!user?.id || user.id !== expectedUserId)) return new Response(JSON.stringify({ success: false,
+      error: user?.id ? '预检账号已变化，请重新确认' : '请先登录后再检查严格排位' } satisfies ApiErrorResponse), {
+      status: user?.id ? 409 : 401, headers: { 'Content-Type': 'application/json' },
+    });
     const db = getDrizzleDbFromRuntime();
 
     const battleMode = trimString(body?.battleMode ?? body?.mode);
@@ -153,8 +176,6 @@ async function handler(req: NextRequest) {
 
     const customProvider = body?.customProvider && typeof body.customProvider === 'object' ? body.customProvider : null;
     const customModelId = trimString(customProvider?.modelId);
-
-    const user = await createRequestAuthUserResolver(req).getUser();
 
     const reasons: string[] = [];
     let range: ApiSuccessResponse['range'] = null;
@@ -273,6 +294,7 @@ async function handler(req: NextRequest) {
 
     const response: ApiSuccessResponse = {
       success: true,
+      ...(guarded ? { preflightVersion: STRICT_PREFLIGHT_VERSION, viewerUserId: user!.id } : {}),
       willCount: reasons.length === 0,
       reasons,
       range,

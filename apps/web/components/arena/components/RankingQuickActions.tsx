@@ -5,7 +5,14 @@ import { useQuery } from '@tanstack/react-query';
 
 import { AI_PROVIDER_CATALOG } from '@/lib/ai/constants';
 import { isStrictRankedModelBlacklisted } from '@/lib/arena/ranked-model-policy';
-import { buildStrictSetupMissingReasons, normalizeStrictStoryGuidance } from '@mahoshojo/domain/arena-strict-setup';
+import {
+  buildStrictSetupConfiguration,
+  formatStrictReason,
+  buildStrictSetupMissingReasons,
+  normalizeStrictStoryGuidance,
+  projectStrictSetupQuestionnaires,
+  type LoadedStrictQuestionnairePreset,
+} from '@mahoshojo/domain/arena-strict-setup';
 import { formatBattleModeLabel } from '@mahoshojo/domain/public-ranking';
 import { StrictSetupChecklist } from '@mahoshojo/ui-web/arena';
 import { authStorage } from '@/lib/auth';
@@ -106,41 +113,6 @@ const pickNonBlacklistedModelForProvider = (providerId: string): string | null =
   return firstNonBlacklisted?.value ?? null;
 };
 
-const formatStrictReason = (code: string): string => {
-  const map: Record<string, string> = {
-    'need-login': '需要先登录',
-    'mode-not-classic': '需使用「经典模式」',
-    'mode-not-season': '需使用赛季指定模式',
-    'combatant-count-not-2': '需 2 人对战',
-    'combatants-unrankable': '参战者需为数据卡/预设',
-    'season-questionnaire-lore-not-allowed': '赛季规则不允许使用「问卷/设定卡 Lore 注入」',
-    'season-questionnaire-lore-mismatch': '「问卷/设定卡 Lore 注入」不符合赛季规则',
-    'strict-card-missing': '数据卡不存在/已删除（严格排位不计分）',
-    'strict-not-character': '仅“角色”数据卡可参与严格排位计分',
-    'strict-not-public': '严格排位仅允许公开角色卡',
-    'strict-not-approved': '严格排位仅允许已审核通过的公开角色卡',
-    'strict-out-of-range': '对手分差过大（不计严格排位）',
-    'dedup-user-pair': '同一对手组合仍处于计分冷却期（严格去重）',
-    'pair-daily-limit': '同一对手组合今日计分已达上限（严格去重）',
-    'strict-check-failed': '严格计分检查失败（已降级为不计）',
-    'language-not-zh-cn': '生成语言需为「简体中文」',
-    'has-user-guidance': '需清空「故事引导」',
-    'season-user-guidance-missing': '需填写赛季指定「故事引导」',
-    'season-user-guidance-mismatch': '「故事引导」与赛季规则不一致',
-    'has-adjudication-events': '需清空「随机判定器事件」',
-    'read-arena-history': '需关闭「读取历战」',
-    'read-current-state': '需关闭「读取当前状态」',
-    'read-narrative-history': '需关闭「读取叙事历史」',
-    'has-character-guidance': '需清空「角色行动引导」',
-    'season-scenario-missing': '需选择主情景（赛季规则）',
-    'season-scenario-preset-mismatch': '主情景需为赛季指定预设',
-    'season-aux-scenarios-not-allowed': '需移除「辅助情景」（赛季规则）',
-    'has-materials': '需移除「素材」',
-    'daily-limit': '今日严格排位计分次数已达上限（按 UTC 00:00/北京时间 08:00 刷新）',
-    'ai-model-blacklisted': '选择了不支持严格排位计分的模型',
-  };
-  return map[code] ?? code;
-};
 
 const formatStrictTimeHint = (iso: string | null): string | null => {
   if (typeof iso !== 'string' || !iso.trim()) return null;
@@ -367,67 +339,26 @@ export function RankingQuickActions() {
       }
     }
 
-    setBattleMode(seasonStrictRules.mode);
-    setSelectedLanguage('zh-CN');
-    updateSettings({
-      userGuidance: seasonStrictRules.storyGuidance ? seasonStrictRules.storyGuidance : '',
-      readArenaHistory: false,
-      readCurrentState: false,
-      readNarrativeHistory: false,
-    });
-    setAdjudicationEvents([]);
-    readableCombatants.forEach((c) => updateCombatantCharacterGuidance(c.filename, ''));
-    if (seasonStrictRules.mode !== 'scenario') {
-      clearScenario();
-    }
-    clearAuxScenarios();
-    clearMaterials();
+    const configuration = buildStrictSetupConfiguration(seasonStrictRules, readableCombatants.map((combatant) => combatant.filename));
+    setBattleMode(configuration.battleMode);
+    setSelectedLanguage(configuration.selectedLanguage);
+    updateSettings(configuration.settings);
+    setAdjudicationEvents(configuration.adjudicationEvents);
+    configuration.characterGuidanceUpdates.forEach(({ filename, characterGuidance }) => updateCombatantCharacterGuidance(filename, characterGuidance));
+    if (configuration.clearScenario) clearScenario();
+    if (configuration.clearAuxScenarios) clearAuxScenarios();
+    if (configuration.clearMaterials) clearMaterials();
 
     let questionnaireAdjustmentMessage: string | null = null;
-    let disabledQuestionnaireLoreCount = 0;
-    let addedQuestionnaireLoreCount = 0;
     try {
       const requiredPresetIds = seasonStrictRules.questionnaireLorePresetIds;
+      const loadedPresets: LoadedStrictQuestionnairePreset[] = [];
       if (requiredPresetIds.length > 0) {
         const index = await fetchJson<{ presets?: QuestionnairePresetEntry[] }>('/questionnaires/presets/index.json');
         const presetEntries = Array.isArray(index?.presets) ? index.presets : [];
-        const requiredIdSet = new Set(requiredPresetIds);
-
-        const usedSelectionIds = new Set<string>();
-        selectedQuestionnaires.forEach((selection) => {
-          const key = (selection.selectionId ?? selection.questionnaire.id).trim();
-          if (key) usedSelectionIds.add(key);
-        });
-
-        const createSelectionSuffix = () => {
-          try {
-            return randomUUID();
-          } catch {
-            // ignore
-          }
-          return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-        };
-
-        const allocSelectionId = (base: string): string => {
-          const cleaned = base.trim() || 'questionnaire';
-          if (!usedSelectionIds.has(cleaned)) {
-            usedSelectionIds.add(cleaned);
-            return cleaned;
-          }
-          const pick1 = `${cleaned}::season`;
-          if (!usedSelectionIds.has(pick1)) {
-            usedSelectionIds.add(pick1);
-            return pick1;
-          }
-          const pick2 = `${cleaned}::${createSelectionSuffix()}`;
-          usedSelectionIds.add(pick2);
-          return pick2;
-        };
-
-        const requiredSelectionsById = new Map<string, BattleStoreState['selectedQuestionnaires'][number]>();
         for (const presetId of requiredPresetIds) {
           const id = presetId.trim();
-          if (!id || requiredSelectionsById.has(id)) continue;
+          if (!id || loadedPresets.some((preset) => preset.presetId === id)) continue;
           const matchedEntry = presetEntries.find((entry) => entry.id === id);
           if (!matchedEntry) throw new Error(`未找到赛季指定的预设问卷：${id}`);
           const data = await fetchJson<unknown>(matchedEntry.path);
@@ -439,68 +370,34 @@ export function RankingQuickActions() {
             nativeAllowed,
           });
           if (!normalized) throw new Error(`预设问卷解析失败：${id}`);
+          if (normalized.id !== id) throw new Error(`预设问卷标识不匹配：${id}`);
           requireLore(normalized);
-
-          const existingPresetSelection = selectedQuestionnaires.find((selection) => selection.source === 'preset' && selection.questionnaire.id === id) ?? null;
-          if (existingPresetSelection) {
-            requiredSelectionsById.set(id, { ...existingPresetSelection, questionnaire: normalized, useLore: true });
-          } else {
-            const selectionId = allocSelectionId(id);
-            requiredSelectionsById.set(id, { source: 'preset', questionnaire: normalized, useLore: true, selectionId });
-            addedQuestionnaireLoreCount += 1;
-          }
+          loadedPresets.push({ presetId: id, questionnaire: normalized });
         }
+      }
 
-        const appendedRequiredIds = new Set<string>();
-        const nextSelections = selectedQuestionnaires.map((selection) => {
-          const id = selection.questionnaire.id.trim();
-          const lore = selection.questionnaire.loreMarkdown;
-          const wasInjecting = selection.useLore !== false && typeof lore === 'string' && Boolean(lore.trim());
-
-          if (requiredIdSet.has(id) && selection.source === 'preset') {
-            if (appendedRequiredIds.has(id)) {
-              if (wasInjecting) disabledQuestionnaireLoreCount += 1;
-              return selection.useLore === false ? { ...selection, useLore: false } : { ...selection, useLore: false };
-            }
-            appendedRequiredIds.add(id);
-            const requiredSelection = requiredSelectionsById.get(id);
-            const willInject = true;
-            if (wasInjecting && !willInject) disabledQuestionnaireLoreCount += 1;
-            return requiredSelection ? requiredSelection : { ...selection, useLore: true };
+      const projection = projectStrictSetupQuestionnaires({
+        rules: seasonStrictRules,
+        selectedQuestionnaires,
+        loadedPresets,
+        createSelectionSuffix: () => {
+          try {
+            return randomUUID();
+          } catch {
+            // ignore
           }
-
-          const willInject = false;
-          if (wasInjecting && !willInject) disabledQuestionnaireLoreCount += 1;
-          return selection.useLore === false ? selection : { ...selection, useLore: false };
-        });
-
-        requiredPresetIds.forEach((presetId) => {
-          const id = presetId.trim();
-          if (!id || appendedRequiredIds.has(id)) return;
-          const selection = requiredSelectionsById.get(id);
-          if (!selection) return;
-          appendedRequiredIds.add(id);
-          nextSelections.push(selection);
-        });
-
-        setQuestionnaireSelections(nextSelections);
-
+          return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        },
+      });
+      if (projection.changed) setQuestionnaireSelections(projection.selections);
+      const { addedQuestionnaireLoreCount, disabledQuestionnaireLoreCount } = projection;
+      if (requiredPresetIds.length > 0) {
         const parts: string[] = [];
         if (addedQuestionnaireLoreCount > 0) parts.push(`已自动添加赛季问卷设定卡 ${addedQuestionnaireLoreCount} 张`);
         if (disabledQuestionnaireLoreCount > 0) parts.push(`已关闭其它设定注入 ${disabledQuestionnaireLoreCount} 张`);
         questionnaireAdjustmentMessage = parts.length > 0 ? parts.join(' / ') : null;
-      } else if (!seasonStrictRules.questionnaireLoreAllowed && questionnaireLoreEnabled) {
-        const nextSelections = selectedQuestionnaires.map((selection) => {
-          if (selection.useLore === false) return selection;
-          const lore = selection.questionnaire?.loreMarkdown;
-          const wasInjecting = typeof lore === 'string' && Boolean(lore.trim());
-          if (wasInjecting) disabledQuestionnaireLoreCount += 1;
-          return { ...selection, useLore: false };
-        });
-        setQuestionnaireSelections(nextSelections);
-        if (disabledQuestionnaireLoreCount > 0) {
-          questionnaireAdjustmentMessage = `已关闭问卷/设定卡 Lore 注入 ${disabledQuestionnaireLoreCount} 张`;
-        }
+      } else if (disabledQuestionnaireLoreCount > 0) {
+        questionnaireAdjustmentMessage = `已关闭问卷/设定卡 Lore 注入 ${disabledQuestionnaireLoreCount} 张`;
       }
     } catch (error) {
       setError(`❌ 无法应用赛季问卷/设定卡规则：${error instanceof Error ? error.message : '未知错误'}`);

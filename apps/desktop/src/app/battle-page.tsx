@@ -23,12 +23,16 @@ import { generationActionClassNames, generationSubmitClassName } from '@mahoshoj
 import { DesktopArenaSession, arenaReadinessMessage, arenaReferenceCount, inheritedArenaAdjudication, type ArenaDraft, type DesktopArenaProduct } from '../features/arena/session';
 import { buildAdjudicationSourceKey } from '@mahoshojo/domain/arena-adjudication-events';
 import { AdvancedArenaControls } from '../features/arena/advanced-controls';
-import { DesktopStrictConfigurationDiagnostics } from '../features/arena/strict-configuration-diagnostics';
+import { retainDesktopArenaSelectionSource } from '../features/arena/strict-source';
+import { prepareDesktopStrictDraft } from '../features/arena/strict-preparation';
+import { describeDesktopStrictSetup } from '../features/arena/strict-setup';
+import type { PublicSeasonMeta } from '@mahoshojo/contracts/public-ranking';
+import { DesktopStrictConfigurationDiagnostics, type DesktopStrictCheckSnapshot } from '../features/arena/strict-configuration-diagnostics';
 import { addAdvancedCombatants, addAdvancedAuxScenario, removeAdvancedCombatants, removeAdvancedAuxScenarios, setAdvancedMainScenario } from '../features/arena/advanced-input';
 import { addArenaCombatants, arenaItemName, fetchArenaPreset, moveArenaItem, parseArenaJson, parseArenaScenario, readArenaFile } from '../features/arena/input';
 import { readSublimationHistorySource, type SublimationHistorySource } from '../features/sublimation/history-source';
 import { useDesktopAiConfig } from '../features/ai-config/use-desktop-ai-config';
-import { resolveDesktopAiTarget } from '../features/ai-config/desktop-ai-config';
+import { resolveDesktopAiTarget, type ResolvedDesktopAiTarget } from '../features/ai-config/desktop-ai-config';
 import { DesktopAiProviderPanel } from '../features/ai-config/desktop-ai-provider-panel';
 import { useDesktopCloudSession } from '../features/account/use-desktop-cloud-session';
 import { useExternalLinks } from '../features/external-links/external-links-provider';
@@ -53,6 +57,7 @@ const secondary = generationActionClassNames.secondary;
 const limits = ARENA_CANONICAL_CAPABILITIES;
 type LibraryPurpose = 'character' | 'scenario' | 'auxScenario' | 'material';
 const reject = () => { throw new Error('当前页面未开放此能力。'); };
+const strictTargetIdentity = (target: ResolvedDesktopAiTarget) => JSON.stringify([target.location, target.providerTarget, target.modelId, target.generationOverrides, target.unavailableReason]);
 
 const createWebPackages = () => {
   const repository = new IpcWebPackageRepository((command, args) => invoke(command, args as never));
@@ -80,7 +85,16 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   useEffect(() => () => { if (!webPackages) packageOwner.dispose(); }, [packageOwner, webPackages]);
   const { state: aiState, store: aiStore } = useDesktopAiConfig();
   const { state: cloudState, store: cloudStore } = useDesktopCloudSession();
-  const target = resolveDesktopAiTarget(aiState.selection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId);
+  const [strictActive, setStrictActive] = useState(false);
+  const strictActiveRef = useRef(false);
+  const [strictRevision, setStrictRevision] = useState(0);
+  const [strictCheck, setStrictCheck] = useState<DesktopStrictCheckSnapshot | null>(null);
+  const strictCheckRef = useRef<DesktopStrictCheckSnapshot | null>(null);
+  const checkedStrict = useCallback((snapshot: DesktopStrictCheckSnapshot | null) => { strictCheckRef.current = snapshot; setStrictCheck(snapshot); }, []);
+  const strictPreparation = useRef<{ token: symbol; controller: AbortController } | null>(null);
+  const effectiveSelection = strictActive ? { ...aiState.selection, executionPreference: 'server' as const } : aiState.selection;
+  const target = resolveDesktopAiTarget(effectiveSelection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId);
+  const readStrictTargetIdentity = () => { const state = aiStore.getSnapshot(); return strictTargetIdentity(resolveDesktopAiTarget({ ...state.selection, executionPreference: 'server' }, state.profiles, state.generationOverrides, state.modelsByProfileId, state.presetsByProviderId)); };
   const hostedTarget = target.location === 'server';
   const hostedUnavailable = hostedTarget && !cloudState.bootstrapped ? '正在确认本机账号身份，请稍后。' : null;
   const router = useRouter(); const { openFixed, openContent } = useExternalLinks(); const libraryHost = useDesktopCardLibraryHost();
@@ -113,13 +127,23 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const referenceCount = useMemo(() => arenaReferenceCount(draft), [draft]);
   const inheritedAdjudication = useMemo(() => inheritedArenaAdjudication(draft, product), [draft, product]);
   // Do not include credential presence probes or preparing-state changes: they do not change target identity.
-  const scope = JSON.stringify({ account: cloudState.account?.userId ?? null, credentialEpoch: cloudStore.getCredentialEpoch(), selection: aiState.selection,
+  const accountCredentialEpoch = cloudStore.getCredentialEpoch();
+  const providerCredentialIntent = aiStore.getCredentialIntentRevision();
+  const scope = JSON.stringify({ account: cloudState.account?.userId ?? null, credentialEpoch: accountCredentialEpoch, strictActive, selection: aiState.selection,
     profiles: aiState.profiles, models: aiState.modelsByProfileId, presets: aiState.presetsByProviderId, overrides: aiState.generationOverrides });
+  const strictSnapshotKey = useMemo(() => ({}), [draft, scope, state.phase, state.generation, cloudState.verification, cloudState.authFlow.kind, providerCredentialIntent, strictRevision]);
+  const strictSnapshotKeyRef = useRef(strictSnapshotKey); strictSnapshotKeyRef.current = strictSnapshotKey;
+  const strictInput = { draft, executionLocation: target.location, modelId: target.modelId, modelUnavailable: !!target.unavailableReason,
+    isAuthenticated: cloudState.verification === 'verified' && !!cloudState.account ? true : cloudState.verification === 'signed-out' || cloudState.verification === 'expired' ? false : null,
+    adjudicationEventCount: inheritedAdjudication.events.length };
+  const strictReady = !strictActive || Boolean(strictCheck?.key === strictSnapshotKey && strictCheck.result.willCount && describeDesktopStrictSetup(strictInput, strictCheck.season).reasons.length === 0);
+  const invalidateStrict = () => { strictSnapshotKeyRef.current = {}; strictPreparation.current?.controller.abort(); strictPreparation.current = null; checkedStrict(null); setStrictRevision(value => value + 1); };
+
   useLayoutEffect(() => { ownerEpoch.current += 1; session.setScope(scope); packageOwner.setScope(scope); aiStore.cancelPreparingGeneration(); setError(null); setImportWarnings([]); setRecoveryHint(null); diagnosisFlight.current = null; setDiagnosing(false); }, [scope, session, aiStore, packageOwner]);
   // Resolving an initially anonymous account updates the Hosted actor without
   // cancelling unrelated Direct credential preparation at the same target scope.
   useLayoutEffect(() => { storyOwner.setExecutionScope(scope, cloudState.bootstrapped ? cloudState.account ? { kind: 'account', expectedUserId: cloudState.account.userId } : { kind: 'anonymous' } : null); }, [scope, cloudState.bootstrapped, cloudState.account?.userId, storyOwner]);
-  useEffect(() => () => { ownerEpoch.current += 1; diagnosisFlight.current = null; aiStore.cancelPreparingGeneration(); }, [aiStore]);
+  useEffect(() => () => { ownerEpoch.current += 1; diagnosisFlight.current = null; strictActiveRef.current = false; strictPreparation.current?.controller.abort(); strictPreparation.current = null; aiStore.cancelPreparingGeneration(); }, [aiStore]);
   const guard = useLeaveGuard(
     () => storyOwner.isBusy() || storyOwner.hasUnsavedResult() || Boolean(diagnosisFlight.current) || session.isBusy() || packageOwner.isBusy() || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current || packageOwner.getSnapshot().temporary.length > 0 || session.hasUnsavedDraft() || Object.values(dirtyControls.current).some(Boolean),
     '当前生成、读取或保存尚未完成，或仍有未保存的内容。',
@@ -153,6 +177,36 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     if (!guard.ready || diagnosisFlight.current || preparing.current || aiState.generationActive || packageOwner.isBusy()) throw new Error('请等待当前操作完成。');
     const epoch = ownerEpoch.current; setError(null); try { await session.importInput(load); } catch (cause) { if (epoch === ownerEpoch.current) reportError(cause); throw cause; }
   };
+  const prepareStrict = async (season: PublicSeasonMeta) => {
+    if (disabled || preparing.current || strictPreparation.current || session.isBusy() || storyOwner.isBusy() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection) return;
+    const token = Symbol(), controller = new AbortController(), epoch = ownerEpoch.current;
+    const preparationIdentity = () => {
+      const ai = aiStore.getSnapshot(), account = cloudStore.getSnapshot();
+      return JSON.stringify([account.account?.userId, account.verification, account.authFlow, cloudStore.getCredentialEpoch(), aiStore.getCredentialIntentRevision(),
+        ai.selection, ai.profiles, ai.modelsByProfileId, ai.presetsByProviderId, ai.generationOverrides]);
+    };
+    const originalIdentity = preparationIdentity();
+    const original = session.getSnapshot().draft;
+    const current = () => strictPreparation.current?.token === token && ownerEpoch.current === epoch && !controller.signal.aborted && preparationIdentity() === originalIdentity;
+    strictPreparation.current = { token, controller }; checkedStrict(null); setError(null);
+    try {
+      await session.importInput(async signal => {
+        const abort = () => controller.abort(); signal.addEventListener('abort', abort, { once: true });
+        try {
+          const prepared = await prepareDesktopStrictDraft(original, season, controller.signal);
+          if (!current() || session.getSnapshot().draft !== original) throw new DOMException('Aborted', 'AbortError');
+          return () => { if (!current() || session.getSnapshot().draft !== original) throw new DOMException('Aborted', 'AbortError'); return prepared; };
+        } finally { signal.removeEventListener('abort', abort); }
+      });
+      if (!current()) return;
+      strictActiveRef.current = true; ownerEpoch.current += 1; setStrictActive(true);
+    } catch (cause) { if (current()) reportError(cause); }
+    finally { if (strictPreparation.current?.token === token) strictPreparation.current = null; }
+  };
+  const exitStrict = () => {
+    if (busy || preparing.current || session.isBusy() || storyOwner.isBusy()) return;
+    strictActiveRef.current = false; ownerEpoch.current += 1; invalidateStrict(); setStrictActive(false);
+  };
   const parseCharacters = async (text: string, warnings: string[]) => {
     if (new TextEncoder().encode(text).byteLength > 12 * 1024 * 1024) throw new Error('输入超过 Arena 12 MiB 上限。');
     const parsed = await parseCombatantsFromText(text, { existingCount: 0, maxCombatants: product === 'arena' ? null : limits.maxCombatants, onWarn: (warning) => warnings.push(warning) });
@@ -167,14 +221,15 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const togglePreset = (filename: string) => {
     if (disabled) return;
     if (draft.combatants.some((item) => item.isPreset && item.filename === filename)) { update(product === 'arena' ? removeAdvancedCombatants(draft, draft.combatants.flatMap((item, index) => item.isPreset && item.filename === filename ? [index] : [])) : { combatants: draft.combatants.filter((item) => !(item.isPreset && item.filename === filename)) }); return; }
-    void performImport(async (signal) => { const warnings: string[] = []; const items = await parseCharacters(await fetchArenaPreset('character', filename, signal), warnings);
-      return (current) => applyCharacters(current, items.map((item) => ({ ...item, isPreset: true, filename })), warnings); }).catch(() => undefined);
+    void performImport(async (signal) => { const warnings: string[] = []; const text = await fetchArenaPreset('character', filename, signal);
+      const items = retainDesktopArenaSelectionSource(await parseCharacters(text, warnings), parseArenaJson(text), { kind: 'preset', filename });
+      return (current) => applyCharacters(current, items, warnings); }).catch(() => undefined);
   };
-  const loadScenario = (read: (signal: AbortSignal) => Promise<string>, filename: string | null = null, auxiliary = false, sourceIdentity?: string) => performImport(async (signal) => {
+  const loadScenario = (read: (signal: AbortSignal) => Promise<string>, filename: string | null = null, auxiliary = false, sourceIdentity?: string, isPreset = false) => performImport(async (signal) => {
     const content = parseArenaScenario(await read(signal)); return (current) => {
       const warnings: string[] = [];
       const next = product === 'arena' ? auxiliary ? addAdvancedAuxScenario(current, content, filename, crypto.randomUUID(), (warning) => warnings.push(warning), sourceIdentity) : setAdvancedMainScenario(current, content, filename, (warning) => warnings.push(warning), sourceIdentity) : { ...current, scenario: { content, fileName: filename }, scenarioDisplayName: arenaItemName(content) };
-      setImportWarnings(warnings); return next;
+      setImportWarnings(warnings); return auxiliary ? { ...next, auxScenarios: next.auxScenarios.map((item, index) => index === next.auxScenarios.length - 1 ? { ...item, isPreset } : item) } : { ...next, scenario: { ...next.scenario, isPreset } };
     };
   });
   const uploadAuxScenarios = (files: FileList | null) => performImport(async (signal) => {
@@ -193,7 +248,14 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     if (!context.rawSourceData || disabled || !library) return;
     const text = JSON.stringify(context.rawSourceData);
     const sourceIdentity = buildAdjudicationSourceKey({ sourceDataCardId: context.cloudCardId ?? context.selectionId }) ?? undefined;
-    const action = library === 'character' ? product === 'arena' ? performImport(async () => { const warnings: string[] = []; const items = (await parseCharacters(text, warnings)).map((item) => ({ ...item, adjudicationSourceKey: sourceIdentity })); return (current) => applyCharacters(current, items, warnings); }) : pasteCharacters(text) : library === 'scenario' || library === 'auxScenario' ? loadScenario(async () => text, null, library === 'auxScenario', sourceIdentity) : loadMaterials(async () => [{ text, filename: null }]);
+    const onlineId = context.storageLocation === 'cloud' && context.cloudCardId?.trim() ? context.cloudCardId.trim() : null;
+    const action = library === 'character' ? performImport(async () => {
+      const warnings: string[] = [];
+      const parsed = await parseCharacters(text, warnings);
+      const items = (onlineId ? retainDesktopArenaSelectionSource(parsed, context.rawSourceData, { kind: 'online', cardId: onlineId }) : parsed)
+        .map(item => ({ ...item, adjudicationSourceKey: sourceIdentity }));
+      return (current) => applyCharacters(current, items, warnings);
+    }) : library === 'scenario' || library === 'auxScenario' ? loadScenario(async () => text, null, library === 'auxScenario', sourceIdentity) : loadMaterials(async () => [{ text, filename: null }]);
     void action.then(() => setLibrary(null)).catch(() => undefined);
   };
   const openLibrary = (purpose: LibraryPurpose) => { if (disabled) return; setLibrary(purpose); void cloudStore.refresh(); };
@@ -219,14 +281,14 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const scenario: ArenaScenarioSectionModel = {
     disabled, isAuthenticated: !!cloudState.account, isMatchingBlocked: true, isMatchingScenario: false, mainName: draft.scenarioDisplayName, mainIsNative: false,
     auxScenarios: product === 'arena' ? draft.auxScenarios.map((item, index) => ({ key: String(index), title: arenaItemName(item.content), isNative: false })) : [], auxBudgetLine: `参考项合计 ${referenceCount}/256`, auxBudgetExhausted: referenceCount >= limits.maxReferenceItemsSanity, presets: SCENARIO_PRESET_LIST, presetsLoading: false, presetsError: null,
-    selectedPresetFilenames: [...(draft.scenario.fileName ? [draft.scenario.fileName] : []), ...(product === 'arena' ? draft.auxScenarios.flatMap((item) => item.fileName ? [item.fileName] : []) : [])], loadingPresetFilename: null,
+    selectedPresetFilenames: [...(draft.scenario.isPreset && draft.scenario.fileName ? [draft.scenario.fileName] : []), ...(product === 'arena' ? draft.auxScenarios.flatMap((item) => item.isPreset && item.fileName ? [item.fileName] : []) : [])], loadingPresetFilename: null,
     capabilities: { browseMain: true, randomMatchMain: false, clearMain: true, uploadMain: true, pasteMain: true, presetRefs: true,
       auxSection: product === 'arena', addAux: product === 'arena', browseAux: product === 'arena', randomMatchAux: false, uploadAux: product === 'arena', pasteAux: product === 'arena', reorderAux: product === 'arena', removeAux: product === 'arena', clearAux: product === 'arena' },
     actions: { openMainModal: () => openLibrary('scenario'), randomMatchMain: reject, clearMain: () => update(product === 'arena' ? setAdvancedMainScenario(draft, null, null) : { scenario: { content: null, fileName: null }, scenarioDisplayName: null }),
       uploadMain: (file) => loadScenario((signal) => readArenaFile(file, signal), file.name), pasteMain: (text) => loadScenario(async () => text),
-      togglePreset: (filename) => { if (draft.scenario.fileName === filename) { update(product === 'arena' ? setAdvancedMainScenario(draft, null, null) : { scenario: { content: null, fileName: null }, scenarioDisplayName: null }); return; }
-        const auxIndex = draft.auxScenarios.findIndex((item) => item.fileName === filename); if (product === 'arena' && auxIndex >= 0) { update(removeAdvancedAuxScenarios(draft, [auxIndex])); return; }
-        void loadScenario((signal) => fetchArenaPreset('scenario', filename, signal), filename, product === 'arena' && !!draft.scenario.content).catch(() => undefined); },
+      togglePreset: (filename) => { if (draft.scenario.isPreset && draft.scenario.fileName === filename) { update(product === 'arena' ? setAdvancedMainScenario(draft, null, null) : { scenario: { content: null, fileName: null }, scenarioDisplayName: null }); return; }
+        const auxIndex = draft.auxScenarios.findIndex((item) => item.isPreset && item.fileName === filename); if (product === 'arena' && auxIndex >= 0) { update(removeAdvancedAuxScenarios(draft, [auxIndex])); return; }
+        void loadScenario((signal) => fetchArenaPreset('scenario', filename, signal), filename, product === 'arena' && !!draft.scenario.content, undefined, true).catch(() => undefined); },
       openAuxModal: () => openLibrary('auxScenario'), randomMatchAux: reject, uploadAux: uploadAuxScenarios, pasteAux: (text) => loadScenario(async () => text, null, true), moveAux: (from, to) => update({ auxScenarios: moveArenaItem(draft.auxScenarios, from, to) }), removeAux: (key) => update(removeAdvancedAuxScenarios(draft, [Number(key)])), clearAux: () => update(removeAdvancedAuxScenarios(draft, draft.auxScenarios.map((_, index) => index))) },
   };
   const diagnoseRecovery = async () => {
@@ -245,17 +307,24 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     if (storyOwner.hosted?.hasCandidate() || storyState.hosted?.slots[product]) { setError('本产品有待处理的 Hosted 故事候选，请先处理原候选。'); return; }
     if (disabled || diagnosisFlight.current || preparing.current || session.isBusy() || packageOwner.isBusy()) return;
     if (!target.modelId || !target.providerTarget || target.unavailableReason || hostedUnavailable) { setError(hostedUnavailable ?? target.unavailableReason ?? '请选择受支持的 AI 目标。'); return; }
+    if (strictActiveRef.current && (session.getSnapshot().draft !== draft || readStrictTargetIdentity() !== strictTargetIdentity(target) || !strictReady || strictCheckRef.current?.key !== strictSnapshotKey || !strictCheckRef.current.result.willCount)) { setError('请先完成当前草稿的服务器预检；预检不保证最终计分。'); return; }
     const actor = cloudState.account ? { kind: 'account' as const, expectedUserId: cloudState.account.userId } : { kind: 'anonymous' as const };
     const repair = hostedTarget ? repairHint?.repair : undefined;
     const previousRequest = hostedTarget ? repairHint && 'requestId' in repairHint.value ? repairHint.value.requestId : recovery.pointer?.requestId : undefined;
     if (hostedTarget && recovery.blocked && !repair) { setError(recovery.error); return; }
     if (previousRequest && !window.confirm(repair ? `本机诊断到原请求 ${previousRequest}。确认放弃其本机恢复并开始新请求？不会停止旧服务器任务；本机原指针仅在新指针保存成功后替换。` : '已有服务器恢复记录。确认以新请求替换？这会放弃原记录的页面恢复入口，不会停止旧服务器任务。')) return;
     if (state.rawText && !window.confirm('开始新生成将替换当前结果，请先保存或完整导出。继续？')) return;
-    const snapshot = structuredClone(session.getSnapshot().draft); const frozen = { ...snapshot, customStoryLength: normalizeCustomStoryLength(snapshot.customStoryLength) };
+    const sourceDraft = session.getSnapshot().draft;
+    const checked = strictCheckRef.current, strictKey = strictSnapshotKey, strictIntent = strictActiveRef.current, credentialEpoch = cloudStore.getCredentialEpoch();
+    const snapshot = structuredClone(sourceDraft); const frozen = { ...snapshot, customStoryLength: normalizeCustomStoryLength(snapshot.customStoryLength) };
     const readiness = arenaReadinessMessage(frozen, product); if (readiness) { setError(readiness); return; }
     const epoch = ownerEpoch.current; preparing.current = true; setError(null);
     void aiStore.withPreparedGeneration(async (prepared) => {
       if (epoch !== ownerEpoch.current || !prepared.modelId || !prepared.providerTarget) return;
+      if (strictIntent && (!strictActiveRef.current || prepared.location !== 'server' || strictTargetIdentity(prepared) !== strictTargetIdentity(target) || readStrictTargetIdentity() !== strictTargetIdentity(target) || session.getSnapshot().draft !== sourceDraft
+        || strictSnapshotKeyRef.current !== strictKey || checked?.key !== strictKey || !checked.result.willCount || strictCheckRef.current !== checked
+        || aiStore.getCredentialIntentRevision() !== providerCredentialIntent || cloudStore.getCredentialEpoch() !== credentialEpoch || cloudStore.getSnapshot().verification !== 'verified' || cloudStore.getSnapshot().authFlow.kind !== 'idle'
+        || cloudStore.getSnapshot().account?.userId !== cloudState.account?.userId)) throw new Error('严格排位准备已失效，请重新检查当前配置。');
       // Credential preparation is finished; the session now owns the generation/leave flight.
       preparing.current = false;
       if (prepared.location === 'server') {
@@ -270,7 +339,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       await session.generate({ invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget }, frozen,
         { mode: prepared.mode, generationMode: frozen.generationMode, modelId: prepared.modelId,
           temperature: prepared.generationOverrides?.temperature, maxOutputTokens: prepared.generationOverrides?.maxOutputTokens });
-    }).catch((cause: unknown) => { if (epoch === ownerEpoch.current) reportError(cause); }).finally(() => { preparing.current = false; });
+    }, strictIntent ? { executionLocation: 'server' } : undefined).catch((cause: unknown) => { if (epoch === ownerEpoch.current) reportError(cause); }).finally(() => { preparing.current = false; });
   };
   const prepareStoryExecution: PrepareStoryExecution = (run) => {
     const epoch = ownerEpoch.current;
@@ -292,6 +361,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     });
   };
   const allowStoryGeneration = () => {
+    if (strictActiveRef.current) { setError('严格排位准备仅用于单次战报，请先退出准备再开始连续故事。'); return false; }
     if (!guard.ready || busy || diagnosisFlight.current || preparing.current || session.isBusy() || packageOwner.isBusy() || storyOwner.isBusy()) return false;
     if (!target.modelId || !target.providerTarget || target.unavailableReason || hostedUnavailable) { setError(hostedUnavailable ?? target.unavailableReason ?? '请选择可用的模型。'); return false; }
     if (storyOwner.hosted?.hasCandidate()) { setError('此产品仍有原 Hosted 故事候选，请先读取、导出或明确放弃。'); return false; }
@@ -406,11 +476,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           {product === 'battle' ? settings : null}
           <p className="text-xs">{product === 'arena' ? '手动及角色、主辅情景' : '角色与主情景继承'} {inheritedAdjudication.events.length} {hostedTarget ? '个随机判定由服务器在创建时执行，本机不会重掷；素材内判定不执行。' : '个随机判定每次生成只在本机掷骰一次，非服务器权威；素材内判定不执行。'}</p>
           {inheritedAdjudication.skippedLegacy ? <p role="status">{inheritedAdjudication.skippedLegacy} 个旧版随机事件格式不受支持，保留原字段但不执行。</p> : null}
-          <fieldset disabled={!guard.ready} className="min-w-0"><DesktopAiProviderPanel generationMode={draft.generationMode} onDirtyChange={onAiDirty} showConnectionTest={false} copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请配置客户端连接。', serverFootnote: 'Arena 服务器支持流式或完整非流式报告；恢复与停止沿原请求，角色更新使用本次创建时冻结的选择。', payloadNoun: '角色与故事设定' }} /></fieldset>
+          <fieldset disabled={!guard.ready} className="min-w-0"><DesktopAiProviderPanel executionConstraint={strictActive ? { location: 'server', reason: '严格排位准备已将本次执行锁定为服务器，普通偏好及配置保持不变。' } : undefined} generationMode={draft.generationMode} onDirtyChange={onAiDirty} showConnectionTest={false} copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请配置客户端连接。', serverFootnote: 'Arena 服务器支持流式或完整非流式报告；恢复与停止沿原请求，角色更新使用本次创建时冻结的选择。', payloadNoun: '角色与故事设定' }} /></fieldset>
           {hostedTarget ? <p role="status">官方服务器生成。创建前验证所选交付协议与原账号；不会自动改为客户端执行。符合服务器规则的对局可能计入严格排位，是否计分以服务器结算为准。</p> : null}
-          <DesktopStrictConfigurationDiagnostics key={product} draft={draft} executionLocation={target.location} modelId={target.modelId} modelUnavailable={!!target.unavailableReason}
-            isAuthenticated={cloudState.verification === 'verified' && !!cloudState.account ? true : cloudState.verification === 'signed-out' || cloudState.verification === 'expired' ? false : null}
-            adjudicationEventCount={inheritedAdjudication.events.length} />
+          <DesktopStrictConfigurationDiagnostics key={product} {...strictInput} journey={{ active: strictActive, disabled: disabled || aiState.savingConnection || aiState.savingCredential || aiState.deletingConnection, snapshotKey: strictSnapshotKey, target, expectedUserId: cloudState.account?.userId ?? null,
+            isCurrent: key => readStrictTargetIdentity() === strictTargetIdentity(target) && key === strictSnapshotKeyRef.current && strictActiveRef.current && session.getSnapshot().draft === draft && cloudStore.getSnapshot().verification === 'verified'
+              && aiStore.getCredentialIntentRevision() === providerCredentialIntent && cloudStore.getCredentialEpoch() === accountCredentialEpoch && cloudStore.getSnapshot().authFlow.kind === 'idle' && cloudStore.getSnapshot().account?.userId === cloudState.account?.userId,
+            prepare: prepareStrict, exit: exitStrict, invalidate: invalidateStrict, checked: checkedStrict }} />
         </>,
         generationMode: <>
           <ArenaReportFormatSelectorView value={draft.reportFormat} disabled={disabled} onChange={(reportFormat) => update({ reportFormat })} webDescription="生成网页或包目标源码；本片仅验证、保存与导出，隔离运行待 D4 验收。" />
@@ -419,7 +490,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         </>,
         actions: <>
           {state.pendingRestore ? <p role="status">发现本机草稿。<button type="button" className={secondary} onClick={() => session.restoreDraft()}>恢复草稿</button><button type="button" className={secondary} onClick={() => { if (window.confirm('清除旧草稿？此操作不会删除本地库。')) session.discardDraft(); }}>清除草稿</button></p> : null}
-          <button type="button" className={generationSubmitClassName} disabled={disabled || !!hostedUnavailable || !!target.unavailableReason || !!readinessMessage || (hostedTarget && recovery.blocked && !repairHint)} onClick={generate}>生成战报</button>
+          <button type="button" className={generationSubmitClassName} disabled={disabled || !strictReady || !!hostedUnavailable || !!target.unavailableReason || !!readinessMessage || (hostedTarget && recovery.blocked && !repairHint)} onClick={generate}>生成战报</button>
           {busy && (!storyOwner.isBusy() || !storyState.hosted?.busy || storyState.hosted.busy === 'model') ? <button type="button" className={secondary} disabled={state.saving || packageState.busy} onClick={() => { aiStore.cancelPreparingGeneration(); ownerEpoch.current += 1; if (storyOwner.isBusy()) storyOwner.cancel(); else session.cancel(); }}>{storyOwner.isBusy() ? storyState.hosted?.busy === 'model' ? '请求服务器停止' : '取消生成' : state.generation?.intent.mode === 'hosted' || state.hosted ? '请求服务器停止' : '取消生成'}</button> : null}
           {recovery.pointer ? <section aria-label="服务器恢复记录" className="space-y-2"><p>原服务器请求：{recovery.pointer.requestId} · {recovery.pointer.actor.kind === 'anonymous' ? '原匿名身份' : `账号 ${recovery.pointer.actor.expectedUserId}`} · {recovery.pointer.state}</p>
             <button type="button" className={secondary} disabled={disabled || !cloudState.bootstrapped} onClick={restoreHosted}>恢复原服务器战报</button>
@@ -438,7 +509,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           {error || guard.message ? <p role="alert">{error ?? guard.message}</p> : null}
           {state.message ? <p role="status">{state.message}</p> : null}
         </>,
-        community: null, result, storySession: <DesktopArenaStoryControls owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
+        community: null, result, storySession: <DesktopArenaStoryControls owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={strictActive ? '请先退出严格排位准备，再生成连续故事。' : hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
         homeLink: <BackHomeLink href="#/" onNavigate={() => navigateByProductHref(router, '/')} />,
         footer: <ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />,
   };

@@ -18,6 +18,8 @@
 pub(crate) mod battle_reports;
 #[path = "cloud/public_ranking.rs"]
 pub(crate) mod public_ranking;
+#[path = "cloud/strict_preflight.rs"]
+pub(crate) mod strict_preflight;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

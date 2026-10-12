@@ -1468,6 +1468,16 @@ async fn cloud_battle_reports_read(
     cloud::battle_reports::read_battle_reports(&cloud, secrets.inner().as_ref(), request).await
 }
 
+/// 严格排位只读预检：固定 Next 路由、封闭字段与账号世代围栏。
+#[tauri::command]
+async fn cloud_arena_strict_preflight(
+    cloud: State<'_, cloud::CloudState>,
+    secrets: State<'_, SharedSecretStore>,
+    request: cloud::strict_preflight::StrictPreflightRequest,
+) -> Result<cloud::strict_preflight::StrictPreflightResponse, cloud::CloudError> {
+    cloud::strict_preflight::read_strict_preflight(&cloud, secrets.inner().as_ref(), request).await
+}
+
 /// 匿名排行榜只读通道：固定公开路由，无凭据或账号存储依赖。
 #[tauri::command]
 async fn cloud_public_ranking_read(
@@ -2064,6 +2074,7 @@ pub fn run() {
             cloud_cached_account,
             cloud_me_profile,
             cloud_battle_reports_read,
+            cloud_arena_strict_preflight,
             cloud_public_ranking_read,
             cloud_save_me_profile_signature,
             cloud_save_me_profile_avatar,

@@ -137,6 +137,8 @@
     "./desktop-arena-story-branch": "./src/desktop-arena-story-branch.ts",
     "./fixtures/desktop-story-tail-rewrite-storage.json": "./fixtures/desktop-story-tail-rewrite-storage.json",
     "./fixtures/desktop-story-branch-storage.json": "./fixtures/desktop-story-branch-storage.json",
+    "./arena-strict-preflight": "./src/arena-strict-preflight.ts",
+    "./fixtures/arena-strict-preflight.json": "./fixtures/arena-strict-preflight.json",
     "./battle-report-history": "./src/battle-report-history.ts",
     "./fixtures/battle-report-history.json": "./fixtures/battle-report-history.json",
     "./public-ranking": "./src/public-ranking.ts",

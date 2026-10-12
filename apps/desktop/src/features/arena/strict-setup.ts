@@ -1,7 +1,7 @@
 import type { PublicSeasonMeta } from '@mahoshojo/contracts/public-ranking';
 import { buildStrictSetupMissingReasons, deriveSeasonStrictRules } from '@mahoshojo/domain/arena-strict-setup';
 import { buildArenaQuestionnaireRequest } from '@mahoshojo/domain/arena-questionnaire-request';
-import { PRESET_LIST } from '@mahoshojo/domain/presets';
+import { isDesktopStrictSource } from './strict-source';
 import type { ArenaDraft } from './session';
 
 export interface DesktopStrictSetupInput {
@@ -18,7 +18,7 @@ export interface DesktopStrictSetupInput {
 export function describeDesktopStrictSetup(input: DesktopStrictSetupInput, season: PublicSeasonMeta) {
   const { draft } = input;
   const rules = deriveSeasonStrictRules(season);
-  const presets = draft.combatants.filter((card) => card.isPreset && PRESET_LIST.some((preset) => preset.filename === card.filename));
+  const presets = draft.combatants.filter(isDesktopStrictSource);
   const questionnaires: readonly unknown[] | undefined = draft.selectedQuestionnaires
     ? buildArenaQuestionnaireRequest(draft.selectedQuestionnaires).questionnaires
     : draft.questionnaires;
@@ -32,9 +32,7 @@ export function describeDesktopStrictSetup(input: DesktopStrictSetupInput, seaso
     requiredStoryGuidance: rules.storyGuidance,
     requiredScenarioPresetFilename: rules.scenarioPresetFilename,
     scenarioFileName: draft.scenario.fileName,
-    // The current Desktop draft stores a filename for both uploads and presets.
-    // Do not infer preset origin from a matching filename or from content fields.
-    scenarioIsPreset: null,
+    scenarioIsPreset: draft.scenario.isPreset ?? null,
     rankableCombatants: presets,
     userGuidance: draft.settings.userGuidance,
     selectedLanguage: draft.selectedLanguage,

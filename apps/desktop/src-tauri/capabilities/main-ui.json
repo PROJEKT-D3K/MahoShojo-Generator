@@ -86,6 +86,7 @@
     "allow-cloud-cached-account",
     "allow-cloud-me-profile",
     "allow-cloud-battle-reports-read",
+    "allow-cloud-arena-strict-preflight",
     "allow-cloud-public-ranking-read",
     "allow-cloud-save-me-profile-signature",
     "allow-cloud-save-me-profile-avatar",

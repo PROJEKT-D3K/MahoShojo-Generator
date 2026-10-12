@@ -735,6 +735,7 @@ describe('desktop workspace app ownership', () => {
       'cloud_cached_account',
       'cloud_me_profile',
       'cloud_battle_reports_read',
+      'cloud_arena_strict_preflight',
       'cloud_public_ranking_read',
       'cloud_save_me_profile_signature',
       'cloud_save_me_profile_avatar',
