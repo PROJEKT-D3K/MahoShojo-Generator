@@ -10,6 +10,8 @@ export * from './diff';
 export * from './errors';
 export * from './gate-types';
 export * from './generation-readiness';
+export * from './host-workspace';
+export * from './shared-config-equality';
 export * from './projection';
 export * from './selection';
 export * from './state-machine';

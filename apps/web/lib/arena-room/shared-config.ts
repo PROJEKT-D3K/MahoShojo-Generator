@@ -7,6 +7,7 @@ import {
 import {
   buildArenaRoomSharedConfig,
   type ArenaRoomNormalizedSource,
+  type ArenaRoomHostWorkspaceBundle,
 } from '@mahoshojo/multiplayer-core';
 
 import type {
@@ -43,16 +44,10 @@ type NormalizedCombatant = ArenaRoomNormalizedSource['combatants'][number];
 type NormalizedScenario = Exclude<ArenaRoomNormalizedSource['scenario'], null>;
 type NormalizedMaterial = ArenaRoomNormalizedSource['materials'][number];
 
-export type ArenaRoomHostLocalContentDigest = Readonly<{
-  key: string;
-  digest: string;
-}>;
-
-export type ArenaRoomHostWorkspaceBundle = Readonly<{
-  sharedConfig: ArenaRoomSharedConfig;
-  hostLocalPayloads: readonly ArenaRoomHostLocalPayload[];
-  hostLocalContentDigests: readonly ArenaRoomHostLocalContentDigest[];
-}>;
+export type {
+  ArenaRoomHostLocalContentDigest,
+  ArenaRoomHostWorkspaceBundle,
+} from '@mahoshojo/multiplayer-core';
 
 export type ArenaRoomShareabilityIssueCode =
   | 'ROOM_COMBATANT_LIMIT'

@@ -1,225 +1,72 @@
 import { describe, expect, it } from 'vitest';
-import { ArenaRoomSharedConfigSchema } from '@mahoshojo/contracts/arena-room';
-
 import {
+  arenaRoomHostWorkspaceAuthorityFromSession,
+  areArenaRoomSharedConfigsExactlyEqual,
+  areArenaRoomSharedConfigsSemanticallyEqual,
   createArenaRoomHostWorkspace,
-  type ArenaRoomHostWorkspaceAuthority,
-} from '@/lib/arena-room/host-workspace';
-import type { ArenaRoomHostWorkspaceBundle } from '@/lib/arena-room/shared-config';
+} from '@mahoshojo/multiplayer-core';
 
-const sharedConfig = (guidance = '', contentVersion = `sha256:${'a'.repeat(64)}`) => ({
-  battleMode: 'classic' as const,
-  reportFormat: 'markdown' as const,
-  combatants: [{
-    key: 'host-local:character:0:one',
-    displayName: '本地角色',
-    type: 'general-character' as const,
-    source: 'host-local' as const,
-    contentVersion,
-  }],
-  teams: [],
-  scenario: null,
-  auxScenarios: [],
-  materials: [],
-  userGuidance: guidance,
-  storyLength: 'standard' as const,
-  customStoryLength: null,
-  selectedLanguage: 'zh-CN',
-  historySettings: {
-    readArenaHistory: true,
-    readArenaHistoryLimit: 3,
-    isArenaHistoryUnlimited: false,
-    writeArenaHistory: true,
-    readCurrentState: true,
-    writeCurrentState: true,
-    readNarrativeHistory: false,
-    readNarrativeHistoryLimit: 10,
-    isNarrativeHistoryUnlimited: false,
-    writeNarrativeHistory: false,
-  },
-});
+import { useBattleStore } from '@/components/arena/stores/useBattleStore';
+import { buildArenaRoomHostWorkspaceBundleFromBattleState } from '@/lib/arena-room/shared-config';
+import * as webWorkspace from '@/lib/arena-room/host-workspace';
+import * as webComparison from '@/lib/arena-room/shared-config-equality';
 
-const bundle = (
-  payload: Record<string, unknown> = { name: '本地角色', secret: 'baseline-body' },
-  digest = `sha256:${'a'.repeat(64)}`,
-  guidance = '',
-): ArenaRoomHostWorkspaceBundle => ({
-  sharedConfig: sharedConfig(guidance, digest),
-  hostLocalPayloads: [{
-    key: 'host-local:character:0:one',
-    kind: 'character',
-    payload,
-  }],
-  hostLocalContentDigests: [{ key: 'host-local:character:0:one', digest }],
-});
-
-const authority = (
-  guidance = '',
-  overrides: Partial<ArenaRoomHostWorkspaceAuthority> = {},
-): ArenaRoomHostWorkspaceAuthority => ({
-  roomId: 'room-1',
-  roomEpoch: 'epoch-1',
-  revision: 3,
-  ownerUserId: 'host-1',
-  sharedConfig: sharedConfig(guidance),
-  ...overrides,
-});
-
-describe('Arena Room host workspace baseline', () => {
-  it('旧房间配置经入口 schema 归一化后与显式 Markdown 工作副本一致', () => {
-    const legacyConfig = Object.fromEntries(Object.entries(sharedConfig())
-      .filter(([key]) => key !== 'reportFormat'));
-    const normalizedAuthority = authority('', {
-      sharedConfig: ArenaRoomSharedConfigSchema.parse(legacyConfig),
-    });
-    const workspace = createArenaRoomHostWorkspace();
-    workspace.capturePublished(normalizedAuthority, bundle());
-    expect(workspace.compare(normalizedAuthority, bundle())).toMatchObject({
-      kind: 'clean', start: { sharedConfig: { reportFormat: 'markdown' } },
-    });
-    expect(workspace.compare(normalizedAuthority, {
-      ...bundle(), sharedConfig: { ...sharedConfig(), reportFormat: 'web' },
-    })).toMatchObject({ kind: 'dirty', reasons: ['shared-config'] });
+describe('Web Arena Room host workspace shared core', () => {
+  it('现有生产入口直接复用同一工厂和 session 投影，不复制工作区实现', () => {
+    expect(webWorkspace.createArenaRoomHostWorkspace).toBe(createArenaRoomHostWorkspace);
+    expect(webWorkspace.arenaRoomHostWorkspaceAuthorityFromSession)
+      .toBe(arenaRoomHostWorkspaceAuthorityFromSession);
   });
 
-  it('已显式发布的安全配置与本地摘要一致时直接启动', () => {
-    const workspace = createArenaRoomHostWorkspace();
-    workspace.capturePublished(authority(), bundle());
-
-    const comparison = workspace.compare(authority(), bundle());
-    expect(comparison).toMatchObject({ kind: 'clean' });
-    if (comparison.kind !== 'clean') throw new Error('expected clean');
-    expect(comparison.start.hostLocalPayloads).toEqual(bundle().hostLocalPayloads);
-    expect(JSON.stringify(comparison.start.sharedConfig)).not.toContain('baseline-body');
+  it('保留旧 semantic alias，权威 exact 比较仍是独立入口', () => {
+    expect(webWorkspace.areArenaRoomSharedConfigsEqual)
+      .toBe(areArenaRoomSharedConfigsSemanticallyEqual);
+    expect(webComparison.areArenaRoomSharedConfigsSemanticallyEqual)
+      .toBe(areArenaRoomSharedConfigsSemanticallyEqual);
+    expect(webComparison.areArenaRoomSharedConfigsExactlyEqual)
+      .toBe(areArenaRoomSharedConfigsExactlyEqual);
+    expect(webComparison.areArenaRoomSharedConfigsExactlyEqual)
+      .not.toBe(webWorkspace.areArenaRoomSharedConfigsEqual);
   });
 
-  it('stub 未变但本地正文改变时必须 preflight，按房间启动使用 baseline 正文', () => {
-    const workspace = createArenaRoomHostWorkspace();
-    workspace.capturePublished(authority(), bundle());
-    const changed = bundle(
-      { name: '本地角色', secret: 'changed-body' },
-      `sha256:${'b'.repeat(64)}`,
-    );
-
-    const comparison = workspace.compare(authority(), changed);
-    expect(comparison).toMatchObject({
-      kind: 'dirty',
-      reasons: ['shared-config', 'host-local-content'],
-    });
-    if (comparison.kind !== 'dirty') throw new Error('expected dirty');
-    expect(comparison.current.hostLocalPayloads[0]!.payload).toMatchObject({ secret: 'changed-body' });
-  });
-
-  it('Room authority 被 Proposal 改变而 host working copy 未同步时不静默覆盖', () => {
-    const workspace = createArenaRoomHostWorkspace();
-    workspace.capturePublished(authority(), bundle());
-
-    const comparison = workspace.compare(authority('成员建议已接受'), bundle());
-    expect(comparison).toMatchObject({
-      kind: 'dirty',
-      reasons: ['shared-config'],
-      current: { sharedConfig: { userGuidance: '' } },
-    });
-  });
-
-  it('仅在已捕获 baseline 仍对应同一权威 revision 时允许自动发布', () => {
-    const workspace = createArenaRoomHostWorkspace();
-    workspace.capturePublished(authority(), bundle());
-    const localChange = bundle(
-      { name: '本地角色', secret: 'changed-body' },
-      `sha256:${'b'.repeat(64)}`,
-      '房主本地修改',
-    );
-
-    expect(workspace.canAutoPublish(authority(), localChange)).toBe(true);
-    expect(workspace.canAutoPublish(authority('', { revision: 4 }), localChange)).toBe(false);
-    expect(workspace.canAutoPublish(authority('', { roomEpoch: 'epoch-2' }), localChange)).toBe(false);
-  });
-
-  it('缺少当前 room/epoch/owner baseline 时 host-local 按房间启动 fail closed', () => {
-    const workspace = createArenaRoomHostWorkspace();
-    const comparison = workspace.compare(authority(), bundle());
-    expect(comparison).toMatchObject({
-      kind: 'dirty',
-      reasons: ['baseline-missing'],
-    });
-
-    workspace.capturePublished(authority(), bundle());
-    workspace.retainFor(authority('', { roomEpoch: 'epoch-2' }));
-    expect(workspace.compare(authority('', { roomEpoch: 'epoch-2' }), bundle()))
-      .toMatchObject({ kind: 'dirty', reasons: ['baseline-missing'] });
-  });
-
-  it('没有 host-local ref 时不需要内存 baseline 也可安全启动', () => {
-    const workspace = createArenaRoomHostWorkspace();
-    const config = {
-      ...sharedConfig(),
-      combatants: [{
-        key: 'data-card:online-1',
-        ref: { id: 'online-1', kind: 'character' as const, versionToken: 'v1' },
-      }],
-    };
-    const onlineBundle: ArenaRoomHostWorkspaceBundle = {
-      sharedConfig: config,
-      hostLocalPayloads: [],
-      hostLocalContentDigests: [],
-    };
-    const comparison = workspace.compare(authority('', { sharedConfig: config }), onlineBundle);
-    expect(comparison).toMatchObject({ kind: 'clean', start: { hostLocalPayloads: [] } });
-  });
-
-  it('settledAuthority 跟随最近一次 capture，并在 epoch 变化清空 baseline 时归零', () => {
-    const workspace = createArenaRoomHostWorkspace();
-    expect(workspace.settledAuthority()).toBeNull();
-
-    workspace.capturePublished(authority(), bundle());
-    expect(workspace.settledAuthority()).toMatchObject({
-      roomId: 'room-1',
-      roomEpoch: 'epoch-1',
-      revision: 3,
-      ownerUserId: 'host-1',
-    });
-
-    workspace.capturePublished(authority('', { revision: 4 }), bundle());
-    expect(workspace.settledAuthority()).toMatchObject({ revision: 4 });
-
-    workspace.retainFor(authority('', { roomEpoch: 'epoch-2' }));
-    expect(workspace.settledAuthority()).toBeNull();
-  });
-
-  it('working copy 无法投影时仍可从已发布 baseline 取得 Room 启动输入', () => {
-    const workspace = createArenaRoomHostWorkspace();
-    workspace.capturePublished(authority(), bundle());
-    expect(workspace.startFromRoom(authority())).toMatchObject({
-      sharedConfig: { combatants: [{ contentVersion: `sha256:${'a'.repeat(64)}` }] },
-      hostLocalPayloads: [{ payload: { secret: 'baseline-body' } }],
-    });
-    expect(workspace.startFromRoom(authority('', { roomEpoch: 'epoch-other' }))).toBeNull();
-  });
-});
-
-
-describe('在线数据卡 latest 发布基线', () => {
-  it('接受仅 token 变化的权威，同时拒绝其他配置差异', () => {
-    const workspace = createArenaRoomHostWorkspace();
+  it('真实 BattleState 摘要投影进入原 Web 工作区，正文变化不被误判为已发布', async () => {
     const local = {
-      ...bundle(),
-      sharedConfig: {
-        ...sharedConfig(),
-        combatants: [{ key: 'data-card:online-1', ref: { id: 'online-1', kind: 'character' as const, versionToken: 'v1' } }],
-      },
-      hostLocalPayloads: [],
-      hostLocalContentDigests: [],
+      type: 'general-character' as const,
+      data: { name: '本地角色', nested: { value: 'original-body' } },
+      filename: 'local.json', isValid: true, isPreset: false,
     };
-    const published = authority('', { sharedConfig: {
-      ...local.sharedConfig,
-      combatants: [{ key: 'data-card:online-1', ref: { id: 'online-1', kind: 'character', versionToken: 'v2' } }],
-    } });
-    expect(() => workspace.capturePublished(published, local)).not.toThrow();
-    expect(workspace.compare(published, local).kind).toBe('clean');
-    expect(workspace.startFromRoom(published)?.sharedConfig).toEqual(published.sharedConfig);
-    expect(() => workspace.capturePublished(published, {
-      ...local, sharedConfig: { ...local.sharedConfig, userGuidance: 'changed' },
-    })).toThrow('ARENA_ROOM_HOST_WORKSPACE_AUTHORITY_MISMATCH');
+    const state = {
+      ...useBattleStore.getState(),
+      battleMode: 'classic' as const, reportFormat: 'markdown' as const,
+      combatants: [local], teams: [],
+      scenario: { content: null, fileName: null, isNative: false },
+      auxScenarios: [], materials: [],
+    };
+    const published = await buildArenaRoomHostWorkspaceBundleFromBattleState(state);
+    expect(published.hostLocalPayloads).toHaveLength(1);
+    expect(published.hostLocalContentDigests).toEqual([{
+      key: published.hostLocalPayloads[0]!.key, digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+    }]);
+    const authority = {
+      roomId: 'room-1', roomEpoch: 'epoch-1', revision: 3, ownerUserId: 'host-1',
+      sharedConfig: published.sharedConfig,
+    };
+    const workspace = webWorkspace.createArenaRoomHostWorkspace();
+    workspace.capturePublished(authority, published);
+    expect(workspace.compare(authority, published).kind).toBe('clean');
+    expect(workspace.startFromRoom(authority)?.hostLocalPayloads).toEqual(published.hostLocalPayloads);
+
+    const changed = await buildArenaRoomHostWorkspaceBundleFromBattleState({
+      ...state, combatants: [{ ...local, data: { ...local.data, nested: { value: 'edited-body' } } }],
+    });
+    expect(changed.hostLocalContentDigests[0]!.digest).not.toBe(published.hostLocalContentDigests[0]!.digest);
+    expect(workspace.compare(authority, changed)).toMatchObject({
+      kind: 'dirty', reasons: ['shared-config', 'host-local-content'],
+      current: { hostLocalPayloads: [{ payload: { nested: { value: 'edited-body' } } }] },
+    });
+    expect(workspace.canAutoPublish(authority, changed)).toBe(true);
+    expect(workspace.canAutoPublish({ ...authority, revision: 4 }, changed)).toBe(false);
+    expect(workspace.startFromRoom(authority)?.hostLocalPayloads).toEqual(published.hostLocalPayloads);
   });
+
 });
