@@ -1,8 +1,7 @@
-import { normalizeScenarioPresetFilename } from '@/lib/scenario-presets';
+import type { SeasonBattleMode } from '@mahoshojo/domain/arena-strict-setup';
+export { deriveSeasonStrictRules, type SeasonBattleMode, type SeasonStrictRules } from '@mahoshojo/domain/arena-strict-setup';
 
 export type SeasonStatus = 'current' | 'history';
-
-export type SeasonBattleMode = 'classic' | 'kizuna' | 'daily' | 'scenario';
 
 export type SeasonSpecialRules = {
   /**
@@ -32,14 +31,6 @@ export type SeasonSpecialRules = {
    * - 非空：严格排位必须注入这些 Lore，并且不允许注入列表外的其它 Lore。
    */
   questionnaireLorePresetIds?: string[];
-};
-
-export type SeasonStrictRules = {
-  mode: SeasonBattleMode;
-  storyGuidance: string;
-  scenarioPresetFilename: string | null;
-  questionnaireLoreAllowed: boolean;
-  questionnaireLorePresetIds: string[];
 };
 
 export type SeasonMeta = {
@@ -157,61 +148,5 @@ export type SeasonArchiveV3 = {
 };
 
 export type SeasonArchive = SeasonArchiveV2 | SeasonArchiveV3;
-
-const normalizeSeasonBattleMode = (value: unknown): SeasonBattleMode | null => {
-  const raw = typeof value === 'string' ? value.trim() : '';
-  if (!raw) return null;
-  if (raw === 'classic' || raw === 'kizuna' || raw === 'daily' || raw === 'scenario') return raw;
-  return null;
-};
-
-const normalizeSeasonStoryGuidance = (value: unknown): string => {
-  if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  return trimmed.slice(0, 200);
-};
-
-const normalizeSeasonScenarioPresetFilename = (mode: SeasonBattleMode, value: unknown): string | null => {
-  if (mode !== 'scenario') return null;
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  try {
-    return normalizeScenarioPresetFilename(trimmed);
-  } catch {
-    return null;
-  }
-};
-
-const normalizeSeasonQuestionnaireLoreAllowed = (value: unknown): boolean => {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number' && Number.isFinite(value)) return value !== 0;
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
-    if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
-  }
-  return false;
-};
-
-const normalizeSeasonQuestionnaireLorePresetIds = (value: unknown): string[] => {
-  if (!Array.isArray(value)) return [];
-  const cleaned = value
-    .map((item) => (typeof item === 'string' ? item.trim() : ''))
-    .filter((item) => Boolean(item));
-  return cleaned.slice(0, 10);
-};
-
-export const deriveSeasonStrictRules = (season: SeasonMeta | null | undefined): SeasonStrictRules => {
-  const special = season?.specialRules && typeof season.specialRules === 'object' ? season.specialRules : null;
-  const mode = normalizeSeasonBattleMode(special?.mode) ?? 'classic';
-  const storyGuidance = normalizeSeasonStoryGuidance(special?.storyGuidance);
-  const scenarioPresetFilename = normalizeSeasonScenarioPresetFilename(mode, special?.scenarioPresetFilename);
-  const questionnaireLorePresetIds = normalizeSeasonQuestionnaireLorePresetIds(special?.questionnaireLorePresetIds);
-  const questionnaireLoreAllowed =
-    questionnaireLorePresetIds.length > 0 || normalizeSeasonQuestionnaireLoreAllowed(special?.questionnaireLoreAllowed);
-  return { mode, storyGuidance, scenarioPresetFilename, questionnaireLoreAllowed, questionnaireLorePresetIds };
-};
 
 export { isSafeSeasonId, getCurrentSeason, formatSeasonTitle, formatYmdSlash, seasonArchiveUrl } from '@mahoshojo/domain/public-ranking';

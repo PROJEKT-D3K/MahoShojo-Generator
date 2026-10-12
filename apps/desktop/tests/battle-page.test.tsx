@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import rankingFixture from '@mahoshojo/contracts/fixtures/public-ranking.json';
 import { StoryPendingSnapshotSchema } from '@mahoshojo/contracts/desktop-arena-story';
 import { DesktopArenaHostedRecoveryPointerSchema } from '@mahoshojo/contracts/desktop-arena-hosted';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -99,6 +100,7 @@ beforeEach(() => {
     if (command.includes('_arena_story_')) return storyIpc.invoke(command, raw, options);
     if (command === 'cloud_cached_account') return cloudAccount ? { account: cloudAccount } : null;
     if (command === 'cloud_auth_status') return cloudAccount ? { state: 'active', account: cloudAccount } : { state: 'signed-out' };
+    if (command === 'cloud_public_ranking_read') return { kind: 'seasons', data: rankingFixture.responses.seasons };
     if (['arena_hosted_stream', 'arena_hosted_control', 'arena_hosted_detach'].includes(command)) {
       if (!hostedCapabilityAvailable && command === 'arena_hosted_stream' && (raw as { request?: { operation: string } })?.request?.operation === 'create-story-stream')
         throw { code: 'capability-unavailable', message: 'synthetic capability unavailable', dispatchState: 'not-dispatched', intentOwnership: 'current-owned' };
@@ -146,6 +148,25 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); release?.(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('Desktop /battle journey against loopback fixture', () => {
+  it.each(['battle', 'arena'])('/%s only reads anonymous seasons after opening configuration diagnostics', async (product) => {
+    window.location.hash = `#/${product}`;
+    await mount();
+    const reads = () => mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_public_ranking_read');
+    expect(reads()).toHaveLength(0);
+    const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+    const diagnostic = container.querySelector<HTMLDetailsElement>('details[aria-label="严格排位配置检查"]')!;
+    expect(diagnostic).not.toBeNull(); expect(diagnostic.open).toBe(false);
+    await act(async () => { diagnostic.open = true; diagnostic.dispatchEvent(new Event('toggle')); });
+    await vi.waitFor(() => expect(diagnostic.textContent).toContain('当前赛季'));
+    // StrictMode may replay mount effects; every read must remain this anonymous operation.
+    expect(reads().length).toBeGreaterThan(0);
+    for (const [, args] of reads()) expect(args).toEqual({ request: { kind: 'seasons' } });
+    expect(diagnostic.textContent).toContain('服务器资格未知');
+    expect(diagnostic.textContent).toContain('当前选择为客户端');
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+    expect(calls()).toHaveLength(0);
+  });
+
   it.each(['classic', 'kizuna', 'daily', 'scenario'] as const)('%s × structured/Markdown route → execution → result → save → local-library reopen', async (mode) => {
     for (const output of ['non-stream', 'stream'] as const) {
       saveDraft(draft(mode, output)); const router = await mount(); await click('恢复草稿');

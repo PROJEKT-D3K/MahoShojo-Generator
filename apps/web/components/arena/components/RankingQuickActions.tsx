@@ -5,10 +5,13 @@ import { useQuery } from '@tanstack/react-query';
 
 import { AI_PROVIDER_CATALOG } from '@/lib/ai/constants';
 import { isStrictRankedModelBlacklisted } from '@/lib/arena/ranked-model-policy';
+import { buildStrictSetupMissingReasons, normalizeStrictStoryGuidance } from '@mahoshojo/domain/arena-strict-setup';
+import { formatBattleModeLabel } from '@mahoshojo/domain/public-ranking';
+import { StrictSetupChecklist } from '@mahoshojo/ui-web/arena';
 import { authStorage } from '@/lib/auth';
 import { normalizeQuestionnaireDefinition, type QuestionnairePresetEntry } from '@/lib/questionnaires';
 import { randomUUID } from '@/lib/crypto';
-import { deriveSeasonStrictRules, formatSeasonTitle, getCurrentSeason, type SeasonBattleMode, type SeasonsConfig } from '@/lib/seasons';
+import { deriveSeasonStrictRules, formatSeasonTitle, getCurrentSeason, type SeasonsConfig } from '@/lib/seasons';
 import { getScenarioPresetByFilename } from '@/lib/scenario-presets';
 import { useAuth } from '@/lib/useAuth';
 
@@ -59,110 +62,12 @@ const fetchJson = async <T,>(url: string): Promise<T> => {
   return (await res.json()) as T;
 };
 
-const normalizeStrictStoryGuidance = (value: unknown): string => {
-  if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  return trimmed.slice(0, 200);
-};
-
 const requireLore = (questionnaire: { title?: string; loreMarkdown?: string | null | undefined }) => {
   const lore = typeof questionnaire.loreMarkdown === 'string' ? questionnaire.loreMarkdown.trim() : '';
   if (!lore) {
     const title = typeof questionnaire.title === 'string' ? questionnaire.title.trim() : '';
     throw new Error(title ? `「${title}」不包含 loreMarkdown，无法用于设定注入` : '该问卷不包含 loreMarkdown，无法用于设定注入');
   }
-};
-
-const formatBattleModeLabel = (mode: SeasonBattleMode): string => {
-  const map: Record<SeasonBattleMode, string> = {
-    classic: '经典',
-    scenario: '情景',
-    daily: '日常',
-    kizuna: '羁绊',
-  };
-  return map[mode] ?? mode;
-};
-
-const buildStrictSetupMissingReasons = (input: {
-  isAuthenticated: boolean;
-  battleMode: string;
-  requiredMode: SeasonBattleMode;
-  requiredStoryGuidance: string;
-  requiredScenarioPresetFilename: string | null;
-  scenarioFileName: string | null;
-  scenarioIsPreset: boolean;
-  rankableCombatants: CombatantData[];
-  userGuidance: string;
-  selectedLanguage: string;
-  readArenaHistory: boolean;
-  readCurrentState: boolean;
-  readNarrativeHistory: boolean;
-  adjudicationEventCount: number;
-  userProviderConfigModelId: string | null;
-  scenarioEnabled: boolean;
-  auxScenarioCount: number;
-  materialCount: number;
-  questionnaireLoreEnabled: boolean;
-  questionnaireLoreAllowed: boolean;
-  requiredQuestionnaireLorePresetIds: string[];
-  questionnaireLoreIds: string[];
-}): string[] => {
-  const reasons: string[] = [];
-  if (!input.isAuthenticated) reasons.push('需要先登录');
-  if (input.battleMode !== input.requiredMode) reasons.push(`模式需为「${formatBattleModeLabel(input.requiredMode)}」`);
-  if (input.rankableCombatants.length <= 0) reasons.push('需先选择 1 位可计分的参战角色（数据卡/预设）');
-  if (input.selectedLanguage !== 'zh-CN') reasons.push('生成语言需为「简体中文」');
-
-  const actualStoryGuidance = normalizeStrictStoryGuidance(input.userGuidance);
-  if (input.requiredStoryGuidance) {
-    if (actualStoryGuidance !== input.requiredStoryGuidance) {
-      reasons.push('需使用赛季指定的「故事引导」');
-    }
-  } else if (actualStoryGuidance) {
-    reasons.push('需清空「故事引导」');
-  }
-
-  if (input.readArenaHistory) reasons.push('需关闭「读取历战」');
-  if (input.readCurrentState) reasons.push('需关闭「读取当前状态」');
-  if (input.readNarrativeHistory) reasons.push('需关闭「读取叙事历史」');
-  if (input.adjudicationEventCount > 0) reasons.push('需清空「随机判定器事件」');
-  if (input.rankableCombatants.some((c) => (c.characterGuidance ?? '').trim())) reasons.push('需清空「角色行动引导」');
-  if (input.requiredQuestionnaireLorePresetIds.length > 0) {
-    const requiredSet = new Set(input.requiredQuestionnaireLorePresetIds);
-    const actualSet = new Set(input.questionnaireLoreIds);
-    let ok = requiredSet.size === actualSet.size;
-    if (ok) {
-      for (const id of requiredSet) {
-        if (!actualSet.has(id)) {
-          ok = false;
-          break;
-        }
-      }
-    }
-    if (!ok) reasons.push('需启用赛季指定的「问卷/设定卡 Lore 注入」');
-  } else if (input.questionnaireLoreEnabled && !input.questionnaireLoreAllowed) {
-    reasons.push('需关闭「问卷/设定卡 Lore 注入」');
-  }
-
-  if (input.requiredMode === 'scenario') {
-    if (!input.scenarioEnabled) reasons.push('需启用「情景模式」并选择主情景');
-    if (input.requiredScenarioPresetFilename) {
-      const fileName = typeof input.scenarioFileName === 'string' ? input.scenarioFileName.trim() : '';
-      if (!input.scenarioIsPreset || fileName !== input.requiredScenarioPresetFilename) {
-        reasons.push('需选择赛季指定的「预设情景」');
-      }
-    }
-  } else if (input.scenarioEnabled) {
-    reasons.push('需关闭「情景模式」');
-  }
-
-  if (input.auxScenarioCount > 0) reasons.push('需移除「辅助情景」');
-  if (input.materialCount > 0) reasons.push('需移除「素材」');
-  if (input.userProviderConfigModelId && isStrictRankedModelBlacklisted(input.userProviderConfigModelId)) {
-    reasons.push('需改用支持严格排位计分的 AI 模型');
-  }
-  return reasons;
 };
 
 const pickNonBlacklistedModelForProvider = (providerId: string): string | null => {
@@ -859,7 +764,6 @@ export function RankingQuickActions() {
   }, [localStrictReasons, strictPreflight]);
 
   const freeRankingToggleId = 'arena-free-ranking-enabled';
-  const strictSetupReady = strictSetupMissingReasons.length === 0;
   const strictCountReady = strictIndicator.willCount;
 
   return (
@@ -930,33 +834,7 @@ export function RankingQuickActions() {
         </label>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-xl border border-gray-200 bg-white/60 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs font-semibold text-gray-900">严格计分基础条件</div>
-              <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                  strictSetupReady ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
-                }`}
-              >
-                {strictSetupReady ? '已就绪' : `缺少 ${strictSetupMissingReasons.length} 项`}
-              </span>
-            </div>
-            {strictSetupReady ? (
-              <div className="mt-2 text-xs text-gray-600">配置已对齐，可尝试计分。</div>
-            ) : (
-              <details className="group mt-2">
-                <summary className="flex cursor-pointer items-center justify-between gap-2 text-xs font-medium text-gray-700 hover:text-gray-900 [&::-webkit-details-marker]:hidden">
-                  <span>查看缺少项</span>
-                  <span className="text-gray-400 transition-transform group-open:rotate-180">▾</span>
-                </summary>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-gray-700">
-                  {strictSetupMissingReasons.map((reason) => (
-                    <li key={reason}>{reason}</li>
-                  ))}
-                </ul>
-              </details>
-            )}
-          </div>
+          <StrictSetupChecklist reasons={strictSetupMissingReasons} />
 
           <div className="rounded-xl border border-gray-200 bg-white/60 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">

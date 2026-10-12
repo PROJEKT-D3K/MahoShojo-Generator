@@ -23,6 +23,7 @@ import { generationActionClassNames, generationSubmitClassName } from '@mahoshoj
 import { DesktopArenaSession, arenaReadinessMessage, arenaReferenceCount, inheritedArenaAdjudication, type ArenaDraft, type DesktopArenaProduct } from '../features/arena/session';
 import { buildAdjudicationSourceKey } from '@mahoshojo/domain/arena-adjudication-events';
 import { AdvancedArenaControls } from '../features/arena/advanced-controls';
+import { DesktopStrictConfigurationDiagnostics } from '../features/arena/strict-configuration-diagnostics';
 import { addAdvancedCombatants, addAdvancedAuxScenario, removeAdvancedCombatants, removeAdvancedAuxScenarios, setAdvancedMainScenario } from '../features/arena/advanced-input';
 import { addArenaCombatants, arenaItemName, fetchArenaPreset, moveArenaItem, parseArenaJson, parseArenaScenario, readArenaFile } from '../features/arena/input';
 import { readSublimationHistorySource, type SublimationHistorySource } from '../features/sublimation/history-source';
@@ -407,6 +408,9 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           {inheritedAdjudication.skippedLegacy ? <p role="status">{inheritedAdjudication.skippedLegacy} 个旧版随机事件格式不受支持，保留原字段但不执行。</p> : null}
           <fieldset disabled={!guard.ready} className="min-w-0"><DesktopAiProviderPanel generationMode={draft.generationMode} onDirtyChange={onAiDirty} showConnectionTest={false} copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请配置客户端连接。', serverFootnote: 'Arena 服务器支持流式或完整非流式报告；恢复与停止沿原请求，角色更新使用本次创建时冻结的选择。', payloadNoun: '角色与故事设定' }} /></fieldset>
           {hostedTarget ? <p role="status">官方服务器生成。创建前验证所选交付协议与原账号；不会自动改为客户端执行。符合服务器规则的对局可能计入严格排位，是否计分以服务器结算为准。</p> : null}
+          <DesktopStrictConfigurationDiagnostics key={product} draft={draft} executionLocation={target.location} modelId={target.modelId} modelUnavailable={!!target.unavailableReason}
+            isAuthenticated={cloudState.verification === 'verified' && !!cloudState.account ? true : cloudState.verification === 'signed-out' || cloudState.verification === 'expired' ? false : null}
+            adjudicationEventCount={inheritedAdjudication.events.length} />
         </>,
         generationMode: <>
           <ArenaReportFormatSelectorView value={draft.reportFormat} disabled={disabled} onChange={(reportFormat) => update({ reportFormat })} webDescription="生成网页或包目标源码；本片仅验证、保存与导出，隔离运行待 D4 验收。" />
