@@ -1,19 +1,21 @@
 import {
   DesktopExternalLinkErrorCodeSchema,
   DesktopOpenExternalUrlRequestSchema,
+  DesktopOpenCloudAccountPageRequestSchema,
   MAX_DESKTOP_EXTERNAL_URL_LENGTH,
 } from '@mahoshojo/contracts/desktop-ipc';
-import type { DesktopExternalLinkErrorCode } from '@mahoshojo/contracts/desktop-ipc';
+import type { DesktopExternalLinkErrorCode, DesktopOpenCloudAccountPageRequest } from '@mahoshojo/contracts/desktop-ipc';
 
 /**
  * 受控外链的 renderer 侧薄桥（D5.1-P1，`DESK-PARITY-003` / `DESK-ONLINE-014`）。
  *
- * 只有一条命令：把一个 URL 交给 native，由它完成协议/凭据/结构校验后交给系统浏览器。
+ * 普通外链交给 native 校验；云账号入口只传页面标识，目标由 native 构造。
  * 「固定产品链接不确认、内容链接默认确认」是 UI 层策略，不在这条命令里——native
  * 校验对两者一视同仁，确认与否不改变安全边界。
  */
 
 export const OPEN_EXTERNAL_URL_COMMAND = 'open_external_url' as const;
+export const OPEN_CLOUD_ACCOUNT_PAGE_COMMAND = 'open_cloud_account_page' as const;
 
 export interface InvokeFn {
   (command: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -31,7 +33,7 @@ export class DesktopExternalLinkError extends Error {
   }
 }
 
-const toExternalLinkError = (cause: unknown): DesktopExternalLinkError => {
+const toExternalLinkError = (cause: unknown, command: string): DesktopExternalLinkError => {
   if (
     cause !== null
     && typeof cause === 'object'
@@ -41,15 +43,15 @@ const toExternalLinkError = (cause: unknown): DesktopExternalLinkError => {
     const { code, message } = cause as { code: string; message: string };
     const parsedCode = DesktopExternalLinkErrorCodeSchema.safeParse(code);
     return new DesktopExternalLinkError(
-      OPEN_EXTERNAL_URL_COMMAND,
+      command,
       parsedCode.success ? parsedCode.data : 'open-failed',
       message,
     );
   }
   if (cause instanceof Error) {
-    return new DesktopExternalLinkError(OPEN_EXTERNAL_URL_COMMAND, 'open-failed', cause.message);
+    return new DesktopExternalLinkError(command, 'open-failed', cause.message);
   }
-  return new DesktopExternalLinkError(OPEN_EXTERNAL_URL_COMMAND, 'open-failed', 'external link command failed');
+  return new DesktopExternalLinkError(command, 'open-failed', '系统浏览器打开失败');
 };
 
 /**
@@ -82,7 +84,22 @@ export const openExternalUrl = async (invoke: InvokeFn, url: string): Promise<vo
   try {
     await invoke(OPEN_EXTERNAL_URL_COMMAND, { url: request.data.url });
   } catch (cause) {
-    throw toExternalLinkError(cause);
+    throw toExternalLinkError(cause, OPEN_EXTERNAL_URL_COMMAND);
+  }
+};
+
+export const openCloudAccountPage = async (
+  invoke: InvokeFn,
+  request: DesktopOpenCloudAccountPageRequest,
+): Promise<void> => {
+  const parsed = DesktopOpenCloudAccountPageRequestSchema.safeParse(request);
+  if (!parsed.success) {
+    throw new DesktopExternalLinkError(OPEN_CLOUD_ACCOUNT_PAGE_COMMAND, 'bridge-invalid', '账号页面请求无效');
+  }
+  try {
+    await invoke(OPEN_CLOUD_ACCOUNT_PAGE_COMMAND, { request: parsed.data });
+  } catch (cause) {
+    throw toExternalLinkError(cause, OPEN_CLOUD_ACCOUNT_PAGE_COMMAND);
   }
 };
 

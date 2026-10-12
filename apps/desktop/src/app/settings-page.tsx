@@ -15,6 +15,7 @@ import { useExternalLinks } from '../features/external-links/external-links-prov
 
 import { DESKTOP_PAGE_PREFERENCE_SOURCES } from './settings-page-preferences';
 import { AccountPanel } from '../features/account/AccountPanel';
+import { AccountSecurityCard } from '../features/account/AccountSecurityCard';
 import { ProfileSignaturePanel } from '../features/account/ProfileSignaturePanel';
 import { AiConnectionsPanel } from '../features/ai-config/AiConnectionsPanel';
 import { DesktopConfigFeedback } from '../features/config/DesktopConfigFeedback';
@@ -171,7 +172,7 @@ export const DesktopSettings = () => {
       groups={[
         {
           id: 'account',
-          content: <><AccountPanel /><ProfileSignaturePanel /></>,
+          content: <><AccountPanel /><ProfileSignaturePanel /><AccountSecurityCard /></>,
         },
         {
           id: 'appearance',

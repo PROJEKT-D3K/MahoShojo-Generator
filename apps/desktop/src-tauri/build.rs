@@ -106,6 +106,7 @@ fn main() {
             "cloud_messages_request",
             "cancel_hosted_ai",
             "open_external_url",
+            "open_cloud_account_page",
             "announcements_get_cached",
             "announcements_refresh",
             "desktop_config_read",

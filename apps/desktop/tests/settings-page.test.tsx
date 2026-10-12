@@ -128,6 +128,53 @@ const click = async (element: Element | null): Promise<void> => {
 };
 
 describe('desktop settings shell', () => {
+  it('opens account security and password recovery from the account group without changing local state', async () => {
+    const router = await mountAt('/settings?section=account');
+    const before = { ...window.localStorage };
+    const group = container.querySelector('#settings-account')!;
+    expect(group.textContent).toContain('浏览器可能登录了不同账号');
+    invokeMock.mockClear();
+    for (const [label, page] of [
+      ['在浏览器打开账号安全', 'account-security'],
+      ['在浏览器找回密码', 'password-recovery'],
+    ]) {
+      await click([...group.querySelectorAll('button')].find((button) => button.textContent === label) ?? null);
+      expect(invokeMock.mock.calls.at(-1)).toEqual(['open_cloud_account_page', { request: { page } }]);
+    }
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(router.state.location.pathname).toBe('/settings');
+    expect(router.state.location.search).toEqual({ section: 'account' });
+    expect({ ...window.localStorage }).toEqual(before);
+  });
+
+  it('keeps the profile draft when a browser open fails and retries only on another click', async () => {
+    const account = { userId: 7, username: 'draft-owner' };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === 'cloud_cached_account') return { account };
+      if (command === 'cloud_auth_status') return { state: 'active', account };
+      if (command === 'cloud_me_profile') return { userId: 7, signature: '线上签名', avatarDataUrl: null };
+      if (command === 'open_cloud_account_page') throw { code: 'open-failed', message: '没有默认浏览器' };
+      return defaultInvokeImpl(command);
+    });
+    await mountAt('/settings?section=account');
+    const textarea = container.querySelector('section[aria-label="个人资料"] textarea') as HTMLTextAreaElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '未保存草稿');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    invokeMock.mockClear();
+    const button = [...container.querySelectorAll('button')].find((item) => item.textContent === '在浏览器打开账号安全');
+    await click(button ?? null);
+    expect(container.textContent).toContain('没有默认浏览器');
+    expect(textarea.value).toBe('未保存草稿');
+    expect(invokeMock.mock.calls).toEqual([['open_cloud_account_page', { request: { page: 'account-security' } }]]);
+    invokeMock.mockImplementation(defaultInvokeImpl);
+    await click(button ?? null);
+    expect(textarea.value).toBe('未保存草稿');
+    expect(container.textContent).toContain('已请求系统浏览器打开');
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
   it('renders the shared grouped shell with section anchors and delivered panels', async () => {
     await mountAt('/settings');
 

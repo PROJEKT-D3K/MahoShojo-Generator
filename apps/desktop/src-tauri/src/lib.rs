@@ -1650,6 +1650,16 @@ fn open_external_url(url: String) -> Result<(), external_link::ExternalLinkError
     external_link::open_validated_url(&validated)
 }
 
+/// 账号敏感流程在系统浏览器继续；不传递 Desktop 会话，也不启动登录或回跳。
+#[tauri::command]
+fn open_cloud_account_page(
+    cloud: State<'_, cloud::CloudState>,
+    request: external_link::OpenCloudAccountPageRequest,
+) -> Result<(), external_link::ExternalLinkError> {
+    let url = external_link::cloud_account_page_url(cloud.origin(), request.page)?;
+    external_link::open_validated_url(&url)
+}
+
 /// 公告快照：上次成功刷新的落盘结果；没有或损坏返回 `None`，
 /// renderer 据此回退内置快照。
 #[tauri::command]
@@ -2050,6 +2060,7 @@ pub fn run() {
             cloud_messages_request,
             cancel_hosted_ai,
             open_external_url,
+            open_cloud_account_page,
             announcements_get_cached,
             announcements_refresh,
             desktop_config_read,

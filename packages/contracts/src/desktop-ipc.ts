@@ -944,6 +944,14 @@ export type DesktopOpenExternalUrlRequest = z.infer<
   typeof DesktopOpenExternalUrlRequestSchema
 >;
 
+/** 云账号页面由 Native 从当前服务 origin 构造；renderer 不传 URL 或账号参数。 */
+export const DesktopCloudAccountPageSchema = z.enum(['account-security', 'password-recovery']);
+export type DesktopCloudAccountPage = z.infer<typeof DesktopCloudAccountPageSchema>;
+export const DesktopOpenCloudAccountPageRequestSchema = z
+  .object({ page: DesktopCloudAccountPageSchema })
+  .strict();
+export type DesktopOpenCloudAccountPageRequest = z.infer<typeof DesktopOpenCloudAccountPageRequestSchema>;
+
 export const DesktopExternalLinkErrorCodeSchema = z.enum([
   'invalid-url',
   'open-failed',
