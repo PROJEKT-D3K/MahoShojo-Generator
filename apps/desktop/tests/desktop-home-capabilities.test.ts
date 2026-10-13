@@ -35,10 +35,8 @@ describe('desktop capability snapshot', () => {
     expect(readCapability(snapshot, '/card-forge').kind).toBe('available');
   });
 
-  it('does not declare Web-only homepage entries', () => {
-    for (const href of ['/magic-tea-party']) {
-      expect(readCapability(snapshot, href).kind).toBe('unknown');
-    }
+  it('exposes the actual local text tea journey', () => {
+    expect(readCapability(snapshot, '/magic-tea-party').kind).toBe('available');
   });
 
   it('marks exactly the delivered routes as available', () => {

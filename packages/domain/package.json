@@ -231,6 +231,7 @@
     "./tavern-card/recommend": "./src/tavern-card/recommend.ts",
     "./magic-tea-party/types": "./src/magic-tea-party/types.ts",
     "./magic-tea-party/transfer": "./src/magic-tea-party/transfer.ts",
+    "./magic-tea-party/import-plan": "./src/magic-tea-party/import-plan.ts",
     "./team-merge": "./src/team-merge.ts",
     "./team-input": "./src/team-input.ts",
     "./questionnaire-editor": "./src/questionnaire-editor.ts",

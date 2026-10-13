@@ -165,6 +165,7 @@ describe('desktop router keeps the product path inside the hash', () => {
     expect(hrefs).toContain('#/local-library');
     expect(hrefs).toContain('#/settings');
     expect(hrefs).toContain('#/battle');
+    expect(hrefs).toContain('#/magic-tea-party');
     // 首页保持 Web 目录：由 /battle 内的高级入口进入 /arena。
     expect(hrefs).not.toContain('#/arena');
     // 页脚站外链接经 onNavigateExternal 渲染为真实 <a href>（点击被拦截走

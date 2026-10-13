@@ -241,3 +241,173 @@ describe('Web 茶会真实导入导出面板消费共享格式核', () => {
     expect(container.textContent).toContain('已导入 1 条消息（1 行已跳过）。');
   });
 });
+
+async function importFromPanel(value: unknown, filename = 'archive.json') {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(input, 'files', { configurable: true, value: [{ name: filename, type: 'application/json', text: async () => JSON.stringify(value) }] });
+  await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(button('导入会话（JSON / JSONL）').disabled).toBe(false);
+}
+
+const importEntry = (sessionId: string, prefix: string) => ({
+  schema: 'magic-tea-party.session.v1',
+  session: {
+    id: sessionId, title: '屏蔽标题', createdAt: 1, updatedAt: 2,
+    settings: { providerId: 'old-provider', modelId: 'old-model', temperature: 0.3, futureOption: { neverDispatch: true }, outputPlan: { choices: 'on', summary: 'off', updates: 'auto', future: true } },
+    summary: '屏蔽摘要', summarySections: { recap: '屏蔽章节' },
+    summaryMeta: { updatedAt: 3, fromMessageId: `${prefix}-user`, toMessageId: `${prefix}-assistant`, extension: { keep: true } },
+    protocolShadow: {
+      updatedAt: 4, source: 'manual',
+      messageRange: { fromMessageId: `${prefix}-user`, toMessageId: `${prefix}-assistant`, extension: 'range' },
+      drafts: [{ character: '屏蔽角色', current_state_summary: '屏蔽旧草稿', extension: true, meta: { sessionId, messageRange: { fromMessageId: `${prefix}-user`, toMessageId: `${prefix}-assistant`, count: 2 }, futureMeta: 'keep' } }],
+      extension: ['shadow'],
+    },
+    updateSnapshot: {
+      id: 'snapshot', createdAt: 5, mode: 'confirm',
+      messageRange: { fromMessageId: `${prefix}-user`, toMessageId: `${prefix}-assistant` }, drafts: [],
+      rolesBefore: [{ id: 'role', name: '屏蔽之前', source: 'local', card: { name: '屏蔽角色卡' } }],
+      rolesAfter: [{ id: 'role', name: '屏蔽之后', source: 'local', card: { name: '屏蔽角色卡' } }], extension: true,
+    },
+    lastChoices: [{ id: 'choice', text: '屏蔽选项', future: true }], draft: '屏蔽输入', branchLabel: '原分支',
+    extension: { mustKeep: '屏蔽未知值仍保持原样' },
+  },
+  roles: [{ id: 'role', name: '屏蔽角色', source: 'local', notes: '屏蔽备注', card: { name: '屏蔽卡', future: ['data'] }, extension: true }],
+  scenario: { id: 'scenario', title: '屏蔽情景', source: 'local', card: { title: '屏蔽情景卡' }, extension: true },
+  auxScenarios: [{ id: 'aux', title: '屏蔽辅情景', source: 'local', card: { title: '屏蔽辅卡' } }],
+  messages: [
+    { id: `${prefix}-user`, sessionId, role: 'user', content: '屏蔽用户', createdAt: 1, extension: { keep: true } },
+    { id: `${prefix}-assistant`, sessionId, role: 'assistant', content: '屏蔽助手', createdAt: 2, status: 'streaming', sourceMessageId: `${prefix}-user`, revisionOf: `${prefix}-user`, tachieId: `${prefix}-asset`,
+      segments: [{ type: 'dialogue', speakerId: 'role', speakerName: '屏蔽姓名', text: '屏蔽对白', future: true }],
+      choices: [{ id: 'choice', text: '屏蔽选项', future: true }], meta: { speakerName: '屏蔽姓名', future: { keep: true } } },
+  ],
+  tachieAssets: [{ id: `${prefix}-asset`, sessionId, anchorMessageId: `${prefix}-assistant`, cacheKey: 'cache', fragmentHash: 'hash', styleId: 'style', imageUrl: 'https://media.invalid/reference.png', blobRef: 'old-local-reference', createdAt: 1, lastUsedAt: 2, extension: { keep: true } }],
+  extensionEnvelope: { keep: true },
+});
+
+describe('Web import plan real panel regression', () => {
+  it('imports a nonempty archive in one preflight, remaps forward parent links and keeps Web masking/media/unknown data', async () => {
+    const child = importEntry('child', 'child'); const parent = importEntry('parent', 'parent');
+    Object.assign(child.session, { forkedFrom: { sessionId: 'parent', messageId: 'parent-assistant', createdAt: 4, future: true } });
+    child.messages[1].revisionOf = 'parent-assistant';
+    host.maskText.mockImplementation((value: string) => ({ value: value.replaceAll('屏蔽', '＊＊'), hasShieldWords: true, detectedWords: ['屏蔽'] }));
+    host.maskJson.mockImplementation((value: unknown) => ({ value: JSON.parse(JSON.stringify(value).replaceAll('屏蔽', '＊＊')), hasShieldWords: true, detectedWords: ['屏蔽'] }));
+    const onImported = vi.fn();
+    await renderPanel(null, onImported);
+    await importFromPanel({ schema: 'magic-tavern.archive.v1', sessions: [child, parent], futureArchive: true });
+
+    expect(host.putSession).toHaveBeenCalledTimes(2);
+    expect(host.putMessage).toHaveBeenCalledTimes(4);
+    expect(host.putAsset).toHaveBeenCalledTimes(2);
+    const importedChild = host.putSession.mock.calls[0][0];
+    const importedParent = host.putSession.mock.calls[1][0];
+    const [childUser, childAssistant, , parentAssistant] = host.putMessage.mock.calls.map(call => call[0]);
+    const childAsset = host.putAsset.mock.calls[0][0];
+    expect(importedChild.forkedFrom).toEqual({ sessionId: importedParent.id, messageId: parentAssistant.id, createdAt: 4, future: true });
+    expect(childAssistant).toMatchObject({ sessionId: importedChild.id, sourceMessageId: childUser.id, revisionOf: parentAssistant.id, tachieId: childAsset.id, status: 'done', content: '＊＊助手', segments: [{ speakerName: '＊＊姓名', text: '＊＊对白', future: true }], choices: [{ id: 'choice', text: '＊＊选项', future: true }], meta: { speakerName: '＊＊姓名', future: { keep: true } } });
+    expect(childAsset).toMatchObject({ sessionId: importedChild.id, anchorMessageId: childAssistant.id, imageUrl: 'https://media.invalid/reference.png', blobRef: 'old-local-reference', extension: { keep: true } });
+    expect(importedChild).toMatchObject({
+      title: '＊＊标题', summary: '＊＊摘要', summarySections: { recap: '＊＊章节' }, draft: '＊＊输入',
+      roles: [{ name: '＊＊角色', notes: '＊＊备注', card: { name: '＊＊卡', future: ['data'] }, extension: true }],
+      scenario: { title: '＊＊情景', card: { title: '＊＊情景卡' }, extension: true },
+      auxScenarios: [{ title: '＊＊辅情景', card: { title: '＊＊辅卡' } }],
+      settings: { providerId: 'old-provider', modelId: 'old-model', temperature: 0.3, futureOption: { neverDispatch: true }, outputPlan: { future: true, choices: 'on', summary: 'off', updates: 'auto' } },
+      summaryMeta: { fromMessageId: childUser.id, toMessageId: childAssistant.id, extension: { keep: true } },
+      protocolShadow: { messageRange: { fromMessageId: childUser.id, toMessageId: childAssistant.id, count: 2, extension: 'range' }, drafts: [{ characterName: '＊＊角色', currentStateSummary: '＊＊旧草稿', extension: true, meta: { sessionId: importedChild.id, messageRange: { fromMessageId: childUser.id, toMessageId: childAssistant.id, count: 2 }, futureMeta: 'keep' } }], extension: ['shadow'] },
+      updateSnapshot: { messageRange: { fromMessageId: childUser.id, toMessageId: childAssistant.id, count: 2 }, rolesBefore: [{ name: '＊＊之前' }], rolesAfter: [{ name: '＊＊之后' }], extension: true },
+      lastChoices: [{ id: 'choice', text: '＊＊选项', future: true }],
+      extension: { mustKeep: '屏蔽未知值仍保持原样' },
+      importMetadata: { sourceEnvelope: { session: { extensionEnvelope: { keep: true } }, archive: { futureArchive: true } } },
+    });
+    expect(host.getSession).not.toHaveBeenCalled();
+    expect(host.getBlob).not.toHaveBeenCalled();
+    expect(onImported).toHaveBeenCalledWith(importedChild.id);
+    expect(container.textContent).toContain('已导入 2 个会话。');
+
+    host.listMessages.mockResolvedValue([childUser, childAssistant]);
+    host.listAssets.mockResolvedValue([childAsset]);
+    await act(async () => root.render(<MagicTeaPartyImportExportPanel activeSession={importedChild} preferences={preferences} onSessionImported={onImported} />));
+    const exported = JSON.parse((await exportFromPanel('导出当前会话（JSON）')).text);
+    expect(exported.session.extension).toEqual(child.session.extension);
+    expect(exported.session.settings.futureOption).toEqual({ neverDispatch: true });
+    expect(exported.messages[0].extension).toEqual({ keep: true });
+    expect(exported.tachieAssets[0].extension).toEqual({ keep: true });
+    expect(exported.session.protocolShadow.extension).toEqual(['shadow']);
+  });
+
+  it.each(['session', 'message', 'asset'])('rejects duplicate %s IDs in a later archive entry with zero IndexedDB writes', async kind => {
+    const a = importEntry('a', 'a'); const b = importEntry('b', 'b');
+    if (kind === 'session') b.session.id = a.session.id;
+    if (kind === 'message') b.messages[0].id = a.messages[0].id;
+    if (kind === 'asset') b.tachieAssets[0].id = a.tachieAssets[0].id;
+    const onImported = vi.fn(); await renderPanel(null, onImported);
+    await importFromPanel({ schema: 'magic-tea-party.archive.v1', sessions: [a, b] });
+    expect(host.putSession).not.toHaveBeenCalled(); expect(host.putMessage).not.toHaveBeenCalled(); expect(host.putAsset).not.toHaveBeenCalled();
+    expect(onImported).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('ID 重复');
+  });
+
+  it('retains external parent provenance without binding to an existing local session of the same ID', async () => {
+    const input = importEntry('source', 'source');
+    Object.assign(input.session, { forkedFrom: { sessionId: 'existing-local', messageId: 'existing-message', createdAt: 1 } });
+    host.getSession.mockResolvedValue({ ...buildSession(), id: 'existing-local' });
+    await renderPanel(null); await importFromPanel(input, 'session.json');
+    expect(host.putSession).toHaveBeenCalledTimes(1);
+    expect(host.putSession.mock.calls[0][0].forkedFrom).toBeUndefined();
+    expect(host.putSession.mock.calls[0][0].importMetadata.unresolvedForkedFrom).toEqual({ sessionId: 'existing-local', messageId: 'existing-message', createdAt: 1 });
+    expect(host.getSession).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('未解析来源');
+  });
+
+  it('completes Web masking for the last session before writing any part of the archive', async () => {
+    const a = importEntry('a', 'a'); const b = importEntry('b', 'b');
+    b.messages[1].content = 'mask-failure';
+    host.maskText.mockImplementation((value: string) => {
+      if (value === 'mask-failure') throw new Error('mask failed');
+      return { value, hasShieldWords: false, detectedWords: [] };
+    });
+    await renderPanel(null); await importFromPanel({ schema: 'magic-tea-party.archive.v1', sessions: [a, b] });
+    expect(host.putSession).not.toHaveBeenCalled(); expect(host.putMessage).not.toHaveBeenCalled(); expect(host.putAsset).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('mask failed');
+  });
+
+  it('keeps the existing sensitive-text redirect before parsing or writing', async () => {
+    host.checkSensitive.mockResolvedValue({ blocked: true, redirectTarget: '/blocked' });
+    await renderPanel(null); await importFromPanel(importEntry('source', 'source'));
+    expect(host.push).toHaveBeenCalledWith('/blocked');
+    expect(host.putSession).not.toHaveBeenCalled(); expect(host.putMessage).not.toHaveBeenCalled(); expect(host.putAsset).not.toHaveBeenCalled();
+    expect(host.maskText).not.toHaveBeenCalled();
+  });
+  it.each(['summary', 'draft-impact', 'draft-currentStateSummary', 'draft-winner'])('rejects malformed known %s in a later entry before any IndexedDB write', field => {
+    const a = importEntry('a', 'a'); const b = importEntry('b', 'b');
+    if (field === 'summary') Object.assign(b.session, { summary: { x: 1 } });
+    else Object.assign(b.session.protocolShadow.drafts[0], { [field.slice('draft-'.length)]: { x: 1 } });
+    return (async () => {
+      await renderPanel(null); await importFromPanel({ schema: 'magic-tea-party.archive.v1', sessions: [a, b] });
+      expect(host.putSession).not.toHaveBeenCalled(); expect(host.putMessage).not.toHaveBeenCalled(); expect(host.putAsset).not.toHaveBeenCalled();
+      expect(container.textContent).toContain('必须为字符串');
+    })();
+  });
+
+  it('keeps JSONL primitive skip warnings, numeric IDs and explicit placeholder-like IDs compatible', async () => {
+    const rows = ['42', '[]', '{"id":12,"mes":"数字ID正文"}', '{"id":"@jsonl-message-1","mes":"显式ID正文"}'];
+    await renderPanel(null);
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', { configurable: true, value: [{ name: 'legacy.jsonl', type: 'application/jsonl', text: async () => rows.join('\n') }] });
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(host.putSession).toHaveBeenCalledTimes(1); expect(host.putMessage).toHaveBeenCalledTimes(2);
+    expect(host.putMessage.mock.calls[0][0].meta.source.rawLine).toBe(rows[2]);
+    expect(host.putMessage.mock.calls[1][0].meta.source.rawLine).toBe(rows[3]);
+    expect(container.textContent).toContain('已导入 2 条消息（2 行已跳过）。');
+  });
+
+  it('remaps Web superseded metadata to a later imported session and leaves external/unknown metadata inert', async () => {
+    const first = importEntry('first', 'first'); const later = importEntry('later', 'later');
+    Object.assign(first.messages[1], { meta: { supersededBySessionId: 'later', future: { supersededBySessionId: 'later' } } });
+    Object.assign(later.messages[1], { meta: { supersededBySessionId: 'external', future: true } });
+    await renderPanel(null); await importFromPanel({ schema: 'magic-tea-party.archive.v1', sessions: [first, later] });
+    expect(host.putSession).toHaveBeenCalledTimes(2);
+    expect(host.putMessage.mock.calls[1][0].meta).toEqual({ supersededBySessionId: host.putSession.mock.calls[1][0].id, future: { supersededBySessionId: 'later' } });
+    expect(host.putMessage.mock.calls[3][0].meta).toEqual({ supersededBySessionId: 'external', future: true });
+  });
+
+});

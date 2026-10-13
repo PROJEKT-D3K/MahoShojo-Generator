@@ -675,3 +675,6 @@ fn real_deferred_commit_failure_rolls_back_all_tables_and_allows_exact_storage_r
     assert_eq!(store.mutate(write).unwrap(), committed);
     assert_eq!(snapshot(&c), after);
 }
+
+#[path = "magic_tea_party_journey_tests.rs"]
+mod journey;

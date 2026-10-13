@@ -1,4 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
+import { useMagicTeaPartyChat, type UseMagicTeaPartyChatResult } from '@/lib/magic-tea-party/useMagicTeaPartyChat';
+import { DEFAULT_MAGIC_TEA_PARTY_PREFERENCES } from '@/lib/magic-tea-party/preferences';
+import type { MagicTeaPartySession } from '@/lib/magic-tea-party/types';
+const requestFixture = vi.hoisted(() => ({ dispatch: vi.fn() }));
+vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntentLatch: () => ({ tryAcquire: () => ({ dispatch: requestFixture.dispatch }) }) }));
+vi.mock('@/lib/auth', () => ({ authStorage: { getActivityHeaders: async () => ({}) } }));
+vi.mock('@/lib/magic-tea-party/storage', () => ({ putMagicTeaPartyMessage: async () => {}, deleteMagicTeaPartyMessages: async () => {} }));
 
 import {
   applyMagicTeaPartyMessageLimits,
@@ -164,4 +173,42 @@ describe('total overflow guard', () => {
     // 必须命中 error-help 的上下文超限提示词，否则会退回数据卡百科
     expect(message).toContain('超过单次请求');
   });
+});
+
+it('preserves the Web UTF16 cap without splitting emoji or silently normalizing existing lone units', () => {
+  const source = '😀'.repeat(20000);
+  const result = clipMagicTeaPartyMessageContent(source, 8000);
+  expect(/[\uD800-\uDFFF]/u.test(result.text)).toBe(false);
+  expect(result.text.length).toBeLessThanOrEqual(8000);
+  expect(clipMagicTeaPartyMessageContent('\ud800', 8000).text).toBe('\ud800');
+});
+
+
+it('uses the known-settings projection in the actual Web choices request, including nested outputPlan', async () => {
+  const settings = { providerId: 'openai', modelId: 'synthetic', temperature: 0.8, maxContextMessages: 120,
+    contextWindowTokens: 32000, responseReserveTokens: 4000, summaryTriggerRatio: 0.8, summaryMaxTokens: 500,
+    summaryMinGapMessages: 3, enableChoices: true, choiceCount: 4, outputFormat: 'jsonl' as const,
+    outputPlan: { choices: 'on' as const, summary: 'off' as const, updates: 'auto' as const, futureEndpoint: 'inert' },
+    updateApplyMode: 'confirm' as const, language: 'zh-CN' as const, userDisplayName: '旅人', presetId: '', worldbookPresetId: '',
+    enableSummary: true, readArenaHistory: true, readArenaHistoryLimit: 3, isArenaHistoryUnlimited: false,
+    readCurrentState: true, writeArenaHistory: true, writeCurrentState: true, futureEndpoint: { url: 'inert://archive-only' } };
+  const session: MagicTeaPartySession = { id: 'request-test', title: '茶会', createdAt: 1, updatedAt: 1, roles: [], settings };
+  const original = JSON.stringify(session);
+  requestFixture.dispatch.mockResolvedValue(new Response(JSON.stringify({ error: 'synthetic stop after request capture' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+  let chat: UseMagicTeaPartyChatResult | undefined;
+  function Probe() {
+    chat = useMagicTeaPartyChat({ activeSession: session, activeSessionId: session.id, messages: [], setMessages: () => {}, persistSession: async () => {},
+      preferences: DEFAULT_MAGIC_TEA_PARTY_PREFERENCES, userProviderConfig: { providerId: 'openai', modelId: 'synthetic', apiKey: 'synthetic-not-a-real-key' }, router: { push: async () => {} } });
+    return null;
+  }
+  renderToString(createElement(Probe)); await chat!.generateChoices();
+  expect(requestFixture.dispatch).toHaveBeenCalledTimes(1);
+  const [, options] = requestFixture.dispatch.mock.calls[0]!;
+  const payload = JSON.parse(options.body as string);
+  const known = { ...settings }; Reflect.deleteProperty(known, 'futureEndpoint'); Reflect.deleteProperty(known, 'outputPlan');
+  const outputPlan = settings.outputPlan;
+  expect(payload.settings).toMatchObject(known);
+  expect(payload.settings.outputPlan).toEqual({ choices: outputPlan.choices, summary: outputPlan.summary, updates: outputPlan.updates });
+  expect(payload.settings).not.toHaveProperty('futureEndpoint');
+  expect(JSON.stringify(session)).toBe(original);
 });

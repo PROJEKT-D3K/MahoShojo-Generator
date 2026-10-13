@@ -27,7 +27,10 @@ const readString = (value: unknown): string => {
 
 const truncateText = (text: string, maxChars: number): string => {
   if (text.length <= maxChars) return text;
-  return `${text.slice(0, Math.max(0, maxChars))}...[已截断]`;
+  let end = Math.max(0, maxChars);
+  if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff
+    && text.charCodeAt(end) >= 0xdc00 && text.charCodeAt(end) <= 0xdfff) end -= 1;
+  return `${text.slice(0, end)}...[已截断]`;
 };
 
 const safeStringField = (value: unknown): string => readString(value);

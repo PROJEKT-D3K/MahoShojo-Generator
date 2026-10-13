@@ -93,14 +93,15 @@ describe('魔法茶会共享预算与历史', () => {
     expect(isMagicTeaPartyTotalOverflow(limited.totalChars + 1)).toBe(true);
   });
 
-  it('按原 UTF-16 slice 保留头尾，包括截断点处的半个代理对', () => {
+  it('保留原 UTF-16 头尾预算，仅在代理对切点后退一个单元', () => {
     const text = `${'a'.repeat(5565)}😀${'中'.repeat(4000)}尾`;
     const clipped = clipMagicTeaPartyMessageContent(text, 8000);
-    expect(clipped.text.startsWith(`${'a'.repeat(5565)}\ud83d`)).toBe(true);
-    expect(clipped.text).toContain('已省略中段 1616 字');
+    expect(clipped.text.startsWith(`${'a'.repeat(5565)}\n\n`)).toBe(true);
+    expect(/[\uD800-\uDFFF]/u.test(clipped.text)).toBe(false);
+    expect(clipped.text).toContain('已省略中段 1617 字');
     expect(clipped.text.endsWith(`${'中'.repeat(2385)}尾`)).toBe(true);
     expect(clipped.originalLength).toBe(9568);
-    expect(clipped.omittedLength).toBe(1616);
+    expect(clipped.omittedLength).toBe(1617);
     expect(clipMagicTeaPartyMessageContent('😀', 2)).toEqual({ text: '😀', clipped: false, originalLength: 2, keptLength: 2, omittedLength: 0 });
   });
 
@@ -285,5 +286,48 @@ describe('魔法茶会共享 JSONL 与预览', () => {
     expect(seen[1]).toMatchObject({ includeJsonl: false, notices: [], status: 'done' });
     preview.applySafeText(`另一段\n${notice}\n`);
     expect(seen[2].notices).toHaveLength(1);
+  });
+});
+
+describe('Tea shared positional history and Unicode cuts', () => {
+  // This is the former Web algorithm, kept as an independent golden rather than delegating to the selector.
+  const formerTrim = (history: ReturnType<typeof buildMagicTeaPartyHistory>, maxMessages: number, tokenBudget: number, minKeep = 1) => {
+    const count = Number.isFinite(maxMessages) ? Math.max(1, Math.floor(maxMessages)) : history.length;
+    const minimum = Number.isFinite(minKeep) ? Math.max(1, Math.floor(minKeep)) : 1;
+    const tail = history.slice(-count); const budget = Number.isFinite(tokenBudget) ? Math.max(0, Math.floor(tokenBudget)) : 0;
+    if (budget <= 0 || tail.length <= minimum) return tail.slice(-minimum);
+    const result: typeof tail = []; let used = 0;
+    for (let i = tail.length - 1; i >= 0; --i) {
+      const row = tail[i]; const cost = estimateMagicTeaPartyTokens(`${row.role === 'user' ? '旅人' : row.role}: ${row.content}`, 'openai');
+      if (result.length < minimum || used + cost <= budget) { result.push(row); used += cost; }
+    }
+    return result.reverse();
+  };
+  it('matches former Web positions, greedy skipped gaps, minKeep and clip ordering exactly', () => {
+    const history = buildMagicTeaPartyHistory([message('same', 'user', 'a'.repeat(15000)), message('same', 'assistant', 'b'),
+      message('z', 'user', '长'.repeat(17000)), message('q', 'assistant', 'emoji😀'), message('end', 'user', 'end')]);
+    for (const maxMessages of [1, 2, 3, 6, Infinity, NaN]) for (const tokenBudget of [0, 1, 4, 100, 90000, Infinity]) for (const minKeep of [1, 2, 5]) {
+      const actual = trimMagicTeaPartyHistory(history, { maxMessages, tokenBudget, minKeep, providerId: 'openai', userDisplayName: '旅人' });
+      const expected = formerTrim(history, maxMessages, tokenBudget, minKeep);
+      expect(actual).toEqual(expected);
+      expect(applyMagicTeaPartyMessageLimits(actual, 8000)).toEqual(applyMagicTeaPartyMessageLimits(expected, 8000));
+    }
+  });
+  it('keeps UTF16 budgets while backing away from paired boundaries, without repairing existing lone units', () => {
+    const source = '😀'.repeat(16000);
+    const result = clipMagicTeaPartyMessageContent(source, 8000);
+    expect(/[\uD800-\uDFFF]/u.test(result.text)).toBe(false);
+    expect(result.text.length).toBeLessThanOrEqual(8000);
+    expect(source.length).toBe(32000);
+    expect(clipMagicTeaPartyMessageContent('a\ud800b', 8000).text).toBe('a\ud800b');
+    expect(clipMagicTeaPartyMessageContent('中文', 8000).text).toBe('中文');
+  });
+  it('keeps card current/history and summary prompt boundaries as complete pairs', () => {
+    const input = promptInput();
+    input.session.summary = `${'s'.repeat(9999)}😀tail`;
+    input.roles[0] = { ...input.roles[0], card: { ...input.roles[0].card, current_state: { summary: `${'a'.repeat(3999)}😀tail` }, arena_history: { entries: [{ impact: `${'x'.repeat(7999)}😀tail`, title: 'boundary' }] } } };
+    const prompt = buildMagicTeaPartyMainPrompt(input);
+    expect(/[\uD800-\uDFFF]/u.test(prompt)).toBe(false);
+    expect(input.session.summary).toContain('😀tail');
   });
 });

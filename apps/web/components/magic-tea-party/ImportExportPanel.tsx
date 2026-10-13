@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { zipSync } from 'fflate';
+import { buildMagicTeaPartyImportPlan } from '@mahoshojo/domain/magic-tea-party/import-plan';
 import { MagicTeaPartyTransferPanel } from '@mahoshojo/ui-web/magic-tea-party';
 
 import { ErrorMessage } from '@/components/ErrorMessage';
@@ -9,7 +10,6 @@ import { buildSafeFileName } from '@/lib/client/fileName';
 import { randomUUID } from '@/lib/crypto';
 import {
   getMagicTeaPartyTachieBlob,
-  getMagicTeaPartySession,
   listMagicTeaPartyMessages,
   listMagicTeaPartySessions,
   listMagicTeaPartyTachieAssets,
@@ -23,14 +23,11 @@ import type {
   MagicTeaPartyRole,
   MagicTeaPartyScenario,
   MagicTeaPartySession,
-  MagicTeaPartyTachieAsset,
   MagicTeaPartyUpdateDraft,
-  MagicTeaPartyUpdateSnapshot,
 } from '@/lib/magic-tea-party/types';
 import {
   buildMagicTeaPartySessionExport,
   buildMagicTeaPartyArchiveZipEntries,
-  parseSillyTavernJsonl,
   stringifySillyTavernJsonl,
   type MagicTeaPartyArchiveExport,
   type MagicTeaPartySessionExport,
@@ -58,10 +55,6 @@ const ensureRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
 };
-
-const readString = (value: unknown): string => (typeof value === 'string' ? value : '').trim();
-
-const ensureArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 
 export function MagicTeaPartyImportExportPanel(props: ImportExportPanelProps) {
   const { activeSession, preferences, onSessionImported } = props;
@@ -244,6 +237,11 @@ export function MagicTeaPartyImportExportPanel(props: ImportExportPanelProps) {
           const hasWinner = mapped.hasWinner;
           const meta = ensureRecord(mapped.meta) ?? undefined;
           return {
+            ...ensureRecord(item),
+            ...Object.fromEntries(['character', 'name', 'current_state_summary'].flatMap(key => {
+              const value = ensureRecord(item)?.[key];
+              return typeof value === 'string' ? [[key, maskMagicTeaPartyText(value).value]] : [];
+            })),
             ...(roleId ? { roleId } : {}),
             characterName,
             ...(impact ? { impact } : {}),
@@ -259,220 +257,32 @@ export function MagicTeaPartyImportExportPanel(props: ImportExportPanelProps) {
     [maskTextValue]
   );
 
-  const importSessionPayload = useCallback(
-    async (
-      payload: MagicTeaPartySessionExport,
-      titleHint: string | null,
-      options?: { sessionId?: string }
-    ): Promise<{
-      sessionId: string;
-      originalSessionId: string | null;
-      messageIdMap: Map<string, string>;
-      forkedFromRaw: MagicTeaPartySession['forkedFrom'] | null;
-      session: MagicTeaPartySession;
-    }> => {
-      const now = Date.now();
-      const sessionId = options?.sessionId ?? randomUUID();
-      const sessionCore = ensureRecord(payload.session) ?? {};
-      const originalSessionId = typeof sessionCore.id === 'string' ? sessionCore.id : null;
-      const roles = ensureArray<MagicTeaPartyRole>(payload.roles).length > 0
-        ? ensureArray<MagicTeaPartyRole>(payload.roles)
-        : ensureArray<MagicTeaPartyRole>(sessionCore.roles);
-      const scenario = payload.scenario ?? (sessionCore.scenario as MagicTeaPartyScenario | null) ?? null;
-      const auxScenarios = ensureArray<MagicTeaPartyScenario>(payload.auxScenarios).length > 0
-        ? ensureArray<MagicTeaPartyScenario>(payload.auxScenarios)
-        : ensureArray<MagicTeaPartyScenario>(sessionCore.auxScenarios);
-      const messages = ensureArray<MagicTeaPartyMessage>(payload.messages);
-      const assets = ensureArray<MagicTeaPartyTachieAsset>(payload.tachieAssets);
-
-      const messageIdMap = new Map<string, string>();
-      const normalizedMessages = messages.map((message, index) => {
-        const raw = ensureRecord(message) ?? {};
-        const id = randomUUID();
-        if (typeof raw.id === 'string') messageIdMap.set(raw.id, id);
-        const createdAt =
-          typeof raw.createdAt === 'number' && Number.isFinite(raw.createdAt) ? (raw.createdAt as number) : now + index;
-        const status = raw.status === 'blocked' || raw.status === 'error' ? raw.status : 'done';
-        return {
-          ...(raw as any),
-          id,
-          sessionId,
-          createdAt,
-          status,
-        } as MagicTeaPartyMessage;
-      });
-
-      const normalizedMessagesFixed = normalizedMessages.map((message) => {
-        const next = { ...(message as any) };
-        if (typeof next.sourceMessageId === 'string' && messageIdMap.has(next.sourceMessageId)) {
-          next.sourceMessageId = messageIdMap.get(next.sourceMessageId);
-        }
-        if (typeof next.revisionOf === 'string' && messageIdMap.has(next.revisionOf)) {
-          next.revisionOf = messageIdMap.get(next.revisionOf);
-        }
-        return next as any;
-      });
-      const messageIndexMap = new Map<string, number>();
-      normalizedMessagesFixed.forEach((message, index) => {
-        messageIndexMap.set(message.id, index);
-      });
-
-      const mapMessageRange = (value: unknown): { fromMessageId: string; toMessageId: string; count: number } | undefined => {
-        const record = ensureRecord(value);
-        if (!record) return undefined;
-        const fromRaw = typeof record.fromMessageId === 'string' ? record.fromMessageId : '';
-        const toRaw = typeof record.toMessageId === 'string' ? record.toMessageId : '';
-        const mappedFrom = fromRaw ? messageIdMap.get(fromRaw) : undefined;
-        const mappedTo = toRaw ? messageIdMap.get(toRaw) : undefined;
-        if (!mappedFrom || !mappedTo) return undefined;
-        let count = typeof record.count === 'number' && Number.isFinite(record.count) ? record.count : undefined;
-        if (typeof count !== 'number') {
-          const fromIndex = messageIndexMap.get(mappedFrom);
-          const toIndex = messageIndexMap.get(mappedTo);
-          if (typeof fromIndex === 'number' && typeof toIndex === 'number' && toIndex >= fromIndex) {
-            count = toIndex - fromIndex + 1;
-          } else {
-            count = 0;
-          }
-        }
-        return { fromMessageId: mappedFrom, toMessageId: mappedTo, count };
-      };
-
-      const summaryMetaRaw = ensureRecord(sessionCore.summaryMeta);
-      const summaryMeta = summaryMetaRaw
-        ? {
-            updatedAt: typeof summaryMetaRaw.updatedAt === 'number' ? summaryMetaRaw.updatedAt : now,
-            ...(typeof summaryMetaRaw.tokenCount === 'number' ? { tokenCount: summaryMetaRaw.tokenCount } : {}),
-            ...(typeof summaryMetaRaw.fromMessageId === 'string' && messageIdMap.has(summaryMetaRaw.fromMessageId)
-              ? { fromMessageId: messageIdMap.get(summaryMetaRaw.fromMessageId) as string }
-              : {}),
-            ...(typeof summaryMetaRaw.toMessageId === 'string' && messageIdMap.has(summaryMetaRaw.toMessageId)
-              ? { toMessageId: messageIdMap.get(summaryMetaRaw.toMessageId) as string }
-              : {}),
-          }
-        : undefined;
-
-      const protocolShadowRaw = ensureRecord(sessionCore.protocolShadow);
-      const protocolShadowDrafts = sanitizeUpdateDrafts(protocolShadowRaw?.drafts);
-      const protocolShadowRange = mapMessageRange(protocolShadowRaw?.messageRange);
-      const protocolShadowSource =
-        protocolShadowRaw?.source === 'manual' || protocolShadowRaw?.source === 'stream'
-          ? (protocolShadowRaw.source as 'manual' | 'stream')
-          : undefined;
-      const protocolShadow =
-        protocolShadowRaw && protocolShadowDrafts && protocolShadowDrafts.length > 0
-          ? {
-              updatedAt: typeof protocolShadowRaw.updatedAt === 'number' ? protocolShadowRaw.updatedAt : now,
-              ...(protocolShadowRange ? { messageRange: protocolShadowRange } : {}),
-              drafts: protocolShadowDrafts,
-              ...(protocolShadowSource ? { source: protocolShadowSource } : {}),
-            }
-          : undefined;
-
-      const updateSnapshotRaw = ensureRecord(sessionCore.updateSnapshot);
-      const updateSnapshotRange = mapMessageRange(updateSnapshotRaw?.messageRange);
-      const updateSnapshotDrafts = sanitizeUpdateDrafts(updateSnapshotRaw?.drafts) ?? [];
-      const updateSnapshotRolesBefore = Array.isArray(updateSnapshotRaw?.rolesBefore)
-        ? updateSnapshotRaw?.rolesBefore.map((role: MagicTeaPartyRole) => sanitizeRole(role))
-        : [];
-      const updateSnapshotRolesAfter = Array.isArray(updateSnapshotRaw?.rolesAfter)
-        ? updateSnapshotRaw?.rolesAfter.map((role: MagicTeaPartyRole) => sanitizeRole(role))
-        : [];
-      const updateSnapshot: MagicTeaPartyUpdateSnapshot | undefined = updateSnapshotRaw
-        ? {
-            id: typeof updateSnapshotRaw.id === 'string' ? updateSnapshotRaw.id : randomUUID(),
-            createdAt: typeof updateSnapshotRaw.createdAt === 'number' ? updateSnapshotRaw.createdAt : now,
-            mode: updateSnapshotRaw.mode === 'confirm' ? 'confirm' : 'auto',
-            ...(updateSnapshotRange ? { messageRange: updateSnapshotRange } : {}),
-            drafts: updateSnapshotDrafts,
-            rolesBefore: updateSnapshotRolesBefore,
-            rolesAfter: updateSnapshotRolesAfter,
-            ...(typeof updateSnapshotRaw.revertedAt === 'number' ? { revertedAt: updateSnapshotRaw.revertedAt } : {}),
-          }
-        : undefined;
-
-      const normalizedAssets = assets.map((asset) => {
-        const raw = ensureRecord(asset) ?? {};
-        const anchor = typeof raw.anchorMessageId === 'string' ? raw.anchorMessageId : undefined;
-        const mappedAnchor = anchor && messageIdMap.has(anchor) ? messageIdMap.get(anchor) : undefined;
-        return {
-          ...(raw as any),
-          id: randomUUID(),
-          sessionId,
-          anchorMessageId: mappedAnchor,
-          createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
-          lastUsedAt: typeof raw.lastUsedAt === 'number' ? raw.lastUsedAt : now,
-        } as any;
-      });
-
-      const sessionTitle =
-        maskOptionalText(sessionCore.title) ||
-        (titleHint ? titleHint.trim() : '') ||
-        '导入会话';
-
-      const forkedFromRaw = ensureRecord(sessionCore.forkedFrom);
-      const forkedFromOriginal =
-        forkedFromRaw && typeof forkedFromRaw.sessionId === 'string' && typeof forkedFromRaw.messageId === 'string'
-          ? {
-              sessionId: forkedFromRaw.sessionId,
-              messageId: forkedFromRaw.messageId,
-              createdAt: typeof forkedFromRaw.createdAt === 'number' ? forkedFromRaw.createdAt : now,
-            }
-          : null;
-      const forkedFrom = forkedFromOriginal
-        ? {
-            ...forkedFromOriginal,
-            messageId: messageIdMap.get(forkedFromOriginal.messageId) ?? forkedFromOriginal.messageId,
-          }
-        : undefined;
-
-      const session: MagicTeaPartySession = {
-        id: sessionId,
-        title: sessionTitle,
-        titleMeta: { source: 'manual', generatedAt: now, reason: 'import' },
-        createdAt: now,
-        updatedAt: now,
-        pinnedAt: typeof sessionCore.pinnedAt === 'number' ? sessionCore.pinnedAt : undefined,
-        pinnedOrder: typeof sessionCore.pinnedOrder === 'number' ? sessionCore.pinnedOrder : undefined,
-        roles: roles.map(sanitizeRole),
-        scenario: scenario ? sanitizeScenario(scenario) : undefined,
-        auxScenarios: auxScenarios.map(sanitizeScenario),
-        playerRoleId: typeof sessionCore.playerRoleId === 'string' ? sessionCore.playerRoleId : null,
-        summary: typeof sessionCore.summary === 'string' ? maskMagicTeaPartyText(sessionCore.summary).value : undefined,
-        summarySections: sanitizeSummarySections(sessionCore.summarySections),
-        summaryMeta,
-        protocolShadow,
-        updateSnapshot,
-        lastChoices: Array.isArray(sessionCore.lastChoices)
-          ? (sessionCore.lastChoices as { id: string; text: string }[]).map((choice) => ({
-              id: choice.id,
-              text: maskMagicTeaPartyText(choice.text).value,
-            }))
-          : undefined,
-        branchLabel: typeof sessionCore.branchLabel === 'string' ? sessionCore.branchLabel : undefined,
-        forkedFrom,
-        draft: typeof sessionCore.draft === 'string' ? maskMagicTeaPartyText(sessionCore.draft).value : undefined,
-        settings: buildSessionSettings(ensureRecord(sessionCore.settings)),
-      };
-
-      await putMagicTeaPartySession(session);
-      const sanitizedMessages = normalizedMessagesFixed.map((message) => sanitizeMessage(message as MagicTeaPartyMessage));
-      await Promise.all(sanitizedMessages.map((message) => putMagicTeaPartyMessage(message as any)));
-      if (normalizedAssets.length > 0) {
-        await Promise.all(normalizedAssets.map((asset) => putMagicTeaPartyTachieAsset(asset as any)));
-      }
-
-      return { sessionId, originalSessionId, messageIdMap, forkedFromRaw: forkedFromOriginal, session };
-    },
-    [
-      buildSessionSettings,
-      maskOptionalText,
-      sanitizeMessage,
-      sanitizeRole,
-      sanitizeScenario,
-      sanitizeSummarySections,
-      sanitizeUpdateDrafts,
-    ]
+  const sanitizeImportSession = useCallback(
+    (session: MagicTeaPartySession): MagicTeaPartySession => ({
+      ...session,
+      title: maskOptionalText(session.title) || '导入会话',
+      roles: session.roles.map(sanitizeRole),
+      ...(session.scenario ? { scenario: sanitizeScenario(session.scenario) } : {}),
+      auxScenarios: (session.auxScenarios ?? []).map(sanitizeScenario),
+      ...(typeof session.summary === 'string' ? { summary: maskMagicTeaPartyText(session.summary).value } : {}),
+      ...(session.summarySections ? { summarySections: sanitizeSummarySections(session.summarySections) } : {}),
+      ...(session.protocolShadow ? {
+        protocolShadow: { ...session.protocolShadow, drafts: sanitizeUpdateDrafts(session.protocolShadow.drafts) ?? [] },
+      } : {}),
+      ...(session.updateSnapshot ? {
+        updateSnapshot: {
+          ...session.updateSnapshot,
+          drafts: sanitizeUpdateDrafts(session.updateSnapshot.drafts) ?? [],
+          rolesBefore: session.updateSnapshot.rolesBefore.map(sanitizeRole),
+          rolesAfter: session.updateSnapshot.rolesAfter.map(sanitizeRole),
+        },
+      } : {}),
+      ...(session.lastChoices ? {
+        lastChoices: session.lastChoices.map(choice => ({ ...choice, text: maskMagicTeaPartyText(choice.text).value })),
+      } : {}),
+      ...(typeof session.draft === 'string' ? { draft: maskMagicTeaPartyText(session.draft).value } : {}),
+    }),
+    [maskOptionalText, sanitizeRole, sanitizeScenario, sanitizeSummarySections, sanitizeUpdateDrafts]
   );
 
   const handleExportSession = useCallback(async () => {
@@ -648,104 +458,33 @@ export function MagicTeaPartyImportExportPanel(props: ImportExportPanelProps) {
         }
         const ext = file.name.toLowerCase();
         const baseTitle = getBaseTitle(file.name, '导入会话');
-        const now = Date.now();
-
-        if (ext.endsWith('.jsonl')) {
-          const sessionId = randomUUID();
-          const { messages, warnings } = parseSillyTavernJsonl({
-            text,
-            sessionId,
-            createId: randomUUID,
-            userDisplayName: preferences.userDisplayName || '旅人',
-            now,
-          });
-          const sanitizedMessages = messages.map(sanitizeMessage);
-          const session: MagicTeaPartySession = {
-            id: sessionId,
-            title: baseTitle,
-            titleMeta: { source: 'manual', generatedAt: now, reason: 'import' },
-            createdAt: now,
-            updatedAt: now,
-            roles: [],
-            scenario: undefined,
-            auxScenarios: [],
-            playerRoleId: null,
-            settings: buildSessionSettings(null),
-          };
-          await putMagicTeaPartySession(session);
-          await Promise.all(sanitizedMessages.map((message) => putMagicTeaPartyMessage(message)));
-          setNotice(warnings.length > 0 ? `已导入 ${sanitizedMessages.length} 条消息（${warnings.length} 行已跳过）。` : `已导入 ${sanitizedMessages.length} 条消息。`);
-          onSessionImported(sessionId);
-          return;
+        const plan = buildMagicTeaPartyImportPlan({
+          input: ext.endsWith('.jsonl') ? { format: 'jsonl', text } : { format: 'json', value: JSON.parse(text) },
+          createId: randomUUID,
+          now: Date.now(),
+          titleHint: baseTitle,
+          userDisplayName: preferences.userDisplayName || '旅人',
+          normalizeSettings: buildSessionSettings,
+        });
+        // Complete both shared preflight and Web masking for the entire batch before the first write.
+        const entries = plan.entries.map(entry => ({
+          ...entry,
+          session: sanitizeImportSession(entry.session),
+          messages: entry.messages.map(sanitizeMessage),
+        }));
+        for (const entry of entries) {
+          await putMagicTeaPartySession(entry.session);
+          await Promise.all(entry.messages.map(message => putMagicTeaPartyMessage(message)));
+          await Promise.all(entry.tachieAssets.map(asset => putMagicTeaPartyTachieAsset(asset)));
         }
-
-        const parsed = JSON.parse(text);
-        const payload = ensureRecord(parsed);
-        const schema = payload ? readString(payload.schema) : '';
-        if (schema === 'magic-tea-party.session.v1' || schema === 'magic-tavern.session.v1') {
-          const { sessionId } = await importSessionPayload(payload as MagicTeaPartySessionExport, baseTitle);
-          setNotice('会话已导入。');
-          onSessionImported(sessionId);
-          return;
+        if (plan.kind === 'jsonl') {
+          const count = entries[0].messages.length;
+          setNotice(plan.warnings.length > 0 ? `已导入 ${count} 条消息（${plan.warnings.length} 行已跳过）。` : `已导入 ${count} 条消息。`);
+        } else {
+          const summary = plan.kind === 'archive' ? `已导入 ${entries.length} 个会话。` : '会话已导入。';
+          setNotice([summary, ...plan.warnings].join(' '));
         }
-        if (schema === 'magic-tea-party.archive.v1' || schema === 'magic-tavern.archive.v1') {
-          const sessions = ensureArray<MagicTeaPartySessionExport>((payload as any).sessions);
-          if (sessions.length === 0) throw new Error('归档中没有会话数据。');
-          const sessionIdMap = new Map<string, string>();
-          for (const sessionExport of sessions) {
-            const sessionCore = ensureRecord(sessionExport.session);
-            if (sessionCore && typeof sessionCore.id === 'string') {
-              sessionIdMap.set(sessionCore.id, randomUUID());
-            }
-          }
-          const importResults: Array<{
-            sessionId: string;
-            originalSessionId: string | null;
-            messageIdMap: Map<string, string>;
-            forkedFromRaw: MagicTeaPartySession['forkedFrom'] | null;
-          }> = [];
-          for (const sessionExport of sessions) {
-            const sessionCore = ensureRecord(sessionExport.session);
-            const originalId = sessionCore && typeof sessionCore.id === 'string' ? sessionCore.id : null;
-            const mappedId = originalId && sessionIdMap.has(originalId) ? sessionIdMap.get(originalId) : undefined;
-            const result = await importSessionPayload(sessionExport, null, mappedId ? { sessionId: mappedId } : undefined);
-            importResults.push({
-              sessionId: result.sessionId,
-              originalSessionId: result.originalSessionId,
-              messageIdMap: result.messageIdMap,
-              forkedFromRaw: result.forkedFromRaw,
-            });
-          }
-          const messageMaps = new Map<string, Map<string, string>>();
-          importResults.forEach((result) => {
-            if (result.originalSessionId) messageMaps.set(result.originalSessionId, result.messageIdMap);
-          });
-          for (const result of importResults) {
-            const forked = result.forkedFromRaw;
-            if (!forked || !result.originalSessionId) continue;
-            const mappedParentId = sessionIdMap.get(forked.sessionId);
-            const parentMessageMap = messageMaps.get(forked.sessionId);
-            const mappedMessageId = parentMessageMap?.get(forked.messageId);
-            if (!mappedParentId || !mappedMessageId) continue;
-            const session = await getMagicTeaPartySession(result.sessionId);
-            if (!session) continue;
-            await putMagicTeaPartySession({
-              ...session,
-              forkedFrom: {
-                sessionId: mappedParentId,
-                messageId: mappedMessageId,
-                createdAt: forked.createdAt,
-              },
-              updatedAt: Date.now(),
-            });
-          }
-          const importedIds = importResults.map((item) => item.sessionId);
-          setNotice(`已导入 ${importedIds.length} 个会话。`);
-          onSessionImported(importedIds[0]);
-          return;
-        }
-
-        throw new Error('不支持的文件格式，请使用魔法茶会导出的 JSON 或 SillyTavern JSONL。');
+        onSessionImported(entries[0].session.id);
       } catch (err) {
         setError(err instanceof Error ? err.message : '导入失败');
       } finally {
@@ -753,7 +492,7 @@ export function MagicTeaPartyImportExportPanel(props: ImportExportPanelProps) {
         event.target.value = '';
       }
     },
-    [buildSessionSettings, importSessionPayload, onSessionImported, preferences.userDisplayName, router, sanitizeMessage]
+    [buildSessionSettings, onSessionImported, preferences.userDisplayName, router, sanitizeImportSession, sanitizeMessage]
   );
 
   return (

@@ -203,3 +203,137 @@ describe('controlled Tea views', () => {
     expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 1200, behavior: 'smooth' });
   });
 });
+
+describe('Tea text-host acknowledgement seams', () => {
+  const paste = async (text: string) => {
+    const field = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="粘贴角色"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, text); field.dispatchEvent(new InputEvent('input', { bubbles: true })); });
+    return field;
+  };
+  it('keeps failed pasted text and clears only the exact successfully accepted version', async () => {
+    let settle!: (result: boolean) => void;
+    const accept = vi.fn(() => new Promise<boolean>(resolve => { settle = resolve; }));
+    const props = { ...setupProps(), onImportRolesText: accept, importScope: 'first' };
+    await render(<MagicTeaPartySessionSetupPanel {...props} />);
+    const field = await paste('{"name":"原文"}');
+    await act(async () => button('导入').click());
+    expect(button('清空').disabled).toBe(true);
+    await act(async () => button('清空').click());
+    expect(field.value).toBe('{"name":"原文"}');
+    await act(async () => settle(false));
+    expect(field.value).toBe('{"name":"原文"}'); expect(container.textContent).toContain('粘贴原文已保留');
+    await act(async () => button('导入').click());
+    await paste('{"name":"后来输入"}');
+    await act(async () => settle(true)); expect(field.value).toBe('{"name":"后来输入"}');
+    await act(async () => button('导入').click()); await act(async () => settle(true)); expect(field.value).toBe('');
+  });
+  it('does not let an old incarnation clear the replacement paste editor', async () => {
+    let settle!: (result: boolean) => void;
+    const props = { ...setupProps(), onImportRolesText: () => new Promise<boolean>(resolve => { settle = resolve; }) };
+    await render(<MagicTeaPartySessionSetupPanel {...props} importScope="one" />);
+    await paste('old'); await act(async () => button('导入').click());
+    await render(<MagicTeaPartySessionSetupPanel {...props} importScope="two" />);
+    const field = await paste('new'); await act(async () => settle(true)); expect(field.value).toBe('new');
+  });
+  it('can locally clear retained paste without a session and synchronously updates dirty state', async () => {
+    const dirty = vi.fn();
+    const props = { ...setupProps(), onDirtyChange: dirty };
+    await render(<MagicTeaPartySessionSetupPanel {...props} />);
+    const roleField = await paste('{"name":"保留角色"}');
+    const scenarioField = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="粘贴情景"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(scenarioField, '  ');
+      scenarioField.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    });
+    const clearButtons = () => [...container.querySelectorAll('button')].filter(node => node.textContent?.trim() === '清空');
+    for (const state of [{ disabled: true }, { readOnly: true }]) {
+      await render(<MagicTeaPartySessionSetupPanel {...props} {...state} activeSession={null} />);
+      expect(clearButtons().every(node => node.matches(':disabled'))).toBe(true);
+      await act(async () => { for (const node of clearButtons()) node.click(); });
+      expect(roleField.value).toBe('{"name":"保留角色"}'); expect(scenarioField.value).toBe('  ');
+    }
+    await render(<MagicTeaPartySessionSetupPanel {...props} activeSession={null} />);
+    expect(roleField.disabled).toBe(true); expect(scenarioField.disabled).toBe(true);
+    expect(clearButtons().every(node => !node.matches(':disabled'))).toBe(true);
+    const imports = [...container.querySelectorAll('button')].filter(node => node.textContent?.trim() === '导入');
+    expect(imports.every(node => node.disabled)).toBe(true);
+    dirty.mockClear();
+    await act(async () => {
+      for (const node of imports) node.click();
+      button('选择角色卡').click(); button('选择情景卡').click(); button('锁定标题').click();
+      clearButtons()[0]!.click();
+      expect(dirty).toHaveBeenLastCalledWith(true);
+    });
+    expect(roleField.value).toBe(''); expect(scenarioField.value).toBe('  ');
+    await act(async () => { clearButtons()[1]!.click(); expect(dirty).toHaveBeenLastCalledWith(false); });
+    expect(scenarioField.value).toBe('');
+    expect(props.onImportRolesText).not.toHaveBeenCalled(); expect(props.onImportScenariosText).not.toHaveBeenCalled();
+    expect(props.onOpenRoleModal).not.toHaveBeenCalled(); expect(props.onOpenScenarioModal).not.toHaveBeenCalled();
+    expect(props.onUpdateRoles).not.toHaveBeenCalled(); expect(props.onUpdateScenarios).not.toHaveBeenCalled();
+    expect(props.onUpdatePlayerRole).not.toHaveBeenCalled(); expect(props.onUpdateTitle).not.toHaveBeenCalled();
+    expect(props.onLockTitle).not.toHaveBeenCalled();
+  });
+  it('bounds long rendering while retaining the original message for export', async () => {
+    const large = { ...message, content: '😀'.repeat(100), segments: Array.from({ length: 3000 }, () => ({ type: 'narration' as const, text: 'a' })) };
+    await render(<MagicTeaPartyChatMessage message={large} session={session} preferences={preferences} isGenerating={false}
+      renderBudget={{ segments: 2000, characters: 1000, rawPreviewCharacters: 19 }} />);
+    expect(container.textContent).toContain('预览');
+    expect(container.querySelectorAll('p').length).toBeLessThan(20);
+    expect(/[\uD800-\uDFFF]/u.test(container.textContent ?? '')).toBe(false);
+    expect(large.segments).toHaveLength(3000); expect(large.content).toBe('😀'.repeat(100));
+  });
+  it('counts nested choices and segment text before rendering imported large messages', async () => {
+    for (const segments of [[{ type: 'narration' as const, text: '大'.repeat(20000) }], [{ type: 'choices' as const, items: Array.from({ length: 3000 }, (_, i) => ({ id: String(i), text: '小' })) }]]) {
+      const value = { ...message, content: '完整正文见导出', segments };
+      await render(<MagicTeaPartyChatMessage message={value} session={session} preferences={preferences} isGenerating={false}
+        renderBudget={{ segments: 2000, characters: 10000, rawPreviewCharacters: 10000 }} />);
+      expect(container.textContent).toContain('内容较长'); expect(container.querySelectorAll('button').length).toBeLessThan(20);
+      expect(value.segments).toBe(segments);
+    }
+  });
+  it('counts every actual dialogue label so repeated short dialogue cannot bypass the render budget', async () => {
+    const longName = '角色名'.repeat(200);
+    for (const useExplicitName of [false, true]) {
+      const value: MagicTeaPartyMessage = {
+        ...message, content: '完整原文',
+        segments: Array.from({ length: 20 }, () => ({ type: 'dialogue' as const, speakerId: 'role-1', text: '好',
+          ...(useExplicitName ? { speakerName: longName } : {}) })),
+      };
+      const roleSession = { ...session, roles: [{ ...session.roles[0]!, name: useExplicitName ? '短名' : longName }] };
+      const original = JSON.stringify({ value, roleSession });
+      const markdown = vi.fn(() => null);
+      await render(<MagicTeaPartyChatMessage message={value} session={roleSession} preferences={preferences} isGenerating={false}
+        renderMarkdown={markdown} renderBudget={{ segments: 2000, characters: 10000, rawPreviewCharacters: 1000 }} />);
+      expect(container.textContent).toContain('内容较长'); expect(container.textContent).toContain('完整原文');
+      expect(container.textContent).not.toContain(longName); expect(markdown).not.toHaveBeenCalled();
+      expect(JSON.stringify({ value, roleSession })).toBe(original);
+    }
+  });
+  it('includes the bubble label in the same budget and bounds it on fallback without splitting emoji', async () => {
+    const longName = '😀'.repeat(100);
+    const roleSession = { ...session, roles: [{ ...session.roles[0]!, name: longName }] };
+    const values: MagicTeaPartyMessage[] = [
+      { ...message, segments: undefined, choices: undefined, content: '原文', meta: { speakerName: longName } },
+      { ...message, role: 'user', speakerId: 'role-1', segments: undefined, choices: undefined, content: '原文' },
+    ];
+    for (const value of values) {
+      const original = JSON.stringify({ value, roleSession });
+      await render(<MagicTeaPartyChatMessage message={value} session={roleSession} preferences={preferences} isGenerating={false}
+        renderBudget={{ segments: 2000, characters: 30, rawPreviewCharacters: 19 }} />);
+      const label = container.firstElementChild?.firstElementChild?.textContent ?? '';
+      expect(container.textContent).toContain('内容较长'); expect(container.textContent).toContain('原文');
+      expect(label).toBe(`${'😀'.repeat(14)}…`); expect(label.length).toBeLessThanOrEqual(30);
+      expect(/[\uD800-\uDFFF]/u.test(label)).toBe(false);
+      expect(JSON.stringify({ value, roleSession })).toBe(original);
+    }
+  });
+  it('keeps the original 20 UTF16 name budget without splitting a paired emoji', async () => {
+    const onChange = vi.fn();
+    await render(<MagicTeaPartyOutputPreferencesPanel activeSession={session} preferences={preferences} onChange={onChange} />);
+    const field = container.querySelector<HTMLInputElement>('input[placeholder^="例如"]')!;
+    await act(async () => inputValue(field, `${'x'.repeat(19)}😀`));
+    expect(onChange).toHaveBeenLastCalledWith({ userDisplayName: 'x'.repeat(19) });
+    await act(async () => inputValue(field, '保留\ud800'));
+    expect(onChange).toHaveBeenLastCalledWith({ userDisplayName: '保留\ud800' });
+  });
+});

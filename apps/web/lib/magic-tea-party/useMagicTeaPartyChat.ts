@@ -1,3 +1,4 @@
+import { pickMagicTeaPartyRequestSettings } from '@mahoshojo/domain/magic-tea-party/import-plan';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 
@@ -195,7 +196,9 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
 
   const buildRequestSettings = useCallback(
     (session: MagicTeaPartySession) => ({
-      ...session.settings,
+      ...pickMagicTeaPartyRequestSettings(session.settings),
+      providerId: session.settings.providerId,
+      modelId: session.settings.modelId,
       readArenaHistory:
         typeof session.settings.readArenaHistory === 'boolean' ? session.settings.readArenaHistory : preferences.readArenaHistory,
       readArenaHistoryLimit:
@@ -214,7 +217,7 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
         typeof session.settings.writeCurrentState === 'boolean' ? session.settings.writeCurrentState : preferences.writeCurrentState,
       enableSummary:
         typeof session.settings.enableSummary === 'boolean' ? session.settings.enableSummary : preferences.enableSummary,
-      outputPlan: session.settings.outputPlan ?? preferences.outputPlan,
+      outputPlan: pickMagicTeaPartyRequestSettings(session.settings).outputPlan ?? preferences.outputPlan,
       updateApplyMode: session.settings.updateApplyMode ?? preferences.updateApplyMode,
     }),
     [preferences]
@@ -228,10 +231,11 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
       const enableChoices =
         typeof session.settings.enableChoices === 'boolean' ? session.settings.enableChoices : preferences.enableChoices;
       const choiceCount = session.settings.choiceCount ?? preferences.choiceCount;
-      const sessionDisplayName =
-        typeof session.settings.userDisplayName === 'string'
-          ? session.settings.userDisplayName.trim().slice(0, 20)
-          : '';
+      const displayName = typeof session.settings.userDisplayName === 'string' ? session.settings.userDisplayName.trim() : '';
+      let nameEnd = 20;
+      if (displayName.charCodeAt(19) >= 0xd800 && displayName.charCodeAt(19) <= 0xdbff
+        && displayName.charCodeAt(20) >= 0xdc00 && displayName.charCodeAt(20) <= 0xdfff) nameEnd -= 1;
+      const sessionDisplayName = displayName.slice(0, nameEnd);
       const userDisplayName = sessionDisplayName || preferences.userDisplayName || '旅人';
 
       return {

@@ -109,8 +109,15 @@ export const clipMagicTeaPartyMessageContent = (
   // 先为标记预留空间，避免「截断后仍然超限」。
   const markerBudget = 48;
   const budget = Math.max(effectiveLimit - markerBudget, 1);
-  const headLength = Math.max(1, Math.floor(budget * HEAD_RATIO));
-  const tailLength = Math.max(1, budget - headLength);
+  let headLength = Math.max(1, Math.floor(budget * HEAD_RATIO));
+  let tailLength = Math.max(1, budget - headLength);
+  // Keep the existing UTF-16 budget; only retreat a cut that splits a valid pair.
+  // Existing lone surrogates are not repaired or normalized here.
+  const splitsPair = (index: number) => text.charCodeAt(index - 1) >= 0xd800
+    && text.charCodeAt(index - 1) <= 0xdbff && text.charCodeAt(index) >= 0xdc00
+    && text.charCodeAt(index) <= 0xdfff;
+  if (splitsPair(headLength)) headLength -= 1;
+  if (splitsPair(text.length - tailLength)) tailLength -= 1;
 
   const head = text.slice(0, headLength);
   const tail = tailLength > 0 ? text.slice(text.length - tailLength) : '';

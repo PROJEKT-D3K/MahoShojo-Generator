@@ -1,0 +1,322 @@
+import { TeaWriteRequestSchema, type TeaHead, type TeaMessageDocument, type TeaReadResponse, type TeaSessionDocument, type TeaWriteRequest, type TeaWriteResponse } from '@mahoshojo/contracts/desktop-magic-tea-party';
+import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import type { MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
+import { TeaStorageError, type TeaNativePort } from '../../platform/magic-tea-party-native';
+import type { DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
+import type { ResolvedDesktopAiTarget } from '../ai-config/desktop-ai-config';
+import { desktopTeaSettings, executeTeaDirect, prepareTeaDirectRequest, readTeaMessagePages, teaTerminalMessage, type TeaDirectOutcome, type TeaRecord } from './direct';
+import { exportDesktopTea, prepareDesktopTeaImport } from './transfer';
+
+type DirectoryCursor = Extract<TeaReadResponse['result'], { action: 'list' }>['nextCursor'];
+type MessageCursor = Extract<TeaReadResponse['result'], { action: 'messages' }>['nextCursor'];
+type Pending = { write: TeaWriteRequest; unknown: boolean; purpose: 'ordinary' | 'begin' | 'finish' | 'import' };
+type Generation = { owner: number; controller: AbortController; dispatched: boolean; request: AiExecutionRequest;
+  options: DesktopAiExecutionOptions; credentialCurrent: () => boolean; begin: Extract<TeaWriteRequest['request'], { action: 'begin-generation' }>;
+  rawText: string; reasoning: string; stopped: boolean; completed: Promise<void>; release: () => void; outcome?: TeaDirectOutcome };
+export type DesktopTeaState = {
+  incarnation: number; directory: TeaHead[]; directoryCursor: DirectoryCursor; catalogRevision: number | null;
+  record: TeaRecord | null; messages: TeaMessageDocument[]; messageCursor: MessageCursor;
+  input: string; titleDraft: string | null; nameDraft: string | null; busy: boolean; generating: boolean; pending: 'none' | 'save' | 'unknown';
+  error: string | null; notice: string | null; rawUnsaved: string | null;
+};
+const initial = (): DesktopTeaState => ({ incarnation: 0, directory: [], directoryCursor: null, catalogRevision: null,
+  record: null, messages: [], messageCursor: null, input: '', titleDraft: null, nameDraft: null, busy: false, generating: false, pending: 'none', error: null, notice: null, rawUnsaved: null });
+const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  return JSON.stringify(value);
+};
+const cloneWrite = (write: TeaWriteRequest): TeaWriteRequest => TeaWriteRequestSchema.parse(JSON.parse(JSON.stringify(write)));
+
+/** One page owner. SQLite revisions fence writes; begin receipts never authorize a replacement owner to dispatch. */
+export class DesktopTeaSession {
+  private state = initial(); private readonly listeners = new Set<() => void>();
+  private live = true; private incarnation = 0; private pending: Pending | null = null; private generation: Generation | null = null; private preparation: { cancelled: boolean } | null = null;
+  constructor(private readonly port: TeaNativePort, private readonly id: () => string = () => crypto.randomUUID(), private readonly now: () => number = Date.now) {}
+  activate = () => { if (!this.live) { this.live = true; this.pending = null; this.generation = null; this.state = { ...initial(), incarnation: ++this.incarnation }; } };
+  getSnapshot = () => this.state;
+  subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
+  private publish(patch: Partial<DesktopTeaState>) { if (!this.live) return; this.state = { ...this.state, ...patch }; for (const listener of this.listeners) listener(); }
+  private current(owner: number) { return this.live && owner === this.incarnation; }
+  isBusy = () => this.state.busy || this.state.titleDraft !== null || this.state.nameDraft !== null || this.state.pending !== 'none' || Boolean(this.pending) || this.state.input !== (this.state.record?.session.draft ?? '');
+  setInput = (input: string) => { if (!this.state.busy && !this.pending) this.publish({ input }); };
+  stageTitle = (value: string) => { if (this.allowed() && this.state.record) this.publish({ titleDraft: value === this.state.record.session.title ? null : value }); };
+  stageName = (value: string) => { if (this.allowed() && this.state.record) this.publish({ nameDraft: value === this.state.record.session.settings.userDisplayName ? null : value }); };
+  report = (error: unknown) => this.publish({ error: error instanceof Error ? error.message : '茶会操作未完成，请保留输入后重试' });
+  dispose = () => { this.live = false; this.incarnation += 1; this.generation?.controller.abort(); this.generation?.release(); this.listeners.clear(); };
+  private allowed() { return this.live && !this.state.busy && !this.pending && this.state.pending === 'none'; }
+  private nextOwner() { this.incarnation += 1; this.publish({ incarnation: this.incarnation }); return this.incarnation; }
+  refreshDirectory = async (next = false): Promise<void> => {
+    if (!this.allowed()) return;
+    const owner = this.incarnation; this.publish({ busy: true, error: null });
+    try { await this.loadDirectory(owner, next); } catch (error) { if (this.current(owner)) this.report(error); }
+    finally { if (this.current(owner)) this.publish({ busy: false }); }
+  };
+  private async loadDirectory(owner: number, next = false) {
+    const response = await this.port.read({ version: 1, request: { action: 'list', cursor: next ? this.state.directoryCursor : null,
+      expectedCatalogRevision: next ? this.state.catalogRevision : null, limit: 50 } });
+    if (!this.current(owner)) return;
+    if (response.result.action !== 'list') throw new Error('茶会目录回执不匹配');
+    this.publish({ directory: response.result.rows, directoryCursor: response.result.nextCursor, catalogRevision: response.result.catalogRevision });
+  }
+  private async loadRecord(id: string, owner: number, input?: string) {
+    const response = await this.port.read({ version: 1, request: { action: 'session', sessionId: id, expectedCatalogRevision: null } });
+    if (!this.current(owner)) return;
+    if (response.result.action !== 'session') throw new Error('茶会会话回执不匹配');
+    const record = response.result.record;
+    this.publish({ record, input: input ?? record?.session.draft ?? '', titleDraft: null, nameDraft: null, messages: [], messageCursor: null });
+    if (record) {
+      let last: TeaMessageDocument[] = [];
+      for await (const page of readTeaMessagePages(this.port, record, () => this.current(owner))) last = page.rows.map(row => row.message);
+      if (this.current(owner)) this.publish({ messages: last, messageCursor: null });
+    }
+  }
+  private async loadMessages(record: TeaRecord, owner: number, cursor: MessageCursor) {
+    const response = await this.port.read({ version: 1, request: { action: 'messages', sessionId: record.session.id, instance: record.instance,
+      expectedRevision: record.revision, expectedCatalogRevision: null, cursor, limit: 100 } });
+    if (!this.current(owner)) return;
+    if (response.result.action !== 'messages') throw new Error('茶会消息回执不匹配');
+    // A page replaces a page: bounded UI, never an unbounded append-only timeline.
+    this.publish({ messages: response.result.rows.map(row => row.message), messageCursor: response.result.nextCursor });
+  }
+  nextMessages = async (first = false) => {
+    if (!this.allowed() || !this.state.record || !first && !this.state.messageCursor) return;
+    const owner = this.incarnation; this.publish({ busy: true });
+    try { await this.loadMessages(this.state.record, owner, first ? null : this.state.messageCursor); }
+    catch (error) { if (this.current(owner)) this.report(error); }
+    finally { if (this.current(owner)) this.publish({ busy: false }); }
+  };
+  select = async (id: string) => {
+    const previousOwner = this.incarnation;
+    if (!this.allowed() || !await this.saveDraft() || !this.current(previousOwner) || !this.allowed()) return;
+    const owner = this.nextOwner(); this.publish({ busy: true, error: null, notice: null });
+    try { await this.loadRecord(id, owner); } catch (error) { if (this.current(owner)) this.report(error); }
+    finally { if (this.current(owner)) this.publish({ busy: false }); }
+  };
+  create = async () => {
+    const owner = this.incarnation;
+    if (!this.allowed() || !await this.saveDraft() || !this.current(owner) || !this.allowed()) return;
+    const at = this.now();
+    const session: TeaSessionDocument = { id: this.id(), title: '新茶会', createdAt: at, updatedAt: at, roles: [], settings: desktopTeaSettings(null), draft: '' };
+    await this.write({ version: 1, request: { action: 'create', session } }, 'ordinary');
+  };
+  update = async (patch: Partial<MagicTeaPartySession>): Promise<boolean> => {
+    if (!this.allowed() || !this.state.record) return false;
+    const { instance, revision, session } = this.state.record;
+    const next = { ...session, draft: this.state.input, ...(this.state.titleDraft === null ? {} : { title: this.state.titleDraft }), ...patch,
+      settings: { ...session.settings, ...patch.settings, ...(this.state.nameDraft === null ? {} : { userDisplayName: this.state.nameDraft }) },
+      id: session.id, createdAt: session.createdAt, updatedAt: this.now() };
+    return this.write({ version: 1, request: { action: 'update', sessionId: session.id, instance, expectedRevision: revision, session: next } }, 'ordinary');
+  };
+  updateSettings = (patch: Partial<MagicTeaPartySession['settings']>) => {
+    if (!this.state.record) return Promise.resolve(false);
+    const original = this.state.record.session.settings;
+    const plan = original.outputPlan && typeof original.outputPlan === 'object' && !Array.isArray(original.outputPlan)
+      ? original.outputPlan as Record<string, unknown> : {};
+    const choices = patch.enableChoices === false ? 'off' : plan.choices === 'on' ? 'on' : 'auto';
+    return this.update({ settings: { ...original, ...patch,
+      ...(typeof patch.enableChoices === 'boolean' ? { outputPlan: { ...plan, choices } as MagicTeaPartySession['settings']['outputPlan'] } : {}) } });
+  };
+  saveDraft = async (): Promise<boolean> => {
+    if (!this.state.record || this.state.input === (this.state.record.session.draft ?? '') && this.state.titleDraft === null && this.state.nameDraft === null) return true;
+    return this.update({ draft: this.state.input });
+  };
+  delete = async (expectedIncarnation: number, expectedId: string, expectedInstance: string, expectedRevision: number) => {
+    if (!this.allowed() || expectedIncarnation !== this.incarnation || this.state.record?.session.id !== expectedId) return;
+    const record = this.state.record;
+    if (record.instance !== expectedInstance || record.revision !== expectedRevision || this.isBusy()) {
+      this.report(new Error('会话或草稿已变化，请先保存并重新确认删除')); return;
+    }
+    await this.write({ version: 1, request: { action: 'delete', sessionId: expectedId, instance: record.instance, expectedRevision: record.revision } }, 'ordinary');
+  };
+  private async write(input: TeaWriteRequest, purpose: Pending['purpose']): Promise<boolean> {
+    if (!this.live) return false;
+    const owner = this.incarnation;
+    let write: TeaWriteRequest;
+    try { write = cloneWrite(input); } catch { this.report(new Error('内容超过桌面文本存储边界，原输入和未保存结果已保留，可导出后处理')); return false; }
+    const pending = { write, purpose, unknown: false }; this.pending = pending;
+    this.publish({ busy: true, pending: 'save', error: null });
+    try {
+      const response = await this.port.mutate(write);
+      if (!this.current(owner) || this.pending !== pending) return false;
+      await this.saved(pending, response.result, owner); return true;
+    } catch (error) {
+      if (this.current(owner) && this.pending === pending) {
+        pending.unknown = !(error instanceof TeaStorageError) || error.writeEvidence === 'unknown';
+        this.publish({ busy: false, generating: false, pending: pending.unknown ? 'unknown' : 'save',
+          error: pending.unknown ? '本次保存结果未知，请核对原操作；不会重新调用模型' : '本次保存未完成，请重试原保存或导出保留内容' });
+      }
+      if (this.current(owner) && this.pending !== pending) { this.publish({ busy: false, error: '保存已确认，但重新读取失败，请刷新会话' }); return true; }
+      return false;
+    }
+  }
+  private async saved(pending: Pending, result: TeaWriteResponse['result'], owner: number) {
+    this.pending = null;
+    this.publish({ pending: 'none', busy: true, error: null });
+    if (result.action === 'begin-generation') {
+      const generation = this.generation;
+      if (!generation || generation.owner !== owner || generation.begin.operationId !== result.operationId) return;
+      this.publish({ record: { instance: result.instance, revision: result.revision, session: generation.begin.session }, input: generation.begin.session.draft ?? '', titleDraft: null, nameDraft: null,
+        messages: [...this.state.messages.slice(-98), ...(generation.begin.userMessage ? [generation.begin.userMessage] : []), generation.begin.assistantMessage] });
+      if (!generation.stopped && generation.credentialCurrent()) await this.dispatch(generation);
+      else await this.finish(generation, { completion: 'stopped', rawText: '', reasoning: '' });
+      return;
+    }
+    if (result.action === 'finish-generation') { this.generation?.release(); this.generation = null; this.publish({ rawUnsaved: null, generating: false }); }
+    if (result.action === 'delete') this.publish({ record: null, messages: [], messageCursor: null, input: '', notice: '会话已删除' });
+    else if ('sessionId' in result) await this.loadRecord(result.sessionId, owner);
+    else if (result.action === 'import') {
+      this.publish({ notice: '整批导入已提交；可从会话列表打开。媒体未恢复，JSONL 仍有原格式损耗边界' });
+      // A historical receipt may refer to sessions deleted later; never recreate them.
+    }
+    if (this.current(owner)) { await this.loadDirectory(owner); this.publish({ busy: false }); }
+  }
+  resolvePending = async () => {
+    const pending = this.pending; if (!pending || this.state.busy || !this.live) return;
+    const owner = this.incarnation; this.publish({ busy: true, error: null });
+    try {
+      const write = pending.write.request;
+      if (write.action === 'import' || write.action === 'begin-generation' || write.action === 'finish-generation') {
+        const response = await this.port.read({ version: 1, request: { action: 'receipt', write: pending.write } });
+        if (!this.current(owner) || this.pending !== pending) return;
+        if (response.result.action !== 'receipt') throw new Error('保存回执不匹配');
+        if (response.result.receipt) { await this.saved(pending, response.result.receipt.result, owner); return; }
+        pending.unknown = false;
+        this.publish({ pending: 'save', notice: '已确认原操作未提交，可重试同一保存；不会重复调用模型' });
+      } else {
+        const id = write.action === 'create' ? write.session.id : write.sessionId;
+        const response = await this.port.read({ version: 1, request: { action: 'session', sessionId: id, expectedCatalogRevision: null } });
+        if (!this.current(owner) || this.pending !== pending) return;
+        if (response.result.action !== 'session') throw new Error('会话回执不匹配');
+        const record = response.result.record;
+        if (write.action === 'delete' && !record) {
+          await this.saved(pending, { action: 'delete', sessionId: write.sessionId, instance: write.instance, revision: write.expectedRevision }, owner); return;
+        }
+        if (write.action !== 'delete' && record && canonical(record.session) === canonical(write.session)
+          && (write.action === 'create' ? record.revision === 1 : record.instance === write.instance && record.revision === write.expectedRevision + 1)) {
+          await this.saved(pending, { action: write.action, sessionId: id, instance: record.instance, revision: record.revision } as TeaWriteResponse['result'], owner); return;
+        }
+        if (write.action === 'create' ? !record : record?.instance === write.instance && record.revision === write.expectedRevision) {
+          pending.unknown = false; this.publish({ pending: 'save', notice: '原写入尚未生效，可重试原操作' });
+        } else throw new Error('会话已发生其他修改，不能盲目重放。请导出未保存内容，再明确放弃并重新读取');
+      }
+    } catch (error) { if (this.current(owner)) this.report(error); }
+    finally { if (this.current(owner)) this.publish({ busy: false }); }
+  };
+  retryPending = async () => {
+    if (!this.live || !this.pending || this.pending.unknown || this.state.busy) return;
+    const pending = this.pending; await this.write(pending.write, pending.purpose);
+  };
+  abandonPending = async () => {
+    if (this.state.busy || !this.live) return;
+    if (this.pending?.unknown) { this.report(new Error('保存结果仍未知，请先核对原回执；不能把未知当作未提交而放弃')); return; }
+    const generation = this.generation;
+    if (generation && generation.dispatched && this.state.record) {
+      const record = this.state.record;
+      generation.controller.abort();
+      const assistantMessage = { ...generation.begin.assistantMessage, status: 'error' as const,
+        error: { code: 'discarded', message: '用户明确放弃未保存结果' }, meta: { completion: 'discarded' } };
+      await this.write({ version: 1, request: { action: 'finish-generation', sessionId: record.session.id, instance: record.instance,
+        expectedRevision: record.revision, operationId: this.id(), beginOperationId: generation.begin.operationId,
+        session: record.session, assistantMessage } }, 'finish');
+      return;
+    }
+    this.generation?.controller.abort(); this.generation?.release(); this.generation = null; this.pending = null;
+    const id = this.state.record?.session.id; const owner = this.nextOwner();
+    this.publish({ pending: 'none', rawUnsaved: null, generating: false, error: null, notice: '已明确放弃易失结果；数据库中已提交的内容仍保留', busy: true });
+    try { if (id) await this.loadRecord(id, owner); await this.loadDirectory(owner); }
+    catch (error) { if (this.current(owner)) this.report(error); }
+    finally { if (this.current(owner)) this.publish({ busy: false }); }
+  };
+  start = async (target: ResolvedDesktopAiTarget, options: DesktopAiExecutionOptions, credentialCurrent: () => boolean, continueStory = false) => {
+    if (!this.allowed() || !this.state.record) return;
+    const record: TeaRecord = { ...this.state.record, session: { ...this.state.record.session,
+      ...(this.state.titleDraft === null ? {} : { title: this.state.titleDraft }),
+      settings: { ...this.state.record.session.settings, ...(this.state.nameDraft === null ? {} : { userDisplayName: this.state.nameDraft }) } } }; const owner = this.incarnation; const input = this.state.input; const at = this.now();
+    if (!continueStory && !input.trim()) return;
+    this.publish({ busy: true, generating: true, error: null });
+    const preparation = { cancelled: false }; this.preparation = preparation;
+    const requestId = this.id();
+    const playerRoleId = typeof record.session.playerRoleId === 'string' ? record.session.playerRoleId : null;
+    const playerRoleName = playerRoleId ? record.session.roles.find(role => role.id === playerRoleId)?.name : '';
+    const displayName = desktopTeaSettings(record.session.settings).userDisplayName?.trim() || '旅人';
+    const userMessage: TeaMessageDocument | null = continueStory ? null : { id: this.id(), sessionId: record.session.id, role: 'user', content: input, createdAt: at, status: 'done',
+      ...(playerRoleId ? { speakerId: playerRoleId } : {}), meta: { speakerName: playerRoleId ? playerRoleName || playerRoleId : displayName } };
+    try {
+      const current = () => this.current(owner) && !preparation.cancelled && credentialCurrent();
+      const request = await prepareTeaDirectRequest(this.port, record, target, userMessage, requestId, current);
+      if (!current()) return;
+      const begin: Generation['begin'] = { action: 'begin-generation', sessionId: record.session.id, instance: record.instance, expectedRevision: record.revision,
+        operationId: this.id(), session: { ...record.session, updatedAt: at, draft: continueStory ? input : '' }, userMessage,
+        assistantMessage: { id: this.id(), sessionId: record.session.id, role: 'assistant', content: '', createdAt: at, status: 'streaming' } };
+      let release!: () => void; const completed = new Promise<void>(resolve => { release = resolve; });
+      const generation: Generation = { owner, controller: new AbortController(), dispatched: false, request, options, credentialCurrent, begin, rawText: '', reasoning: '', stopped: false, completed, release };
+      this.generation = generation;
+      const began = await this.write({ version: 1, request: begin }, 'begin');
+      if (!began && (!this.current(owner) || this.generation !== generation || !this.pending)) {
+        // Release only this preparation; a late reply cannot retire a replacement owner.
+        generation.release();
+        if (this.current(owner) && this.generation === generation && !this.pending) {
+          this.generation = null;
+          this.publish({ busy: false, generating: false, pending: 'none' });
+        }
+      }
+      await completed;
+    } catch (error) { if (this.current(owner)) this.report(error); }
+    finally { if (this.preparation === preparation) this.preparation = null; if (this.current(owner) && !this.generation?.dispatched) this.publish({ busy: false, generating: false }); }
+  };
+  private async dispatch(generation: Generation) {
+    if (!this.current(generation.owner) || this.generation !== generation || generation.dispatched) return;
+    generation.dispatched = true; // A historical begin can never grant a second dispatch.
+    this.publish({ busy: true, generating: true });
+    const outcome = await executeTeaDirect(generation.options, generation.request, generation.controller.signal, (text, reasoning) => {
+      if (!this.current(generation.owner) || this.generation !== generation || generation.stopped) return;
+      if (!generation.credentialCurrent()) { generation.stopped = true; generation.controller.abort(); return; }
+      generation.rawText = text; generation.reasoning = reasoning;
+      this.publish({ rawUnsaved: text, messages: this.state.messages.map(message => message.id === generation.begin.assistantMessage.id ? { ...message, content: text } : message) });
+    });
+    if (!this.current(generation.owner) || this.generation !== generation) return;
+    await this.finish(generation, generation.stopped ? { completion: 'stopped', rawText: generation.rawText, reasoning: generation.reasoning } : outcome);
+  }
+  private async finish(generation: Generation, outcome: TeaDirectOutcome) {
+    if (!this.current(generation.owner) || this.generation !== generation || this.pending?.purpose === 'finish') return;
+    generation.outcome = outcome;
+    this.publish({ generating: false, rawUnsaved: outcome.rawText, busy: false });
+    const record = this.state.record;
+    if (!record) return;
+    const message = teaTerminalMessage(generation.begin.assistantMessage, outcome, desktopTeaSettings(record.session.settings).outputFormat ?? 'jsonl');
+    const write: TeaWriteRequest = { version: 1, request: { action: 'finish-generation', sessionId: record.session.id, instance: record.instance,
+      expectedRevision: record.revision, operationId: this.id(), beginOperationId: generation.begin.operationId,
+      session: { ...record.session, updatedAt: this.now() }, assistantMessage: message } };
+    if (!await this.write(write, 'finish') && this.current(generation.owner) && this.generation === generation && !this.pending) {
+      // The document admission gate failed before IPC. Retain the exact result for export; no model retry.
+      this.publish({ pending: 'save', busy: false });
+    }
+  }
+  stop = () => {
+    if (this.preparation) this.preparation.cancelled = true;
+    const generation = this.generation;
+    if (!generation) return;
+    generation.stopped = true; generation.controller.abort();
+    // A terminal write already in flight is immutable; stop cannot create another terminal body.
+    this.publish({ generating: false, notice: '已停止接收，保留已接受前缀；请等待保存结果' });
+  };
+  importText = async (text: string, format: 'json' | 'jsonl', confirmWarnings: (_warnings: string[]) => boolean = () => false) => {
+    if (!this.allowed()) return;
+    const owner = this.incarnation;
+    try {
+      const plan = prepareDesktopTeaImport(text, format, this.id, this.now());
+      if (plan.warnings.length) { this.publish({ notice: plan.warnings.join('\n') }); if (!confirmWarnings(plan.warnings)) return; }
+      if (!this.current(owner) || !this.allowed() || !await this.saveDraft() || !this.current(owner) || !this.allowed()) return;
+      await this.write(plan.write, 'import');
+    } catch (error) { if (this.current(owner)) this.report(error); }
+  };
+  export = async (format: 'json' | 'jsonl' | 'archive') => {
+    const owner = this.incarnation;
+    if (!this.allowed() || !await this.saveDraft() || !this.current(owner) || !this.allowed()) throw new Error('请先处理在途保存，再导出完整档案');
+    this.publish({ busy: true });
+    try { return await exportDesktopTea(this.port, this.state.record?.session.id ?? null, format, () => this.current(owner)); }
+    finally { if (this.current(owner)) this.publish({ busy: false }); }
+  };
+  unsavedText = () => this.state.rawUnsaved ?? (this.pending ? JSON.stringify(this.pending.write, null, 2) : this.state.input);
+}

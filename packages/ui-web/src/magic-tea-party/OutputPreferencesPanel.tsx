@@ -48,7 +48,11 @@ export function MagicTeaPartyOutputPreferencesPanel({ activeSession, preferences
               className="input-field"
               value={currentUserDisplayName}
               onChange={(event) => {
-                const value = event.target.value.trim().slice(0, 20);
+                const raw = event.target.value.trim();
+                let end = 20;
+                if (raw.charCodeAt(end - 1) >= 0xd800 && raw.charCodeAt(end - 1) <= 0xdbff
+                  && raw.charCodeAt(end) >= 0xdc00 && raw.charCodeAt(end) <= 0xdfff) end -= 1;
+                const value = raw.slice(0, end);
                 applyChange({ userDisplayName: value });
               }}
               placeholder="例如：旅人 / 记者 / 观众"

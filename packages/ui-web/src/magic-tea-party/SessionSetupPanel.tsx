@@ -14,6 +14,9 @@ export type MagicTeaPartySessionSetupPanelProps = {
   roleImportHint?: string;
   rolePickerLabel?: string;
   scenarioPickerLabel?: string;
+  /** Host incarnation, so a late paste result cannot clear a replacement editor. */
+  importScope?: string;
+  onDirtyChange?: (dirty: boolean) => void;
   playerOptions: MagicTeaPartyPlayerOption[];
   onOpenRoleModal: () => void;
   onOpenScenarioModal: () => void;
@@ -25,8 +28,8 @@ export type MagicTeaPartySessionSetupPanelProps = {
   onUpdateTitle: (title: string) => void;
   onLockTitle: () => void;
   onCreateSession?: () => void;
-  onImportRolesText: (text: string) => void;
-  onImportScenariosText: (text: string) => void;
+  onImportRolesText: (text: string) => void | boolean | Promise<void | boolean>;
+  onImportScenariosText: (text: string) => void | boolean | Promise<void | boolean>;
   onDropRoles: (files: File[]) => void;
   onDropScenarios: (files: File[]) => void;
 };
@@ -55,6 +58,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
     onImportScenariosText,
     onDropRoles,
     onDropScenarios,
+    onDirtyChange,
   } = props;
 
   const roles = activeSession?.roles ?? [];
@@ -62,6 +66,19 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
   const auxScenarios = activeSession?.auxScenarios ?? [];
   const [rolePasteText, setRolePasteText] = useState('');
   const [scenarioPasteText, setScenarioPasteText] = useState('');
+  useEffect(() => { onDirtyChange?.(Boolean(rolePasteText || scenarioPasteText)); }, [rolePasteText, scenarioPasteText, onDirtyChange]);
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const [pasteError, setPasteError] = useState<string | null>(null);
+  const pastePending = useRef(false);
+  const pasteVersions = useRef({ roles: 0, scenarios: 0 });
+  const pasteLifecycle = useRef(0);
+  const pasteScope = useRef(props.importScope ?? activeSession?.id ?? null);
+  pasteScope.current = props.importScope ?? activeSession?.id ?? null;
+  useEffect(() => () => { pasteLifecycle.current += 1; }, []);
+  useEffect(() => {
+    pastePending.current = false;
+    setPasteBusy(false); setPasteError(null);
+  }, [props.importScope, activeSession?.id]);
   const [collapsed, setCollapsed] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [isTitleFocused, setIsTitleFocused] = useState(false);
@@ -71,8 +88,33 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
   const prevSessionIdRef = useRef<string | null>(null);
   const hasSession = Boolean(activeSession);
   const canEdit = hasSession && !disabled && !readOnly;
+  const canClearPaste = !disabled && !readOnly && !pasteBusy;
   const sessionId = activeSession?.id ?? null;
   const sessionTitle = activeSession?.title ?? '';
+  const importPaste = (kind: 'roles' | 'scenarios') => {
+    if (!canEdit || pastePending.current) return;
+    const text = kind === 'roles' ? rolePasteText : scenarioPasteText;
+    const version = pasteVersions.current[kind];
+    const lifecycle = pasteLifecycle.current;
+    const scope = pasteScope.current;
+    const current = () => lifecycle === pasteLifecycle.current && scope === pasteScope.current;
+    pastePending.current = true; setPasteBusy(true); setPasteError(null);
+    const finish = (accepted: void | boolean) => {
+      if (!current()) return;
+      pastePending.current = false; setPasteBusy(false);
+      if (accepted === false) { setPasteError('导入未完成，粘贴原文已保留。'); return; }
+      if (version !== pasteVersions.current[kind]) return;
+      pasteVersions.current[kind] += 1;
+      (kind === 'roles' ? setRolePasteText : setScenarioPasteText)('');
+      onDirtyChange?.(Boolean(kind === 'roles' ? scenarioPasteText : rolePasteText));
+    };
+    const failure = () => { if (current()) { pastePending.current = false; setPasteBusy(false); setPasteError('导入未完成，粘贴原文已保留。'); } };
+    try {
+      const result = (kind === 'roles' ? onImportRolesText : onImportScenariosText)(text);
+      if (result && typeof result === 'object') void result.then(finish, failure);
+      else finish(result);
+    } catch { failure(); }
+  };
 
   useEffect(() => {
     if (prevSessionIdRef.current === sessionId) return;
@@ -111,6 +153,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
 
   return (
     <fieldset disabled={disabled || readOnly} className="min-w-0 rounded-xl border border-pink-100 bg-white p-4 space-y-4">
+      {pasteError ? <p role="alert" className="text-xs text-red-700">{pasteError}</p> : null}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-semibold text-gray-800">会话设置</div>
         <div className="flex items-center gap-2">
@@ -188,7 +231,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
             <textarea
               className="input-field mt-2 h-20 resize-y"
               value={rolePasteText}
-              onChange={(event) => setRolePasteText(event.target.value)}
+              onChange={(event) => { pasteVersions.current.roles += 1; setRolePasteText(event.target.value); onDirtyChange?.(Boolean(event.target.value || scenarioPasteText)); }}
               placeholder="粘贴角色卡 JSON（单卡/数组，支持 SillyTavern JSON）"
               disabled={!canEdit}
             />
@@ -196,20 +239,19 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
               <button
                 type="button"
                 className="rounded-md border border-pink-200 bg-white px-3 py-1 text-xs font-semibold text-pink-700 hover:bg-pink-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canEdit || !rolePasteText.trim()}
-                onClick={() => {
-                  if (!canEdit) return;
-                  onImportRolesText(rolePasteText);
-                  setRolePasteText('');
-                }}
+                disabled={!canEdit || pasteBusy || !rolePasteText.trim()}
+                onClick={() => importPaste('roles')}
               >
                 导入
               </button>
               <button
                 type="button"
                 className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canEdit || !rolePasteText.trim()}
-                onClick={() => setRolePasteText('')}
+                disabled={!canClearPaste || !rolePasteText}
+                onClick={() => {
+                  if (!canClearPaste || pastePending.current) return;
+                  pasteVersions.current.roles += 1; setRolePasteText(''); onDirtyChange?.(Boolean(scenarioPasteText));
+                }}
               >
                 清空
               </button>
@@ -264,7 +306,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
             <textarea
               className="input-field mt-2 h-20 resize-y"
               value={scenarioPasteText}
-              onChange={(event) => setScenarioPasteText(event.target.value)}
+              onChange={(event) => { pasteVersions.current.scenarios += 1; setScenarioPasteText(event.target.value); onDirtyChange?.(Boolean(event.target.value || rolePasteText)); }}
               placeholder="粘贴情景卡 JSON（单卡或数组）"
               disabled={!canEdit}
             />
@@ -272,20 +314,19 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
               <button
                 type="button"
                 className="rounded-md border border-pink-200 bg-white px-3 py-1 text-xs font-semibold text-pink-700 hover:bg-pink-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canEdit || !scenarioPasteText.trim()}
-                onClick={() => {
-                  if (!canEdit) return;
-                  onImportScenariosText(scenarioPasteText);
-                  setScenarioPasteText('');
-                }}
+                disabled={!canEdit || pasteBusy || !scenarioPasteText.trim()}
+                onClick={() => importPaste('scenarios')}
               >
                 导入
               </button>
               <button
                 type="button"
                 className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canEdit || !scenarioPasteText.trim()}
-                onClick={() => setScenarioPasteText('')}
+                disabled={!canClearPaste || !scenarioPasteText}
+                onClick={() => {
+                  if (!canClearPaste || pastePending.current) return;
+                  pasteVersions.current.scenarios += 1; setScenarioPasteText(''); onDirtyChange?.(Boolean(rolePasteText));
+                }}
               >
                 清空
               </button>

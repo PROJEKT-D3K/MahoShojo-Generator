@@ -20,6 +20,8 @@ export type MagicTeaPartyChatMessagePresentationProps = {
   renderAttachments?: (message: MagicTeaPartyMessage, session: MagicTeaPartySession | null) => ReactNode;
   renderBlockedHelp?: (message: MagicTeaPartyMessage) => ReactNode;
   renderError?: (message: MagicTeaPartyMessage) => ReactNode;
+  /** Host presentation budget only; the original record is never changed. */
+  renderBudget?: { segments: number; characters: number; rawPreviewCharacters: number };
 };
 
 const renderDefaultMarkdown = (props: MagicTeaPartyChatMarkdownProps) => <MarkdownBlock {...props} />;
@@ -190,7 +192,7 @@ const renderAssistantActions = (props: {
   const { message, session, isGenerating, onUseAsReference, onRegenerate, showRegenerate, onDeleteMessage } = props;
   if (message.status === 'streaming') return null;
 
-  const plain = getPlainTextFromMessage(message, session);
+  const plain = typeof onUseAsReference === 'function' ? getPlainTextFromMessage(message, session) : '';
   const canUseReference = plain && typeof onUseAsReference === 'function';
   const canRegenerate = showRegenerate && typeof onRegenerate === 'function';
   const canDelete = message.role !== 'system' && typeof onDeleteMessage === 'function';
@@ -293,14 +295,18 @@ const renderUserActions = (props: {
   );
 };
 
+const getPreviewEnd = (text: string, limit: number): number => {
+  let end = Math.min(text.length, limit);
+  if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff
+    && text.charCodeAt(end) >= 0xdc00 && text.charCodeAt(end) <= 0xdfff) end -= 1;
+  return end;
+};
+
 export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
   const { message, session, preferences, isGenerating } = props;
   const renderMarkdown = props.renderMarkdown ?? renderDefaultMarkdown;
   const isUser = message.role === 'user';
   const bubbleClass = isUser ? 'bg-pink-600 text-white' : 'bg-white border border-pink-100 text-gray-800';
-  const isRawView = message.role === 'assistant' && props.outputView === 'raw';
-  const messageReasoning = message.role === 'assistant' ? getMessageAiReasoning(message) : null;
-  const reasoningStatus = messageReasoning?.status ?? (message.status === 'streaming' ? 'thinking' : 'idle');
   const speakerName =
     message.meta && typeof message.meta === 'object' && typeof message.meta.speakerName === 'string'
       ? String(message.meta.speakerName).trim()
@@ -314,6 +320,35 @@ export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
           ? getSpeakerNameFromRole(session, message.speakerId)
           : (session?.settings.userDisplayName || preferences.userDisplayName || '旅人').trim() || '旅人'
         : getAssistantPrefix(session));
+  let oversized = false;
+  if (props.renderBudget) {
+    const budget = props.renderBudget;
+    let nodes = message.segments?.length ?? 0;
+    let characters = message.content.length + bubbleSpeaker.length;
+    oversized = nodes > budget.segments || characters > budget.characters;
+    for (const segment of message.segments ?? []) {
+      if (oversized) break;
+      if (segment.type === 'choices') {
+        nodes += segment.items.length;
+        if (nodes > budget.segments) { oversized = true; break; }
+        for (const item of segment.items) { characters += item.text.length; if (characters > budget.characters) break; }
+      } else {
+        characters += segment.text.length;
+        if (segment.type === 'dialogue') {
+          characters += (segment.speakerName || getSpeakerNameFromRole(session, segment.speakerId)).length;
+        }
+      }
+      oversized = characters > budget.characters;
+    }
+  }
+  const isRawView = oversized || (message.role === 'assistant' && props.outputView === 'raw');
+  const rawEnd = getPreviewEnd(message.content, props.renderBudget?.rawPreviewCharacters ?? message.content.length);
+  const speakerLimit = props.renderBudget ? Math.min(80, props.renderBudget.characters) : bubbleSpeaker.length;
+  const displayedBubbleSpeaker = oversized && bubbleSpeaker.length > speakerLimit
+    ? `${bubbleSpeaker.slice(0, getPreviewEnd(bubbleSpeaker, Math.max(0, speakerLimit - 1)))}${speakerLimit > 0 ? '…' : ''}`
+    : bubbleSpeaker;
+  const messageReasoning = message.role === 'assistant' ? getMessageAiReasoning(message) : null;
+  const reasoningStatus = messageReasoning?.status ?? (message.status === 'streaming' ? 'thinking' : 'idle');
   const speakerClass = `px-1 text-xs font-semibold ${isUser ? 'text-right text-pink-700' : 'text-gray-600'}`;
   const isSuperseded = isMessageSuperseded(message);
   const canEdit = Boolean(props.onStartEdit && props.onEditDraftChange && props.onCancelEdit && props.onConfirmEdit);
@@ -322,7 +357,7 @@ export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
 
   const withHeader = (bubble: ReactNode) => (
     <div className={`space-y-1 ${isSuperseded ? 'opacity-70' : ''}`}>
-      <div className={speakerClass}>{bubbleSpeaker}</div>
+      <div className={speakerClass}>{displayedBubbleSpeaker}</div>
       {bubble}
       {isSuperseded ? <div className="text-[11px] text-gray-400">该条消息已被更新替换</div> : null}
     </div>
@@ -331,7 +366,9 @@ export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
   if (isRawView) {
     return withHeader(
       <div className={`rounded-xl px-4 py-3 ${bubbleClass}`}>
-        <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
+        {oversized ? <p role="status" className="mb-2 text-xs text-gray-500">内容较长，当前使用原文预览；完整内容仍保留在记录中。</p> : null}
+        {rawEnd < message.content.length ? <p className="mb-2 text-xs text-gray-500">本页仅显示前段原文，可导出会话查看完整内容。</p> : null}
+        <div className="whitespace-pre-wrap leading-relaxed">{message.content.slice(0, rawEnd)}</div>
         {props.renderAttachments?.(message, session)}
         <AiReasoningPanel reasoning={messageReasoning} status={reasoningStatus} compact />
         {renderAssistantFooter(message, props)}

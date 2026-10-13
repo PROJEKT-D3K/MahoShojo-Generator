@@ -56,39 +56,45 @@ export type EstimateMagicTeaPartyHistoryOptions = {
   userDisplayName?: string;
 };
 
+/** Positions refer to the original ordered history, even when IDs repeat. */
+export const selectMagicTeaPartyHistoryPositions = (
+  length: number,
+  // eslint-disable-next-line no-unused-vars -- 函数类型参数不是运行时绑定。
+  estimateAt: (index: number) => number,
+  options: Pick<TrimMagicTeaPartyHistoryOptions, 'maxMessages' | 'tokenBudget' | 'minKeep'>,
+): number[] => {
+  if (length === 0) return [];
+  const maxMessages = Number.isFinite(options.maxMessages) ? Math.max(1, Math.floor(options.maxMessages)) : length;
+  const minKeepRaw = typeof options.minKeep === 'number' ? options.minKeep : 1;
+  const minKeep = Number.isFinite(minKeepRaw) ? Math.max(1, Math.floor(minKeepRaw)) : 1;
+  const start = Math.max(0, length - maxMessages);
+  const budget = Number.isFinite(options.tokenBudget) ? Math.max(0, Math.floor(options.tokenBudget)) : 0;
+  if (budget <= 0 || length - start <= minKeep) {
+    return Array.from({ length: Math.min(length - start, minKeep) }, (_, index) => Math.max(start, length - minKeep) + index);
+  }
+  const kept: number[] = [];
+  let usedTokens = 0;
+  for (let index = length - 1; index >= start; index -= 1) {
+    const estimate = estimateAt(index);
+    if (kept.length < minKeep || usedTokens + estimate <= budget) {
+      kept.push(index);
+      usedTokens += estimate;
+    }
+  }
+  return kept.reverse();
+};
+
 export const trimMagicTeaPartyHistory = (
   history: MagicTeaPartyHistoryMessage[],
   options: TrimMagicTeaPartyHistoryOptions
 ): MagicTeaPartyHistoryMessage[] => {
   if (!Array.isArray(history) || history.length === 0) return [];
-
-  const maxMessages = Number.isFinite(options.maxMessages) ? Math.max(1, Math.floor(options.maxMessages)) : history.length;
-  const minKeepRaw = typeof options.minKeep === 'number' ? options.minKeep : 1;
-  const minKeep = Number.isFinite(minKeepRaw) ? Math.max(1, Math.floor(minKeepRaw)) : 1;
-  const trimmedByCount = history.slice(-maxMessages);
-
-  const budget = Number.isFinite(options.tokenBudget) ? Math.max(0, Math.floor(options.tokenBudget)) : 0;
-  if (budget <= 0 || trimmedByCount.length <= minKeep) {
-    return trimmedByCount.slice(-minKeep);
-  }
-
   const userLabel = options.userDisplayName?.trim() || '{{user}}';
-  const kept: MagicTeaPartyHistoryMessage[] = [];
-  let usedTokens = 0;
-
-  for (let idx = trimmedByCount.length - 1; idx >= 0; idx -= 1) {
-    const message = trimmedByCount[idx];
+  return selectMagicTeaPartyHistoryPositions(history.length, index => {
+    const message = history[index];
     const prefix = message.role === 'user' ? userLabel : message.role;
-    const line = `${prefix}: ${message.content}`;
-    const estimate = estimateMagicTeaPartyTokens(line, options.providerId);
-
-    if (kept.length < minKeep || usedTokens + estimate <= budget) {
-      kept.push(message);
-      usedTokens += estimate;
-    }
-  }
-
-  return kept.reverse();
+    return estimateMagicTeaPartyTokens(`${prefix}: ${message.content}`, options.providerId);
+  }, options).map(index => history[index]);
 };
 
 export const estimateMagicTeaPartyHistoryTokens = (

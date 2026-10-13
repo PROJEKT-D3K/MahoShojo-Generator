@@ -1,6 +1,7 @@
 export {
   buildMagicTeaPartyHistory,
   trimMagicTeaPartyHistory,
+  selectMagicTeaPartyHistoryPositions,
   estimateMagicTeaPartyHistoryTokens,
 } from '@mahoshojo/ai-core/magic-tea-party';
 export type {

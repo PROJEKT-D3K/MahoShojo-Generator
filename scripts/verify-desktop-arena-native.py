@@ -83,7 +83,7 @@ pub mod ipc {
     paths = [PRODUCT / "src" / f"{name}.rs" for name in MODULES + TEST_MODULES + ["arena_hosted_tests", "arena_hosted_json", "arena_hosted_json_tests"]]
     paths += sorted((PRODUCT / "src").glob("arena_hosted_*.rs"))
     paths += sorted((PRODUCT / "src").glob("arena_story_*.rs"))
-    paths += [PRODUCT / "src/magic_tea_party_tests.rs", ROOT / "packages/contracts/fixtures/desktop-magic-tea-party.json"]
+    paths += [PRODUCT / "src/magic_tea_party_tests.rs", PRODUCT / "src/magic_tea_party_journey_tests.rs", ROOT / "packages/contracts/fixtures/desktop-magic-tea-party.json"]
     paths += sorted((PRODUCT / "src/cloud").glob("*.rs"))
     paths += [ROOT / "packages/contracts/fixtures/battle-report-history.json",
               ROOT / "packages/contracts/fixtures/public-ranking.json",

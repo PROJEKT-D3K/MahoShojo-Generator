@@ -10,6 +10,7 @@ export {
 export {
   buildMagicTeaPartyHistory,
   trimMagicTeaPartyHistory,
+  selectMagicTeaPartyHistoryPositions,
   estimateMagicTeaPartyHistoryTokens,
 } from './history';
 export type {

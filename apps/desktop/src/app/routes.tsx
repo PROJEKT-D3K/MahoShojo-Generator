@@ -100,7 +100,7 @@ const ESCAPE_MENU_ENTRIES: readonly ShellEscapeMenuEntry[] = (
   ] as const
 ).filter((entry) => readCapability(CAPABILITIES, entry.href).kind === 'available');
 
-const FULL_BLEED_PATHS = new Set(['/', '/details', '/canshou', '/free', '/scenario', '/sublimation', '/battle', '/arena', '/ranking', '/tavern', '/character-party', '/questionnaire-editor', '/card-forge', '/creator', '/character-manager', '/encyclopedia', '/messages', '/settings', '/me', '/local-library']);
+const FULL_BLEED_PATHS = new Set(['/', '/details', '/canshou', '/free', '/scenario', '/sublimation', '/battle', '/arena', '/ranking', '/magic-tea-party', '/tavern', '/character-party', '/questionnaire-editor', '/card-forge', '/creator', '/character-manager', '/encyclopedia', '/messages', '/settings', '/me', '/local-library']);
 
 /** 条目页是前缀而不是字面路径：`/encyclopedia/<slug>`。 */
 const isFullBleedPath = (pathname: string) =>
@@ -443,6 +443,7 @@ const creatorRoute = createRoute({
 const questionnaireEditorRoute = createRoute({ getParentRoute: () => rootRoute, path: '/questionnaire-editor', component: lazyRouteComponent(() => import('./questionnaire-editor-page'), 'DesktopQuestionnaireEditor') });
 const cardForgeRoute = createRoute({ getParentRoute: () => rootRoute, path: '/card-forge', component: lazyRouteComponent(() => import('./card-forge-page'), 'DesktopCardForge') });
 const partyRoute = createRoute({ getParentRoute: () => rootRoute, path: '/character-party', component: lazyRouteComponent(() => import('./party-page'), 'DesktopParty') });
+const teaRoute = createRoute({ getParentRoute: () => rootRoute, path: '/magic-tea-party', component: lazyRouteComponent(() => import('./magic-tea-party-page')) });
 const tavernRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tavern', component: lazyRouteComponent(() => import('./tavern-page'), 'DesktopTavern') });
 
 export const routeTree = rootRoute.addChildren([
@@ -456,6 +457,7 @@ export const routeTree = rootRoute.addChildren([
   advancedArenaRoute,
   rankingRoute,
   tavernRoute,
+  teaRoute,
   partyRoute,
   questionnaireEditorRoute, cardForgeRoute,
   creatorRoute,

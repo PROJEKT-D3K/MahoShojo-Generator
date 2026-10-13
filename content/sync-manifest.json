@@ -23,6 +23,7 @@
       "logo-white-qrcode.svg",
       "logo-white.svg",
       "logo.svg",
+      "magic-tea-party-white.svg",
       "party-white.svg",
       "questionnaire-logo.svg",
       "questionnaire-title.svg",
@@ -33,9 +34,7 @@
       "sublimation.svg",
       "tavern-white.svg"
     ],
-    "web": [
-      "magic-tea-party-white.svg"
-    ]
+    "web": []
   },
   "arenaPresets": {
     "presets": {
