@@ -1,11 +1,13 @@
 /** DESK-103 W01: explicit, disposable Windows test-checkout adapter. No installs. */
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
-import net from 'node:net';
+import { existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readStoryMockFaults, startStoryMocks, validateStoryMockFaults } from './desktop-story-acceptance-mock.mjs';
+import { assertToolVersions, checkPorts, contains, rejectLinks, replaceOnce, safeLaunchEnvironment } from './desktop-acceptance-common.mjs';
+
+export { assertToolVersions, checkPorts, replaceOnce } from './desktop-acceptance-common.mjs';
 
 const sourceRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const native = 'apps/desktop/src-tauri/src/';
@@ -25,11 +27,6 @@ export function loopbackOrigin(input) {
   return { origin: input, port: Number(match[1]) };
 }
 
-export function replaceOnce(source, before, after, label) {
-  if (source.split(before).length !== 2) fail(`patch anchor changed or duplicated: ${label}`);
-  return source.replace(before, after);
-}
-
 export function acceptancePaths(testTree, stateRoot, identifier) {
   if (!new RegExp(`^${PREFIX.replaceAll('.', '\\.')}[a-f0-9]{32}$`).test(identifier)) fail('invalid isolated identifier');
   for (const candidate of [testTree, stateRoot]) if (!path.isAbsolute(candidate)) fail('paths must be absolute');
@@ -41,18 +38,6 @@ export function acceptancePaths(testTree, stateRoot, identifier) {
     webview: path.join(stateRoot, 'webview'),
     target: path.join(stateRoot, 'cargo-target'),
   };
-}
-
-function contains(parent, child) {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
-}
-
-function rejectLinks(candidate) {
-  for (let current = path.resolve(candidate); ; current = path.dirname(current)) {
-    if (existsSync(current) && (lstatSync(current).isSymbolicLink() || realpathSync(current) !== current)) fail('isolated path must not contain symlinks/junctions');
-    if (path.dirname(current) === current) break;
-  }
 }
 
 export function patchSources(original, paths, honoOrigin, nextOrigin, mockFaults = {}) {
@@ -76,21 +61,6 @@ export function patchSources(original, paths, honoOrigin, nextOrigin, mockFaults
   patch('lib.rs', '.run(tauri::generate_context!())', '.run(acceptance_context)');
   patch('lib.rs', '            // 单实例先于一切本地库访问', `            assert!(data_root.ends_with(${JSON.stringify(paths.identifier)}), "unexpected app data namespace");\n\n            // 单实例先于一切本地库访问`);
   return Object.fromEntries(Object.entries(result).map(([file, value]) => [file, original[file].includes('\r\n') ? value.replaceAll('\n', '\r\n') : value]));
-}
-
-export async function checkPorts(ports) {
-  const reservations = [];
-  try {
-    for (const binding of ports) {
-      const { port, host } = typeof binding === 'number' ? { port: binding, host: '127.0.0.1' } : binding;
-      if (!['127.0.0.1', '::1'].includes(host)) fail('only loopback port probes are permitted');
-      const server = net.createServer();
-      await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host, port, exclusive: true }, resolve); });
-      reservations.push(server);
-    }
-  } finally {
-    await Promise.all(reservations.map(server => new Promise(resolve => server.close(resolve))));
-  }
 }
 
 function verifyCheckout(root, expectedTree) {
@@ -182,23 +152,7 @@ export function validatePrepared(stateRoot) {
 
 /** @returns {Record<string, string | undefined>} */
 export function launchEnvironment(manifest, inherited = process.env) {
-  const env = {};
-  // Do not inherit app tokens, proxy, TAURI_CONFIG, WebView browser args, RUSTFLAGS or Cargo overrides.
-  const allowed = /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|PROGRAMFILES|PROGRAMFILES\(X86\)|PROGRAMW6432|CARGO_HOME|RUSTUP_HOME)$/i;
-  for (const [key, value] of Object.entries(inherited)) if (allowed.test(key)) env[key] = value;
-  return { ...env, WEBVIEW2_USER_DATA_FOLDER: manifest.webview, MAHOSHOJO_STORY_ACCEPTANCE: manifest.identifier, CARGO_TARGET_DIR: manifest.target, CARGO_NET_OFFLINE: 'true', RUSTUP_AUTO_INSTALL: '0', COREPACK_ENABLE_NETWORK: '0', CI: 'true',
-    pnpm_config_pm_on_fail: 'error', pnpm_config_runtime_on_fail: 'error',
-    pnpm_config_verify_deps_before_run: 'error', pnpm_config_offline: 'true',
-    npm_config_manage_package_manager_versions: 'false', npm_config_package_manager_strict_version: 'true' };
-}
-
-export function assertToolVersions({ pnpm, cargo, rustc, expectedPnpm, minimumRust }) {
-  if (pnpm.trim() !== expectedPnpm) fail(`existing pnpm ${expectedPnpm} is required; automatic installation is disabled`);
-  const minimum = minimumRust.split('.').map(Number);
-  for (const [name, output] of Object.entries({ cargo, rustc })) {
-    const match = new RegExp(`^${name} (\\d+)\\.(\\d+)\\.(\\d+)(?: |$)`).exec(output.trim());
-    if (!match || Number(match[1]) !== minimum[0] || Number(match[2]) < minimum[1]) fail(`existing ${name} >= ${minimumRust} stable is required; automatic installation is disabled`);
-  }
+  return { ...safeLaunchEnvironment(manifest, inherited), MAHOSHOJO_STORY_ACCEPTANCE: manifest.identifier };
 }
 
 function verifyExistingTools(manifest, env) {
