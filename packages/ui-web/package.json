@@ -209,6 +209,7 @@
       "default": "./src/cloud-save/index.ts"
     },
     "./arena": "./src/arena/index.ts",
+    "./arena-room": "./src/arena-room/index.ts",
     "./arena.css": "./src/arena/styles.css",
     "./arena-report": "./src/arena-report/index.ts",
     "./arena-report-text": "./src/arena-report/text.ts",

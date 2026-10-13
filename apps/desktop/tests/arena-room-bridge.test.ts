@@ -19,11 +19,11 @@ const deferred = <T>() => {
 const batchAt = (sequence = 0, subscriptionId = fixture.attach.subscriptionId): DesktopRoomBatch => DesktopRoomBatchSchema.parse({
   ...fixture.pulls[0].batch, sequence, batchId: `batch-${sequence}`, subscriptionId,
 });
-function harness(accept?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance) => boolean | Promise<boolean>) {
+function harness(accept?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance) => boolean | Promise<boolean>, onAcknowledged?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance) => void) {
   const channels: ArenaRoomChannel[] = [];
   const accepted: DesktopRoomBatch[] = [];
   let current = true;
-  let documentNonce: string | undefined;
+  let documentNonce: string | undefined; let documentReadFails = false;
   let subscriptionId = fixture.attach.subscriptionId;
   let batch: unknown = batchAt();
   let active = 0, maximumActive = 0;
@@ -45,7 +45,8 @@ function harness(accept?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance
   });
   const bridge = createArenaRoomBridge(invoke, {
     acceptBatch: accept ?? ((value) => { accepted.push(value); return true; }),
-    isCurrent: () => current, getDocumentNonce: () => documentNonce, onError: (error) => { errors.push(error); errorHook?.(error); },
+    onAcknowledged,
+    isCurrent: () => current, getDocumentNonce: () => { if (documentReadFails) throw new Error("document-unavailable"); return documentNonce; }, onError: (error) => { errors.push(error); errorHook?.(error); },
     createChannel: () => { const channel = { onmessage: (_value: unknown) => undefined }; channels.push(channel); return channel; },
   });
   const actions = () => invoke.mock.calls.filter(([command]) => command === DESKTOP_ROOM_IPC_COMMANDS.request)
@@ -60,11 +61,57 @@ function harness(accept?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance
     setCurrent: (value: boolean) => { current = value; },
     setErrorHook: (hook: (error: ArenaRoomBridgeError) => void) => { errorHook = hook; },
     setDocumentNonce: (value: string | undefined) => { documentNonce = value; },
+    setDocumentReadFails: () => { documentReadFails = true; },
     maximumActive: () => maximumActive,
   };
 }
 
 describe('Native Room bounded pull/accept/ack bridge', () => {
+  it('exposes the transition boundary only after a valid exact ACK, not consumer acceptance', async () => {
+    const done = vi.fn(); const h = harness(undefined, done); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const original = h.invoke.getMockImplementation()!; const gate = deferred<unknown>();
+    h.invoke.mockImplementation(async (command, args) => {
+      if (command === DESKTOP_ROOM_IPC_COMMANDS.request && (args!.request as { request: { kind: string } }).request.kind === 'ack') return gate.promise;
+      return original(command, args);
+    });
+    h.notify(); await tick(); expect(h.accepted).toHaveLength(1); expect(done).not.toHaveBeenCalled();
+    const batch = batchAt(); gate.resolve({ kind: 'acknowledged', handle: batch.handle, subscriptionId: batch.subscriptionId,
+      batchId: batch.batchId, sequence: batch.sequence, accepted: true });
+    await tick(); expect(done).toHaveBeenCalledTimes(1); expect(done.mock.calls[0]![1].isCurrent()).toBe(true);
+    h.notify(); await tick(); expect(done).toHaveBeenCalledTimes(1);
+    h.setDocumentNonce('b'.repeat(64)); expect(done.mock.calls[0]![1].isCurrent()).toBe(false);
+  });
+  it.each(['wrong-receipt', 'retired-owner', 'changed-document', 'missing-document', 'unreadable-document'])('never grants an ACK boundary for %s', async (reason) => {
+    const done = vi.fn(); const h = harness(undefined, done); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const original = h.invoke.getMockImplementation()!; const gate = deferred<unknown>();
+    h.invoke.mockImplementation(async (command, args) => {
+      if (command === DESKTOP_ROOM_IPC_COMMANDS.request && (args!.request as { request: { kind: string } }).request.kind === 'ack') return gate.promise;
+      return original(command, args);
+    });
+    h.notify(); await tick(); if (reason === 'retired-owner') h.setCurrent(false);
+    if (reason === 'changed-document') h.setDocumentNonce('b'.repeat(64));
+    if (reason === 'missing-document') h.setDocumentNonce(undefined);
+    if (reason === 'unreadable-document') h.setDocumentReadFails();
+    const batch = batchAt(); gate.resolve({ kind: 'acknowledged', handle: batch.handle, subscriptionId: batch.subscriptionId,
+      batchId: reason === 'wrong-receipt' ? 'wrong' : batch.batchId, sequence: batch.sequence, accepted: true });
+    await tick(); expect(done).not.toHaveBeenCalled();
+  });
+  it('keeps ACK irreversible when its callback throws, including reentrant detach', async () => {
+    for (const change of ['none', 'detach', 'document-changed', 'document-unreadable']) {
+      const h = harness(undefined, () => {
+        if (change === 'detach') h.bridge.detach();
+        if (change === 'document-changed') h.setDocumentNonce('b'.repeat(64));
+        if (change === 'document-unreadable') h.setDocumentReadFails();
+        throw new Error('consumer-private-text');
+      });
+      h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start(); h.notify(); await tick(); h.notify(); await tick();
+      expect(h.actions().filter(action => action === 'ack')).toHaveLength(1);
+      expect(h.actions().filter(action => action === 'pull')).toHaveLength(1);
+      expect(h.errors.map(error => error.code)).toEqual(change === 'none' ? ['internal-error'] : []);
+      expect(JSON.stringify(h.errors)).not.toContain('consumer-private-text');
+    }
+  });
+
   it('retires synchronously on revoked while a consumer is stuck and releases only the small notification debt', async () => {
     const acceptance = deferred<boolean>(); let captured: ArenaRoomAcceptance | undefined;
     const h = harness((_batch, context) => { captured = context; return acceptance.promise; });

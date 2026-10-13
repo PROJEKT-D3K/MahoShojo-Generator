@@ -681,6 +681,11 @@ describe('Arena multiplayer panel real React interactions', () => {
     await act(async () => openMoreMenu());
     await act(async () => button('房间成员与操作').click());
     await act(async () => button('关闭房间').click());
+    expect(document.activeElement).toBe(button('确认关闭房间'));
+    await act(async () => button('取消').click());
+    expect(document.activeElement).toBe(button('关闭房间'));
+    expect(mocks.close).not.toHaveBeenCalled();
+    await act(async () => button('关闭房间').click());
     await act(async () => button('确认关闭房间').click());
     expect(mocks.close).toHaveBeenCalledOnce();
   });
@@ -859,6 +864,13 @@ it('成员名额与在线人数分开，断线和旧服务端不显示假在线'
   expect(document.body.querySelectorAll('[data-member-presence="online"]')).toHaveLength(1);
   expect(document.body.querySelectorAll('[data-member-presence="offline"]')).toHaveLength(1);
   expect(document.body.textContent).toContain('仍保留成员席位和提案');
+  const validPresence = mocks.state.presence!;
+  for (const mismatch of [{ roomId: 'another-room' }, { roomEpoch: 'old-epoch' }]) {
+    mocks.state = { ...connected, presence: { ...validPresence, ...mismatch } };
+    await act(async () => root.render(<ArenaMultiplayerContextPanel {...props} />));
+    expect(document.body.querySelectorAll('[data-member-presence="unknown"]')).toHaveLength(2);
+    expect(document.body.textContent).toContain('当前 2 位成员；在线状态暂不可用。');
+  }
   mocks.state = { ...mocks.state!, phase: 'reconnecting' };
   await act(async () => root.render(<ArenaMultiplayerContextPanel {...props} />));
   expect(document.body.textContent).toContain('当前 2 位成员；在线状态暂不可用。');
@@ -867,4 +879,26 @@ it('成员名额与在线人数分开，断线和旧服务端不显示假在线'
   await act(async () => root.render(<ArenaMultiplayerContextPanel {...props} />));
   expect(document.body.textContent).toContain('在线状态暂不可用');
   expect(document.body.textContent).not.toContain('2 人在线');
+});
+
+
+it('共享退出确认仍由 Web Modal 的 Escape 关闭，取消后重开不残留动作', async () => {
+  mocks.state = connectedHostState(sharedConfig);
+  await act(async () => root.render(<ArenaMultiplayerContextPanel {...props} />));
+  await act(async () => openMoreMenu());
+  await act(async () => button('房间成员与操作').click());
+  await act(async () => button('关闭房间').click());
+  expect(document.activeElement).toBe(button('确认关闭房间'));
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+  expect(document.body.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(document.body.querySelector('#arena-room-overview-dialog-heading')).toBeNull();
+  expect(mocks.close).not.toHaveBeenCalled();
+  expect(mocks.leave).not.toHaveBeenCalled();
+  expect(mocks.cancelGeneration).not.toHaveBeenCalled();
+  await act(async () => openMoreMenu());
+  await act(async () => button('房间成员与操作').click());
+  expect(document.body.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(button('关闭房间').disabled).toBe(false);
 });

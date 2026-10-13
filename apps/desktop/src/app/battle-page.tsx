@@ -44,6 +44,8 @@ import { IpcWebPackageRepository } from '../platform/web-package-bridge';
 import { downloadTextFile } from '../platform/download-text-file';
 import { navigateByProductHref, resolveInternalHrefForHashHistory } from './hash-history-fragment';
 import { useLeaveGuard } from './useLeaveGuard';
+import { DesktopArenaRoomSession, readDesktopRoomDocumentNonce } from '../features/arena/room-session';
+import { DesktopArenaRoomPanel } from '../features/arena/room-panel';
 import { DesktopArenaStorySession, type PrepareStoryExecution } from '../features/arena/story-session';
 import { DesktopArenaStoryControls } from '../features/arena/story-controls';
 import { createIpcStoryPendingPort, createIpcStoryPendingExportPort } from '../platform/arena-story-pending-native';
@@ -87,6 +89,10 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const { state: cloudState, store: cloudStore } = useDesktopCloudSession();
   const [strictActive, setStrictActive] = useState(false);
   const strictActiveRef = useRef(false);
+  const roomStartAllowed = useRef<() => boolean>(() => false);
+  const roomOwner = useMemo(() => new DesktopArenaRoomSession({ invoke, account: cloudStore, documentNonce: readDesktopRoomDocumentNonce, canStart: () => product === 'arena' && roomStartAllowed.current() }), [cloudStore, product]);
+  const roomState = useSyncExternalStore(roomOwner.subscribe, roomOwner.getSnapshot);
+  useEffect(() => { roomOwner.activate(); return () => roomOwner.dispose(); }, [roomOwner]);
   const [strictRevision, setStrictRevision] = useState(0);
   const [strictCheck, setStrictCheck] = useState<DesktopStrictCheckSnapshot | null>(null);
   const strictCheckRef = useRef<DesktopStrictCheckSnapshot | null>(null);
@@ -145,18 +151,20 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   useLayoutEffect(() => { storyOwner.setExecutionScope(scope, cloudState.bootstrapped ? cloudState.account ? { kind: 'account', expectedUserId: cloudState.account.userId } : { kind: 'anonymous' } : null); }, [scope, cloudState.bootstrapped, cloudState.account?.userId, storyOwner]);
   useEffect(() => () => { ownerEpoch.current += 1; diagnosisFlight.current = null; strictActiveRef.current = false; strictPreparation.current?.controller.abort(); strictPreparation.current = null; aiStore.cancelPreparingGeneration(); }, [aiStore]);
   const guard = useLeaveGuard(
-    () => storyOwner.isBusy() || storyOwner.hasUnsavedResult() || Boolean(diagnosisFlight.current) || session.isBusy() || packageOwner.isBusy() || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current || packageOwner.getSnapshot().temporary.length > 0 || session.hasUnsavedDraft() || Object.values(dirtyControls.current).some(Boolean),
+    () => roomOwner.needsLeaveConfirmation() || storyOwner.isBusy() || storyOwner.hasUnsavedResult() || Boolean(diagnosisFlight.current) || session.isBusy() || packageOwner.isBusy() || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current || packageOwner.getSnapshot().temporary.length > 0 || session.hasUnsavedDraft() || Object.values(dirtyControls.current).some(Boolean),
     '当前生成、读取或保存尚未完成，或仍有未保存的内容。',
     '窗口关闭保护初始化失败，生成、导入与保存暂不可用，请重新打开页面。',
     () => {
       if (storyOwner.getSnapshot().hosted?.busy && storyOwner.getSnapshot().hosted?.busy !== 'model' || storyOwner.getSnapshot().saving || storyOwner.getSnapshot().exporting || storyOwner.getSnapshot().phase === 'preparing' || diagnosisFlight.current || packageOwner.isBusy() || session.getSnapshot().saving || session.getSnapshot().importing || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current) return false;
-      if (!window.confirm(storyOwner.hosted?.hasCandidate() || session.getSnapshot().hosted || session.getSnapshot().generation?.intent.mode === 'hosted' ? '确认离开？只停止本机订阅，服务器可能继续生成；已封存原件可从原页面恢复，尚未封存的最新正文仅在当前窗口，请先导出。' : '确认离开？正在生成的请求会取消，未保存的输入或原文可能丢失。')) return false;
-      storyOwner.detach(); session.detach(); return true;
+      const roomWarning = roomOwner.needsLeaveConfirmation() ? '多人房间只会断开本机连接，不代表退出、关闭或停止生成；未知操作仍可能已发生，建议先核对。' : '';
+      if (!window.confirm(roomWarning + (storyOwner.hosted?.hasCandidate() || session.getSnapshot().hosted || session.getSnapshot().generation?.intent.mode === 'hosted' ? '确认离开？只停止本机订阅，服务器可能继续生成；已封存原件可从原页面恢复，尚未封存的最新正文仅在当前窗口，请先导出。' : '确认离开？正在生成的请求会取消，未保存的输入或原文可能丢失。'))) return false;
+      roomOwner.detach(); storyOwner.detach(); session.detach(); return true;
     },
   );
   const busy = Boolean(storyState.hosted?.stopping) || Boolean(storyState.hosted?.busy) || storyState.saving || storyState.exporting || storyState.phase === 'preparing' || storyState.phase === 'generating' || diagnosing || state.roleUpdates.status === 'updating' || state.phase === 'generating' || state.saving || state.importing || aiState.generationActive || advancedBusy || packageState.busy;
-  const disabled = !guard.ready || busy || state.pendingRestore;
-  const update = (patch: Partial<ArenaDraft>) => { if (!disabled) session.updateDraft({ ...session.getSnapshot().draft, ...patch }); };
+  roomStartAllowed.current = () => guard.ready && !strictActiveRef.current && !session.isBusy() && !storyOwner.isBusy() && !storyOwner.hosted?.hasCandidate() && !storyOwner.getSnapshot().hosted?.slots[product] && !packageOwner.isBusy() && !preparing.current && !diagnosisFlight.current && !advancedBusyRef.current && !session.getSnapshot().pendingRestore && !aiStore.isPreparingGeneration() && !aiStore.getSnapshot().generationActive && !aiStore.getSnapshot().savingConnection && !aiStore.getSnapshot().savingCredential && !aiStore.getSnapshot().deletingConnection;
+  const disabled = !guard.ready || busy || state.pendingRestore || roomState.constrained;
+  const update = (patch: Partial<ArenaDraft>) => { if (!roomOwner.isConstrained() && !disabled) session.updateDraft({ ...session.getSnapshot().draft, ...patch }); };
   const resultRef = useRef<HTMLDivElement>(null);
   useResultAutoScroll(resultRef, state.phase === 'completed' || (state.phase === 'generating' && state.activeGenerationMode === 'stream' && !!state.markdown.trim()), { restored: state.restored });
   useEffect(() => {
@@ -178,7 +186,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     const epoch = ownerEpoch.current; setError(null); try { await session.importInput(load); } catch (cause) { if (epoch === ownerEpoch.current) reportError(cause); throw cause; }
   };
   const prepareStrict = async (season: PublicSeasonMeta) => {
-    if (disabled || preparing.current || strictPreparation.current || session.isBusy() || storyOwner.isBusy() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection) return;
+    if (roomOwner.isConstrained() || disabled || preparing.current || strictPreparation.current || session.isBusy() || storyOwner.isBusy() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection) return;
     const token = Symbol(), controller = new AbortController(), epoch = ownerEpoch.current;
     const preparationIdentity = () => {
       const ai = aiStore.getSnapshot(), account = cloudStore.getSnapshot();
@@ -304,6 +312,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const currentHint = recoveryHint?.epoch === ownerEpoch.current && session.hostedRecovery.isReplacementCurrent(recoveryHint.repair) ? recoveryHint : null;
   const repairHint = currentHint && (currentHint.value.state === 'available' || currentHint.value.state === 'expired') ? currentHint : null;
   const generate = () => {
+    if (roomOwner.isConstrained()) return;
     if (storyOwner.hosted?.hasCandidate() || storyState.hosted?.slots[product]) { setError('本产品有待处理的 Hosted 故事候选，请先处理原候选。'); return; }
     if (disabled || diagnosisFlight.current || preparing.current || session.isBusy() || packageOwner.isBusy()) return;
     if (!target.modelId || !target.providerTarget || target.unavailableReason || hostedUnavailable) { setError(hostedUnavailable ?? target.unavailableReason ?? '请选择受支持的 AI 目标。'); return; }
@@ -320,7 +329,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     const readiness = arenaReadinessMessage(frozen, product); if (readiness) { setError(readiness); return; }
     const epoch = ownerEpoch.current; preparing.current = true; setError(null);
     void aiStore.withPreparedGeneration(async (prepared) => {
-      if (epoch !== ownerEpoch.current || !prepared.modelId || !prepared.providerTarget) return;
+      if (roomOwner.isConstrained() || epoch !== ownerEpoch.current || !prepared.modelId || !prepared.providerTarget) return;
       if (strictIntent && (!strictActiveRef.current || prepared.location !== 'server' || strictTargetIdentity(prepared) !== strictTargetIdentity(target) || readStrictTargetIdentity() !== strictTargetIdentity(target) || session.getSnapshot().draft !== sourceDraft
         || strictSnapshotKeyRef.current !== strictKey || checked?.key !== strictKey || !checked.result.willCount || strictCheckRef.current !== checked
         || aiStore.getCredentialIntentRevision() !== providerCredentialIntent || cloudStore.getCredentialEpoch() !== credentialEpoch || cloudStore.getSnapshot().verification !== 'verified' || cloudStore.getSnapshot().authFlow.kind !== 'idle'
@@ -345,7 +354,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     const epoch = ownerEpoch.current;
     const actor = cloudState.account ? { kind: 'account' as const, expectedUserId: cloudState.account.userId } : { kind: 'anonymous' as const };
     return aiStore.withPreparedGeneration(async (prepared) => {
-      if (epoch !== ownerEpoch.current) return;
+      if (roomOwner.isConstrained() || epoch !== ownerEpoch.current) return;
       if (!prepared.modelId || !prepared.providerTarget) throw new Error('请选择可用的模型。');
       if (prepared.location === 'server') {
         if (!cloudState.bootstrapped || prepared.providerTarget.kind === 'custom') throw new Error('服务器故事目标或账号身份尚未就绪。');
@@ -361,6 +370,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     });
   };
   const allowStoryGeneration = () => {
+    if (roomOwner.isConstrained()) return false;
     if (strictActiveRef.current) { setError('严格排位准备仅用于单次战报，请先退出准备再开始连续故事。'); return false; }
     if (!guard.ready || busy || diagnosisFlight.current || preparing.current || session.isBusy() || packageOwner.isBusy() || storyOwner.isBusy()) return false;
     if (!target.modelId || !target.providerTarget || target.unavailableReason || hostedUnavailable) { setError(hostedUnavailable ?? target.unavailableReason ?? '请选择可用的模型。'); return false; }
@@ -514,8 +524,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         footer: <ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />,
   };
   return <>
-    {product === 'arena' ? <AdvancedArenaPageView header={<AdvancedArenaHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} description="桌面高级单次 · 角色、主辅情景与故事设定" guideChildren={<p>配置输入后生成单次战报。此页使用独立本机草稿，支持客户端 Direct、官方服务器流式/非流式报告与 Web 源码生成/验证/导出；角色更新遵循服务器冻结权限；线性连续故事使用本机独立目录；隔离运行和插图尚未开放。<button className="footer-link" type="button" onClick={() => navigateByProductHref(router, '/battle')}>前往简洁版</button></p>} />} result={<>{result}{slots.storySession}</>} homeLink={slots.homeLink} footer={slots.footer}>
-      <ArenaEditorWorkspaceLayout disabled={disabled} sections={[
+    {product === 'arena' ? <AdvancedArenaPageView header={<AdvancedArenaHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} description="桌面高级单次 · 角色、主辅情景与故事设定" guideChildren={<p>配置输入后生成单次战报。此页使用独立本机草稿，支持客户端 Direct、官方服务器流式/非流式报告与 Web 源码生成/验证/导出；角色更新遵循服务器冻结权限；线性连续故事使用本机独立目录；隔离运行和插图尚未开放。<button className="footer-link" type="button" onClick={() => navigateByProductHref(router, '/battle')}>前往简洁版</button></p>} />} beforeWorkspace={<DesktopArenaRoomPanel owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} />} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
+      {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained}><ArenaEditorWorkspaceLayout disabled={disabled} sections={[
         { kind: 'presets', title: '🎴 预设角色', column: 'left', description: '选择内置角色', defaultOpen: true, content: slots.presets },
         { kind: 'database', title: '📚 角色库', column: 'left', description: '本地、公开或缓存副本', defaultOpen: true, content: slots.database },
         { kind: 'import', title: '📁 本地导入', column: 'left', description: '上传或粘贴角色 JSON', defaultOpen: true, keepMounted: true, content: slots.localImport },
@@ -527,7 +537,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         { kind: 'story', title: '🧠 故事引导 / 判定 / AI 模型', column: 'right', description: '辅助设定、活动历史编辑与 AI 目标', defaultOpen: true, keepMounted: true, content: slots.storyOptions },
         { kind: 'generation', title: '⚡ 生成方式', column: 'right', description: 'Markdown 或 Web 源码；流式/非流式', defaultOpen: true, content: slots.generationMode },
         { kind: 'actions', title: '🚀 开始生成', column: 'right', description: '一次冻结，一个请求', collapsible: false, content: slots.actions },
-      ]} />
+      ]} /></fieldset>
     </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
       showScenario={draft.battleMode === 'scenario'} hasScenario={!!draft.scenario.content} materialCount={draft.materials.length} referenceItemCount={referenceCount} maxReferenceItems={limits.maxReferenceItemsSanity}
       copy={{ databaseTitle: '📚 角色库', databaseDescription: '选择本地卡、在线公开卡或已缓存副本', modeDescription: '不同模式决定故事风格', storyOptionsDescription: '设置故事方向、历史读写和 AI 目标' }} slots={slots} />}

@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  ArenaRoomShareabilityError as CoreArenaRoomShareabilityError,
+  createArenaRoomCanonicalEmptyDraftBundle as createCoreEmptyDraftBundle,
+  createArenaRoomSourceProjector,
+} from '@mahoshojo/multiplayer-core';
 import type { WebPackageRef } from '@mahoshojo/contracts/web-package';
 import { BUILTIN_ARENA_NEWS_PACKAGE_REF, isBuiltinWebPackageRef } from '@mahoshojo/web-package';
 
@@ -7,9 +12,11 @@ import {
   buildArenaRoomHostWorkspaceBundleFromBattleState,
   buildArenaRoomSharedConfigFromBattleState,
   computeArenaRoomContentDigest,
+  createArenaRoomCanonicalEmptyDraftBundle,
   tryBuildArenaRoomHostWorkspaceBundleFromBattleState,
   type ArenaRoomBattleStateSource,
 } from '@/lib/arena-room/shared-config';
+import { sha256Hex } from '@/lib/crypto';
 import { mapSharedConfigToArenaEditorView } from '@/components/arena/editor/shared-config-mapper';
 
 afterEach(() => {
@@ -92,6 +99,18 @@ const source = (): ArenaRoomBattleStateSource => ({
 });
 
 describe('Arena Room Battle store projection', () => {
+  it('Web adapter uses the shared source projector with existing host ports and error identity', async () => {
+    const projector = createArenaRoomSourceProjector({ sha256Hex, isBuiltinWebPackageRef });
+    const input = { ...source(), reportFormat: 'web' as const, webPackageRef: BUILTIN_ARENA_NEWS_PACKAGE_REF };
+
+    expect(await buildArenaRoomHostWorkspaceBundleFromBattleState(input)).toEqual(
+      await projector.buildArenaRoomHostWorkspaceBundleFromBattleState(input),
+    );
+    expect(ArenaRoomShareabilityError).toBe(CoreArenaRoomShareabilityError);
+    expect(createArenaRoomCanonicalEmptyDraftBundle).toBe(createCoreEmptyDraftBundle);
+    expect(createArenaRoomCanonicalEmptyDraftBundle().sharedConfig.historySettings.readArenaHistoryLimit).toBe(3);
+  });
+
   it('includes a Web package revision in the shared generation config only in Web mode', async () => {
     const state = { ...source(), reportFormat: 'web' as const, webPackageRef: BUILTIN_ARENA_NEWS_PACKAGE_REF };
     expect((await buildArenaRoomSharedConfigFromBattleState(state)).webPackageRef).toEqual(BUILTIN_ARENA_NEWS_PACKAGE_REF);

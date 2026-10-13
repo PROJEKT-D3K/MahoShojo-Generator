@@ -22,6 +22,8 @@ export interface ArenaRoomAcceptance {
 export interface ArenaRoomBridgeOptions {
   /** Resolve true only after bounded state installation/queue acceptance has succeeded. */
   acceptBatch: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance) => boolean | Promise<boolean>;
+  /** Runs only after the exact Native ACK is confirmed; safe boundary for replacing a subscription. */
+  onAcknowledged?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance) => void;
   isCurrent: () => boolean;
   /** Read the immutable main-frame document-start nonce; omission disables retired ACKs. */
   getDocumentNonce?: () => string | undefined;
@@ -198,6 +200,13 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       if (!result.success || result.data.handle !== handle || result.data.subscriptionId !== subscriptionId
         || result.data.batchId !== batch.batchId || result.data.sequence !== batch.sequence || !result.data.accepted) throw invalid();
       candidate.lastAcknowledged = batch.sequence;
+      // The receipt is now irreversible. A consumer failure may retire this scope,
+      // but must never undo the ACK, retry it, or replay the acknowledged mutation.
+      const acknowledgedContext = { signal: context.signal, isCurrent: () => context.isCurrent() && sameDocument(candidate) };
+      try { if (acknowledgedContext.isCurrent()) options.onAcknowledged?.(batch, acknowledgedContext); }
+      catch {
+        if (acknowledgedContext.isCurrent()) fail(candidate, new ArenaRoomBridgeError('internal-error'));
+      }
     } catch (cause) {
       if (context.isCurrent()) fail(candidate, cause instanceof ArenaRoomBridgeError ? cause : normalizeArenaRoomFailure(cause));
     } finally {

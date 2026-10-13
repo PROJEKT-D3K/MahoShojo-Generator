@@ -808,3 +808,60 @@ describe('Arena multiplayer production client/hook wiring', () => {
     expect(container.textContent).not.toContain('上次提案请求结果未知');
   });
 });
+
+it.each(['mahoshojo.arena-room.presence.v1', 'mahoshojo.arena-room.v1', ''])(
+  '共享成员视图保留 Web socket-open 语义，presence 仅在真实协商和匹配帧后可用：%s',
+  async (protocol) => {
+    const session = sessionFor('member');
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/languages.json')) return Response.json([]);
+      if (requestPath(url) === '/api/auth/verify') return Response.json({ success: false });
+      if (requestPath(url) === '/api/arena/rooms/v1') return Response.json({ items: [], nextCursor: null });
+      if (url.endsWith('/join')) return Response.json(session);
+      if (url.endsWith('/generations')) {
+        return Response.json({ protocolVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1', items: [] });
+      }
+      if (url.endsWith('/ticket')) return Response.json({
+        protocolVersion: 1, ticket: 'ticket-presence', expiresInSeconds: 45,
+        websocket: { path: '/api/arena/rooms/v1/ws', protocol: 'mahoshojo.arena-room.v1' },
+      });
+      throw new Error(`unexpected Room request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => root.render(productionTree(props)));
+    await enterJoinCode();
+    await act(async () => button('加入房间').click());
+    await flush();
+    const socket = WiringSocket.instances[0]!;
+    Object.defineProperty(socket, 'protocol', { value: protocol });
+    await act(async () => socket.open());
+    // Web 的既有 connected 表示 socket-open，不因本次抽取增加 session-attached 门槛。
+    expect(container.textContent).toContain('房间已连接');
+    await act(async () => button('更多').click());
+    await act(async () => button('房间成员与操作').click());
+    expect(document.body.querySelectorAll('[data-member-presence="unknown"]')).toHaveLength(2);
+    expect(button('离开房间').disabled).toBe(false);
+
+    const presence = {
+      protocolVersion: 1, type: 'room.presence', roomId: 'room-1', roomEpoch: 'epoch-1', onlineUserIds: ['user-host'],
+    };
+    for (const mismatch of [{ roomId: 'another-room' }, { roomEpoch: 'old-epoch' }]) {
+      await act(async () => socket.message(JSON.stringify({ ...presence, ...mismatch })));
+      expect(document.body.querySelectorAll('[data-member-presence="unknown"]')).toHaveLength(2);
+    }
+    await act(async () => socket.message(JSON.stringify(presence)));
+    if (protocol === 'mahoshojo.arena-room.presence.v1') {
+      expect(document.body.querySelectorAll('[data-member-presence="online"]')).toHaveLength(1);
+      expect(document.body.querySelectorAll('[data-member-presence="offline"]')).toHaveLength(1);
+      expect(document.body.textContent).toContain('当前 2 位成员，1 人在线，1 人离线。');
+    } else {
+      expect(document.body.querySelectorAll('[data-member-presence="unknown"]')).toHaveLength(2);
+      expect(document.body.textContent).toContain('在线状态暂不可用');
+    }
+    await act(async () => socket.closed(1006, 'connection-lost'));
+    expect(document.body.querySelectorAll('[data-member-presence="unknown"]')).toHaveLength(2);
+    expect(button('离开房间').disabled).toBe(true);
+    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('/join'))).toHaveLength(1);
+  },
+);
