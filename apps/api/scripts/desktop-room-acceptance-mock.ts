@@ -257,7 +257,8 @@ export const startRoomAcceptanceMock = async (options: {
   auth.onError(() => Response.json({ error: 'Acceptance request failed' }, { status: 503 }));
   auth.use('*', bodyLimit({ maxSize: 4096 }));
   auth.use('*', async (context, next) => {
-    context.header('cache-control', 'no-store'); context.header('referrer-policy', 'no-referrer');
+    // Keep the browser's same-origin form POST Origin; suppress referrers to the callback.
+    context.header('cache-control', 'no-store'); context.header('referrer-policy', 'same-origin');
     context.header('content-security-policy', "default-src 'none'; form-action 'self'; frame-ancestors 'none'");
     await next();
   });

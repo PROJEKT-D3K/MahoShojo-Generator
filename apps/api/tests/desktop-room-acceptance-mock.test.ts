@@ -48,6 +48,8 @@ const newGrant = async (runtime: RoomAcceptanceRuntime, userId: 101 | 202) => {
   const query = new URLSearchParams({ state, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', redirect_uri: 'http://127.0.0.1:49152/callback' });
   const page = await request(runtime, `/auth/desktop?${query}`, { auth: true }); expect(page.status).toBe(200);
   expect(page.text).toContain('Synthetic 101'); expect(page.text).toContain('Synthetic 202');
+  expect(page.headers['referrer-policy']).toBe('same-origin');
+  expect(page.headers['content-security-policy']).toBe("default-src 'none'; form-action 'self'; frame-ancestors 'none'");
   const flow = /name="flow" value="([A-Za-z0-9_-]+)"/u.exec(page.text)![1]!;
   const form = new URLSearchParams({ flow, userId: String(userId) }).toString();
   const grant = await request(runtime, '/auth/desktop', { auth: true, body: form, headers: { origin: runtime.authOrigin } });
@@ -142,6 +144,24 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     }
     expect((await request(runtime, '/health')).status).toBe(404);
     expect(runtime.observations().rooms).toBe(0);
+  });
+
+  it('rejects missing, opaque and foreign form Origins without consuming the flow', async () => {
+    const runtime = await start();
+    const query = new URLSearchParams({ state: 's'.repeat(43), code_challenge: 'c'.repeat(43),
+      code_challenge_method: 'S256', redirect_uri: 'http://127.0.0.1:49152/callback' });
+    const page = await request(runtime, `/auth/desktop?${query}`, { auth: true });
+    expect(page.status).toBe(200);
+    const flow = /name="flow" value="([A-Za-z0-9_-]+)"/u.exec(page.text)![1]!;
+    const body = new URLSearchParams({ flow, userId: '101' }).toString();
+    for (const origin of [undefined, 'null', 'http://localhost:34080', 'https://foreign.invalid']) {
+      expect((await request(runtime, '/auth/desktop', { auth: true, body,
+        headers: origin === undefined ? {} : { origin },
+      })).status).toBe(403);
+    }
+    expect((await request(runtime, '/auth/desktop', { auth: true, body,
+      headers: { origin: runtime.authOrigin },
+    })).status).toBe(303);
   });
 
   it('preserves PKCE, state, one-use grant, session/profile/summary contracts and cookie identity', async () => {
