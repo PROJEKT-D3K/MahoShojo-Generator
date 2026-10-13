@@ -9,3 +9,4 @@ export { MagicTeaPartyPageView, type MagicTeaPartyPageViewProps } from './PageVi
 export { MagicTeaPartyHero, type MagicTeaPartyHeroProps } from './Hero';
 export { MagicTeaPartyNoticePanel, type MagicTeaPartyNoticePanelProps } from './NoticePanel';
 export { useChatAutoScroll, type UseChatAutoScrollOptions } from './useChatAutoScroll';
+export { MagicTeaPartySummaryBody, type MagicTeaPartySummaryBodyProps } from './SummaryPanel';

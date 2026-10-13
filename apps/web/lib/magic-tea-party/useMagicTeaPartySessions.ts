@@ -52,6 +52,47 @@ import {
 import { applyShieldWords } from '@/lib/shield-word-filter';
 import { parseTavernCardFromPngFile } from '@/lib/tavern-card';
 
+/** Preserve the historical summary watermark while keeping coverage tied to retained message identities. */
+export const resolveMagicTeaPartyBranchSummary = (params: {
+  session: MagicTeaPartySession;
+  messages: MagicTeaPartyMessage[];
+  replaceFromIndex: number;
+  clonedMessageIds?: ReadonlyMap<string, string>;
+}): Pick<MagicTeaPartySession, 'summary' | 'summarySections' | 'summaryMeta'> => {
+  const { session, messages, replaceFromIndex, clonedMessageIds } = params;
+  let summaryMeta = session.summaryMeta;
+  const clear = { summary: undefined, summarySections: undefined, summaryMeta: undefined };
+  if (summaryMeta?.toMessageId) {
+    const summaryIndex = messages.findIndex(message => message.id === summaryMeta?.toMessageId);
+    if (summaryIndex >= replaceFromIndex) return clear;
+  }
+  if (summaryMeta) {
+    summaryMeta = { ...summaryMeta };
+    const coverage = summaryMeta.coverage;
+    if (clonedMessageIds) {
+      // Keep the full-history watermark; selected coverage endpoints are not interchangeable with it.
+      for (const key of ['fromMessageId', 'toMessageId'] as const) {
+        const id = summaryMeta[key];
+        if (id && clonedMessageIds.has(id)) summaryMeta[key] = clonedMessageIds.get(id);
+      }
+      if (coverage) {
+        // Dropping only the evidence would retain summary text about an omitted branch tail.
+        // Missing identities are equally unprovable, so fail closed for the whole summary.
+        if ([...coverage.selectedMessageIds, ...coverage.clippedMessageIds].some(id => !clonedMessageIds.has(id))) return clear;
+        summaryMeta.coverage = {
+          ...coverage,
+          selectedMessageIds: coverage.selectedMessageIds.map(id => clonedMessageIds.get(id)!),
+          clippedMessageIds: coverage.clippedMessageIds.map(id => clonedMessageIds.get(id)!),
+        };
+      }
+    } else if (coverage) {
+      const retainedIds = new Set(messages.slice(0, replaceFromIndex).map(message => message.id));
+      if ([...coverage.selectedMessageIds, ...coverage.clippedMessageIds].some(id => !retainedIds.has(id))) return clear;
+    }
+  }
+  return { summary: session.summary, summarySections: session.summarySections, summaryMeta };
+};
+
 const STORAGE_RECENT_SESSION = 'magic-tea-party:recent-session';
 type MagicTeaPartyOutputFormat = NonNullable<MagicTeaPartySession['settings']['outputFormat']>;
 
@@ -1182,17 +1223,9 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
       const roundIndex = messages.slice(0, targetIndex + 1).filter((message) => message.role === 'user').length;
       const branchLabel = `从第 ${Math.max(1, roundIndex)} 轮分支`;
 
-      let summary = activeSession.summary;
-      let summaryMeta = activeSession.summaryMeta;
-      let summarySections = activeSession.summarySections;
-      if (summaryMeta?.toMessageId) {
-        const summaryIndex = messages.findIndex((message) => message.id === summaryMeta?.toMessageId);
-        if (summaryIndex >= 0 && targetIndex <= summaryIndex) {
-          summary = undefined;
-          summaryMeta = undefined;
-          summarySections = undefined;
-        }
-      }
+      const { summary, summaryMeta, summarySections } = resolveMagicTeaPartyBranchSummary({
+        session: activeSession, messages, replaceFromIndex: targetIndex, clonedMessageIds: idMap,
+      });
 
       const nextSession: MagicTeaPartySession = {
         ...activeSession,
@@ -1336,17 +1369,9 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         await Promise.all(fixed.map((message) => putMagicTeaPartyMessage(message)));
       }
 
-      let summary = parentSession.summary;
-      let summaryMeta = parentSession.summaryMeta;
-      let summarySections = parentSession.summarySections;
-      if (summaryMeta?.toMessageId) {
-        const summaryIndex = parentMessages.findIndex((message) => message.id === summaryMeta?.toMessageId);
-        if (summaryIndex >= parentForkIndex) {
-          summary = undefined;
-          summaryMeta = undefined;
-          summarySections = undefined;
-        }
-      }
+      const { summary, summaryMeta, summarySections } = resolveMagicTeaPartyBranchSummary({
+        session: parentSession, messages: parentMessages, replaceFromIndex: parentForkIndex,
+      });
 
       const nextParentSession: MagicTeaPartySession = {
         ...parentSession,

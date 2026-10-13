@@ -1,6 +1,7 @@
 import type { TavernCharacterBook } from '@mahoshojo/domain/tavern-card/worldbook';
 import type {
   MagicTeaPartyMessage,
+  MagicTeaPartyHistoryMessage,
   MagicTeaPartyRole,
   MagicTeaPartyScenario,
   MagicTeaPartySession,
@@ -172,24 +173,31 @@ export const buildScenarioText = (scenario: MagicTeaPartyScenario, options?: { i
   return lines.join('\n');
 };
 
-const formatDialogueHistory = (messages: MagicTeaPartyMessage[], userDisplayName: string): string => {
+export const projectMagicTeaPartyDialogueHistory = (
+  messages: readonly MagicTeaPartyHistoryMessage[],
+  userDisplayName: string,
+) => {
   const lines: string[] = [];
+  const messageIds: string[] = [];
+  const contentLengths: number[] = [];
+  const clippedMessageIds: string[] = [];
   lines.push('【对话记录】');
   for (const message of messages) {
     const content = readString(message.content);
     if (!content) continue;
-    if (message.role === 'user') {
-      lines.push(`${userDisplayName || '{{user}}'}: ${truncateText(content, 8_000)}`);
-      continue;
-    }
-    if (message.role === 'assistant') {
-      lines.push(`assistant: ${truncateText(content, 12_000)}`);
-      continue;
-    }
-    lines.push(`system: ${truncateText(content, 4_000)}`);
+    const limit = message.role === 'user' ? 8_000 : message.role === 'assistant' ? 12_000 : 4_000;
+    const body = truncateText(content, limit);
+    const label = message.role === 'user' ? userDisplayName || '{{user}}' : message.role === 'assistant' ? 'assistant' : 'system';
+    lines.push(`${label}: ${body}`);
+    messageIds.push(message.id);
+    contentLengths.push(body.length);
+    if (content.length > limit) clippedMessageIds.push(message.id);
   }
-  return lines.join('\n');
+  return { text: lines.join('\n'), messageIds, contentLengths, clippedMessageIds };
 };
+
+const formatDialogueHistory = (messages: readonly MagicTeaPartyHistoryMessage[], userDisplayName: string): string =>
+  projectMagicTeaPartyDialogueHistory(messages, userDisplayName).text;
 
 export const buildMagicTeaPartyMainPrompt = (params: {
   session: Pick<MagicTeaPartySession, 'playerRoleId' | 'summary' | 'settings' | 'protocolShadow'>;
@@ -579,7 +587,7 @@ export const buildMagicTeaPartyUpdatePrompt = (params: {
 export type MagicTeaPartySummarizeMode = 'summary' | 'title';
 
 export const buildMagicTeaPartySummarizePrompt = (params: {
-  messages: MagicTeaPartyMessage[];
+  messages: readonly (MagicTeaPartyHistoryMessage | MagicTeaPartyMessage)[];
   mode?: MagicTeaPartySummarizeMode;
   language?: MagicTeaPartySession['settings']['language'];
   userDisplayName?: string;

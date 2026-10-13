@@ -33,6 +33,9 @@ export type {
 export { projectMagicTeaPartyChoices } from './choices';
 export type { MagicTeaPartyChoicesCompletion, MagicTeaPartyChoicesProjection } from './choices';
 
+export { projectMagicTeaPartySummaryInput, matchesMagicTeaPartySummaryInput } from './summary';
+export type { MagicTeaPartySummaryInput, MagicTeaPartySummaryInputProjection } from './summary';
+
 export {
   MAGIC_TEA_PARTY_MIN_MESSAGE_CHARS,
   MAGIC_TEA_PARTY_MAX_MESSAGE_CHARS,

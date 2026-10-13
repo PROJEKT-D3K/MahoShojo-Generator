@@ -307,13 +307,14 @@ export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
   const { message, session, preferences, isGenerating } = props;
   const renderMarkdown = props.renderMarkdown ?? renderDefaultMarkdown;
   const isUser = message.role === 'user';
+  const isSummary = message.meta?.kind === 'summary';
   const bubbleClass = isUser ? 'bg-pink-600 text-white' : 'bg-white border border-pink-100 text-gray-800';
   const speakerName =
     message.meta && typeof message.meta === 'object' && typeof message.meta.speakerName === 'string'
       ? String(message.meta.speakerName).trim()
       : '';
   const bubbleSpeaker =
-    speakerName ||
+    isSummary ? '魔法茶会 · 摘要操作' : speakerName ||
     (message.role === 'system'
       ? 'system'
       : message.role === 'user'
@@ -346,13 +347,13 @@ export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
   const rawOutput = message.meta?.rawOutput;
   const rawChoiceBudget = props.renderBudget?.characters;
   const rawChoiceItems = useMemo(() => {
-    if (typeof rawOutput !== 'string' || isRawView || (rawChoiceBudget !== undefined && rawOutput.length > rawChoiceBudget)) return null;
+    if (isSummary || typeof rawOutput !== 'string' || isRawView || (rawChoiceBudget !== undefined && rawOutput.length > rawChoiceBudget)) return null;
     const projection = projectMagicTeaPartyChoices({ rawText: rawOutput, completion: 'completed' });
     if (!projection.lastChoices) return null;
     return new Set(projection.segments.flatMap((segment) => segment.type === 'choices'
       ? segment.items.map((item) => JSON.stringify([item.id, item.text]))
       : []));
-  }, [rawOutput, isRawView, rawChoiceBudget]);
+  }, [rawOutput, isRawView, rawChoiceBudget, isSummary]);
   const completion = message.meta?.completion;
   const notices = message.meta?.notices;
   const hasErrorNotice = Array.isArray(notices)
@@ -382,6 +383,17 @@ export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
       {isSuperseded ? <div className="text-[11px] text-gray-400">该条消息已被更新替换</div> : null}
     </div>
   );
+
+  if (isSummary) {
+    const raw = props.outputView === 'raw' && typeof rawOutput === 'string' ? rawOutput : message.content;
+    const end = getPreviewEnd(raw, props.renderBudget?.rawPreviewCharacters ?? raw.length);
+    return withHeader(<div className={`rounded-xl px-4 py-3 ${bubbleClass}`}>
+      <p className="mb-2 text-xs text-gray-500">摘要生成记录，不作为角色发言或后续剧情历史。</p>
+      {end < raw.length ? <p className="mb-2 text-xs text-gray-500">本页仅显示前段原文，可导出会话查看完整内容。</p> : null}
+      <div className="whitespace-pre-wrap leading-relaxed">{raw.slice(0, end)}</div>
+      {renderAssistantFooter(message, props)}
+    </div>);
+  }
 
   if (isRawView) {
     return withHeader(

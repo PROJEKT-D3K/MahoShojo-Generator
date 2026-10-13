@@ -6,6 +6,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { TeaReadRequestSchema, TeaWriteRequestSchema, type TeaSessionDocument, type TeaMessageDocument } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
+import * as downloads from '../src/platform/download-text-file';
 import { createDesktopRouter } from '../src/app/router';
 import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
@@ -19,6 +20,7 @@ let streamOutput: string;
 const instance = 'a'.repeat(32);
 const button = (text: string) => { const node = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === text); expect(node, text).toBeTruthy(); return node!; };
 const click = (text: string) => act(async () => button(text).click());
+const openSession = (title: string) => act(async () => { const node = [...container.querySelectorAll('button')].find(item => item.querySelector('.line-clamp-1')?.textContent === title); expect(node).toBeTruthy(); node!.click(); });
 const change = async (selector: string, value: string) => {
   const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
   expect(input, selector).toBeTruthy();
@@ -88,7 +90,7 @@ it('runs the delivered route with shared layout, real owner/IPC/Direct adapters 
   await click('新建会话');
   await change('textarea[placeholder^="粘贴角色"]', JSON.stringify({ templateId: '通用角色', name: '星見', content: '完整设定' }));
   await click('导入'); expect(document?.roles[0]?.name).toBe('星見');
-  const composer = [...container.querySelectorAll('textarea')].find(item => !item.placeholder.startsWith('粘贴'))!;
+  const composer = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!;
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(composer, '喝茶'); composer.dispatchEvent(new Event('input', { bubbles: true })); });
   await click('发送');
   expect(streams).toBe(1); expect(container.textContent).toContain('共源茶会正文😀');
@@ -122,7 +124,7 @@ it('shows invalid choices as preserved text instead of actionable buttons', asyn
 it('preserves composer draft across preference updates and keeps null/player selection truthful', async () => {
   await mount(); await click('新建会话');
   await change('textarea[placeholder^="粘贴角色"]', JSON.stringify({ templateId: '通用角色', name: '唯一角色', content: '设定' })); await click('导入');
-  const composer = [...container.querySelectorAll('textarea')].find(item => !item.placeholder.startsWith('粘贴'))!;
+  const composer = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!;
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(composer, '保住草稿'); composer.dispatchEvent(new Event('input', { bubbles: true })); });
   await click('Markdown'); expect(document?.draft).toBe('保住草稿'); expect(composer.value).toBe('保住草稿');
   const select = [...container.querySelectorAll('select')].find(item => [...item.options].some(option => option.textContent === '唯一角色'))!;
@@ -148,7 +150,7 @@ it('stages continuous title and display-name typing without per-character writes
 it.each([false, true])('freezes the click intent while a real preset credential check is deferred (cancel=%s)', async cancel => {
   const router = await mount(); await click('新建会话');
   await act(async () => getDesktopAiConfigStore().selectProviderTarget({ kind: 'preset', providerId: 'deepseek' }));
-  const composer = [...container.querySelectorAll('textarea')].find(item => !item.placeholder.startsWith('粘贴'))!;
+  const composer = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!;
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(composer, '点击时原输入'); composer.dispatchEvent(new Event('input', { bubbles: true })); });
   const original = native.invoke.getMockImplementation()!; let release!: () => void;
   native.invoke.mockImplementation(async (command, args) => {
@@ -208,11 +210,68 @@ it('keeps unsubmitted paste behind the leave guard and allows explicit local cle
 });
 it('retains unsaved draft and blocks route departure until its explicit save', async () => {
   const router = await mount(); await click('新建会话');
-  const composer = [...container.querySelectorAll('textarea')].find(item => !item.placeholder.startsWith('粘贴'))!;
+  const composer = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!;
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(composer, '未保存😀'); composer.dispatchEvent(new Event('input', { bubbles: true })); });
   await act(async () => { void router.navigate({ to: '/settings' }); });
   expect(container.textContent).toContain('茶会仍有生成');
   await click('保存会话草稿'); expect(document?.draft).toBe('未保存😀');
   await act(async () => { await router.navigate({ to: '/settings' }); });
   expect(container.querySelector('[data-testid="page-settings"]')).toBeTruthy();
+});
+
+it('runs the real page manual summary controls, preserves draft and persists full edited text before clearing', async () => {
+  await mount(); await click('新建会话'); await change('textarea[placeholder^="输入你的行动"]', '先前剧情'); await click('发送');
+  await change('textarea[placeholder^="输入你的行动"]', '不能发出的草稿');
+  await change('textarea[aria-label="会话摘要正文"]', '  手工摘要原件  ');
+  expect(document?.summary).toBeUndefined(); expect(button('保存摘要').disabled).toBe(false);
+  await click('保存摘要'); expect(document?.summary).toBe('  手工摘要原件  ');
+  streamOutput = '  成功的摘要正文😀  ';
+  await act(async () => { button('生成/更新摘要').click(); button('生成/更新摘要').click(); });
+  expect(streams).toBe(2); expect(document?.summary).toBe('成功的摘要正文😀');
+  expect(document?.draft).toBe('不能发出的草稿'); expect(messages.at(-1)).toMatchObject({ meta: { kind: 'summary', rawOutput: streamOutput } });
+  expect(container.textContent).toContain('魔法茶会 · 摘要操作');
+  const calls = native.invoke.mock.calls.filter(([command]) => command === 'stream_target_ai');
+  const summaryRequest = calls.at(-1)![1]!.request as { messages: Array<{ content: string }> };
+  expect(summaryRequest.messages[0]!.content).toContain('【任务】生成会话摘要'); expect(summaryRequest.messages[0]!.content).not.toContain('不能发出的草稿');
+  await act(async () => root.unmount()); root = createRoot(container); await mount(); await openSession('新茶会');
+  expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="会话摘要正文"]')!.value).toBe('成功的摘要正文😀');
+  const panel = container.querySelector('textarea[aria-label="会话摘要正文"]')!.closest('.rounded-xl')!;
+  await act(async () => [...panel.querySelectorAll('button')].find(node => node.textContent === '清空')!.click());
+  expect(document?.summary).toBeUndefined(); expect(document?.summaryMeta).toBeUndefined();
+  expect(streams).toBe(2);
+});
+it('protects summary drafts on departure and does not write one session document for each keystroke', async () => {
+  const router = await mount(); await click('新建会话');
+  const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  await change('textarea[aria-label="会话摘要正文"]', '一'); await change('textarea[aria-label="会话摘要正文"]', '完整编辑中的摘要');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+  await act(async () => { void router.navigate({ to: '/settings' }); }); expect(container.textContent).toContain('茶会仍有生成');
+  await click('保存摘要'); expect(document?.summary).toBe('完整编辑中的摘要');
+  await act(async () => { await router.navigate({ to: '/settings' }); }); expect(container.querySelector('[data-testid="page-settings"]')).toBeTruthy();
+});
+it.each([false, true])('freezes manual summary and composer edits during credential preparation (cancel=%s)', async cancel => {
+  await mount(); await click('新建会话'); await change('textarea[placeholder^="输入你的行动"]', '已有历史'); await click('发送');
+  const before = streams; await change('textarea[placeholder^="输入你的行动"]', '冻结草稿'); await change('textarea[aria-label="会话摘要正文"]', '冻结摘要编辑');
+  await act(async () => getDesktopAiConfigStore().selectProviderTarget({ kind: 'preset', providerId: 'deepseek' }));
+  const original = native.invoke.getMockImplementation()!; let release!: () => void;
+  native.invoke.mockImplementation(async (command, args) => { if (command === 'has_provider_secret') await new Promise<void>(resolve => { release = resolve; }); return original(command, args); });
+  await act(async () => { button('生成/更新摘要').click(); button('生成/更新摘要').click(); });
+  expect(streams).toBe(before); expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="会话摘要正文"]')!.disabled).toBe(true);
+  await change('textarea[aria-label="会话摘要正文"]', '不得迟到替换'); await change('textarea[placeholder^="输入你的行动"]', '不得迟到发出');
+  if (cancel) await click('停止生成'); streamOutput = '摘要完成'; await act(async () => release());
+  expect(streams).toBe(before + (cancel ? 0 : 1)); expect(container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!.value).toBe('冻结草稿');
+  expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="会话摘要正文"]')!.value).toBe(cancel ? '冻结摘要编辑' : '摘要完成');
+  expect(getDesktopAiConfigStore().getSnapshot().generationActive).toBe(false);
+});
+
+it('offers an actual export after staged summary admission fails, with no Native write or model call', async () => {
+  await mount(); await click('新建会话'); document!.future = 'x'.repeat(8 * 1024 * 1024 - 4000); await openSession('新茶会');
+  const text = '原件'.repeat(3000); await change('textarea[aria-label="会话摘要正文"]', text);
+  const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  await click('保存摘要'); expect(streams).toBe(0); expect(document?.summary).toBeUndefined();
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+  expect(container.textContent).toContain('内容超过桌面文本存储边界');
+  const download = vi.spyOn(downloads, 'downloadTextFile').mockImplementation(() => {});
+  await click('导出未保存摘要'); expect(download).toHaveBeenCalledOnce();
+  expect(JSON.parse(download.mock.calls[0]![1])).toMatchObject({ summary: text, future: document!.future });
 });

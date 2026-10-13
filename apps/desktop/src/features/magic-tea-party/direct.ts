@@ -149,7 +149,17 @@ export async function executeTeaDirect(options: DesktopAiExecutionOptions, reque
     return { completion: signal.aborted ? 'stopped' : 'failed', rawText, reasoning, message: '生成连接或输出预算未通过，已保留收到的正文' };
   }
 }
-export const teaTerminalMessage = (placeholder: TeaMessageDocument, outcome: TeaDirectOutcome, format: 'jsonl' | 'markdown', kind: 'chat' | 'choices' = 'chat'): TeaMessageDocument => {
+export const teaTerminalMessage = (placeholder: TeaMessageDocument, outcome: TeaDirectOutcome, format: 'jsonl' | 'markdown', kind: 'chat' | 'choices' | 'summary' = 'chat'): TeaMessageDocument => {
+  if (kind === 'summary') {
+    const content = outcome.rawText.trim();
+    const valid = outcome.completion === 'provider' && Boolean(content) && isTeaScalarText(content);
+    const error = valid ? null : { code: outcome.completion === 'provider' ? 'invalid_summary' : outcome.completion,
+      message: outcome.completion === 'stopped' ? '已主动停止，旧摘要未变，收到的原文已保留'
+        : outcome.completion === 'failed' ? outcome.message ?? '摘要生成未正常完成，旧摘要未变' : '模型返回空摘要或无效字符，旧摘要未变' };
+    return { ...placeholder, status: valid ? 'done' : 'error', content,
+      meta: { kind: 'summary', completion: outcome.completion, rawOutput: outcome.rawText, ...(outcome.reasoning ? { reasoningText: outcome.reasoning } : {}) },
+      ...(error ? { error } : {}) };
+  }
   const projection = format === 'jsonl' ? projectMagicTeaPartyChoices({ rawText: outcome.rawText,
     completion: outcome.completion === 'provider' ? 'completed' : outcome.completion }) : null;
   const error = outcome.completion === 'provider' ? (kind === 'choices' ? projection?.error : undefined)

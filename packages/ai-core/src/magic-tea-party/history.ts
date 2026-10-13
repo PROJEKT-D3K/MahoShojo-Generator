@@ -12,6 +12,7 @@ const isNoticeSuppressed = (message: MagicTeaPartyMessage): boolean => {
 };
 
 const shouldIncludeInHistory = (message: MagicTeaPartyMessage): boolean => {
+  if (message.meta?.kind === 'summary') return false;
   if (isMessageSuperseded(message)) return false;
   if (isNoticeSuppressed(message)) return false;
   if (message.role === 'user') return true;

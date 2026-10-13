@@ -1,3 +1,4 @@
+import { buildMagicTeaPartyHistory } from '@mahoshojo/ai-core/magic-tea-party';
 import { describe, expect, it, vi } from 'vitest';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import type { TeaReadResponse, TeaWriteRequest, TeaWriteResponse, TeaSessionDocument, TeaMessageDocument } from '@mahoshojo/contracts/desktop-magic-tea-party';
@@ -411,4 +412,210 @@ describe('real Native TeaStore and Direct loopback journey', () => {
     } finally { owner.dispose(); await probe.close(); }
   }, 20000);
 
+});
+
+
+describe('manual summary through the existing Tea owner', () => {
+  const prepare = async () => {
+    const h = harness(); h.messages.push({ id: 'history', sessionId: 's', role: 'user', content: '种下月光花', createdAt: 1 });
+    await h.owner.select('s');
+    await h.owner.update({ summary: '旧摘要', summarySections: { old: '旧分节' }, summaryMeta: { updatedAt: 1, tokenCount: 999, extension: { preserved: true } } } as never);
+    return h;
+  };
+  const prompts = (h: ReturnType<typeof harness>) => h.invoke.mock.calls.filter(([command]) => command === 'stream_direct_ai' || command === 'stream_target_ai')
+    .map(([, args]) => (args?.request as { messages: Array<{ content: string }> }).messages[0]!.content);
+  it('saves one non-empty summary atomically, keeps drafts, and uses the saved summary for chat/continue/choices', async () => {
+    const h = await prepare(); h.owner.setInput('尚未发送的草稿'); h.owner.stageSummary('先保存的手改摘要');
+    const raw = '  新摘要：月光花已经种下😀  '; h.output(raw);
+    await Promise.all([h.owner.start(target, h.options, () => true, { kind: 'summary' }), h.owner.start(target, h.options, () => true, { kind: 'summary' })]);
+    expect(h.count()).toBe(1); expect(prompts(h)[0]).not.toContain('尚未发送的草稿');
+    expect(h.record?.session).toMatchObject({ summary: raw.trim(), draft: '尚未发送的草稿', summaryMeta: { extension: { preserved: true }, coverage: { version: 1, selectedMessageIds: ['history'], sourceMessageCount: 1 } } });
+    expect(h.record?.session.summarySections).toBeUndefined(); expect(h.record?.session.summaryMeta).not.toHaveProperty('tokenCount'); expect(h.owner.getSnapshot().summaryDraft).toBeNull();
+    expect(h.messages.at(-1)).toMatchObject({ meta: { kind: 'summary', rawOutput: raw } }); expect(buildMagicTeaPartyHistory(h.messages).map(item => item.id)).toEqual(['history']);
+    const begin = h.invoke.mock.calls.find(([command, args]) => command === 'mutate_magic_tea_party' && (args?.request as TeaWriteRequest).request.action === 'begin-generation')![1]!.request as TeaWriteRequest;
+    if (begin.request.action !== 'begin-generation') throw new Error('bad fixture');
+    expect(Object.keys(begin.request.assistantMessage)).toHaveLength(6); expect(begin.request.userMessage).toBeNull(); expect(begin.request.session.summary).toBe('先保存的手改摘要');
+    h.output('{"type":"choices","items":[{"id":"choice","text":"浇水"}]}');
+    for (const intent of [{ kind: 'continue' }, { kind: 'choices' }, { kind: 'reply', text: '浇水' }] as const) await h.owner.start(target, h.options, () => true, intent);
+    for (const prompt of prompts(h).slice(1)) expect(prompt).toContain('【会话摘要】\n' + raw.trim());
+    await h.owner.clearSummary(); await h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    expect(prompts(h).at(-1)).not.toContain(raw.trim());
+  });
+  it.each(['', ' \n '])('keeps all old summary fields after empty provider result %j', async raw => {
+    const h = await prepare(); const old = { summary: h.record!.session.summary, summaryMeta: h.record!.session.summaryMeta, summarySections: h.record!.session.summarySections };
+    h.output(raw); await h.owner.start(target, h.options, () => true, { kind: 'summary' });
+    expect(h.record?.session).toMatchObject(old); expect(h.messages.at(-1)).toMatchObject({ status: 'error', meta: { kind: 'summary', rawOutput: raw } });
+  });
+  it.each(['begin-generation', 'finish-generation'])('resolves an unknown %s receipt without sending the summary twice', async action => {
+    const h = await prepare(); h.output('已完成摘要'); h.drop(action);
+    const running = h.owner.start(target, h.options, () => true, { kind: 'summary' });
+    await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe('unknown'));
+    expect(h.count()).toBe(action === 'begin-generation' ? 0 : 1);
+    await h.owner.start(target, h.options, () => true, { kind: 'summary' });
+    await h.owner.retryPending(); await h.owner.resolvePending(); await running;
+    expect(h.count()).toBe(1); expect(h.record?.session.summary).toBe('已完成摘要');
+  });
+  it('retries the exact known failed finish without changing the saved old summary or calling the model again', async () => {
+    const h = await prepare(); h.output('保留待保存摘要'); h.fail('finish-generation');
+    const running = h.owner.start(target, h.options, () => true, { kind: 'summary' });
+    await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe('save'));
+    expect(h.record?.session.summary).toBe('旧摘要'); expect(h.owner.unsavedText()).toBe('保留待保存摘要');
+    const bodies = () => h.invoke.mock.calls.filter(([command, args]) => command === 'mutate_magic_tea_party' && (args?.request as TeaWriteRequest).request.action === 'finish-generation').map(([, args]) => JSON.stringify(args?.request));
+    const original = bodies()[0]; await h.owner.retryPending(); await running;
+    expect(bodies()).toEqual([original, original]); expect(h.count()).toBe(1);
+  });
+  it('keeps local summary edits behind save/leave fencing, including failed update and original-write retry', async () => {
+    const h = await prepare(); h.owner.stageSummary('  完整手工摘要  '); h.fail('update');
+    await h.owner.select('other');
+    expect(h.owner.getSnapshot()).toMatchObject({ summaryDraft: '  完整手工摘要  ', pending: 'save' }); expect(h.record?.session.summary).toBe('旧摘要'); expect(h.owner.isBusy()).toBe(true);
+    await h.owner.retryPending(); expect(h.record?.session.summary).toBe('  完整手工摘要  '); expect(h.owner.getSnapshot().summaryDraft).toBeNull();
+  });
+  it('exports the full staged summary and composer when document admission fails before any Native write or dispatch', async () => {
+    const h = await prepare(); const before = h.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+    h.owner.setInput('原输入仍保留'); const summary = '界'.repeat(3 * 1024 * 1024); h.owner.stageSummary(summary);
+    expect(await h.owner.saveDraft()).toBe(false);
+    await h.owner.start(target, h.options, () => true, { kind: 'summary' });
+    expect(h.count()).toBe(0); expect(h.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+    expect(h.record?.session.summary).toBe('旧摘要');
+    expect(JSON.parse(h.owner.unsavedText())).toMatchObject({ summary, draft: '原输入仍保留' });
+  });
+  it.each(['stop', 'credential', 'dispose'] as const)('does not dispatch or overwrite staged edits after preparation %s', async reason => {
+    const h = await prepare(); h.owner.stageSummary('仍待保存手改'); const original = h.invoke.getMockImplementation()!;
+    let release!: () => void; let first = true; let credential = true;
+    h.invoke.mockImplementation(async (command, args) => {
+      if (command === 'read_magic_tea_party' && (args?.request as { request: { action: string } }).request.action === 'messages' && first) {
+        first = false; await new Promise<void>(resolve => { release = resolve; });
+      }
+      return original(command, args);
+    });
+    const running = h.owner.start(target, h.options, () => credential, { kind: 'summary' });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    if (reason === 'stop') h.owner.stop(); else if (reason === 'credential') credential = false; else h.owner.dispose();
+    release(); await running; expect(h.count()).toBe(0); expect(h.record?.session.summary).toBe('旧摘要');
+    if (reason !== 'dispose') expect(h.owner.getSnapshot().summaryDraft).toBe('仍待保存手改');
+  });
+  it('keeps the original owner fenced when an old summary finish reply arrives after reactivation', async () => {
+    const h = await prepare(); h.output('旧owner摘要'); const original = h.invoke.getMockImplementation()!; let release!: () => void;
+    h.invoke.mockImplementation(async (command, args) => { const value = await original(command, args);
+      if (command === 'mutate_magic_tea_party' && (args?.request as TeaWriteRequest).request.action === 'finish-generation') await new Promise<void>(resolve => { release = resolve; });
+      return value; });
+    const running = h.owner.start(target, h.options, () => true, { kind: 'summary' }); await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    h.owner.dispose(); h.owner.activate(); await h.owner.select('s'); h.owner.stageSummary('新owner草稿'); const current = h.owner.getSnapshot();
+    release(); await running; expect(h.owner.getSnapshot()).toEqual(current); expect(h.count()).toBe(1);
+  });
+});
+
+describe('real Native manual summary journey', () => {
+  const open = async () => {
+    const probe = await startMagicTeaPartyJourneyProbe(); let sequence = 0;
+    const owner = new DesktopTeaSession(createIpcTeaNativePort(probe.invoke), () => `summary-native-${++sequence}`, () => 800);
+    await owner.importText(JSON.stringify({ schema: 'magic-tea-party.session.v1',
+      session: { ...baseSession(), summary: '原有效摘要', summarySections: { retained: '原分节' }, summaryMeta: { updatedAt: 1, future: { keep: true } }, future: { untouched: true } },
+      roles: [], messages: [{ id: 'source', sessionId: 's', role: 'user', status: 'done', content: '月光花开了。', createdAt: 1 }], tachieAssets: [] }), 'json', () => true);
+    const id = owner.getSnapshot().directory[0]!.id; await owner.select(id);
+    return { probe, owner, id };
+  };
+  const observed = async (probe: Awaited<ReturnType<typeof startMagicTeaPartyJourneyProbe>>) =>
+    await probe.control('requestCount') as { count: number; requests: Array<{ messages: Array<{ content: string }> }> };
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('saves edited summary across SQLite reopen, generates once and uses it in the next chat, choices and clear/continue', async () => {
+    const { probe, owner, id } = await open();
+    try {
+      owner.stageSummary('  手改后摘要😀  '); expect(owner.isBusy()).toBe(true); await owner.saveDraft();
+      await probe.control('reopen'); await owner.select(id); expect(owner.getSnapshot().record?.session.summary).toBe('  手改后摘要😀  ');
+      owner.setInput('原输入草稿'); const raw = '  模型生成摘要：月光花绽放😀  ';
+      await probe.control('checkpoint', { action: 'model', chunks: [raw], deferred: false });
+      await Promise.all([owner.start(target, probe.aiOptions, () => true, { kind: 'summary' }), owner.start(target, probe.aiOptions, () => true, { kind: 'summary' })]);
+      expect(owner.getSnapshot().record?.session).toMatchObject({ summary: raw.trim(), draft: '原输入草稿', future: { untouched: true }, summaryMeta: { future: { keep: true }, coverage: { sourceMessageCount: 1, omittedMessageCount: 0 } } });
+      expect(owner.getSnapshot().record?.session.summarySections).toBeUndefined();
+      await probe.control('reopen'); await owner.select(id);
+      await probe.control('checkpoint', { action: 'model', chunks: ['{"type":"choices","items":[{"id":"water","text":"浇花"}]}'], deferred: false });
+      await owner.start(target, probe.aiOptions, () => true, { kind: 'choices' });
+      await owner.start(target, probe.aiOptions, () => true, { kind: 'reply', text: '现在浇水' });
+      const withSummary = await observed(probe); expect(withSummary.count).toBe(3);
+      expect(withSummary.requests[0]!.messages[0]!.content).not.toContain('原输入草稿');
+      for (const request of withSummary.requests.slice(1)) expect(request.messages[0]!.content).toContain('【会话摘要】\n' + raw.trim());
+      await owner.clearSummary(); await probe.control('reopen'); await owner.select(id);
+      await owner.start(target, probe.aiOptions, () => true, { kind: 'continue' });
+      expect((await observed(probe)).requests.at(-1)!.messages[0]!.content).not.toContain(raw.trim());
+      expect(await probe.control('requestCount')).toMatchObject({ count: 4 });
+    } finally { owner.dispose(); await probe.close(); }
+  }, 30000);
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('keeps stopped raw summary inert after late chunks and SQLite restart', async () => {
+    const { probe, owner, id } = await open(); const raw = '已接受摘要前缀😀';
+    try {
+      await probe.control('checkpoint', { action: 'model', chunks: [raw, '不准迟到覆盖'], deferred: true });
+      const running = owner.start(target, probe.aiOptions, () => true, { kind: 'summary' });
+      await vi.waitFor(() => expect(owner.getSnapshot().rawUnsaved).toBe(raw), { timeout: 5000 }); owner.stop(); await running;
+      const saved = JSON.stringify(owner.getSnapshot().messages); await probe.control('checkpoint', { action: 'release' });
+      expect(JSON.stringify(owner.getSnapshot().messages)).toBe(saved);
+      await probe.control('reopen'); await owner.select(id);
+      expect(owner.getSnapshot().record?.session).toMatchObject({ summary: '原有效摘要', summarySections: { retained: '原分节' } });
+      expect(owner.getSnapshot().messages.at(-1)).toMatchObject({ status: 'error', meta: { kind: 'summary', completion: 'stopped', rawOutput: raw } });
+      expect(buildMagicTeaPartyHistory(owner.getSnapshot().messages).map(message => message.content)).toEqual(['月光花开了。']);
+      expect(await probe.control('requestCount')).toMatchObject({ count: 1 });
+    } finally { owner.dispose(); await probe.close(); }
+  }, 20000);
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('stores an empty-output failure without replacing any old summary fields', async () => {
+    const { probe, owner, id } = await open(); const old = owner.getSnapshot().record!.session;
+    try {
+      await probe.control('checkpoint', { action: 'model', chunks: [' \n '], deferred: false });
+      await owner.start(target, probe.aiOptions, () => true, { kind: 'summary' }); await probe.control('reopen'); await owner.select(id);
+      for (const key of ['summary', 'summaryMeta', 'summarySections'] as const) expect(owner.getSnapshot().record!.session[key]).toEqual(old[key]);
+      expect(owner.getSnapshot().messages.at(-1)).toMatchObject({ status: 'error', content: '', meta: { kind: 'summary', rawOutput: ' \n ' } });
+      expect(await probe.control('requestCount')).toMatchObject({ count: 1 });
+    } finally { owner.dispose(); await probe.close(); }
+  }, 20000);
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('resolves original finish once and preserves summary, raw and coverage through JSON, JSONL and backup restore', async () => {
+    const { probe, owner, id } = await open(); const raw = '  可归档完整摘要😀  ';
+    try {
+      await probe.control('checkpoint', { action: 'model', chunks: [raw], deferred: false }); await probe.control('drop-next-write-reply', { action: 'finish-generation' });
+      const running = owner.start(target, probe.aiOptions, () => true, { kind: 'summary' });
+      await vi.waitFor(() => expect(owner.getSnapshot().pending).toBe('unknown'), { timeout: 5000 });
+      await owner.retryPending(); await owner.start(target, probe.aiOptions, () => true, { kind: 'summary' });
+      await owner.resolvePending(); await running; expect(await probe.control('requestCount')).toMatchObject({ count: 1 });
+      const json = await owner.export('json'); const jsonl = await owner.export('jsonl'); let serial = 0;
+      const jsonPlan = prepareDesktopTeaImport(json, 'json', () => `json-summary-${++serial}`, 900);
+      const jsonlPlan = prepareDesktopTeaImport(jsonl, 'jsonl', () => `jsonl-summary-${++serial}`, 900);
+      if (jsonPlan.write.request.action !== 'import' || jsonlPlan.write.request.action !== 'import') throw new Error('bad fixture');
+      const entry = jsonPlan.write.request.entries[0]!;
+      expect(entry.session.summary).toBe(raw.trim()); expect(entry.session.summaryMeta).toMatchObject({ coverage: { selectedMessageIds: [entry.messages[0]!.id] } });
+      for (const plan of [jsonPlan, jsonlPlan]) {
+        if (plan.write.request.action !== 'import') throw new Error('bad fixture');
+        const messages = plan.write.request.entries[0]!.messages;
+        expect(messages.at(-1)).toMatchObject({ status: 'done', meta: { kind: 'summary', rawOutput: raw } });
+        expect(buildMagicTeaPartyHistory(messages).map(message => message.content)).toEqual(['月光花开了。']);
+      }
+      expect(jsonlPlan.write.request.entries[0]!.session.summary).toBeUndefined();
+      const backup = await probe.control('checkpoint', { action: 'backup' }) as { backupId: string };
+      await owner.delete(owner.getSnapshot().incarnation, id, owner.getSnapshot().record!.instance, owner.getSnapshot().record!.revision);
+      await probe.control('checkpoint', { action: 'prepare-restore', backupId: backup.backupId }); await probe.control('reopen'); await owner.select(id);
+      expect(owner.getSnapshot().record?.session.summary).toBe(raw.trim()); expect(owner.getSnapshot().messages.at(-1)?.meta?.rawOutput).toBe(raw);
+      await owner.importText(jsonl, 'jsonl', () => true); expect(await probe.control('requestCount')).toMatchObject({ count: 1 });
+    } finally { owner.dispose(); await probe.close(); }
+  }, 30000);
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('reopens an unresolved begin as interrupted, keeps old summary and never resends a model', async () => {
+    const { probe, owner, id } = await open(); let replacement: DesktopTeaSession | undefined;
+    try {
+      await probe.control('drop-next-write-reply', { action: 'begin-generation' });
+      const running = owner.start(target, probe.aiOptions, () => true, { kind: 'summary' });
+      await vi.waitFor(() => expect(owner.getSnapshot().pending).toBe('unknown'), { timeout: 5000 });
+      owner.dispose(); await running; await probe.control('reopen');
+      replacement = new DesktopTeaSession(createIpcTeaNativePort(probe.invoke)); await replacement.select(id);
+      expect(replacement.getSnapshot().record?.session.summary).toBe('原有效摘要');
+      expect(replacement.getSnapshot().messages.at(-1)).toMatchObject({ content: '', status: 'error', error: { code: 'tea-interrupted' } });
+      expect(await probe.control('requestCount')).toMatchObject({ count: 0 });
+    } finally { owner.dispose(); replacement?.dispose(); await probe.close(); }
+  }, 20000);
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('invalidates a live summary credential snapshot without promoting its prefix', async () => {
+    const { probe, owner, id } = await open(); let current = true; const prefix = '原凭据接受的前缀';
+    try {
+      await probe.control('checkpoint', { action: 'model', chunks: [prefix, '凭据已变化不得追加'], deferred: true });
+      const running = owner.start(target, probe.aiOptions, () => current, { kind: 'summary' });
+      await vi.waitFor(() => expect(owner.getSnapshot().rawUnsaved).toBe(prefix), { timeout: 5000 }); current = false;
+      await probe.control('checkpoint', { action: 'release' }); await running; await probe.control('reopen'); await owner.select(id);
+      expect(owner.getSnapshot().record?.session.summary).toBe('原有效摘要');
+      expect(owner.getSnapshot().messages.at(-1)).toMatchObject({ status: 'error', meta: { kind: 'summary', completion: 'stopped', rawOutput: prefix } });
+      expect(await probe.control('requestCount')).toMatchObject({ count: 1 });
+    } finally { owner.dispose(); await probe.close(); }
+  }, 20000);
 });

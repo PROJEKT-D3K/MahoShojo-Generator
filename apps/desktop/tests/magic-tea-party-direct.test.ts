@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as teaCore from '@mahoshojo/ai-core/magic-tea-party';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
-import { applyMagicTeaPartyMessageLimits, buildMagicTeaPartyChoicesPrompt, buildMagicTeaPartyHistory, buildMagicTeaPartyMainPrompt, estimateMagicTeaPartyTokens, projectMagicTeaPartyChoices, resolveMagicTeaPartyMessageCharLimit, resolveMagicTeaPartyTokenBudget, trimMagicTeaPartyHistory } from '@mahoshojo/ai-core/magic-tea-party';
-import type { TeaReadRequest, TeaReadResponse } from '@mahoshojo/contracts/desktop-magic-tea-party';
+import { applyMagicTeaPartyMessageLimits, buildMagicTeaPartyChoicesPrompt, buildMagicTeaPartyHistory, buildMagicTeaPartyMainPrompt, estimateMagicTeaPartyTokens, projectMagicTeaPartyChoices, resolveMagicTeaPartyMessageCharLimit, resolveMagicTeaPartyTokenBudget, trimMagicTeaPartyHistory, projectMagicTeaPartySummaryInput } from '@mahoshojo/ai-core/magic-tea-party';
+import type { TeaMessageDocument, TeaReadRequest, TeaReadResponse } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import type { ResolvedDesktopAiTarget } from '../src/features/ai-config/desktop-ai-config';
 import { desktopTeaSettings, executeTeaDirect, prepareTeaDirectRequest, teaSessionView, teaTerminalMessage, type TeaRecord } from '../src/features/magic-tea-party/direct';
+import { editedTeaSummary, prepareTeaSummaryRequest } from '../src/features/magic-tea-party/summary';
 import type { TeaNativePort } from '../src/platform/magic-tea-party-native';
 
 export const target: ResolvedDesktopAiTarget = { location: 'client', providerTarget: { kind: 'custom', profileId: 'tea-loopback' }, profile: null,
@@ -11,7 +13,7 @@ export const target: ResolvedDesktopAiTarget = { location: 'client', providerTar
 const record = (): TeaRecord => ({ instance: 'a'.repeat(32), revision: 1, session: { id: 'tea', title: '星光', createdAt: 1, updatedAt: 1, roles: [],
   settings: { providerId: 'openai', modelId: 'synthetic', maxContextMessages: 3, contextWindowTokens: 8192 } } });
 const rows = [1, 2, 3, 4].map(id => ({ ordinal: id, message: { id: `m${id}`, sessionId: 'tea', createdAt: id, role: 'user' as const, content: id === 3 ? '中😀'.repeat(20000) : `row-${id}` } }));
-const paged = (source = rows) => {
+const paged = (source: Array<{ ordinal: number; message: TeaMessageDocument }> = rows) => {
   const read = vi.fn(async (input: TeaReadRequest): Promise<TeaReadResponse> => {
     if (input.request.action !== 'messages') throw new Error('unexpected');
     const index = input.request.cursor?.ordinal ?? 0; const page = source.slice(index, index + 2);
@@ -99,5 +101,69 @@ describe('Desktop Tea actual shared prompt and Direct bridge', () => {
     expect(outcome).toMatchObject({ completion: 'failed', rawText: '中😀' });
     const message = teaTerminalMessage({ id: 'a', sessionId: 'tea', role: 'assistant', content: '', createdAt: 1, status: 'streaming' }, outcome, 'markdown');
     expect(message).toMatchObject({ status: 'error', content: '中😀', meta: { rawOutput: '中😀', completion: 'failed' } });
+  });
+});
+
+
+describe('Desktop manual summary input and terminal seam', () => {
+  it('matches the actual Web projection over paged, non-contiguous, clipped history and excludes its own records', async () => {
+    const value = record(); value.session.settings.maxContextMessages = 200; value.session.draft = 'NOT_SENT_DRAFT';
+    value.session.protocolShadow = { unknown: 'NOT_SENT_PROTOCOL' }; value.session.settings.future = 'NOT_SENT_SETTING';
+    const source = Array.from({ length: 205 }, (_, index) => ({ ordinal: index + 1,
+      message: { id: `history-${index}`, sessionId: 'tea', createdAt: index, role: 'user' as const, content: `原始剧情-${index}` } }));
+    source[201]!.message.content = 'SKIPPED_HUGE' + '中😀'.repeat(50000);
+    source[204]!.message.content = '两层裁剪😀'.repeat(20000);
+    const input: Array<{ ordinal: number; message: TeaMessageDocument }> = [...source,
+      { ordinal: 206, message: { id: 'old-summary', sessionId: 'tea', createdAt: 206, role: 'assistant', status: 'done', content: 'NOT_SENT_SUMMARY_RECORD', meta: { kind: 'summary' } } }];
+    const before = JSON.stringify([value, input]); const port = paged(input);
+    const prepared = await prepareTeaSummaryRequest(port, value, target, 'summary-request', () => true);
+    const history = buildMagicTeaPartyHistory(input.map(row => row.message), { includeEmptyContent: false });
+    const settings = teaSessionView(value.session).settings; const budget = resolveMagicTeaPartyTokenBudget(settings, 'openai');
+    const selected = trimMagicTeaPartyHistory(history, { maxMessages: budget.maxContextMessages, tokenBudget: budget.historyBudgetTokens, providerId: 'openai', userDisplayName: '旅人', minKeep: 2 });
+    const expected = projectMagicTeaPartySummaryInput({ messages: selected, contextWindowTokens: budget.contextWindowTokens, language: settings.language, userDisplayName: '旅人', sourceMessageCount: history.length });
+    expect(prepared.request.messages).toEqual([{ role: 'user', content: expected.prompt }]);
+    expect(prepared.summaryMeta).toEqual({ fromMessageId: 'history-0', toMessageId: 'history-204', coverage: expected.coverage });
+    expect(expected.coverage.selectedMessageIds).not.toContain('history-201');
+    expect(expected.coverage.clippedMessageIds).toContain('history-204');
+    expect(expected.coverage.omittedMessageCount).toBeGreaterThan(0);
+    expect(prepared.request.messages[0]!.content).not.toMatch(/NOT_SENT/);
+    expect(JSON.stringify([value, input])).toBe(before); expect(port.mutate).not.toHaveBeenCalled();
+  });
+  it('context-clips each retained second-pass row before the summary projector owns the selected array', async () => {
+    const projection = vi.spyOn(teaCore, 'projectMagicTeaPartySummaryInput');
+    try {
+      const value = record(); const source = [1, 2].map(ordinal => ({ ordinal, message: { ...rows[0]!.message, id: `large-${ordinal}`, content: '中😀'.repeat(30000) } }));
+      const result = await prepareTeaSummaryRequest(paged(source), value, target, 'bounded', () => true);
+      expect(projection).toHaveBeenCalledOnce(); const input = projection.mock.calls[0]![0];
+      expect(input.messages.every(message => message.content.length <= 8000)).toBe(true);
+      expect(input.contextClippedMessageIds).toEqual(['large-1', 'large-2']);
+      expect(result.summaryMeta.coverage?.clippedMessageIds).toEqual(['large-1', 'large-2']);
+    } finally { projection.mockRestore(); }
+  });
+  it('keeps a huge local source while bounding only its selected request, and never dispatches an empty or stale source', async () => {
+    const value = record(); value.session.settings.maxContextMessages = 1;
+    const big = [{ ordinal: 1, message: { ...rows[0]!.message, content: '中'.repeat(900000) } }];
+    const result = await prepareTeaSummaryRequest(paged(big), value, target, 'big', () => true);
+    expect(result.request.messages[0]!.content.length).toBeLessThan(20000);
+    await expect(prepareTeaSummaryRequest(paged([]), value, target, 'empty', () => true)).rejects.toThrow('还没有');
+    await expect(prepareTeaSummaryRequest(paged(), value, target, 'stale', () => false)).rejects.toThrow('已失效');
+  });
+  it.each(['provider', 'stopped', 'failed'] as const)('does not parse summary content as choices or updates for %s', completion => {
+    const rawText = '  {"type":"choices","items":[{"id":"c1","text":"不可行动"}]}\n{"type":"updates","drafts":[]}  ';
+    const value = teaTerminalMessage({ id: 's', sessionId: 'tea', role: 'assistant', status: 'streaming', content: '', createdAt: 1 }, { completion, rawText, reasoning: '' }, 'jsonl', 'summary');
+    expect(value).toMatchObject({ status: completion === 'provider' ? 'done' : 'error', content: rawText.trim(), meta: { kind: 'summary', rawOutput: rawText, completion } });
+    expect(value.choices).toBeUndefined(); expect(value.segments).toBeUndefined(); expect(buildMagicTeaPartyHistory([value])).toEqual([]);
+  });
+  it.each(['', '  \n ', '\ud800'])('does not mark invalid summary %j successful and retains its exact raw output', rawText => {
+    const value = teaTerminalMessage({ id: 's', sessionId: 'tea', role: 'assistant', status: 'streaming', content: '', createdAt: 1 }, { completion: 'provider', rawText, reasoning: '' }, 'markdown', 'summary');
+    expect(value.status).toBe('error'); expect(value.meta?.rawOutput).toBe(rawText);
+  });
+  it('manual edits drop only coverage, preserve unrelated metadata and keep full stored text', () => {
+    const value = record().session; value.summaryMeta = { updatedAt: 1, fromMessageId: 'a', toMessageId: 'b', tokenCount: 999, extension: { untouched: true }, coverage: { version: 1 } };
+    value.summarySections = { original: '分节保留' }; const text = '  ' + '长摘要'.repeat(4000) + '  ';
+    expect(editedTeaSummary(value, text, 99)).toEqual({ summary: text, summarySections: value.summarySections,
+      summaryMeta: { updatedAt: 99, fromMessageId: 'a', toMessageId: 'b', extension: { untouched: true } } });
+    expect(editedTeaSummary(value, ' ', 99)).toEqual({ summary: undefined, summarySections: undefined, summaryMeta: undefined });
+    expect(value.summaryMeta).toHaveProperty('coverage');
   });
 });

@@ -706,11 +706,12 @@ export function MagicTeaPartyPage() {
     if (payload.summary?.text && allowSummary) {
       const safeText = applyShieldWords(payload.summary.text).filteredText;
       if (safeText) {
+        const { coverage: _coverage, tokenCount: _tokenCount, ...summaryMeta } = nextSession.summaryMeta ?? {};
         nextSession = {
           ...nextSession,
           summary: safeText,
           summarySections: payload.summary.sections ?? undefined,
-          summaryMeta: { ...(nextSession.summaryMeta ?? {}), updatedAt: now },
+          summaryMeta: { ...summaryMeta, updatedAt: now },
           updatedAt: now,
         };
         didChange = true;

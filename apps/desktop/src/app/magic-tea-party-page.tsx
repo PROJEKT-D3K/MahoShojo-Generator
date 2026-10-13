@@ -6,7 +6,7 @@ import { MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import {
   MagicTeaPartyPageView, MagicTeaPartyHero, MagicTeaPartySessionList, MagicTeaPartySessionSetupPanel,
   MagicTeaPartyOutputPreferencesPanel, MagicTeaPartyTransferPanel, MagicTeaPartyChatTimeline,
-  MagicTeaPartyChatComposer, MagicTeaPartyChatMessage,
+  MagicTeaPartyChatComposer, MagicTeaPartyChatMessage, MagicTeaPartySummaryBody,
 } from '@mahoshojo/ui-web/magic-tea-party';
 import { DesktopTeaSession, type DesktopTeaIntent } from '../features/magic-tea-party/session';
 import { TEA_PREFERENCES, teaMessageView, teaSessionView } from '../features/magic-tea-party/direct';
@@ -25,6 +25,7 @@ export default function MagicTeaPartyPage() {
   const { store: aiStore } = useDesktopAiConfig();
   const libraryHost = useDesktopCardLibraryHost(); const { openContent } = useExternalLinks();
   const [library, setLibrary] = useState<'character' | 'scenario' | null>(null);
+  const [summaryCollapsed, setSummaryCollapsed] = useState(false);
   const [outputView, setOutputView] = useState<'raw' | 'rendered'>('rendered');
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false); const [recentCollapsed, setRecentCollapsed] = useState(false);
   const [importBusy, setImportBusy] = useState(false); const importRunning = useRef(false);
@@ -94,7 +95,7 @@ export default function MagicTeaPartyPage() {
     preparing.current = true; setPreparingView(true);
     run(async () => { try { await aiStore.withPreparedGeneration(async target => {
       const now = owner.getSnapshot();
-      if (!mounted.current || currentScope() !== scope || now.record !== intent.record || now.input !== intent.input || now.titleDraft !== intent.titleDraft || now.nameDraft !== intent.nameDraft) return;
+      if (!mounted.current || currentScope() !== scope || now.record !== intent.record || now.input !== intent.input || now.titleDraft !== intent.titleDraft || now.nameDraft !== intent.nameDraft || now.summaryDraft !== intent.summaryDraft) return;
       const snapshot = aiStore.getSnapshot();
       const credentialIntent = snapshot.credentialDraftRevision;
       const selection = snapshot.selection; const profiles = snapshot.profiles;
@@ -129,7 +130,7 @@ export default function MagicTeaPartyPage() {
         onImportFile={importArchive} onExportSession={() => exportArchive('json')} onExportSessionJsonl={() => exportArchive('jsonl')} onExportArchive={() => exportArchive('archive')} />
       <fieldset disabled={disabled} className="min-w-0"><DesktopAiProviderPanel generationMode="stream" showConnectionTest={false} onDirtyChange={setProviderDirty}
         copy={{ serverOutput: { stream: '茶会使用客户端连接', nonStream: '茶会使用客户端连接' }, emptyProfilesHint: '选择客户端 Direct 连接', serverFootnote: '文本茶会尚不支持服务器执行', payloadNoun: '茶会正文' }} /></fieldset>
-      <div className="text-xs text-gray-500">请主动选择客户端执行位置。生成选项会调用当前模型并消耗 Token；点选行动会直接发送，保留输入框草稿。不自动调用摘要、更新草案或补充选项请求；媒体附件导入会在写入前拒绝。卡片图片与链接只作资料保存，不自动下载。Tavern 额外系统提示等仅保留原件，沿现有通用卡正文投影。</div>
+      <div className="text-xs text-gray-500">请主动选择客户端执行位置。生成选项会调用当前模型并消耗 Token；点选行动会直接发送，保留输入框草稿。手动生成摘要也会消耗 Token；不自动调用摘要、更新草案或补充选项请求；媒体附件导入会在写入前拒绝。卡片图片与链接只作资料保存，不自动下载。Tavern 额外系统提示等仅保留原件，沿现有通用卡正文投影。</div>
       <MagicTeaPartyOutputPreferencesPanel activeSession={session} preferences={TEA_PREFERENCES} disabled={disabled || !session}
         outputPlanSupported={false} choicesHint="控制同次 JSONL 输出；两种正文模式均可手动生成选项" onChange={patch => { if (currentScope() !== renderScope || disabled) return; if (patch.userDisplayName !== undefined) owner.stageName(patch.userDisplayName); else run(() => owner.updateSettings(patch)); }} />
     </aside>}
@@ -145,6 +146,16 @@ export default function MagicTeaPartyPage() {
       onUpdatePlayerRole={playerRoleId => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ playerRoleId })); }} onUpdateTitle={title => { if (currentScope() === renderScope && !disabled) owner.stageTitle(title); }}
       onLockTitle={() => run(() => owner.update({ titleMeta: { source: 'manual' } }))} onCreateSession={() => run(owner.create)} />}
     beforeChat={<>
+      <MagicTeaPartySummaryBody active={Boolean(session)} summary={state.summaryDraft ?? session?.summary ?? ''} updatedAt={session?.summaryMeta?.updatedAt}
+        disabled={disabled} isSummarizing={state.generationKind === 'summary' && state.generating} hasMessages={state.messages.length > 0}
+        error={state.messages.at(-1)?.meta?.kind === 'summary' ? state.messages.at(-1)?.error?.message ?? null : null}
+        description="用于长对话压缩（保存在本机）。生成摘要会消耗额外 Token。后续剧情最多读取摘要前 10000 字，保存正文不截断。"
+        collapsed={summaryCollapsed} onCollapsedChange={setSummaryCollapsed} onGenerate={() => start({ kind: 'summary' })}
+        onClear={() => { if (!disabled && currentScope() === renderScope) run(owner.clearSummary); }}
+        onChange={value => { if (!disabled && !preparing.current && currentScope() === renderScope) owner.stageSummary(value); }}
+        onSave={() => { if (!disabled && currentScope() === renderScope) run(owner.saveDraft); }} dirty={state.summaryDraft !== null}>
+        {state.summaryDraft !== null ? <button className="text-xs text-pink-700 underline" onClick={() => downloadTextFile('magic-tea-party.unsaved-summary.txt', owner.unsavedText(), 'text/plain')}>导出未保存摘要</button> : null}
+      </MagicTeaPartySummaryBody>
       {confirmed ? <div role="alert" className="rounded-xl border border-red-200 p-3 text-sm">确认删除当前会话及全部消息？整库备份是恢复来源。
         <button className="ml-3 underline" disabled={disabled} onClick={() => { const confirmation = confirmDelete; setConfirmDelete(null); if (confirmation) run(() => owner.delete(confirmation.incarnation, confirmation.id, confirmation.instance, confirmation.revision)); }}>确认删除</button>
         <button className="ml-3 underline" onClick={() => setConfirmDelete(null)}>取消</button></div> : null}

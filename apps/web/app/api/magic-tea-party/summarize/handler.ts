@@ -1,4 +1,5 @@
 import { z } from 'zod/v3';
+import { projectMagicTeaPartySummaryInput } from '@mahoshojo/ai-core/magic-tea-party';
 import { UserGenerationOverridesSchema } from '@/lib/ai/generation-settings/schemas';
 import { NextRequest } from 'next/server';
 
@@ -29,13 +30,11 @@ const CustomProviderSchema = z.object({
   generationOverrides: UserGenerationOverridesSchema.optional(),
 });
 
-const MessageSchema = z
-  .object({
-    id: z.string().min(1),
-    role: z.enum(['user', 'assistant', 'system']),
-    content: z.string(),
-  })
-  .passthrough();
+const MessageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['user', 'assistant', 'system']),
+  content: z.string(),
+});
 
 const RequestBodySchema = z.object({
   sessionId: z.string().min(1),
@@ -136,8 +135,15 @@ async function handler(req: NextRequest): Promise<Response> {
     if (providerOverrideResult instanceof Response) return providerOverrideResult;
     const { providerOverride, providerId } = providerOverrideResult;
 
-    const prompt = buildMagicTeaPartySummarizePrompt({
-      messages: limitedMessages.messages as any,
+    const summaryProjection = mode === 'summary' ? projectMagicTeaPartySummaryInput({
+      messages,
+      contextWindowTokens,
+      language,
+      userDisplayName,
+      sourceMessageCount: messages.length,
+    }) : null;
+    const prompt = summaryProjection?.prompt ?? buildMagicTeaPartySummarizePrompt({
+      messages: limitedMessages.messages,
       mode: mode as MagicTeaPartySummarizeMode,
       language,
       userDisplayName,
@@ -180,7 +186,7 @@ async function handler(req: NextRequest): Promise<Response> {
       return json({ title });
     }
 
-    return json({ summary: text });
+    return json({ summary: text, summaryInput: summaryProjection!.summaryInput });
   } catch (error) {
     log.error('魔法茶会摘要生成失败', { error });
     const message = error instanceof Error ? error.message : '未知错误';

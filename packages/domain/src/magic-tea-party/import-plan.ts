@@ -1,5 +1,5 @@
 import { parseSillyTavernJsonl } from './transfer';
-import type { MagicTeaPartyMessage, MagicTeaPartySession, MagicTeaPartyTachieAsset } from './types';
+import type { MagicTeaPartyMessage, MagicTeaPartySession, MagicTeaPartySummaryCoverage, MagicTeaPartyTachieAsset } from './types';
 
 type RecordValue = Record<string, unknown>;
 export type MagicTeaPartyImportPlan = {
@@ -170,6 +170,36 @@ const validateSegments = (value: unknown, path: string) => {
   }
 };
 
+const validateSummaryCoverage = (value: unknown, path: string, messages: RecordValue[]): MagicTeaPartySummaryCoverage => {
+  const raw = requiredRecord(value, path);
+  const keys = ['version', 'sourceMessageCount', 'selectedMessageIds', 'clippedMessageIds', 'omittedMessageCount'];
+  if (Object.keys(raw).some(key => !keys.includes(key))) fail(path, '摘要覆盖信息包含未知字段');
+  if (raw.version !== 1) fail(`${path}.version`, '摘要覆盖版本无效');
+  for (const key of ['sourceMessageCount', 'omittedMessageCount']) {
+    if (typeof raw[key] !== 'number' || !Number.isSafeInteger(raw[key]) || raw[key] < 0) fail(`${path}.${key}`, '必须为非负安全整数');
+  }
+  const ids = (key: string) => {
+    if (!Array.isArray(raw[key]) || raw[key].length > 200) fail(`${path}.${key}`, '必须为不超过 200 项的 ID 数组');
+    const result = (raw[key] as unknown[]).map((item, index) => {
+      const id = optionalId(item, `${path}.${key}[${index}]`);
+      return id ?? fail(`${path}.${key}[${index}]`, 'ID 不能为空');
+    });
+    if (new Set(result).size !== result.length) fail(`${path}.${key}`, 'ID 不能重复');
+    return result;
+  };
+  const selectedMessageIds = ids('selectedMessageIds');
+  const clippedMessageIds = ids('clippedMessageIds');
+  if (clippedMessageIds.some(id => !selectedMessageIds.includes(id))) fail(`${path}.clippedMessageIds`, '必须为选中消息的子集');
+  if (raw.sourceMessageCount !== selectedMessageIds.length + Number(raw.omittedMessageCount)) fail(path, '摘要覆盖计数不一致');
+  const messageIds = new Set(messages.map(message => message.id));
+  // Coverage records prompt order. Storage may reorder equal-timestamp messages after ID remapping.
+  if (selectedMessageIds.some(id => !messageIds.has(id))) fail(`${path}.selectedMessageIds`, '必须引用本会话内的消息');
+  return {
+    version: 1, sourceMessageCount: raw.sourceMessageCount as number,
+    selectedMessageIds, clippedMessageIds, omittedMessageCount: raw.omittedMessageCount as number,
+  };
+};
+
 /** Pure, complete-batch preflight. Host ports supply only IDs, time and settings normalization. */
 export const buildMagicTeaPartyImportPlan = (options: MagicTeaPartyImportPlanOptions): MagicTeaPartyImportPlan => {
   if (!Number.isFinite(options.now)) fail('now', '时间必须有限');
@@ -249,6 +279,9 @@ export const buildMagicTeaPartyImportPlan = (options: MagicTeaPartyImportPlanOpt
       if (oldId && raw.sessionId !== undefined && raw.sessionId !== oldId) fail(`${path}.messages[${messageIndex}].sessionId`, '消息不属于声明的会话');
       return raw;
     });
+    const summaryMeta = core.summaryMeta === undefined ? null : requiredRecord(core.summaryMeta, `${path}.summaryMeta`);
+    const coverage = summaryMeta?.coverage === undefined ? undefined
+      : validateSummaryCoverage(summaryMeta.coverage, `${path}.summaryMeta.coverage`, messages);
     const assets = array(payload.tachieAssets, `${path}.tachieAssets`).map((item, assetIndex) => {
       const raw = requiredRecord(item, `${path}.tachieAssets[${assetIndex}]`);
       collect(optionalId(raw.id, `${path}.tachieAssets[${assetIndex}].id`), assetIds, `${path}.tachieAssets[${assetIndex}].id`);
@@ -262,7 +295,7 @@ export const buildMagicTeaPartyImportPlan = (options: MagicTeaPartyImportPlanOpt
       if (!parent || !message) fail(`${path}.forkedFrom`, '分支来源 ID 缺失');
       originals.add(parent); originals.add(message);
     }
-    return { payload, core, oldId, messages, assets, path, fork, id: '', messageNewIds: [] as string[], assetNewIds: [] as string[] };
+    return { payload, core, oldId, messages, assets, path, fork, coverage, id: '', messageNewIds: [] as string[], assetNewIds: [] as string[] };
   });
   const sourceSessions = new Map(drafts.filter(item => item.oldId).map(item => [item.oldId!, item]));
   const visited = new Set<string>();
@@ -378,6 +411,11 @@ export const buildMagicTeaPartyImportPlan = (options: MagicTeaPartyImportPlanOpt
       const meta = requiredRecord(core.summaryMeta, `${path}.summaryMeta`);
       session.summaryMeta = {
         ...meta, updatedAt: typeof meta.updatedAt === 'number' ? meta.updatedAt : options.now,
+        ...(draft.coverage ? { coverage: {
+          ...draft.coverage,
+          selectedMessageIds: draft.coverage.selectedMessageIds.map(id => messageIds.get(id)!),
+          clippedMessageIds: draft.coverage.clippedMessageIds.map(id => messageIds.get(id)!),
+        } } : {}),
         ...(meta.fromMessageId !== undefined ? { fromMessageId: remap(meta.fromMessageId, messageIds, `${path}.summaryMeta.fromMessageId`) } : {}),
         ...(meta.toMessageId !== undefined ? { toMessageId: remap(meta.toMessageId, messageIds, `${path}.summaryMeta.toMessageId`) } : {}),
       };

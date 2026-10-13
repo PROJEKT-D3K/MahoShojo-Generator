@@ -121,6 +121,14 @@ export type MagicTeaPartyTachieAsset = {
   blobSize?: number;
 };
 
+export type MagicTeaPartySummaryCoverage = {
+  version: 1;
+  sourceMessageCount: number;
+  selectedMessageIds: string[];
+  clippedMessageIds: string[];
+  omittedMessageCount: number;
+};
+
 export type MagicTeaPartySession = {
   id: string;
   title: string;
@@ -146,6 +154,7 @@ export type MagicTeaPartySession = {
     fromMessageId?: string;
     toMessageId?: string;
     tokenCount?: number;
+    coverage?: MagicTeaPartySummaryCoverage;
   };
   forkedFrom?: { sessionId: string; messageId: string; createdAt: number };
   branchLabel?: string;

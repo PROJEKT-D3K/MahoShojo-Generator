@@ -55,7 +55,7 @@ const setupProps = { activeSession: session, playerOptions: [{ value: '', label:
 describe('Web Tea actual shared composition', () => {
   it('keeps the original hook and all migrated Web entrypoints wired to the public shared module', () => {
     expect(useChatAutoScroll).toBe(shared.useChatAutoScroll);
-    for (const name of ['ChatMessage', 'ChatTimeline', 'ChatComposer', 'SessionSetupPanel', 'Hero', 'NoticePanel', 'SessionSidebar', 'ImportExportPanel', 'MagicTeaPartyPage']) {
+    for (const name of ['ChatMessage', 'ChatTimeline', 'ChatComposer', 'SessionSetupPanel', 'Hero', 'NoticePanel', 'SessionSidebar', 'ImportExportPanel', 'MagicTeaPartyPage', 'SummaryPanel']) {
       const source = readFileSync(new URL(`../components/magic-tea-party/${name}.tsx`, import.meta.url), 'utf8');
       expect(source, name).toContain("from '@mahoshojo/ui-web/magic-tea-party'");
     }

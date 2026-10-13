@@ -1,4 +1,5 @@
 import { pickMagicTeaPartyRequestSettings } from '@mahoshojo/domain/magic-tea-party/import-plan';
+import { matchesMagicTeaPartySummaryInput, projectMagicTeaPartySummaryInput } from '@mahoshojo/ai-core/magic-tea-party';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 
@@ -168,7 +169,12 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
   const abortControllerRef = useRef<AbortController | null>(null);
   const generationEntryRef = useRef<AbortController | null>(null);
   const activeSessionIdRef = useRef(activeSessionId);
-  activeSessionIdRef.current = activeSessionId;
+  const activeSessionEpochRef = useRef(0);
+  if (activeSessionIdRef.current !== activeSessionId) {
+    activeSessionIdRef.current = activeSessionId;
+    activeSessionEpochRef.current += 1;
+  }
+  const activeSessionEpoch = activeSessionEpochRef.current;
   const summarizeAbortControllerRef = useRef<AbortController | null>(null);
   const autoSummaryRunningRef = useRef(false);
   const messagesRef = useRef<MagicTeaPartyMessage[]>(messages);
@@ -179,7 +185,13 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
   }, [messages]);
 
   useEffect(() => {
-    summarizeAbortControllerRef.current?.abort('session-switch');
+    const summaryController = summarizeAbortControllerRef.current;
+    summaryController?.abort('session-switch');
+    if (summaryController && generationEntryRef.current === summaryController) {
+      generationEntryRef.current = null;
+      setIsGenerating(false);
+      if (abortControllerRef.current === summaryController) abortControllerRef.current = null;
+    }
     summarizeAbortControllerRef.current = null;
     setIsSummarizing(false);
     setSummaryError(null);
@@ -1325,7 +1337,8 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
       const enableSummary =
         typeof session.settings.enableSummary === 'boolean' ? session.settings.enableSummary : preferences.enableSummary;
       if (!enableSummary) return;
-      if (autoSummaryRunningRef.current || isSummarizing) return;
+      if (autoSummaryRunningRef.current || isSummarizing
+        || (generationEntryRef.current && generationEntryRef.current === summarizeAbortControllerRef.current)) return;
 
       const providerId = userProviderConfig?.providerId ?? session.settings.providerId;
       const providerReady =
@@ -1964,15 +1977,18 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
   ]);
 
   const clearSummary = useCallback(async () => {
-    if (!activeSession) return;
+    if (!activeSession || activeSessionIdRef.current !== activeSession.id || activeSessionEpochRef.current !== activeSessionEpoch) return;
+    if (summarizeAbortControllerRef.current === generationEntryRef.current) {
+      summarizeAbortControllerRef.current?.abort('summary-cleared');
+    }
     setSummaryError(null);
     const now = Date.now();
     await persistSession({ ...activeSession, summary: undefined, summarySections: undefined, summaryMeta: undefined, updatedAt: now });
-  }, [activeSession, persistSession]);
+  }, [activeSession, activeSessionEpoch, persistSession]);
 
   const generateSummary = useCallback(async () => {
-    if (!activeSession) return;
-    if (isGenerating || isSummarizing) return;
+    if (!activeSession || activeSessionIdRef.current !== activeSession.id || activeSessionEpochRef.current !== activeSessionEpoch) return;
+    if (isGenerating || isSummarizing || generationEntryRef.current || autoSummaryRunningRef.current || summarizeAbortControllerRef.current) return;
 
     const providerCheck = ensureProviderReady();
     if (!providerCheck.ok) {
@@ -2007,24 +2023,43 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
         activeSession.settings.userDisplayName || preferences.userDisplayName || '旅人',
       minKeep: 2,
     });
-    const historyForRequest = applyMagicTeaPartyMessageLimits(
-      trimmedForSummary,
-      resolveMagicTeaPartyMessageCharLimit(summaryTokenBudget.contextWindowTokens)
-    ).messages;
+    const projection = projectMagicTeaPartySummaryInput({
+      messages: trimmedForSummary,
+      contextWindowTokens: summaryTokenBudget.contextWindowTokens,
+      language: activeSession.settings.language ?? preferences.language,
+      userDisplayName: activeSession.settings.userDisplayName || preferences.userDisplayName || '旅人',
+      sourceMessageCount: rawHistoryForSummary.length,
+    });
+    const historyForRequest = projection.requestMessages;
 
     if (historyForRequest.length === 0) {
       setSummaryError('还没有可用于摘要的对话。');
       return;
     }
 
+    const requestChars = historyForRequest.reduce((total, message) => total + message.content.length, 0);
+    if (isMagicTeaPartyTotalOverflow(requestChars)) {
+      setSummaryError(formatMagicTeaPartyTotalOverflowMessage(requestChars));
+      return;
+    }
+
     const controller = new AbortController();
+    generationEntryRef.current = controller;
+    abortControllerRef.current = controller;
     summarizeAbortControllerRef.current = controller;
+    setIsGenerating(true);
     setIsSummarizing(true);
+    const assertSummaryActive = () => {
+      if (activeSessionEpochRef.current !== activeSessionEpoch) controller.abort('session-switch');
+      assertGenerationActive(controller, activeSession.id);
+    };
 
     try {
+      const headers = await buildMagicTeaPartyRequestHeaders();
+      assertSummaryActive();
       const response = await fetch('/api/magic-tea-party/summarize', {
         method: 'POST',
-        headers: await buildMagicTeaPartyRequestHeaders(),
+        headers,
         signal: controller.signal,
         body: JSON.stringify({
           sessionId: activeSession.id,
@@ -2037,7 +2072,9 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
         }),
       });
 
+      assertSummaryActive();
       const payload = await response.json().catch(() => null);
+      assertSummaryActive();
 
       if (!response.ok) {
         const shouldRedirect = Boolean(payload?.shouldRedirect);
@@ -2054,13 +2091,27 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
         return;
       }
 
+      const hasInputCheck = payload?.summaryInput !== undefined;
+      if (hasInputCheck && !matchesMagicTeaPartySummaryInput(payload.summaryInput, projection.summaryInput)) {
+        setSummaryError('服务端摘要输入与本次选择不一致，请重试。');
+        return;
+      }
+
       const now = Date.now();
       const safeText = applyShieldWords(summaryRaw).filteredText;
+      if (!safeText.trim()) {
+        setSummaryError('模型返回空摘要。');
+        return;
+      }
       const summaryMeta: MagicTeaPartySession['summaryMeta'] = {
+        ...activeSession.summaryMeta,
         updatedAt: now,
         fromMessageId: rawHistoryForSummary[0]?.id,
         toMessageId: rawHistoryForSummary[rawHistoryForSummary.length - 1]?.id,
       };
+      delete summaryMeta.tokenCount;
+      delete summaryMeta.coverage;
+      if (hasInputCheck) summaryMeta.coverage = projection.coverage;
 
       const nextSession: MagicTeaPartySession = {
         ...activeSession,
@@ -2069,20 +2120,30 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
         summaryMeta,
         updatedAt: now,
       };
+      assertSummaryActive();
       await persistSession(nextSession);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return;
+      if (activeSessionEpochRef.current !== activeSessionEpoch || !isGenerationCurrent(controller, activeSession.id)
+        || (error instanceof Error && error.name === 'AbortError')) return;
       const message = error instanceof Error ? error.message : '生成摘要失败';
       setSummaryError(message);
     } finally {
       if (summarizeAbortControllerRef.current === controller) {
         summarizeAbortControllerRef.current = null;
+        if (activeSessionEpochRef.current === activeSessionEpoch && activeSessionIdRef.current === activeSession.id) setIsSummarizing(false);
       }
-      setIsSummarizing(false);
+      if (generationEntryRef.current === controller) {
+        generationEntryRef.current = null;
+        if (activeSessionEpochRef.current === activeSessionEpoch && activeSessionIdRef.current === activeSession.id) setIsGenerating(false);
+      }
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
     }
   }, [
     activeSession,
+    activeSessionEpoch,
+    assertGenerationActive,
     ensureProviderReady,
+    isGenerationCurrent,
     isGenerating,
     isSummarizing,
     messages,

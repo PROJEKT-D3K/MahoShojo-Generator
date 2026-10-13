@@ -74,6 +74,72 @@ const choiceOutcomeIdentity = (outcome: ChoiceOutcome): string => JSON.stringify
   Array.isArray(outcome.meta.notices) ? outcome.meta.notices.map((notice: Record<string, unknown>) => [notice.type, notice.level, notice.code, notice.message]) : null,
 ]);
 
+const summaryOutcomeKeys = ['kind', 'status', 'completion', 'content', 'rawOutput', 'error'];
+type SummaryOutcome = {
+  kind: 'summary';
+  status: 'done' | 'error' | 'blocked';
+  completion: 'provider' | 'stopped' | 'failed' | 'discarded';
+  content: string;
+  rawOutput: string;
+  error?: { code: string; message: string };
+};
+const parseSummaryOutcome = (raw: unknown): SummaryOutcome | null => {
+  const value = asRecord(raw);
+  if (!value || Object.keys(value).some(key => !summaryOutcomeKeys.includes(key))) return null;
+  if (value.kind !== 'summary' || value.status !== 'done' && value.status !== 'error' && value.status !== 'blocked') return null;
+  if (typeof value.completion !== 'string' || !['provider', 'stopped', 'failed', 'discarded'].includes(value.completion)) return null;
+  if (typeof value.content !== 'string' || typeof value.rawOutput !== 'string') return null;
+  const error = value.error === undefined ? undefined : asRecord(value.error);
+  if (value.error !== undefined && (!error || Object.keys(error).some(key => key !== 'code' && key !== 'message')
+    || typeof error.code !== 'string' || typeof error.message !== 'string')) return null;
+  return {
+    kind: 'summary', status: value.status as SummaryOutcome['status'], completion: value.completion as SummaryOutcome['completion'],
+    content: value.content, rawOutput: value.rawOutput,
+    ...(error ? { error: { code: error.code as string, message: error.message as string } } : {}),
+  };
+};
+const exportSummaryOutcome = (message: MagicTeaPartyMessage): Record<string, unknown> | null => {
+  if (message.meta?.kind !== 'summary') return null;
+  // Even unfinished/malformed summaries keep the marker so they cannot become story text.
+  // The reader validates terminal values and fails closed while retaining the original line.
+  return {
+    kind: 'summary', status: message.status, completion: message.meta.completion,
+    content: message.content, rawOutput: message.meta.rawOutput ?? '',
+    ...(message.error ? { error: { code: message.error.code, message: message.error.message } } : {}),
+  };
+};
+
+/** Re-export canonical rows without recursively embedding the row that already contains their provenance. */
+const exportSummaryProvenance = (message: MagicTeaPartyMessage, outcome: Record<string, unknown>): Record<string, unknown> => {
+  const extra = asRecord(asRecord(message.meta?.sillyTavern)?.extra);
+  const source = asRecord(message.meta?.source);
+  const rawLine = typeof source?.rawLine === 'string' ? source.rawLine : undefined;
+  let raw: Record<string, unknown> | null = null;
+  if (rawLine !== undefined) {
+    try { raw = asRecord(JSON.parse(rawLine)); } catch { /* Preserve non-JSON provenance verbatim below. */ }
+  }
+  const rawExtra = asRecord(raw?.extra);
+  const slot = asRecord(rawExtra?.magic_tea_party);
+  const storedOutcome = parseSummaryOutcome(slot?.summaryOutcome);
+  const currentOutcome = parseSummaryOutcome(outcome);
+  const sameExtra = rawExtra !== null && JSON.stringify(rawExtra) === JSON.stringify(extra);
+  const canonical = raw && rawLine === JSON.stringify(raw) && source && Object.keys(source).every(key => key === 'rawLine')
+    && Object.keys(raw).every(key => ['name', 'mes', 'is_user', 'send_date', 'extra'].includes(key))
+    && typeof raw.name === 'string' && raw.mes === '' && raw.is_user === false
+    && typeof raw.send_date === 'number' && Number.isFinite(raw.send_date)
+    && sameExtra && !Object.prototype.hasOwnProperty.call(rawExtra, 'magic_tavern')
+    && slot && Object.keys(slot).every(key => key === 'summaryOutcome' || key === 'source')
+    && storedOutcome && currentOutcome && JSON.stringify(storedOutcome) === JSON.stringify(currentOutcome);
+  if (canonical && slot) {
+    return Object.prototype.hasOwnProperty.call(slot, 'source') ? { source: slot.source } : {};
+  }
+  const originalAliases = Object.fromEntries(Object.entries(extra ?? {}).filter(([key]) => key === 'magic_tea_party' || key === 'magic_tavern'));
+  // A parsed source line already contains the complete original extra. Keep that evidence once.
+  // Independently edited metadata still needs its own copy when it no longer matches the line.
+  const aliases = !sameExtra && Object.keys(originalAliases).length ? { extra: originalAliases } : {};
+  return source || Object.keys(aliases).length ? { source: { ...(source ? { message: source } : {}), ...aliases } } : {};
+};
+
 const isNumberLike = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 const parseSillyTavernHumanDate = (raw: string): number | null => {
@@ -218,13 +284,26 @@ export const parseSillyTavernJsonl = (params: {
       return;
     }
 
+    const extra = asRecord(parsed.extra);
+    const aliases = [asRecord(extra?.magic_tea_party), asRecord(extra?.magic_tavern)];
+    const summarySlots = aliases.filter((slot): slot is Record<string, unknown> =>
+      Boolean(slot && Object.prototype.hasOwnProperty.call(slot, 'summaryOutcome')));
+    const hasSummaryOutcome = summarySlots.length > 0;
+    const summaryOutcomes = summarySlots.map(slot => parseSummaryOutcome(slot.summaryOutcome));
+    const firstSummary = summaryOutcomes[0];
+    const outcomeSlots = aliases.filter((slot): slot is Record<string, unknown> =>
+      Boolean(slot && Object.prototype.hasOwnProperty.call(slot, 'choiceOutcome')));
+    const hasChoiceOutcome = outcomeSlots.length > 0;
+    const summaryOutcome = !hasChoiceOutcome && firstSummary
+      && summaryOutcomes.every(outcome => outcome && JSON.stringify(outcome) === JSON.stringify(firstSummary)) ? firstSummary : null;
+
     const hasHeaderFields =
       (typeof parsed.user_name === 'string' || typeof parsed.character_name === 'string' || parsed.chat_metadata) &&
       !readString(parsed.mes) &&
       !readString(parsed.content) &&
       !readString(parsed.text) &&
       typeof parsed.is_user === 'undefined';
-    if (hasHeaderFields) {
+    if (hasHeaderFields && !hasSummaryOutcome) {
       if (readString(parsed.user_name)) fallbackUserName = readString(parsed.user_name);
       if (readString(parsed.character_name)) fallbackCharacterName = readString(parsed.character_name);
       return;
@@ -238,16 +317,12 @@ export const parseSillyTavernJsonl = (params: {
       readString(parsed.text) ||
       readString(parsed.message) ||
       pickSwipeContent(swipes, swipeId);
-    const extra = asRecord(parsed.extra);
     const mtExtra = asRecord(extra?.magic_tea_party) ?? asRecord(extra?.magic_tavern);
     // Either known alias can carry a denial; an empty preferred slot must not hide it.
-    const outcomeSlots = [asRecord(extra?.magic_tea_party), asRecord(extra?.magic_tavern)]
-      .filter((slot): slot is Record<string, unknown> => Boolean(slot && Object.prototype.hasOwnProperty.call(slot, 'choiceOutcome')));
-    const hasChoiceOutcome = outcomeSlots.length > 0;
-    const outcomes = outcomeSlots.map(slot => parseChoiceOutcome(slot.choiceOutcome));
+    const outcomes = hasSummaryOutcome ? [] : outcomeSlots.map(slot => parseChoiceOutcome(slot.choiceOutcome));
     const firstOutcome = outcomes[0];
     const choiceOutcome = firstOutcome && outcomes.every(outcome => outcome && choiceOutcomeIdentity(outcome) === choiceOutcomeIdentity(firstOutcome)) ? firstOutcome : null;
-    if (!content && !hasChoiceOutcome) {
+    if (!content && !hasChoiceOutcome && !hasSummaryOutcome) {
       warnings.push(`第 ${index + 1} 行缺少内容字段，已跳过。`);
       return;
     }
@@ -268,6 +343,24 @@ export const parseSillyTavernJsonl = (params: {
     const resolvedSpeakerName =
       speakerName ||
       (isUser ? fallbackUserName || params.userDisplayName || '' : isSystem ? 'system' : fallbackCharacterName);
+
+    if (hasSummaryOutcome) {
+      if (!summaryOutcome) warnings.push(`第 ${index + 1} 行摘要终态信息无效，已保留原文并禁用行动。`);
+      messages.push({
+        id: params.createId(), sessionId: params.sessionId, role: 'assistant', createdAt,
+        content: summaryOutcome?.content ?? '', status: summaryOutcome?.status ?? 'error',
+        ...(summaryOutcome?.error ? { error: summaryOutcome.error } : !summaryOutcome
+          ? { error: { code: 'invalid_summary_outcome', message: '摘要终态信息无效，已保留原文' } } : {}),
+        meta: {
+          kind: 'summary', completion: summaryOutcome?.completion ?? 'failed', rawOutput: summaryOutcome?.rawOutput ?? '',
+          ...(hasChoiceOutcome ? { choicesValid: false } : {}),
+          ...(resolvedSpeakerName ? { speakerName: resolvedSpeakerName } : {}),
+          source: { rawLine },
+          ...(extra ? { sillyTavern: { extra } } : {}),
+        },
+      });
+      return;
+    }
 
     if (hasChoiceOutcome && !choiceOutcome) warnings.push(`第 ${index + 1} 行选项终态信息无效，已保留原文并禁用行动。`);
     const extraSpeakerId = mtExtra && typeof mtExtra.speakerId === 'string' ? mtExtra.speakerId : undefined;
@@ -374,6 +467,24 @@ export const stringifySillyTavernJsonl = (params: {
     const speakerName = isUser
       ? params.playerRoleName || normalizedUserName || 'User'
       : metaSpeaker || (message.speakerId && lookup ? lookup(message.speakerId) : '') || 'Narrator';
+    const summaryOutcome = exportSummaryOutcome(message);
+    if (summaryOutcome) {
+      const extra = asRecord(asRecord(message.meta?.sillyTavern)?.extra);
+      const otherExtra = Object.fromEntries(Object.entries(extra ?? {}).filter(([key]) => key !== 'magic_tea_party' && key !== 'magic_tavern'));
+      lines.push(JSON.stringify({
+        name: speakerName, mes: '', is_user: false,
+        send_date: typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) ? message.createdAt : Date.now(),
+        extra: {
+          ...otherExtra,
+          magic_tea_party: {
+            summaryOutcome,
+            // Preserve unknown/contradictory aliases only as stable, inert provenance.
+            ...exportSummaryProvenance(message, summaryOutcome),
+          },
+        },
+      }));
+      continue;
+    }
     const segmentText = buildPlainTextFromSegments(message.segments, lookup);
     const content = segmentText || readString(message.content);
     const choiceOutcome = exportChoiceOutcome(message);
