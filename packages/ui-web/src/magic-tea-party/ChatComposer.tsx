@@ -105,7 +105,7 @@ export function MagicTeaPartyChatComposer(props: MagicTeaPartyChatComposerProps)
             className="flex-none whitespace-nowrap rounded-lg border border-pink-200 bg-white px-3 py-2 text-xs font-semibold text-pink-700 hover:bg-pink-50 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!canAction}
             onClick={() => { if (canAction) onGenerateChoices?.(); }}
-            title="根据当前剧情生成下一步行动选项"
+            title="调用当前模型，根据当前剧情生成下一步行动选项（会消耗 Token）"
           >
             生成选项
           </button>

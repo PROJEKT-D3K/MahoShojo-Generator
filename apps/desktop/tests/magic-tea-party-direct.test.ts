@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
-import { applyMagicTeaPartyMessageLimits, buildMagicTeaPartyHistory, buildMagicTeaPartyMainPrompt, estimateMagicTeaPartyTokens, resolveMagicTeaPartyMessageCharLimit, resolveMagicTeaPartyTokenBudget, trimMagicTeaPartyHistory } from '@mahoshojo/ai-core/magic-tea-party';
+import { applyMagicTeaPartyMessageLimits, buildMagicTeaPartyChoicesPrompt, buildMagicTeaPartyHistory, buildMagicTeaPartyMainPrompt, estimateMagicTeaPartyTokens, projectMagicTeaPartyChoices, resolveMagicTeaPartyMessageCharLimit, resolveMagicTeaPartyTokenBudget, trimMagicTeaPartyHistory } from '@mahoshojo/ai-core/magic-tea-party';
 import type { TeaReadRequest, TeaReadResponse } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import type { ResolvedDesktopAiTarget } from '../src/features/ai-config/desktop-ai-config';
 import { desktopTeaSettings, executeTeaDirect, prepareTeaDirectRequest, teaSessionView, teaTerminalMessage, type TeaRecord } from '../src/features/magic-tea-party/direct';
@@ -22,6 +22,30 @@ const paged = (source = rows) => {
   return { read, mutate: vi.fn() } satisfies TeaNativePort;
 };
 describe('Desktop Tea actual shared prompt and Direct bridge', () => {
+  it.each(['markdown', 'jsonl'] as const)('uses the shared choices prompt and its own budget without mutating %s preferences or adding an opening/continue instruction', async outputFormat => {
+    const value = record(); value.session.settings.outputFormat = outputFormat; value.session.draft = '不能发送的草稿'; const port = paged(); const before = JSON.stringify(value);
+    const request = await prepareTeaDirectRequest(port, value, target, null, 'request', () => true, 'choices');
+    const session = teaSessionView(value.session); const base = { session, roles: [], messages: [], worldbookText: '', stylePrompt: '', updates: 'off' as const };
+    const budget = resolveMagicTeaPartyTokenBudget(session.settings, 'openai');
+    const selected = trimMagicTeaPartyHistory(buildMagicTeaPartyHistory(rows.map(row => row.message), { includeEmptyContent: false }), {
+      maxMessages: budget.maxContextMessages, tokenBudget: Math.max(0, budget.historyBudgetTokens - estimateMagicTeaPartyTokens(buildMagicTeaPartyChoicesPrompt(base), 'openai')),
+      providerId: 'openai', userDisplayName: '旅人', minKeep: 2 });
+    const limited = applyMagicTeaPartyMessageLimits(selected, resolveMagicTeaPartyMessageCharLimit(budget.contextWindowTokens));
+    const expected = buildMagicTeaPartyChoicesPrompt({ ...base, messages: limited.messages.map(message => ({ ...message, sessionId: value.session.id, createdAt: 0 })) });
+    expect(request.messages).toEqual([{ role: 'user', content: expected }]); expect(request.messages[0]!.content).not.toContain('不能发送的草稿');
+    expect(JSON.stringify(value)).toBe(before); expect(port.read).toHaveBeenCalledTimes(4);
+    for (const [call] of port.read.mock.calls) expect(call.request).toMatchObject({ expectedRevision: value.revision, instance: value.instance });
+    const emptyRequest = await prepareTeaDirectRequest(paged([]), value, target, null, 'empty', () => true, 'choices');
+    expect(emptyRequest.messages[0]!.content).toBe(buildMagicTeaPartyChoicesPrompt(base));
+  });
+  it.each(['provider', 'stopped', 'failed'] as const)('uses the same terminal choices projection for %s completion and preserves unsupported side-channel raw bytes', completion => {
+    const rawText = '{"type":"choices","items":[{"id":"c1","text":"喝茶"}]}\n{"type":"summary","text":"不应用摘要"}\n{"type":"updates","items":[]}';
+    const outcome = { completion, rawText, reasoning: '' }; const projection = projectMagicTeaPartyChoices({ rawText, completion: completion === 'provider' ? 'completed' : completion });
+    const message = teaTerminalMessage({ id: 'a', sessionId: 'tea', role: 'assistant', content: '', createdAt: 1, status: 'streaming' }, outcome, 'jsonl', 'choices');
+    expect(message).toMatchObject({ status: projection.status, choices: projection.choices, segments: projection.segments,
+      meta: { rawOutput: rawText, outputFormat: 'jsonl', kind: 'choices', choicesValid: Boolean(projection.lastChoices) } });
+    expect(message).not.toHaveProperty('summary'); expect(message).not.toHaveProperty('updates');
+  });
   it('constructs the same Web history pipeline through two bounded revision-fenced passes', async () => {
     const value = record(); const port = paged();
     const input = { id: 'new', sessionId: 'tea', createdAt: 5, role: 'user' as const, content: '继续喝茶' };

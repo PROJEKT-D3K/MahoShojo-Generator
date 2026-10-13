@@ -30,6 +30,9 @@ export type {
   MagicTeaPartyJsonlStreamState,
 } from './jsonl';
 
+export { projectMagicTeaPartyChoices } from './choices';
+export type { MagicTeaPartyChoicesCompletion, MagicTeaPartyChoicesProjection } from './choices';
+
 export {
   MAGIC_TEA_PARTY_MIN_MESSAGE_CHARS,
   MAGIC_TEA_PARTY_MAX_MESSAGE_CHARS,

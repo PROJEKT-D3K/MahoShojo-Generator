@@ -33,6 +33,47 @@ type ParseJsonlResult = {
 
 const readString = (value: unknown): string => (typeof value === 'string' ? value : '').trim();
 
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+const choiceOutcomeKeys = ['status', 'kind', 'outputFormat', 'completion', 'choicesValid', 'notices', 'rawOutput', 'error'];
+const terminalMetaKeys = ['kind', 'outputFormat', 'completion', 'choicesValid', 'notices', 'rawOutput'] as const;
+type ChoiceOutcome = { status: 'done' | 'error' | 'blocked'; meta: Record<string, unknown>; error?: { code: string; message: string } };
+/** JSONL preserves this narrow terminal seam; it is evidence, never authority to enable actions. */
+const parseChoiceOutcome = (raw: unknown): ChoiceOutcome | null => {
+  const value = asRecord(raw);
+  if (!value || Object.keys(value).some(key => !choiceOutcomeKeys.includes(key))) return null;
+  if (value.status !== 'done' && value.status !== 'error' && value.status !== 'blocked') return null;
+  if (value.kind !== 'choices' && value.kind !== 'reply') return null;
+  if (value.outputFormat !== 'jsonl' && value.outputFormat !== 'markdown') return null;
+  if (value.completion !== undefined && (typeof value.completion !== 'string' || !['provider', 'completed', 'stopped', 'failed', 'blocked', 'discarded'].includes(value.completion))) return null;
+  if (value.choicesValid !== undefined && typeof value.choicesValid !== 'boolean') return null;
+  if (value.rawOutput !== undefined && typeof value.rawOutput !== 'string') return null;
+  if (value.notices !== undefined && (!Array.isArray(value.notices) || value.notices.some(item => {
+    const notice = asRecord(item);
+    return !notice || Object.keys(notice).some(key => !['type', 'level', 'code', 'message', 'meta'].includes(key))
+      || notice.type !== 'notice' || typeof notice.level !== 'string' || !['info', 'warning', 'error'].includes(notice.level)
+      || typeof notice.message !== 'string' || notice.code !== undefined && typeof notice.code !== 'string'
+      || notice.meta !== undefined && !asRecord(notice.meta);
+  }))) return null;
+  const error = value.error === undefined ? undefined : asRecord(value.error);
+  if (value.error !== undefined && (!error || Object.keys(error).some(key => key !== 'code' && key !== 'message')
+    || typeof error.code !== 'string' || typeof error.message !== 'string')) return null;
+  return { status: value.status, meta: Object.fromEntries(terminalMetaKeys.filter(key => value[key] !== undefined).map(key => [key, value[key]])),
+    ...(error ? { error: { code: error.code as string, message: error.message as string } } : {}) };
+};
+const exportChoiceOutcome = (message: MagicTeaPartyMessage): Record<string, unknown> | null => {
+  const meta = asRecord(message.meta);
+  if (message.role !== 'assistant' || !meta || meta.kind !== 'choices' && typeof meta.choicesValid !== 'boolean') return null;
+  return { status: message.status, kind: meta.kind === 'choices' ? 'choices' : 'reply', outputFormat: meta.outputFormat,
+    ...Object.fromEntries(terminalMetaKeys.filter(key => key !== 'kind' && key !== 'outputFormat' && meta[key] !== undefined).map(key => [key, meta[key]])),
+    ...(message.error ? { error: { code: message.error.code, message: message.error.message } } : {}) };
+};
+const choiceOutcomeIdentity = (outcome: ChoiceOutcome): string => JSON.stringify([
+  outcome.status, outcome.meta.kind, outcome.meta.outputFormat, outcome.meta.completion, outcome.meta.choicesValid,
+  outcome.meta.rawOutput, outcome.error?.code, outcome.error?.message,
+  Array.isArray(outcome.meta.notices) ? outcome.meta.notices.map((notice: Record<string, unknown>) => [notice.type, notice.level, notice.code, notice.message]) : null,
+]);
+
 const isNumberLike = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 const parseSillyTavernHumanDate = (raw: string): number | null => {
@@ -197,7 +238,16 @@ export const parseSillyTavernJsonl = (params: {
       readString(parsed.text) ||
       readString(parsed.message) ||
       pickSwipeContent(swipes, swipeId);
-    if (!content) {
+    const extra = asRecord(parsed.extra);
+    const mtExtra = asRecord(extra?.magic_tea_party) ?? asRecord(extra?.magic_tavern);
+    // Either known alias can carry a denial; an empty preferred slot must not hide it.
+    const outcomeSlots = [asRecord(extra?.magic_tea_party), asRecord(extra?.magic_tavern)]
+      .filter((slot): slot is Record<string, unknown> => Boolean(slot && Object.prototype.hasOwnProperty.call(slot, 'choiceOutcome')));
+    const hasChoiceOutcome = outcomeSlots.length > 0;
+    const outcomes = outcomeSlots.map(slot => parseChoiceOutcome(slot.choiceOutcome));
+    const firstOutcome = outcomes[0];
+    const choiceOutcome = firstOutcome && outcomes.every(outcome => outcome && choiceOutcomeIdentity(outcome) === choiceOutcomeIdentity(firstOutcome)) ? firstOutcome : null;
+    if (!content && !hasChoiceOutcome) {
       warnings.push(`第 ${index + 1} 行缺少内容字段，已跳过。`);
       return;
     }
@@ -219,13 +269,7 @@ export const parseSillyTavernJsonl = (params: {
       speakerName ||
       (isUser ? fallbackUserName || params.userDisplayName || '' : isSystem ? 'system' : fallbackCharacterName);
 
-    const extra = (parsed.extra && typeof parsed.extra === 'object' ? (parsed.extra as Record<string, unknown>) : null) ?? null;
-    const mtExtra =
-      extra && typeof extra.magic_tea_party === 'object' && extra.magic_tea_party !== null
-        ? (extra.magic_tea_party as Record<string, unknown>)
-        : extra && typeof extra.magic_tavern === 'object' && extra.magic_tavern !== null
-          ? (extra.magic_tavern as Record<string, unknown>)
-          : null;
+    if (hasChoiceOutcome && !choiceOutcome) warnings.push(`第 ${index + 1} 行选项终态信息无效，已保留原文并禁用行动。`);
     const extraSpeakerId = mtExtra && typeof mtExtra.speakerId === 'string' ? mtExtra.speakerId : undefined;
     const extraSegments = mtExtra && Array.isArray(mtExtra.segments) ? (mtExtra.segments as MagicTeaPartyOutputSegment[]) : undefined;
     const extraChoices = mtExtra && Array.isArray(mtExtra.choices) ? (mtExtra.choices as { id: string; text: string }[]) : undefined;
@@ -233,6 +277,7 @@ export const parseSillyTavernJsonl = (params: {
     const extraRevisionOf = mtExtra && typeof mtExtra.revisionOf === 'string' ? mtExtra.revisionOf : undefined;
 
     const meta: Record<string, unknown> = {
+      ...(choiceOutcome?.meta ?? (hasChoiceOutcome ? { choicesValid: false } : {})),
       ...(resolvedSpeakerName ? { speakerName: resolvedSpeakerName } : {}),
       source: {
         rawLine,
@@ -254,7 +299,9 @@ export const parseSillyTavernJsonl = (params: {
       role: isSystem ? 'system' : isUser ? 'user' : 'assistant',
       content,
       createdAt,
-      status: 'done',
+      status: choiceOutcome?.status ?? (hasChoiceOutcome ? 'error' : 'done'),
+      ...(choiceOutcome?.error ? { error: choiceOutcome.error } : hasChoiceOutcome && !choiceOutcome
+        ? { error: { code: 'invalid_choice_outcome', message: '选项终态信息无效，已保留原文' } } : {}),
       ...(extraSpeakerId ? { speakerId: extraSpeakerId } : {}),
       ...(extraSegments ? { segments: extraSegments } : {}),
       ...(extraChoices ? { choices: extraChoices } : {}),
@@ -329,7 +376,8 @@ export const stringifySillyTavernJsonl = (params: {
       : metaSpeaker || (message.speakerId && lookup ? lookup(message.speakerId) : '') || 'Narrator';
     const segmentText = buildPlainTextFromSegments(message.segments, lookup);
     const content = segmentText || readString(message.content);
-    if (!content) continue;
+    const choiceOutcome = exportChoiceOutcome(message);
+    if (!content && !choiceOutcome) continue;
 
     const meta = message.meta && typeof message.meta === 'object' ? (message.meta as Record<string, unknown>) : null;
     const stMeta = meta && typeof meta.sillyTavern === 'object' ? (meta.sillyTavern as Record<string, unknown>) : null;
@@ -356,6 +404,7 @@ export const stringifySillyTavernJsonl = (params: {
         choices: message.choices ?? null,
         tachieId: message.tachieId ?? null,
         revisionOf: message.revisionOf ?? null,
+        ...(choiceOutcome ? { choiceOutcome } : {}),
       },
     };
     payload.extra = extraPayload;

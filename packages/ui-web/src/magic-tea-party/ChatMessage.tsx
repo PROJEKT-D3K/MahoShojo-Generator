@@ -1,7 +1,8 @@
 'use client';
 
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useMemo, type ReactNode } from 'react';
 
+import { projectMagicTeaPartyChoices } from '@mahoshojo/ai-core/magic-tea-party';
 import type { AIReasoningEnvelope } from '@mahoshojo/contracts/ai-reasoning';
 import type {
   MagicTeaPartyMessage,
@@ -342,6 +343,25 @@ export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
     }
   }
   const isRawView = oversized || (message.role === 'assistant' && props.outputView === 'raw');
+  const rawOutput = message.meta?.rawOutput;
+  const rawChoiceBudget = props.renderBudget?.characters;
+  const rawChoiceItems = useMemo(() => {
+    if (typeof rawOutput !== 'string' || isRawView || (rawChoiceBudget !== undefined && rawOutput.length > rawChoiceBudget)) return null;
+    const projection = projectMagicTeaPartyChoices({ rawText: rawOutput, completion: 'completed' });
+    if (!projection.lastChoices) return null;
+    return new Set(projection.segments.flatMap((segment) => segment.type === 'choices'
+      ? segment.items.map((item) => JSON.stringify([item.id, item.text]))
+      : []));
+  }, [rawOutput, isRawView, rawChoiceBudget]);
+  const completion = message.meta?.completion;
+  const notices = message.meta?.notices;
+  const hasErrorNotice = Array.isArray(notices)
+    && notices.some((notice: unknown) => notice && typeof notice === 'object' && 'level' in notice && notice.level === 'error');
+  const canSelectChoices = Boolean(props.onSelectChoice)
+    && (message.status === undefined || message.status === 'done') && !message.error
+    && (completion === undefined || completion === 'completed' || completion === 'provider')
+    && message.meta?.choicesValid !== false && !hasErrorNotice
+    && (rawOutput === undefined || rawChoiceItems !== null);
   const rawEnd = getPreviewEnd(message.content, props.renderBudget?.rawPreviewCharacters ?? message.content.length);
   const speakerLimit = props.renderBudget ? Math.min(80, props.renderBudget.characters) : bubbleSpeaker.length;
   const displayedBubbleSpeaker = oversized && bubbleSpeaker.length > speakerLimit
@@ -410,7 +430,8 @@ export function MagicTeaPartyChatMessage(props: MagicTeaPartyChatMessageProps) {
           if (seg.type === 'choices') {
             return (
               <div key={`${message.id}-c-${idx}`} className="grid gap-2 sm:grid-cols-2">
-                {seg.items.map((item) => props.onSelectChoice ? (
+                {seg.items.map((item) => canSelectChoices && typeof item.text === 'string' && item.text.trim()
+                  && (rawOutput === undefined || rawChoiceItems?.has(JSON.stringify([item.id, item.text]))) ? (
                   <button
                     key={item.id}
                     type="button"

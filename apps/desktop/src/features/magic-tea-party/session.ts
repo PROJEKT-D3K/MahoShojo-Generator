@@ -11,8 +11,10 @@ type DirectoryCursor = Extract<TeaReadResponse['result'], { action: 'list' }>['n
 type MessageCursor = Extract<TeaReadResponse['result'], { action: 'messages' }>['nextCursor'];
 type Pending = { write: TeaWriteRequest; unknown: boolean; purpose: 'ordinary' | 'begin' | 'finish' | 'import' };
 type Generation = { owner: number; controller: AbortController; dispatched: boolean; request: AiExecutionRequest;
+  kind: 'chat' | 'choices'; outputFormat: 'jsonl' | 'markdown';
   options: DesktopAiExecutionOptions; credentialCurrent: () => boolean; begin: Extract<TeaWriteRequest['request'], { action: 'begin-generation' }>;
   rawText: string; reasoning: string; stopped: boolean; completed: Promise<void>; release: () => void; outcome?: TeaDirectOutcome };
+export type DesktopTeaIntent = { kind: 'reply' | 'selected-choice'; text: string } | { kind: 'continue' | 'choices' };
 export type DesktopTeaState = {
   incarnation: number; directory: TeaHead[]; directoryCursor: DirectoryCursor; catalogRevision: number | null;
   record: TeaRecord | null; messages: TeaMessageDocument[]; messageCursor: MessageCursor;
@@ -228,29 +230,34 @@ export class DesktopTeaSession {
     catch (error) { if (this.current(owner)) this.report(error); }
     finally { if (this.current(owner)) this.publish({ busy: false }); }
   };
-  start = async (target: ResolvedDesktopAiTarget, options: DesktopAiExecutionOptions, credentialCurrent: () => boolean, continueStory = false) => {
+  start = async (target: ResolvedDesktopAiTarget, options: DesktopAiExecutionOptions, credentialCurrent: () => boolean,
+    intent: DesktopTeaIntent = { kind: 'reply', text: this.state.input }) => {
     if (!this.allowed() || !this.state.record) return;
     const record: TeaRecord = { ...this.state.record, session: { ...this.state.record.session,
       ...(this.state.titleDraft === null ? {} : { title: this.state.titleDraft }),
       settings: { ...this.state.record.session.settings, ...(this.state.nameDraft === null ? {} : { userDisplayName: this.state.nameDraft }) } } }; const owner = this.incarnation; const input = this.state.input; const at = this.now();
-    if (!continueStory && !input.trim()) return;
+    const text = 'text' in intent ? intent.text : null;
+    if (text !== null && !text.trim()) return;
+    const preserveDraft = intent.kind !== 'reply';
+    const kind = intent.kind === 'choices' ? 'choices' : 'chat';
+    const outputFormat = kind === 'choices' ? 'jsonl' : desktopTeaSettings(record.session.settings).outputFormat ?? 'jsonl';
     this.publish({ busy: true, generating: true, error: null });
     const preparation = { cancelled: false }; this.preparation = preparation;
     const requestId = this.id();
     const playerRoleId = typeof record.session.playerRoleId === 'string' ? record.session.playerRoleId : null;
     const playerRoleName = playerRoleId ? record.session.roles.find(role => role.id === playerRoleId)?.name : '';
     const displayName = desktopTeaSettings(record.session.settings).userDisplayName?.trim() || '旅人';
-    const userMessage: TeaMessageDocument | null = continueStory ? null : { id: this.id(), sessionId: record.session.id, role: 'user', content: input, createdAt: at, status: 'done',
+    const userMessage: TeaMessageDocument | null = text === null ? null : { id: this.id(), sessionId: record.session.id, role: 'user', content: text, createdAt: at, status: 'done',
       ...(playerRoleId ? { speakerId: playerRoleId } : {}), meta: { speakerName: playerRoleId ? playerRoleName || playerRoleId : displayName } };
     try {
       const current = () => this.current(owner) && !preparation.cancelled && credentialCurrent();
-      const request = await prepareTeaDirectRequest(this.port, record, target, userMessage, requestId, current);
+      const request = await prepareTeaDirectRequest(this.port, record, target, userMessage, requestId, current, kind);
       if (!current()) return;
       const begin: Generation['begin'] = { action: 'begin-generation', sessionId: record.session.id, instance: record.instance, expectedRevision: record.revision,
-        operationId: this.id(), session: { ...record.session, updatedAt: at, draft: continueStory ? input : '' }, userMessage,
+        operationId: this.id(), session: { ...record.session, updatedAt: at, draft: preserveDraft ? input : '' }, userMessage,
         assistantMessage: { id: this.id(), sessionId: record.session.id, role: 'assistant', content: '', createdAt: at, status: 'streaming' } };
       let release!: () => void; const completed = new Promise<void>(resolve => { release = resolve; });
-      const generation: Generation = { owner, controller: new AbortController(), dispatched: false, request, options, credentialCurrent, begin, rawText: '', reasoning: '', stopped: false, completed, release };
+      const generation: Generation = { owner, kind, outputFormat, controller: new AbortController(), dispatched: false, request, options, credentialCurrent, begin, rawText: '', reasoning: '', stopped: false, completed, release };
       this.generation = generation;
       const began = await this.write({ version: 1, request: begin }, 'begin');
       if (!began && (!this.current(owner) || this.generation !== generation || !this.pending)) {
@@ -276,7 +283,8 @@ export class DesktopTeaSession {
       this.publish({ rawUnsaved: text, messages: this.state.messages.map(message => message.id === generation.begin.assistantMessage.id ? { ...message, content: text } : message) });
     });
     if (!this.current(generation.owner) || this.generation !== generation) return;
-    await this.finish(generation, generation.stopped ? { completion: 'stopped', rawText: generation.rawText, reasoning: generation.reasoning } : outcome);
+    await this.finish(generation, generation.stopped || !generation.credentialCurrent()
+      ? { completion: 'stopped', rawText: generation.rawText, reasoning: generation.reasoning } : outcome);
   }
   private async finish(generation: Generation, outcome: TeaDirectOutcome) {
     if (!this.current(generation.owner) || this.generation !== generation || this.pending?.purpose === 'finish') return;
@@ -284,10 +292,10 @@ export class DesktopTeaSession {
     this.publish({ generating: false, rawUnsaved: outcome.rawText, busy: false });
     const record = this.state.record;
     if (!record) return;
-    const message = teaTerminalMessage(generation.begin.assistantMessage, outcome, desktopTeaSettings(record.session.settings).outputFormat ?? 'jsonl');
+    const message = teaTerminalMessage(generation.begin.assistantMessage, outcome, generation.outputFormat, generation.kind);
     const write: TeaWriteRequest = { version: 1, request: { action: 'finish-generation', sessionId: record.session.id, instance: record.instance,
       expectedRevision: record.revision, operationId: this.id(), beginOperationId: generation.begin.operationId,
-      session: { ...record.session, updatedAt: this.now() }, assistantMessage: message } };
+      session: { ...record.session, updatedAt: this.now(), ...(message.meta?.choicesValid === true ? { lastChoices: message.choices } : {}) }, assistantMessage: message } };
     if (!await this.write(write, 'finish') && this.current(generation.owner) && this.generation === generation && !this.pending) {
       // The document admission gate failed before IPC. Retain the exact result for export; no model retry.
       this.publish({ pending: 'save', busy: false });

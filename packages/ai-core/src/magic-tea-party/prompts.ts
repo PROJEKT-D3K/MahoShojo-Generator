@@ -395,6 +395,7 @@ export const buildMagicTeaPartyChoicesPrompt = (params: {
   messages: MagicTeaPartyMessage[];
   stylePrompt?: string;
   choiceCount?: number;
+  updates?: 'on' | 'off';
 }): string => {
   const choiceCount = Math.min(16, Math.max(2, params.choiceCount ?? params.session.settings.choiceCount ?? 3));
 
@@ -405,7 +406,7 @@ export const buildMagicTeaPartyChoicesPrompt = (params: {
       outputFormat: 'jsonl',
       enableChoices: true,
       choiceCount,
-      outputPlan: { choices: 'on', summary: 'off', updates: 'on' },
+      outputPlan: { choices: 'on', summary: 'off', updates: params.updates ?? 'on' },
     },
   };
 

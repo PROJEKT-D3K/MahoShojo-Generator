@@ -8,7 +8,7 @@ import {
   MagicTeaPartyOutputPreferencesPanel, MagicTeaPartyTransferPanel, MagicTeaPartyChatTimeline,
   MagicTeaPartyChatComposer, MagicTeaPartyChatMessage,
 } from '@mahoshojo/ui-web/magic-tea-party';
-import { DesktopTeaSession } from '../features/magic-tea-party/session';
+import { DesktopTeaSession, type DesktopTeaIntent } from '../features/magic-tea-party/session';
 import { TEA_PREFERENCES, teaMessageView, teaSessionView } from '../features/magic-tea-party/direct';
 import { parseDesktopTeaRoles, parseDesktopTeaScenarios } from '../features/magic-tea-party/source';
 import { createIpcTeaNativePort } from '../platform/magic-tea-party-native';
@@ -88,8 +88,8 @@ export default function MagicTeaPartyPage() {
     const text = await owner.export(format);
     if (mounted.current) downloadTextFile(format === 'archive' ? 'magic-tea-party.archive.json' : `magic-tea-party.${format}`, text, format === 'jsonl' ? 'application/x-ndjson' : 'application/json');
   });
-  const start = (continueStory = false) => {
-    if (disabled || preparing.current) return;
+  const start = (generationIntent: DesktopTeaIntent) => {
+    if (disabled || preparing.current || currentScope() !== renderScope) return;
     const scope = currentScope(); const intent = owner.getSnapshot();
     preparing.current = true; setPreparingView(true);
     run(async () => { try { await aiStore.withPreparedGeneration(async target => {
@@ -100,7 +100,7 @@ export default function MagicTeaPartyPage() {
       const selection = snapshot.selection; const profiles = snapshot.profiles;
       await owner.start(target, { invoke, profileId: target.profile?.id ?? '', providerTarget: target.providerTarget }, () => mounted.current && currentScope() === scope
         && aiStore.getSnapshot().credentialDraftRevision === credentialIntent && aiStore.getSnapshot().selection === selection
-        && aiStore.getSnapshot().profiles === profiles, continueStory);
+        && aiStore.getSnapshot().profiles === profiles, generationIntent);
     }); } finally { preparing.current = false; if (mounted.current) setPreparingView(false); } });
   };
   const deleteActive = (id: string) => {
@@ -129,9 +129,9 @@ export default function MagicTeaPartyPage() {
         onImportFile={importArchive} onExportSession={() => exportArchive('json')} onExportSessionJsonl={() => exportArchive('jsonl')} onExportArchive={() => exportArchive('archive')} />
       <fieldset disabled={disabled} className="min-w-0"><DesktopAiProviderPanel generationMode="stream" showConnectionTest={false} onDirtyChange={setProviderDirty}
         copy={{ serverOutput: { stream: '茶会使用客户端连接', nonStream: '茶会使用客户端连接' }, emptyProfilesHint: '选择客户端 Direct 连接', serverFootnote: '文本茶会尚不支持服务器执行', payloadNoun: '茶会正文' }} /></fieldset>
-      <div className="text-xs text-gray-500">请主动选择客户端执行位置。本阶段不调用摘要、更新草案或额外选项接口；媒体附件导入会在写入前拒绝。卡片图片与链接只作资料保存，不自动下载。Tavern 额外系统提示等仅保留原件，沿现有通用卡正文投影。</div>
+      <div className="text-xs text-gray-500">请主动选择客户端执行位置。生成选项会调用当前模型并消耗 Token；点选行动会直接发送，保留输入框草稿。不自动调用摘要、更新草案或补充选项请求；媒体附件导入会在写入前拒绝。卡片图片与链接只作资料保存，不自动下载。Tavern 额外系统提示等仅保留原件，沿现有通用卡正文投影。</div>
       <MagicTeaPartyOutputPreferencesPanel activeSession={session} preferences={TEA_PREFERENCES} disabled={disabled || !session}
-        outputPlanSupported={false} choicesHint="只接受同一次 JSONL 输出中的选项，不发额外模型请求" onChange={patch => { if (currentScope() !== renderScope || disabled) return; if (patch.userDisplayName !== undefined) owner.stageName(patch.userDisplayName); else run(() => owner.updateSettings(patch)); }} />
+        outputPlanSupported={false} choicesHint="控制同次 JSONL 输出；两种正文模式均可手动生成选项" onChange={patch => { if (currentScope() !== renderScope || disabled) return; if (patch.userDisplayName !== undefined) owner.stageName(patch.userDisplayName); else run(() => owner.updateSettings(patch)); }} />
     </aside>}
     setup={<MagicTeaPartySessionSetupPanel activeSession={session} importScope={currentScope()} disabled={disabled} onDirtyChange={value => { pasteDirty.current = value; }}
       roleFileAccept=".json" roleImportHint="粘贴或拖入角色 JSON；PNG 与媒体附件暂不支持"
@@ -164,12 +164,13 @@ export default function MagicTeaPartyPage() {
     chat={<>
       <MagicTeaPartyChatTimeline activeSession={session} preferences={TEA_PREFERENCES} messages={state.messages.map(teaMessageView)}
         isGenerating={state.generating || preparingView} outputView={outputView} onOutputViewChange={setOutputView}
-        onStopGenerating={() => { aiStore.cancelPreparingGeneration(); owner.stop(); }} onSelectChoice={owner.setInput}
+        onStopGenerating={() => { aiStore.cancelPreparingGeneration(); owner.stop(); }} onSelectChoice={text => start({ kind: 'selected-choice', text })}
         renderMessage={props => <MagicTeaPartyChatMessage {...props} renderBudget={{ segments: 2000, characters: 100_000, rawPreviewCharacters: 100_000 }}
           renderMarkdown={markdown => <MarkdownBlock {...markdown} onNavigateExternal={openContent} renderInternalLink={({ children }) => <span>{children}</span>} />} />} />
       <MagicTeaPartyChatComposer activeSession={session} preferences={TEA_PREFERENCES} draft={state.input} onDraftChange={value => { if (!preparing.current) owner.setInput(value); }}
-        onSend={() => start()} onContinue={() => start(true)} isGenerating={state.generating || preparingView} hasMessages={state.messages.length > 0} disabled={disabled}
-        markdownHint="Markdown 输出只保存正文；JSONL 可显示同次输出的对话与选项" />
+        onSend={text => start({ kind: 'reply', text })} onContinue={() => start({ kind: 'continue' })} onGenerateChoices={() => start({ kind: 'choices' })}
+        isGenerating={state.generating || preparingView} hasMessages={state.messages.length > 0} disabled={disabled}
+        markdownHint="Markdown 正文与手动 JSONL 行动选项分别保存" />
     </>}
     afterChat={<p className="text-xs text-gray-500">文本存储上限：单消息 32 MiB、会话资料 8 MiB、单次导入 / 导出 64 MiB。整库备份含茶会表。停止与重启中断会明确标记，绝不自动重发生成。JSONL 使用原有交换格式，不能保全 JSON 的全部会话资料；需要完整文本归档时请选择 JSON。</p>}
     modals={<CardLibraryModal host={libraryHost} isOpen={library !== null} onClose={() => setLibrary(null)} onSelectCard={chooseCard}

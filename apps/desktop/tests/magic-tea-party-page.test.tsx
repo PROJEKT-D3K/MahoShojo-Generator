@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke, isTauri: () => t
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: native.listen }) }));
 const profile = { version: 1, id: 'tea-page', name: '合成测试连接', adapter: 'openai-compatible', baseUrl: 'http://127.0.0.1:18080/v1', modelId: 'synthetic', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' };
 let root: Root; let container: HTMLDivElement; let document: TeaSessionDocument | null; let revision: number; let messages: TeaMessageDocument[]; let streams: number;
+let streamOutput: string;
 const instance = 'a'.repeat(32);
 const button = (text: string) => { const node = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === text); expect(node, text).toBeTruthy(); return node!; };
 const click = (text: string) => act(async () => button(text).click());
@@ -28,6 +29,7 @@ beforeEach(() => {
   vi.clearAllMocks(); localStorage.clear(); resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
   vi.stubGlobal('crypto', webcrypto); native.listen.mockResolvedValue(vi.fn());
   document = null; revision = 1; messages = []; streams = 0;
+  streamOutput = '{"type":"narration","text":"共源茶会正文😀"}\n';
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5, selection: { executionPreference: 'client', clientTarget: { kind: 'custom', profileId: profile.id }, serverTarget: { kind: 'system' }, systemModelId: 'default' }, hiddenPresetIds: [], modelsByProfileId: {}, presetsByProviderId: {} }));
   native.invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
     if (command === 'list_provider_profile_ids') return [profile.id];
@@ -58,7 +60,7 @@ beforeEach(() => {
       streams += 1; const request = args.request as { requestId: string; contractVersion: 1; mode: 'direct-local' };
       const channel = args.onEvent as { onmessage: (_event: AiStreamEvent) => void };
       const identity = { requestId: request.requestId, contractVersion: request.contractVersion, mode: request.mode };
-      const text = '{"type":"narration","text":"共源茶会正文😀"}\n';
+      const text = streamOutput;
       channel.onmessage({ ...identity, sequence: 0, type: 'started' }); channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: text });
       channel.onmessage({ ...identity, sequence: 2, type: 'result', result: { ...identity, status: 'completed', output: { text }, finishReason: 'stop' } }); return;
     }
@@ -82,7 +84,7 @@ const mount = async () => {
 it('runs the delivered route with shared layout, real owner/IPC/Direct adapters and unchanged ordinary provider preference', async () => {
   await mount(); const preference = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
   expect(container.querySelector('.container')?.className).toBe('container !max-w-[1200px]');
-  expect(container.textContent).toContain('本地文本茶会'); expect(container.textContent).not.toContain('生成选项');
+  expect(container.textContent).toContain('本地文本茶会'); expect(button('生成选项').title).toContain('当前模型');
   await click('新建会话');
   await change('textarea[placeholder^="粘贴角色"]', JSON.stringify({ templateId: '通用角色', name: '星見', content: '完整设定' }));
   await click('导入'); expect(document?.roles[0]?.name).toBe('星見');
@@ -94,6 +96,28 @@ it('runs the delivered route with shared layout, real owner/IPC/Direct adapters 
   expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(preference);
   expect(vi.mocked(fetch).mock.calls).toEqual([['/announcements.json', { credentials: 'omit', redirect: 'error' }]]);
   expect(container.querySelector('img[src^="http"]')).toBeNull();
+});
+it.each(['Markdown', 'JSONL'])('runs manual choices → one-click send → continue with unchanged %s preference and retained draft', async format => {
+  await mount(); await click('新建会话'); await click(format);
+  await change('textarea[placeholder^="输入你的行动"]', '保留未发送草稿');
+  streamOutput = '{"type":"choices","items":[{"id":"c1","text":"端起热茶"},{"id":"c2","text":"走向窗边"}]}';
+  await act(async () => { button('生成选项').click(); button('生成选项').click(); });
+  expect(streams).toBe(1); expect(messages.filter(message => message.role === 'user')).toHaveLength(0);
+  expect(document).toMatchObject({ settings: { outputFormat: format === 'Markdown' ? 'markdown' : 'jsonl' }, draft: '保留未发送草稿', lastChoices: [{ id: 'c1', text: '端起热茶' }, { id: 'c2', text: '走向窗边' }] });
+  expect(button('端起热茶').title).toBe('选择该行动'); streamOutput = format === 'Markdown' ? '接着讲故事' : '{"type":"narration","text":"接着讲故事"}';
+  await act(async () => { button('端起热茶').click(); button('走向窗边').click(); });
+  expect(streams).toBe(2); expect(messages.filter(message => message.role === 'user').map(message => message.content)).toEqual(['端起热茶']);
+  expect(container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!.value).toBe('保留未发送草稿');
+  await click('继续生成'); expect(streams).toBe(3); expect(messages.filter(message => message.role === 'user')).toHaveLength(1);
+  expect(document?.draft).toBe('保留未发送草稿');
+});
+it('shows invalid choices as preserved text instead of actionable buttons', async () => {
+  await mount(); await click('新建会话');
+  streamOutput = '{"type":"choices","items":[{"id":"c1","text":"不可执行的前缀"}]}\n{"type":"notice","level":"error","message":"生成要求未满足"}';
+  await click('生成选项'); expect(container.textContent).toContain('不可执行的前缀');
+  expect([...container.querySelectorAll('button')].some(node => node.textContent?.trim() === '不可执行的前缀')).toBe(false);
+  expect(messages.at(-1)).toMatchObject({ status: 'error', meta: { rawOutput: streamOutput, choicesValid: false } });
+  expect(streams).toBe(1);
 });
 it('preserves composer draft across preference updates and keeps null/player selection truthful', async () => {
   await mount(); await click('新建会话');
@@ -141,6 +165,32 @@ it.each([false, true])('freezes the click intent while a real preset credential 
   expect(streams).toBe(cancel ? 0 : 1);
   if (cancel) expect(composer.value).toBe('点击时原输入');
   else expect(messages.find(message => message.role === 'user')?.content).toBe('点击时原输入');
+  expect(getDesktopAiConfigStore().getSnapshot().generationActive).toBe(false);
+});
+it.each([
+  ['choices', false], ['choices', true], ['selected-choice', false], ['selected-choice', true],
+] as const)('freezes %s and its independent draft during credential preparation (cancel=%s)', async (kind, cancel) => {
+  await mount(); await click('新建会话'); await click('Markdown');
+  streamOutput = '{"type":"choices","items":[{"id":"c1","text":"冻结点击的行动"}]}';
+  if (kind === 'selected-choice') await click('生成选项');
+  const before = streams; await change('textarea[placeholder^="输入你的行动"]', '不能替换的草稿');
+  await act(async () => getDesktopAiConfigStore().selectProviderTarget({ kind: 'preset', providerId: 'deepseek' }));
+  const original = native.invoke.getMockImplementation()!; let release!: () => void;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === 'has_provider_secret') await new Promise<void>(resolve => { release = resolve; });
+    return original(command, args);
+  });
+  const label = kind === 'choices' ? '生成选项' : '冻结点击的行动';
+  await act(async () => { button(label).click(); button(label).click(); });
+  expect(streams).toBe(before); expect(release).toBeTypeOf('function');
+  const composer = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!;
+  expect(composer.disabled).toBe(true); expect(button('新建').matches(':disabled')).toBe(true);
+  await change('textarea[placeholder^="输入你的行动"]', '不可晚到覆盖');
+  if (cancel) await click('停止生成');
+  await act(async () => release());
+  expect(streams).toBe(before + (cancel ? 0 : 1)); expect(composer.value).toBe('不能替换的草稿');
+  expect(document?.settings.outputFormat).toBe('markdown');
+  expect(messages.filter(message => message.role === 'user').map(message => message.content)).toEqual(kind === 'selected-choice' && !cancel ? ['冻结点击的行动'] : []);
   expect(getDesktopAiConfigStore().getSnapshot().generationActive).toBe(false);
 });
 it('keeps unsubmitted paste behind the leave guard and allows explicit local clearing after session deletion', async () => {

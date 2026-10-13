@@ -1,7 +1,7 @@
 import {
-  appendMagicTeaPartySystemInstruction, buildMagicTeaPartyHistory, buildMagicTeaPartyMainPrompt,
-  buildMagicTeaPartyJsonlPreview, buildWorldbookText, clipMagicTeaPartyMessageContent,
-  estimateMagicTeaPartyTokens, getMagicTeaPartyPreset, parseMagicTeaPartyJsonl,
+  appendMagicTeaPartySystemInstruction, buildMagicTeaPartyHistory, buildMagicTeaPartyMainPrompt, buildMagicTeaPartyChoicesPrompt,
+  buildWorldbookText, clipMagicTeaPartyMessageContent,
+  estimateMagicTeaPartyTokens, getMagicTeaPartyPreset, projectMagicTeaPartyChoices,
   resolveMagicTeaPartyMessageCharLimit, resolveMagicTeaPartyTokenBudget, selectMagicTeaPartyHistoryPositions,
 } from '@mahoshojo/ai-core/magic-tea-party';
 import { collectAiStreamResult, type AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -78,7 +78,7 @@ export async function* readTeaMessagePages(port: TeaNativePort, record: TeaRecor
 }
 
 export async function prepareTeaDirectRequest(port: TeaNativePort, record: TeaRecord, target: ResolvedDesktopAiTarget,
-  input: MagicTeaPartyMessage | null, requestId: string, current: () => boolean): Promise<AiExecutionRequest> {
+  input: MagicTeaPartyMessage | null, requestId: string, current: () => boolean, kind: 'chat' | 'choices' = 'chat'): Promise<AiExecutionRequest> {
   if (target.location !== 'client' || !target.mode || !target.modelId || !target.providerTarget || target.unavailableReason) {
     throw new Error('文本茶会需要选择可用的客户端 Direct 连接和模型');
   }
@@ -91,7 +91,10 @@ export async function prepareTeaDirectRequest(port: TeaNativePort, record: TeaRe
   const preset = getMagicTeaPartyPreset(settings.presetId ?? null);
   const base = { session, roles: session.roles, scenario: session.scenario, auxScenarios: session.auxScenarios,
     worldbookText: preset ? buildWorldbookText(preset.worldbook) : '', stylePrompt: preset?.systemPrompt ?? '', requestChoices: false };
-  const available = Math.max(0, budget.historyBudgetTokens - estimateMagicTeaPartyTokens(buildMagicTeaPartyMainPrompt({ ...base, messages: [] }), providerId));
+  const buildPrompt = (messages: MagicTeaPartyMessage[]) => kind === 'choices'
+    ? buildMagicTeaPartyChoicesPrompt({ ...base, messages, updates: 'off' })
+    : buildMagicTeaPartyMainPrompt({ ...base, messages });
+  const available = Math.max(0, budget.historyBudgetTokens - estimateMagicTeaPartyTokens(buildPrompt([]), providerId));
   const label = settings.userDisplayName?.trim() || '{{user}}';
   const descriptors: Array<{ ordinal: number; tokens: number }> = [];
   const describe = (message: MagicTeaPartyMessage, ordinal: number) => {
@@ -111,11 +114,11 @@ export async function prepareTeaDirectRequest(port: TeaNativePort, record: TeaRe
   };
   for await (const page of readTeaMessagePages(port, record, current)) for (const row of page.rows) accept(teaMessageView(row.message), row.ordinal);
   if (input) accept(input, -1);
-  else history = appendMagicTeaPartySystemInstruction(history, descriptors.length ? 'continue' : 'opening', requestId);
+  else if (kind === 'chat') history = appendMagicTeaPartySystemInstruction(history, descriptors.length ? 'continue' : 'opening', requestId);
   if (history.length > 200) throw new Error('本次请求超过 200 条上下文，请调低上下文条数后重试；原设置已保留');
   if (history.reduce((sum, item) => sum + item.content.length, 0) > 800_000) throw new Error('本次裁剪后的上下文超过 800000 字符，请减少上下文后重试');
   assertTeaCurrent(current);
-  const prompt = buildMagicTeaPartyMainPrompt({ ...base, messages: history.map(message => ({ ...message, sessionId: record.session.id, createdAt: 0 })) });
+  const prompt = buildPrompt(history.map(message => ({ ...message, sessionId: record.session.id, createdAt: 0 })));
   // Existing isolated code units are rejected, never normalized or replaced.
   if (!isTeaScalarText(prompt)) throw new Error('请求含不完整的 Unicode 字符，请修正来源后重试；原正文已保留');
   return AiExecutionRequestSchema.parse({ requestId, contractVersion: 1, mode: target.mode, modelId: target.modelId,
@@ -146,11 +149,16 @@ export async function executeTeaDirect(options: DesktopAiExecutionOptions, reque
     return { completion: signal.aborted ? 'stopped' : 'failed', rawText, reasoning, message: '生成连接或输出预算未通过，已保留收到的正文' };
   }
 }
-export const teaTerminalMessage = (placeholder: TeaMessageDocument, outcome: TeaDirectOutcome, format: 'jsonl' | 'markdown'): TeaMessageDocument => {
-  const parsed = format === 'jsonl' ? parseMagicTeaPartyJsonl(outcome.rawText) : null;
-  return { ...placeholder, status: outcome.completion === 'provider' ? 'done' : 'error',
-    content: parsed ? buildMagicTeaPartyJsonlPreview(outcome.rawText) : outcome.rawText,
-    ...(parsed ? { segments: parsed.segments, choices: parsed.choices ?? [] } : {}),
-    meta: { completion: outcome.completion, rawOutput: outcome.rawText, ...(outcome.reasoning ? { reasoningText: outcome.reasoning } : {}) },
-    ...(outcome.completion === 'provider' ? {} : { error: { code: outcome.completion, message: outcome.completion === 'stopped' ? '已主动停止，保存的是已接收前缀' : outcome.message ?? '生成未正常完成' } }) };
+export const teaTerminalMessage = (placeholder: TeaMessageDocument, outcome: TeaDirectOutcome, format: 'jsonl' | 'markdown', kind: 'chat' | 'choices' = 'chat'): TeaMessageDocument => {
+  const projection = format === 'jsonl' ? projectMagicTeaPartyChoices({ rawText: outcome.rawText,
+    completion: outcome.completion === 'provider' ? 'completed' : outcome.completion }) : null;
+  const error = outcome.completion === 'provider' ? (kind === 'choices' ? projection?.error : undefined)
+    : { code: outcome.completion, message: outcome.completion === 'stopped' ? '已主动停止，保存的是已接收前缀' : outcome.message ?? '生成未正常完成' };
+  return { ...placeholder, status: kind === 'choices' && projection ? projection.status : outcome.completion === 'provider' ? 'done' : 'error',
+    content: projection ? projection.content : outcome.rawText,
+    ...(projection ? { segments: projection.segments, choices: projection.choices } : {}),
+    meta: { kind: kind === 'choices' ? 'choices' : 'reply', outputFormat: format, completion: outcome.completion,
+      choicesValid: Boolean(projection?.lastChoices), ...(projection?.notices.length ? { notices: projection.notices } : {}),
+      rawOutput: outcome.rawText, ...(outcome.reasoning ? { reasoningText: outcome.reasoning } : {}) },
+    ...(error ? { error } : {}) };
 };

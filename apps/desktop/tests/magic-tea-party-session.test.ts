@@ -5,12 +5,14 @@ import { DesktopTeaSession } from '../src/features/magic-tea-party/session';
 import { createIpcTeaNativePort } from '../src/platform/magic-tea-party-native';
 import type { ResolvedDesktopAiTarget } from '../src/features/ai-config/desktop-ai-config';
 import { startMagicTeaPartyJourneyProbe } from './helpers/magic-tea-party-journey-probe';
+import { prepareDesktopTeaImport } from '../src/features/magic-tea-party/transfer';
 
 const target: ResolvedDesktopAiTarget = { location: 'client', providerTarget: { kind: 'custom', profileId: 'tea-loopback' }, profile: null, mode: 'direct-local', modelId: 'synthetic', availableModelIds: [], generationOverrides: undefined, unavailableReason: null };
 const baseSession = (): TeaSessionDocument => ({ id: 's', title: '茶会', createdAt: 1, updatedAt: 1, roles: [], settings: { providerId: 'openai', modelId: 'm' }, draft: '' });
 const harness = () => {
   let record: { session: TeaSessionDocument; instance: string; revision: number } | null = { session: baseSession(), instance: 'a'.repeat(32), revision: 1 };
   let messages: TeaMessageDocument[] = []; let drop: string | null = null; let fail: string | null = null;
+  let output = '{"type":"narration","text":"星光😀"}\n';
   let count = 0; let sequence = 0; const receipts = new Map<string, TeaWriteResponse['result']>();
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
     if (command === 'read_magic_tea_party') {
@@ -47,18 +49,108 @@ const harness = () => {
       const channel = args?.onEvent as { onmessage: (_event: AiStreamEvent) => void };
       const identity = { requestId: request.requestId, contractVersion: request.contractVersion, mode: request.mode };
       channel.onmessage({ ...identity, sequence: 0, type: 'started' });
-      channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: '{"type":"narration","text":"星光😀"}\n' });
-      channel.onmessage({ ...identity, sequence: 2, type: 'result', result: { ...identity, status: 'completed', output: { text: '{"type":"narration","text":"星光😀"}\n' }, finishReason: 'stop' } });
+      channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: output });
+      channel.onmessage({ ...identity, sequence: 2, type: 'result', result: { ...identity, status: 'completed', output: { text: output }, finishReason: 'stop' } });
       return;
     }
     if (command === 'cancel_direct_ai') return;
     throw new Error('unexpected command');
   });
   const owner = new DesktopTeaSession(createIpcTeaNativePort(invoke), () => `id-${++sequence}`, () => 10);
-  return { owner, invoke, get record() { return record; }, get messages() { return messages; }, count: () => count, drop: (action: string) => { drop = action; }, fail: (action: string) => { fail = action; }, options: { invoke, profileId: 'tea-loopback', createChannel: () => ({}) } };
+  return { owner, invoke, get record() { return record; }, get messages() { return messages; }, count: () => count, output: (text: string) => { output = text; }, drop: (action: string) => { drop = action; }, fail: (action: string) => { fail = action; }, options: { invoke, profileId: 'tea-loopback', createChannel: () => ({}) } };
 };
 
 describe('text Tea owner save and generation identity', () => {
+  it.each(['markdown', 'jsonl'] as const)('generates separate choices then sends the frozen selection and continues while preserving the %s draft', async outputFormat => {
+    const h = harness(); await h.owner.select('s'); await h.owner.updateSettings({ outputFormat }); h.owner.setInput('未发送草稿😀');
+    const choices = [{ id: 'c1', text: '端起茶杯' }, { id: 'c2', text: '推开窗户' }]; const raw = JSON.stringify({ type: 'choices', items: choices });
+    h.output(raw); await h.owner.start(target, h.options, () => true, { kind: 'choices' });
+    expect(h.messages).toHaveLength(1); expect(h.messages[0]).toMatchObject({ status: 'done', choices, meta: { kind: 'choices', outputFormat: 'jsonl', choicesValid: true, rawOutput: raw } });
+    expect(h.record?.session).toMatchObject({ lastChoices: choices, draft: '未发送草稿😀', settings: { outputFormat } });
+    expect(h.owner.getSnapshot().input).toBe('未发送草稿😀');
+    const begin = h.invoke.mock.calls.find(([command, args]) => command === 'mutate_magic_tea_party' && (args?.request as TeaWriteRequest).request.action === 'begin-generation')![1]!.request as TeaWriteRequest;
+    if (begin.request.action !== 'begin-generation') throw new Error('bad fixture');
+    expect(begin.request.userMessage).toBeNull(); expect(Object.keys(begin.request.assistantMessage)).toHaveLength(6);
+    h.output('剧情');
+    await Promise.all([h.owner.start(target, h.options, () => true, { kind: 'selected-choice', text: choices[0]!.text }),
+      h.owner.start(target, h.options, () => true, { kind: 'selected-choice', text: choices[1]!.text })]);
+    expect(h.messages.filter(message => message.role === 'user').map(message => message.content)).toEqual(['端起茶杯']);
+    expect(h.count()).toBe(2); expect(h.owner.getSnapshot().input).toBe('未发送草稿😀');
+    expect(h.messages.at(-1)?.status).toBe('done');
+    await h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    expect(h.count()).toBe(3); expect(h.messages.filter(message => message.role === 'user')).toHaveLength(1);
+    expect(h.record?.session).toMatchObject({ draft: '未发送草稿😀', settings: { outputFormat } });
+  });
+  it.each(['', 'malformed output', '{"type":"choices","items":[]}', '{"type":"notice","level":"error","message":"不能继续"}\n{"type":"choices","items":[{"id":"c1","text":"不可执行"}]}'])('keeps the last valid choices and raw output for invalid manual output %j', async raw => {
+    const h = harness(); await h.owner.select('s'); const lastChoices = [{ id: 'old', text: '上次有效选项' }];
+    await h.owner.update({ lastChoices }); h.output(raw);
+    await h.owner.start(target, h.options, () => true, { kind: 'choices' });
+    expect(h.count()).toBe(1); expect(h.record?.session.lastChoices).toEqual(lastChoices);
+    expect(h.messages.at(-1)).toMatchObject({ status: 'error', choices: [], meta: { kind: 'choices', choicesValid: false, rawOutput: raw } });
+  });
+  it('atomically keeps choices and raw finish immutable while a finish receipt is unknown', async () => {
+    const h = harness(); await h.owner.select('s'); h.owner.setInput('保留草稿');
+    const choices = [{ id: 'c1', text: '喝茶' }]; const raw = JSON.stringify({ type: 'choices', items: choices }); h.output(raw); h.drop('finish-generation');
+    const running = h.owner.start(target, h.options, () => true, { kind: 'choices' });
+    await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe('unknown'));
+    expect(h.record?.session.lastChoices).toEqual(choices); const stored = JSON.stringify(h.messages);
+    expect(h.owner.unsavedText()).toBe(raw); await h.owner.start(target, h.options, () => true, { kind: 'selected-choice', text: '不可重发' });
+    h.owner.stop(); await h.owner.resolvePending(); await running;
+    expect(JSON.stringify(h.messages)).toBe(stored); expect(h.count()).toBe(1); expect(h.owner.getSnapshot().input).toBe('保留草稿');
+  });
+  it('retains choices and exact finish body after a known storage failure, without another generation', async () => {
+    const h = harness(); await h.owner.select('s'); const old = [{ id: 'old', text: '旧有效' }]; await h.owner.update({ lastChoices: old });
+    const raw = '{"type":"choices","items":[{"id":"new","text":"新有效"}]}'; h.output(raw); h.fail('finish-generation');
+    const running = h.owner.start(target, h.options, () => true, { kind: 'choices' });
+    await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe('save'));
+    expect(h.record?.session.lastChoices).toEqual(old); expect(h.owner.unsavedText()).toBe(raw);
+    const finishBodies = () => h.invoke.mock.calls.filter(([command, args]) => command === 'mutate_magic_tea_party' && (args?.request as TeaWriteRequest).request.action === 'finish-generation').map(([, args]) => JSON.stringify(args?.request));
+    const original = finishBodies()[0]; await h.owner.retryPending(); await running;
+    expect(finishBodies()).toEqual([original, original]); expect(h.count()).toBe(1); expect(h.record?.session.lastChoices).toEqual([{ id: 'new', text: '新有效' }]);
+  });
+  it('does not promote an accepted choices prefix after the stream budget rejects a later delta', async () => {
+    const h = harness(); await h.owner.select('s'); const old = [{ id: 'old', text: '保留旧选项' }]; await h.owner.update({ lastChoices: old });
+    const raw = '{"type":"choices","items":[{"id":"prefix","text":"前缀选项"}]}';
+    const original = h.invoke.getMockImplementation()!; let calls = 0;
+    h.invoke.mockImplementation(async (command, args) => {
+      if (command !== 'stream_direct_ai') return original(command, args);
+      calls += 1; const request = args?.request as { requestId: string; contractVersion: 1; mode: 'direct-local' };
+      const channel = args?.onEvent as { onmessage: (_event: AiStreamEvent) => void }; const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
+      channel.onmessage({ ...identity, sequence: 0, type: 'started' }); channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: raw });
+      channel.onmessage({ ...identity, sequence: 2, type: 'text-delta', delta: 'x'.repeat(1_000_001) });
+    });
+    await h.owner.start(target, h.options, () => true, { kind: 'choices' });
+    expect(calls).toBe(1); expect(h.record?.session.lastChoices).toEqual(old);
+    expect(h.messages.at(-1)).toMatchObject({ status: 'error', choices: [], meta: { completion: 'failed', choicesValid: false, rawOutput: raw } });
+  });
+  it('retains an over-budget terminal candidate for export and never retries its model automatically', async () => {
+    const h = harness(); await h.owner.select('s');
+    expect(await h.owner.update({ title: 'x'.repeat(8 * 1024 * 1024 - 400) })).toBe(true);
+    const raw = JSON.stringify({ type: 'choices', items: [{ id: 'large', text: 'y'.repeat(1000) }] }); h.output(raw);
+    const running = h.owner.start(target, h.options, () => true, { kind: 'choices' });
+    await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe('save'));
+    expect(h.count()).toBe(1); expect(h.owner.unsavedText()).toBe(raw); expect(h.record?.session.lastChoices).toBeUndefined();
+    await h.owner.retryPending(); expect(h.count()).toBe(1);
+    await h.owner.abandonPending(); await running;
+    expect(h.count()).toBe(1); expect(h.messages.at(-1)).toMatchObject({ status: 'error', meta: { completion: 'discarded' } });
+  });
+  it('freezes the selected text and original draft before history preparation, and stop cancels preparation', async () => {
+    for (const stopped of [false, true]) {
+      const h = harness(); await h.owner.select('s'); h.owner.setInput('原草稿'); const original = h.invoke.getMockImplementation()!;
+      let release!: () => void; let first = true;
+      h.invoke.mockImplementation(async (command, args) => {
+        if (command === 'read_magic_tea_party' && (args?.request as TeaReadResponse & { request: { action: string } }).request.action === 'messages' && first) {
+          first = false; await new Promise<void>(resolve => { release = resolve; });
+        }
+        return original(command, args);
+      });
+      const intent = { kind: 'selected-choice' as const, text: '原点选' }; const running = h.owner.start(target, h.options, () => true, intent);
+      await vi.waitFor(() => expect(release).toBeTypeOf('function')); intent.text = '不得换发'; h.owner.setInput('不得覆盖草稿');
+      if (stopped) h.owner.stop(); release(); await running;
+      expect(h.count()).toBe(stopped ? 0 : 1); expect(h.owner.getSnapshot().input).toBe('原草稿');
+      expect(h.messages.filter(message => message.role === 'user').map(message => message.content)).toEqual(stopped ? [] : ['原点选']);
+    }
+  });
   it('commits begin before exactly one stream and saves the actual shared parser projection', async () => {
     const h = harness(); await h.owner.select('s'); h.owner.setInput('你好');
     await h.owner.start(target, h.options, () => true);
@@ -201,6 +293,69 @@ describe('text Tea owner save and generation identity', () => {
 });
 
 describe('real Native TeaStore and Direct loopback journey', () => {
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY).each(['markdown', 'jsonl'] as const)('persists the choices → selection → continue slice, restores SQLite and roundtrips JSON / JSONL for %s', async outputFormat => {
+    const probe = await startMagicTeaPartyJourneyProbe(); let sequence = 0;
+    const owner = new DesktopTeaSession(createIpcTeaNativePort(probe.invoke), () => `choices-${++sequence}`, () => 400);
+    const choices = [{ id: 'c1', text: '端起茶杯😀' }, { id: 'c2', text: '看看门外' }];
+    const raw = JSON.stringify({ type: 'choices', items: choices });
+    try {
+      await owner.create(); const id = owner.getSnapshot().record!.session.id;
+      await owner.updateSettings({ outputFormat }); owner.setInput('未发送草稿');
+      await probe.control('checkpoint', { action: 'model', chunks: [raw], deferred: false });
+      await probe.control('drop-next-write-reply', { action: 'finish-generation' });
+      const generating = owner.start(target, probe.aiOptions, () => true, { kind: 'choices' });
+      await vi.waitFor(() => expect(owner.getSnapshot().pending).toBe('unknown'), { timeout: 5000 });
+      expect(owner.unsavedText()).toBe(raw); owner.stop(); await owner.resolvePending(); await generating;
+      expect(owner.getSnapshot().record?.session).toMatchObject({ lastChoices: choices, draft: '未发送草稿', settings: { outputFormat } });
+      expect(owner.getSnapshot().messages).toHaveLength(1);
+      expect(owner.getSnapshot().messages[0]).toMatchObject({ choices, meta: { kind: 'choices', choicesValid: true, rawOutput: raw, outputFormat: 'jsonl' } });
+      await probe.control('checkpoint', { action: 'model', chunks: [outputFormat === 'markdown' ? '接着讲故事' : '{"type":"narration","text":"接着讲故事"}'], deferred: false });
+      await Promise.all([owner.start(target, probe.aiOptions, () => true, { kind: 'selected-choice', text: choices[0]!.text }),
+        owner.start(target, probe.aiOptions, () => true, { kind: 'selected-choice', text: choices[1]!.text })]);
+      await owner.start(target, probe.aiOptions, () => true, { kind: 'continue' });
+      expect(owner.getSnapshot().messages.filter(message => message.role === 'user').map(message => message.content)).toEqual([choices[0]!.text]);
+      expect(owner.getSnapshot().input).toBe('未发送草稿');
+      const observed = await probe.control('requestCount') as { count: number; requests: Array<{ messages: Array<{ content: string }> }> };
+      expect(observed.count).toBe(3); expect(observed.requests[0]!.messages[0]!.content).toContain('【阶段规则：选项】');
+      expect(observed.requests[0]!.messages[0]!.content).not.toContain('未发送草稿');
+      const json = await owner.export('json'); const jsonl = await owner.export('jsonl');
+      const jsonPlan = prepareDesktopTeaImport(json, 'json', () => `json-${++sequence}`, 600);
+      const jsonlPlan = prepareDesktopTeaImport(jsonl, 'jsonl', () => `jsonl-${++sequence}`, 600);
+      for (const plan of [jsonPlan, jsonlPlan]) {
+        expect(plan.write.request.action).toBe('import');
+        if (plan.write.request.action !== 'import') throw new Error('bad fixture');
+        expect(plan.write.request.entries[0]!.messages[0]).toMatchObject({ choices, status: 'done', meta: { choicesValid: true, rawOutput: raw, kind: 'choices', outputFormat: 'jsonl' } });
+      }
+      const backup = await probe.control('checkpoint', { action: 'backup' }) as { backupId: string };
+      await owner.delete(owner.getSnapshot().incarnation, id, owner.getSnapshot().record!.instance, owner.getSnapshot().record!.revision);
+      await probe.control('checkpoint', { action: 'prepare-restore', backupId: backup.backupId }); await probe.control('reopen'); await owner.select(id);
+      expect(owner.getSnapshot().record?.session).toMatchObject({ lastChoices: choices, draft: '未发送草稿', settings: { outputFormat } });
+      expect(owner.getSnapshot().messages[0]).toMatchObject({ choices, meta: { rawOutput: raw, choicesValid: true } });
+      await owner.importText(jsonl, 'jsonl', () => true);
+      expect(await probe.control('requestCount')).toMatchObject({ count: 3 });
+    } finally { owner.dispose(); await probe.close(); }
+  }, 30000);
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('keeps stopped complete choices inert after late bytes, restart, backup and JSONL roundtrip', async () => {
+    const probe = await startMagicTeaPartyJourneyProbe(); let sequence = 0;
+    const owner = new DesktopTeaSession(createIpcTeaNativePort(probe.invoke), () => `stopped-choices-${++sequence}`, () => 500);
+    const raw = '{"type":"choices","items":[{"id":"partial","text":"前缀里看似完整的选项"}]}\n';
+    const old = [{ id: 'old', text: '旧有效选项' }];
+    try {
+      await owner.create(); const id = owner.getSnapshot().record!.session.id; await owner.update({ lastChoices: old });
+      owner.setInput('保留草稿'); await probe.control('checkpoint', { action: 'model', chunks: [raw, '不得迟到追加'], deferred: true });
+      const running = owner.start(target, probe.aiOptions, () => true, { kind: 'choices' });
+      await vi.waitFor(() => expect(owner.getSnapshot().rawUnsaved).toBe(raw), { timeout: 5000 }); owner.stop(); await running;
+      const snapshot = JSON.stringify(owner.getSnapshot().messages); await probe.control('checkpoint', { action: 'release' });
+      expect(JSON.stringify(owner.getSnapshot().messages)).toBe(snapshot); expect(owner.getSnapshot().record?.session.lastChoices).toEqual(old);
+      const backup = await probe.control('checkpoint', { action: 'backup' }) as { backupId: string };
+      await probe.control('checkpoint', { action: 'prepare-restore', backupId: backup.backupId }); await probe.control('reopen'); await owner.select(id);
+      expect(owner.getSnapshot().messages[0]).toMatchObject({ status: 'error', choices: [], meta: { kind: 'choices', completion: 'stopped', choicesValid: false, rawOutput: raw } });
+      const plan = prepareDesktopTeaImport(await owner.export('jsonl'), 'jsonl', () => `import-${++sequence}`, 700);
+      if (plan.write.request.action !== 'import') throw new Error('bad fixture');
+      expect(plan.write.request.entries[0]!.messages[0]).toMatchObject({ status: 'error', choices: [], meta: { completion: 'stopped', choicesValid: false, rawOutput: raw } });
+      expect(await probe.control('requestCount')).toMatchObject({ count: 1 });
+    } finally { owner.dispose(); await probe.close(); }
+  }, 20000);
   it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('runs the actual TS owner through Native SQLite, stream_direct_ai, unknown receipts and reopen', async () => {
     const probe = await startMagicTeaPartyJourneyProbe(); let sequence = 0;
     const owner = new DesktopTeaSession(createIpcTeaNativePort(probe.invoke), () => `journey-${++sequence}`, () => 100);

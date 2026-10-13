@@ -4,6 +4,63 @@ import { buildMagicTeaPartySessionExport, parseSillyTavernJsonl, stringifySillyT
 import type { MagicTeaPartyMessage, MagicTeaPartySession } from '../src/magic-tea-party/types';
 
 describe('magic tea party transfer', () => {
+  it.each(['done', 'error', 'blocked'] as const)('preserves the narrow choices terminal evidence through JSONL (%s)', status => {
+    const rawOutput = ' \n{"type":"choices","items":[{"id":"c1","text":"喝茶😀"}]}\n';
+    const message: MagicTeaPartyMessage = { id: 'old', sessionId: 's', role: 'assistant', content: '喝茶😀', createdAt: 1, status,
+      segments: [{ type: 'choices', items: [{ id: 'c1', text: '喝茶😀' }] }], choices: [{ id: 'c1', text: '喝茶😀' }],
+      meta: { kind: 'choices', outputFormat: 'jsonl', completion: status === 'done' ? 'provider' : status === 'error' ? 'stopped' : 'blocked', choicesValid: status === 'done', rawOutput,
+        notices: [{ type: 'notice', level: 'warning', message: '保留提示', meta: { inert: ['original'] } }], unrelated: 'not part of the narrow JSONL seam' },
+      ...(status === 'error' ? { error: { code: 'stopped', message: '已停止' } } : {}) };
+    const text = stringifySillyTavernJsonl({ messages: [message], userDisplayName: '旅人' });
+    const { messages, warnings } = parseSillyTavernJsonl({ text, sessionId: 'restored', createId: () => 'new' });
+    expect(warnings).toEqual([]); expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ status, segments: message.segments, choices: message.choices, meta: {
+      kind: 'choices', outputFormat: 'jsonl', completion: message.meta!.completion, choicesValid: status === 'done', rawOutput, notices: message.meta!.notices } });
+    expect(messages[0]!.error).toEqual(message.error); expect(messages[0]!.meta).not.toHaveProperty('unrelated');
+  });
+  it('keeps empty failed choices and an unfinished exported choices placeholder non-actionable', () => {
+    for (const status of ['error', 'streaming'] as const) {
+      const message: MagicTeaPartyMessage = { id: 'a', sessionId: 's', role: 'assistant', content: '', createdAt: 1, status,
+        meta: { kind: 'choices', outputFormat: 'jsonl', choicesValid: false, rawOutput: '' } };
+      const text = stringifySillyTavernJsonl({ messages: [message], userDisplayName: '旅人' });
+      const parsed = parseSillyTavernJsonl({ text, sessionId: 'new', createId: () => 'm' });
+      expect(parsed.messages).toHaveLength(1); expect(parsed.messages[0]).toMatchObject({ status: 'error', meta: { choicesValid: false } });
+      expect(parsed.warnings.length).toBe(status === 'streaming' ? 1 : 0);
+    }
+  });
+  it.each([null, { status: 'done', choicesValid: true }, { status: 'done', kind: 'choices', outputFormat: 'jsonl', choicesValid: 'true' },
+    { status: 'done', kind: 'choices', outputFormat: 'jsonl', completion: ['provider'] },
+    { status: 'done', kind: 'choices', outputFormat: 'jsonl', rawOutput: 4 },
+    { status: 'done', kind: 'choices', outputFormat: 'jsonl', notices: [{ type: 'notice', level: ['error'], message: 'invalid' }] },
+    { status: 'done', kind: 'choices', outputFormat: 'jsonl', futureAuthority: true }])('preserves invalid imported choiceOutcome inertly and fails closed: %j', choiceOutcome => {
+    const extra = { magic_tea_party: { segments: [{ type: 'choices', items: [{ id: 'c1', text: '原文保留' }] }], choiceOutcome } };
+    const text = JSON.stringify({ is_user: false, mes: '原文保留', extra });
+    const parsed = parseSillyTavernJsonl({ text, sessionId: 'new', createId: () => 'm' });
+    expect(parsed.warnings).toHaveLength(1); expect(parsed.messages[0]).toMatchObject({ status: 'error', meta: { choicesValid: false, sillyTavern: { extra } } });
+  });
+  it('retains contradictory true as untrusted evidence and keeps truly legacy JSONL compatible', () => {
+    const choices = [{ id: 'c1', text: '继续' }];
+    for (const outcome of [undefined, { status: 'error', kind: 'choices', outputFormat: 'jsonl', completion: 'stopped', choicesValid: true,
+      notices: [{ type: 'notice', level: 'error', message: '不能继续' }] }]) {
+      const text = JSON.stringify({ is_user: false, mes: '继续', extra: { magic_tea_party: { segments: [{ type: 'choices', items: choices }], choices, ...(outcome ? { choiceOutcome: outcome } : {}) } } });
+      const parsed = parseSillyTavernJsonl({ text, sessionId: 'new', createId: () => 'm' });
+      expect(parsed.warnings).toEqual([]); expect(parsed.messages[0]).toMatchObject({ status: outcome ? 'error' : 'done', choices });
+      if (outcome) expect(parsed.messages[0]!.meta).toMatchObject({ completion: 'stopped', choicesValid: true, notices: outcome.notices });
+      else expect(parsed.messages[0]!.meta).not.toHaveProperty('choicesValid');
+    }
+  });
+  it('checks both known JSONL aliases so an empty primary slot cannot hide a terminal denial', () => {
+    const segments = [{ type: 'choices', items: [{ id: 'c1', text: '不可由首槽重新启用' }] }];
+    const stopped = { status: 'error', kind: 'choices', outputFormat: 'jsonl', completion: 'stopped', choicesValid: false };
+    for (const primary of [{ segments }, { segments, choiceOutcome: { ...stopped, status: 'done', completion: 'completed', choicesValid: true } },
+      { segments, choiceOutcome: stopped }, { segments, choiceOutcome: null }]) {
+      const extra = { magic_tea_party: primary, magic_tavern: { choiceOutcome: stopped } };
+      const text = JSON.stringify({ is_user: false, mes: '前缀', extra });
+      const result = parseSillyTavernJsonl({ text, sessionId: 'new', createId: () => 'm' });
+      expect(result.messages[0]).toMatchObject({ status: 'error', segments, meta: { choicesValid: false, sillyTavern: { extra } } });
+      expect(result.warnings.length).toBe(!('choiceOutcome' in primary) || primary.choiceOutcome === stopped ? 0 : 1);
+    }
+  });
   it('可以导入 SillyTavern JSONL', () => {
     const text = [
       '{"user_name":"旅人","character_name":"Narrator","create_date":"2024-01-01 @00h 00m 00s 000ms"}',
