@@ -1,0 +1,1476 @@
+{
+  "fixtureVersion": 1,
+  "source": "Local IPC wrappers of unchanged desktop-room-session.json service payloads; Native execution evidence is a separate runtime output probe.",
+  "expectedUserId": 42,
+  "limits": {
+    "requestBytes": 68608,
+    "batchBytes": 262144,
+    "notificationBytes": 1024,
+    "smallResponseBytes": 1024,
+    "nativeQueueBytes": 262144,
+    "frameworkUnackedBytes": 1048576,
+    "maxJsonDepth": 64
+  },
+  "attachRequest": {
+    "documentNonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "attachIntent": 1,
+    "expectedUserId": 42
+  },
+  "attach": {
+    "handle": "room-handle-fixture",
+    "subscriptionId": "room-subscription-fixture",
+    "pendingIntent": null
+  },
+  "subscribeRequest": {
+    "handle": "room-handle-fixture",
+    "roomId": "room_01JARENAEXAMPLE",
+    "expectedRoomEpoch": "epoch_01JARENA"
+  },
+  "subscribe": {
+    "handle": "room-handle-fixture",
+    "subscriptionId": "room-subscription-fixture"
+  },
+  "detachRequest": {
+    "handle": "room-handle-fixture"
+  },
+  "detach": {
+    "detached": true
+  },
+  "requests": [
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "discover",
+        "query": {
+          "limit": 20
+        }
+      }
+    },
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "create",
+        "request": {
+          "creationRequestId": "desktop-create-0001",
+          "displayName": "房主😀 \"第一队\"",
+          "directory": {
+            "title": "多人房间😀",
+            "visibility": "public"
+          },
+          "sharedConfig": {
+            "battleMode": "scenario",
+            "combatants": [
+              {
+                "key": "data-card:character-001",
+                "ref": {
+                  "id": "character-001",
+                  "kind": "character",
+                  "versionToken": "v2026-08-22-001"
+                },
+                "characterGuidance": "优先保护队友"
+              },
+              {
+                "key": "host-local:character-opaque-1",
+                "displayName": "房主本地角色",
+                "type": "magical-girl",
+                "source": "host-local",
+                "characterGuidance": "保持谨慎"
+              }
+            ],
+            "teams": [
+              {
+                "key": "team-alpha",
+                "displayName": "第一队",
+                "combatantKeys": [
+                  "data-card:character-001"
+                ]
+              }
+            ],
+            "scenario": {
+              "key": "data-card:scenario-001",
+              "ref": {
+                "id": "scenario-001",
+                "kind": "scenario",
+                "versionToken": "v2026-08-22-scenario-001"
+              }
+            },
+            "auxScenarios": [
+              {
+                "key": "data-card:scenario-aux-001",
+                "ref": {
+                  "id": "scenario-aux-001",
+                  "kind": "scenario",
+                  "versionToken": "v2026-08-22-scenario-aux-001"
+                }
+              }
+            ],
+            "materials": [
+              {
+                "key": "data-card:material-001",
+                "ref": {
+                  "id": "material-001",
+                  "kind": "material",
+                  "versionToken": "v2026-08-22-material-001"
+                }
+              }
+            ],
+            "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+            "storyLength": "standard",
+            "customStoryLength": null,
+            "selectedLanguage": "zh-CN",
+            "historySettings": {
+              "readArenaHistory": true,
+              "readArenaHistoryLimit": 3,
+              "isArenaHistoryUnlimited": false,
+              "writeArenaHistory": true,
+              "readCurrentState": true,
+              "writeCurrentState": true,
+              "readNarrativeHistory": false,
+              "readNarrativeHistoryLimit": 10,
+              "isNarrativeHistoryUnlimited": false,
+              "writeNarrativeHistory": false
+            },
+            "reportFormat": "markdown"
+          }
+        }
+      }
+    },
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "join",
+        "request": {
+          "displayName": "成员😀"
+        },
+        "roomId": "room_01JARENAEXAMPLE"
+      }
+    },
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "session",
+        "roomId": "room_01JARENAEXAMPLE"
+      }
+    },
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "leave",
+        "roomId": "room_01JARENAEXAMPLE",
+        "expectedRoomEpoch": "epoch_01JARENA"
+      }
+    },
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "close",
+        "roomId": "room_01JARENAEXAMPLE",
+        "expectedRoomEpoch": "epoch_01JARENA"
+      }
+    },
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "resume-create",
+        "intentId": "room-intent-fixture"
+      }
+    },
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "pull",
+        "subscriptionId": "room-subscription-fixture"
+      }
+    },
+    {
+      "handle": "room-handle-fixture",
+      "request": {
+        "kind": "ack",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-0",
+        "sequence": 0
+      }
+    }
+  ],
+  "accepted": {
+    "kind": "accepted",
+    "handle": "room-handle-fixture",
+    "subscriptionId": "room-subscription-fixture",
+    "requestId": "room-request-fixture"
+  },
+  "empty": {
+    "kind": "empty",
+    "handle": "room-handle-fixture",
+    "subscriptionId": "room-subscription-fixture"
+  },
+  "error": {
+    "code": "network-error",
+    "message": "多人房间操作未完成",
+    "outcome": "unknown"
+  },
+  "notifications": [
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 0,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 1,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 2,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 3,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 4,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 5,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 6,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 7,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 8,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 9,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 10,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 11,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 12,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 13,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 14,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 15,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 16,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 17,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 18,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 19,
+      "type": "available"
+    },
+    {
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "sequence": 20,
+      "type": "available"
+    }
+  ],
+  "pulls": [
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-0",
+        "sequence": 0,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-discover-success",
+          "operation": "discover",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "result": {
+              "items": [
+                {
+                  "roomId": "room_01JARENAEXAMPLE",
+                  "title": "多人房间😀",
+                  "visibility": "public",
+                  "status": "open",
+                  "createdAt": "2026-10-12T00:00:00.000Z",
+                  "lastActivityAt": "2026-10-12T00:01:00.000Z",
+                  "hostDisplayName": "房主😀 \"第一队\"",
+                  "memberCount": 2,
+                  "memberLimit": 32
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-1",
+        "sequence": 1,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-discover-error",
+          "operation": "discover",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "error": {
+              "code": "ROOM_RATE_LIMITED",
+              "message": "房间请求过于频繁，请稍后重试。",
+              "outcome": "not-applicable",
+              "retryAfterSeconds": 3
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-2",
+        "sequence": 2,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-create-success",
+          "operation": "create",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "result": {
+              "protocolVersion": 1,
+              "roomId": "room_01JARENAEXAMPLE",
+              "roomEpoch": "epoch_01JARENA",
+              "self": {
+                "userId": "user-host",
+                "role": "host",
+                "displayName": "房主😀 \"第一队\"",
+                "membershipState": "active"
+              },
+              "snapshot": {
+                "protocolVersion": 1,
+                "schemaVersion": 1,
+                "roomId": "room_01JARENAEXAMPLE",
+                "roomEpoch": "epoch_01JARENA",
+                "controlSeq": 24,
+                "revision": 7,
+                "sharedConfig": {
+                  "battleMode": "scenario",
+                  "reportFormat": "markdown",
+                  "combatants": [
+                    {
+                      "key": "data-card:character-001",
+                      "ref": {
+                        "id": "character-001",
+                        "kind": "character",
+                        "versionToken": "v2026-08-22-001"
+                      },
+                      "characterGuidance": "优先保护队友"
+                    },
+                    {
+                      "key": "host-local:character-opaque-1",
+                      "displayName": "房主本地角色",
+                      "type": "magical-girl",
+                      "source": "host-local",
+                      "characterGuidance": "保持谨慎"
+                    }
+                  ],
+                  "teams": [
+                    {
+                      "key": "team-alpha",
+                      "displayName": "第一队",
+                      "combatantKeys": [
+                        "data-card:character-001"
+                      ]
+                    }
+                  ],
+                  "scenario": {
+                    "key": "data-card:scenario-001",
+                    "ref": {
+                      "id": "scenario-001",
+                      "kind": "scenario",
+                      "versionToken": "v2026-08-22-scenario-001"
+                    }
+                  },
+                  "auxScenarios": [
+                    {
+                      "key": "data-card:scenario-aux-001",
+                      "ref": {
+                        "id": "scenario-aux-001",
+                        "kind": "scenario",
+                        "versionToken": "v2026-08-22-scenario-aux-001"
+                      }
+                    }
+                  ],
+                  "materials": [
+                    {
+                      "key": "data-card:material-001",
+                      "ref": {
+                        "id": "material-001",
+                        "kind": "material",
+                        "versionToken": "v2026-08-22-material-001"
+                      }
+                    }
+                  ],
+                  "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+                  "storyLength": "standard",
+                  "customStoryLength": null,
+                  "selectedLanguage": "zh-CN",
+                  "historySettings": {
+                    "readArenaHistory": true,
+                    "readArenaHistoryLimit": 3,
+                    "isArenaHistoryUnlimited": false,
+                    "writeArenaHistory": true,
+                    "readCurrentState": true,
+                    "writeCurrentState": true,
+                    "readNarrativeHistory": false,
+                    "readNarrativeHistoryLimit": 10,
+                    "isNarrativeHistoryUnlimited": false,
+                    "writeNarrativeHistory": false
+                  }
+                },
+                "members": [
+                  {
+                    "userId": "user-host",
+                    "role": "host",
+                    "displayName": "房主😀 \"第一队\"",
+                    "membershipState": "active"
+                  },
+                  {
+                    "userId": "user-member",
+                    "role": "member",
+                    "displayName": "成员",
+                    "membershipState": "active"
+                  }
+                ],
+                "proposals": [],
+                "activeGeneration": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-3",
+        "sequence": 3,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-create-error",
+          "operation": "create",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "error": {
+              "code": "ROOM_RATE_LIMITED",
+              "message": "房间请求过于频繁，请稍后重试。",
+              "outcome": "not-applied",
+              "retryAfterSeconds": 3
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-4",
+        "sequence": 4,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-join-success",
+          "operation": "join",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "result": {
+              "protocolVersion": 1,
+              "roomId": "room_01JARENAEXAMPLE",
+              "roomEpoch": "epoch_01JARENA",
+              "self": {
+                "userId": "user-host",
+                "role": "host",
+                "displayName": "房主😀 \"第一队\"",
+                "membershipState": "active"
+              },
+              "snapshot": {
+                "protocolVersion": 1,
+                "schemaVersion": 1,
+                "roomId": "room_01JARENAEXAMPLE",
+                "roomEpoch": "epoch_01JARENA",
+                "controlSeq": 24,
+                "revision": 7,
+                "sharedConfig": {
+                  "battleMode": "scenario",
+                  "reportFormat": "markdown",
+                  "combatants": [
+                    {
+                      "key": "data-card:character-001",
+                      "ref": {
+                        "id": "character-001",
+                        "kind": "character",
+                        "versionToken": "v2026-08-22-001"
+                      },
+                      "characterGuidance": "优先保护队友"
+                    },
+                    {
+                      "key": "host-local:character-opaque-1",
+                      "displayName": "房主本地角色",
+                      "type": "magical-girl",
+                      "source": "host-local",
+                      "characterGuidance": "保持谨慎"
+                    }
+                  ],
+                  "teams": [
+                    {
+                      "key": "team-alpha",
+                      "displayName": "第一队",
+                      "combatantKeys": [
+                        "data-card:character-001"
+                      ]
+                    }
+                  ],
+                  "scenario": {
+                    "key": "data-card:scenario-001",
+                    "ref": {
+                      "id": "scenario-001",
+                      "kind": "scenario",
+                      "versionToken": "v2026-08-22-scenario-001"
+                    }
+                  },
+                  "auxScenarios": [
+                    {
+                      "key": "data-card:scenario-aux-001",
+                      "ref": {
+                        "id": "scenario-aux-001",
+                        "kind": "scenario",
+                        "versionToken": "v2026-08-22-scenario-aux-001"
+                      }
+                    }
+                  ],
+                  "materials": [
+                    {
+                      "key": "data-card:material-001",
+                      "ref": {
+                        "id": "material-001",
+                        "kind": "material",
+                        "versionToken": "v2026-08-22-material-001"
+                      }
+                    }
+                  ],
+                  "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+                  "storyLength": "standard",
+                  "customStoryLength": null,
+                  "selectedLanguage": "zh-CN",
+                  "historySettings": {
+                    "readArenaHistory": true,
+                    "readArenaHistoryLimit": 3,
+                    "isArenaHistoryUnlimited": false,
+                    "writeArenaHistory": true,
+                    "readCurrentState": true,
+                    "writeCurrentState": true,
+                    "readNarrativeHistory": false,
+                    "readNarrativeHistoryLimit": 10,
+                    "isNarrativeHistoryUnlimited": false,
+                    "writeNarrativeHistory": false
+                  }
+                },
+                "members": [
+                  {
+                    "userId": "user-host",
+                    "role": "host",
+                    "displayName": "房主😀 \"第一队\"",
+                    "membershipState": "active"
+                  },
+                  {
+                    "userId": "user-member",
+                    "role": "member",
+                    "displayName": "成员",
+                    "membershipState": "active"
+                  }
+                ],
+                "proposals": [],
+                "activeGeneration": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-5",
+        "sequence": 5,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-join-error",
+          "operation": "join",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "error": {
+              "code": "ROOM_RATE_LIMITED",
+              "message": "房间请求过于频繁，请稍后重试。",
+              "outcome": "not-applied",
+              "retryAfterSeconds": 3
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-6",
+        "sequence": 6,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-session-success",
+          "operation": "session",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "result": {
+              "protocolVersion": 1,
+              "roomId": "room_01JARENAEXAMPLE",
+              "roomEpoch": "epoch_01JARENA",
+              "self": {
+                "userId": "user-host",
+                "role": "host",
+                "displayName": "房主😀 \"第一队\"",
+                "membershipState": "active"
+              },
+              "snapshot": {
+                "protocolVersion": 1,
+                "schemaVersion": 1,
+                "roomId": "room_01JARENAEXAMPLE",
+                "roomEpoch": "epoch_01JARENA",
+                "controlSeq": 24,
+                "revision": 7,
+                "sharedConfig": {
+                  "battleMode": "scenario",
+                  "reportFormat": "markdown",
+                  "combatants": [
+                    {
+                      "key": "data-card:character-001",
+                      "ref": {
+                        "id": "character-001",
+                        "kind": "character",
+                        "versionToken": "v2026-08-22-001"
+                      },
+                      "characterGuidance": "优先保护队友"
+                    },
+                    {
+                      "key": "host-local:character-opaque-1",
+                      "displayName": "房主本地角色",
+                      "type": "magical-girl",
+                      "source": "host-local",
+                      "characterGuidance": "保持谨慎"
+                    }
+                  ],
+                  "teams": [
+                    {
+                      "key": "team-alpha",
+                      "displayName": "第一队",
+                      "combatantKeys": [
+                        "data-card:character-001"
+                      ]
+                    }
+                  ],
+                  "scenario": {
+                    "key": "data-card:scenario-001",
+                    "ref": {
+                      "id": "scenario-001",
+                      "kind": "scenario",
+                      "versionToken": "v2026-08-22-scenario-001"
+                    }
+                  },
+                  "auxScenarios": [
+                    {
+                      "key": "data-card:scenario-aux-001",
+                      "ref": {
+                        "id": "scenario-aux-001",
+                        "kind": "scenario",
+                        "versionToken": "v2026-08-22-scenario-aux-001"
+                      }
+                    }
+                  ],
+                  "materials": [
+                    {
+                      "key": "data-card:material-001",
+                      "ref": {
+                        "id": "material-001",
+                        "kind": "material",
+                        "versionToken": "v2026-08-22-material-001"
+                      }
+                    }
+                  ],
+                  "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+                  "storyLength": "standard",
+                  "customStoryLength": null,
+                  "selectedLanguage": "zh-CN",
+                  "historySettings": {
+                    "readArenaHistory": true,
+                    "readArenaHistoryLimit": 3,
+                    "isArenaHistoryUnlimited": false,
+                    "writeArenaHistory": true,
+                    "readCurrentState": true,
+                    "writeCurrentState": true,
+                    "readNarrativeHistory": false,
+                    "readNarrativeHistoryLimit": 10,
+                    "isNarrativeHistoryUnlimited": false,
+                    "writeNarrativeHistory": false
+                  }
+                },
+                "members": [
+                  {
+                    "userId": "user-host",
+                    "role": "host",
+                    "displayName": "房主😀 \"第一队\"",
+                    "membershipState": "active"
+                  },
+                  {
+                    "userId": "user-member",
+                    "role": "member",
+                    "displayName": "成员",
+                    "membershipState": "active"
+                  }
+                ],
+                "proposals": [],
+                "activeGeneration": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-7",
+        "sequence": 7,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-session-error",
+          "operation": "session",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "error": {
+              "code": "ROOM_RATE_LIMITED",
+              "message": "房间请求过于频繁，请稍后重试。",
+              "outcome": "not-applicable",
+              "retryAfterSeconds": 3
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-8",
+        "sequence": 8,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-leave-success",
+          "operation": "leave",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "result": {
+              "protocolVersion": 1,
+              "roomId": "room_01JARENAEXAMPLE",
+              "outcome": "left"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-9",
+        "sequence": 9,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-leave-error",
+          "operation": "leave",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "error": {
+              "code": "ROOM_RATE_LIMITED",
+              "message": "房间请求过于频繁，请稍后重试。",
+              "outcome": "not-applied",
+              "retryAfterSeconds": 3
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-10",
+        "sequence": 10,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-close-success",
+          "operation": "close",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "result": {
+              "protocolVersion": 1,
+              "roomId": "room_01JARENAEXAMPLE",
+              "outcome": "closed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-11",
+        "sequence": 11,
+        "event": {
+          "kind": "http-result",
+          "requestId": "room-request-close-error",
+          "operation": "close",
+          "response": {
+            "desktopRoom": {
+              "version": "desktop-room-session-v1",
+              "viewerUserId": 42
+            },
+            "error": {
+              "code": "ROOM_RATE_LIMITED",
+              "message": "房间请求过于频繁，请稍后重试。",
+              "outcome": "not-applied",
+              "retryAfterSeconds": 3
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-12",
+        "sequence": 12,
+        "event": {
+          "kind": "socket",
+          "message": {
+            "protocolVersion": 1,
+            "type": "room.snapshot",
+            "roomId": "room_01JARENAEXAMPLE",
+            "roomEpoch": "epoch_01JARENA",
+            "controlSeq": 24,
+            "timestamp": "2026-10-12T00:00:00.000Z",
+            "payload": {
+              "protocolVersion": 1,
+              "schemaVersion": 1,
+              "roomId": "room_01JARENAEXAMPLE",
+              "roomEpoch": "epoch_01JARENA",
+              "controlSeq": 24,
+              "revision": 7,
+              "sharedConfig": {
+                "battleMode": "scenario",
+                "reportFormat": "markdown",
+                "combatants": [
+                  {
+                    "key": "data-card:character-001",
+                    "ref": {
+                      "id": "character-001",
+                      "kind": "character",
+                      "versionToken": "v2026-08-22-001"
+                    },
+                    "characterGuidance": "优先保护队友"
+                  },
+                  {
+                    "key": "host-local:character-opaque-1",
+                    "displayName": "房主本地角色",
+                    "type": "magical-girl",
+                    "source": "host-local",
+                    "characterGuidance": "保持谨慎"
+                  }
+                ],
+                "teams": [
+                  {
+                    "key": "team-alpha",
+                    "displayName": "第一队",
+                    "combatantKeys": [
+                      "data-card:character-001"
+                    ]
+                  }
+                ],
+                "scenario": {
+                  "key": "data-card:scenario-001",
+                  "ref": {
+                    "id": "scenario-001",
+                    "kind": "scenario",
+                    "versionToken": "v2026-08-22-scenario-001"
+                  }
+                },
+                "auxScenarios": [
+                  {
+                    "key": "data-card:scenario-aux-001",
+                    "ref": {
+                      "id": "scenario-aux-001",
+                      "kind": "scenario",
+                      "versionToken": "v2026-08-22-scenario-aux-001"
+                    }
+                  }
+                ],
+                "materials": [
+                  {
+                    "key": "data-card:material-001",
+                    "ref": {
+                      "id": "material-001",
+                      "kind": "material",
+                      "versionToken": "v2026-08-22-material-001"
+                    }
+                  }
+                ],
+                "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+                "storyLength": "standard",
+                "customStoryLength": null,
+                "selectedLanguage": "zh-CN",
+                "historySettings": {
+                  "readArenaHistory": true,
+                  "readArenaHistoryLimit": 3,
+                  "isArenaHistoryUnlimited": false,
+                  "writeArenaHistory": true,
+                  "readCurrentState": true,
+                  "writeCurrentState": true,
+                  "readNarrativeHistory": false,
+                  "readNarrativeHistoryLimit": 10,
+                  "isNarrativeHistoryUnlimited": false,
+                  "writeNarrativeHistory": false
+                }
+              },
+              "members": [
+                {
+                  "userId": "user-host",
+                  "role": "host",
+                  "displayName": "房主😀 \"第一队\"",
+                  "membershipState": "active"
+                },
+                {
+                  "userId": "user-member",
+                  "role": "member",
+                  "displayName": "成员",
+                  "membershipState": "active"
+                }
+              ],
+              "proposals": [],
+              "activeGeneration": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-13",
+        "sequence": 13,
+        "event": {
+          "kind": "socket",
+          "message": {
+            "protocolVersion": 1,
+            "type": "room.presence",
+            "roomId": "room_01JARENAEXAMPLE",
+            "roomEpoch": "epoch_01JARENA",
+            "onlineUserIds": [
+              "user-host"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-14",
+        "sequence": 14,
+        "event": {
+          "kind": "socket",
+          "message": {
+            "protocolVersion": 1,
+            "type": "story.delta",
+            "roomId": "room_01JARENAEXAMPLE",
+            "roomEpoch": "epoch_01JARENA",
+            "generationId": "generation-fixture",
+            "chunkSeq": 0,
+            "timestamp": "2026-10-12T00:00:00.000Z",
+            "payload": {
+              "delta": "临时正文 😀 \"引号\" \\ \n"
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-15",
+        "sequence": 15,
+        "event": {
+          "kind": "status",
+          "state": "resync-required"
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-16",
+        "sequence": 16,
+        "event": {
+          "kind": "status",
+          "state": "backpressure",
+          "code": "backpressure"
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-17",
+        "sequence": 17,
+        "event": {
+          "kind": "mutation-unknown",
+          "intentId": "room-intent-fixture",
+          "operation": "create",
+          "roomId": null
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-18",
+        "sequence": 18,
+        "event": {
+          "kind": "request-error",
+          "requestId": "room-request-error-create",
+          "operation": "create",
+          "error": {
+            "code": "network-error",
+            "message": "多人房间操作未完成",
+            "outcome": "unknown"
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-19",
+        "sequence": 19,
+        "event": {
+          "kind": "request-error",
+          "requestId": "room-request-error-discover",
+          "operation": "discover",
+          "error": {
+            "code": "network-error",
+            "message": "多人房间操作未完成",
+            "outcome": "not-applicable"
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch",
+      "batch": {
+        "handle": "room-handle-fixture",
+        "subscriptionId": "room-subscription-fixture",
+        "batchId": "room-batch-20",
+        "sequence": 20,
+        "event": {
+          "kind": "request-error",
+          "requestId": "room-request-error-join",
+          "operation": "join",
+          "error": {
+            "code": "network-error",
+            "message": "多人房间操作未完成",
+            "outcome": "not-applied"
+          }
+        }
+      }
+    }
+  ],
+  "acks": [
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-0",
+      "sequence": 0,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-1",
+      "sequence": 1,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-2",
+      "sequence": 2,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-3",
+      "sequence": 3,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-4",
+      "sequence": 4,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-5",
+      "sequence": 5,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-6",
+      "sequence": 6,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-7",
+      "sequence": 7,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-8",
+      "sequence": 8,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-9",
+      "sequence": 9,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-10",
+      "sequence": 10,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-11",
+      "sequence": 11,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-12",
+      "sequence": 12,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-13",
+      "sequence": 13,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-14",
+      "sequence": 14,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-15",
+      "sequence": 15,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-16",
+      "sequence": 16,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-17",
+      "sequence": 17,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-18",
+      "sequence": 18,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-19",
+      "sequence": 19,
+      "accepted": true
+    },
+    {
+      "kind": "acknowledged",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-batch-20",
+      "sequence": 20,
+      "accepted": true
+    }
+  ],
+  "unicodeBoundary": {
+    "invalidJsonTexts": [
+      "{\"handle\":\"room-handle-fixture\",\"request\":{\"kind\":\"join\",\"request\":{\"displayName\":\"\\ud800\"},\"roomId\":\"room_01JARENAEXAMPLE\"}}",
+      "{\"handle\":\"room-handle-fixture\",\"request\":{\"kind\":\"join\",\"request\":{\"displayName\":\"\\udc00\"},\"roomId\":\"room_01JARENAEXAMPLE\"}}",
+      "{\"handle\":\"room-handle-fixture\",\"request\":{\"kind\":\"join\",\"request\":{\"displayName\":\"\\u6210\\u5458\\ud83d\\ude00\",\"\\ud800\":\"value\"},\"roomId\":\"room_01JARENAEXAMPLE\"}}",
+      "{\"handle\":\"room-handle-fixture\",\"request\":{\"kind\":\"join\",\"request\":{\"displayName\":\"\\u6210\\u5458\\ud83d\\ude00\",\"\\udc00\":\"value\"},\"roomId\":\"room_01JARENAEXAMPLE\"}}"
+    ],
+    "validJsonText": "{\"handle\":\"room-handle-fixture\",\"request\":{\"kind\":\"join\",\"request\":{\"displayName\":\"\\u6210\\u5458\\ud83d\\ude00\"},\"roomId\":\"room_01JARENAEXAMPLE\"}}"
+  },
+  "revokedNotifications": [
+    {
+      "type": "revoked",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-revoked-0",
+      "sequence": 21,
+      "requestId": "room-request-revoked-0",
+      "operation": "create",
+      "error": {
+        "code": "not-authenticated",
+        "message": "多人房间操作未完成",
+        "outcome": "not-applied",
+        "serverCode": "ROOM_AUTHENTICATION_REQUIRED"
+      }
+    },
+    {
+      "type": "revoked",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-revoked-1",
+      "sequence": 22,
+      "requestId": "room-request-revoked-1",
+      "operation": "session",
+      "error": {
+        "code": "not-authenticated",
+        "message": "多人房间操作未完成",
+        "outcome": "not-applicable",
+        "serverCode": "ROOM_AUTHENTICATION_REQUIRED"
+      }
+    },
+    {
+      "type": "revoked",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-revoked-2",
+      "sequence": 23,
+      "requestId": "room-request-revoked-2",
+      "operation": "join",
+      "error": {
+        "code": "scope-changed",
+        "message": "多人房间操作未完成",
+        "outcome": "unknown"
+      }
+    },
+    {
+      "type": "revoked",
+      "handle": "room-handle-fixture",
+      "subscriptionId": "room-subscription-fixture",
+      "batchId": "room-revoked-3",
+      "sequence": 24,
+      "requestId": null,
+      "operation": "subscribe",
+      "error": {
+        "code": "not-authenticated",
+        "message": "多人房间操作未完成",
+        "outcome": "not-applicable",
+        "serverCode": "ROOM_AUTHENTICATION_REQUIRED"
+      }
+    }
+  ]
+}

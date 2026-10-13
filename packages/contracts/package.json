@@ -144,7 +144,9 @@
     "./public-ranking": "./src/public-ranking.ts",
     "./fixtures/public-ranking.json": "./fixtures/public-ranking.json",
     "./desktop-room-session": "./src/desktop-room-session.ts",
-    "./fixtures/desktop-room-session.json": "./fixtures/desktop-room-session.json"
+    "./fixtures/desktop-room-session.json": "./fixtures/desktop-room-session.json",
+    "./desktop-room-ipc": "./src/desktop-room-ipc.ts",
+    "./fixtures/desktop-room-ipc.json": "./fixtures/desktop-room-ipc.json"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

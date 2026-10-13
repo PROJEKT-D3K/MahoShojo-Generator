@@ -367,6 +367,7 @@ fn store_login_session(
     write_session_record(&guard, secrets, session)?;
     // Publish the new record and generation together, including same-byte relogins.
     state.account_epoch.fetch_add(1, Ordering::SeqCst);
+    state.revoke_room_leases();
     Ok(())
 }
 
@@ -393,6 +394,11 @@ fn clear_session_if_current(
     if current.as_deref() != Some(raw) {
         return Ok(false);
     }
+    if let Some((state, _)) = epoch {
+        // Matching expiry/corruption must stop idle Room sockets even if keyring
+        // deletion itself fails. The IO failure is still reported honestly.
+        state.revoke_room_leases();
+    }
     secrets
         .delete(ACCOUNT_SESSION_REF)
         .map_err(|error| CloudError::from_secret_store(&error))?;
@@ -403,13 +409,14 @@ fn decode_session_record(
     secrets: &dyn SecretStore,
     raw: &str,
     clear_corrupt: bool,
+    epoch: Option<(&CloudState, u64)>,
 ) -> Option<StoredSession> {
     match serde_json::from_str::<StoredSession>(raw) {
         Ok(session) => Some(session),
         // Preserve corrupt-record recovery, but never delete a later valid record.
         Err(_) => {
             if clear_corrupt {
-                let _ = clear_session_if_current(secrets, raw, None);
+                let _ = clear_session_if_current(secrets, raw, epoch);
             }
             None
         }
@@ -423,7 +430,7 @@ fn load_session_record(
     let raw = secrets
         .resolve(ACCOUNT_SESSION_REF)
         .map_err(|error| CloudError::from_secret_store(&error))?;
-    Ok(raw.and_then(|raw| decode_session_record(secrets, &raw, clear_corrupt)))
+    Ok(raw.and_then(|raw| decode_session_record(secrets, &raw, clear_corrupt, None)))
 }
 
 struct SessionSnapshot {
@@ -446,16 +453,104 @@ fn load_session_snapshot(
     let Some(raw) = raw else { return Ok(None) };
     // Decoding/conditional corrupt cleanup runs after releasing the non-reentrant gate.
     Ok(
-        decode_session_record(secrets, &raw, true).map(|session| SessionSnapshot {
-            session,
-            raw,
-            epoch,
+        decode_session_record(secrets, &raw, true, Some((state, epoch))).map(|session| {
+            SessionSnapshot {
+                session,
+                raw,
+                epoch,
+            }
         }),
     )
 }
 
+#[cfg(test)]
 fn load_session(secrets: &dyn SecretStore) -> Result<Option<StoredSession>, CloudError> {
     load_session_record(secrets, true)
+}
+
+fn load_session_for(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+) -> Result<Option<StoredSession>, CloudError> {
+    Ok(load_session_snapshot(state, secrets)?.map(|snapshot| snapshot.session))
+}
+
+/// Room-only private lease. Neither raw credentials nor this cancellation token cross IPC.
+#[derive(Clone)]
+pub(crate) struct RoomAccountLease {
+    pub(crate) user_id: u64,
+    pub(crate) epoch: u64,
+    pub(crate) cancel: CancellationToken,
+    raw: String,
+    cookie: String,
+}
+
+impl RoomAccountLease {
+    pub(crate) fn cookie(&self) -> &str {
+        &self.cookie
+    }
+
+    pub(crate) fn is_current(
+        &self,
+        state: &CloudState,
+        secrets: &dyn SecretStore,
+    ) -> Result<bool, CloudError> {
+        let _guard = account_session_gate()?;
+        if self.cancel.is_cancelled() || state.account_epoch.load(Ordering::SeqCst) != self.epoch {
+            return Ok(false);
+        }
+        let raw = secrets
+            .resolve(ACCOUNT_SESSION_REF)
+            .map_err(|error| CloudError::from_secret_store(&error))?;
+        Ok(raw.as_deref() == Some(self.raw.as_str()))
+    }
+
+    pub(crate) fn clear_if_current(
+        &self,
+        state: &CloudState,
+        secrets: &dyn SecretStore,
+    ) -> Result<bool, CloudError> {
+        if self.cancel.is_cancelled() {
+            return Ok(false);
+        }
+        clear_session_if_current(secrets, &self.raw, Some((state, self.epoch)))
+    }
+}
+
+pub(crate) fn room_account_lease(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+    expected_user_id: u64,
+) -> Result<RoomAccountLease, CloudError> {
+    // Same gate as every writer, including same-byte login and logout initiation.
+    let _guard = account_session_gate()?;
+    let raw = secrets
+        .resolve(ACCOUNT_SESSION_REF)
+        .map_err(|error| CloudError::from_secret_store(&error))?
+        .ok_or_else(|| CloudError::new(CloudErrorCode::NotAuthenticated, "多人房间需要登录"))?;
+    let session: StoredSession = serde_json::from_str(&raw)
+        .map_err(|_| CloudError::new(CloudErrorCode::NotAuthenticated, "账号凭据不可用"))?;
+    if expected_user_id == 0
+        || expected_user_id > 9_007_199_254_740_991
+        || session.account.user_id != expected_user_id
+    {
+        return Err(CloudError::new(
+            CloudErrorCode::StateMismatch,
+            "登录身份已变化",
+        ));
+    }
+    let cancellation = state
+        .room_account_cancel
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .child_token();
+    Ok(RoomAccountLease {
+        user_id: session.account.user_id,
+        epoch: state.account_epoch.load(Ordering::SeqCst),
+        cancel: cancellation,
+        raw,
+        cookie: session.cookie,
+    })
 }
 
 /// 资料请求只冻结快照；损坏记录也不能让旧读取删除并发写入的新凭据。
@@ -742,18 +837,31 @@ struct LoginFlow {
 /// 云通路的 managed state：HTTP client、origin 与进行中的登录流程表。
 pub struct CloudState {
     account_epoch: AtomicU64,
+    room_account_cancel: Mutex<CancellationToken>,
     http: reqwest::Client,
     origin: String,
     flows: Mutex<HashMap<String, Arc<LoginFlow>>>,
 }
 
 impl CloudState {
+    /// Called only while the account writer gate is held. Cancellation only wakes
+    /// async waiters; no callback reads keyring or re-enters the gate synchronously.
+    fn revoke_room_leases(&self) {
+        let mut current = self
+            .room_account_cancel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        current.cancel();
+        *current = CancellationToken::new();
+    }
+
     pub fn new() -> Result<Self, CloudError> {
         Ok(Self {
             http: build_cloud_client()?,
             origin: cloud_origin(),
             flows: Mutex::new(HashMap::new()),
             account_epoch: AtomicU64::new(0),
+            room_account_cancel: Mutex::new(CancellationToken::new()),
         })
     }
 
@@ -765,6 +873,7 @@ impl CloudState {
             origin: origin.to_string(),
             flows: Mutex::new(HashMap::new()),
             account_epoch: AtomicU64::new(0),
+            room_account_cancel: Mutex::new(CancellationToken::new()),
         }
     }
 
@@ -1064,12 +1173,15 @@ pub struct CloudCachedAccount {
 /// 返回 `None` 即本机没有已保存账号（此时 `cloud_auth_status` 也只可能是
 /// signed-out，不需要再问服务端）。
 pub fn cloud_cached_account(
+    state: &CloudState,
     secrets: &dyn SecretStore,
 ) -> Result<Option<CloudCachedAccount>, CloudError> {
-    Ok(load_session(secrets)?.map(|session| CloudCachedAccount {
-        account: CloudAccountSummary::from(&session.account),
-        session_expires_at: session.session_expires_at,
-    }))
+    Ok(
+        load_session_for(state, secrets)?.map(|session| CloudCachedAccount {
+            account: CloudAccountSummary::from(&session.account),
+            session_expires_at: session.session_expires_at,
+        }),
+    )
 }
 
 /// `cloud_auth_status`：本地凭据 + 服务端确认，区分 unreachable / expired。
@@ -1300,7 +1412,7 @@ pub async fn cloud_save_me_profile_signature(
     request: CloudSaveSignatureRequest,
 ) -> Result<CloudSaveSignatureResult, CloudError> {
     let signature = request.normalized_signature()?;
-    let session = load_session(secrets)?.ok_or_else(|| {
+    let session = load_session_for(state, secrets)?.ok_or_else(|| {
         CloudError::new(CloudErrorCode::NotAuthenticated, "该操作需要登录云端账号")
     })?;
     if session.account.user_id != request.expected_user_id {
@@ -1507,6 +1619,7 @@ pub async fn cloud_sign_out(
     let (raw, epoch) = {
         let _guard = account_session_gate()?;
         let epoch = state.account_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        state.revoke_room_leases();
         let raw = secrets
             .resolve(ACCOUNT_SESSION_REF)
             .map_err(|error| CloudError::from_secret_store(&error))?;
@@ -1646,7 +1759,7 @@ pub async fn cloud_online_status(
     state: &CloudState,
     secrets: &dyn SecretStore,
 ) -> Result<CloudOnlineStatus, CloudError> {
-    let session = load_session(secrets)?;
+    let session = load_session_for(state, secrets)?;
     Ok(
         match probe_hosted_compatibility(state, session.as_ref()).await? {
             HostedCompatibility::Unreachable => CloudOnlineStatus {
@@ -2232,7 +2345,7 @@ async fn prepare_hosted_dispatch(
     let mut body = build_hosted_request_body(request)?;
     inject_hosted_preset(&mut body, request.preset_config.as_ref(), secrets)?;
     check_hosted_body_budget(&body, &request.route_id)?;
-    let session = load_session(secrets)?;
+    let session = load_session_for(state, secrets)?;
     match probe_hosted_compatibility(state, session.as_ref()).await? {
         HostedCompatibility::Ready { .. } => {}
         HostedCompatibility::Unreachable => {
@@ -3973,7 +4086,7 @@ mod tests {
                 // 新 renderer 的 bootstrap/refresh 仍能调用既有 native 命令。
                 // 服务端已作废 A，但退出响应尚未到达；不伪造 renderer 的登录成功。
                 assert_eq!(
-                    cloud_cached_account(&secrets)
+                    cloud_cached_account(&state, &secrets)
                         .unwrap()
                         .unwrap()
                         .account
@@ -4071,7 +4184,7 @@ mod tests {
                 let (result, ()) = tokio::join!(cloud_sign_out(&state, &secrets), check_pending);
                 assert_eq!(result.unwrap().revoked, status == 200);
                 assert_only_original_sign_out(&server, &original);
-                assert!(cloud_cached_account(&secrets).unwrap().is_none());
+                assert!(cloud_cached_account(&state, &secrets).unwrap().is_none());
                 assert_eq!(secrets.deletions.load(Ordering::SeqCst), 1);
                 assert!(!cloud_sign_out(&state, &secrets).await.unwrap().revoked);
                 assert_only_original_sign_out(&server, &original);
@@ -4360,14 +4473,206 @@ mod tests {
     }
 
     #[test]
+    fn room_leases_revoke_on_same_byte_login_and_current_cleanup_only() {
+        let state = CloudState::with_origin("http://127.0.0.1:9");
+        let secrets = MemorySecrets::new();
+        let original = stored_test_session();
+        store_login_session(&state, &secrets, &original).unwrap();
+        let first = room_account_lease(&state, &secrets, 7).unwrap();
+        assert!(first.is_current(&state, &secrets).unwrap());
+        store_login_session(&state, &secrets, &original).unwrap();
+        let second = room_account_lease(&state, &secrets, 7).unwrap();
+        assert!(first.cancel.is_cancelled());
+        assert!(!first.is_current(&state, &secrets).unwrap());
+        assert!(!first.clear_if_current(&state, &secrets).unwrap());
+        assert!(!second.cancel.is_cancelled());
+        assert!(second.clear_if_current(&state, &secrets).unwrap());
+        assert!(second.cancel.is_cancelled());
+        assert!(!second.is_current(&state, &secrets).unwrap());
+        assert!(secrets.resolve(ACCOUNT_SESSION_REF).unwrap().is_none());
+    }
+
+    #[test]
+    fn room_cleanup_io_stops_idle_socket_but_stale_aba_cleanup_does_not() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+        use tokio_tungstenite::tungstenite::Message;
+        struct PresenceHandshake;
+        impl tokio_tungstenite::tungstenite::handshake::server::Callback for PresenceHandshake {
+            fn on_request(
+                self,
+                _: &Request,
+                mut response: Response,
+            ) -> Result<Response, tokio_tungstenite::tungstenite::handshake::server::ErrorResponse>
+            {
+                response.headers_mut().insert(
+                    "sec-websocket-protocol",
+                    crate::arena_room_protocol::PRESENCE_PROTOCOL
+                        .parse()
+                        .unwrap(),
+                );
+                Ok(response)
+            }
+        }
+        struct DeleteFault {
+            inner: MemorySecrets,
+            fail: std::sync::atomic::AtomicBool,
+        }
+        impl SecretStore for DeleteFault {
+            fn set(&self, key: &str, value: &str) -> Result<(), SecretStoreError> {
+                self.inner.set(key, value)
+            }
+            fn resolve(&self, key: &str) -> Result<Option<String>, SecretStoreError> {
+                self.inner.resolve(key)
+            }
+            fn exists(&self, key: &str) -> Result<bool, SecretStoreError> {
+                self.inner.exists(key)
+            }
+            fn delete(&self, key: &str) -> Result<(), SecretStoreError> {
+                if self.fail.load(Ordering::SeqCst) {
+                    Err(SecretStoreError::failure_for_test())
+                } else {
+                    self.inner.delete(key)
+                }
+            }
+        }
+        rt().block_on(async {
+            for fail_delete in [false, true] {
+                let state = CloudState::with_origin("http://127.0.0.1:9");
+                let secrets = DeleteFault {
+                    inner: MemorySecrets::new(),
+                    fail: std::sync::atomic::AtomicBool::new(fail_delete),
+                };
+                store_login_session(&state, &secrets, &stored_test_session()).unwrap();
+                let old = room_account_lease(&state, &secrets, 7).unwrap();
+                store_login_session(&state, &secrets, &stored_test_session()).unwrap();
+                let current = room_account_lease(&state, &secrets, 7).unwrap();
+                let (client_stream, server_stream) = tokio::io::duplex(4096);
+                let (resync_tx, resync_rx) = tokio::sync::oneshot::channel();
+                let server = tokio::spawn(async move {
+                    let mut socket =
+                        tokio_tungstenite::accept_hdr_async(server_stream, PresenceHandshake)
+                            .await
+                            .unwrap();
+                    let mut resync_tx = Some(resync_tx);
+                    while let Some(message) = socket.next().await {
+                        match message.unwrap() {
+                            Message::Text(text) => {
+                                assert_eq!(
+                                    serde_json::from_str::<serde_json::Value>(&text).unwrap()
+                                        ["type"],
+                                    "room.resync.request"
+                                );
+                                if let Some(tx) = resync_tx.take() {
+                                    let _ = tx.send(());
+                                }
+                            }
+                            Message::Close(_) => return true,
+                            _ => {}
+                        }
+                    }
+                    false
+                });
+                let mut socket = crate::arena_room_socket::RoomSocket::from_test_stream(
+                    client_stream,
+                    crate::arena_room_protocol::RoomTicket {
+                        token: "synthetic-room-ticket".into(),
+                        expires_in_seconds: 60,
+                    },
+                    tokio::time::Instant::now(),
+                    current.cancel.child_token(),
+                )
+                .await
+                .unwrap();
+                assert!(!old.clear_if_current(&state, &secrets).unwrap());
+                assert!(!current.cancel.is_cancelled());
+                socket.request_resync().await.unwrap();
+                tokio::time::timeout(Duration::from_secs(2), resync_rx)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let result = current.clear_if_current(&state, &secrets);
+                if fail_delete {
+                    assert_eq!(result.unwrap_err().code, CloudErrorCode::StorageUnavailable);
+                    assert!(secrets
+                        .inner
+                        .resolve(ACCOUNT_SESSION_REF)
+                        .unwrap()
+                        .is_some());
+                } else {
+                    assert!(result.unwrap());
+                }
+                assert!(current.cancel.is_cancelled());
+                // No next() is being polled: cancellation still closes the idle driver.
+                assert!(tokio::time::timeout(Duration::from_secs(2), server)
+                    .await
+                    .unwrap()
+                    .unwrap());
+                socket.shutdown().await;
+            }
+        });
+    }
+
+    #[test]
+    fn cached_corrupt_cleanup_cancels_room_lease_without_exposing_credentials() {
+        let state = CloudState::with_origin("http://127.0.0.1:9");
+        let secrets = MemorySecrets::new();
+        store_login_session(&state, &secrets, &stored_test_session()).unwrap();
+        let lease = room_account_lease(&state, &secrets, 7).unwrap();
+        secrets.set(ACCOUNT_SESSION_REF, "{corrupt").unwrap();
+        assert!(cloud_cached_account(&state, &secrets).unwrap().is_none());
+        assert!(lease.cancel.is_cancelled());
+        assert!(room_account_lease(&state, &secrets, 7).is_err());
+    }
+
+    #[test]
+    fn cached_corrupt_cleanup_delete_failure_retires_room_without_claiming_deletion() {
+        struct DeleteFailure(MemorySecrets);
+        impl SecretStore for DeleteFailure {
+            fn set(&self, key: &str, value: &str) -> Result<(), SecretStoreError> {
+                self.0.set(key, value)
+            }
+            fn resolve(&self, key: &str) -> Result<Option<String>, SecretStoreError> {
+                self.0.resolve(key)
+            }
+            fn exists(&self, key: &str) -> Result<bool, SecretStoreError> {
+                self.0.exists(key)
+            }
+            fn delete(&self, _: &str) -> Result<(), SecretStoreError> {
+                self.0.deletions.fetch_add(1, Ordering::SeqCst);
+                Err(SecretStoreError::failure_for_test())
+            }
+        }
+        let state = CloudState::with_origin("http://127.0.0.1:9");
+        let secrets = DeleteFailure(MemorySecrets::new());
+        store_login_session(&state, &secrets, &stored_test_session()).unwrap();
+        let lease = room_account_lease(&state, &secrets, 7).unwrap();
+        secrets.set(ACCOUNT_SESSION_REF, "{corrupt").unwrap();
+
+        // The legacy cache projection means no usable account, not successful deletion.
+        assert!(cloud_cached_account(&state, &secrets).unwrap().is_none());
+        assert!(lease.cancel.is_cancelled());
+        assert_eq!(secrets.0.deletions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            secrets.resolve(ACCOUNT_SESSION_REF).unwrap().as_deref(),
+            Some("{corrupt")
+        );
+        assert_eq!(
+            room_account_lease(&state, &secrets, 7).err().unwrap().code,
+            CloudErrorCode::NotAuthenticated
+        );
+    }
+
+    #[test]
     fn cached_account_projects_only_public_summary_fields() {
+        let state = CloudState::with_origin("http://127.0.0.1:9");
         // cached-first 启动身份：无会话 → None；有会话 → 只给公开摘要，
         // cookie 等可重放凭据绝不离开 native。
         let secrets = MemorySecrets::new();
-        assert!(cloud_cached_account(&secrets).unwrap().is_none());
+        assert!(cloud_cached_account(&state, &secrets).unwrap().is_none());
 
         store_session(&secrets, &stored_test_session()).unwrap();
-        let cached = cloud_cached_account(&secrets)
+        let cached = cloud_cached_account(&state, &secrets)
             .unwrap()
             .expect("stored session");
         assert_eq!(cached.account.username, "homura");

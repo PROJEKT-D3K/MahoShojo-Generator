@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = ROOT / "apps/desktop/src-tauri"
 MODULES = ["ai", "blob", "cloud", "library", "local_card", "maintenance", "provider_profile",
            "provider_target", "public_cache", "secret", "sse", "store", "web_package",
-           "package_path", "arena_hosted", "arena_story", "backup", "restore", "export", "external_link"]
+           "package_path", "arena_hosted", "arena_story", "backup", "restore", "export", "external_link", "arena_room_protocol", "arena_room_state", "arena_room_http",
+           "arena_room_socket", "arena_room"]
 TEST_MODULES = ["ai_contract_tests", "ai_e2e_tests", "test_fixture"]
 
 
@@ -86,6 +87,10 @@ pub mod ipc {
     paths += [ROOT / "packages/contracts/fixtures/battle-report-history.json",
               ROOT / "packages/contracts/fixtures/public-ranking.json",
               ROOT / "packages/contracts/fixtures/arena-strict-preflight.json",
+              ROOT / "packages/contracts/fixtures/desktop-room-session.json",
+              ROOT / "packages/contracts/fixtures/desktop-room-ipc.json",
+              ROOT / "config/hosted-routing.json", ROOT / "config/arena-room-origins.json",
+              PRODUCT / "src/arena_room_tauri.rs",
               PRODUCT / "src/lib.rs", PRODUCT / "build.rs", PRODUCT / "capabilities/main-ui.json"]
     paths += sorted((PRODUCT / "src/generated").glob("*.json"))
     paths += sorted((ROOT / "packages/contracts/fixtures").glob("desktop-story-*.json"))

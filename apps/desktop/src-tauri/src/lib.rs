@@ -16,6 +16,12 @@ mod ai_contract_tests;
 mod ai_e2e_tests;
 mod announcements;
 mod arena_hosted;
+mod arena_room;
+mod arena_room_http;
+mod arena_room_protocol;
+mod arena_room_socket;
+mod arena_room_state;
+mod arena_room_tauri;
 mod arena_story;
 #[cfg(test)]
 mod arena_story_command_pipe_tests;
@@ -1453,9 +1459,10 @@ fn cloud_login_cancel(cloud: State<'_, cloud::CloudState>, flow_id: String) -> b
 /// 零网络——`None` 即本机没有已保存账号。
 #[tauri::command]
 fn cloud_cached_account(
+    cloud: State<'_, cloud::CloudState>,
     secrets: State<'_, SharedSecretStore>,
 ) -> Result<Option<cloud::CloudCachedAccount>, cloud::CloudError> {
-    cloud::cloud_cached_account(secrets.inner().as_ref())
+    cloud::cloud_cached_account(&cloud, secrets.inner().as_ref())
 }
 
 /// 固定服务器战报历史只读通道，不接受任意 URL、HTTP 方法或凭据。
@@ -1578,6 +1585,40 @@ async fn stream_hosted_ai(
         &on_event,
     )
     .await
+}
+
+/// Native owns Room credentials, fixed HTTP/WSS and bounded delivery.
+#[tauri::command]
+async fn arena_room_attach(
+    webview: tauri::Webview,
+    request: serde_json::Value,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<tauri::ipc::Response, arena_room_protocol::RoomError> {
+    arena_room_tauri::attach(webview, request, on_event).await
+}
+
+#[tauri::command]
+async fn arena_room_request(
+    webview: tauri::Webview,
+    request: serde_json::Value,
+) -> Result<tauri::ipc::Response, arena_room_protocol::RoomError> {
+    arena_room_tauri::request(webview, request)
+}
+
+#[tauri::command]
+async fn arena_room_subscribe(
+    webview: tauri::Webview,
+    request: serde_json::Value,
+) -> Result<tauri::ipc::Response, arena_room_protocol::RoomError> {
+    arena_room_tauri::subscribe(webview, request)
+}
+
+#[tauri::command]
+fn arena_room_detach(
+    webview: tauri::Webview,
+    request: serde_json::Value,
+) -> Result<tauri::ipc::Response, arena_room_protocol::RoomError> {
+    arena_room_tauri::detach(webview, request)
 }
 
 /// Arena fixed-primary, actor-fenced streaming. Package windows have no permission.
@@ -1888,7 +1929,17 @@ pub fn run() {
     };
     boot_mark("process-start");
 
+    let rooms = match arena_room::RoomState::new() {
+        Ok(rooms) => std::sync::Arc::new(rooms),
+        Err(_) => {
+            eprintln!("mahoshojo: 无法初始化多人房间通路");
+            return;
+        }
+    };
     tauri::Builder::default()
+        .manage(rooms)
+        .append_invoke_initialization_script(arena_room_tauri::DOCUMENT_SCRIPT)
+        .on_page_load(|webview, payload| arena_room_tauri::page_load(webview, payload.event()))
         .manage(default_secret_store())
         .manage(ai::RequestRegistry::default())
         .manage(config::ConfigState::default())
@@ -2087,6 +2138,10 @@ pub fn run() {
             arena_hosted_control,
             arena_hosted_detach,
             arena_hosted_recovery_hint,
+            arena_room_attach,
+            arena_room_request,
+            arena_room_subscribe,
+            arena_room_detach,
             hosted_ai_request,
             cloud_card_library_request,
             cloud_messages_request,
