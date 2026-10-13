@@ -1254,7 +1254,11 @@ impl RoomInstance {
             let input = HttpRequest {
                 operation: Operation::Ticket,
                 room_id: Some(session.room_id.clone()),
-                request: json!({"reconnect":{"control":{"roomEpoch":session.room_epoch,"controlSeq":session.control_seq}}}),
+                // Every new socket clears its snapshot/presence proof. An HTTP or
+                // previous-socket cursor can yield replay/current + presence before
+                // the explicit resync reply, which cannot establish this socket's
+                // baseline. Omit it so admission starts with a full snapshot.
+                request: json!({}),
                 resume_only: false,
             };
             inner.delivery.reserve_subscription_terminal()?;
@@ -2843,10 +2847,7 @@ mod tests {
                 let (mut stream, _) = http.accept().await.unwrap();
                 let raw = read_http(&mut stream).await;
                 if operation == Operation::Ticket {
-                    assert_eq!(
-                        request_body(&raw)["request"]["reconnect"]["control"]["controlSeq"],
-                        24
-                    );
+                    assert_eq!(request_body(&raw)["request"], json!({}));
                 }
                 send_http(&mut stream, 200, &fixture(operation, "success")).await;
             }
@@ -2856,6 +2857,16 @@ mod tests {
             let mut socket = tokio_tungstenite::accept_hdr_async(stream, SelectPresence)
                 .await
                 .unwrap();
+            // The real producer sends admission frames before reading resync.
+            // With no ticket cursor, even a returning host receives a snapshot.
+            for message in [snapshot(), presence(&["user-host", "user-member"])] {
+                socket
+                    .send(Message::Text(
+                        serde_json::to_string(&message).unwrap().into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
             let resync = socket.next().await.unwrap().unwrap();
             let resync: Value = serde_json::from_str(resync.to_text().unwrap()).unwrap();
             assert_eq!(
@@ -2916,6 +2927,26 @@ mod tests {
             .position(|event| event["message"]["type"] == "room.closing")
             .unwrap();
         assert!(snapshot_at < presence_at && presence_at < online_at && online_at < closed_at);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["message"]["type"] == "room.snapshot")
+                .count(),
+            2
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["message"]["type"] == "room.presence")
+                .count(),
+            2
+        );
+        assert_eq!(
+            lock(&attached.instance.inner)
+                .delivery
+                .delivered_unacked_bytes(),
+            0
+        );
         assert!(lock(&attached.instance.inner)
             .scope
             .as_ref()

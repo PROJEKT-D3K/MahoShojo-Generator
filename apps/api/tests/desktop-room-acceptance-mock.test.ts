@@ -188,6 +188,40 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     expect((await room(runtime, 'discover', cookie101, 101)).status).toBe(401);
   });
 
+  it.each(['replay', 'current'] as const)('requires a fresh snapshot for a new Native socket instead of the old %s cursor', async mode => {
+    const runtime = await start(); const cookie = await login(runtime, 101);
+    const created = await success(room(runtime, 'create', cookie, 101, creation()));
+    if (mode === 'current') {
+      const anchorTicket = await success(room(runtime, 'ticket', cookie, 101, {}, created.roomId));
+      const anchor = open(runtime, anchorTicket.ticket); await anchor.connected;
+      await expect.poll(() => latestPresence(anchor.messages)?.onlineUserIds).toContain(created.self.userId);
+    }
+    const current = await success(room(runtime, 'session', cookie, 101, undefined, created.roomId));
+    const replayTicket = await success(room(runtime, 'ticket', cookie, 101, {
+      reconnect: { control: { roomEpoch: current.roomEpoch, controlSeq: current.snapshot.controlSeq } },
+    }, created.roomId));
+    const replay = open(runtime, replayTicket.ticket); await replay.connected;
+    await expect.poll(() => latestPresence(replay.messages)?.onlineUserIds).toContain(created.self.userId);
+    // These are real admission frames. Native clears snapshot_seen on every new
+    // connection, so the old cursor reaches presence without a bound snapshot.
+    expect(replay.messages.map(message => message.type)).toEqual(mode === 'replay'
+      ? ['room.host.online', 'room.presence'] : ['room.presence']);
+    replay.socket.send(JSON.stringify({ protocolVersion: 1, type: 'room.resync.request' }));
+    await expect.poll(() => replay.messages.filter(message => message.type === 'room.presence').length).toBe(2);
+    expect(replay.messages.slice(-2).map(message => message.type)).toEqual(['room.snapshot', 'room.presence']);
+
+    const freshTicket = await success(room(runtime, 'ticket', cookie, 101, {}, created.roomId));
+    const fresh = open(runtime, freshTicket.ticket); await fresh.connected;
+    await expect.poll(() => latestPresence(fresh.messages)?.onlineUserIds).toContain(created.self.userId);
+    expect(fresh.messages.map(message => message.type)).toEqual(['room.snapshot', 'room.presence']);
+    // The existing fixed resync remains valid after the initial full snapshot.
+    fresh.socket.send(JSON.stringify({ protocolVersion: 1, type: 'room.resync.request' }));
+    await expect.poll(() => fresh.messages.filter(message => message.type === 'room.presence').length).toBe(2);
+    expect(fresh.messages.map(message => message.type)).toEqual([
+      'room.snapshot', 'room.presence', 'room.snapshot', 'room.presence',
+    ]);
+  });
+
   it('uses all seven HTTP operations, real WSS double presence, replay rejection and terminal readback', async () => {
     const runtime = await start(); const hostCookie = await login(runtime, 101); const memberCookie = await login(runtime, 202);
     const host = await success(room(runtime, 'create', hostCookie, 101, creation()));
