@@ -27,7 +27,8 @@ fn host_marker() -> &'static Mutex<Option<Arc<InstanceMarker>>> {
 
 // Wry on Windows does not enforce for_main_frame_only for these scripts.
 // An immutable main-frame nonce is readable by the trusted UI but grants no network authority.
-pub(crate) const DOCUMENT_SCRIPT: &str = r#"(()=>{if(window.top!==window)return;const k='__MAHOSHOJO_ROOM_DOCUMENT_V1__';if(Object.prototype.hasOwnProperty.call(window,k))return;const b=new Uint8Array(32);crypto.getRandomValues(b);Object.defineProperty(window,k,{value:Array.from(b,x=>x.toString(16).padStart(2,'0')).join(''),writable:false,configurable:false,enumerable:false});})()"#;
+// Tauri appends this verbatim after its IPC IIFE; delimit both script boundaries.
+pub(crate) const DOCUMENT_SCRIPT: &str = r#";(()=>{if(window.top!==window)return;const k='__MAHOSHOJO_ROOM_DOCUMENT_V1__';if(Object.prototype.hasOwnProperty.call(window,k))return;const b=new Uint8Array(32);crypto.getRandomValues(b);Object.defineProperty(window,k,{value:Array.from(b,x=>x.toString(16).padStart(2,'0')).join(''),writable:false,configurable:false,enumerable:false});})();"#;
 
 struct InstanceMarker {
     room: Arc<RoomInstance>,
