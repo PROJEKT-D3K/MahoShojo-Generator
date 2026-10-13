@@ -346,10 +346,11 @@ export function MagicTeaPartyTachiePanel(props: {
   const negativePromptForRequest = activeWorkflowSettings.negativePrompt.trim() ? activeWorkflowSettings.negativePrompt.trim() : undefined;
   const negativePromptNodeIdForRequest = parseNodeId(activeWorkflowSettings.negativePromptNodeId);
 
-  const saveAsset = async (result: { imageUrl: string; seed?: number; auditStatus?: number; generateUuid?: string }) => {
+  const saveAsset = async (result: { imageUrl: string; prompt?: string; seed?: number; auditStatus?: number; generateUuid?: string }) => {
     setAssetError(null);
     try {
       const now = Date.now();
+      const usedPrompt = result.prompt ?? prompt;
       const normalizedReference = (referenceText || '').trim();
       const fragmentHash = await sha256Hex(`${kind}:${normalizedReference}`.slice(0, 20_000));
       const cacheKey = await sha256Hex(
@@ -366,7 +367,7 @@ export function MagicTeaPartyTachiePanel(props: {
           templateUuid: templateUuidForRequest || '',
           promptNodeId: promptNodeIdForRequest || 0,
           negativePromptNodeId: negativePromptNodeIdForRequest || 0,
-          prompt: (prompt || '').slice(0, 20_000),
+          prompt: (usedPrompt || '').slice(0, 20_000),
         })
       );
 
@@ -395,7 +396,7 @@ export function MagicTeaPartyTachiePanel(props: {
         cacheKey,
         fragmentHash,
         styleId,
-        prompt: truncateText(prompt, MAX_PROMPT_CHARS),
+        prompt: truncateText(usedPrompt, MAX_PROMPT_CHARS),
         imageUrl: result.imageUrl,
         seed: result.seed,
         auditStatus: result.auditStatus,
@@ -864,7 +865,13 @@ export function MagicTeaPartyTachiePanel(props: {
 
       <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
         <TachieGenerator
+          textProviderStorageNamespace="magic-tea-party.customProvider"
           prompt={styleId === 'vn' && kind === 'illustration' ? `${promptForGenerator}\n（额外约束：更强调镜头感与氛围，画面层次丰富）` : promptForGenerator}
+          recommendedPrompt={styleId === 'vn' && kind === 'illustration' ? `${suggestedPrompt}\n（额外约束：更强调镜头感与氛围，画面层次丰富）` : suggestedPrompt}
+          onUseRecommendedPrompt={() => {
+            setPrompt(suggestedPrompt);
+            setPromptDirty(false);
+          }}
           mode={kind}
           workflowUuid={workflowUuidForRequest}
           templateUuid={templateUuidForRequest}
@@ -875,6 +882,7 @@ export function MagicTeaPartyTachiePanel(props: {
             if (!result.success || !result.imageUrl) return;
             void saveAsset({
               imageUrl: result.imageUrl,
+              prompt: result.prompt,
               seed: result.seed,
               auditStatus: result.auditStatus,
               generateUuid: result.generateUuid,

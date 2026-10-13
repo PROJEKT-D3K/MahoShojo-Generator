@@ -1,8 +1,9 @@
 import { generateText2Image, getGenerateStatus, calculateProgress } from "./liblib";
 import { getStatusDescription, GenerateStatus } from "./liblib/types";
 import { generateModelScopeText2Image, getModelScopeTaskStatus } from "./modelscope/api";
+import { generateNovelAIImage, DEFAULT_NOVELAI_SETTINGS, type NovelAISettings } from './novelai';
 
-export type TachieSource = "liblib" | "modelscope";
+export type TachieSource = "liblib" | "modelscope" | "novelai";
 export type TachieGenerateMode = 'tachie' | 'illustration';
 
 export interface TachieGenerationRequest {
@@ -12,6 +13,9 @@ export interface TachieGenerationRequest {
     modelscopeToken?: string;
     modelscopeModel?: string;
     modelscopeSize?: string;
+    novelaiToken?: string;
+    novelaiSettings?: NovelAISettings;
+    signal?: AbortSignal;
     prompt: string;
     mode?: TachieGenerateMode;
     workflowUuid?: string;
@@ -23,6 +27,7 @@ export interface TachieGenerationRequest {
 
 export interface TachieGenerationResult {
     success: boolean;
+    prompt?: string;
     imageUrl?: string;
     error?: string;
     seed?: number;
@@ -60,6 +65,17 @@ export const generateTachieWithProgress = async (
 ): Promise<TachieGenerationResult> => {
     try {
         switch (request.source) {
+            case 'novelai': {
+                onProgress?.(0, '正在等待 NovelAI 返回图片…');
+                const image = await generateNovelAIImage(
+                    request.novelaiToken ?? '',
+                    request.prompt,
+                    request.novelaiSettings ?? { ...DEFAULT_NOVELAI_SETTINGS, negativePrompt: request.negativePrompt ?? '' },
+                    request.signal,
+                );
+                onProgress?.(100, '生成完成！');
+                return { success: true, ...image, prompt: request.prompt.trim(), percentCompleted: 100, statusDescription: '生成完成！' };
+            }
             case "liblib": {
                 const accessKey = request.accessKey?.trim();
                 const secretKey = request.secretKey?.trim();

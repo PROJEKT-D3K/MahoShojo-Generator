@@ -5,11 +5,12 @@
 // `mahoshojo:set-ai-provider-config` CustomEvent、Next `<Link>` 文档入口。
 // 对外契约不变：默认导出 + `UserAIProviderConfig` re-export。
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import Link from 'next/link';
 
 import {
   AI_PROVIDER_SYNC_EVENT,
+  DEFAULT_AI_PROVIDER_STORAGE_NAMESPACE,
   AiProviderSelectorView,
   type AiChannelAvailabilityEntry,
   type AiProviderStoragePort,
@@ -18,6 +19,7 @@ import {
 import type { AIProviderOption } from '@/lib/ai/constants';
 import { ChannelAvailabilityBadge } from '@/components/ChannelAvailabilityBadge';
 import type { UserAIProviderConfig } from '@/lib/ai/custom-provider';
+import { AI_PROVIDER_CONFIG_CHANGED, type AiProviderConfigChangedDetail } from '@/lib/ai/use-inherited-provider-config';
 
 export type { UserAIProviderConfig } from '@/lib/ai/custom-provider';
 
@@ -75,24 +77,32 @@ const renderDocsLink = (provider: AIProviderOption) => (
 
 const AiProviderSelector: React.FC<AiProviderSelectorProps> = ({
     onConfigChange,
-    storageNamespace,
+    storageNamespace = DEFAULT_AI_PROVIDER_STORAGE_NAMESPACE,
     allowSystemProvider,
     label,
-}) => (
-    <AiProviderSelectorView
-        onConfigChange={onConfigChange}
-        storage={webLocalStoragePort}
-        storageNamespace={storageNamespace}
-        allowSystemProvider={allowSystemProvider}
-        label={label}
-        loadChannelAvailability={loadChannelAvailability}
-        renderAvailabilityBadge={(entry) => (
-            <ChannelAvailabilityBadge availability={entry} compact />
-        )}
-        renderDocsLink={renderDocsLink}
-        subscribeSync={subscribeSync}
-        apiKeyStorageHint="API Key 仅存储于本地浏览器；请求时会随 HTTPS 发送到边缘函数用于转发调用，不会写入数据库或日志。"
-    />
-);
+}) => {
+    const handleConfigChange = useCallback((config: UserAIProviderConfig | null) => {
+        onConfigChange(config);
+        window.dispatchEvent(new CustomEvent<AiProviderConfigChangedDetail>(AI_PROVIDER_CONFIG_CHANGED, {
+            detail: { storageNamespace, config },
+        }));
+    }, [onConfigChange, storageNamespace]);
+    return (
+        <AiProviderSelectorView
+            onConfigChange={handleConfigChange}
+            storage={webLocalStoragePort}
+            storageNamespace={storageNamespace}
+            allowSystemProvider={allowSystemProvider}
+            label={label}
+            loadChannelAvailability={loadChannelAvailability}
+            renderAvailabilityBadge={(entry) => (
+                <ChannelAvailabilityBadge availability={entry} compact />
+            )}
+            renderDocsLink={renderDocsLink}
+            subscribeSync={subscribeSync}
+            apiKeyStorageHint="API Key 仅存储于本地浏览器；请求时会随 HTTPS 发送到边缘函数用于转发调用，不会写入数据库或日志。"
+        />
+    );
+};
 
 export default AiProviderSelector;
