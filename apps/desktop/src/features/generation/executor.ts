@@ -51,6 +51,8 @@ export interface DesktopGenerationIntent {
   overrides?: UserGenerationOverrides;
 }
 
+export type DesktopDirectGenerationIntent = DesktopGenerationIntent & { mode: 'direct-local' | 'direct-remote' };
+
 /**
  * 已校验结果卡数据：结构化 schema 字段 + 服务端透传字段
  * （templateId/userAnswers/signature/metadata 等），或流式 Markdown
@@ -131,31 +133,36 @@ export interface GenerationCardProjection<TCardKind extends string> {
  * 契约对所有生成族一致，家族差异集中在输入校验、结构化配置、
  * 结果卡构造/归一化、hosted 路由与错误包装。
  */
-export interface DesktopGenerationFamily<
+export interface DesktopDirectGenerationFamily<
   TInput,
   TIntent extends DesktopGenerationIntent = DesktopGenerationIntent,
   TCardKind extends string = string,
 > {
   /** dispatch 前的输入校验；抛出的 Error.message 如实投影为失败原因。 */
   validateInput?(input: TInput, intent: TIntent): void;
-  /** hosted 流式（SSE）与非流式（JSON）路由标识。 */
-  streamRouteId: HostedGenerationRouteId;
-  jsonRouteId: HostedJsonGenerationRouteId;
-  /** hosted 业务请求体（不含 customProvider 等凭据字段——native 拒绝）。 */
-  buildHostedBody(input: TInput): Record<string, JsonValue>;
   /** direct 通路的结构化生成配置（system prompt/schema/temperature/promptBuilder）。 */
   createDirectConfig(intent: TIntent, input: TInput): DesktopDirectGenerationConfig<TInput>;
   createDirectStreamConfig?(intent: TIntent, input: TInput): DesktopDirectStreamGenerationConfig<TInput>;
   /** direct 结构化 data → 结果卡（无签名通路产出）。 */
   buildStructuredCard(data: unknown, input: TInput): GenerationCardProjection<TCardKind>;
-  /** hosted SSE Markdown → 结果卡。 */
-  buildStreamCard(markdown: string, input: TInput): GenerationCardProjection<TCardKind>;
-  /** hosted JSON 响应 `data` → 结果卡（schema 校验 + 透传字段；可携带签名）。 */
-  normalizeHostedJsonCard(data: unknown, input: TInput): GenerationCardProjection<TCardKind>;
+  /** 可选的 Direct Markdown 输出投影。 */
+  buildStreamCard?(markdown: string, input: TInput): GenerationCardProjection<TCardKind>;
   /** 通路/协议错误包装：保留已收正文。 */
   createError(rawText: string, cause: unknown): GenerationTransportError;
   /** invalid-output 文案中的卡片名词（'角色卡'/'数据卡'/'情景卡'）。 */
   cardNoun: string;
+}
+
+export interface DesktopGenerationFamily<TInput, TIntent extends DesktopGenerationIntent = DesktopGenerationIntent, TCardKind extends string = string>
+  extends DesktopDirectGenerationFamily<TInput, TIntent, TCardKind> {
+  /** hosted 流式（SSE）与非流式（JSON）路由标识。 */
+  streamRouteId: HostedGenerationRouteId;
+  jsonRouteId: HostedJsonGenerationRouteId;
+  /** hosted 业务请求体（不含 customProvider 等凭据字段——native 拒绝）。 */
+  buildHostedBody(input: TInput): Record<string, JsonValue>;
+  /** hosted JSON 响应 `data` → 结果卡（schema 校验 + 透传字段；可携带签名）。 */
+  normalizeHostedJsonCard(data: unknown, input: TInput): GenerationCardProjection<TCardKind>;
+  buildStreamCard(markdown: string, input: TInput): GenerationCardProjection<TCardKind>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -168,21 +175,26 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 /* ── direct 通路 ─────────────────────────────────────────────────────── */
 
-const executeDirectGeneration = async <
+export const executeDirectGeneration = async <
   TInput,
   TIntent extends DesktopGenerationIntent,
   TCardKind extends string,
 >(
-  family: DesktopGenerationFamily<TInput, TIntent, TCardKind>,
+  family: DesktopDirectGenerationFamily<TInput, TIntent, TCardKind>,
   options: DesktopAiExecutionOptions,
   input: TInput,
-  intent: TIntent,
+  intent: TIntent & DesktopDirectGenerationIntent,
   signal: AbortSignal,
   onPartialText?: (text: string) => void,
 ): Promise<DesktopGenerationOutcome<TCardKind>> => {
+  if (signal.aborted) return { status: 'cancelled', mode: intent.mode, rawText: '', reason: 'aborted' };
+  if ((intent.mode !== 'direct-local' && intent.mode !== 'direct-remote') || options.providerTarget?.kind === 'system') {
+    return { status: 'failed', mode: intent.mode, rawText: '', code: 'invalid-request', message: '当前生成类型仅支持客户端执行。' };
+  }
+  family.validateInput?.(input, intent);
   const snapshot = clone(input);
   const streaming = intent.generationMode === 'stream';
-  if (streaming && !family.createDirectStreamConfig) {
+  if (streaming && (!family.createDirectStreamConfig || !family.buildStreamCard)) {
     return { status: 'failed', mode: intent.mode, rawText: '', code: 'invalid-request', message: '当前生成类型不支持客户端流式输出。' };
   }
   const structuredConfig = streaming ? null : family.createDirectConfig(intent, snapshot);
@@ -257,7 +269,7 @@ const executeDirectGeneration = async <
   }
   try {
     const projection = streaming
-      ? family.buildStreamCard(rawText, snapshot)
+      ? family.buildStreamCard!(rawText, snapshot)
       : family.buildStructuredCard(
         parseStructuredJsonWithSchema(rawText, structuredConfig!.schema, { taskName: structuredConfig!.taskName }).data,
         snapshot,
@@ -605,8 +617,8 @@ export const executeDesktopGeneration = async <
   if (signal.aborted) {
     return { status: 'cancelled', mode: intent.mode, rawText: '', reason: 'aborted' };
   }
-  family.validateInput?.(input, intent);
   if (intent.mode === 'hosted-stream' || intent.mode === 'hosted-json') {
+    family.validateInput?.(input, intent);
     const routeId = intent.mode === 'hosted-stream' ? family.streamRouteId : family.jsonRouteId;
     const body = family.buildHostedBody(input);
     // 派发前按完整 JSON 正文的 UTF-8 字节数预检：native 在 dispatch 门禁内做
@@ -633,5 +645,5 @@ export const executeDesktopGeneration = async <
       ? executeHostedStreamGeneration(family, options, input, intent, signal, body, providerConfig, onPartialText)
       : executeHostedJsonGeneration(family, options, input, intent, signal, body, providerConfig);
   }
-  return executeDirectGeneration(family, options, input, intent, signal, onPartialText);
+  return executeDirectGeneration(family, options, input, { ...intent, mode: intent.mode }, signal, onPartialText);
 };

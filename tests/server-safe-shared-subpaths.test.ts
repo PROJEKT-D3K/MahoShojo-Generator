@@ -239,6 +239,18 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
   });
 
+  it('keeps the actual Hosted name generation graph in shared pure prompt/schema', async () => {
+    const bundled = await build({
+      entryPoints: [path.resolve(PACKAGE_ROOT, '../hosted-runtime/src/generate-magical-girl-runtime.ts')],
+      bundle: true, platform: 'node', format: 'esm', write: false, metafile: true, logLevel: 'silent',
+    });
+    const files = Object.keys(bundled.metafile!.inputs);
+    expect(files.some(file => file.endsWith('packages/ai-core/src/name-generation.ts'))).toBe(true);
+    expect(files.some(file => file.endsWith('packages/domain/src/name-generation.ts'))).toBe(true);
+    expect(files.some(file => file.includes('packages/ui-web/') || file.includes('/apps/'))).toBe(false);
+    expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
+  });
+
   it('keeps the Tea import plan as a pure domain entry with no UI or host imports', async () => {
     const root = path.resolve(PACKAGE_ROOT, '../domain');
     const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -341,6 +353,7 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
       './media',
       './messages',
       './modal',
+      './name-generation',
       './narrative-history',
       './questionnaire',
       './questionnaire-editor',

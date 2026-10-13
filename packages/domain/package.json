@@ -268,7 +268,8 @@
     "./arena-story-truncation": "./src/arena-story-truncation.ts",
     "./public-ranking": "./src/public-ranking.ts",
     "./arena-tier": "./src/arena-tier.ts",
-    "./ranking-season-extrema": "./src/ranking-season-extrema.ts"
+    "./ranking-season-extrema": "./src/ranking-season-extrema.ts",
+    "./name-generation": "./src/name-generation.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

@@ -4,7 +4,9 @@ import {
   createSafeHostedGenerationError,
 } from './regular-generation';
 
-export const MAGICAL_GIRL_NAME_MAX_LENGTH = 300;
+import { NAME_MAX_LENGTH, type NameGeneratedData, type NameGenerationInput } from '@mahoshojo/domain/name-generation';
+
+export const MAGICAL_GIRL_NAME_MAX_LENGTH = NAME_MAX_LENGTH;
 export const MAGICAL_GIRL_TEMPLATE_ID = '魔法少女/心之花/魔法少女（名字生成）';
 
 const GenerateMagicalGirlRequestSchema = z.object({
@@ -12,29 +14,8 @@ const GenerateMagicalGirlRequestSchema = z.object({
   language: z.string().trim().min(1).max(32).optional().default('zh-CN'),
 });
 
-export type MagicalGirlGenerationResult = {
-  flowerName: string;
-  flowerDescription: string;
-  appearance: {
-    height: string;
-    weight: string;
-    hairColor: string;
-    hairStyle: string;
-    eyeColor: string;
-    skinTone: string;
-    wearing: string;
-    specialFeature: string;
-    mainColor: string;
-    firstPageColor: string;
-    secondPageColor: string;
-  };
-  spell: string;
-};
-
-export type GenerateMagicalGirlInput = {
-  realName: string;
-  language: string;
-};
+export type MagicalGirlGenerationResult = NameGeneratedData;
+export type GenerateMagicalGirlInput = NameGenerationInput;
 
 export interface GenerateMagicalGirlServiceDependencies {
   checkRateLimit(_request: Request): Promise<Response | null>;

@@ -222,7 +222,8 @@
       "default": "./src/battle-report-history/index.ts"
     },
     "./ranking": "./src/ranking/index.ts",
-    "./card-details": "./src/card-details/index.ts"
+    "./card-details": "./src/card-details/index.ts",
+    "./name-generation": "./src/name-generation/index.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

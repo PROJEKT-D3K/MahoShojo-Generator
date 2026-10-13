@@ -17,14 +17,12 @@ export const downloadBinaryFile = (fileName: string, bytes: Uint8Array, mimeType
   downloadBlobFile(fileName, new Blob([new Uint8Array(bytes).buffer], { type: mimeType }));
 };
 
-const downloadBlobFile = (fileName: string, blob: Blob): void => {
+export const downloadBlobFile = (fileName: string, blob: Blob): void => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = fileName;
   anchor.rel = 'noopener';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  try { document.body.appendChild(anchor); anchor.click(); }
+  finally { anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 60_000); }
 };
