@@ -1,5 +1,7 @@
 'use client';
 
+import { MagicTeaPartyPageView } from '@mahoshojo/ui-web/magic-tea-party';
+
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -785,206 +787,210 @@ export function MagicTeaPartyPage() {
   }
 
   return (
-    <div className="magic-background-white">
-        <div className="container !max-w-[1200px]">
-          <div className="card !max-w-none">
-            <MagicTeaPartyHero globalError={globalError} />
+    <MagicTeaPartyPageView
+      hero={
+        <MagicTeaPartyHero globalError={globalError} />
+      }
+      sidebar={
+        <MagicTeaPartySessionSidebar
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          activeSession={activeSession}
+          preferences={preferences}
+          onCreateSession={(presetId) => void createSession(presetId)}
+          onSelectSession={setActiveSessionId}
+          onDeleteSession={(sessionId) => void deleteSession(sessionId)}
+          onCleanupSessions={(sessionIds) => bulkDeleteSessions(sessionIds)}
+          onToggleSessionPin={(sessionId) => void toggleSessionPin(sessionId)}
+          onReorderPinnedSessions={(orderedIds) => void reorderPinnedSessions(orderedIds)}
+          onSessionImported={handleSessionImported}
+          onPresetSelected={(presetId) => applyPreset(presetId)}
+          onProviderConfigChange={setUserProviderConfig}
+          onPreferenceChange={applyPreferencePatch}
+          onSessionSettingChange={updateActiveSessionSettings}
+          onMergeSession={handleMergeSessionToParent}
+        />
+      }
+      setup={
+        <MagicTeaPartySessionSetupPanel
+          activeSession={activeSession}
+          playerOptions={playerOptions}
+          onOpenRoleModal={() => setShowRoleModal(true)}
+          onOpenScenarioModal={() => setShowScenarioModal(true)}
+          onUploadRoles={onUploadRoles}
+          onUploadScenarios={onUploadScenarios}
+          onImportRolesText={(text) => void onImportRolesText(text)}
+          onImportScenariosText={(text) => void onImportScenariosText(text)}
+          onDropRoles={(files) => void onDropRoles(files)}
+          onDropScenarios={(files) => void onDropScenarios(files)}
+          onUpdateRoles={(roles) => void updateActiveSessionRoles(roles)}
+          onUpdateScenarios={(scenario, auxScenarios) => void updateActiveSessionScenarios(scenario, auxScenarios)}
+          onUpdatePlayerRole={updatePlayerRole}
+          onUpdateTitle={updateSessionTitle}
+          onLockTitle={lockSessionTitle}
+          onCreateSession={() => void createSession()}
+        />
+      }
+      beforeChat={
+        <>
+          <MagicTeaPartyPresetCharacterPanel
+            activeSession={activeSession}
+            preferences={preferences}
+            onPreferenceChange={applyPreferencePatch}
+            onUpdateRoles={(roles) => void updateActiveSessionRoles(roles)}
+          />
 
-            <div className="mt-6 grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-                <MagicTeaPartySessionSidebar
-                  sessions={sessions}
-                  activeSessionId={activeSessionId}
-                  activeSession={activeSession}
-                  preferences={preferences}
-                  onCreateSession={(presetId) => void createSession(presetId)}
-                  onSelectSession={setActiveSessionId}
-                  onDeleteSession={(sessionId) => void deleteSession(sessionId)}
-                  onCleanupSessions={(sessionIds) => bulkDeleteSessions(sessionIds)}
-                  onToggleSessionPin={(sessionId) => void toggleSessionPin(sessionId)}
-                  onReorderPinnedSessions={(orderedIds) => void reorderPinnedSessions(orderedIds)}
-                  onSessionImported={handleSessionImported}
-                  onPresetSelected={(presetId) => applyPreset(presetId)}
-                  onProviderConfigChange={setUserProviderConfig}
-                  onPreferenceChange={applyPreferencePatch}
-                  onSessionSettingChange={updateActiveSessionSettings}
-                  onMergeSession={handleMergeSessionToParent}
-                />
+          <MagicTeaPartyPresetScenarioPanel
+            activeSession={activeSession}
+            preferences={preferences}
+            onPreferenceChange={applyPreferencePatch}
+            onUpdateScenarios={(scenario, auxScenarios) => void updateActiveSessionScenarios(scenario, auxScenarios)}
+          />
 
-              <main className="space-y-4 min-w-0">
-                <MagicTeaPartySessionSetupPanel
-                  activeSession={activeSession}
-                  playerOptions={playerOptions}
-                  onOpenRoleModal={() => setShowRoleModal(true)}
-                  onOpenScenarioModal={() => setShowScenarioModal(true)}
-                  onUploadRoles={onUploadRoles}
-                  onUploadScenarios={onUploadScenarios}
-                  onImportRolesText={(text) => void onImportRolesText(text)}
-                  onImportScenariosText={(text) => void onImportScenariosText(text)}
-                  onDropRoles={(files) => void onDropRoles(files)}
-                  onDropScenarios={(files) => void onDropScenarios(files)}
-                  onUpdateRoles={(roles) => void updateActiveSessionRoles(roles)}
-                  onUpdateScenarios={(scenario, auxScenarios) => void updateActiveSessionScenarios(scenario, auxScenarios)}
-                  onUpdatePlayerRole={updatePlayerRole}
-                  onUpdateTitle={updateSessionTitle}
-                  onLockTitle={lockSessionTitle}
-                  onCreateSession={() => void createSession()}
-                />
+          <MagicTeaPartyCharacterPanel
+            activeSession={activeSession}
+            roles={activeSession?.roles ?? []}
+            isAuthenticated={Boolean(user?.id)}
+            onUpdateRoles={(roles) => void updateActiveSessionRoles(roles)}
+            onUpdatePlayerRole={updatePlayerRole}
+            onToggleRoleCard={onToggleRoleCard}
+          />
+          <MagicTeaPartySummaryPanel
+            activeSession={activeSession}
+            isGenerating={isGenerating}
+            isSummarizing={isSummarizing}
+            summaryError={summaryError}
+            hasMessages={messages.length > 0}
+            onGenerateSummary={() => void generateSummary()}
+            onClearSummary={() => void clearSummary()}
+            onPersistSession={persistSession}
+            updateDrafts={updateDrafts}
+            updateRangeSize={updateRangeSize}
+            isGeneratingUpdates={isGeneratingUpdates}
+            isApplyingUpdates={isApplyingUpdates}
+            updateError={updateError}
+            updateApplyMode={resolveUpdateApplyMode()}
+            updateSnapshot={activeSession?.updateSnapshot ?? null}
+            onUpdateRangeSizeChange={setUpdateRangeSize}
+            onGenerateUpdates={() => void handleGenerateUpdateDrafts()}
+            onApplyUpdates={() => void handleApplyUpdates()}
+            onClearUpdateDrafts={() => {
+              setUpdateDrafts(null);
+              if (activeSession) {
+                void persistSession({ ...activeSession, protocolShadow: undefined, updatedAt: Date.now() });
+              }
+            }}
+            onRollbackUpdates={() => void handleRollbackUpdates()}
+          />
 
-                <MagicTeaPartyPresetCharacterPanel
-                  activeSession={activeSession}
-                  preferences={preferences}
-                  onPreferenceChange={applyPreferencePatch}
-                  onUpdateRoles={(roles) => void updateActiveSessionRoles(roles)}
-                />
+          {activeSession ? (
+            <div className="rounded-xl border border-pink-100 bg-white p-4 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-gray-800">
+                <span>Token 预算提示</span>
+                <span className="text-xs font-normal text-gray-500">
+                  上下文 {tokenBudget.contextWindowTokens.toLocaleString()} · 预留{' '}
+                  {tokenBudget.responseReserveTokens.toLocaleString()}
+                </span>
+              </div>
 
-                <MagicTeaPartyPresetScenarioPanel
-                  activeSession={activeSession}
-                  preferences={preferences}
-                  onPreferenceChange={applyPreferencePatch}
-                  onUpdateScenarios={(scenario, auxScenarios) => void updateActiveSessionScenarios(scenario, auxScenarios)}
-                />
+              <TokenIndicator
+                text=""
+                estimatedTokens={tokenEstimate?.estimatedTokens ?? 0}
+                maxTokens={tokenBudget.historyBudgetTokens}
+                warnTokens={tokenBudget.warnTokens}
+                warningText="⚠️ 已接近上下文阈值，建议生成摘要或减少历史消息。"
+                className="!mt-1"
+              />
 
-                <MagicTeaPartyCharacterPanel
-                  activeSession={activeSession}
-                  roles={activeSession?.roles ?? []}
-                  isAuthenticated={Boolean(user?.id)}
-                  onUpdateRoles={(roles) => void updateActiveSessionRoles(roles)}
-                  onUpdatePlayerRole={updatePlayerRole}
-                  onToggleRoleCard={onToggleRoleCard}
-                />
-                <MagicTeaPartySummaryPanel
-                  activeSession={activeSession}
-                  isGenerating={isGenerating}
-                  isSummarizing={isSummarizing}
-                  summaryError={summaryError}
-                  hasMessages={messages.length > 0}
-                  onGenerateSummary={() => void generateSummary()}
-                  onClearSummary={() => void clearSummary()}
-                  onPersistSession={persistSession}
-                  updateDrafts={updateDrafts}
-                  updateRangeSize={updateRangeSize}
-                  isGeneratingUpdates={isGeneratingUpdates}
-                  isApplyingUpdates={isApplyingUpdates}
-                  updateError={updateError}
-                  updateApplyMode={resolveUpdateApplyMode()}
-                  updateSnapshot={activeSession?.updateSnapshot ?? null}
-                  onUpdateRangeSizeChange={setUpdateRangeSize}
-                  onGenerateUpdates={() => void handleGenerateUpdateDrafts()}
-                  onApplyUpdates={() => void handleApplyUpdates()}
-                  onClearUpdateDrafts={() => {
-                    setUpdateDrafts(null);
-                    if (activeSession) {
-                      void persistSession({ ...activeSession, protocolShadow: undefined, updatedAt: Date.now() });
-                    }
-                  }}
-                  onRollbackUpdates={() => void handleRollbackUpdates()}
-                />
+              <div className="text-xs text-gray-500">
+                已计入 {tokenEstimate?.messageCount ?? 0} 条消息 / 上限 {tokenBudget.maxContextMessages} 条（估算值 ±20%）。
+              </div>
 
-                {activeSession ? (
-                  <div className="rounded-xl border border-pink-100 bg-white p-4 space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-gray-800">
-                      <span>Token 预算提示</span>
-                      <span className="text-xs font-normal text-gray-500">
-                        上下文 {tokenBudget.contextWindowTokens.toLocaleString()} · 预留{' '}
-                        {tokenBudget.responseReserveTokens.toLocaleString()}
-                      </span>
-                    </div>
-
-                    <TokenIndicator
-                      text=""
-                      estimatedTokens={tokenEstimate?.estimatedTokens ?? 0}
-                      maxTokens={tokenBudget.historyBudgetTokens}
-                      warnTokens={tokenBudget.warnTokens}
-                      warningText="⚠️ 已接近上下文阈值，建议生成摘要或减少历史消息。"
-                      className="!mt-1"
-                    />
-
-                    <div className="text-xs text-gray-500">
-                      已计入 {tokenEstimate?.messageCount ?? 0} 条消息 / 上限 {tokenBudget.maxContextMessages} 条（估算值 ±20%）。
-                    </div>
-
-                    {tokenEstimate && tokenEstimate.messageCount > tokenBudget.maxContextMessages ? (
-                      <div className="text-xs text-orange-600">⚠️ 消息条数超过上限，建议先生成摘要再继续对话。</div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <MagicTeaPartyNoticePanel notices={notices} onClearNotices={clearNotices} />
-
-                <div className="rounded-xl border border-pink-100 bg-white p-4">
-                  <MagicTeaPartyChatTimeline
-                    activeSession={activeSession}
-                    preferences={preferences}
-                    messages={messages}
-                    isGenerating={isGenerating}
-                    outputView={outputView}
-                    onOutputViewChange={setOutputView}
-                    tachieAssets={tachieAssets}
-                    anchorMessageId={tachieAnchorMessageId}
-                    editingMessageId={editingMessageId}
-                    editingDraft={editingDraft}
-                    onStopGenerating={stopGenerating}
-                    onSelectChoice={(text) => void handleSendMessage(text)}
-                    onUseAsReference={(target, plainText) => {
-                      setTachieReferenceText(plainText);
-                      setTachieAnchorMessageId(target.id);
-                    }}
-                    onRegenerate={(target) => void handleRegenerateMessage(target)}
-                    onStartEdit={handleStartEditMessage}
-                    onEditDraftChange={setEditingDraft}
-                    onCancelEdit={handleCancelEditMessage}
-                    onConfirmEdit={handleConfirmEditMessage}
-                    onDeleteMessage={(message) => void deleteMessage(message)}
-                    onCompactMessage={(message) => void compactMessageContent(message)}
-                    messageCharLimit={getMessageCharLimit()}
-                  />
-
-                  <MagicTeaPartyChatComposer
-                    activeSession={activeSession}
-                    preferences={preferences}
-                    draft={draft}
-                    onDraftChange={updateDraft}
-                    onSend={(value) => {
-                      if (!value.trim()) return;
-                      void handleSendMessage(value).then((sent) => {
-                        if (sent) updateDraft('');
-                      });
-                    }}
-                    onContinue={() => void handleContinueGeneration()}
-                    onGenerateChoices={() => void handleGenerateChoices()}
-                    isGenerating={isGenerating}
-                    hasMessages={messages.length > 0}
-                    messageCharLimit={getMessageCharLimit()}
-                  />
-
-                  <MagicTeaPartyHistoryImageExportPanel
-                    activeSession={activeSession}
-                    preferences={preferences}
-                    messages={messages}
-                    outputView={outputView}
-                    isGenerating={isGenerating}
-                  />
-                </div>
-
-                {activeSession ? (
-                  <MagicTeaPartyTachiePanel
-                    preferences={preferences}
-                    session={activeSession}
-                    messages={messages}
-                    referenceText={tachieReferenceText}
-                    onReferenceTextChange={setTachieReferenceText}
-                    anchorMessageId={tachieAnchorMessageId}
-                    onAnchorMessageIdChange={setTachieAnchorMessageId}
-                    onAssetsUpdated={setTachieAssets}
-                  />
-                ) : null}
-
-                <Footer className="footer mt-4" />
-              </main>
+              {tokenEstimate && tokenEstimate.messageCount > tokenBudget.maxContextMessages ? (
+                <div className="text-xs text-orange-600">⚠️ 消息条数超过上限，建议先生成摘要再继续对话。</div>
+              ) : null}
             </div>
-          </div>
-        </div>
+          ) : null}
 
+          <MagicTeaPartyNoticePanel notices={notices} onClearNotices={clearNotices} />
+        </>
+      }
+      chat={
+        <>
+          <MagicTeaPartyChatTimeline
+            activeSession={activeSession}
+            preferences={preferences}
+            messages={messages}
+            isGenerating={isGenerating}
+            outputView={outputView}
+            onOutputViewChange={setOutputView}
+            tachieAssets={tachieAssets}
+            anchorMessageId={tachieAnchorMessageId}
+            editingMessageId={editingMessageId}
+            editingDraft={editingDraft}
+            onStopGenerating={stopGenerating}
+            onSelectChoice={(text) => void handleSendMessage(text)}
+            onUseAsReference={(target, plainText) => {
+              setTachieReferenceText(plainText);
+              setTachieAnchorMessageId(target.id);
+            }}
+            onRegenerate={(target) => void handleRegenerateMessage(target)}
+            onStartEdit={handleStartEditMessage}
+            onEditDraftChange={setEditingDraft}
+            onCancelEdit={handleCancelEditMessage}
+            onConfirmEdit={handleConfirmEditMessage}
+            onDeleteMessage={(message) => void deleteMessage(message)}
+            onCompactMessage={(message) => void compactMessageContent(message)}
+            messageCharLimit={getMessageCharLimit()}
+          />
+
+          <MagicTeaPartyChatComposer
+            activeSession={activeSession}
+            preferences={preferences}
+            draft={draft}
+            onDraftChange={updateDraft}
+            onSend={(value) => {
+              if (!value.trim()) return;
+              void handleSendMessage(value).then((sent) => {
+                if (sent) updateDraft('');
+              });
+            }}
+            onContinue={() => void handleContinueGeneration()}
+            onGenerateChoices={() => void handleGenerateChoices()}
+            isGenerating={isGenerating}
+            hasMessages={messages.length > 0}
+            messageCharLimit={getMessageCharLimit()}
+          />
+
+          <MagicTeaPartyHistoryImageExportPanel
+            activeSession={activeSession}
+            preferences={preferences}
+            messages={messages}
+            outputView={outputView}
+            isGenerating={isGenerating}
+          />
+        </>
+      }
+      afterChat={
+        <>
+          {activeSession ? (
+            <MagicTeaPartyTachiePanel
+              preferences={preferences}
+              session={activeSession}
+              messages={messages}
+              referenceText={tachieReferenceText}
+              onReferenceTextChange={setTachieReferenceText}
+              anchorMessageId={tachieAnchorMessageId}
+              onAnchorMessageIdChange={setTachieAnchorMessageId}
+              onAssetsUpdated={setTachieAssets}
+            />
+          ) : null}
+        </>
+      }
+      footer={
+        <Footer className="footer mt-4" />
+      }
+      modals={
         <MagicTeaPartyCardModals
           showRoleModal={showRoleModal}
           showScenarioModal={showScenarioModal}
@@ -995,6 +1001,7 @@ export function MagicTeaPartyPage() {
           onToggleRoleCard={onToggleRoleCard}
           onToggleScenarioCard={onToggleScenarioCard}
         />
-    </div>
+      }
+    />
   );
 }

@@ -293,6 +293,7 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     // `./arena-story-session-read` 是客户端会话读取生命周期，由宿主装配存储与偏好端口。
     // `./cloud-save` 是含模态生命周期的受控保存表单，仅由两端客户端宿主消费。
     // `./battle-report-history` 包含筛选 hook 与详情模态框，仅由 Web/Desktop 客户端宿主消费。
+    // `./magic-tea-party` 是茶会受控视图与滚动 hook；Web 和 Desktop 宿主注入 IO/媒体。
     // `./arena-room` 包含交互视图与 hook，仅由 Web/ Desktop 的多人房间客户端面板消费。
     expect(unlisted.sort()).toEqual([
       './ai-provider',
@@ -323,6 +324,7 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
       './generation-actions',
       './local-archive',
       './local-cards',
+      './magic-tea-party',
       './markdown',
       './media',
       './messages',
