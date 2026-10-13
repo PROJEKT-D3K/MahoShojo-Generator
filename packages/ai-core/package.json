@@ -86,6 +86,7 @@
       "default": "./src/sublimation-generation.ts"
     },
     "./arena-generation": "./src/arena-generation/index.ts",
+    "./magic-tea-party": "./src/magic-tea-party/index.ts",
     "./repair-pipeline": "./src/repair-pipeline.ts"
   },
   "scripts": {

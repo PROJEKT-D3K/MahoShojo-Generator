@@ -71,7 +71,7 @@ const SERVER_SAFE_ENTRYPOINTS: Readonly<Record<string, string>> = {
   './card-library-visibility': 'card-library/visibility.ts',
   // Web /creator metadata 经由 lib/creator/page-copy 读取的纯文案叶子。
   './creator-copy': 'creator/page-copy.ts',
-  // Web 茶会服务端 handler → presets → lib/tavern-card → v3 会载入此叶子。
+  // 保留已公开的 Tavern 服务端安全叶子契约；茶会现在直接复用纯 domain worldbook。
   // DOM 栅格化只在调用时使用，Node 调用返回占位 PNG；不得经由含 hook 的 Tavern barrel。
   './tavern-default-base': 'tavern/default-base.ts',
 };
@@ -219,7 +219,10 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
   });
 
-  it('keeps the actual Web Tavern server import graph free of client hooks', async () => {
+  it('keeps the actual Web Tea Party server import graph in pure shared core', async () => {
+    const aiCoreRoot = path.resolve(PACKAGE_ROOT, '../ai-core');
+    const aiCorePackage = JSON.parse(readFileSync(path.join(aiCoreRoot, 'package.json'), 'utf8'));
+    expect(aiCorePackage.exports['./magic-tea-party']).toBe('./src/magic-tea-party/index.ts');
     const bundled = await build({
       entryPoints: [path.resolve(PACKAGE_ROOT, '../../apps/web/lib/magic-tea-party/presets.ts')],
       bundle: true,
@@ -230,8 +233,9 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
       logLevel: 'silent',
     });
     const inputs = Object.keys(bundled.metafile!.inputs);
-    expect(inputs.some((file) => file.endsWith('src/tavern/default-base.ts'))).toBe(true);
-    expect(inputs.some((file) => file.endsWith('src/tavern/index.ts'))).toBe(false);
+    expect(inputs.some((file) => file.endsWith('packages/ai-core/src/magic-tea-party/presets.ts'))).toBe(true);
+    expect(inputs.some((file) => file.endsWith('packages/domain/src/tavern-card/worldbook.ts'))).toBe(true);
+    expect(inputs.some((file) => file.includes('packages/ui-web/'))).toBe(false);
     expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
   });
 
