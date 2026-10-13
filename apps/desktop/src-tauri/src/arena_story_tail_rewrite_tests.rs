@@ -1025,7 +1025,7 @@ fn restart_reads_exact_success_but_rejects_old_instance_for_absent_receipt() {
 }
 
 #[test]
-fn schema10_and_maintenance_keep_rewrite_admission_closed() {
+fn schema11_and_maintenance_keep_rewrite_admission_closed() {
     let (manifest, parts) = with_history_schema_for_test(|| {
         let (_root, lib) = library();
         commit(lib.stories(), "source", 1);
@@ -1038,7 +1038,7 @@ fn schema10_and_maintenance_keep_rewrite_admission_closed() {
             .unwrap()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, u64>(0))
             .unwrap(),
-        10
+        11
     );
     assert!(lib
         .stories()

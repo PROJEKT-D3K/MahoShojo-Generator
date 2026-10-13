@@ -1,5 +1,5 @@
 //! Explicit synthetic-library stdin bridge. Never a registered IPC or release
-//! feature flag; schema 11 is scoped to this test thread only.
+//! feature flag; schema 12 is scoped to this test thread only.
 use super::*;
 use crate::library::LocalLibrary;
 use base64::{engine::general_purpose::STANDARD, Engine};

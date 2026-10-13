@@ -33,7 +33,7 @@ fn load<T: serde::de::DeserializeOwned>(root: &Path, name: &str) -> T {
 }
 
 // Stream typed original columns one row at a time. The first 15 chapter columns
-// are precisely schema 10; schema 11 only adds three derived history columns.
+// are precisely schema 10; candidate schema 12 only adds three derived history columns.
 fn fingerprint(c: &Connection, original10: bool, skip: Option<&str>) -> String {
     let mut hash = Sha256::new();
     for table in [
@@ -125,7 +125,7 @@ fn health(store: &StoryStore, version: u64, physical: u64, active: u64) -> Value
         )
         .unwrap();
     assert_eq!(count, active);
-    if version == 11 {
+    if version == 12 {
         assert_eq!(
             c.query_row(
                 "SELECT count(*) FROM arena_story_chapter WHERE status='active'",
@@ -146,7 +146,7 @@ fn health(store: &StoryStore, version: u64, physical: u64, active: u64) -> Value
         .unwrap()
         .exists([])
         .unwrap());
-    if version == 11 {
+    if version == 12 {
         crate::arena_story::branch::history::audit_relations(&c).unwrap();
     } else {
         crate::arena_story::branch::audit::audit_relations(&c).unwrap();
@@ -312,16 +312,16 @@ fn candidate_open(root: &Path, migration: bool) -> LocalLibrary {
     let mut expected = vec!["upgrade.pre-backup.before", "upgrade.pre-backup.after"];
     if migration {
         expected.extend([
-            "migration11.begin.before",
-            "migration11.begin.after",
-            "migration11.pre-audit.before",
-            "migration11.pre-audit.after",
-            "migration11.sql.before",
-            "migration11.sql.after",
-            "migration11.post-audit.before",
-            "migration11.post-audit.after",
-            "migration11.commit.before",
-            "migration11.commit.after",
+            "migration12.begin.before",
+            "migration12.begin.after",
+            "migration12.pre-audit.before",
+            "migration12.pre-audit.after",
+            "migration12.sql.before",
+            "migration12.sql.after",
+            "migration12.post-audit.before",
+            "migration12.post-audit.after",
+            "migration12.commit.before",
+            "migration12.commit.after",
         ]);
     }
     assert_eq!(
@@ -391,7 +391,18 @@ fn real_store_candidate_history_resource_probe() {
     if axis == "upgrade" && phase == "fixture" {
         // Same legal linear fixture as the short-history branch probe, using
         // begin/append/end instead of synthesizing database rows.
-        let lib = LocalLibrary::open(&root).unwrap();
+        let connection = Connection::open(root.join("library.sqlite")).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON",
+            )
+            .unwrap();
+        crate::store::migrate_to_version_for_test(&connection, 10);
+        let lib = LocalLibrary::open_with_connection(
+            &root,
+            std::sync::Arc::new(std::sync::Mutex::new(connection)),
+        )
+        .unwrap();
         let store = lib.stories();
         let start = Instant::now();
         for i in 1..=n {
@@ -422,7 +433,7 @@ fn real_store_candidate_history_resource_probe() {
         let expected: String = load(&root, "original-fingerprint.json");
         assert_eq!(stored_fingerprint(store, true, None), expected);
         verify_receipt(store, &load(&root, "linear-receipt.json"));
-        mark("verified", health(store, 11, n, n));
+        mark("verified", health(store, 12, n, n));
         let backup = backup_original(&root, &expected);
         mark(
             "backup-verified",
@@ -450,14 +461,14 @@ fn real_store_candidate_history_resource_probe() {
         let store = lib.stories();
         mark(
             "restore-open-return",
-            json!({"recoverPendingNs":recovered,"default10OpenNs":start.elapsed().as_nanos()}),
+            json!({"recoverPendingNs":recovered,"default11OpenNs":start.elapsed().as_nanos()}),
         );
         assert_eq!(
             stored_fingerprint(store, true, None),
             load::<String>(&root, "original-fingerprint.json")
         );
         verify_receipt(store, &load(&root, "linear-receipt.json"));
-        mark("verified", health(store, 10, n, n));
+        mark("verified", health(store, 11, n, n));
         let backup: crate::backup::BackupSummary = load(&root, "original-backup.json");
         assert_eq!(
             crate::backup::verify_backup(&root, &backup.backup_id).unwrap(),
@@ -497,13 +508,13 @@ fn real_store_candidate_history_resource_probe() {
                 "history-fingerprint.json",
                 &stored_fingerprint(store, false, None),
             );
-            mark("verified", health(store, 11, n, 3));
+            mark("verified", health(store, 12, n, 3));
         } else if phase == "adopt" {
             // A runner-owned copy of an interrupted synthetic fixture, never a
             // user library. Validate the actually persisted count before using it.
             assert_eq!(state(store, "source").0, n);
             assert_eq!(state(store, "source").2, format!("history-{n}"));
-            mark("verified", health(store, 11, n, 3));
+            mark("verified", health(store, 12, n, 3));
             let operation = format!("history-{n}");
             let request_digest: String = lock_connection(&store.connection)
                 .unwrap()
@@ -545,7 +556,7 @@ fn real_store_candidate_history_resource_probe() {
                 "observed-fingerprint.json",
                 &stored_fingerprint(store, false, None),
             );
-            mark("verified", health(store, 11, n + 1, 3));
+            mark("verified", health(store, 12, n + 1, 3));
         } else if phase == "reopen" {
             assert_eq!(
                 stored_fingerprint(store, false, None),
@@ -557,7 +568,7 @@ fn real_store_candidate_history_resource_probe() {
             verify_tail_receipt(store, &load(&root, "history-receipt.json"));
             verify_tail_receipt(store, &load(&root, "observed-receipt.json"));
             read_tail(store, n + 1);
-            mark("verified", health(store, 11, n + 1, 3));
+            mark("verified", health(store, 12, n + 1, 3));
         } else {
             panic!("unknown history phase");
         }

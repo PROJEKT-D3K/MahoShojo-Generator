@@ -23,7 +23,7 @@ fn schema_objects(c: &Connection) -> Vec<(String, String, String, Option<String>
 }
 
 fn candidate_statements() -> Vec<&'static str> {
-    super::super::schema::MIGRATION_11
+    super::super::schema::MIGRATION_12
         .split(';')
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -138,14 +138,14 @@ pub(crate) fn rewrite_tail(c: &Connection, session: &str, new_id: &str) {
 
 #[test]
 fn candidate_migration_keeps_original_bytes_and_closed_default() {
-    assert_eq!(crate::store::SCHEMA_VERSION, 10);
+    assert_eq!(crate::store::SCHEMA_VERSION, 11);
     for branch in [false, true] {
-        let c = super::super::schema::tests::connection(10);
+        let c = super::super::schema::tests::connection(11);
         super::super::schema::tests::fixture(&c, branch);
         let before = bytes(&c);
         crate::store::migrate_history_candidate_for_test(&c).unwrap();
         assert_eq!(bytes(&c), before);
-        verify_schema(&c, 11).unwrap();
+        verify_schema(&c, 12).unwrap();
         audit_relations(&c).unwrap();
         assert!(crate::store::migrate(&c).is_err());
         assert_eq!(
@@ -161,21 +161,21 @@ fn candidate_migration_keeps_original_bytes_and_closed_default() {
             )
             .unwrap();
         assert_eq!(copy_null, u64::from(branch));
-        assert!(verify_schema(&c, 10).is_err());
+        assert!(verify_schema(&c, 11).is_err());
     }
 }
 
 #[test]
 fn candidate_migration_child_indexes_cover_copy_and_legacy_drop() {
     for branch in [false, true] {
-        let c = super::super::schema::tests::connection(10);
+        let c = super::super::schema::tests::connection(11);
         super::super::schema::tests::fixture(&c, branch);
         let before = bytes(&c);
         let old_schema = schema_objects(&c);
         c.execute_batch("BEGIN IMMEDIATE").unwrap();
         let mut inspected_copy = false;
         for sql in candidate_statements() {
-            if sql.starts_with("INSERT INTO arena_story_chapter_v11") {
+            if sql.starts_with("INSERT INTO arena_story_chapter_v12") {
                 inspected_copy = true;
                 assert_eq!(
                     c.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
@@ -186,7 +186,7 @@ fn candidate_migration_child_indexes_cover_copy_and_legacy_drop() {
                 // checkpoints. FK debt remains during the chapter bulk copy.
                 assert_eq!(
                     c.query_row(
-                        "SELECT count(*) FROM pragma_foreign_key_check WHERE \"table\"='arena_story_session_v11'",
+                        "SELECT count(*) FROM pragma_foreign_key_check WHERE \"table\"='arena_story_session_v12'",
                         [],
                         |r| r.get::<_, i64>(0)
                     )
@@ -195,18 +195,18 @@ fn candidate_migration_child_indexes_cover_copy_and_legacy_drop() {
                 );
                 for (table, name, child) in [
                     (
-                        "arena_story_chapter_v11",
-                        "arena_story_chapter_source_v11",
+                        "arena_story_chapter_v12",
+                        "arena_story_chapter_source_v12",
                         "source_chapter_id",
                     ),
                     (
-                        "arena_story_chapter_v11",
-                        "arena_story_chapter_superseder_v11",
+                        "arena_story_chapter_v12",
+                        "arena_story_chapter_superseder_v12",
                         "superseded_by_chapter_id",
                     ),
                     (
                         "arena_story_checkpoint",
-                        "arena_story_checkpoint_chapter_v11",
+                        "arena_story_checkpoint_chapter_v12",
                         "chapter_id",
                     ),
                 ] {
@@ -227,14 +227,14 @@ fn candidate_migration_child_indexes_cover_copy_and_legacy_drop() {
                 assert_child_index(
                     &c,
                     "arena_story_checkpoint",
-                    "arena_story_checkpoint_chapter_v11",
+                    "arena_story_checkpoint_chapter_v12",
                     "chapter_id",
                 );
             }
             c.execute_batch(sql).unwrap();
             if sql == "DROP TABLE arena_story_checkpoint" {
                 assert!(!c
-                    .prepare("SELECT 1 FROM sqlite_schema WHERE name='arena_story_checkpoint_chapter_v11'")
+                    .prepare("SELECT 1 FROM sqlite_schema WHERE name='arena_story_checkpoint_chapter_v12'")
                     .unwrap()
                     .exists([])
                     .unwrap());
@@ -242,7 +242,7 @@ fn candidate_migration_child_indexes_cover_copy_and_legacy_drop() {
         }
         assert!(inspected_copy);
         assert_eq!(bytes(&c), before);
-        verify_schema(&c, 11).unwrap();
+        verify_schema(&c, 12).unwrap();
         audit_relations(&c).unwrap();
         assert!(!c
             .prepare("PRAGMA foreign_key_check")
@@ -250,7 +250,7 @@ fn candidate_migration_child_indexes_cover_copy_and_legacy_drop() {
             .exists([])
             .unwrap());
         assert!(!c
-            .prepare("SELECT 1 FROM sqlite_schema WHERE instr(name,'_v11')>0")
+            .prepare("SELECT 1 FROM sqlite_schema WHERE instr(name,'_v12')>0")
             .unwrap()
             .exists([])
             .unwrap());
@@ -433,7 +433,7 @@ fn history_receipts_read_active_export_continue_and_delete() {
 
 #[test]
 fn lifecycle_partial_unique_and_checkpoint_corruption_fail_closed() {
-    let c = super::super::schema::tests::connection(10);
+    let c = super::super::schema::tests::connection(11);
     super::super::schema::tests::fixture(&c, false);
     crate::store::migrate_history_candidate_for_test(&c).unwrap();
     rewrite_tail(&c, "target", "rewrite-one");
@@ -447,7 +447,7 @@ fn lifecycle_partial_unique_and_checkpoint_corruption_fail_closed() {
         c.execute_batch("SAVEPOINT corrupt").unwrap();
         c.execute_batch(sql).unwrap();
         assert!(
-            verify_schema(&c, 11)
+            verify_schema(&c, 12)
                 .and_then(|_| audit_relations(&c))
                 .is_err(),
             "{sql}"
@@ -469,7 +469,7 @@ fn every_candidate_ddl_failure_rolls_back_old_file_on_reopen() {
         {
             let c = Connection::open(&path).unwrap();
             c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
-            crate::store::migrate_to_version_for_test(&c, 10);
+            crate::store::migrate_to_version_for_test(&c, 11);
             super::super::schema::tests::fixture(&c, false);
             before = bytes(&c);
             old_schema = schema_objects(&c);
@@ -490,11 +490,11 @@ fn every_candidate_ddl_failure_rolls_back_old_file_on_reopen() {
         assert_eq!(
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         assert_eq!(
             crate::store::applied_migrations(&c).unwrap(),
-            (1..=10).collect::<Vec<_>>()
+            (1..=11).collect::<Vec<_>>()
         );
         super::super::audit::audit_relations(&c).unwrap();
     }
@@ -509,10 +509,10 @@ fn real_candidate_journal_failure_rolls_back_schema_version_and_graph() {
     {
         let c = Connection::open(&path).unwrap();
         c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
-        crate::store::migrate_to_version_for_test(&c, 10);
+        crate::store::migrate_to_version_for_test(&c, 11);
         super::super::schema::tests::fixture(&c, true);
         before = bytes(&c);
-        c.execute_batch("CREATE TRIGGER migration_journal_fault BEFORE INSERT ON schema_migration WHEN NEW.version=11 BEGIN SELECT RAISE(ABORT,'synthetic journal failure'); END;").unwrap();
+        c.execute_batch("CREATE TRIGGER migration_journal_fault BEFORE INSERT ON schema_migration WHEN NEW.version=12 BEGIN SELECT RAISE(ABORT,'synthetic journal failure'); END;").unwrap();
         old_schema = schema_objects(&c);
         assert_eq!(
             crate::store::migrate_history_candidate_for_test(&c),
@@ -523,15 +523,15 @@ fn real_candidate_journal_failure_rolls_back_schema_version_and_graph() {
     let c = Connection::open(&path).unwrap();
     assert_eq!(bytes(&c), before);
     assert_eq!(schema_objects(&c), old_schema);
-    verify_schema(&c, 10).unwrap();
+    verify_schema(&c, 11).unwrap();
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        10
+        11
     );
     assert_eq!(
         crate::store::applied_migrations(&c).unwrap(),
-        (1..=10).collect::<Vec<_>>()
+        (1..=11).collect::<Vec<_>>()
     );
     super::super::audit::audit_relations(&c).unwrap();
 }
@@ -669,17 +669,17 @@ fn candidate_backup_restores_complete_history_and_fences_pending_without_release
                 .unwrap()
                 .is_none());
         });
-        assert_eq!(crate::store::supported_schema_version(), 10);
+        assert_eq!(crate::store::supported_schema_version(), 11);
         assert!(LocalLibrary::open(root.path()).is_err());
     }
 }
 
 #[test]
 fn candidate_schema_rejects_old_full_uniqueness_even_with_new_partial_indexes() {
-    let c = super::super::schema::tests::connection(10);
+    let c = super::super::schema::tests::connection(11);
     super::super::schema::tests::fixture(&c, false);
     crate::store::migrate_history_candidate_for_test(&c).unwrap();
     for sql in ["CREATE UNIQUE INDEX forged_old_chapter ON arena_story_chapter(session_id,chapter_index)","CREATE UNIQUE INDEX forged_old_checkpoint ON arena_story_checkpoint(session_id,boundary_index)"] {
-        c.execute_batch("SAVEPOINT old_shape").unwrap();c.execute_batch(sql).unwrap();assert!(verify_schema(&c,11).is_err());c.execute_batch("ROLLBACK TO old_shape; RELEASE old_shape").unwrap();
+        c.execute_batch("SAVEPOINT old_shape").unwrap();c.execute_batch(sql).unwrap();assert!(verify_schema(&c,12).is_err());c.execute_batch("ROLLBACK TO old_shape; RELEASE old_shape").unwrap();
     }
 }

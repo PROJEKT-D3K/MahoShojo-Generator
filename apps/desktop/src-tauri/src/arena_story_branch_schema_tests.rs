@@ -556,7 +556,7 @@ fn schema10_indexes_both_linear_and_branch_rows_without_changing_any_column() {
         let c = connection(9);
         fixture(&c, branch);
         let before = all_column_hashes(&c);
-        crate::store::migrate(&c).unwrap();
+        crate::store::migrate_to_version_for_test(&c, 10);
         assert_schema10_index(&c);
         assert_eq!(before, all_column_hashes(&c));
         assert_eq!(
@@ -570,7 +570,7 @@ fn schema10_indexes_both_linear_and_branch_rows_without_changing_any_column() {
             .exists([])
             .unwrap());
         super::super::audit::audit_relations(&c).unwrap();
-        crate::store::migrate(&c).unwrap();
+        crate::store::migrate_to_version_for_test(&c, 10);
         assert_eq!(before, all_column_hashes(&c));
         assert_eq!(
             crate::store::applied_migrations(&c).unwrap(),
@@ -605,7 +605,7 @@ fn failed_schema10_migration_leaves_version_journal_rows_and_foreign_keys_intact
     );
     c.execute_batch("DROP TABLE arena_story_chapter_source")
         .unwrap();
-    crate::store::migrate(&c).unwrap();
+    crate::store::migrate_to_version_for_test(&c, 10);
     assert_schema10_index(&c);
     assert_eq!(before, all_column_hashes(&c));
 }
@@ -661,7 +661,7 @@ fn schema10_sqlite_full_index_failure_rolls_back_before_successful_retry() {
         )
         .unwrap());
     c.execute_batch("PRAGMA max_page_count=2147483647").unwrap();
-    crate::store::migrate(&c).unwrap();
+    crate::store::migrate_to_version_for_test(&c, 10);
     assert_schema10_index(&c);
     assert_eq!(before, all_column_hashes(&c));
 }
@@ -731,7 +731,7 @@ fn schema10_migration_cost_preserves_real_history_and_reports_index_pages() {
         .query_row("SELECT count(*) FROM arena_story_chapter", [], |r| r.get(0))
         .unwrap();
     let start = Instant::now();
-    crate::store::migrate(&c).unwrap();
+    crate::store::migrate_to_version_for_test(&c, 10);
     let elapsed = start.elapsed().as_nanos();
     let pages_after: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
     let index_pages: i64 = c

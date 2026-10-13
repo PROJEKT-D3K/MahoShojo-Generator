@@ -1,4 +1,4 @@
-//! Candidate-11 compatibility through the actual native writers, not SQL-created
+//! Candidate-12 compatibility through the actual native writers, not SQL-created
 //! ideal branch rows. The TypeScript pipe independently checks domain projection.
 use super::*;
 use crate::arena_story::branch::tail_rewrite::tests::{continue_after, rewrite_for_branch};
@@ -320,7 +320,7 @@ fn rewrite_copy_requires_exact_marker_and_null_local_lineage() {
 
 #[test]
 fn old_schema_branch_auditors_still_reject_rewrite_copy_shape() {
-    for version in [9, 10] {
+    for version in [9, 10, 11] {
         let (_root, lib) = library();
         let store = lib.stories();
         commit(store, "source", 1);
@@ -346,7 +346,7 @@ fn old_schema_branch_auditors_still_reject_rewrite_copy_shape() {
 
 #[test]
 fn old_schema_resolver_rejects_rewrite_raw_before_prompt_for_anchor_and_window() {
-    for version in [9, 10] {
+    for version in [9, 10, 11] {
         for (count, bad_index) in [(1, 1), (15, 14)] {
             let (_root, lib) = library();
             let store = lib.stories();

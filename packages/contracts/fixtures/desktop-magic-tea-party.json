@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "commands": { "read": "read_magic_tea_party", "mutate": "mutate_magic_tea_party" },
+  "session": {
+    "id": "tea-fixture", "title": "茶会与 🍵", "createdAt": 1, "updatedAt": 1,
+    "roles": [{ "id": "role-a", "name": "星光", "source": "local", "card": { "name": "星光", "future": { "kept": true } } }],
+    "settings": { "providerId": "synthetic", "modelId": "synthetic-model", "outputFormat": "jsonl" },
+    "summaryMeta": { "updatedAt": 1, "fromMessageId": "external-text" },
+    "future": { "nested": ["完整保留", 1.25, null] }
+  },
+  "messages": [
+    { "id": "user-a", "sessionId": "tea-fixture", "role": "user", "content": "一起喝茶", "createdAt": 2, "status": "done" },
+    { "id": "assistant-a", "sessionId": "tea-fixture", "role": "assistant", "content": "欢迎 🍵", "createdAt": 3, "status": "done", "segments": [{ "type": "narration", "text": "欢迎 🍵" }], "meta": { "completion": "provider-complete", "future": { "kept": true } } }
+  ],
+  "instance": "11111111111111111111111111111111"
+}

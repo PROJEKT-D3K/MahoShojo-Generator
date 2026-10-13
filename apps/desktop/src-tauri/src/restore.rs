@@ -223,6 +223,7 @@ fn recover_pending_with_hook(
     // A committed marker is the durable boundary. Once present, never reapply the
     // snapshot: the user may already have opened the new library and made later writes.
     if marker_matches(data_root, &intent, "committed")? {
+        verify_committed_database(data_root)?;
         fence_story_pending(data_root, &intent, hook)?;
         clear_intent_after_commit(data_root, hook)?;
         return Ok(());
@@ -326,6 +327,32 @@ fn recover_pending_with_hook(
     ensure_marker(data_root, &journal, &intent, "committed", hook)?;
     fence_story_pending(data_root, &intent, hook)?;
     clear_intent_after_commit(data_root, hook)
+}
+
+/// The committed generation may contain later valid WAL writes. Validate that
+/// actual database without replaying the old snapshot or checkpointing on failure.
+fn verify_committed_database(data_root: &Path) -> Result<(), RestoreError> {
+    for name in [SQLITE_FILE, SQLITE_WAL_FILE, SQLITE_SHM_FILE] {
+        let metadata = safe_metadata(&data_root.join(name))?;
+        if metadata.as_ref().is_some_and(|value| !value.is_file())
+            || (name == SQLITE_FILE && metadata.is_none())
+        {
+            return Err(RestoreError::Failed);
+        }
+    }
+    let connection = rusqlite::Connection::open_with_flags(
+        data_root.join(SQLITE_FILE),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| RestoreError::Failed)?;
+    connection
+        .set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+            true,
+        )
+        .map_err(|_| RestoreError::Failed)?;
+    backup::verify_sqlite(&connection)?;
+    Ok(())
 }
 
 fn fence_story_pending(
@@ -1425,5 +1452,108 @@ mod tests {
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(outside);
         let _ = fs::remove_dir_all(base);
+    }
+
+    fn committed_intent(root: &Path, pending_fenced: bool) -> RestoreIntent {
+        let intent = RestoreIntent {
+            version: INTENT_VERSION,
+            backup_id: "local-library-20261013-000000-0".into(),
+            restore_id: format!("restore-1-{}-991", std::process::id()),
+        };
+        publish_intent(root, &intent).unwrap();
+        ensure_native_scratch_root(root, JOURNAL_ROOT).unwrap();
+        let journal = journal_path(root, &intent.restore_id);
+        ensure_native_id_directory(&journal).unwrap();
+        ensure_marker(root, &journal, &intent, "committed", &mut |_| Ok(())).unwrap();
+        if pending_fenced {
+            ensure_marker(root, &journal, &intent, "pending-fenced", &mut |_| Ok(())).unwrap();
+        }
+        intent
+    }
+
+    #[test]
+    fn committed_restore_rejects_old_history11_in_main_or_wal_before_any_write() {
+        for with_tea in [false, true] {
+            for wal in [false, true] {
+                for pending_fenced in [false, true] {
+                    let temp = tempfile::tempdir().unwrap();
+                    let root = temp.path();
+                    let _instance = crate::maintenance::InstanceGuard::acquire(root).unwrap();
+                    let c = rusqlite::Connection::open(root.join(SQLITE_FILE)).unwrap();
+                    c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+                    crate::store::migrate_to_version_for_test(&c, if with_tea { 11 } else { 10 });
+                    crate::arena_story::branch::schema::tests::fixture(&c, true);
+                    crate::arena_story::pending::seed_historical_backup(
+                        &c,
+                        if with_tea { 11 } else { 10 },
+                        true,
+                    );
+                    if wal {
+                        c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0")
+                            .unwrap();
+                    }
+                    c.execute_batch("BEGIN IMMEDIATE").unwrap();
+                    c.execute_batch(crate::arena_story::branch::schema::MIGRATION_12)
+                        .unwrap();
+                    c.execute_batch("INSERT OR IGNORE INTO schema_migration VALUES (11,'old-history'); PRAGMA user_version=11; COMMIT").unwrap();
+                    let intent = committed_intent(root, pending_fenced);
+                    let main = fs::read(root.join(SQLITE_FILE)).unwrap();
+                    let wal_bytes = fs::read(root.join(SQLITE_WAL_FILE)).ok();
+                    let intent_bytes = fs::read(root.join(INTENT_FILE)).unwrap();
+                    let changes = c.total_changes();
+                    let restored: i64 = c
+                        .query_row("SELECT sum(restored) FROM arena_story_pending", [], |row| {
+                            row.get(0)
+                        })
+                        .unwrap();
+                    assert_eq!(recover_pending(root), Err(RestoreError::BackupCorrupt));
+                    assert_eq!(fs::read(root.join(SQLITE_FILE)).unwrap(), main);
+                    assert_eq!(fs::read(root.join(SQLITE_WAL_FILE)).ok(), wal_bytes);
+                    assert_eq!(fs::read(root.join(INTENT_FILE)).unwrap(), intent_bytes);
+                    assert_eq!(c.total_changes(), changes);
+                    assert_eq!(
+                        c.query_row("SELECT sum(restored) FROM arena_story_pending", [], |row| {
+                            row.get::<_, i64>(0)
+                        })
+                        .unwrap(),
+                        restored
+                    );
+                    assert_eq!(
+                        marker_matches(root, &intent, "pending-fenced").unwrap(),
+                        pending_fenced
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn committed_restore_accepts_current_wal_without_revalidating_an_old_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let _instance = crate::maintenance::InstanceGuard::acquire(root).unwrap();
+        let c = rusqlite::Connection::open(root.join(SQLITE_FILE)).unwrap();
+        crate::store::migrate_to_version_for_test(&c, 11);
+        c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0")
+            .unwrap();
+        c.execute("INSERT INTO provider_profile VALUES ('later-write','{\"value\":\"after-commit\"}','2026-10-13T00:00:00Z')", []).unwrap();
+        committed_intent(root, false);
+        // No old backup directory exists. The durable marker must never cause
+        // snapshot hash checks or reinstallation over later legitimate writes.
+        assert!(!root.join("backups").exists());
+        recover_pending(root).unwrap();
+        assert!(!root.join(INTENT_FILE).exists());
+        let value: String = c
+            .query_row(
+                "SELECT document FROM provider_profile WHERE id='later-write'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&value).unwrap()["value"],
+            "after-commit"
+        );
+        assert_eq!(backup::verify_sqlite(&c), Ok(11));
     }
 }

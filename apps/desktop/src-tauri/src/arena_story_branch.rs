@@ -4,8 +4,8 @@
 //! verifies an indexed, hashed Native record and changes its physical identities.
 //! The caller must recheck the complete source CAS inside its write transaction.
 
-// Candidate schema 11: default activation and product page injection remain closed.
-#[allow(dead_code, reason = "internal schema-11 tail rewrite candidate")]
+// Candidate schema 12: default activation and product page injection remain closed.
+#[allow(dead_code, reason = "internal schema-12 tail rewrite candidate")]
 #[path = "arena_story_tail_rewrite.rs"]
 pub(crate) mod tail_rewrite;
 use std::collections::BTreeMap;

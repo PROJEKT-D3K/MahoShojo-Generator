@@ -62,6 +62,8 @@
     "allow-query-arena-story-tail-rewrite-receipt",
     "allow-resolve-arena-story-branch-anchor",
     "allow-resolve-arena-story-tail-rewrite-source",
+    "allow-read-magic-tea-party",
+    "allow-mutate-magic-tea-party",
     "allow-list-arena-story-sessions",
     "allow-delete-arena-story-session",
     "allow-list-arena-story-chapters",

@@ -17,7 +17,7 @@ PRODUCT = ROOT / "apps/desktop/src-tauri"
 MODULES = ["ai", "blob", "cloud", "library", "local_card", "maintenance", "provider_profile",
            "provider_target", "public_cache", "secret", "sse", "store", "web_package",
            "package_path", "arena_hosted", "arena_story", "backup", "restore", "export", "external_link", "arena_room_protocol", "arena_room_state", "arena_room_http",
-           "arena_room_socket", "arena_room"]
+           "arena_room_socket", "arena_room", "magic_tea_party"]
 TEST_MODULES = ["ai_contract_tests", "ai_e2e_tests", "test_fixture"]
 
 
@@ -83,6 +83,7 @@ pub mod ipc {
     paths = [PRODUCT / "src" / f"{name}.rs" for name in MODULES + TEST_MODULES + ["arena_hosted_tests", "arena_hosted_json", "arena_hosted_json_tests"]]
     paths += sorted((PRODUCT / "src").glob("arena_hosted_*.rs"))
     paths += sorted((PRODUCT / "src").glob("arena_story_*.rs"))
+    paths += [PRODUCT / "src/magic_tea_party_tests.rs", ROOT / "packages/contracts/fixtures/desktop-magic-tea-party.json"]
     paths += sorted((PRODUCT / "src/cloud").glob("*.rs"))
     paths += [ROOT / "packages/contracts/fixtures/battle-report-history.json",
               ROOT / "packages/contracts/fixtures/public-ranking.json",

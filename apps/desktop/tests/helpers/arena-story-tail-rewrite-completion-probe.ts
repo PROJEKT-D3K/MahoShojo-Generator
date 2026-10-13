@@ -56,9 +56,9 @@ function launch(root: string, defaultSchema = false) {
     waiting.push({ resolve: done, reject }); child.stdin.write(frame + '\n');
   }), close: async () => { if (!terminal) child.stdin.end(); await closed; } };
 }
-type Scenario = 'schema10' | 'first' | 'third' | 'long-window' | 'multiple' | 'rollback' | 'commit-failed' | 'cold-unknown' | 'source-restart' | 'saved-unread';
+type Scenario = 'schema11' | 'first' | 'third' | 'long-window' | 'multiple' | 'rollback' | 'commit-failed' | 'cold-unknown' | 'source-restart' | 'saved-unread';
 async function scenario(kind: Scenario) {
-  const root = mkdtempSync(join(output, `${kind}-`)); let host = launch(root, kind === 'schema10'), hide: 'none' | 'absent' | 'mismatch' | 'io' | 'malformed' = 'none';
+  const root = mkdtempSync(join(output, `${kind}-`)); let host = launch(root, kind === 'schema11'), hide: 'none' | 'absent' | 'mismatch' | 'io' | 'malformed' = 'none';
   const receipts: unknown[] = [];
   const traces: Array<Array<Record<string, unknown>>> = [], models: BattleStoryArenaRequestInput[] = [], prepared: PreparedStoryTailRewriteCommit[] = [];
   let fault = kind === 'rollback' ? 'rollback' : kind === 'commit-failed' ? 'commit-failed' : kind === 'cold-unknown' ? 'commit-unknown' : '';
@@ -152,14 +152,14 @@ async function scenario(kind: Scenario) {
     owner.setExecutionScope('synthetic-A'); await owner.initialize();
     const rewrite = async () => { const head = owner.getSnapshot().active!; await owner.generateTailRewrite({ mode: 'direct', userGuidance: '完整改写引导',
       target: { sessionId: head.id, expectedRevision: head.revision, expectedChapterCount: head.chapterCount, targetChapterId: head.lastChapterId } }, prepare); };
-    if (kind === 'schema10') {
+    if (kind === 'schema11') {
       const before = await call('snapshot'); const boundary = host.trace.length;
       await rewrite();
       assert.equal(preparations, 0); assert.equal(prepared.length, 0); assert.equal(models.length, 0);
       assert.ok(owner.getSnapshot().message); assert.equal(owner.getSnapshot().pending, null);
       assert.deepEqual(host.trace.slice(boundary).map(entry => entry.op), [STORY_TAIL_REWRITE_IPC.resolveSource]);
       const after = await call('snapshot'); assert.deepEqual(after, before);
-      assert.equal((after as { version: number }).version, 10); assert.equal((after as { stages: number }).stages, 0);
+      assert.equal((after as { version: number }).version, 11); assert.equal((after as { stages: number }).stages, 0);
       const report = { kind, passed: true, preparations, models: models.length, before, after, trace: host.trace };
       writeFileSync(join(output, `${kind}.json`), JSON.stringify(report, null, 2) + '\n'); return { kind, passed: true, models: 0, preparations: 0 };
     }
@@ -267,7 +267,7 @@ async function main() {
   writeFileSync(join(output, 'sources-before.json'), JSON.stringify({ binaryShaBefore, ...sourcesBefore }, null, 2));
   const results = [];
   try {
-  for (const kind of ['schema10', 'first', 'third', 'long-window', 'multiple', 'rollback', 'commit-failed', 'cold-unknown', 'source-restart', 'saved-unread'] as const) results.push(await scenario(kind));
+  for (const kind of ['schema11', 'first', 'third', 'long-window', 'multiple', 'rollback', 'commit-failed', 'cold-unknown', 'source-restart', 'saved-unread'] as const) results.push(await scenario(kind));
   } finally {
     const sourcesAfter = snapshotSources(), binaryShaAfter = await binaryDigest();
     writeFileSync(join(output, 'sources-after.json'), JSON.stringify({ binaryShaAfter, ...sourcesAfter }, null, 2));

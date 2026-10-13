@@ -61,6 +61,9 @@ pub fn open_shared_connection(paths: &LocalStorePaths) -> Result<SharedConnectio
         connection
             .set_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
             .map_err(|_| StoreError::Unavailable)?;
+        if user_version(&connection)? > supported_schema_version() {
+            return Err(StoreError::Unavailable);
+        }
         #[cfg(test)]
         crate::arena_story::branch::resource_probe::mark("upgrade.pre-backup.before");
         crate::backup::backup_before_history_upgrade(root, &connection, had_sidecars)
@@ -70,8 +73,13 @@ pub fn open_shared_connection(paths: &LocalStorePaths) -> Result<SharedConnectio
         connection
             .set_db_config(SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, previous)
             .map_err(|_| StoreError::Unavailable)?;
+        // The file backup barrier already validated installed schemas before
+        // configuration writes; do not repeat the Tea document audit here.
+        configure(&connection)?;
+        migrate_verified(&connection)?;
+    } else {
+        configure_and_migrate(&connection)?;
     }
-    configure_and_migrate(&connection)?;
 
     Ok(Arc::new(Mutex::new(connection)))
 }
@@ -134,12 +142,12 @@ pub fn scalar_i64(connection: &Connection, sql: &str) -> Result<i64, StoreError>
 /// D1 引入 `provider_profile`（版本 1）；D2.0 在**同一个库**上增加本地卡（版本 2）；
 /// D2.1 增加内容寻址 blob 与 Web 包记录（版本 3、4）。刻意不新开数据库文件：Profile、
 /// 本地卡、Web 包与 blob 同属一台设备上的用户资产，分库会让备份、迁移与"重开应用"各自多一套路径。
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 pub(crate) fn supported_schema_version() -> i64 {
     #[cfg(test)]
     if CANDIDATE_HISTORY_SCHEMA.get() {
-        return 11;
+        return 12;
     }
     SCHEMA_VERSION
 }
@@ -147,7 +155,7 @@ pub(crate) fn supported_schema_version() -> i64 {
 thread_local! { static CANDIDATE_HISTORY_SCHEMA: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// Explicit synthetic-library test scope. Release builds contain neither this
-/// switch nor an environment/IPC override; ordinary open continues to reject 11.
+/// switch nor an environment/IPC override; ordinary open continues to reject candidate 12.
 #[cfg(test)]
 pub(crate) fn with_history_schema_for_test<T>(run: impl FnOnce() -> T) -> T {
     struct Reset(bool);
@@ -294,9 +302,14 @@ pub fn applied_migrations(connection: &Connection) -> Result<Vec<i64>, StoreErro
 ///
 /// 迁移只向前。已应用的版本不会重复执行，因此重复打开同一个数据库是安全的。
 pub fn migrate(connection: &Connection) -> Result<(), StoreError> {
+    verify_installed_schema(connection)?;
+    migrate_verified(connection)
+}
+
+fn migrate_verified(connection: &Connection) -> Result<(), StoreError> {
     apply_steps(connection, MIGRATION_STEPS)?;
     #[cfg(test)]
-    if supported_schema_version() == 11 && user_version(connection)? < 11 {
+    if supported_schema_version() == 12 && user_version(connection)? < 12 {
         migrate_history_candidate_for_test(connection)?;
     }
     Ok(())
@@ -343,14 +356,19 @@ const MIGRATION_STEPS: &[MigrationStep] = &[
         version: 10,
         sql: crate::arena_story::branch::schema::MIGRATION_10,
     },
+    MigrationStep {
+        version: 11,
+        sql: crate::magic_tea_party::MIGRATION_11,
+    },
 ];
 
 #[cfg(test)]
 pub(crate) fn migrate_to_version_for_test(connection: &Connection, version: i64) {
     assert!((1..=SCHEMA_VERSION).contains(&version));
+    let current = user_version(connection).expect("historical version");
     for step in MIGRATION_STEPS
         .iter()
-        .filter(|step| step.version <= version)
+        .filter(|step| current < step.version && step.version <= version)
     {
         apply_step(connection, step).expect("apply historical migration");
     }
@@ -366,6 +384,21 @@ fn apply_steps(connection: &Connection, steps: &[MigrationStep]) -> Result<(), S
     }
     for step in steps.iter().filter(|step| step.version > current) {
         apply_step(connection, step)?;
+    }
+    Ok(())
+}
+
+/// Validate an installed Tea/history library before PRAGMA writes or reclamation.
+/// Also used by same-version migration, which otherwise has no DDL to validate.
+fn verify_installed_schema(connection: &Connection) -> Result<(), StoreError> {
+    let version = user_version(connection)?;
+    if version > supported_schema_version() {
+        return Err(StoreError::Unavailable);
+    }
+    if version >= 11 {
+        crate::backup::verify_sqlite_schema(connection).map_err(|_| StoreError::InvalidDocument)?;
+    } else {
+        crate::magic_tea_party::verify_schema(connection, version)?;
     }
     Ok(())
 }
@@ -419,40 +452,46 @@ pub fn timestamp_sort_key(updated_at: &str) -> Result<i64, StoreError> {
 /// 启动仍是"未应用"状态。
 fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), StoreError> {
     #[cfg(test)]
-    if step.version == 11 {
-        crate::arena_story::branch::resource_probe::mark("migration11.begin.before");
+    if step.version == 12 {
+        crate::arena_story::branch::resource_probe::mark("migration12.begin.before");
     }
     connection
         .execute_batch("BEGIN IMMEDIATE")
         .map_err(|_| StoreError::Failure)?;
     #[cfg(test)]
-    if step.version == 11 {
-        crate::arena_story::branch::resource_probe::mark("migration11.begin.after");
+    if step.version == 12 {
+        crate::arena_story::branch::resource_probe::mark("migration12.begin.after");
     }
 
     let outcome = (|| {
         if step.version == 11 {
+            crate::magic_tea_party::verify_schema(connection, step.version - 1)?;
+            crate::arena_story::branch::history::verify_schema(connection, step.version - 1)
+                .map_err(|_| StoreError::InvalidDocument)?;
+        }
+        if step.version == 12 {
             #[cfg(test)]
-            crate::arena_story::branch::resource_probe::mark("migration11.pre-audit.before");
-            crate::arena_story::branch::history::verify_schema(connection, 10)
+            crate::arena_story::branch::resource_probe::mark("migration12.pre-audit.before");
+            crate::magic_tea_party::verify_schema(connection, 11)?;
+            crate::arena_story::branch::history::verify_schema(connection, 11)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::branch::audit::audit_relations(connection)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::pending::audit(connection)
                 .map_err(|_| StoreError::InvalidDocument)?;
             #[cfg(test)]
-            crate::arena_story::branch::resource_probe::mark("migration11.pre-audit.after");
+            crate::arena_story::branch::resource_probe::mark("migration12.pre-audit.after");
         }
         #[cfg(test)]
-        if step.version == 11 {
-            crate::arena_story::branch::resource_probe::mark("migration11.sql.before");
+        if step.version == 12 {
+            crate::arena_story::branch::resource_probe::mark("migration12.sql.before");
         }
         connection
             .execute_batch(step.sql)
             .map_err(|_| StoreError::Failure)?;
         #[cfg(test)]
-        if step.version == 11 {
-            crate::arena_story::branch::resource_probe::mark("migration11.sql.after");
+        if step.version == 12 {
+            crate::arena_story::branch::resource_probe::mark("migration12.sql.after");
         }
         connection
             .execute(
@@ -464,9 +503,15 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
             .execute_batch(&format!("PRAGMA user_version = {}", step.version))
             .map_err(|_| StoreError::Failure)?;
         if step.version == 11 {
+            crate::magic_tea_party::verify_schema(connection, step.version)?;
+            crate::arena_story::branch::history::verify_schema(connection, step.version)
+                .map_err(|_| StoreError::InvalidDocument)?;
+        }
+        if step.version == 12 {
             #[cfg(test)]
-            crate::arena_story::branch::resource_probe::mark("migration11.post-audit.before");
-            crate::arena_story::branch::history::verify_schema(connection, 11)
+            crate::arena_story::branch::resource_probe::mark("migration12.post-audit.before");
+            crate::magic_tea_party::verify_schema(connection, 12)?;
+            crate::arena_story::branch::history::verify_schema(connection, 12)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::branch::history::audit_relations(connection)
                 .map_err(|_| StoreError::InvalidDocument)?;
@@ -481,7 +526,7 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
                 return Err(StoreError::InvalidDocument);
             }
             #[cfg(test)]
-            crate::arena_story::branch::resource_probe::mark("migration11.post-audit.after");
+            crate::arena_story::branch::resource_probe::mark("migration12.post-audit.after");
         }
         Ok(())
     })();
@@ -491,8 +536,8 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
         return Err(error);
     }
     #[cfg(test)]
-    if step.version == 11 {
-        crate::arena_story::branch::resource_probe::mark("migration11.commit.before");
+    if step.version == 12 {
+        crate::arena_story::branch::resource_probe::mark("migration12.commit.before");
     }
     if connection.execute_batch("COMMIT").is_err() {
         // Deferred FK or disk failures can surface only at COMMIT. Do not leave
@@ -501,8 +546,8 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
         return Err(StoreError::Failure);
     }
     #[cfg(test)]
-    if step.version == 11 {
-        crate::arena_story::branch::resource_probe::mark("migration11.commit.after");
+    if step.version == 12 {
+        crate::arena_story::branch::resource_probe::mark("migration12.commit.after");
     }
     Ok(())
 }
@@ -520,20 +565,20 @@ fn rollback_migration(connection: &Connection) -> Result<(), StoreError> {
     }
 }
 
-/// Candidate-only entry. Normal open remains at schema 10 until compatibility
+/// Candidate-only entry. Normal open remains at Tea schema 11 until history compatibility
 /// tests and activation review are complete; never accepts a user-supplied SQL step.
 #[cfg(test)]
 pub(crate) fn migrate_history_candidate_for_test(
     connection: &Connection,
 ) -> Result<(), StoreError> {
-    if user_version(connection)? != 10 {
+    if user_version(connection)? != 11 {
         return Err(StoreError::Unavailable);
     }
     apply_step(
         connection,
         &MigrationStep {
-            version: 11,
-            sql: crate::arena_story::branch::schema::MIGRATION_11,
+            version: 12,
+            sql: crate::arena_story::branch::schema::MIGRATION_12,
         },
     )
 }
@@ -572,6 +617,7 @@ fn configure(connection: &Connection) -> Result<(), StoreError> {
 /// **MUST** 用同一份 PRAGMA 与迁移，否则会出现"Profile 库开了 WAL、卡片库没开"这类
 /// 按类型分叉的隐性差异。
 pub fn configure_and_migrate(connection: &Connection) -> Result<(), StoreError> {
+    verify_installed_schema(connection)?;
     configure(connection)?;
     migrate(connection)
 }
@@ -821,11 +867,71 @@ mod tests {
 
         let versions = applied_migrations(&store.connection.lock().expect("lock"))
             .expect("migration journal must be readable");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 
         // 重复打开同一个库不会重复执行迁移。
         let reopened = LocalStore::open_in_memory().expect("reopen");
         assert_eq!(reopened.schema_version().expect("version"), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn formal_tea11_adds_only_tea_tables_and_keeps_story_history_closed() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        super::migrate_to_version_for_test(&c, 10);
+        crate::arena_story::branch::schema::tests::fixture(&c, true);
+        let story = crate::arena_story::branch::schema::tests::all_column_hashes(&c);
+        let legacy_schema = |c: &Connection| {
+            c.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE tbl_name NOT LIKE 'magic_tea_%' ORDER BY type,name")
+                .unwrap()
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let old_journal = |c: &Connection| {
+            c.prepare("SELECT version,applied_at FROM schema_migration WHERE version<=10 ORDER BY version")
+                .unwrap()
+                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let schema = legacy_schema(&c);
+        let journal = old_journal(&c);
+        migrate(&c).unwrap();
+        assert_eq!(user_version(&c), Ok(11));
+        assert_eq!(
+            applied_migrations(&c).unwrap(),
+            (1..=11).collect::<Vec<_>>()
+        );
+        assert_eq!(legacy_schema(&c), schema);
+        assert_eq!(old_journal(&c), journal);
+        assert_eq!(
+            crate::arena_story::branch::schema::tests::all_column_hashes(&c),
+            story
+        );
+        for table in [
+            "magic_tea_session",
+            "magic_tea_message",
+            "magic_tea_receipt",
+            "magic_tea_catalog",
+        ] {
+            assert!(table_exists(&c, table));
+        }
+        for index in ["magic_tea_session_updated", "magic_tea_message_session"] {
+            assert!(c
+                .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1")
+                .unwrap()
+                .exists([index])
+                .unwrap());
+        }
+        crate::magic_tea_party::verify_schema(&c, 11).unwrap();
+        crate::arena_story::branch::history::verify_schema(&c, 11).unwrap();
+        assert_eq!(crate::arena_story::branch::history::enabled(&c), Ok(false));
+        let changes = c.total_changes();
+        migrate(&c).unwrap();
+        assert_eq!(c.total_changes(), changes);
     }
 
     #[test]
@@ -870,7 +976,7 @@ mod tests {
         );
         let versions = applied_migrations(&store.connection.lock().expect("lock"))
             .expect("migration journal must be readable");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -964,7 +1070,7 @@ mod tests {
             assert_eq!(store.schema_version().expect("version"), SCHEMA_VERSION);
             let versions = applied_migrations(&store.connection.lock().expect("lock"))
                 .expect("journal must be readable");
-            assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+            assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         }
 
         // 第三次打开：全部已完成，不重复执行。
@@ -972,7 +1078,7 @@ mod tests {
             let store = LocalStore::open(&LocalStorePaths::under(&root)).expect("third open");
             assert_eq!(
                 applied_migrations(&store.connection.lock().expect("lock")).expect("journal"),
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
             );
         }
 

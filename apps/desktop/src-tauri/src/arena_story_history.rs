@@ -1,4 +1,4 @@
-//! Schema 11 tail-only history relationships. No rewrite producer or IPC is exposed here.
+//! Candidate schema 12 tail-only history relationships. No rewrite producer or IPC is exposed here.
 //! Historical receipt identity never depends on the current head or active status.
 use super::super::{valid_digest, valid_id, StoryError, MAX_SAFE_INTEGER};
 use super::tail_rewrite::{TailRewriteKind, TailRewriteReceipt};
@@ -13,8 +13,8 @@ pub(crate) fn verify_schema(c: &Connection, version: i64) -> Result<(), StoryErr
         ("committed_revision", "INTEGER", false),
     ] {
         let actual:Option<(String,bool)>=c.query_row(r#"SELECT type,"notnull" FROM pragma_table_info('arena_story_chapter') WHERE name=?1"#,[name],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_|StoryError::Corrupt)?;
-        if (version == 11 && actual != Some((kind.into(), required)))
-            || (version < 11 && actual.is_some())
+        if (version == 12 && actual != Some((kind.into(), required)))
+            || (version < 12 && actual.is_some())
         {
             return Err(StoryError::Corrupt);
         }
@@ -27,9 +27,9 @@ pub(crate) fn verify_schema(c: &Connection, version: i64) -> Result<(), StoryErr
         ("arena_story_chapter_superseder","CREATE INDEX arena_story_chapter_superseder ON arena_story_chapter(session_id,superseded_by_chapter_id)"),
     ] {
         let actual:Option<String>=c.query_row("SELECT sql FROM sqlite_master WHERE type='index' AND name=?1",[name],|r|r.get(0)).optional().map_err(|_|StoryError::Corrupt)?;
-        if (version==11 && actual.as_deref()!=Some(sql)) || (version<11 && actual.is_some()) {return Err(StoryError::Corrupt);}
+        if (version==12 && actual.as_deref()!=Some(sql)) || (version<12 && actual.is_some()) {return Err(StoryError::Corrupt);}
     }
-    if version == 11 {
+    if version == 12 {
         let has_full_chapter_unique:bool=c.query_row(r#"SELECT EXISTS(SELECT 1 FROM pragma_index_list('arena_story_chapter') i WHERE i."unique"=1 AND i.partial=0 AND (SELECT group_concat(name,',') FROM (SELECT name FROM pragma_index_info(i.name) ORDER BY seqno))='session_id,chapter_index')"#,[],|r|r.get(0)).map_err(|_|StoryError::Corrupt)?;
         if has_full_chapter_unique {
             return Err(StoryError::Corrupt);
@@ -59,8 +59,9 @@ pub(crate) fn verify_schema(c: &Connection, version: i64) -> Result<(), StoryErr
 
 pub(crate) fn enabled(c: &Connection) -> Result<bool, StoryError> {
     match c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)) {
-        Ok(5..=10) => Ok(false),
-        Ok(11) => Ok(true),
+        Ok(5..=11) => Ok(false),
+        #[cfg(test)]
+        Ok(12) => Ok(true),
         _ => Err(StoryError::Corrupt),
     }
 }

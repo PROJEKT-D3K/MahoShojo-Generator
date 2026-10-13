@@ -1,4 +1,4 @@
-/** Opt-in real TS projections -> test-only schema-11 pipe -> Native SQLite.
+/** Opt-in real TS projections -> test-only schema-12 pipe -> Native SQLite.
  * Completed prose is synthetic. No model, registered IPC, UI or user database. */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

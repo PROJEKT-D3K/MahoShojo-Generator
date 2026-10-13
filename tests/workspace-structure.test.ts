@@ -711,6 +711,8 @@ describe('desktop workspace app ownership', () => {
       'query_arena_story_tail_rewrite_receipt',
       'resolve_arena_story_branch_anchor',
       'resolve_arena_story_tail_rewrite_source',
+      'read_magic_tea_party',
+      'mutate_magic_tea_party',
       'list_arena_story_sessions',
       'delete_arena_story_session',
       'list_arena_story_chapters',

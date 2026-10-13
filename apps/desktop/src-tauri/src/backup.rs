@@ -152,7 +152,7 @@ pub fn create_backup_in_window(
     })
 }
 
-/// Only the candidate cross-11 file-open path calls these checks. A missing
+/// The cross-11 file-open path calls these checks. A missing
 /// main file with SQLite sidecars or managed blobs is not a fresh library.
 pub(crate) fn check_upgrade_source_path(data_root: &Path) -> Result<bool, BackupError> {
     let mut had_sidecars = false;
@@ -186,8 +186,11 @@ pub(crate) fn backup_before_history_upgrade(
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|_| BackupError::Corrupt)?;
-    if version >= 11 {
-        return Ok(()); // Normal migration rejects versions above the target.
+    let target = crate::store::supported_schema_version();
+    if version >= target {
+        // An installed version label is not proof of the corresponding shape.
+        verify_sqlite_schema(connection)?;
+        return Ok(());
     }
     if !is_regular_file(&data_root.join(DATABASE_FILE)) {
         return Err(BackupError::Corrupt);
@@ -209,7 +212,7 @@ pub(crate) fn backup_before_history_upgrade(
         // Do not initialize a mislabeled old library or ignore orphaned assets.
         return require_no_managed_blobs(data_root);
     }
-    if !(1..11).contains(&version) {
+    if !(1..target).contains(&version) {
         return Err(BackupError::UnsupportedVersion);
     }
     create_pre_upgrade_backup(data_root, connection).map(|_| ())
@@ -672,13 +675,10 @@ pub(crate) fn verified_blob_names(
     .map(|(_, names)| names)
 }
 
-fn verify_sqlite(connection: &Connection) -> Result<i64, BackupError> {
-    verify_sqlite_supported(connection, crate::store::supported_schema_version())
-}
-fn verify_sqlite_supported(
-    connection: &Connection,
-    maximum_version: i64,
-) -> Result<i64, BackupError> {
+/// Installed-library shape checks shared by startup and backup verification.
+/// Do not hash every historical Story payload on every ordinary reopen.
+pub(crate) fn verify_sqlite_schema(connection: &Connection) -> Result<i64, BackupError> {
+    let maximum_version = crate::store::supported_schema_version();
     let version = connection
         .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
         .map_err(|_| BackupError::Corrupt)?;
@@ -701,6 +701,7 @@ fn verify_sqlite_supported(
     if versions != (1..=version).collect::<Vec<_>>() {
         return Err(BackupError::Corrupt);
     }
+    crate::magic_tea_party::verify_schema(connection, version).map_err(|_| BackupError::Corrupt)?;
     // Check the actual tables/columns for this historical schema, not just its labels.
     for (introduced, table, columns) in [
         (1, "schema_migration", "version, applied_at"),
@@ -761,6 +762,15 @@ fn verify_sqlite_supported(
             return Err(BackupError::Corrupt);
         }
     }
+    if version >= 5 {
+        crate::arena_story::branch::history::verify_schema(connection, version)
+            .map_err(|_| BackupError::Corrupt)?;
+    }
+    Ok(version)
+}
+
+pub(crate) fn verify_sqlite(connection: &Connection) -> Result<i64, BackupError> {
+    let version = verify_sqlite_schema(connection)?;
     let integrity = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
         .map_err(|_| BackupError::Corrupt)?;
@@ -774,14 +784,10 @@ fn verify_sqlite_supported(
     if rows.next().map_err(|_| BackupError::Corrupt)?.is_some() {
         return Err(BackupError::Corrupt);
     }
-    if version >= 5 {
-        crate::arena_story::branch::history::verify_schema(connection, version)
-            .map_err(|_| BackupError::Corrupt)?;
-    }
-    if version == 11 {
+    if version == 12 {
         crate::arena_story::branch::history::audit_relations(connection)
             .map_err(|_| BackupError::Corrupt)?;
-    } else if (9..=10).contains(&version) {
+    } else if (9..=11).contains(&version) {
         crate::arena_story::branch::audit::audit_relations(connection)
             .map_err(|_| BackupError::Corrupt)?;
     } else if version >= 5 {
@@ -1523,8 +1529,8 @@ mod tests {
     }
 
     #[test]
-    fn schema9_and_schema10_branch_backups_keep_versioned_audit_dispatch() {
-        for version in [9, 10] {
+    fn schema9_through_tea11_branch_backups_keep_versioned_audit_dispatch() {
+        for version in [9, 10, 11] {
             let connection = crate::arena_story::branch::schema::tests::connection(version);
             crate::arena_story::branch::schema::tests::fixture(&connection, true);
             assert_eq!(verify_sqlite(&connection), Ok(version));
@@ -1534,7 +1540,7 @@ mod tests {
     }
 
     #[test]
-    fn real_schema9_branch_backup_restores_into_schema10_without_rewriting_rows() {
+    fn real_schema9_branch_backup_restores_into_tea11_without_rewriting_rows() {
         let temp = scratch();
         let root = temp.path();
         let library = LocalLibrary::open(root).unwrap();
@@ -1561,7 +1567,7 @@ mod tests {
         crate::restore::recover_pending(root).unwrap();
         let restored = LocalLibrary::open(root).unwrap();
         let c = restored.connection().lock().unwrap();
-        assert_eq!(verify_sqlite(&c), Ok(10));
+        assert_eq!(verify_sqlite(&c), Ok(11));
         assert_eq!(
             before,
             crate::arena_story::branch::schema::tests::all_column_hashes(&c)

@@ -31,8 +31,11 @@ describe('tail rewrite command registration without schema or product activation
     for (const command of Object.values(STORY_TAIL_REWRITE_IPC)) expect(harness.match(/tauri::generate_handler!\[([\s\S]*?)\]/u)![1]).toContain(command);
     expect(harness).toContain('.build(tauri::generate_context!())'); expect(harness).toContain('get_ipc_response(');
   });
-  it('keeps production schema 10 and the unconfigured product owner closed', () => {
-    expect(read('../src-tauri/src/store.rs')).toContain('pub const SCHEMA_VERSION: i64 = 10;');
+  it('keeps production Tea schema 11 and the unconfigured product owner closed', () => {
+    expect(read('../src-tauri/src/store.rs')).toContain('pub const SCHEMA_VERSION: i64 = 11;');
+    const history = read('../src-tauri/src/arena_story_history.rs');
+    expect(history).toContain('Ok(5..=11) => Ok(false)');
+    expect(history).toMatch(/#\[cfg\(test\)\]\s*Ok\(12\) => Ok\(true\)/u);
     expect(read('../src/app/battle-page.tsx')).not.toMatch(/tailRewrite|tail_rewrite|tail-rewrite/u);
     const owner = read('../src/features/arena/story-session.ts');
     const flow = owner.slice(owner.indexOf('async generateTailRewrite('), owner.indexOf('private assertNoBranchCandidate('));

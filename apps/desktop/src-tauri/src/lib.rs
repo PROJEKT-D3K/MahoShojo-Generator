@@ -37,6 +37,7 @@ mod library;
 mod local_card;
 #[cfg(test)]
 mod local_card_contract_tests;
+mod magic_tea_party;
 mod maintenance;
 #[cfg(test)]
 mod maintenance_contract_tests;
@@ -1014,6 +1015,22 @@ fn abort_arena_story_pending_export(
 ) -> Result<(), arena_story::StoryError> {
     arena_story::ipc::token(Some(&token))?;
     library.stories().abort_pending_export(&token)
+}
+
+// Tea commands admit only closed operations on the same local SQLite library.
+#[tauri::command(async)]
+fn read_magic_tea_party(
+    library: State<'_, LocalLibrary>,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, magic_tea_party::TeaError> {
+    library.tea().read(request)
+}
+#[tauri::command(async)]
+fn mutate_magic_tea_party(
+    library: State<'_, LocalLibrary>,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, magic_tea_party::TeaError> {
+    library.tea().mutate(request)
 }
 
 // Dedicated story commands. All disk/connection waits run off the UI thread. The
@@ -2101,6 +2118,8 @@ pub fn run() {
             query_arena_story_tail_rewrite_receipt,
             resolve_arena_story_branch_anchor,
             resolve_arena_story_tail_rewrite_source,
+            read_magic_tea_party,
+            mutate_magic_tea_party,
             list_arena_story_sessions,
             delete_arena_story_session,
             list_arena_story_chapters,

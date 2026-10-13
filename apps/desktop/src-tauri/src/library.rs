@@ -56,6 +56,7 @@ pub struct LocalLibrary {
     connection: SharedConnection,
     data_root: PathBuf,
     profiles: LocalStore,
+    tea: crate::magic_tea_party::TeaStore,
     cards: LocalCardStore,
     packages: WebPackageStore,
     blobs: BlobStore,
@@ -95,7 +96,11 @@ impl LocalLibrary {
             Arc::clone(&gate),
         )
         .map_err(|_| crate::store::StoreError::Unavailable)?;
+        let tea =
+            crate::magic_tea_party::TeaStore::open(Arc::clone(&connection), Arc::clone(&gate))
+                .map_err(|_| crate::store::StoreError::Unavailable)?;
         Ok(Self {
+            tea,
             gate,
             stories: Arc::new(stories),
             profiles: LocalStore::new(Arc::clone(&connection)),
@@ -138,6 +143,10 @@ impl LocalLibrary {
 
     pub fn stories(&self) -> &crate::arena_story::StoryStore {
         &self.stories
+    }
+
+    pub fn tea(&self) -> &crate::magic_tea_party::TeaStore {
+        &self.tea
     }
 
     pub fn profiles(&self) -> &LocalStore {

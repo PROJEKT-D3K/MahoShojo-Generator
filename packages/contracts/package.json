@@ -40,6 +40,11 @@
       "import": "./src/desktop-cloud.ts",
       "default": "./src/desktop-cloud.ts"
     },
+    "./desktop-magic-tea-party": {
+      "types": "./src/desktop-magic-tea-party.ts",
+      "import": "./src/desktop-magic-tea-party.ts",
+      "default": "./src/desktop-magic-tea-party.ts"
+    },
     "./desktop-config": {
       "types": "./src/desktop-config.ts",
       "import": "./src/desktop-config.ts",
@@ -146,7 +151,8 @@
     "./desktop-room-session": "./src/desktop-room-session.ts",
     "./fixtures/desktop-room-session.json": "./fixtures/desktop-room-session.json",
     "./desktop-room-ipc": "./src/desktop-room-ipc.ts",
-    "./fixtures/desktop-room-ipc.json": "./fixtures/desktop-room-ipc.json"
+    "./fixtures/desktop-room-ipc.json": "./fixtures/desktop-room-ipc.json",
+    "./fixtures/desktop-magic-tea-party.json": "./fixtures/desktop-magic-tea-party.json"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",
