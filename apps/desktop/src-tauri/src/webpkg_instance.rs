@@ -134,7 +134,7 @@ fn parse_policy_manifest(json: &str) -> Option<GeneratedPolicies> {
         if policy.is_empty()
             || policy
                 .split(';')
-                .any(|part| part.trim().split_whitespace().next() == Some("sandbox"))
+                .any(|part| part.split_whitespace().next() == Some("sandbox"))
             || http::HeaderValue::from_str(policy).is_err()
         {
             return None;

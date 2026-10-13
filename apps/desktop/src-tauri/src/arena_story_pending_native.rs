@@ -213,6 +213,7 @@ pub(crate) struct AdmissionGuard<'a> {
     _maintenance: crate::maintenance::WritePermit,
 }
 impl AdmissionGuard<'_> {
+    #[cfg(test)]
     pub(crate) fn product(&self) -> Product {
         self.product
     }
