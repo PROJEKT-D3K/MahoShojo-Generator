@@ -57,6 +57,16 @@ describe('Tavern local journey', () => {
     expect(readTavernLocalDocument(png, 'png').candidates[0].parsed).toEqual(raw);
     expect(() => readTavernLocalDocument(encoder.encode(JSON.stringify({ ...projection, _tavern: undefined })), 'json')).toThrow();
   });
+  it('reopens only schema-valid structured scenarios and preserves the inert original through PNG', () => {
+    const projection = { title: '结构化情景', elements: { scene: { place: '庭院' }, events: '已编辑' }, metadata: { signature: 'untrusted' }, _tavern: { raw: card } };
+    const reopened = readTavernLocalDocument(encoder.encode(JSON.stringify(projection)), 'json');
+    expect(reopened.candidates[0].parsed).toEqual(card);
+    expect(reopened.warnings.join('')).toContain('不会合并');
+    expect(readTavernLocalDocument(writeTavernCardToPngBytes(getPlaceholderPngBytes(), reopened.candidates[0].parsed), 'png').candidates[0].parsed).toEqual(card);
+    for (const invalid of [{ ...projection, elements: [] }, { ...projection, elements: { events: 1 } }, { ...projection, templateId: 'unknown' }, { ...projection, title: 1 }, { _tavern: { raw: card } }]) {
+      expect(() => readTavernLocalDocument(encoder.encode(JSON.stringify(invalid)), 'json')).toThrow();
+    }
+  });
   it('preserves the conservative Canshou fields and round-trips only its complete original', () => {
     const raw = { ...card, data: { ...card.data, name: '残兽', description: '{{user}} 外观', personality: '情感', scenario: '场景', mes_example: '样例', first_mes: '不映射开场', tags: ['不映射标签'] } };
     const candidate = readTavernLocalDocument(encoder.encode(JSON.stringify(raw)), 'json').candidates[0];

@@ -79,6 +79,55 @@
           ]
         }
       }
+    },
+    {
+      "label": "structured-scenario-system",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "scenario",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "systemConfig": {
+          "modelId": "default"
+        }
+      }
+    },
+    {
+      "label": "structured-scenario-preset",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "scenario",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "presetConfig": {
+          "providerId": "deepseek",
+          "modelId": "deepseek-chat"
+        }
+      }
     }
   ],
   "invalid": [
@@ -637,6 +686,90 @@
         },
         "systemConfig": {
           "modelId": "default"
+        }
+      }
+    },
+    {
+      "label": "unsupported-template-magical-girl",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "magical-girl",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "unsupported-template-custom",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "custom",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "unsupported-template-wrong-case",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "Scenario",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "unsupported-template-whitespace",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": " scenario ",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
         }
       }
     }

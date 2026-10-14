@@ -37,7 +37,8 @@ async function upload(value = raw) {
 }
 async function chooseAi() { const input = host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]:not(:checked)')!; await act(async () => input.click()); await settle(); }
 async function template(value: string) { const select = host.querySelector<HTMLSelectElement>('select')!; await act(async () => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); }); }
-const complete = (input: TavernGenerationInput) => ({ status: 'completed', mode: 'direct-local', cardKind: input.template, rawText: '模型输出', card: { templateId: input.template === 'general' ? '通用角色' : '通用情景', ...(input.template === 'general' ? { name: '整理角色' } : { title: '整理情景' }), content: 'AI 整理正文', _tavern: { raw: input.raw } } });
+const scenario = { title: '整理情景', scenario_type: '互动', description: '简介', elements: { scene: { place: '庭院' }, events: 'AI 整理正文', atmosphere: '轻松', development: ['探访'] } };
+const complete = (input: TavernGenerationInput) => ({ status: 'completed', mode: 'direct-local', cardKind: input.template, rawText: '模型输出', card: input.template === 'scenario' ? { ...scenario, _tavern: { raw: input.raw } } : { templateId: input.template === 'general' ? '通用角色' : '通用情景', ...(input.template === 'general' ? { name: '整理角色' } : { title: '整理情景' }), content: 'AI 整理正文', _tavern: { raw: input.raw } } });
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.account = { userId: null, epoch: 0 };
@@ -51,8 +52,8 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(
 const mount = async () => { await act(async () => root.render(<StrictMode><DesktopTavern /></StrictMode>)); await settle(); };
 
 describe('Desktop Tavern actual Direct journey', () => {
-  it.each(['general', 'general-scenario'])('generates %s with frozen source and restores without replay', async kind => {
-    await mount(); await upload(); await template(kind); await chooseAi(); await click('开始转换');
+  it.each(['general', 'general-scenario', 'scenario'])('generates %s with frozen source and restores without replay', async kind => {
+    await mount(); await upload(); await template(kind); if (kind !== 'scenario') await chooseAi(); await click('开始转换');
     expect(mocks.execute).toHaveBeenCalledTimes(1);
     expect(mocks.execute.mock.calls[0]!.slice(0, 3)).toEqual([
       expect.objectContaining({ profileId: 'local', providerTarget: { kind: 'custom', profileId: 'local' } }),
@@ -60,11 +61,23 @@ describe('Desktop Tavern actual Direct journey', () => {
       expect.objectContaining({ mode: 'direct-local', generationMode: 'non-stream', modelId: 'model' }),
     ]);
     expect(host.querySelector('[data-result]')?.textContent).toContain('AI 整理正文');
-    await click('下载通用卡 JSON'); const exported = JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes));
-    expect(exported).toMatchObject({ content: 'AI 整理正文', _tavern: { raw } });
+    await click(kind === 'scenario' ? '下载情景卡 JSON' : '下载通用卡 JSON'); const exported = JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes));
+    expect(exported).toMatchObject({ ...(kind === 'scenario' ? scenario : { content: 'AI 整理正文' }), _tavern: { raw } });
+    if (kind === 'scenario') { expect(exported).not.toHaveProperty('content'); expect(exported).not.toHaveProperty('templateId'); }
     await act(async () => root.unmount()); root = createRoot(host); await mount();
     expect(mocks.execute).toHaveBeenCalledTimes(1); expect(host.textContent).toContain('已恢复 AI 结果');
     await click('导出原件 JSON'); expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[1]![0].bytes))).toEqual(raw);
+  });
+  it('selects structured AI locally, disables unsupported rules, and preserves execution preference', async () => {
+    await mount(); await upload(); const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+    await template('scenario');
+    const rules = host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')!;
+    expect(rules.disabled).toBe(true); expect(rules.checked).toBe(false);
+    expect(host.textContent).toContain('尚未提供规则映射'); expect(host.querySelector('[data-result]')).toBeNull();
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+    await act(async () => rules.click()); await click('开始转换');
+    expect(mocks.execute.mock.calls[0]![1].template).toBe('scenario');
+    expect(host.querySelector('[data-result="scenario"]')?.textContent).toContain('庭院');
   });
   it('requires confirmation for source/template changes and never restores a result under the replacement source', async () => {
     await mount(); await upload(); await chooseAi(); await click('开始转换');
@@ -86,9 +99,9 @@ describe('Desktop Tavern actual Direct journey', () => {
     await click('取消转换'); expect(signal.aborted).toBe(true); await act(async () => finish(complete(frozen)));
     expect(host.querySelector('[data-result]')).toBeNull(); expect(host.textContent).toContain('模型输出'); expect(mocks.execute).toHaveBeenCalledTimes(1);
   });
-  it('uses Hosted without rewriting the selected server preference', async () => {
+  it.each(['general', 'scenario'])('uses Hosted %s without rewriting the selected server preference', async kind => {
     localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
-    await mount(); await upload(); const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY); await chooseAi();
+    await mount(); await upload(); const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY); await template(kind); if (kind !== 'scenario') await chooseAi();
     expect(button('开始转换').disabled).toBe(false); await click('开始转换');
     expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'hosted-json', generationMode: 'non-stream' });
     expect(mocks.execute.mock.calls[0]![0]).toMatchObject({ providerTarget: { kind: 'system' }, onHostedDispatchSettled: expect.any(Function) });

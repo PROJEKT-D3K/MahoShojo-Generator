@@ -1,4 +1,5 @@
 import { SafeJsonValueSchema, type JsonValue } from '@mahoshojo/contracts/json-value';
+import { ScenarioSchema, type ScenarioData } from '../data-card-schemas';
 import { GENERAL_CHARACTER_TEMPLATE_ID, GENERAL_SCENARIO_TEMPLATE_ID } from '../data-cards';
 import { buildTavernCanshouCard, TAVERN_CANSHOU_TEMPLATE_ID } from './canshou';
 import { buildGeneralMarkdown, buildTavernGeneralScenarioCard } from './general';
@@ -34,6 +35,11 @@ export function isTavernGeneralProjection(input: unknown): input is Record<strin
     && typeof input.content === 'string' && !isLikelyTavernCard(input);
 }
 
+/** Structured scenarios have no templateId; arbitrary wrappers cannot recover an original. */
+export function isTavernScenarioProjection(input: unknown): input is ScenarioData {
+  return ScenarioSchema.safeParse(input).success && !isLikelyTavernCard(input);
+}
+
 export function isTavernCanshouProjection(input: unknown): input is Record<string, unknown> {
   return record(input) && input.templateId === TAVERN_CANSHOU_TEMPLATE_ID
     && ['name', 'appearance', 'coreEmotion', 'researcherNotes'].every((key) => typeof input[key] === 'string')
@@ -52,7 +58,7 @@ export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json
   const input: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   // Only our explicitly preserved original is recoverable. Do not pretend edits to a converted
   // projected card have been mapped back into the original Tavern fields.
-  const archived = (isTavernGeneralProjection(input) || isTavernCanshouProjection(input)) && record(input._tavern) ? input._tavern.raw : undefined;
+  const archived = (isTavernGeneralProjection(input) || isTavernCanshouProjection(input) || isTavernScenarioProjection(input)) && record(input._tavern) ? input._tavern.raw : undefined;
   const raw = validateTavernRaw(archived ?? input);
   return {
     candidates: [{ keyword: 'json', chunkType: 'tEXt', parseMethod: 'json', parsed: raw }],

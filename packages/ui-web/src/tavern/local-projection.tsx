@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { GENERAL_CHARACTER_TEMPLATE_ID, GENERAL_SCENARIO_TEMPLATE_ID } from '@mahoshojo/domain/data-cards';
-import { MAX_TAVERN_TEXT_BYTES, TAVERN_CANSHOU_TEMPLATE_ID } from '@mahoshojo/domain/tavern-card';
+import type { ScenarioData } from '@mahoshojo/domain/data-card-schemas';
+import { MAX_TAVERN_TEXT_BYTES, TAVERN_CANSHOU_TEMPLATE_ID, isTavernScenarioProjection } from '@mahoshojo/domain/tavern-card';
 import { buildSafeFileName } from '../client';
 import type { TavernExportFilePort } from './controls';
 
@@ -12,19 +13,23 @@ interface TavernProjectionBase {
 export type TavernProjection = TavernProjectionBase & (
   | { templateId: typeof GENERAL_CHARACTER_TEMPLATE_ID; name: string; content: string }
   | { templateId: typeof GENERAL_SCENARIO_TEMPLATE_ID; title: string; content: string }
+  | ScenarioData
   | { templateId: typeof TAVERN_CANSHOU_TEMPLATE_ID; name: string; appearance: string; coreEmotion: string; researcherNotes: string }
 );
+export const isTavernStructuredScenario = (data: unknown): data is ScenarioData =>
+  isTavernScenarioProjection(data);
 export const getTavernProjectionTitle = (data: TavernProjection): string =>
-  data.templateId === GENERAL_SCENARIO_TEMPLATE_ID ? (data.title ?? '未命名情景') : (data.name ?? '未命名角色');
+  (data.templateId === GENERAL_SCENARIO_TEMPLATE_ID || isTavernStructuredScenario(data)) ? (typeof data.title === 'string' ? data.title : '未命名情景') : (typeof data.name === 'string' ? data.name : '未命名角色');
 export const getTavernProjectionCardType = (data: TavernProjection): 'character' | 'scenario' =>
-  data.templateId === GENERAL_SCENARIO_TEMPLATE_ID ? 'scenario' : 'character';
+  (data.templateId === GENERAL_SCENARIO_TEMPLATE_ID || isTavernStructuredScenario(data)) ? 'scenario' : 'character';
 
 export function TavernLocalProjection({ data, disabled, exportFile, saveCard, hideExport = false, conversionMode = 'rules' }: {
   conversionMode?: 'rules' | 'ai'; data: TavernProjection; disabled?: boolean; hideExport?: boolean; exportFile: TavernExportFilePort;
   saveCard: (data: TavernProjection) => Promise<'saved' | 'already-present'>;
 }) {
   const isCanshou = data.templateId === TAVERN_CANSHOU_TEMPLATE_ID;
-  const cardLabel = isCanshou ? '残兽卡' : '通用卡';
+  const isStructuredScenario = isTavernStructuredScenario(data);
+  const cardLabel = isStructuredScenario ? '情景卡' : isCanshou ? '残兽卡' : '通用卡';
   const lock = useRef(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ data: TavernProjection; text: string } | null>(null);
@@ -45,7 +50,7 @@ export function TavernLocalProjection({ data, disabled, exportFile, saveCard, hi
     finally { lock.current = false; setBusy(false); }
   }
   return <div className="rounded-xl border border-pink-200 bg-white/70 p-4">
-    <div className="text-sm font-semibold text-pink-700">{conversionMode === 'ai' ? (getTavernProjectionCardType(data) === 'scenario' ? '通用情景（AI 深度转换）' : '通用角色（AI 深度转换）') : isCanshou ? '残兽（保守规则映射）' : getTavernProjectionCardType(data) === 'scenario' ? '通用情景（规则映射）' : '通用角色（规则映射）'}</div>
+    <div className="text-sm font-semibold text-pink-700">{conversionMode === 'ai' ? (isStructuredScenario ? '结构化情景（AI 深度转换）' : getTavernProjectionCardType(data) === 'scenario' ? '通用情景（AI 深度转换）' : '通用角色（AI 深度转换）') : isCanshou ? '残兽（保守规则映射）' : getTavernProjectionCardType(data) === 'scenario' ? '通用情景（规则映射）' : '通用角色（规则映射）'}</div>
     <p className="mt-2 text-xs text-gray-600">{conversionMode === 'ai' ? '正文由所选模型根据裁剪后的设定整理，并通过 schema 校验。' : isCanshou ? '保守映射：名称保留；描述转为外观，性格转为核心情感，场景与对话样例转为研究员笔记。开场白与标签不进入残兽正文。' : '正文仅映射描述、性格、场景、开场白、对话样例与标签。'}世界书、脚本、系统提示和其他扩展不会在转换卡中执行；{data._tavern?.raw !== undefined ? '完整原件保留在 _tavern.raw。' : '未保留完整原件；未映射字段不会出现在转换结果中。'}转换结果未签名，原件签名不适用于新正文。修改转换卡不会自动同步到酒馆原件。</p>
     <div className="mt-3 flex flex-wrap gap-2">
       {!hideExport ? <button type="button" disabled={disabled || busy} onClick={() => void run(false)} className="rounded-xl border border-pink-200 bg-white px-4 py-2 text-sm text-pink-700 disabled:opacity-50">下载{cardLabel} JSON</button> : null}

@@ -55,4 +55,30 @@ describe('Tavern uses the existing generation owner', () => {
     expect(putIfAbsent.mock.calls[1]![0].data).not.toHaveProperty('signature'); expect(putIfAbsent.mock.calls[1]![0].data).not.toHaveProperty('isPreset');
   });
 
+  it.each(['direct-local', 'direct-remote', 'hosted-json'] as const)('restores and saves structured %s as unsigned, retaining raw after save failure', async mode => {
+    const disk = storage();
+    const selected = { ...input, template: 'scenario' as const, raw: { ...(input.raw as object), extensions: { keep: ['all'] } } };
+    const card = { title: '结构情景', scenario_type: '互动', description: '简介', elements: { scene: {}, events: '事件', atmosphere: '轻松', development: [] }, _tavern: { raw: selected.raw } };
+    const execute = vi.fn(async () => ({ ...completed, mode, cardKind: 'scenario' as const, card: { ...card, signature: 'forged', isPreset: true, metadata: { signature: 'forged' } } }));
+    const putIfAbsent = vi.fn<CardRepository['putIfAbsent']>().mockRejectedValueOnce(new Error('disk full')).mockResolvedValue({ written: true });
+    const repository = { putIfAbsent } as unknown as CardRepository;
+    const session = new TavernAiSession({ storage: disk, repository, execute });
+    session.updateDraft({ language: selected.language, input: selected }); await session.generate(options, selected, { ...intent, mode });
+    const stored = JSON.parse(disk.getItem(TAVERN_AI_DRAFT_KEY)!);
+    const appFields = { metadata: { created_at: '2026-01-01T00:00:00Z' }, adjudicationEvents: [{ id: 'event-1', description: '保留判定', type: 'binary', probability: 50 }], creationInputs: { template: 'scenario', freeformBrief: '用户编辑', questionnaires: [], questionnaireAnswers: [], buildRules: [] } };
+    Object.assign(stored.output.card, JSON.parse(JSON.stringify(appFields)));
+    stored.output.card.signature = 'restored-forged'; stored.output.card.metadata.signature = 'restored-forged';
+    disk.setItem(TAVERN_AI_DRAFT_KEY, JSON.stringify(stored)); session.dispose();
+    const restored = new TavernAiSession({ storage: disk, repository, execute }); restored.restoreDraft(false);
+    expect(restored.getSnapshot()).toMatchObject({ resultRestored: true, cardKind: 'scenario', card, draft: { input: selected } });
+    expect(restored.getSnapshot().card).toMatchObject(appFields);
+    expect(restored.resultSignatureKind()).toBe('unsigned'); expect(restored.getSnapshot().card).not.toHaveProperty('metadata.signature');
+    expect(await restored.saveResult()).toBe(false); expect(restored.getSnapshot().card).toMatchObject(card);
+    expect(await restored.saveResult()).toBe(true); expect(execute).toHaveBeenCalledOnce();
+    expect(putIfAbsent.mock.calls[1]![0]).toMatchObject({ cardType: 'scenario', title: card.title, data: card, provenance: { kind: 'unsigned', execution: mode === 'hosted-json' ? 'hosted' : mode } });
+    expect(putIfAbsent.mock.calls[1]![0].data).not.toHaveProperty('signature');
+    expect(putIfAbsent.mock.calls[1]![0].data).not.toHaveProperty('metadata.signature');
+    expect(putIfAbsent.mock.calls[1]![0].data).toMatchObject(appFields);
+  });
+
 });

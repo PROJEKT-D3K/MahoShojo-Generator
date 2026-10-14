@@ -9,7 +9,7 @@ type Reply = { response?: DesktopHostedJsonResponse; error?: unknown; observed: 
 const TEST = 'cloud::tests::tavern_conversion::real_tavern_hosted_pipe';
 
 describe('Tavern renderer through real Native Hosted HTTP', () => {
-  it.skipIf(!process.env.MAHO_TAVERN_HOSTED_BINARY)('uses the fixed path and trusted system/preset config for both unsigned templates', async () => {
+  it.skipIf(!process.env.MAHO_TAVERN_HOSTED_BINARY)('uses the fixed path and trusted system/preset config for all unsigned templates', async () => {
     const child = spawn(process.env.MAHO_TAVERN_HOSTED_BINARY!, ['--ignored', '--exact', TEST, '--nocapture', '--quiet', '--test-threads=1'], { stdio: ['pipe', 'pipe', 'pipe'] });
     const lines = createInterface({ input: child.stdout });
     let resolveReady!: () => void, rejectReady!: (error: Error) => void;
@@ -38,7 +38,7 @@ describe('Tavern renderer through real Native Hosted HTTP', () => {
     }));
     try {
       await ready;
-      for (const template of ['general', 'general-scenario'] as const) {
+      for (const template of ['general', 'general-scenario', 'scenario'] as const) {
         for (const kind of ['system', 'preset'] as const) {
           let observed: Reply['observed'] | undefined;
           const raw = { name: 'Alice', description: '{{user}} 对 {{char}} 说话', extensions: { keep: true } };
@@ -46,16 +46,16 @@ describe('Tavern renderer through real Native Hosted HTTP', () => {
             expect(command).toBe('hosted_ai_request');
             if (failure) throw failure;
             const promise = new Promise<Reply>((resolve, reject) => { pending = { resolve, reject }; });
-            child.stdin.write(`${JSON.stringify({ request: args?.request, responseBody: { aiMeta: null, data: { name: '角色', title: '情景', content: '正文', signature: 'synthetic-forged', _tavern: { raw: { name: 'untrusted' } } } } })}\n`);
+            child.stdin.write(`${JSON.stringify({ request: args?.request, responseBody: { aiMeta: null, data: { name: '角色', title: '情景', content: '正文', scenario_type: '互动', description: '简介', elements: { scene: {}, events: '事件', atmosphere: '轻松', development: [] }, metadata: { signature: 'synthetic-forged' }, signature: 'synthetic-forged', _tavern: { raw: { name: 'untrusted' } } } } })}\n`);
             const reply = await promise; observed = reply.observed;
             if (reply.error) throw reply.error;
             return reply.response;
           } }, { raw, template, language: 'zh-CN', preference: DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE }, {
             requestId: `native-${template}-${kind}`, mode: 'hosted-json', generationMode: 'non-stream', modelId: kind === 'system' ? 'default' : 'deepseek-chat',
           }, new AbortController().signal);
-          expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { content: '正文', _tavern: { raw } } });
+          expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { ...(template === 'scenario' ? { title: '情景', elements: { events: '事件' } } : { content: '正文' }), _tavern: { raw } } });
           if (outcome.status !== 'completed') throw new Error('Expected real Native completion');
-          expect(outcome.card).not.toHaveProperty('signature');
+          expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('metadata.signature');
           expect(observed).toMatchObject({ method: 'POST', path: '/api/tavern/convert', body: { template, language: 'zh-CN' } });
           expect(observed!.body).not.toHaveProperty('raw'); expect(observed!.body).not.toHaveProperty('preference');
           if (kind === 'preset') expect(observed!.body.customProvider).toMatchObject({ providerId: 'deepseek', modelId: 'deepseek-chat', apiKey: 'fake-tavern-key' });

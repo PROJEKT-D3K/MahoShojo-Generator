@@ -18,7 +18,20 @@ fn tavern_contract_rejects_before_credentials_session_or_probe() {
             "../../../../packages/contracts/fixtures/desktop-hosted-tavern.json"
         ))
         .unwrap();
+        let mut invalid = fixture["invalid"].as_array().unwrap().clone();
+        // The new template must retain every existing non-template validation boundary.
         for entry in fixture["invalid"].as_array().unwrap() {
+            if matches!(
+                entry["request"]["body"]["template"].as_str(),
+                Some("general" | "general-scenario")
+            ) {
+                let mut scenario = entry.clone();
+                scenario["request"]["body"]["template"] = serde_json::json!("scenario");
+                scenario["label"] = serde_json::json!(format!("scenario: {}", entry["label"]));
+                invalid.push(scenario);
+            }
+        }
+        for entry in &invalid {
             if let Ok(mut request) =
                 serde_json::from_value::<CloudHostedGenerateRequest>(entry["request"].clone())
             {
@@ -86,14 +99,17 @@ fn tavern_contract_rejects_before_credentials_session_or_probe() {
                 .code,
             CloudErrorCode::InvalidRequest
         );
-        let request = tavern_request();
-        assert_eq!(
-            stream_hosted_ai(&state, &secrets, &registry, request, &VecSink::new())
-                .await
-                .unwrap_err()
-                .code,
-            CloudErrorCode::InvalidRequest
-        );
+        for template in ["general", "general-scenario", "scenario"] {
+            let mut request = tavern_request();
+            request.body["template"] = serde_json::json!(template);
+            assert_eq!(
+                stream_hosted_ai(&state, &secrets, &registry, request, &VecSink::new())
+                    .await
+                    .unwrap_err()
+                    .code,
+                CloudErrorCode::InvalidRequest
+            );
+        }
         assert_eq!(secrets.resolves.load(Ordering::SeqCst), 0);
         assert_eq!(server.readiness_count.load(Ordering::SeqCst), 0);
         assert!(server.last_generate_body.lock().unwrap().is_none());
@@ -112,7 +128,7 @@ fn tavern_templates_system_and_preset_use_fixed_json_path() {
         let registry = crate::ai::RequestRegistry::default();
         let response_body = serde_json::json!({"data":{"name":"Alice","templateId":"通用角色"},"aiMeta":{"model":"test"}});
         *server.hosted_json_response.lock().unwrap() = Some((200, response_body.to_string()));
-        for template in ["general", "general-scenario"] {
+        for template in ["general", "general-scenario", "scenario"] {
             for preset in [false, true] {
                 let mut request = tavern_request();
                 request.body["template"] = serde_json::json!(template);

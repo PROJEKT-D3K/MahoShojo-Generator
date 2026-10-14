@@ -1,4 +1,4 @@
-import { isTavernGeneralProjection } from '@mahoshojo/domain/tavern-card';
+import { isTavernGeneralProjection, isTavernScenarioProjection } from '@mahoshojo/domain/tavern-card';
 import { useEffect, useRef, useState } from 'react';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
@@ -17,7 +17,7 @@ export function TavernLocalSources({ repository, disabled, onSource, selection, 
   mode?: 'original' | 'character'; repository: CardRepository; selection: TavernSourceSelection; disabled?: boolean; onSource: (file: TavernInputFile) => void;
 }) {
   const accepts = (item: LocalCardRecordV1) => item.deletedAt === undefined && (mode === 'character' ? item.cardType === 'character'
-    : (item.cardType === 'character' || (item.cardType === 'scenario' && isTavernGeneralProjection(item.data))) && hasOriginal(item));
+    : (item.cardType === 'character' || (item.cardType === 'scenario' && (isTavernGeneralProjection(item.data) || isTavernScenarioProjection(item.data)))) && hasOriginal(item));
   const [items, setItems] = useState<LocalCardRecordV1[]>([]);
   const [cursor, setCursor] = useState<string>();
   const [opened, setOpened] = useState(false);

@@ -49,6 +49,13 @@ describe('shared Tavern conversion controls', () => {
     expect(button('流式').disabled).toBe(false); expect(container.querySelectorAll<HTMLInputElement>('input[type="radio"]')[1].disabled).toBe(false);
     expect(container.textContent).toContain('输出会通过 schema 校验');
   });
+  it('disables unsupported rules without disabling AI or altering host state', () => {
+    const input = props(); act(() => root.render(<TavernConversionControls {...input} rulesDisabledReason="结构化情景尚未提供规则映射" />));
+    const [rules, ai] = container.querySelectorAll<HTMLInputElement>('input[type="radio"]');
+    expect(rules.disabled).toBe(true); expect(ai.disabled).toBe(false); expect(ai.checked).toBe(true);
+    expect(container.textContent).toContain('尚未提供规则映射');
+    act(() => rules.click()); expect(input.onModeChange).not.toHaveBeenCalled();
+  });
   it('locks controls while busy and leaves collapsed language display controlled by the host', () => {
     const input = props(); act(() => root.render(<TavernConversionControls {...input} disabled />));
     expect([...container.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select')].every((control) => control.disabled)).toBe(true);

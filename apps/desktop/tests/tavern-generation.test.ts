@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createTavernGeneralGenerationConfig, createTavernGeneralScenarioGenerationConfig } from '@mahoshojo/ai-core/tavern-generation';
+import { createTavernGeneralGenerationConfig, createTavernGeneralScenarioGenerationConfig, createTavernScenarioGenerationConfig } from '@mahoshojo/ai-core/tavern-generation';
 import { buildStructuredJsonInstructionFromZodSchema } from '@mahoshojo/ai-core/structured-json';
 import { DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE } from '@mahoshojo/domain/tavern-card';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
-import { executeTavernGeneration, prepareTavernGenerationInput, type TavernGenerationInput, type TavernGenerationIntent } from '../src/features/tavern/generation';
+import { executeTavernGeneration, prepareTavernGenerationInput, validateTavernGeneratedCard, type TavernGenerationInput, type TavernGenerationIntent } from '../src/features/tavern/generation';
 import { STREAM_DIRECT_AI_COMMAND, STREAM_TARGET_AI_COMMAND } from '../src/platform/direct-ai-bridge';
 
+const scenario = { title: '情景', scenario_type: '互动', description: '简介', elements: { scene: {}, events: '事件', atmosphere: '轻松', development: [] } };
 const input: TavernGenerationInput = { raw: { name: 'Alice', description: '{{user}} 对 {{char}} 说话', extensions: { script: '{{user}} 原件' } }, template: 'general', language: '日本語', preference: { ...DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE, userReplacement: '旅人' } };
 const intent: TavernGenerationIntent = { requestId: 'tavern-1', mode: 'direct-remote', generationMode: 'non-stream', modelId: 'test-model' };
 function harness(text: string) {
@@ -24,11 +25,11 @@ function harness(text: string) {
 }
 
 describe('Tavern Direct uses the shared Web generation core', () => {
-  it.each(['general', 'general-scenario'] as const)('dispatches %s prompt/schema to Direct and retains the untouched original', async template => {
-    const native = harness(JSON.stringify({ name: '角色', title: '情景', content: '正文', signature: 'forged', isPreset: true }));
+  it.each(['general', 'general-scenario', 'scenario'] as const)('dispatches %s prompt/schema to Direct and retains the untouched original', async template => {
+    const native = harness(JSON.stringify({ ...scenario, name: '角色', content: '正文', metadata: { signature: 'forged' }, signature: 'forged', isPreset: true }));
     const selected = { ...input, template };
     const prepared = prepareTavernGenerationInput(selected);
-    const config = template === 'general' ? createTavernGeneralGenerationConfig() : createTavernGeneralScenarioGenerationConfig();
+    const config = template === 'scenario' ? createTavernScenarioGenerationConfig() : template === 'general' ? createTavernGeneralGenerationConfig() : createTavernGeneralScenarioGenerationConfig();
     const target = { kind: 'preset' as const, providerId: 'deepseek' };
     const outcome = await executeTavernGeneration({ ...native.options, providerTarget: target }, selected, { ...intent, overrides: { temperature: 0.4, maxOutputTokens: 900 } }, new AbortController().signal);
     expect(native.invoke).toHaveBeenCalledTimes(1);
@@ -39,15 +40,24 @@ describe('Tavern Direct uses the shared Web generation core', () => {
       { role: 'user', content: config.promptBuilder(prepared.promptInput) },
     ]);
     expect(prepared.promptInput.attachments[0].content).toContain('旅人 对 Alice 说话');
-    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { templateId: template === 'general' ? '通用角色' : '通用情景', content: '正文', _tavern: { raw: input.raw } } });
+    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { ...(template === 'scenario' ? scenario : { templateId: template === 'general' ? '通用角色' : '通用情景', content: '正文' }), _tavern: { raw: input.raw } } });
     if (outcome.status !== 'completed') throw new Error('expected completed');
-    expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('isPreset');
+    expect(outcome.card).not.toHaveProperty('metadata.signature'); expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('isPreset');
     expect(input.raw).toMatchObject({ description: '{{user}} 对 {{char}} 说话' });
   });
   it.each(['not JSON', '{"name":"missing content"}', '{"title":1,"content":{}}'])('rejects malformed model output without retry: %s', async text => {
     const native = harness(text);
     expect(await executeTavernGeneration(native.options, input, intent, new AbortController().signal)).toMatchObject({ status: 'invalid-output', rawText: text });
     expect(native.invoke).toHaveBeenCalledTimes(1);
+  });
+  it('rejects unknown app fields when validating a restored structured card', () => {
+    expect(() => validateTavernGeneratedCard('scenario', { ...scenario, arbitrary: 'unknown', _tavern: { raw: input.raw } })).toThrow();
+  });
+  it('rejects malformed structured scenario without falling back to a general card', async () => {
+    const text = JSON.stringify({ title: '错误情景', content: '不是结构化数据', elements: { events: 1 } });
+    const native = harness(text);
+    expect(await executeTavernGeneration(native.options, { ...input, template: 'scenario' }, intent, new AbortController().signal)).toMatchObject({ status: 'invalid-output', rawText: text });
+    expect(native.invoke).toHaveBeenCalledOnce();
   });
   it('rejects direct system and stream rather than inventing a fallback', async () => {
     const native = harness('{}'); const signal = new AbortController().signal;
@@ -59,7 +69,7 @@ describe('Tavern Direct uses the shared Web generation core', () => {
 
 describe('Tavern JSON-only Hosted generation', () => {
   const hosted = { requestId: 'tavern-hosted', mode: 'hosted-json' as const, generationMode: 'non-stream' as const, modelId: 'default' };
-  it.each(['general', 'general-scenario'] as const)('projects unsigned %s and restores only the frozen local original', async template => {
+  it.each(['general', 'general-scenario', 'scenario'] as const)('projects unsigned %s and restores only the frozen local original', async template => {
     let finish!: (value: unknown) => void;
     const invoke = vi.fn(() => new Promise(resolve => { finish = resolve; })); const notify = vi.fn();
     const original = JSON.parse(JSON.stringify(input)) as TavernGenerationInput; original.template = template;
@@ -71,11 +81,11 @@ describe('Tavern JSON-only Hosted generation', () => {
     expect(request[1].request).toMatchObject({ routeId: 'tavern-convert', body: { template, ...prepareTavernGenerationInput(original).promptInput }, presetConfig: { providerId: 'deepseek', modelId: 'deepseek-chat', generationOverrides: { temperature: 0.4 } } });
     expect(request[1].request.body).not.toHaveProperty('raw'); expect(request[1].request.body).not.toHaveProperty('preference');
     original.raw = { name: 'changed' };
-    finish({ status: 200, body: { aiMeta: null, data: { name: '角色', title: '情景', content: '正文', signature: 'forged', isPreset: true, _tavern: { raw: { name: 'server' } } } } });
+    finish({ status: 200, body: { aiMeta: null, data: { ...scenario, name: '角色', content: '正文', metadata: { signature: 'forged' }, signature: 'forged', isPreset: true, _tavern: { raw: { name: 'server' } } } } });
     const outcome = await pending;
-    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { content: '正文', _tavern: { raw: frozenRaw } } });
+    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { ...(template === 'scenario' ? scenario : { content: '正文' }), _tavern: { raw: frozenRaw } } });
     if (outcome.status !== 'completed') throw new Error('expected completed');
-    expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('isPreset');
+    expect(outcome.card).not.toHaveProperty('metadata.signature'); expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('isPreset');
     expect(invoke).toHaveBeenCalledOnce(); expect(notify).toHaveBeenCalledOnce();
   });
   it('rejects overlong source metadata before any Native invocation or cooldown', async () => {

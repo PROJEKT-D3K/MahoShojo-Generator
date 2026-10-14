@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernCandidateSelector, TavernFileInput, TavernLocalProjection, TavernOriginalExport, TavernLocalSources, useTavernSourceSelection, readTavernFile } from '../src/tavern';
+import { getTavernProjectionTitle, getTavernProjectionCardType, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernCandidateSelector, TavernFileInput, TavernLocalProjection, TavernOriginalExport, TavernLocalSources, useTavernSourceSelection, readTavernFile } from '../src/tavern';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import { convertTavernToCanshouCard, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_FILE_BYTES, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
 let root: Root; let container: HTMLDivElement;
@@ -47,6 +47,18 @@ describe('shared Tavern original journey controls', () => {
     expect(exportFile.mock.calls[0][0].name).toBe('未知_角色.json');
     expect(JSON.parse(new TextDecoder().decode(exportFile.mock.calls[0][0].bytes))).toEqual(scenario);
   });
+  it('exports structured scenario JSON independently of its Markdown preview and reports save failures without dropping raw', async () => {
+    const data = { title: '结构/情景', elements: { events: '正文' }, _tavern: { raw: candidate.parsed } };
+    const exportFile = vi.fn(); const save = vi.fn().mockRejectedValue(new Error('disk full'));
+    expect(isTavernStructuredScenario(data)).toBe(true); expect(isTavernStructuredScenario({ ...data, elements: [] })).toBe(false);
+    expect(getTavernProjectionTitle(data)).toBe(data.title); expect(getTavernProjectionCardType(data)).toBe('scenario');
+    act(() => root.render(<TavernLocalProjection conversionMode="ai" data={data} exportFile={exportFile} saveCard={save} />));
+    expect(container.textContent).toContain('结构化情景（AI 深度转换）');
+    await act(async () => container.querySelectorAll('button')[1].click()); expect(container.textContent).toContain('disk full');
+    await act(async () => container.querySelector('button')!.click());
+    expect(exportFile.mock.calls[0][0].name).toBe('结构_情景.json');
+    expect(JSON.parse(new TextDecoder().decode(exportFile.mock.calls[0][0].bytes))).toEqual(data);
+  });
   it('isolates late saves across all three projections and describes the Canshou loss accurately', async () => {
     let resolve!: (result: 'saved') => void;
     const save = vi.fn(() => new Promise<'saved'>((done) => { resolve = done; })); const exportFile = vi.fn();
@@ -77,7 +89,7 @@ describe('shared Tavern original journey controls', () => {
     function Harness({ mode = 'original' }: { mode?: 'original' | 'character' }) { const selection = useTavernSourceSelection(); return <TavernLocalSources repository={repository} selection={selection} onSource={onSource} mode={mode} />; }
     act(() => root.render(<Harness />)); await act(async () => container.querySelector('button')!.click());
     expect(list).toHaveBeenLastCalledWith({ cardTypes: ['character', 'scenario'], limit: 100 });
-    expect(container.textContent).not.toContain('已删除'); expect(container.textContent).not.toContain('结构化情景');
+    expect(container.textContent).not.toContain('已删除'); expect(container.textContent).toContain('结构化情景');
     await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === '情景')!.click());
     expect(JSON.parse(new TextDecoder().decode(await onSource.mock.calls[0][0].arrayBuffer()))).toEqual(scenario.data);
     get.mockResolvedValueOnce(tombstone);

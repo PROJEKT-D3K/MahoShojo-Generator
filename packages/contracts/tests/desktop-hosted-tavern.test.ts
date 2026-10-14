@@ -9,8 +9,16 @@ const fixture = JSON.parse(readFileSync(new URL('../fixtures/desktop-hosted-tave
 describe('酒馆 Hosted JSON contract', () => {
   it.each(fixture.valid)('accepts $label', ({ request }) => expect(DesktopHostedJsonRequestSchema.safeParse(request).success).toBe(true));
   it.each(fixture.invalid)('rejects $label', ({ request }) => expect(DesktopHostedJsonRequestSchema.safeParse(request).success).toBe(false));
-  it('retains UTF-8 content limits while reserving JSON escaping room only for Tavern requests', () => {
-    const body = { template: 'general', language: 'zh-CN', sourceName: '', attachments: [{ name: 'x', content: '\u0000'.repeat(1024 * 1024) }] };
+  it.each(fixture.invalid.filter(({ request }) => {
+    const body = request.body as Record<string, unknown>;
+    return body.template === 'general' || body.template === 'general-scenario';
+  }))('retains the same scenario boundary for $label', ({ request }) => {
+    expect(DesktopHostedJsonRequestSchema.safeParse({
+      ...request, body: { ...(request.body as Record<string, unknown>), template: 'scenario' },
+    }).success).toBe(false);
+  });
+  it.each(['general', 'general-scenario', 'scenario'])('retains UTF-8 content limits and JSON escaping room for %s', (template) => {
+    const body = { template, language: 'zh-CN', sourceName: '', attachments: [{ name: 'x', content: '\u0000'.repeat(1024 * 1024) }] };
     expect(DesktopHostedTavernBodySchema.safeParse(body).success).toBe(true);
     expect(new TextEncoder().encode(JSON.stringify(body)).length).toBeLessThan(hostedGenerationBodyMaxBytes('tavern-convert'));
     expect(DesktopHostedTavernBodySchema.safeParse({ ...body, attachments: [{ name: 'x', content: '界'.repeat(350_000) }] }).success).toBe(false);

@@ -8,6 +8,7 @@ export interface TavernConversionControlsProps {
   onModeChange: (mode: TavernConversionMode) => void;
   disabled?: boolean;
   aiDisabledReason?: string;
+  rulesDisabledReason?: string;
   aiDescription?: ReactNode;
   language: string;
   languages: readonly { code: string; name: string }[];
@@ -32,10 +33,12 @@ export function TavernConversionControls(props: TavernConversionControlsProps) {
       <div className="mt-2 grid gap-2">
         <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-pink-100 bg-white/80 p-3">
           <input type="radio" name="tavern-convert-mode" className="mt-1"
-            checked={props.mode === 'rules'} onChange={() => props.onModeChange('rules')} disabled={props.disabled} />
+            checked={props.mode === 'rules'} onChange={() => props.onModeChange('rules')} disabled={props.disabled || props.rulesDisabledReason !== undefined}
+            aria-describedby={props.rulesDisabledReason !== undefined ? `${id}-rules-unavailable` : undefined} />
           <div className="min-w-0">
             <div className="text-sm text-gray-900">规则映射（不调用 AI）</div>
             <div className="mt-1 text-xs text-gray-600">稳定、可解释、不会发起网络请求。</div>
+            {props.rulesDisabledReason !== undefined ? <div id={`${id}-rules-unavailable`} className="mt-1 text-xs text-gray-600">{props.rulesDisabledReason}</div> : null}
           </div>
         </label>
         <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-pink-100 bg-white/80 p-3">
