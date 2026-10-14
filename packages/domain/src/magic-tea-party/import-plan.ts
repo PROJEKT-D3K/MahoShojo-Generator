@@ -25,7 +25,7 @@ const SETTINGS_KEYS = [
   'providerId', 'modelId', 'temperature', 'maxContextMessages', 'contextWindowTokens',
   'responseReserveTokens', 'summaryTriggerRatio', 'summaryMaxTokens', 'summaryMinGapMessages',
   'enableChoices', 'choiceCount', 'outputFormat', 'updateApplyMode', 'language', 'userDisplayName',
-  'presetId', 'worldbookPresetId', 'enableSummary', 'readArenaHistory', 'readArenaHistoryLimit',
+  'presetId', 'worldbookPresetId', 'enableSummary', 'autoSummaryEnabled', 'readArenaHistory', 'readArenaHistoryLimit',
   'isArenaHistoryUnlimited', 'readCurrentState', 'writeArenaHistory', 'writeCurrentState',
 ] as const;
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -389,7 +389,8 @@ export const buildMagicTeaPartyImportPlan = (options: MagicTeaPartyImportPlanOpt
     const { core, payload, path } = draft;
     const rawSettings = core.settings == null ? null : requiredRecord(core.settings, `${path}.settings`);
     const normalizedSettings = options.normalizeSettings(rawSettings ? pickMagicTeaPartyRequestSettings(rawSettings) as RecordValue : null);
-    const settings = { ...rawSettings, ...normalizedSettings };
+    // Importing an archive is not permission to spend tokens on additional requests.
+    const settings = { ...rawSettings, ...normalizedSettings, autoSummaryEnabled: false };
     if (record(rawSettings?.outputPlan) && record(normalizedSettings.outputPlan)) settings.outputPlan = {
       ...record(rawSettings?.outputPlan), ...normalizedSettings.outputPlan,
     } as MagicTeaPartySession['settings']['outputPlan'];
@@ -405,6 +406,7 @@ export const buildMagicTeaPartyImportPlan = (options: MagicTeaPartyImportPlanOpt
       playerRoleId: typeof core.playerRoleId === 'string' ? core.playerRoleId : null,
       settings,
     };
+    delete session.autoSummaryState;
     if (rawScenario != null) session.scenario = normalizeRoles([rawScenario], `${path}.scenario`, true)[0];
     else delete session.scenario;
     if (core.summaryMeta !== undefined) {

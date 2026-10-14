@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MagicTeaPartyMessage, MagicTeaPartyPreferences, MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
 import {
-  MagicTeaPartyChatComposer, MagicTeaPartyChatMessage, MagicTeaPartyChatTimeline,
+  MagicTeaPartyChatComposer, MagicTeaPartyChatMessage, MagicTeaPartyChatTimeline, MagicTeaPartySummaryBody,
   MagicTeaPartyHero, MagicTeaPartyNoticePanel, MagicTeaPartyOutputPreferencesPanel,
   MagicTeaPartyPageView, MagicTeaPartySessionList, MagicTeaPartySessionSetupPanel,
   MagicTeaPartyTransferPanel, type MagicTeaPartySessionSetupPanelProps, type MagicTeaPartySessionListItem,
@@ -336,4 +336,31 @@ describe('Tea text-host acknowledgement seams', () => {
     await act(async () => inputValue(field, '保留\ud800'));
     expect(onChange).toHaveBeenLastCalledWith({ userDisplayName: '保留\ud800' });
   });
+});
+
+
+it('shows an explicitly controlled, initially off additional-request permission even when collapsed', async () => {
+  const changed = vi.fn(); const generated = vi.fn();
+  const props = { active: true, summary: '', disabled: false, isSummarizing: false, hasMessages: true,
+    error: null, description: '摘要', collapsed: true, onCollapsedChange: vi.fn(), onGenerate: generated,
+    onClear: vi.fn(), onChange: vi.fn(), onAutoSummaryEnabledChange: changed };
+  await render(<MagicTeaPartySummaryBody {...props} />);
+  const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  expect(checkbox.checked).toBe(false);
+  expect(container.textContent).toContain('额外请求一次当前模型');
+  expect(container.textContent).toContain('原始消息全部保留');
+  await act(async () => checkbox.click());
+  expect(changed).toHaveBeenCalledWith(true); expect(generated).not.toHaveBeenCalled();
+  await render(<MagicTeaPartySummaryBody {...props} autoSummaryEnabled disabled />);
+  expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
+  expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.disabled).toBe(true);
+});
+
+
+it('keeps a visible summary stop control available during automatic or manual generation', async () => {
+  const stop = vi.fn();
+  await render(<MagicTeaPartySummaryBody active summary="旧摘要" disabled isSummarizing hasMessages error={null}
+    description="摘要" collapsed onCollapsedChange={vi.fn()} onGenerate={vi.fn()} onClear={vi.fn()} onChange={vi.fn()} onStopSummary={stop} />);
+  await act(async () => button('停止摘要').click());
+  expect(stop).toHaveBeenCalledOnce(); expect(button('生成/更新摘要').disabled).toBe(true);
 });

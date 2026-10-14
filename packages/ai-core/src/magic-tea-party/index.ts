@@ -35,6 +35,9 @@ export type { MagicTeaPartyChoicesCompletion, MagicTeaPartyChoicesProjection } f
 
 export { projectMagicTeaPartySummaryInput, matchesMagicTeaPartySummaryInput } from './summary';
 export type { MagicTeaPartySummaryInput, MagicTeaPartySummaryInputProjection } from './summary';
+export { createMagicTeaPartyAutoSummaryScan, appendMagicTeaPartyAutoSummaryMessage, planMagicTeaPartyAutoSummary,
+  resolveMagicTeaPartyAutoSummaryBudget, projectMagicTeaPartyAutoSummaryInput } from './auto-summary';
+export type { MagicTeaPartyAutoSummaryScan } from './auto-summary';
 
 export {
   MAGIC_TEA_PARTY_MIN_MESSAGE_CHARS,

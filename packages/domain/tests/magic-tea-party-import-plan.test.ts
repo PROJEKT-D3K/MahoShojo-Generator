@@ -71,7 +71,7 @@ describe('shared complete-batch tea import plan', () => {
     const result = plan(entry('source', 'm'), { normalizeSettings });
     expect(normalizeSettings).toHaveBeenCalledWith({ providerId: 'local', modelId: 'test', outputPlan: { choices: 'auto' } });
     expect(result.entries[0].session.settings).toMatchObject({ providerId: 'normalized', unknownOption: { url: 'https://never.invalid' }, outputPlan: { choices: 'auto', futurePlan: true } });
-    expect(pickMagicTeaPartyRequestSettings(result.entries[0].session.settings)).toEqual({ providerId: 'normalized', modelId: 'model', outputPlan: { choices: 'auto' } });
+    expect(pickMagicTeaPartyRequestSettings(result.entries[0].session.settings)).toEqual({ providerId: 'normalized', modelId: 'model', outputPlan: { choices: 'auto' }, autoSummaryEnabled: false });
   });
 
   it('preserves unknown fields through real v1 export and reimport, without making external forks live', () => {
@@ -239,4 +239,19 @@ describe('shared complete-batch tea import plan', () => {
     expect(result.entries[1].messages[1].meta).toEqual({ supersededBySessionId: 'external-session', future: true });
   });
 
+});
+
+
+it('imports archive data without inheriting permission or pending auto-summary work', () => {
+  const source = entry('source', 'm');
+  const input = { ...source, session: { ...source.session,
+    settings: { ...source.session.settings, enableSummary: true, autoSummaryEnabled: true },
+    autoSummaryState: { lastAttemptedThroughMessageId: 'm2' } } };
+  const before = JSON.stringify(input);
+  const imported = plan(input).entries[0]!.session;
+  expect(imported.settings.autoSummaryEnabled).toBe(false);
+  expect(imported.settings.enableSummary).toBe(true);
+  expect(imported.autoSummaryState).toBeUndefined();
+  expect(pickMagicTeaPartyRequestSettings({ autoSummaryEnabled: true })).toEqual({ autoSummaryEnabled: true });
+  expect(JSON.stringify(input)).toBe(before);
 });

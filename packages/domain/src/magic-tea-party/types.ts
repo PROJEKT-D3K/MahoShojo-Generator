@@ -156,6 +156,8 @@ export type MagicTeaPartySession = {
     tokenCount?: number;
     coverage?: MagicTeaPartySummaryCoverage;
   };
+  /** A bounded dispatch watermark, never a resumable job or a coverage claim. */
+  autoSummaryState?: { lastAttemptedThroughMessageId: string };
   forkedFrom?: { sessionId: string; messageId: string; createdAt: number };
   branchLabel?: string;
   protocolShadow?: {
@@ -185,6 +187,8 @@ export type MagicTeaPartySession = {
     language?: 'zh-CN' | 'ja-JP' | 'en-US';
     userDisplayName?: string;
     enableSummary?: boolean;
+    /** Explicit permission for a separate, additional summary request. Missing means off. */
+    autoSummaryEnabled?: boolean;
     presetId?: string;
     worldbookPresetId?: string;
     readArenaHistory?: boolean;

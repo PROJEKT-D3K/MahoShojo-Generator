@@ -15,10 +15,13 @@ export type MagicTeaPartySummaryBodyProps = {
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
   onGenerate: () => void;
+  onStopSummary?: () => void;
   onClear: () => void;
   onChange: (summary: string) => void;
   onSave?: () => void;
   dirty?: boolean;
+  autoSummaryEnabled?: boolean;
+  onAutoSummaryEnabledChange?: (enabled: boolean) => void;
   collapsedDetails?: ReactNode;
   renderError?: (message: string) => ReactNode;
   children?: ReactNode;
@@ -34,6 +37,8 @@ export function MagicTeaPartySummaryBody(props: MagicTeaPartySummaryBodyProps) {
         {props.isSummarizing ? <div className="flex items-center gap-2 text-xs font-semibold text-pink-700">
           <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-pink-200 border-t-pink-600" aria-hidden="true" /><span>生成中…</span>
         </div> : null}
+        {props.isSummarizing && props.onStopSummary ? <button type="button" className="rounded-lg border border-pink-200 px-3 py-1.5 text-xs text-pink-700"
+          onClick={props.onStopSummary}>停止摘要</button> : null}
         <button type="button" className="rounded-lg border border-pink-200 bg-white px-3 py-1.5 text-xs font-semibold text-pink-700 hover:bg-pink-50 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={disabled || !props.hasMessages} onClick={props.onGenerate} title="生成摘要会消耗额外 Token">生成/更新摘要</button>
         {props.onSave ? <button type="button" className="rounded-lg border border-pink-200 bg-white px-3 py-1.5 text-xs font-semibold text-pink-700 hover:bg-pink-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -43,6 +48,14 @@ export function MagicTeaPartySummaryBody(props: MagicTeaPartySummaryBodyProps) {
         <button type="button" className="text-xs text-pink-700 hover:underline" onClick={() => props.onCollapsedChange(!props.collapsed)}>{props.collapsed ? '展开' : '收起'}</button>
       </div>
     </div>
+    {props.onAutoSummaryEnabledChange ? <div className="space-y-1 text-xs text-gray-500">
+      <label className="flex items-center gap-2 text-gray-700">
+        <input type="checkbox" checked={props.autoSummaryEnabled === true} disabled={!props.active || props.disabled}
+          onChange={event => props.onAutoSummaryEnabledChange?.(event.target.checked)} />
+        自动更新会话摘要
+      </label>
+      <div>默认关闭。开启后，长对话正常完成时最多额外请求一次当前模型，消耗输入和输出 Token。摘要选材有损，原始消息全部保留；开启开关不会立即生成。</div>
+    </div> : null}
     {props.collapsed ? <div className="space-y-1 text-xs text-gray-500">
       <div>{props.active ? <>{props.summary.trim() ? '已有摘要' : '暂无摘要'}{props.collapsedDetails}</> : '尚未选择会话。'}</div>
       {props.updatedAt ? <div>更新时间：{new Date(props.updatedAt).toLocaleString()}</div> : null}
