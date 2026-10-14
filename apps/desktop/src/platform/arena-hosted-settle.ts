@@ -1,5 +1,6 @@
 import {
-  ARENA_HOSTED_STREAM_COMMAND, getArenaHostedStreamCompletionCheck, normalizeArenaHostedBridgeFailure, type ArenaHostedBridgeError,
+  ARENA_HOSTED_STREAM_COMMAND, getArenaHostedStreamCompletionCheck, getArenaHostedFailedStreamCheck,
+  normalizeArenaHostedBridgeFailure, type ArenaHostedBridgeError, type ArenaHostedFailedStreamSeal,
 } from './arena-hosted-bridge';
 import type { InvokeFn } from './cloud-bridge';
 
@@ -13,9 +14,11 @@ export type ArenaHostedNativeSettleResult =
 export const createArenaHostedNativeSettle = (invoke: InvokeFn): {
   invoke: InvokeFn;
   settle: (signal?: AbortSignal) => Promise<ArenaHostedNativeSettleResult>;
+  settleFailed: (signal?: AbortSignal) => Promise<ArenaHostedFailedStreamSeal | null>;
 } => {
   const pending = new Set<Promise<ArenaHostedNativeSettleResult>>();
-  let latest: { observed: Promise<ArenaHostedNativeSettleResult>; checkCompletion?: () => ArenaHostedBridgeError | null } | undefined;
+  let latest: { observed: Promise<ArenaHostedNativeSettleResult>; checkCompletion?: () => ArenaHostedBridgeError | null;
+    checkFailed?: () => ArenaHostedFailedStreamSeal | null } | undefined;
   const trackedInvoke: InvokeFn = (command, args) => {
     const checkCompletion = getArenaHostedStreamCompletionCheck(args);
     let invocation: Promise<unknown>;
@@ -26,7 +29,7 @@ export const createArenaHostedNativeSettle = (invoke: InvokeFn): {
         () => ({ status: 'succeeded' }),
         (cause: unknown) => ({ status: 'failed', error: normalizeArenaHostedBridgeFailure(cause) }),
       );
-      latest = { observed, checkCompletion }; pending.add(observed);
+      latest = { observed, checkCompletion, checkFailed: getArenaHostedFailedStreamCheck(args) }; pending.add(observed);
       void observed.then(() => pending.delete(observed));
     }
     return invocation;
@@ -41,7 +44,18 @@ export const createArenaHostedNativeSettle = (invoke: InvokeFn): {
     const failure = current.checkCompletion?.();
     return failure ? { status: 'failed', error: failure } : result;
   };
-  return { invoke: trackedInvoke, settle: (signal) => new Promise(resolve => {
+  return { invoke: trackedInvoke, settleFailed: (signal) => new Promise(resolve => {
+    const finish = (result: ArenaHostedFailedStreamSeal | null) => { signal?.removeEventListener('abort', abort); resolve(result); };
+    const abort = () => finish(null);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) { abort(); return; }
+    void (async () => {
+      while (pending.size) await Promise.all([...pending]);
+      const current = latest;
+      if (!current || (await current.observed).status !== 'succeeded') return null;
+      return current.checkFailed?.() ?? null;
+    })().then(finish);
+  }), settle: (signal) => new Promise(resolve => {
     const finish = (result: ArenaHostedNativeSettleResult) => { signal?.removeEventListener('abort', abort); resolve(result); };
     const abort = () => finish({ status: 'aborted' });
     signal?.addEventListener('abort', abort, { once: true });

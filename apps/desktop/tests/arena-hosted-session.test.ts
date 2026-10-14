@@ -21,7 +21,7 @@ function storage() {
   return { data, fail: () => { fail = true; }, recover: () => { fail = false; }, getItem: (key: string) => data.get(key) ?? null,
     setItem: (key: string, value: string) => { if (fail) throw new Error('disk failed'); data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
 }
-function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feedback: { ranking?: unknown; nativeEvents?: DesktopArenaHostedChannelEvent[]; rejectAfterDone?: boolean; omitDone?: boolean; lateRanking?: unknown } = {}) {
+function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feedback: { ranking?: unknown; nativeEvents?: DesktopArenaHostedChannelEvent[]; rejectAfterDone?: boolean; omitDone?: boolean; lateRanking?: unknown; failureCode?: string; duplicateCursor?: boolean } = {}) {
   const records = new Map<string, LocalCardRecordV1>(); let failSave = false, hold = false, release: (() => void) | undefined;
   const repository = { get: async (id: string) => records.get(id) ?? null, putIfAbsent: vi.fn(async (record: LocalCardRecordV1) => {
     if (failSave) throw new Error('disk failed'); if (records.has(record.id)) return { alreadyPresent: true }; records.set(record.id, record); return { written: true };
@@ -41,17 +41,50 @@ function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feed
     const send = (value: Record<string, unknown>) => channel.onmessage({ requestId: request.requestId, sequence: sequence++, ...value } as DesktopArenaHostedChannelEvent);
     send({ kind: 'response', status: 200, generationId, generationRequestId: request.requestId, metadataState: 'missing', recoveryCredentialState: 'stored' });
     send({ kind: 'sse-fragment', final: true, text: `id: 1-0\nevent: snapshot\ndata: ${JSON.stringify({ markdown: body, reasoning: '独立推理', status: hold ? 'running' : 'completed', telemetry: null, lastEventId: '1-0', updatedAt: now })}\n\n` });
+    if (feedback.duplicateCursor) send({ kind: 'sse-fragment', final: true, text: 'id: 1-0\nevent: markdown\ndata: {"chunk":"rejected duplicate"}\n\n' });
     if ('ranking' in feedback) send({ kind: 'sse-fragment', final: true, text: `id: 1-1\nevent: ranking\ndata: ${JSON.stringify(feedback.ranking)}\n\n` });
     if (hold) await new Promise<void>((resolve) => { release = resolve; });
     if ('lateRanking' in feedback) send({ kind: 'sse-fragment', final: true, text: `id: 1-2\nevent: ranking\ndata: ${JSON.stringify(feedback.lateRanking)}\n\n` });
     if (feedback.omitDone) { send({ kind: 'stream-end' }); return; }
-    send({ kind: 'sse-fragment', final: true, text: 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); send({ kind: 'stream-end' });
+    send({ kind: 'sse-fragment', final: true, text: feedback.failureCode
+      ? `id: 2-0\nevent: error\ndata: ${JSON.stringify({ status: 'failed', code: feedback.failureCode })}\n\n`
+      : 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); send({ kind: 'stream-end' });
     if (feedback.rejectAfterDone) throw new Error('late-native-secret-canary');
   });
   return { session, saved, records, repository, invoke, operations, random, setHold: () => { hold = true; }, failSave: () => { failSave = true; }, recoverSave: () => { failSave = false; } };
 }
 
 describe('same Arena session with Hosted completion ownership', () => {
+  it.each(['AI_OUTPUT_TRUNCATED', 'AI_STREAM_INCOMPLETE', 'AI_UPSTREAM_REQUEST_FAILED', 'AI_UPSTREAM_TIMEOUT'])(
+    'retains %s only after the real C0/bridge/Native failure seal without completion effects', async failureCode => {
+      const f = fixture('battle', storage(), { failureCode }); const source = draft(); f.session.updateDraft(source);
+      await f.session.generateHosted({ invoke: f.invoke }, source, intent, actor);
+      const state = f.session.getSnapshot(); expect(state.phase).toBe('failed');
+      expect(state.draft.narrativeDrafts).toHaveLength(1); expect(state.narrativeDraftStatus).toBe('stored');
+      expect(state.draft.narrativeDrafts?.[0]).toMatchObject({ requestId: 'hosted-session-1', markdown: body, source: 'hosted', completion: { kind: 'server-failed', code: failureCode } });
+      expect(state.draft.narrativeHistoryEntries).toEqual([]); expect(state.draft.combatants).toEqual(source.combatants);
+      expect(state.roleUpdates.items).toEqual([]); expect(state.candidates).toBeNull(); expect(f.records.size).toBe(0);
+      const archive = f.session.exportNarrativeDrafts(); expect(archive).not.toContain('独立推理'); expect(archive).not.toContain('source-authority');
+      f.session.dispose(); const reopened = fixture('battle', f.saved); reopened.session.restoreDraft();
+      expect(reopened.session.getSnapshot().draft.narrativeDrafts).toEqual(state.draft.narrativeDrafts); reopened.session.dispose();
+    },
+  );
+  it.each(['AI_OUTPUT_FILTERED', 'CONTENT_POLICY', 'UNKNOWN'])( 'does not retain rejected %s failures', async failureCode => {
+    const f = fixture('battle', storage(), { failureCode }); f.session.updateDraft(draft());
+    await f.session.generateHosted({ invoke: f.invoke }, draft(), intent, actor);
+    expect(f.session.getSnapshot().draft.narrativeDrafts).toBeUndefined(); expect(f.session.getSnapshot().narrativeDraftCandidate).toBeNull(); f.session.dispose();
+  });
+  it('a genuine failed terminal cannot hide a later Native rejection from the session', async () => {
+    const f = fixture('battle', storage(), { failureCode: 'AI_STREAM_INCOMPLETE', rejectAfterDone: true }); f.session.updateDraft(draft());
+    await f.session.generateHosted({ invoke: f.invoke }, draft(), intent, actor);
+    expect(f.session.getSnapshot().draft.narrativeDrafts).toBeUndefined(); expect(f.session.getSnapshot().narrativeDraftCandidate).toBeNull(); f.session.dispose();
+  });
+  it('C0忽略的重复SSE cursor仍会阻断failure seal，不能成为可存草稿', async () => {
+    const f = fixture('battle', storage(), { failureCode: 'AI_STREAM_INCOMPLETE', duplicateCursor: true }); f.session.updateDraft(draft());
+    await f.session.generateHosted({ invoke: f.invoke }, draft(), intent, actor);
+    expect(f.session.getSnapshot().rawText).toBe(body); expect(f.session.getSnapshot().narrativeDraftCandidate).toBeNull();
+    expect(f.session.getSnapshot().draft.narrativeDrafts).toBeUndefined(); f.session.dispose();
+  });
   it.each(['battle', 'arena'] as const)('%s preserves source cards and Direct preferences; history appends once then explicitly saves', async (product) => {
     const f = fixture(product), source = draft(); f.session.updateDraft(source);
     const run = f.session.generateHosted({ invoke: f.invoke }, source, intent, actor);

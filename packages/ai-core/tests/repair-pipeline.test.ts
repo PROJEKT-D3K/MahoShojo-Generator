@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v3';
-import { repairNormalizeValidate } from '../src/repair-pipeline';
+import { RepairNormalizeError, repairNormalizeValidate } from '../src/repair-pipeline';
 
 const schema = z.object({ title: z.string(), values: z.array(z.number()) });
 describe('shared legacy repair pipeline', () => {
@@ -21,5 +21,7 @@ describe('shared legacy repair pipeline', () => {
     await expect(repairNormalizeValidate({ input: '{}', schema })).rejects.toThrow(
       'Schema validation failed: title: Required; values: Required',
     );
+    await expect(repairNormalizeValidate({ input: '{}', schema })).rejects.toBeInstanceOf(RepairNormalizeError);
+    await expect(repairNormalizeValidate({ input: '{}', schema })).rejects.toMatchObject({ code: 'schema' });
   });
 });

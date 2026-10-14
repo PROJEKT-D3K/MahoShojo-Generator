@@ -1,6 +1,16 @@
 import { z } from 'zod/v3';
 import { jsonrepair } from "jsonrepair";
 
+/** Stable classification for callers which must distinguish parser failures from arbitrary errors. */
+export class RepairNormalizeError extends Error {
+  readonly code: 'parse' | 'schema';
+  constructor(code: 'parse' | 'schema', message: string) {
+    super(message);
+    this.code = code;
+    this.name = 'RepairNormalizeError';
+  }
+}
+
 /** —— 工具函数 —— */
 const stripCodeFences = (s: string) =>
   s
@@ -135,7 +145,7 @@ export async function repairNormalizeValidate<TSchema extends z.ZodTypeAny>(
     const unfenced = stripCodeFences(rawStr);
     root = tryParse(unfenced);
   } catch (e) {
-    throw new Error(`JSON repair/parse failed: ${(e as Error).message}`);
+    throw new RepairNormalizeError('parse', `JSON repair/parse failed: ${(e as Error).message}`);
   }
 
   /** 3) 通用“解包”逻辑 */
@@ -208,7 +218,7 @@ export async function repairNormalizeValidate<TSchema extends z.ZodTypeAny>(
     const issues = parsed.error.issues
       .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
       .join("; ");
-    throw new Error(`Schema validation failed: ${issues}`);
+    throw new RepairNormalizeError('schema', `Schema validation failed: ${issues}`);
   }
 
   return as === "string" ? JSON.stringify(parsed.data) : parsed.data;

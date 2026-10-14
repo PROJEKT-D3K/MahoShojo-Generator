@@ -39,6 +39,7 @@ let saveBarrier: Promise<void> | null = null;
 let releaseSave: (() => void) | null = null;
 let accountId: number | null, hold: boolean, failSave: boolean, activeCloseHandles: number;
 let webOverride: string | null;
+let failureCode: string | null;
 let rankingFeedback: unknown;
 let streamRequests: (DesktopArenaHostedStreamRequest | DesktopArenaHostedJsonCreateRequest)[], controlRequests: DesktopArenaHostedControlRequest[];
 let roleRequests: Record<string, unknown>[];
@@ -90,7 +91,7 @@ beforeAll(async () => {
         res.write(wire('1-0', 'markdown', { chunk: output.text }));
         const finish = () => {
           if (rankingFeedback !== undefined) res.write(wire('1-1', 'ranking', rankingFeedback));
-          res.end(wire('2-0', 'done', { ok: true, status: 'completed' }));
+          res.end(failureCode ? wire('2-0', 'error', { status: 'failed', code: failureCode }) : wire('2-0', 'done', { ok: true, status: 'completed' }));
         };
         if (hold) released.push(finish); else finish(); return;
       }
@@ -135,7 +136,7 @@ const restoreAndSelectStream = async () => {
 const releaseAll = () => { released.splice(0).forEach(finish => finish()); };
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.clearAllMocks(); localStorage.clear(); holdFirstChunk = false; nativeResponseCount = 0; saveBarrier = null; releaseSave = null; accountId = null; hold = false; failSave = false; activeCloseHandles = 0; webOverride = null;
+  vi.clearAllMocks(); localStorage.clear(); holdFirstChunk = false; nativeResponseCount = 0; saveBarrier = null; releaseSave = null; accountId = null; hold = false; failSave = false; activeCloseHandles = 0; webOverride = null; failureCode = null;
   companion = null; rankingFeedback = undefined; roleRequests = []; streamRequests = []; controlRequests = []; httpRequests = []; docs = new Map(); released = []; pendingNative = new Set(); configure(); resetDesktopCloudSessionStoreForTests();
   mocks.hint.mockReset().mockImplementation(async (product: Product) => ({ product, state: 'none' }));
   mocks.listen.mockImplementation(async () => { activeCloseHandles += 1; return vi.fn(() => { activeCloseHandles -= 1; }); }); mocks.download.mockResolvedValue(undefined);
@@ -714,4 +715,46 @@ it.each(roleMatrix)('new /$product $delivery role policy history=$history state=
     expect([...docs.values()].every(item => item.provenance.kind === 'official-signed')).toBe(true);
     await click('重试角色更新'); expect(streamRequests).toHaveLength(1); expect(roleRequests).toHaveLength(2);
   } else { expect(button('重试角色更新')!.disabled).toBe(true); expect(button('另存战后角色副本')).toBeUndefined(); }
+});
+
+
+describe('Failed narrative drafts through the real Desktop route', () => {
+  it.each((['battle', 'arena'] as const).flatMap(product => [true, false].map(automatic => ({ product, automatic }))))(
+    '/$product keeps failed prose separate, automatic=$automatic, and reopens the read-only archive', async ({ product, automatic }) => {
+      failureCode = 'AI_STREAM_INCOMPLETE';
+      const original = draft(); original.settings.writeNarrativeHistory = automatic;
+      saveDraft(original, product); await mount(product); await restoreAndSelectStream(); await click('生成战报');
+      await vi.waitFor(async () => {
+        await settle();
+        expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(automatic ? '草稿已保存到本机' : '有未保存草稿');
+      });
+      const readSaved = () => JSON.parse(localStorage.getItem(draftKey(product))!) as { draft: ArenaDraft; output: { phase: string } };
+      expect(readSaved().output.phase).toBe('failed');
+      expect(readSaved().draft.narrativeDrafts ?? []).toHaveLength(automatic ? 1 : 0);
+      if (!automatic) await click('保存未完成草稿');
+      await vi.waitFor(() => expect(container.textContent).toContain('草稿已保存到本机'));
+      expect(button('将本次正文加入活动历史')).toBeUndefined();
+      expect(button('保存叙事历史到本地库')).toBeUndefined();
+      expect(readSaved().draft.narrativeHistoryEntries).toEqual([]);
+      expect(readSaved().draft.combatants).toEqual(original.combatants);
+      expect(readSaved().draft.narrativeDrafts).toHaveLength(1);
+      expect(roleRequests).toHaveLength(0); expect(docs.size).toBe(0);
+      await click('导出未完成草稿', container.querySelector('[aria-label="战报结果"]')!);
+      const [filename, json] = mocks.download.mock.calls.at(-1)!;
+      expect(filename).toBe('arena-narrative-drafts.json');
+      const exported = JSON.parse(json);
+      expect(Object.keys(exported).sort()).toEqual(['drafts', 'kind', 'version']);
+      expect(exported).toMatchObject({ kind: 'arena-narrative-draft-archive', version: 1,
+        drafts: [{ markdown, source: 'hosted', completion: { kind: 'server-failed', code: failureCode } }] });
+      await act(async () => root.unmount()); root = createRoot(container);
+      await mount(product); await click('恢复草稿'); await openSection('⚙️ 读写设置');
+      expect(container.textContent).toContain('正式 0 条 · 未完成草稿 1 条');
+      const archive = container.querySelector('[aria-label="未完成叙事草稿"]')!;
+      expect(archive.textContent).toContain('甲与乙共同守护车站');
+      expect(archive.querySelector('textarea, input')).toBeNull();
+      expect(button('保存未完成草稿', archive)).toBeUndefined();
+      await click('导出未完成草稿', archive);
+      expect(JSON.parse(mocks.download.mock.calls.at(-1)![1])).toEqual(exported);
+      expect(streamRequests).toHaveLength(1); expect(controlRequests).toHaveLength(0);
+    });
 });

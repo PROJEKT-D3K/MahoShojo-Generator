@@ -23,6 +23,8 @@ import {
   DesktopArenaHostedStoryCreateRequestSchema, type DesktopArenaHostedStoryCreateRequest,
 } from '@mahoshojo/contracts/desktop-arena-story-transport';
 import type { InvokeFn } from './cloud-bridge';
+import { SafeJsonValueSchema } from '@mahoshojo/contracts/json-value';
+import { compareGenerationSseIds } from '@mahoshojo/hosted-api/arena-generation/sse';
 
 export const ARENA_HOSTED_STREAM_COMMAND = 'arena_hosted_stream';
 export const ARENA_HOSTED_CONTROL_COMMAND = 'arena_hosted_control';
@@ -55,6 +57,10 @@ export const normalizeArenaHostedBridgeFailure = (cause: unknown): ArenaHostedBr
 // The Native completion fence captures this check from the exact invocation arguments. Response
 // consumption can end at C0's done event, so reader completion cannot stand in for IPC framing.
 const streamCompletionChecks = new WeakMap<object, () => ArenaHostedBridgeError | null>();
+export type ArenaHostedFailedStreamSeal = { requestId: string; code: string };
+const failedStreamChecks = new WeakMap<object, () => ArenaHostedFailedStreamSeal | null>();
+export const getArenaHostedFailedStreamCheck = (args: unknown): (() => ArenaHostedFailedStreamSeal | null) | undefined =>
+  args !== null && typeof args === 'object' ? failedStreamChecks.get(args) : undefined;
 export const getArenaHostedStreamCompletionCheck = (args: unknown): (() => ArenaHostedBridgeError | null) | undefined =>
   args !== null && typeof args === 'object' ? streamCompletionChecks.get(args) : undefined;
 const abortError = () => new DOMException('已停止本机订阅；服务器终态仍需确认。', 'AbortError');
@@ -101,6 +107,8 @@ export const openArenaHostedStream = (
   let nextSequence = 0, fragmentBytes = 0, fragment = '';
   let responded = false, acceptsSse = false, ended = false, detached = false;
   let nativeSettled = false, channelEnded = false, completedTerminal = false;
+  let terminalCount = 0, eventAfterTerminal = false, failureEvidenceSafe = true, failedCode: string | null = null;
+  let lastFailureSseId: string | null = null;
   let completionError: ArenaHostedBridgeError | null = null;
   let generationId = request.operation === 'resume' ? request.generationId : null;
   let streamController: ReadableStreamDefaultController<Uint8Array>;
@@ -127,6 +135,10 @@ export const openArenaHostedStream = (
   const invocationArgs = { request, onEvent: channel };
   streamCompletionChecks.set(invocationArgs, () => completionError ?? (nativeSettled && responded && channelEnded && (!acceptsSse || completedTerminal)
     ? null : new ArenaHostedBridgeError('protocol')));
+  // Failure retention has its own seal; the success completion fence intentionally rejects it.
+  failedStreamChecks.set(invocationArgs, () => nativeSettled && responded && acceptsSse && channelEnded
+    && !completionError && failureEvidenceSafe && !eventAfterTerminal && terminalCount === 1 && failedCode
+    ? { requestId: request.requestId, code: failedCode } : null);
   channel.onmessage = (raw) => {
     if (nativeSettled || completionError) return;
     if (channelEnded) { detach(); finish(new ArenaHostedBridgeError('protocol')); return; }
@@ -160,6 +172,16 @@ export const openArenaHostedStream = (
         fragment += event.text;
         if (event.final) {
           const parsed = parseDesktopArenaHostedSseBlock(fragment);
+          try {
+            if (!SafeJsonValueSchema.safeParse(parsed).success || lastFailureSseId !== null && compareGenerationSseIds(parsed.id, lastFailureSseId) <= 0) failureEvidenceSafe = false;
+            lastFailureSseId = parsed.id;
+          }
+          catch { failureEvidenceSafe = false; }
+          if (terminalCount) eventAfterTerminal = true;
+          if (parsed.event === 'done' || parsed.event === 'error') {
+            terminalCount += 1;
+            if (parsed.data.status === 'failed' && parsed.data.ok !== true && parsed.data.code) failedCode = parsed.data.code;
+          }
           if (parsed.event === 'done' && parsed.data.status === 'completed' && parsed.data.ok) completedTerminal = true;
           if (parsed.event === 'ranking') {
             const ranking = parsed.data?.generationId === generationId ? parsed.data : null;

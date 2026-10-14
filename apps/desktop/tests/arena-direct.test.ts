@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as arenaCore from '@mahoshojo/ai-core/arena-generation';
 import { appendNarrativeHistoryEntry } from '@mahoshojo/domain/narrative-history-operations';
+import { createNarrativeDraftCandidate } from '@mahoshojo/domain/narrative-drafts';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { assembleArenaGenerationPrompt, buildArenaGenerationInputSnapshot, buildArenaStoryGenerationInputSnapshot, type ArenaGenerationInputSnapshot } from '@mahoshojo/ai-core/arena-generation';
@@ -77,16 +78,18 @@ describe('typed Arena Direct adapter', () => {
     if (result.status === 'completed') expect(result.report.article.body).toBe(body);
     expect(native.invoke).toHaveBeenCalledTimes(1);
   });
-  it.each(['eof', 'sequence', 'identity', 'duplicate', 'late', 'failed', 'length', 'different-terminal'] as const)('%s preserves accepted body without a candidate or replay', async kind => {
+  it.each(['eof', 'sequence', 'identity', 'duplicate', 'late', 'failed', 'length', 'filter', 'oversize-delta', 'different-terminal'] as const)('%s preserves accepted body without a history candidate or replay', async kind => {
     const native = harness('保留的正文', events => {
       const terminal = events.at(-1)!;
       if (kind === 'eof') return events.slice(0, -1);
+      if (kind === 'oversize-delta') return [...events.slice(0, 3), { ...events[2]!, type: 'text-delta', delta: '拒收'.repeat(40_000), sequence: 3 }];
       if (kind === 'duplicate' || kind === 'late') return [...events, kind === 'duplicate' ? terminal : { ...events[2]!, sequence: events.length }];
       if (kind === 'sequence' || kind === 'identity') return [...events.slice(0, 3), { ...events[2]!, sequence: kind === 'sequence' ? 99 : 3, requestId: kind === 'identity' ? 'wrong' : 'arena-1' }];
       if (terminal.type !== 'result') throw new Error('fixture');
       if (kind === 'failed') terminal.result = { requestId: 'arena-1', contractVersion: 1, mode: 'direct-local', status: 'failed', error: { code: 'service-unavailable' } };
       else if (terminal.result.status === 'completed') {
         if (kind === 'length') terminal.result.finishReason = 'length';
+        else if (kind === 'filter') terminal.result.finishReason = 'content-filter';
         else terminal.result.output.text = '未经接受的替换';
       }
       return events;
@@ -94,6 +97,8 @@ describe('typed Arena Direct adapter', () => {
     const result = await executeArenaDirect(native.options, input(), task(), host(), new AbortController().signal);
     expect(['failed', 'invalid-output']).toContain(result.status); expect(result.rawText).toBe('保留的正文');
     expect(result).not.toHaveProperty('historyCandidate'); expect(native.invoke).toHaveBeenCalledTimes(1);
+    if (kind === 'eof' || kind === 'length') expect(result).toHaveProperty('draftCompletion.kind', kind === 'eof' ? 'missing-terminal' : 'trusted-length');
+    else expect(result).not.toHaveProperty('draftCompletion');
   });
   it('early abort never dispatches; late abort never accepts queued terminal or writes a candidate', async () => {
     const early = new AbortController(); early.abort(); const native = harness();
@@ -124,6 +129,35 @@ describe('typed Arena Direct adapter', () => {
       expect(result.status).toBe('failed'); expect(native.invoke).not.toHaveBeenCalled();
     }
   });
+});
+
+it('a late Native rejection after accepted text and terminal is source-failed, never missing-terminal', async () => {
+  const native = harness('已接受正文'); const invoke = native.options.invoke;
+  const result = await executeArenaDirect({ ...native.options, invoke: async (command, args) => {
+    await invoke(command, args); throw new Error('private-late-error');
+  } }, input(), task(), host(), new AbortController().signal);
+  expect(result).toMatchObject({ status: 'failed', rawText: '已接受正文' });
+  expect(result).not.toHaveProperty('draftCompletion');
+});
+it('normal-stop malformed metadata retains collector-accepted rawText, including literal code and later prose', async () => {
+  const text = '前文\r\n```json\r\n<!-- MAHOSHOJO_META {} -->\r\n```\r\n后文<!-- MAHOSHOJO_ARENA_META {"version":"invalid"} -->末文';
+  const result = await executeArenaDirect(harness(text).options, input(), task(), host(), new AbortController().signal);
+  expect(result).toMatchObject({ status: 'invalid-output', draftCompletion: { kind: 'trusted-stop-metadata-invalid' }, rawText: text });
+  if (result.status !== 'invalid-output') throw new Error('expected failure');
+  const draft = createNarrativeDraftCandidate({ requestId: result.requestId, source: result.mode, createdAt: '2026-01-01T00:00:00Z',
+    acceptedText: result.rawText, completion: result.draftCompletion ?? null, reportFormat: 'markdown', generationMode: 'stream', current: true, cancelled: false, completed: false });
+  expect(draft?.markdown).toBe('前文\r\n```json\r\n<!-- MAHOSHOJO_META {} -->\r\n```\r\n后文末文');
+  expect(JSON.stringify(draft)).not.toContain('独立推理');
+});
+it('metadata unsafe keys and unexpected extractor errors never acquire draft evidence', async () => {
+  const text = '保留正文<!-- MAHOSHOJO_ARENA_META {"version":"bad","constructor":{"private":"no"}} -->';
+  const unsafe = await executeArenaDirect(harness(text).options, input(), task(), host(), new AbortController().signal);
+  expect(unsafe).toMatchObject({ status: 'invalid-output' }); expect(unsafe).not.toHaveProperty('draftCompletion');
+  const repair = vi.spyOn(arenaCore, 'extractStreamUpdateMeta').mockRejectedValueOnce(new Error('unexpected-private-error'));
+  try {
+    const result = await executeArenaDirect(harness(streamText).options, input(), task(), host(), new AbortController().signal);
+    expect(result.status).toBe('invalid-output'); expect(result).not.toHaveProperty('draftCompletion');
+  } finally { repair.mockRestore(); }
 });
 
 it('retains Hosted trim/slice guidance semantics without altering the frozen source', async () => {

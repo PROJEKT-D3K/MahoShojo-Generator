@@ -14,7 +14,8 @@ import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-o
 import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
 import { ArenaReportFormatSelectorView, BattleReportCard, StreamingBattleReportCard, CombatantUpdatesPresentation } from '@mahoshojo/ui-web/arena-report';
 import { CardLibraryModal, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
-import { NarrativeHistoryPicker } from '@mahoshojo/ui-web/narrative-history';
+import { NarrativeHistoryPicker, NarrativeDraftsPanel } from '@mahoshojo/ui-web/narrative-history';
+import { buildNarrativeDraftArchive, type NarrativeDraft } from '@mahoshojo/domain/narrative-drafts';
 import { AiReasoningPanel, GenerationModeSwitcher, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { ThemeImage } from '@mahoshojo/ui-web/media';
 import { DENY_EXTERNAL_MEDIA, MarkdownBlock } from '@mahoshojo/ui-web/markdown';
@@ -400,6 +401,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const reasoning = state.hosted?.delivery === 'non-stream' && state.report?.aiReasoning ? state.report.aiReasoning : state.reasoning ? { status: state.phase === 'generating' ? 'thinking' as const : 'done' as const, source: 'provider' as const, text: state.reasoning } : null;
   const download = (filename: string, text: string, mimeType: string) => { try { downloadTextFile(filename, text, mimeType); } catch (cause) { reportError(cause); } };
   const exportAll = () => download('arena-complete.json', session.exportDocument(), 'application/json');
+  const exportNarrativeDrafts = (drafts: readonly NarrativeDraft[]) => download('arena-narrative-drafts.json', JSON.stringify(buildNarrativeDraftArchive(drafts), null, 2), 'application/json');
   const ranking = state.hosted?.ranking;
   const hostedSummary = state.hosted ? (({ companion: _companion, ...summary }) => summary)(state.hosted) : null;
   const result = (state.rawText || state.reasoning || state.report) ? <section ref={resultRef} className="mt-6 space-y-4" aria-label="战报结果">
@@ -458,12 +460,17 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     </div>
     {state.saveStatus === 'saved' ? <p role="status">已保存到本地库，可在卡库重新打开。</p> : null}
     {state.saveError ? <p role="alert">{state.saveError}</p> : null}
+    {state.narrativeDraftCandidate ? <NarrativeDraftsPanel drafts={[]} candidate={state.narrativeDraftCandidate} status={state.narrativeDraftStatus}
+      onSave={() => { session.saveNarrativeDraft(); }} onExport={exportNarrativeDrafts}
+      renderMarkdown={content => <MarkdownBlock content={content} variant="light" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} />} /> : null}
   </section> : null;
   const settings = <>
           <ArenaDataSettingsPanel value={draft.settings} onChange={(patch) => update({ settings: { ...draft.settings, ...patch } })} disabled={disabled} footerNote={<p className="text-xs">设置与角色工作副本保存在本机草稿；原始库卡保持不变。</p>} />
-          <NarrativeHistorySettings value={draft.settings} onChange={(patch) => update({ settings: { ...draft.settings, ...patch } })} disabled={disabled} persistenceNote="完成后追加到本机活动草稿；保存到本地库需单独操作。超限或写入失败时请完整导出。" readingNote="引用本地历史仅用于提示词，不改写原卡。" />
+          <NarrativeHistorySettings value={draft.settings} onChange={(patch) => update({ settings: { ...draft.settings, ...patch } })} disabled={disabled} persistenceNote="完成后追加正式历史；合资格失败正文另存未完成草稿。超限或写入失败时请导出。" readingNote="只有正式历史用于提示词，未完成草稿仅供查看和导出。" />
           <button type="button" className={secondary} disabled={disabled} onClick={() => setHistoryOpen(true)}>引用本地叙事历史</button>
-          <p className="text-xs">已引用 {draft.historyReferences.length} 条；活动历史 {draft.narrativeHistoryEntries.length} 条</p>
+          <p className="text-xs">已引用 {draft.historyReferences.length} 条；正式 {draft.narrativeHistoryEntries.length} 条 · 未完成草稿 {draft.narrativeDrafts?.length ?? 0} 条</p>
+          <NarrativeDraftsPanel drafts={draft.narrativeDrafts ?? []} status="idle" onExport={exportNarrativeDrafts}
+            renderMarkdown={content => <MarkdownBlock content={content} variant="light" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} />} />
   </>;
   const slots = {
         header: <BattleLiteHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={300} height={84} alt="魔法少女竞技场" />} description="选择角色，生成属于他们的故事。" helper={product === 'arena' ? '桌面高级单次 · 本机独立工作稿 · 客户端 Direct' : '桌面简洁版 · 本机工作副本 · Direct / 服务器生成'} />,

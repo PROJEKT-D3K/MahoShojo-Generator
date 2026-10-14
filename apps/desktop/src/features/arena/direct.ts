@@ -16,8 +16,10 @@ import {
   type ArenaGenerationInputSnapshot,
   type ArenaMetadataStatus,
 } from '@mahoshojo/ai-core/arena-generation';
-import { buildStructuredJsonInstructionFromZodSchema, parseStructuredJsonWithSchema } from '@mahoshojo/ai-core/structured-json';
-import { collectAiStreamResult, looksLikeTrivialEmptyOutput, type AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
+import { buildStructuredJsonInstructionFromZodSchema, parseStructuredJsonWithSchema, StructuredJsonParseError } from '@mahoshojo/ai-core/structured-json';
+import { RepairNormalizeError } from '@mahoshojo/ai-core/repair-pipeline';
+import { AiStreamProtocolError, collectAiStreamResult, looksLikeTrivialEmptyOutput, type AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
+import type { NarrativeDraftCompletion } from '@mahoshojo/domain/narrative-drafts';
 import { findAiProviderPreset } from '@mahoshojo/ai-core/provider-catalog';
 import { ARENA_CANONICAL_RESOURCE_LIMITS } from '@mahoshojo/contracts/arena-capabilities';
 import { AiExecutionRequestSchema, validateArenaAiInputJson, type AiExecutionResult, type AiExecutionUsage } from '@mahoshojo/contracts/ai-execution';
@@ -72,11 +74,15 @@ export type ArenaDirectOutcome = CommonOutcome & (
       /** Candidate only. A later host writer must verify this original scopeKey. */
       historyCandidate?: NarrativeHistoryAppendInput & { scopeKey: string; requestId: string } }
   | { status: 'cancelled'; reason: 'aborted' }
-  | { status: 'failed' | 'invalid-output'; code: string; message: string }
+  | { status: 'failed' | 'invalid-output'; code: string; message: string; draftCompletion?: NarrativeDraftCompletion }
 );
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const unchangedText = (value: string): string => value;
+const isOrdinaryMetadataFailure = (candidate: string): boolean => {
+  try { parseStructuredJsonWithSchema(candidate, StreamUpdateMetaSchema); return true; }
+  catch (diagnostic) { return diagnostic instanceof StructuredJsonParseError && diagnostic.code === 'invalid-output'; }
+};
 
 /** One explicit request, one native execution; no provider retries or persistence. */
 export const executeArenaDirect = async (
@@ -107,7 +113,10 @@ export const executeArenaDirect = async (
   const partial = (): ArenaDirectPartial => ({ rawText, markdown: splitStreamMeta(rawText).markdown, reasoning, usage });
   const common = (): CommonOutcome => ({ ...partial(), requestId: task.requestId, scopeKey: host.scopeKey, mode: task.mode, terminal });
   const cancelled = (): ArenaDirectOutcome => ({ ...common(), status: 'cancelled', reason: 'aborted' });
-  const failed = (code: string, message: string, invalid = false): ArenaDirectOutcome => ({ ...common(), status: invalid ? 'invalid-output' : 'failed', code, message });
+  const failed = (code: string, message: string, invalid = false, draftCompletion?: NarrativeDraftCompletion): ArenaDirectOutcome => ({
+    ...common(), status: invalid ? 'invalid-output' : 'failed', code, message,
+    ...(draftCompletion && task.generationMode === 'stream' && input.reportFormat === 'markdown' && !story ? { draftCompletion } : {}),
+  });
   if (signal.aborted) return cancelled();
   if (!['direct-local', 'direct-remote'].includes(task.mode)
     || !['stream', 'non-stream'].includes(task.generationMode)
@@ -210,9 +219,10 @@ export const executeArenaDirect = async (
   };
   try {
     terminal = await collectAiStreamResult(request, source());
-  } catch {
+  } catch (cause) {
     if (signal.aborted) return cancelled();
-    return failed('invalid-response', '生成连接或流协议失败，已保留收到的正文。');
+    return failed('invalid-response', '生成连接或流协议失败，已保留收到的正文。', false,
+      cause instanceof AiStreamProtocolError && cause.code === 'missing-terminal' ? { kind: 'missing-terminal' } : undefined);
   }
   if (signal.aborted) return cancelled();
   if (terminal.status === 'cancelled') return cancelled();
@@ -225,7 +235,8 @@ export const executeArenaDirect = async (
   rawText = terminal.output.text ?? rawText;
   reasoning = terminal.output.reasoning ?? reasoning;
   usage = terminal.usage ?? usage;
-  if (terminal.finishReason !== 'stop') return failed('incomplete-output', '生成未正常结束，原文已保留。', true);
+  if (terminal.finishReason !== 'stop') return failed('incomplete-output', '生成未正常结束，原文已保留。', true,
+    terminal.finishReason === 'length' ? { kind: 'trusted-length' } : undefined);
   let report: ArenaBattleReport;
   let impacts: ArenaBattleAiImpact[] = [];
   let markdown: string;
@@ -265,9 +276,19 @@ export const executeArenaDirect = async (
       // Latest source block wins, even if it is unclosed. Never repair an older
       // closed block as a fallback when the newest update is invalid.
       const latestMeta = split.updateMetaBlocks.at(-1);
-      const extracted = latestMeta ? await extractStreamUpdateMeta(latestMeta.rawComment) : null;
+      let extracted: Awaited<ReturnType<typeof extractStreamUpdateMeta>>;
+      try { extracted = latestMeta ? await extractStreamUpdateMeta(latestMeta.rawComment) : null; }
+      catch (cause) {
+        if (signal.aborted) return cancelled();
+        // Classification only: never substitutes for the legacy parser or changes completion.
+        const metadataFailure = cause instanceof RepairNormalizeError && latestMeta
+          && isOrdinaryMetadataFailure(latestMeta.jsonCandidate);
+        return failed('invalid-output', '战报输出未通过本地校验，原文已保留。', true,
+          metadataFailure ? { kind: 'trusted-stop-metadata-invalid' } : undefined);
+      }
       if (signal.aborted) return cancelled();
-      if (latestMeta && !extracted) return failed('invalid-output', '最新战报元数据无法解析，原文已保留。', true);
+      if (latestMeta && !extracted) return failed('invalid-output', '最新战报元数据无法解析，原文已保留。', true,
+        isOrdinaryMetadataFailure(latestMeta.jsonCandidate) ? { kind: 'trusted-stop-metadata-invalid' } : undefined);
       metaStatus = extracted ? 'valid' : 'absent';
       impacts = normalizeBattleAiImpacts(extracted?.meta.impacts, unchangedText);
       report = {
