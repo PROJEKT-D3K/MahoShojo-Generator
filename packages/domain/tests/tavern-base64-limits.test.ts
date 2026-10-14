@@ -2,19 +2,38 @@ import { describe, expect, it } from 'vitest';
 import { decodeBase64ToBytes, encodeBytesToBase64 } from '../src/tavern-card/base64';
 import { getPlaceholderPngBytes, MAX_TAVERN_TEXT_BYTES, readTavernLocalDocument, writeTavernCardToPngBytes } from '../src/tavern-card';
 
+const createBoundaryDocument = (size: number) => {
+  const empty = { name: 'boundary', description: '' };
+  const overhead = new TextEncoder().encode(JSON.stringify(empty)).length;
+  const raw = { ...empty, description: 'a'.repeat(size - overhead) };
+  const bytes = new TextEncoder().encode(JSON.stringify(raw));
+  return { raw, bytes };
+};
+
 describe('large Tavern base64 validation', () => {
-  it('roundtrips maximum-size JSON through both PNG text chunks without regexp stack overflow', () => {
-    const empty = { name: 'boundary', description: '' };
-    const overhead = new TextEncoder().encode(JSON.stringify(empty)).length;
-    const raw = { ...empty, description: 'a'.repeat(MAX_TAVERN_TEXT_BYTES - overhead) };
-    const bytes = new TextEncoder().encode(JSON.stringify(raw));
+  it('roundtrips maximum-size JSON through base64 without regexp stack overflow', () => {
+    const { raw, bytes } = createBoundaryDocument(MAX_TAVERN_TEXT_BYTES);
     expect(bytes.length).toBe(MAX_TAVERN_TEXT_BYTES);
     expect(new TextDecoder().decode(decodeBase64ToBytes(encodeBytesToBase64(bytes)))).toBe(JSON.stringify(raw));
+  });
+  it('roundtrips maximum-size JSON through both default PNG text chunks', () => {
+    const { raw, bytes } = createBoundaryDocument(MAX_TAVERN_TEXT_BYTES);
+    expect(bytes.length).toBe(MAX_TAVERN_TEXT_BYTES);
     const png = writeTavernCardToPngBytes(getPlaceholderPngBytes(), raw);
-    expect(readTavernLocalDocument(png, 'png').candidates[0].parsed).toEqual(raw);
-    const oversized = { ...raw, description: `${raw.description}a` };
-    expect(() => readTavernLocalDocument(new TextEncoder().encode(JSON.stringify(oversized)), 'json')).toThrow('4 MiB');
-    expect(() => readTavernLocalDocument(writeTavernCardToPngBytes(getPlaceholderPngBytes(), oversized), 'png')).toThrow();
+    const { candidates } = readTavernLocalDocument(png, 'png');
+    expect(candidates.map((candidate) => candidate.keyword)).toEqual(['ccv3', 'chara']);
+    for (const candidate of candidates) expect(candidate.parsed).toEqual(raw);
+  });
+  it('rejects JSON one byte above the text limit', () => {
+    const { bytes } = createBoundaryDocument(MAX_TAVERN_TEXT_BYTES + 1);
+    expect(bytes.length).toBe(MAX_TAVERN_TEXT_BYTES + 1);
+    expect(() => readTavernLocalDocument(bytes, 'json')).toThrow('4 MiB');
+  });
+  it('rejects reading PNG containing JSON one byte above the text limit', () => {
+    const { raw, bytes } = createBoundaryDocument(MAX_TAVERN_TEXT_BYTES + 1);
+    expect(bytes.length).toBe(MAX_TAVERN_TEXT_BYTES + 1);
+    const png = writeTavernCardToPngBytes(getPlaceholderPngBytes(), raw);
+    expect(() => readTavernLocalDocument(png, 'png')).toThrow();
   });
   it.each(['ĀAAA', '=AAA', 'AA=A', 'AA==AAAA', '!!!!', 'AAAA===', 'A==='])('rejects malformed encoding %s', (value) => {
     expect(() => decodeBase64ToBytes(value)).toThrow();
