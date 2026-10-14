@@ -269,7 +269,8 @@
     "./public-ranking": "./src/public-ranking.ts",
     "./arena-tier": "./src/arena-tier.ts",
     "./ranking-season-extrema": "./src/ranking-season-extrema.ts",
-    "./name-generation": "./src/name-generation.ts"
+    "./name-generation": "./src/name-generation.ts",
+    "./narrative-drafts": "./src/narrative-drafts.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",
