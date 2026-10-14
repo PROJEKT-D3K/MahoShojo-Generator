@@ -275,3 +275,20 @@ it('offers an actual export after staged summary admission fails, with no Native
   await click('导出未保存摘要'); expect(download).toHaveBeenCalledOnce();
   expect(JSON.parse(download.mock.calls[0]![1])).toMatchObject({ summary: text, future: document!.future });
 });
+
+it('persists the actual per-session automatic switch without invoking a model, then summarizes one normal turn', async () => {
+  document = { id: 'automatic-page', title: '显式自动摘要茶会', createdAt: 1, updatedAt: 1, roles: [],
+    settings: { providerId: 'openai', modelId: 'synthetic', outputFormat: 'markdown', maxContextMessages: 2, summaryMinGapMessages: 8 } };
+  messages = Array.from({ length: 8 }, (_, index) => ({ id: `auto-history-${index}`, sessionId: document!.id,
+    role: 'user' as const, content: `原始剧情${index}`, createdAt: index, status: 'done' as const }));
+  const before = JSON.stringify(messages);
+  await mount(); await openSession('显式自动摘要茶会');
+  const checkbox = [...container.querySelectorAll('label')].find(label => label.textContent?.includes('自动更新会话摘要'))!.querySelector<HTMLInputElement>('input')!;
+  expect(checkbox.checked).toBe(false); expect(streams).toBe(0);
+  await act(async () => checkbox.click());
+  expect(document?.settings.autoSummaryEnabled).toBe(true); expect(streams).toBe(0);
+  streamOutput = '正常剧情和摘要'; await click('继续生成');
+  expect(streams).toBe(2); expect(document?.summary).toBe('正常剧情和摘要');
+  expect(JSON.stringify(messages.slice(0, 8))).toBe(before);
+  expect(messages.at(-1)?.meta?.kind).toBe('summary');
+});

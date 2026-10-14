@@ -48,6 +48,7 @@ export const desktopTeaSettings = (raw: unknown): MagicTeaPartySession['settings
     readCurrentState: typeof value.readCurrentState === 'boolean' ? value.readCurrentState : true,
     readArenaHistoryLimit: typeof value.readArenaHistoryLimit === 'number' ? value.readArenaHistoryLimit : 3,
     isArenaHistoryUnlimited: value.isArenaHistoryUnlimited === true,
+    autoSummaryEnabled: value.autoSummaryEnabled === true,
     enableSummary: false, writeArenaHistory: false, writeCurrentState: false, updateApplyMode: 'draft',
     outputPlan: { choices: value.outputPlan?.choices === 'off' ? 'off' : value.outputPlan?.choices === 'on' ? 'on' : 'auto', summary: 'off', updates: 'off' },
   };
@@ -78,7 +79,8 @@ export async function* readTeaMessagePages(port: TeaNativePort, record: TeaRecor
 }
 
 export async function prepareTeaDirectRequest(port: TeaNativePort, record: TeaRecord, target: ResolvedDesktopAiTarget,
-  input: MagicTeaPartyMessage | null, requestId: string, current: () => boolean, kind: 'chat' | 'choices' = 'chat'): Promise<AiExecutionRequest> {
+  input: MagicTeaPartyMessage | null, requestId: string, current: () => boolean, kind: 'chat' | 'choices' = 'chat',
+  onHistorySelection?: (_droppedRatio: number) => void): Promise<AiExecutionRequest> {
   if (target.location !== 'client' || !target.mode || !target.modelId || !target.providerTarget || target.unavailableReason) {
     throw new Error('文本茶会需要选择可用的客户端 Direct 连接和模型');
   }
@@ -97,9 +99,11 @@ export async function prepareTeaDirectRequest(port: TeaNativePort, record: TeaRe
   const available = Math.max(0, budget.historyBudgetTokens - estimateMagicTeaPartyTokens(buildPrompt([]), providerId));
   const label = settings.userDisplayName?.trim() || '{{user}}';
   const descriptors: Array<{ ordinal: number; tokens: number }> = [];
+  let sourceMessageCount = 0;
   const describe = (message: MagicTeaPartyMessage, ordinal: number) => {
     const history = buildMagicTeaPartyHistory([message], { includeEmptyContent: false })[0];
     if (!history) return;
+    sourceMessageCount += 1;
     descriptors.push({ ordinal, tokens: estimateMagicTeaPartyTokens(`${history.role === 'user' ? label : history.role}: ${history.content}`, providerId) });
     if (descriptors.length > maxMessages) descriptors.shift();
   };
@@ -107,6 +111,7 @@ export async function prepareTeaDirectRequest(port: TeaNativePort, record: TeaRe
   if (input) describe(input, -1);
   const selected = new Set(selectMagicTeaPartyHistoryPositions(descriptors.length, index => descriptors[index]!.tokens,
     { maxMessages, tokenBudget: available, minKeep: 2 }).map(index => descriptors[index]!.ordinal));
+  onHistorySelection?.(sourceMessageCount ? (sourceMessageCount - selected.size) / sourceMessageCount : 0);
   const limit = resolveMagicTeaPartyMessageCharLimit(budget.contextWindowTokens);
   let history: MagicTeaPartyHistoryMessage[] = [];
   const accept = (message: MagicTeaPartyMessage, ordinal: number) => {

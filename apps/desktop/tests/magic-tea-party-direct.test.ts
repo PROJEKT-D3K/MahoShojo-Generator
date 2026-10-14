@@ -5,7 +5,7 @@ import { applyMagicTeaPartyMessageLimits, buildMagicTeaPartyChoicesPrompt, build
 import type { TeaMessageDocument, TeaReadRequest, TeaReadResponse } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import type { ResolvedDesktopAiTarget } from '../src/features/ai-config/desktop-ai-config';
 import { desktopTeaSettings, executeTeaDirect, prepareTeaDirectRequest, teaSessionView, teaTerminalMessage, type TeaRecord } from '../src/features/magic-tea-party/direct';
-import { editedTeaSummary, prepareTeaSummaryRequest } from '../src/features/magic-tea-party/summary';
+import { editedTeaSummary, prepareTeaSummaryRequest, prepareTeaAutoSummaryRequest } from '../src/features/magic-tea-party/summary';
 import type { TeaNativePort } from '../src/platform/magic-tea-party-native';
 
 export const target: ResolvedDesktopAiTarget = { location: 'client', providerTarget: { kind: 'custom', profileId: 'tea-loopback' }, profile: null,
@@ -163,7 +163,52 @@ describe('Desktop manual summary input and terminal seam', () => {
     value.summarySections = { original: '分节保留' }; const text = '  ' + '长摘要'.repeat(4000) + '  ';
     expect(editedTeaSummary(value, text, 99)).toEqual({ summary: text, summarySections: value.summarySections,
       summaryMeta: { updatedAt: 99, fromMessageId: 'a', toMessageId: 'b', extension: { untouched: true } } });
-    expect(editedTeaSummary(value, ' ', 99)).toEqual({ summary: undefined, summarySections: undefined, summaryMeta: undefined });
+    expect(editedTeaSummary(value, ' ', 99)).toEqual({ summary: undefined, summarySections: undefined, summaryMeta: { extension: { untouched: true }, updatedAt: 99 } });
     expect(value.summaryMeta).toHaveProperty('coverage');
+  });
+});
+
+describe('Desktop bounded automatic summary preparation', () => {
+  it('selects the same seed-aware prompt and real coverage through two fixed-revision passes', async () => {
+    const value = record(); value.session.settings = { ...value.session.settings, autoSummaryEnabled: true, summaryMinGapMessages: 1 };
+    value.session.summary = '旧摘要😀'.repeat(5000);
+    const port = paged();
+    const result = await prepareTeaAutoSummaryRequest(port, value, target, 'auto', () => true, 0);
+    expect(result).not.toBeNull();
+    const session = teaSessionView(value.session); const history = buildMagicTeaPartyHistory(rows.map(row => row.message), { includeEmptyContent: false });
+    const budget = teaCore.resolveMagicTeaPartyAutoSummaryBudget({ settings: session.settings, providerId: 'openai', previousSummary: session.summary });
+    const selected = trimMagicTeaPartyHistory(history, { maxMessages: budget.maxMessages, tokenBudget: budget.historyBudgetTokens, providerId: 'openai', userDisplayName: '旅人', minKeep: 2 });
+    const expected = teaCore.projectMagicTeaPartyAutoSummaryInput({ messages: selected, seedContent: budget.seedContent, contextWindowTokens: budget.contextWindowTokens,
+      language: session.settings.language, userDisplayName: '旅人', sourceMessageCount: history.length });
+    expect(result!.request.messages).toEqual([{ role: 'user', content: expected.prompt }]);
+    expect(result!.summaryMeta).toEqual({ fromMessageId: 'm1', toMessageId: 'm4', coverage: expected.coverage });
+    expect(result!.autoSummaryThroughMessageId).toBe('m4'); expect(result!.request.maxOutputTokens).toBe(1200);
+    expect(port.read).toHaveBeenCalledTimes(4);
+    for (const [call] of port.read.mock.calls) expect(call.request).toMatchObject({ expectedRevision: value.revision, instance: value.instance });
+    expect(expected.summaryInput.messageIds).toHaveLength(expected.coverage.selectedMessageIds.length + 1);
+    const explicit = await prepareTeaAutoSummaryRequest(paged(), value, { ...target, generationOverrides: { maxOutputTokens: 321 } }, 'override', () => true, 0);
+    expect(explicit!.request.maxOutputTokens).toBe(321);
+  });
+  it('does not read a second pass when disabled or the latest attempt has insufficient new source', async () => {
+    const value = record(); const off = paged();
+    expect(await prepareTeaAutoSummaryRequest(off, value, target, 'off', () => true, 2)).toBeNull();
+    expect(off.read).toHaveBeenCalledTimes(2);
+    value.session.settings.autoSummaryEnabled = true;
+    value.session.settings.summaryMinGapMessages = 1;
+    value.session.autoSummaryState = { lastAttemptedThroughMessageId: 'm4' };
+    const attempted = paged(); expect(await prepareTeaAutoSummaryRequest(attempted, value, target, 'attempted', () => true, 2)).toBeNull();
+    expect(attempted.read).toHaveBeenCalledTimes(2);
+  });
+  it('counts all eligible history for the original request drop ratio while retaining only a bounded tail', async () => {
+    const value = record(); value.session.settings.maxContextMessages = 2;
+    const report = vi.fn(); await prepareTeaDirectRequest(paged(), value, target, null, 'chat', () => true, 'chat', report);
+    expect(report).toHaveBeenCalledExactlyOnceWith(0.5);
+  });
+  it('abandons an automatic second pass on revision change and cannot prepare a partial-source request', async () => {
+    const value = record(); value.session.settings = { ...value.session.settings, autoSummaryEnabled: true, summaryMinGapMessages: 1 };
+    const port = paged(); const original = port.read.getMockImplementation()!; let calls = 0;
+    port.read.mockImplementation(async input => { if (++calls === 3) throw new Error('tea-stale'); return original(input); });
+    await expect(prepareTeaAutoSummaryRequest(port, value, target, 'stale', () => true, 2)).rejects.toThrow('tea-stale');
+    expect(port.mutate).not.toHaveBeenCalled();
   });
 });

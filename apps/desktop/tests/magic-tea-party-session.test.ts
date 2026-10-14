@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import type { TeaReadResponse, TeaWriteRequest, TeaWriteResponse, TeaSessionDocument, TeaMessageDocument } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import { DesktopTeaSession } from '../src/features/magic-tea-party/session';
+import { teaSessionView } from '../src/features/magic-tea-party/direct';
 import { createIpcTeaNativePort } from '../src/platform/magic-tea-party-native';
 import type { ResolvedDesktopAiTarget } from '../src/features/ai-config/desktop-ai-config';
 import { startMagicTeaPartyJourneyProbe } from './helpers/magic-tea-party-journey-probe';
@@ -618,4 +619,185 @@ describe('real Native manual summary journey', () => {
       expect(await probe.control('requestCount')).toMatchObject({ count: 1 });
     } finally { owner.dispose(); await probe.close(); }
   }, 20000);
+});
+
+const automaticHarness = async (enabled = true) => {
+  const h = harness();
+  h.messages.push(...Array.from({ length: 8 }, (_, index): TeaMessageDocument => ({
+    id: `history-${index}`, sessionId: 's', role: index % 2 ? 'assistant' : 'user', content: `原始消息${index}`, createdAt: index, status: 'done',
+  })));
+  await h.owner.select('s');
+  await h.owner.updateSettings({ autoSummaryEnabled: enabled, outputFormat: 'markdown', maxContextMessages: 2, summaryMinGapMessages: 8 });
+  h.output('正常剧情与摘要');
+  return h;
+};
+
+describe('explicit Desktop automatic summary after the original committed turn', () => {
+  it('does not dispatch on load, a toggle, or legacy combined-output permission', async () => {
+    const h = await automaticHarness(false);
+    await h.owner.updateSettings({ enableSummary: true, outputPlan: { choices: 'auto', summary: 'on', updates: 'off' } });
+    expect(h.count()).toBe(0);
+    await h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    expect(h.count()).toBe(1); expect(h.record?.session.summary).toBeUndefined();
+    await h.owner.updateSettings({ autoSummaryEnabled: true }); await h.owner.select('s');
+    expect(h.count()).toBe(1);
+  });
+  it.each(['reply', 'selected-choice', 'continue'] as const)('appends at most one summary after %s and preserves every source message and draft', async kind => {
+    const h = await automaticHarness(); const originals = JSON.stringify(h.messages);
+    h.owner.setInput('保留输入框草稿');
+    const intent = kind === 'continue' ? { kind } : { kind, text: '本次剧情输入' };
+    await Promise.all([h.owner.start(target, h.options, () => true, intent), h.owner.start(target, h.options, () => true, intent)]);
+    expect(h.count()).toBe(2);
+    expect(JSON.stringify(h.messages.slice(0, 8))).toBe(originals);
+    expect(h.messages.at(-1)).toMatchObject({ status: 'done', meta: { kind: 'summary', rawOutput: '正常剧情与摘要' } });
+    expect(h.record?.session.summary).toBe('正常剧情与摘要');
+    const through = h.messages.at(-2)!.id;
+    expect(h.record?.session.autoSummaryState).toEqual({ lastAttemptedThroughMessageId: through });
+    expect(h.record?.session.summaryMeta).toMatchObject({ toMessageId: through, coverage: { sourceMessageCount: kind === 'continue' ? 9 : 10 } });
+    expect(teaSessionView(h.record!.session).summaryMeta?.coverage?.selectedMessageIds).not.toContain(h.messages.at(-1)!.id);
+    expect(h.owner.getSnapshot().input).toBe(kind === 'reply' ? '' : '保留输入框草稿');
+    await h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    expect(h.count()).toBe(3); // One new source message is below the attempt/summary gap.
+  });
+  it.each(['summary', 'choices'] as const)('does not cascade after manual %s', async kind => {
+    const h = await automaticHarness();
+    await h.owner.start(target, h.options, () => true, { kind });
+    expect(h.count()).toBe(1); expect(h.record?.session.autoSummaryState).toBeUndefined();
+  });
+  it.each(['unknown', 'not-written'] as const)('never schedules from a recovered %s original finish', async failure => {
+    const h = await automaticHarness(); if (failure === 'unknown') h.drop('finish-generation'); else h.fail('finish-generation');
+    const running = h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe(failure === 'unknown' ? 'unknown' : 'save'));
+    if (failure === 'unknown') await h.owner.resolvePending(); else await h.owner.retryPending();
+    await running; expect(h.count()).toBe(1); expect(h.record?.session.autoSummaryState).toBeUndefined();
+  });
+  it.each(['unknown', 'not-written'] as const)('revokes an automatic begin after %s saving and cannot charge on receipt/retry', async failure => {
+    const h = await automaticHarness(); const original = h.invoke.getMockImplementation()!; let failed = false;
+    h.invoke.mockImplementation(async (command, args) => {
+      const write = command === 'mutate_magic_tea_party' ? (args?.request as TeaWriteRequest).request : null;
+      if (!failed && write?.action === 'begin-generation' && write.session.autoSummaryState) {
+        failed = true; if (failure === 'unknown') h.drop('begin-generation'); else h.fail('begin-generation');
+      }
+      return original(command, args);
+    });
+    const running = h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe(failure === 'unknown' ? 'unknown' : 'save'));
+    expect(h.owner.getSnapshot().error).toContain('剧情已保存'); expect(h.count()).toBe(1);
+    if (failure === 'unknown') await h.owner.resolvePending(); else await h.owner.retryPending();
+    await running;
+    expect(h.count()).toBe(1); expect(h.record?.session.summary).toBeUndefined();
+    expect(h.messages.at(-1)).toMatchObject({ status: 'error', meta: { kind: 'summary', completion: 'stopped' } });
+  });
+  it('keeps the attempt after an empty automatic result and does not immediately retry', async () => {
+    const h = await automaticHarness(); await h.owner.update({ summary: '保留旧摘要', summaryMeta: { updatedAt: 1, coverage: { version: 1, sourceMessageCount: 1, selectedMessageIds: ['history-0'], clippedMessageIds: [], omittedMessageCount: 0 } } });
+    const before = JSON.stringify(h.record?.session.summaryMeta); const original = h.invoke.getMockImplementation()!;
+    h.invoke.mockImplementation(async (command, args) => {
+      if (command === 'stream_direct_ai' && h.count() === 1) h.output('   ');
+      return original(command, args);
+    });
+    await h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    expect(h.count()).toBe(2); expect(h.record?.session.summary).toBe('保留旧摘要');
+    expect(JSON.stringify(h.record?.session.summaryMeta)).toBe(before);
+    expect(teaSessionView(h.record!.session).autoSummaryState?.lastAttemptedThroughMessageId).toBe(h.messages.at(-2)!.id);
+    h.output('下一轮'); await h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    expect(h.count()).toBe(3);
+  });
+  it('treats a stop during original committed-result reload as loss of automatic dispatch authority', async () => {
+    const h = await automaticHarness(); const original = h.invoke.getMockImplementation()!; let stopped = false;
+    h.invoke.mockImplementation(async (command, args) => {
+      if (!stopped && command === 'read_magic_tea_party' && (args?.request as { request: { action: string } }).request.action === 'session' && h.count() === 1) {
+        stopped = true; h.owner.stop();
+      }
+      return original(command, args);
+    });
+    await h.owner.start(target, h.options, () => true, { kind: 'continue' });
+    expect(h.count()).toBe(1); expect(h.messages.at(-1)?.status).toBe('done');
+    expect(h.record?.session.autoSummaryState).toBeUndefined();
+  });
+});
+
+it.each(['编辑后的手工摘要', ''])( 'retains a new manual summary draft %j while stopping an automatic request', async draft => {
+  const h = await automaticHarness(); await h.owner.update({ summary: '原摘要', summaryMeta: { updatedAt: 1, extension: '保留扩展' } } as Parameters<typeof h.owner.update>[0]);
+  const original = h.invoke.getMockImplementation()!; let release!: () => void;
+  h.invoke.mockImplementation(async (command, args) => {
+    if (command === 'stream_direct_ai' && h.count() === 1) {
+      await new Promise<void>(resolve => { release = resolve; });
+    }
+    return original(command, args);
+  });
+  const running = h.owner.start(target, h.options, () => true, { kind: 'continue' });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  h.owner.stageSummary(draft); expect(h.owner.getSnapshot().summaryDraft).toBe(draft);
+  release(); await running;
+  expect(h.owner.getSnapshot().summaryDraft).toBe(draft); expect(h.record?.session.summary).toBe('原摘要');
+  await h.owner.saveDraft();
+  expect(h.record?.session.summary).toBe(draft || undefined);
+  expect(h.record?.session.summaryMeta).toMatchObject({ extension: '保留扩展' });
+});
+
+it('separates a manual summary draft export from an automatic raw prefix during an unknown finish', async () => {
+  const h = await automaticHarness(); await h.owner.update({ summary: '原摘要' });
+  const original = h.invoke.getMockImplementation()!; let release!: () => void;
+  h.invoke.mockImplementation(async (command, args) => {
+    if (command === 'stream_direct_ai' && h.count() === 1) {
+      const request = args?.request as { requestId: string; contractVersion: 1; mode: 'direct-local' };
+      const channel = args?.onEvent as { onmessage: (_event: AiStreamEvent) => void };
+      const identity = { requestId: request.requestId, contractVersion: request.contractVersion, mode: request.mode };
+      channel.onmessage({ ...identity, sequence: 0, type: 'started' });
+      channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: '自动模型前缀' });
+      await new Promise<void>(resolve => { release = resolve; }); return;
+    }
+    return original(command, args);
+  });
+  const running = h.owner.start(target, h.options, () => true, { kind: 'continue' });
+  await vi.waitFor(() => expect(h.owner.getSnapshot().rawUnsaved).toBe('自动模型前缀'));
+  h.drop('finish-generation'); h.owner.stageSummary('用户手工稿');
+  // Let the synthetic invoke settle after Stop, as the real bridge does on cancellation.
+  release();
+  await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe('unknown'));
+  expect(h.owner.unsavedText()).toBe('自动模型前缀');
+  expect(JSON.parse(h.owner.unsavedSummaryText())).toMatchObject({ summary: '用户手工稿' });
+  await h.owner.resolvePending(); await running;
+  expect(h.record?.session.summary).toBe('原摘要'); expect(h.owner.getSnapshot().summaryDraft).toBe('用户手工稿');
+});
+
+it.each(['credential', 'dispose'] as const)('does not let late automatic output survive a %s change', async change => {
+  const h = await automaticHarness(); await h.owner.update({ summary: '原摘要' });
+  const original = h.invoke.getMockImplementation()!; let release!: () => void; let current = true;
+  h.invoke.mockImplementation(async (command, args) => {
+    if (command === 'stream_direct_ai' && h.count() === 1) await new Promise<void>(resolve => { release = resolve; });
+    return original(command, args);
+  });
+  const running = h.owner.start(target, h.options, () => current, { kind: 'continue' });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  if (change === 'credential') current = false; else h.owner.dispose();
+  release(); await running;
+  expect(h.record?.session.summary).toBe('原摘要');
+  expect(h.record?.session.autoSummaryState).toBeDefined();
+});
+
+it.each(['unknown', 'not-written'] as const)('restores the existing primary begin after %s saving without granting a new automatic request', async failure => {
+  const h = await automaticHarness(); if (failure === 'unknown') h.drop('begin-generation'); else h.fail('begin-generation');
+  const running = h.owner.start(target, h.options, () => true, { kind: 'continue' });
+  await vi.waitFor(() => expect(h.owner.getSnapshot().pending).toBe(failure === 'unknown' ? 'unknown' : 'save'));
+  expect(h.count()).toBe(0);
+  if (failure === 'unknown') await h.owner.resolvePending(); else await h.owner.retryPending();
+  await running;
+  expect(h.count()).toBe(1); expect(h.messages.at(-1)?.status).toBe('done');
+  expect(h.record?.session.summary).toBeUndefined(); expect(h.record?.session.autoSummaryState).toBeUndefined();
+});
+
+it('honors a manual edit received synchronously before an automatic terminal write freezes', async () => {
+  const h = await automaticHarness(); await h.owner.update({ summary: '旧摘要' });
+  let changed = false;
+  h.owner.subscribe(() => {
+    const state = h.owner.getSnapshot();
+    if (!changed && state.isAutoSummarizing && !state.generating && !state.busy && state.rawUnsaved) {
+      changed = true; h.owner.stageSummary('终态前的手工稿');
+    }
+  });
+  await h.owner.start(target, h.options, () => true, { kind: 'continue' });
+  expect(changed).toBe(true); expect(h.record?.session.summary).toBe('旧摘要');
+  expect(h.owner.getSnapshot().summaryDraft).toBe('终态前的手工稿');
+  expect(h.messages.at(-1)).toMatchObject({ status: 'error', meta: { kind: 'summary', completion: 'stopped' } });
 });

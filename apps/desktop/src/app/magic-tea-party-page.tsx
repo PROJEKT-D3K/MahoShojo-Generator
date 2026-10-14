@@ -130,7 +130,7 @@ export default function MagicTeaPartyPage() {
         onImportFile={importArchive} onExportSession={() => exportArchive('json')} onExportSessionJsonl={() => exportArchive('jsonl')} onExportArchive={() => exportArchive('archive')} />
       <fieldset disabled={disabled} className="min-w-0"><DesktopAiProviderPanel generationMode="stream" showConnectionTest={false} onDirtyChange={setProviderDirty}
         copy={{ serverOutput: { stream: '茶会使用客户端连接', nonStream: '茶会使用客户端连接' }, emptyProfilesHint: '选择客户端 Direct 连接', serverFootnote: '文本茶会尚不支持服务器执行', payloadNoun: '茶会正文' }} /></fieldset>
-      <div className="text-xs text-gray-500">请主动选择客户端执行位置。生成选项会调用当前模型并消耗 Token；点选行动会直接发送，保留输入框草稿。手动生成摘要也会消耗 Token；不自动调用摘要、更新草案或补充选项请求；媒体附件导入会在写入前拒绝。卡片图片与链接只作资料保存，不自动下载。Tavern 额外系统提示等仅保留原件，沿现有通用卡正文投影。</div>
+      <div className="text-xs text-gray-500">请主动选择客户端执行位置。生成选项会调用当前模型并消耗 Token；点选行动会直接发送，保留输入框草稿。手动生成摘要也会消耗 Token；自动摘要需在当前会话单独开启，不自动补充更新草案或选项请求。媒体附件导入会在写入前拒绝。卡片图片与链接只作资料保存，不自动下载。Tavern 额外系统提示等仅保留原件，沿现有通用卡正文投影。</div>
       <MagicTeaPartyOutputPreferencesPanel activeSession={session} preferences={TEA_PREFERENCES} disabled={disabled || !session}
         outputPlanSupported={false} choicesHint="控制同次 JSONL 输出；两种正文模式均可手动生成选项" onChange={patch => { if (currentScope() !== renderScope || disabled) return; if (patch.userDisplayName !== undefined) owner.stageName(patch.userDisplayName); else run(() => owner.updateSettings(patch)); }} />
     </aside>}
@@ -148,13 +148,17 @@ export default function MagicTeaPartyPage() {
     beforeChat={<>
       <MagicTeaPartySummaryBody active={Boolean(session)} summary={state.summaryDraft ?? session?.summary ?? ''} updatedAt={session?.summaryMeta?.updatedAt}
         disabled={disabled} isSummarizing={state.generationKind === 'summary' && state.generating} hasMessages={state.messages.length > 0}
+        editingDisabled={disabled && !state.isAutoSummarizing}
         error={state.messages.at(-1)?.meta?.kind === 'summary' ? state.messages.at(-1)?.error?.message ?? null : null}
         description="用于长对话压缩（保存在本机）。生成摘要会消耗额外 Token。后续剧情最多读取摘要前 10000 字，保存正文不截断。"
         collapsed={summaryCollapsed} onCollapsedChange={setSummaryCollapsed} onGenerate={() => start({ kind: 'summary' })}
+        onStopSummary={owner.stop}
+        autoSummaryEnabled={session?.settings.autoSummaryEnabled === true}
+        onAutoSummaryEnabledChange={value => { if (!disabled && currentScope() === renderScope) run(() => owner.updateSettings({ autoSummaryEnabled: value })); }}
         onClear={() => { if (!disabled && currentScope() === renderScope) run(owner.clearSummary); }}
-        onChange={value => { if (!disabled && !preparing.current && currentScope() === renderScope) owner.stageSummary(value); }}
+        onChange={value => { if ((!disabled || state.isAutoSummarizing) && (!preparing.current || state.isAutoSummarizing) && currentScope() === renderScope) owner.stageSummary(value); }}
         onSave={() => { if (!disabled && currentScope() === renderScope) run(owner.saveDraft); }} dirty={state.summaryDraft !== null}>
-        {state.summaryDraft !== null ? <button className="text-xs text-pink-700 underline" onClick={() => downloadTextFile('magic-tea-party.unsaved-summary.txt', owner.unsavedText(), 'text/plain')}>导出未保存摘要</button> : null}
+        {state.summaryDraft !== null ? <button className="text-xs text-pink-700 underline" onClick={() => downloadTextFile('magic-tea-party.unsaved-summary.txt', owner.unsavedSummaryText(), 'text/plain')}>导出未保存摘要</button> : null}
       </MagicTeaPartySummaryBody>
       {confirmed ? <div role="alert" className="rounded-xl border border-red-200 p-3 text-sm">确认删除当前会话及全部消息？整库备份是恢复来源。
         <button className="ml-3 underline" disabled={disabled} onClick={() => { const confirmation = confirmDelete; setConfirmDelete(null); if (confirmation) run(() => owner.delete(confirmation.incarnation, confirmation.id, confirmation.instance, confirmation.revision)); }}>确认删除</button>
