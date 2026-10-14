@@ -31,11 +31,11 @@
 PowerShell 示例（替换为实际绝对路径；整个状态目录单次使用）：
 
 ```powershell
-$script = 'D:\source\MahoShojo-Generator\scripts\desktop-story-acceptance.mjs'
-$argsW01 = @('--test-tree', 'D:\isolated\story-checkout', '--state-root', 'D:\acceptance\story-fresh', '--hono-origin', 'http://127.0.0.1:24181', '--next-origin', 'http://127.0.0.1:24182')
+$script = '<源码根>\scripts\desktop-story-acceptance.mjs'
+$argsW01 = @('--test-tree', '<独立测试树路径>', '--state-root', '<一次性状态目录>', '--hono-origin', 'http://127.0.0.1:<端口1>', '--next-origin', 'http://127.0.0.1:<端口2>')
 node $script @argsW01
 node $script prepare @argsW01
-node $script launch --state-root 'D:\acceptance\story-fresh'
+node $script launch --state-root '<一次性状态目录>'
 ```
 
 在真实窗口分别打开 `#/battle` 与 `#/arena`，通过既有导入/粘贴入口加入两张合成卡，选“服务器 / 系统默认”。battle 将“新故事章节规划”设为“自定义 / 2”，arena 设为“不限制”；各点“新建连续战报”，待实际本机保存完成后改变普通草稿，再点“继续续写”，慢流期间手选旧章。验证原 seed/plan/角色沿用、普通草稿与原卡不变、晚结果不抢选章。两页各完成两章时应合计 4 个 model POST、4 个 role POST；必须结合真实 IPC 观察、保存回执/章节读取与截图核对 prepare/save，HTTP 数量本身不能证明本机保存或 IPC 顺序。
@@ -46,7 +46,7 @@ node $script launch --state-root 'D:\acceptance\story-fresh'
 
 ### 可选 HTTP 故障配置
 
-将 JSON 保存到测试树外的绝对路径，例如 `D:\acceptance\faults.json`，在上述 preflight 和 prepare 参数中都追加 `--fault-config D:\acceptance\faults.json`；launch 只读取 `acceptance.json` 内已归档的配置，不再读取原文件；规范化配置摘要绑定到测试副本的精确补丁，改单独 manifest 即拒启。未配置保持原 happy path；不接受未知字段/故障、任意正文、URL、凭据或代码。独立双 mock CLI 也支持相同 `--fault-config`，但单独启动 mock 不等于启动隔离 Tauri。
+将 JSON 保存到测试树外的绝对路径，例如 `<测试树外目录>\faults.json`，在上述 preflight 和 prepare 参数中都追加 `--fault-config <同一绝对路径>`；launch 只读取 `acceptance.json` 内已归档的配置，不再读取原文件；规范化配置摘要绑定到测试副本的精确补丁，改单独 manifest 即拒启。未配置保持原 happy path；不接受未知字段/故障、任意正文、URL、凭据或代码。独立双 mock CLI 也支持相同 `--fault-config`，但单独启动 mock 不等于启动隔离 Tauri。
 
 先选一个目标场景，每个独立样本使用新的测试树/状态路径。以下示例把正文分为四段并放慢，适合真实页面 Stop/Back/Close 与角色响应前离页：
 
