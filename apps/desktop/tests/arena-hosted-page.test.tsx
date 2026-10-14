@@ -300,8 +300,18 @@ describe('Desktop Hosted real-route loopback journey', () => {
     await openSection(product === 'arena' ? '⚙️ 读写设置' : '🧠 故事');
     const writes = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].filter(input => input.closest('label')?.textContent?.includes('战报后写入') && ['历战记录', '当前状态'].includes(input.closest('fieldset')?.querySelector('legend')?.textContent ?? ''));
     expect(writes).toHaveLength(2); for (const input of writes) { expect(input.disabled).toBe(false); expect(input.checked).toBe(false); }
+    const prepared = vi.spyOn(getDesktopAiConfigStore(), 'withPreparedGeneration');
     const random = vi.spyOn(crypto, 'getRandomValues'); await act(async () => { button('生成战报')!.click(); button('生成战报')!.click(); });
-    await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); }); await settle();
+    expect(prepared).toHaveBeenCalledTimes(1);
+    const generation = prepared.mock.results[0];
+    if (generation?.type !== 'return') throw new Error('页面未返回生成任务');
+    // Observe the actual page-owned task; a timer does not prove completion.
+    // act flushes React after settlement, then the DOM still has to prove success.
+    await act(async () => {
+      await vi.waitFor(() => expect(['fulfilled', 'rejected']).toContain(prepared.mock.settledResults[0]?.type));
+      await generation.value;
+    });
+    expect(container.textContent).toContain('服务器生成完成');
     expect(random).not.toHaveBeenCalled(); expect(streamRequests).toHaveLength(1); expect(httpRequests.filter(request => request.method === 'POST' && request.path === (delivery === 'stream' ? '/api/arena/generate-stream' : '/api/generate-battle-story'))).toHaveLength(1);
     expect(streamRequests[0]).toMatchObject({ operation: delivery === 'stream' ? 'create-stream' : 'create-json', product, actor: account ? { kind: 'account', expectedUserId: 42 } : { kind: 'anonymous' }, body: { mode, reportFormat: format, writeArenaHistory: false, writeCurrentState: false, adjudicationEvents: original.adjudicationEvents } });
     expect(streamRequests[0]).toHaveProperty(funding === 'system' ? 'systemConfig' : 'presetConfig'); expect(streamRequests[0]).not.toHaveProperty('body.adjudicationResults');
@@ -722,7 +732,8 @@ describe('Failed narrative drafts through the real Desktop route', () => {
   it.each((['battle', 'arena'] as const).flatMap(product => [true, false].map(automatic => ({ product, automatic }))))(
     '/$product keeps failed prose separate, automatic=$automatic, and reopens the read-only archive', async ({ product, automatic }) => {
       failureCode = 'AI_STREAM_INCOMPLETE';
-      const original = draft(); original.settings.writeNarrativeHistory = automatic;
+      const source = draft();
+      const original: ArenaDraft = { ...source, settings: { ...source.settings, writeNarrativeHistory: automatic } };
       saveDraft(original, product); await mount(product); await restoreAndSelectStream(); await click('生成战报');
       await vi.waitFor(async () => {
         await settle();
