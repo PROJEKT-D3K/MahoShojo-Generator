@@ -31,11 +31,13 @@ export interface DesktopAiProviderPanelProps {
   showConnectionTest?: boolean;
   /** 只约束本页服务器能力，不改其他页的供应商/模型偏好。 */
   serverPolicy?: 'fixed-default';
+  /** Page capability only: preserve the selected location until an explicit user change. */
+  serverUnavailableReason?: string;
   /** Temporary page-owned lock; ordinary configuration remains untouched. */
   executionConstraint?: { location: 'server'; reason: string };
 }
 
-export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDirtyChange, showConnectionTest = true, executionConstraint, serverPolicy }: DesktopAiProviderPanelProps) => {
+export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDirtyChange, showConnectionTest = true, executionConstraint, serverPolicy, serverUnavailableReason }: DesktopAiProviderPanelProps) => {
   const { state, store } = useDesktopAiConfig();
   const router = useRouter();
   const [editing, setEditing] = useState<EditingState | null>(null);
@@ -94,17 +96,18 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
   const asyncAct = (fn: () => Promise<void>) => { if (disabled) return; void fn().then(() => setError(null)).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : '凭据操作失败')); };
 
   return <fieldset disabled={disabled} className="min-w-0 border-0 p-0">
-    <AiExecutionLocationField value={target.location} client={{ enabled: !disabled }} server={{ enabled: !disabled }} onChange={(location) => act(() => {
-      if (!confirmDiscardEditing()) return;
+    <AiExecutionLocationField value={target.location} client={{ enabled: !disabled }} server={{ enabled: !disabled && !serverUnavailableReason, reason: serverUnavailableReason }} onChange={(location) => act(() => {
+      if ((location === 'server' && serverUnavailableReason) || !confirmDiscardEditing()) return;
       // 易失 Key 按预设身份保留，切换位置或供应商不会转移给另一目标。
       store.selectExecutionLocation(location);
       closeEditing();
     })} />
     {executionConstraint ? <p role="status" className="text-xs">{executionConstraint.reason} 退出严格排位准备后可调整 AI 配置。</p> : null}
     {controlsSlot}
+    <fieldset disabled={!!serverUnavailableReason && target.location === 'server'} className="min-w-0 border-0 p-0">
     <AiProviderSelectorForm
       label="AI 提供商"
-      providerSelect={<AiProviderCustomSelect options={providerOptions} value={providerValue} placeholder="选择供应商" disabled={disabled || fixedServer}
+      providerSelect={<AiProviderCustomSelect options={providerOptions} value={providerValue} placeholder="选择供应商" disabled={disabled || fixedServer || (!!serverUnavailableReason && target.location === 'server')}
         onChange={(value) => act(() => {
           if (fixedServer || !confirmDiscardEditing()) return;
           if (value === 'system') store.selectProviderTarget({ kind: 'system' });
@@ -127,7 +130,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
           if (id === 'manage' && confirmDiscardEditing()) navigateByProductHref(router, '/settings?section=generation');
         }} />}
       providerExtra={profile ? <p className="break-all text-xs">接收方：{profile.baseUrl} · 模型：{target.modelId ?? profile.modelId}</p> : undefined}
-      modelSelect={<AiProviderCustomSelect options={modelOptions} value={target.modelId ?? ''} onChange={changeModel} placeholder="选择模型" disabled={disabled || fixedServer || !identity}
+      modelSelect={<AiProviderCustomSelect options={modelOptions} value={target.modelId ?? ''} onChange={changeModel} placeholder="选择模型" disabled={disabled || fixedServer || !identity || (!!serverUnavailableReason && target.location === 'server')}
         actions={!isSystem && identity ? [{ id: 'custom-model', label: '自定义模型 ID' }, ...(profile && target.modelId && (state.modelsByProfileId[profile.id]?.customModelIds.includes(target.modelId) || state.modelsByProfileId[profile.id]?.inlineModelId === target.modelId) ? [{ id: 'remove-model', label: `移除模型「${target.modelId}」` }] : [])] : []}
         onAction={(id) => { if (id === 'remove-model' && profile && target.modelId) act(() => store.removeCustomModel(profile.id, target.modelId!)); else setCustomModel(true); }} />}
       customModelId={!isSystem && identity && customModel ? {
@@ -158,6 +161,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
     >
       {showConnectionTest && profile && target.mode && <ConnectionTestSection target={target} />}
     </AiProviderSelectorForm>
+    </fieldset>
     {fixedServer && <p role="status" className="text-xs">本页服务器使用固定系统默认配置；不支持选择模型、BYOK 或高级生成覆盖。</p>}
     {(error || (!executionConstraint && !fixedServer && state.modelInputError)) && <p role="alert">{error ?? state.modelInputError}</p>}
     {target.unavailableReason && <p role="status">{target.unavailableReason}</p>}

@@ -9,6 +9,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiExecutionResult } from '@mahoshojo/ai-core/stream-events';
 import type { DirectProviderProfileV1 } from '@mahoshojo/contracts/provider-profile';
+import type { saveProviderProfile } from '../src/platform/provider-profile-bridge';
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
 import {
   getDesktopAiConfigStore,
@@ -21,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
   navigate: vi.fn(async () => undefined),
   profileIds: ['p1', 'p2'] as string[],
-  saveProfile: vi.fn(async () => undefined),
+  saveProfile: vi.fn<typeof saveProviderProfile>(async () => undefined),
 }));
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (command: string) => {
@@ -73,7 +74,7 @@ const profiles: Record<string, DirectProviderProfileV1> = {
 vi.mock('../src/platform/provider-profile-bridge', () => ({
   listProviderProfileIds: async () => [...mocks.profileIds],
   getProviderProfile: async (_invoke: unknown, id: string) => profiles[id] ?? null,
-  saveProviderProfile: (...args: unknown[]) => mocks.saveProfile(...args),
+  saveProviderProfile: mocks.saveProfile,
   deleteProviderProfile: async () => undefined,
   validateProviderExecutionProfile: async (_invoke: unknown, doc: unknown) => doc,
 }));
@@ -442,6 +443,7 @@ describe('DesktopAiProviderPanel', () => {
       contractVersion: 1,
       mode: 'direct-local',
       output: { text: '你好' },
+      finishReason: 'stop',
     } satisfies AiExecutionResult);
     await mount();
     await act(async () => button('测试当前连接')!.click());
@@ -532,18 +534,20 @@ describe('DesktopAiProviderPanel', () => {
     expect(container.textContent).toContain('编辑连接');
 
     let releaseSave: (() => void) | null = null;
-    mocks.saveProfile.mockImplementation((_invoke: unknown, doc: unknown) => {
+    mocks.saveProfile.mockImplementation((_invoke, doc) => {
       // 模拟真实落盘：resolve 之后回读必须能拿到本次候选文档，
       // 否则保存后核验会按「结果不确定」如实报错。
-      profiles[(doc as DirectProviderProfileV1).id] = doc as DirectProviderProfileV1;
+      profiles[doc.id] = doc;
       return new Promise<void>((resolve) => {
         releaseSave = resolve;
       });
     });
     await act(async () => button('保存连接')!.click());
     await settle();
-    expect(button('取消').disabled).toBe(true);
-    expect(button('保存中…').disabled).toBe(true);
+    const cancel = button('取消'); const saving = button('保存中…');
+    if (!cancel || !saving) throw new Error('保存事务期间必须保留取消与保存进度按钮');
+    expect(cancel.disabled).toBe(true);
+    expect(saving.disabled).toBe(true);
 
     releaseSave!();
     await settle();
@@ -574,5 +578,24 @@ describe('temporary Strict execution panel lock', () => {
     expect(getDesktopAiConfigStore().getSnapshot().selection).toMatchObject({ executionPreference: 'client', clientTarget: { kind: 'custom', profileId: 'p1' } });
     expect(container.textContent).toContain('接收方：http://127.0.0.1:11434/v1'); expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
     expect(button('保存连接')!.matches(':disabled')).toBe(false);
+  });
+});
+
+describe('page-local server capability', () => {
+  it('keeps the server preference visible but unavailable and lets the user explicitly choose client', async () => {
+    seedOverlay({ version: 3, selection: { executionPreference: 'server', clientConnectionId: 'p1' }, hiddenPresetIds: [], generationOverrides: {}, modelsByProfileId: {} });
+    resetDesktopAiConfigStoreForTests();
+    await act(async () => root.render(<DesktopAiProviderPanel generationMode="non-stream" copy={copy} serverUnavailableReason="此页暂不支持服务器" />)); await settle();
+    const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+    expect(container.textContent).toContain('此页暂不支持服务器');
+    const server = buttons().find(item => item.hasAttribute('aria-pressed') && item.textContent?.includes('服务器'))!;
+    expect(server.disabled).toBe(true);
+    expect(getDesktopAiConfigStore().getSnapshot().selection.executionPreference).toBe('server');
+    expect(triggers().every(item => item.disabled)).toBe(true);
+    await act(async () => server.click()); expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+    const client = buttons().find(item => item.hasAttribute('aria-pressed') && item.textContent?.includes('客户端'))!;
+    await act(async () => client.click()); await settle();
+    expect(getDesktopAiConfigStore().getSnapshot().selection.executionPreference).toBe('client');
+    expect(triggers().some(item => !item.disabled)).toBe(true);
   });
 });

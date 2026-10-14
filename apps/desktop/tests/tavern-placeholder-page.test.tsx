@@ -3,10 +3,13 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TavernExportFile } from '@mahoshojo/ui-web/tavern';
+import { resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { DesktopTavern } from '../src/app/tavern-page';
 import { getPlaceholderPngBytes, replacePngTextChunks } from '@mahoshojo/domain/tavern-card';
 
 const mocks = vi.hoisted(() => ({ save: vi.fn<(repository: unknown, data: unknown) => Promise<string>>(async () => 'saved'), export: vi.fn<(file: TavernExportFile) => void>() }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => true) }));
+vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileIds: async () => [] }));
 vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({}), Link: ({ children }: { children: ReactNode }) => <a>{children}</a> }));
 vi.mock('../src/app/useLeaveGuard', () => ({ useLeaveGuard: () => ({ ready: true }) }));
 vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openFixed: vi.fn() }) }));
@@ -30,8 +33,8 @@ async function upload(raw: unknown) {
   Object.defineProperty(input, 'files', { configurable: true, value: [file] });
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 }
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true; container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container); });
-afterEach(() => { act(() => root.unmount()); container.remove(); });
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); resetDesktopAiConfigStoreForTests(); vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [] }))); (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true; container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container); });
+afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 
 describe('Desktop Tavern real placeholder journey', () => {
   it('restores shared preferences and regenerates preview/export/save from the original', async () => {

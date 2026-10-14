@@ -13,3 +13,4 @@ export * from './local-export';
 export * from './placeholder-preference';
 export * from './placeholder-fields';
 export * from './template-selector';
+export * from './conversion-controls';

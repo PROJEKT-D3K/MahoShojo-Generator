@@ -1,6 +1,6 @@
 import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
-import { TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
+import { TavernConversionControls, TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
 import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard, buildTavernCanshouCard } from '@mahoshojo/domain/tavern-card';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
@@ -15,7 +15,7 @@ import GeneralScenarioCard from '@/components/GeneralScenarioCard';
 import MagicalGirlCard from '@/components/MagicalGirlCard';
 import SaveToCloudButton from '@/components/SaveToCloudButton';
 import TachieGenerator from '@/components/TachieGenerator';
-import { GenerationModeSwitcher, type GenerationMode } from '@/components/shared/GenerationModeSwitcher';
+import type { GenerationMode } from '@/components/shared/GenerationModeSwitcher';
 import { ImagePreviewModal } from '@/components/shared/ImagePreviewModal';
 import { JsonSizeIndicator } from '@/components/shared/JsonSizeIndicator';
 import { StreamStopButton } from '@/components/shared/StreamStopButton';
@@ -939,118 +939,27 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                 </div>
               </div>
 
-              <div className="mt-4">
-                <label className="block text-sm font-semibold text-pink-700">转换模式</label>
-                <div className="mt-2 grid gap-2">
-                  <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-pink-100 bg-white/80 p-3">
-                    <input
-                      type="radio"
-                      name="tavern-convert-mode"
-                      className="mt-1"
-                      checked={state.convertMode === 'rules'}
-                      onChange={() => {
-                        dispatch({ type: 'setConvertMode', mode: 'rules' });
-                        resetGeneratedPreview();
-                      }}
-                      disabled={state.step === 'converting' || state.step === 'parsing'}
-                    />
-                    <div className="min-w-0">
-                      <div className="text-sm text-gray-900">规则映射（不调用 AI）</div>
-                      <div className="mt-1 text-xs text-gray-600">稳定、可解释、不会发起网络请求。</div>
-                    </div>
-                  </label>
-
-                  <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-pink-100 bg-white/80 p-3">
-                    <input
-                      type="radio"
-                      name="tavern-convert-mode"
-                      className="mt-1"
-                      checked={state.convertMode === 'ai'}
-                      onChange={() => {
-                        dispatch({ type: 'setConvertMode', mode: 'ai' });
-                        resetGeneratedPreview();
-                      }}
-                      disabled={state.step === 'converting' || state.step === 'parsing'}
-                    />
-                    <div className="min-w-0">
-                      <div className="text-sm text-gray-900">AI 深度转换（可选）</div>
-                      <div className="mt-1 text-xs text-gray-600">
-                        结构化质量更高，但会发送裁剪后的输入包到生成接口；输出会通过 schema 校验。
-                      </div>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-              {state.convertMode === 'ai' ? (
-                <div className="mt-4 rounded-xl border border-pink-100 bg-white/60 p-3">
-                  <div className="grid gap-3">
-                    <div className="rounded-xl border border-pink-100 bg-white/70 p-3">
-                      <button
-                        type="button"
-                        className="flex w-full items-center justify-between text-left text-sm font-semibold text-pink-700"
-                        onClick={() => setShowLanguageSection(!showLanguageSection)}
-                        disabled={state.step === 'converting' || state.step === 'parsing'}
-                      >
-                        <span>生成语言</span>
-                        <span className="text-xs">{showLanguageSection ? '▲' : '▼'}</span>
-                      </button>
-                      {showLanguageSection ? (
-                        <div className="mt-3">
-                          <select
-                            className="w-full rounded-xl border border-pink-100 bg-white/80 p-3 text-sm text-gray-900"
-                            value={selectedLanguage}
-                            onChange={(e) => {
-                              setSelectedLanguage(e.target.value);
-                              resetGeneratedPreview();
-                            }}
-                            disabled={state.step === 'converting' || state.step === 'parsing'}
-                          >
-                            {languages.map((lang) => (
-                              <option key={lang.code} value={lang.code}>
-                                {lang.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : (
-                        <div className="mt-2 text-xs text-gray-600">当前：{selectedLanguage}</div>
-                      )}
-                    </div>
-
-                    <div className="rounded-xl border border-pink-100 bg-white/70 p-3">
-                      <GenerationModeSwitcher
-                        label="生成方式"
-                        value={generationMode}
-                        disabled={state.step === 'converting' || state.step === 'parsing'}
-                        helper={false}
-                        onChange={(mode) => {
-                          setGenerationMode(mode);
-                          resetGeneratedPreview();
-                        }}
-                      />
-                      <div className="mt-2 text-xs text-gray-600">
-                        {generationMode === 'stream'
-                          ? (isScenarioTemplate
-                            ? '提示：流式生成会实时输出 Markdown，并生成【通用情景卡】。'
-                            : '提示：流式生成会实时输出 Markdown，并生成【通用角色卡】；若需要结构化的魔法少女/残兽字段与 userAnswers，请切换为非流式。')
-                          : (isScenarioTemplate
-                            ? '提示：非流式生成会返回结构化情景 JSON（包含 elements 等字段），更适合进阶玩法。'
-                            : '提示：非流式生成会返回结构化数据卡（魔法少女/残兽会同时生成 userAnswers），适合后续升华/导出酒馆卡。')}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <AiProviderSelector
-                      onConfigChange={handleAiProviderConfigChange}
-                    />
-                    <div className="mt-2 text-xs text-gray-600">
-                      可选：使用自有 API Key 冷却统一为 3 秒；使用官方 Key 冷却为 {Math.ceil(OFFICIAL_KEY_MAX_AI_COOLDOWN_MS / 1000)} 秒。API Key 仅存储于浏览器本地（localStorage），不会上传到服务器。
-                    </div>
-                  </div>
-                </div>
-              ) : null}
+              <TavernConversionControls
+                mode={state.convertMode}
+                onModeChange={(mode) => { dispatch({ type: 'setConvertMode', mode }); resetGeneratedPreview(); }}
+                disabled={state.step === 'converting' || state.step === 'parsing'}
+                language={selectedLanguage}
+                languages={languages}
+                onLanguageChange={(language) => { setSelectedLanguage(language); resetGeneratedPreview(); }}
+                languageExpanded={showLanguageSection}
+                onLanguageExpandedChange={setShowLanguageSection}
+                generationMode={generationMode}
+                onGenerationModeChange={(mode) => { setGenerationMode(mode); resetGeneratedPreview(); }}
+                generationModeDescription={generationMode === 'stream'
+                  ? (isScenarioTemplate
+                    ? '提示：流式生成会实时输出 Markdown，并生成【通用情景卡】。'
+                    : '提示：流式生成会实时输出 Markdown，并生成【通用角色卡】；若需要结构化的魔法少女/残兽字段与 userAnswers，请切换为非流式。')
+                  : (isScenarioTemplate
+                    ? '提示：非流式生成会返回结构化情景 JSON（包含 elements 等字段），更适合进阶玩法。'
+                    : '提示：非流式生成会返回结构化数据卡（魔法少女/残兽会同时生成 userAnswers），适合后续升华/导出酒馆卡。')}
+                provider={<AiProviderSelector onConfigChange={handleAiProviderConfigChange} />}
+                providerFootnote={<>可选：使用自有 API Key 冷却统一为 3 秒；使用官方 Key 冷却为 {Math.ceil(OFFICIAL_KEY_MAX_AI_COOLDOWN_MS / 1000)} 秒。API Key 仅存储于浏览器本地（localStorage），不会上传到服务器。</>}
+              />
 
               <div className="mt-4">
                 <button

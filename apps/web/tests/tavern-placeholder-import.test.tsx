@@ -38,6 +38,30 @@ beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); mocks.projection = 
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 
 describe('Web Tavern real shared placeholder import', () => {
+  it('retains Web AI, streaming and language controls through the shared conversion UI', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => [{ code: 'zh-CN', name: '中文' }, { code: 'en', name: 'English' }] })));
+    await act(async () => root.render(<TavernImportPanel />));
+    await upload({ name: 'Alice', description: '原文' }); await click('生成角色卡');
+    expect(container.querySelector('[data-projection]')).not.toBeNull();
+    const modes = container.querySelectorAll<HTMLInputElement>('input[name="tavern-convert-mode"]');
+    expect(modes).toHaveLength(2);
+    await act(async () => modes[1].click());
+    expect(modes[1].checked).toBe(true);
+    expect(container.querySelector('[data-projection]')).toBeNull();
+    expect(button('流式').disabled).toBe(false); expect(button('非流式').disabled).toBe(false);
+    expect(container.textContent).toContain('使用官方 Key 冷却为');
+    await click('流式'); expect(button('流式').getAttribute('aria-pressed')).toBe('true');
+    expect(container.textContent).toContain('流式生成会实时输出 Markdown');
+    const languageToggle = [...container.querySelectorAll('button')].find((element) => element.textContent?.startsWith('生成语言'))!;
+    if (languageToggle.getAttribute('aria-expanded') !== 'true') await act(async () => languageToggle.click());
+    const language = container.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!;
+    await act(async () => { language.value = 'en'; language.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(language.value).toBe('en');
+    await act(async () => languageToggle.click()); expect(container.textContent).toContain('当前：en');
+    await act(async () => modes[0].click());
+    expect(button('流式')).toBeUndefined(); expect(button('生成角色卡').disabled).toBe(false);
+    await click('生成角色卡'); expect(mocks.projection?.content).toContain('原文');
+  });
   it('uses shared preferences and rules while retaining original meta/raw and invalidating stale output', async () => {
     localStorage.setItem(key, JSON.stringify({ enabled: true, userReplacement: '$&', charReplacementMode: 'auto', customCharReplacement: '' }));
     await act(async () => root.render(<TavernImportPanel />));

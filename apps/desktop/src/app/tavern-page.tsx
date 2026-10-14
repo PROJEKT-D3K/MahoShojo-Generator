@@ -1,8 +1,8 @@
-import { useCallback, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter } from '@tanstack/react-router';
 import { convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
-import { TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
+import { TavernConversionControls, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
 import { GeneralScenarioCard } from '@mahoshojo/ui-web/scenario';
 import { CanshouCard, GeneralCharacterCard } from '@mahoshojo/ui-web/character-card';
 import { ProductFooter } from '@mahoshojo/ui-web/shell';
@@ -12,8 +12,26 @@ import { useLeaveGuard } from './useLeaveGuard';
 import { useExternalLinks } from '../features/external-links/external-links-provider';
 import { navigateByProductHref, resolveInternalHrefForHashHistory } from './hash-history-fragment';
 
-/** Shared Web intake, preview and local actions; this slice has no AI/cloud executor. */
-export function DesktopTavern() {
+import { TavernAiSession } from '../features/tavern/session';
+import { prepareTavernGenerationInput, validateTavernGeneratedCard, type TavernGenerationInput } from '../features/tavern/generation';
+import { DesktopAiProviderPanel } from '../features/ai-config/desktop-ai-provider-panel';
+import { useDesktopAiConfig } from '../features/ai-config/use-desktop-ai-config';
+import { resolveDesktopAiTarget } from '../features/ai-config/desktop-ai-config';
+import { QuestionnaireDraftPanel } from './questionnaire-draft-panel';
+
+const SERVER_UNAVAILABLE = '酒馆 AI 转换尚未接入服务器；请明确选择客户端和可直连的供应商。';
+
+function TavernPage({ session }: { session: TavernAiSession }) {
+  const ai = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const { state: aiState, store: aiStore } = useDesktopAiConfig();
+  const target = resolveDesktopAiTarget(aiState.selection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId);
+  const [providerDirty, setProviderDirty] = useState(false);
+  const [mode, setMode] = useState<'rules' | 'ai'>(ai.draft.input ? 'ai' : 'rules');
+  const [languageExpanded, setLanguageExpanded] = useState(false);
+  const [languages, setLanguages] = useState<{ code: string; name: string }[]>([]);
+  const requestLock = useRef(false);
+  const generating = ai.phase === 'generating' || aiState.generationActive;
+
   const router = useRouter();
   const idPrefix = useId();
   const { openFixed } = useExternalLinks();
@@ -25,21 +43,59 @@ export function DesktopTavern() {
   const [result, setResult] = useState<TavernParseResult | null>(null);
   const [basePng, setBasePng] = useState<Uint8Array>();
   const [index, setIndex] = useState(0);
-  const [template, setTemplate] = useState<typeof TAVERN_LOCAL_IMPORT_TEMPLATES[number]>('general');
+  const [template, setTemplate] = useState<typeof TAVERN_LOCAL_IMPORT_TEMPLATES[number]>(ai.draft.input?.template ?? 'general');
   const [error, setError] = useState('');
   const [reading, setReading] = useState(false);
   const [saving, setSaving] = useState(false);
   const { preference, setPreference, isHydrated: placeholderHydrated } = useTavernPlaceholderPreference();
   const sourceSelection = useTavernSourceSelection();
   const busy = useRef(false);
-  const guard = useLeaveGuard(() => busy.current || exportBusy.current);
+  const guard = useLeaveGuard(() => busy.current || exportBusy.current || requestLock.current || aiStore.isPreparingGeneration() || session.isBusy() || session.hasUnsavedDraft() || providerDirty,
+    '生成、导出尚未完成，或草稿/AI 配置未保存。请等待、取消或导出后再离开。', undefined, () => {
+      if (busy.current || exportBusy.current || ai.saving) return false;
+      if (!window.confirm('确认终止当前操作并离开？未保存的内容和 AI 配置可能丢失。')) return false;
+      aiStore.cancelPreparingGeneration(); session.cancel(); return true;
+    });
+  const blocked = generating || reading || saving || ai.pendingRestore || !guard.ready;
+  const clearAiOutput = () => { session.clearOutput(); session.updateDraft({ ...session.getSnapshot().draft, input: null }); };
+  const confirmChange = (clear = true, unmountProvider = false) => {
+    if (busy.current || requestLock.current || session.isBusy() || aiStore.isPreparingGeneration()) return false;
+    if (unmountProvider && providerDirty && !window.confirm('AI 连接配置或 API Key 尚未保存。切换会关闭配置面板，确认放弃未保存的配置？')) return false;
+    if ((session.hasUnsavedResult() || session.hasUnsavedDraft() || ai.rawText) && !window.confirm('更改转换输入会清除当前 AI 结果与原始输出。请先下载或保存需要保留的内容。确认继续？')) return false;
+    if (clear) clearAiOutput(); return true;
+  };
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch('/languages.json', { signal: controller.signal, credentials: 'omit', redirect: 'error' })
+      .then(response => response.ok ? response.json() : [])
+      .then(value => { if (!controller.signal.aborted && Array.isArray(value)) setLanguages(value); }).catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    const stop = () => { aiStore.cancelPreparingGeneration(); session.cancel(); };
+    window.addEventListener('pagehide', stop);
+    return () => { window.removeEventListener('pagehide', stop); stop(); };
+  }, [aiStore, session]);
+  useEffect(() => {
+    const input = session.getSnapshot().draft.input;
+    if (!input) return;
+    let disposed = false;
+    const bytes = new TextEncoder().encode(JSON.stringify(input.raw));
+    setReading(true); busy.current = true;
+    void readTavernFile({ name: 'restored.json', size: bytes.length, arrayBuffer: async () => bytes.buffer }).then(next => {
+      if (!disposed) { setResult(next.parsed); setIndex(0); }
+    }).catch(cause => { if (!disposed) setError(cause instanceof Error ? cause.message : '恢复原件失败'); })
+      .finally(() => { if (!disposed) { busy.current = false; setReading(false); } });
+    return () => { disposed = true; };
+  }, [session]);
   async function read(file: TavernInputFile | null) {
-    if (!file || busy.current) return;
+    if (!file || busy.current || blocked || !confirmChange(false)) return;
     const current = sourceSelection.begin();
     busy.current = true; setReading(true); setError('');
     try {
       const next = await readTavernFile(file);
       if (!sourceSelection.isCurrent(current)) return;
+      clearAiOutput();
       setResult(next.parsed); setBasePng(next.basePngBytes); setIndex(next.parsed.candidates.indexOf(next.parsed.selected));
     } catch (cause) { if (sourceSelection.isCurrent(current)) setError(cause instanceof Error ? cause.message : '读取失败'); }
     finally { busy.current = false; if (sourceSelection.isCurrent(current)) setReading(false); }
@@ -50,33 +106,89 @@ export function DesktopTavern() {
     try { return { projection: candidate ? (template === 'canshou' ? convertTavernToCanshouCard(candidate, preference) : template === 'general-scenario' ? convertTavernToGeneralScenarioCard(candidate, preference) : convertTavernToGeneralCard(candidate, preference)) : null, error: null }; }
     catch (cause) { return { projection: null, error: cause instanceof Error ? cause.message : '转换失败，原件仍保留。' }; }
   }, [candidate, preference, template]);
-  const projection = conversion.projection;
+  const aiCard = useMemo(() => ai.card ? validateTavernGeneratedCard(ai.cardKind, ai.card) : null, [ai.card, ai.cardKind]);
+  const projection = mode === 'ai' ? aiCard : conversion.projection;
+  const { aiInput, aiInputError, warnings } = useMemo(() => {
+    if (!candidate || template === 'canshou') return { aiInput: null, aiInputError: null, warnings: [] };
+    const aiInput: TavernGenerationInput = { raw: candidate.parsed, template, language: ai.draft.language, preference };
+    try { return { aiInput, aiInputError: null, warnings: prepareTavernGenerationInput(aiInput).warnings }; }
+    catch (cause) { return { aiInput, aiInputError: cause instanceof Error ? cause.message : 'AI 输入无效', warnings: [] }; }
+  }, [candidate, template, ai.draft.language, preference]);
+  const directUnavailable = target.location !== 'client' ? SERVER_UNAVAILABLE : target.unavailableReason;
+  const generateDisabled = blocked || !placeholderHydrated || !aiInput || !!aiInputError || !!directUnavailable || !target.mode || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
+  const generate = () => {
+    if (generateDisabled || requestLock.current || session.isBusy() || !aiInput) return;
+    if ((session.hasUnsavedResult() || ai.rawText) && !window.confirm('重新转换会替换当前 AI 结果与原始输出，且可能产生新的模型费用。确认继续？')) return;
+    const frozen = JSON.parse(JSON.stringify(aiInput)) as TavernGenerationInput;
+    requestLock.current = true; setError('');
+    session.updateDraft({ language: frozen.language, input: frozen });
+    void aiStore.withPreparedGeneration(async prepared => {
+      if (prepared.location !== 'client' || !prepared.mode || !prepared.providerTarget || prepared.providerTarget.kind === 'system' || prepared.unavailableReason) throw new Error(SERVER_UNAVAILABLE);
+      await session.generate({ invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget }, frozen,
+        { mode: prepared.mode, generationMode: 'non-stream', modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides }, true);
+    }).catch(cause => setError(cause instanceof Error ? cause.message : 'AI 配置准备失败'))
+      .finally(() => { requestLock.current = false; });
+  };
   return <div className="magic-background-white"><div className="container !max-w-[980px]"><div className="card !max-w-none !p-0">
-    <TavernHeroBanner title="酒馆生态" subtitle="SillyTavern 角色卡（PNG 内嵌 JSON）导入/导出工具" actions={<TavernTabs idPrefix={idPrefix} tab={tab} onChange={setTab} disabled={reading || saving || exporting} />} right={<Link to="/" className="text-sm text-pink-700 hover:underline">返回首页</Link>} />
+    <TavernHeroBanner title="酒馆生态" subtitle="SillyTavern 角色卡（PNG 内嵌 JSON）导入/导出工具" actions={<TavernTabs idPrefix={idPrefix} tab={tab} onChange={setTab} disabled={blocked || exporting} />} right={<Link to="/" className="text-sm text-pink-700 hover:underline">返回首页</Link>} />
     <div className="p-6">
-      <p className="text-center text-xs text-gray-600">本地解析与导出 PNG / JSON、规则映射和卡库读写，不上传角色内容。AI 深度转换和云保存尚未接入。</p>
+      <p className="text-center text-xs text-gray-600">本地解析与导出 PNG / JSON、规则映射和卡库读写。仅选择 AI 深度转换并点击转换时，裁剪后的设定才会发送给所选供应商；云保存尚未接入。</p>
       <TavernTabPanels idPrefix={idPrefix} tab={tab} exportPanel={<TavernLocalExportPanel repository={repository} exportFile={exportTavernFile} getDefaultBase={getDesktopTavernBase} disabled={!guard.ready} onBusyChange={onExportBusy} />} importPanel={<>
-      <TavernLocalSources selection={sourceSelection} repository={repository} disabled={reading || saving || !guard.ready} onSource={(file) => void read(file)} />
-      <TavernFileInput disabled={reading || saving || !guard.ready} onFileSelected={(file) => void read(file)} />
+      <TavernLocalSources selection={sourceSelection} repository={repository} disabled={blocked} onSource={(file) => void read(file)} />
+      <TavernFileInput disabled={blocked} onFileSelected={(file) => void read(file)} />
       {reading ? <p role="status">解析中…</p> : null}
       {error ? <p role="alert" className="mt-3 text-sm text-red-700">{error}</p> : null}
       {candidate && normalized && result ? <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="space-y-4"><TavernCandidateSelector candidates={result.candidates} selectedIndex={index} onSelect={(next) => { sourceSelection.begin(); setIndex(next); }} disabled={saving || reading} />
-          <TavernTemplateSelector value={template} templates={TAVERN_LOCAL_IMPORT_TEMPLATES} disabled={saving || reading || !guard.ready}
-            onChange={(next) => { sourceSelection.begin(); setTemplate(next); }} />
-          <TavernPlaceholderFields preference={preference} name={normalized.name} onChange={setPreference} disabled={saving || reading || !placeholderHydrated || !guard.ready} />
+        <div className="space-y-4"><TavernCandidateSelector candidates={result.candidates} selectedIndex={index} onSelect={(next) => { if (confirmChange()) { sourceSelection.begin(); setIndex(next); } }} disabled={blocked} />
+          <TavernTemplateSelector value={template} templates={TAVERN_LOCAL_IMPORT_TEMPLATES} disabled={blocked}
+            onChange={(next) => { if (confirmChange(true, next === 'canshou')) { sourceSelection.begin(); setTemplate(next); if (next === 'canshou') setMode('rules'); } }} />
+          <TavernPlaceholderFields preference={preference} name={normalized.name} onChange={(next) => { if (confirmChange()) setPreference(next); }} disabled={blocked || !placeholderHydrated} />
+          <TavernConversionControls mode={mode} onModeChange={next => { if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={blocked}
+            aiDisabledReason={template === 'canshou' ? '残兽目前仅支持规则映射；AI 深度转换仅支持通用角色与通用情景。' : undefined}
+            aiDescription="裁剪后的设定将通过客户端直连发送给所选供应商；结果通过共源 schema 校验，原件单独保留。"
+            language={ai.draft.language} languages={languages.length ? languages : [{ code: ai.draft.language, name: ai.draft.language }]}
+            onLanguageChange={language => { if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, language }); }}
+            languageExpanded={languageExpanded} onLanguageExpandedChange={setLanguageExpanded}
+            generationMode="non-stream" onGenerationModeChange={() => undefined}
+            generationModeDisabledReasons={{ stream: '酒馆客户端当前仅支持非流式转换。' }}
+            generationModeDescription="非流式生成返回通用角色或通用情景 JSON；转换结果未签名。"
+            provider={<DesktopAiProviderPanel generationMode="non-stream" serverUnavailableReason={SERVER_UNAVAILABLE} showConnectionTest={false} onDirtyChange={setProviderDirty}
+              copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请选择客户端连接。', serverFootnote: SERVER_UNAVAILABLE, payloadNoun: '裁剪后的酒馆设定' }} />}
+            providerFootnote="API Key 使用本机安全存储。失败或取消后不会自动重发，请确认费用与原始输出后再手动重试。" />
+          {mode === 'ai' ? <div className="mt-4 space-y-2">
+            {directUnavailable ? <p role="status">{directUnavailable}</p> : null}
+            {aiInputError ? <p role="alert">{aiInputError}</p> : null}
+            {warnings.map(warning => <p className="text-xs text-amber-700" key={warning}>{warning}</p>)}
+            <button type="button" className="generate-button" disabled={generateDisabled} onClick={generate}>{generating ? '转换中…' : '开始转换'}</button>
+            {ai.phase === 'generating' || aiStore.isPreparingGeneration() ? <button type="button" onClick={() => { aiStore.cancelPreparingGeneration(); session.cancel(); }}>取消转换</button> : null}
+            {ai.message ? <p role={ai.phase === 'failed' ? 'alert' : 'status'}>{ai.message}</p> : null}
+            {ai.rawText ? <details open={ai.phase !== 'completed'}><summary>AI 原始输出</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words">{ai.rawText}</pre></details> : null}
+          </div> : null}
           {conversion.error ? <p role="alert" className="text-sm text-red-700">{conversion.error}</p> : null}
-          {projection ? <><TavernLocalProjection disabled={reading || !placeholderHydrated || !guard.ready} data={projection} exportFile={exportTavernFile} saveCard={async (data) => {
+          {projection ? <><TavernLocalProjection conversionMode={mode} disabled={blocked || !placeholderHydrated} data={projection} exportFile={exportTavernFile} saveCard={async (data) => {
             busy.current = true; setSaving(true);
-            try { return await saveDesktopTavernCard(repository, data); } finally { busy.current = false; setSaving(false); }
+            try { if (mode === 'ai') { const saved = await session.saveResult(); if (!saved) throw new Error(session.getSnapshot().saveError ?? '保存失败'); return session.getSnapshot().saveStatus === 'already-present' ? 'already-present' : 'saved'; } return await saveDesktopTavernCard(repository, data); } finally { busy.current = false; setSaving(false); }
           }} />
           {projection.templateId === TAVERN_CANSHOU_TEMPLATE_ID ? <CanshouCard canshou={projection} /> : projection.templateId === '通用情景' ? <GeneralScenarioCard scenario={projection} /> : <GeneralCharacterCard general={projection} />}</> : null}</div>
         <div className="space-y-4"><TavernCardPreview normalized={normalized} warnings={result.meta.warnings} />
-          <TavernOriginalExport disabled={saving || reading} candidate={candidate} basePngBytes={basePng} exportFile={exportTavernFile} /></div>
+          <TavernOriginalExport disabled={blocked} candidate={candidate} basePngBytes={basePng} exportFile={exportTavernFile} /></div>
       </div> : null}
       </>} />
+      <QuestionnaireDraftPanel draftError={ai.draftError} draftBlocked={session.isDraftBlocked()} busy={blocked} actionClass="footer-link" onRetrySave={() => session.retryDraftSave()} />
+      {session.isDraftBlocked() ? <button disabled={blocked} onClick={() => { if (window.confirm('确认清除损坏的 AI 草稿？请先导出需要保留的内容。')) session.discardDraft(); }}>清除损坏 AI 草稿</button> : null}
+      {ai.resultRestored ? <p role="status">已恢复 AI 结果与酒馆 JSON 原件，不会重新发起请求。草稿不保存 PNG 底图；PNG 导出使用占位图。</p> : null}
       {guard.message ? <p role="alert" className="mt-3 text-sm text-red-700">{guard.message}</p> : null}
       <ProductFooter className="footer mt-8" assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />
     </div>
   </div></div></div>;
+}
+
+export function DesktopTavern() {
+  const [session, setSession] = useState<TavernAiSession | null>(null);
+  useEffect(() => {
+    const owner = new TavernAiSession({ storage: window.localStorage, repository: new IpcLocalCardRepository((command, args) => invoke(command, args as never)) });
+    owner.restoreDraft(false); setSession(owner);
+    return () => owner.dispose();
+  }, []);
+  return session ? <TavernPage session={session} /> : <p role="status">正在准备草稿…</p>;
 }
