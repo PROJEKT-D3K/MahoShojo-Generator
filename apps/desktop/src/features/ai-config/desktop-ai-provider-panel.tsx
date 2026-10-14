@@ -29,11 +29,13 @@ export interface DesktopAiProviderPanelProps {
   /** Optional page owner hook; the panel never installs a second native close guard. */
   onDirtyChange?: (dirty: boolean) => void;
   showConnectionTest?: boolean;
+  /** 只约束本页服务器能力，不改其他页的供应商/模型偏好。 */
+  serverPolicy?: 'fixed-default';
   /** Temporary page-owned lock; ordinary configuration remains untouched. */
   executionConstraint?: { location: 'server'; reason: string };
 }
 
-export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDirtyChange, showConnectionTest = true, executionConstraint }: DesktopAiProviderPanelProps) => {
+export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDirtyChange, showConnectionTest = true, executionConstraint, serverPolicy }: DesktopAiProviderPanelProps) => {
   const { state, store } = useDesktopAiConfig();
   const router = useRouter();
   const [editing, setEditing] = useState<EditingState | null>(null);
@@ -41,8 +43,9 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
   const [error, setError] = useState<string | null>(null);
   const [customModel, setCustomModel] = useState(false);
   const selection = executionConstraint ? { ...state.selection, executionPreference: executionConstraint.location } : state.selection;
-  const target = resolveDesktopAiTarget(selection, state.profiles, state.generationOverrides, state.modelsByProfileId, state.presetsByProviderId);
-  const identity = selectedProviderTarget(selection);
+  const target = resolveDesktopAiTarget(selection, state.profiles, state.generationOverrides, state.modelsByProfileId, state.presetsByProviderId, serverPolicy);
+  const fixedServer = serverPolicy === 'fixed-default' && target.location === 'server';
+  const identity = fixedServer ? target.providerTarget : selectedProviderTarget(selection);
   const preset = target.preset;
   const profile = target.profile;
   const isSystem = identity?.kind === 'system';
@@ -65,7 +68,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
 
   const providerOptions: AiProviderSelectOption[] = [
     ...(target.location === 'server' ? [{ value: 'system', label: SYSTEM_PROVIDER_OPTION.name, description: SYSTEM_PROVIDER_OPTION.description, kind: 'builtin' }] : []),
-    ...listDesktopPresetEntries(state.hiddenPresetIds).filter((entry) => !entry.hidden).map((entry) => {
+    ...listDesktopPresetEntries(state.hiddenPresetIds).filter((entry) => !fixedServer && !entry.hidden).map((entry) => {
       const enabled = target.location === 'server' || entry.directCapableModels.length > 0;
       return { value: `preset:${entry.preset.id}`, label: entry.preset.name, description: entry.preset.description, group: '内置供应商', kind: 'preset', ...(!enabled ? { disabled: true, disabledReason: entry.presetSupport.supported ? '暂无可直连的收录模型' : describeAiDirectUnsupportedReason(entry.presetSupport.reason) } : {}) };
     }),
@@ -78,6 +81,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
   });
   if (target.modelId && !target.availableModelIds.includes(target.modelId)) modelOptions.unshift({ value: target.modelId, label: target.modelId, disabled: true, disabledReason: isSystem ? '该系统模型已不在支持列表中，请重新选择' : '模型已从列表移除，请重新选择' });
   const changeModel = (id: string) => act(() => {
+    if (fixedServer) return;
     if (presetId) store.selectPresetModel(presetId, id);
     else if (profile) store.selectModel(profile.id, id);
     else store.selectSystemModel(id);
@@ -100,9 +104,9 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
     {controlsSlot}
     <AiProviderSelectorForm
       label="AI 提供商"
-      providerSelect={<AiProviderCustomSelect options={providerOptions} value={providerValue} placeholder="选择供应商" disabled={disabled}
+      providerSelect={<AiProviderCustomSelect options={providerOptions} value={providerValue} placeholder="选择供应商" disabled={disabled || fixedServer}
         onChange={(value) => act(() => {
-          if (!confirmDiscardEditing()) return;
+          if (fixedServer || !confirmDiscardEditing()) return;
           if (value === 'system') store.selectProviderTarget({ kind: 'system' });
           else if (value.startsWith('preset:')) store.selectProviderTarget({ kind: 'preset', providerId: value.slice(7) });
           else if (value.startsWith('custom:')) store.selectProviderTarget({ kind: 'custom', profileId: value.slice(7) });
@@ -123,7 +127,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
           if (id === 'manage' && confirmDiscardEditing()) navigateByProductHref(router, '/settings?section=generation');
         }} />}
       providerExtra={profile ? <p className="break-all text-xs">接收方：{profile.baseUrl} · 模型：{target.modelId ?? profile.modelId}</p> : undefined}
-      modelSelect={<AiProviderCustomSelect options={modelOptions} value={target.modelId ?? ''} onChange={changeModel} placeholder="选择模型" disabled={disabled || !identity}
+      modelSelect={<AiProviderCustomSelect options={modelOptions} value={target.modelId ?? ''} onChange={changeModel} placeholder="选择模型" disabled={disabled || fixedServer || !identity}
         actions={!isSystem && identity ? [{ id: 'custom-model', label: '自定义模型 ID' }, ...(profile && target.modelId && (state.modelsByProfileId[profile.id]?.customModelIds.includes(target.modelId) || state.modelsByProfileId[profile.id]?.inlineModelId === target.modelId) ? [{ id: 'remove-model', label: `移除模型「${target.modelId}」` }] : [])] : []}
         onAction={(id) => { if (id === 'remove-model' && profile && target.modelId) act(() => store.removeCustomModel(profile.id, target.modelId!)); else setCustomModel(true); }} />}
       customModelId={!isSystem && identity && customModel ? {
@@ -146,7 +150,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
           ? 'API Key 安全保存在本机；生成时由项目服务器转交给所选内置供应商。未保存的输入仅保留在本次会话。'
           : 'API Key 保存在本机安全存储中，生成时直接发送给所选供应商。未保存的输入仅保留在本次会话。',
       } : profile ? { content: <div className="flex items-center gap-2 text-xs"><span>{statusLabel}</span><button type="button" className="battle-lite-link underline" disabled={disabled} onClick={openEdit}>更新凭据</button></div> } : undefined}
-      advancedSettings={identity && (target.location === 'server' || target.mode !== null) && <AdvancedGenerationSettings value={target.generationOverrides} onChange={(next) => act(() => {
+      advancedSettings={!fixedServer && identity && (target.location === 'server' || target.mode !== null) && <AdvancedGenerationSettings value={target.generationOverrides} onChange={(next) => act(() => {
         if (!target.modelId) return;
         if (presetId) store.setPresetGenerationOverrides(presetId, target.modelId, next);
         else if (scope) store.setGenerationOverrides(scope, target.modelId, next);
@@ -154,7 +158,8 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
     >
       {showConnectionTest && profile && target.mode && <ConnectionTestSection target={target} />}
     </AiProviderSelectorForm>
-    {(error || (!executionConstraint && state.modelInputError)) && <p role="alert">{error ?? state.modelInputError}</p>}
+    {fixedServer && <p role="status" className="text-xs">本页服务器使用固定系统默认配置；不支持选择模型、BYOK 或高级生成覆盖。</p>}
+    {(error || (!executionConstraint && !fixedServer && state.modelInputError)) && <p role="alert">{error ?? state.modelInputError}</p>}
     {target.unavailableReason && <p role="status">{target.unavailableReason}</p>}
     {editing && <ConnectionEditor editing={editing} existingSecretKnown={state.secretStatus[editing.draft.id] === 'present'} saving={state.savingConnection || state.generationActive} saveLabel={editing.isExisting ? '保存连接' : '保存并使用'} onCancel={closeEditing} onDirtyChange={setEditorDirty} onSave={async (draft) => { if (disabled) throw new Error('当前 AI 配置已锁定，请先退出严格排位准备或等待当前操作完成。'); await saveConnectionDraft(store, draft, { activate: !editing.isExisting }); closeEditing(); }} />}
   </fieldset>;

@@ -450,3 +450,9 @@ desktop_config_open_directory()
 默认问卷与花名数据以根 `content/` 为权威来源。草稿由单个 DetailsSession 持有，通过 WebView localStorage 保存版本化回答、输出语言、结果和已接收部分正文；上限为序列化后 4 Mi 字符，不存 Provider 凭据、不恢复上游请求。旧草稿需明确恢复或清除；读写失败显式报告，在途生成/保存和未持久化内容阻止路由离开、刷新及原生关闭。
 
 只有点击保存到本地卡库的角色进入 SQLite，并参与 portable archive 与整库备份；页面草稿、未保存结果和部分输出均不在这些备份中。相同摘要采用原子 putIfAbsent，不覆写既有记录或自动恢复墓碑。当前只开放 OpenAI-compatible Direct，在线问卷和其他问卷类型仍待迁移。
+
+## 名字生成服务器通道
+
+`/name` 保留 Direct，服务器执行只使用现有名字 JSON 路由的系统默认配置；页面约束不改其他页的供应商偏好。原始签名响应与 unsigned 展示卡分开，未知结果不自动重试。服务器冷却与 Web 共源，准备失败不计冷却，Direct 不受影响。
+
+请求、签名和验收边界见[唯一 Desktop 计划的经典名字生成段](../../docs/plans/2026-09-30_160100_Desktop客户端阶段实施计划.md)。

@@ -1445,3 +1445,27 @@ describe('DesktopAiConfigStore', () => {
     ).toBe(true);
   });
 });
+
+describe('page-scoped fixed-default server policy', () => {
+  it('projects fixed settings without changing server, Direct, model, or override preferences', () => {
+    const selection = { executionPreference: 'server' as const, clientConnectionId: 'missing', clientTarget: { kind: 'custom' as const, profileId: 'missing' }, serverTarget: { kind: 'preset' as const, providerId: 'deepseek' }, systemModelId: 'removed' };
+    const overrides = { system: { default: { temperature: 0.3 } } };
+    const preset = { deepseek: { selectedModelId: 'deepseek-chat', generationOverrides: { 'deepseek-chat': { temperature: 1 } } } };
+    const before = JSON.stringify({ selection, overrides, preset });
+    expect(resolveDesktopAiTarget(selection, [], overrides, {}, preset, 'fixed-default')).toMatchObject({ location: 'server', providerTarget: { kind: 'system' }, modelId: 'default', availableModelIds: ['default'], generationOverrides: undefined, unavailableReason: null });
+    expect(resolveDesktopAiTarget(selection, [], overrides, {}, preset).providerTarget).toEqual(selection.serverTarget);
+    expect(resolveDesktopAiTarget({ ...selection, executionPreference: 'client' }, [], overrides, {}, preset, 'fixed-default').unavailableReason).toContain('所选连接已不存在');
+    expect(JSON.stringify({ selection, overrides, preset })).toBe(before);
+  });
+  it('does not persist a staged preset key when preparing the fixed server target', async () => {
+    const disk = createStorage(); const native = createNativeStub();
+    const store = createStore(disk, native.invoke); await store.init();
+    store.selectExecutionLocation('server'); store.selectProviderTarget({ kind: 'preset', providerId: 'deepseek' });
+    store.setPresetKeyDraft('deepseek', 'synthetic-staged-key');
+    const before = disk.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY); native.calls.length = 0; const run = vi.fn(async () => undefined);
+    await store.withPreparedGeneration(run, { serverPolicy: 'fixed-default' });
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ providerTarget: { kind: 'system' }, modelId: 'default', generationOverrides: undefined }));
+    expect(native.calls).toEqual([]); expect(store.getPresetKeyDraft('deepseek')).toBe('synthetic-staged-key');
+    expect(disk.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+  });
+});

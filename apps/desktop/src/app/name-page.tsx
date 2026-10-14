@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from '@tanstack/react-router';
 import { serializeNameGenerationResult, type NameGenerationResult } from '@mahoshojo/domain/name-generation';
 import { NamePageView } from '@mahoshojo/ui-web/name-generation';
+import { useCooldown } from '@mahoshojo/ui-web/cooldown';
 import { capturePngBlob, DENY_SNAPDOM_MEDIA } from '@mahoshojo/ui-web/client';
 import { useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { ProductFooter } from '@mahoshojo/ui-web/shell';
@@ -25,9 +26,11 @@ function NameForm({ session }: { session: NameSession }) {
   const router = useRouter();
   const { openFixed } = useExternalLinks();
   const { state: aiState, store: aiStore } = useDesktopAiConfig();
-  const target = resolveDesktopAiTarget(aiState.selection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId);
+  const target = resolveDesktopAiTarget(aiState.selection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId, 'fixed-default');
   const [languages, setLanguages] = useState<{ code: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const { isCooldown, startCooldown, remainingTime } = useCooldown('generateMagicalGirlCooldown', 60000);
+  const serverCooldown = target.location === 'server' && isCooldown;
   const exporting = useRef(false);
   const onExportingChange = useCallback((value: boolean) => { exporting.current = value; }, []);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -57,21 +60,26 @@ function NameForm({ session }: { session: NameSession }) {
   }, [aiStore, session]);
   const busy = state.phase === 'generating' || state.saving || aiState.generationActive;
   const profilesBlocked = target.profile !== null && aiState.profilesState !== 'ready';
-  const generateDisabled = !guard.ready || busy || state.pendingRestore || target.location !== 'client' || !target.mode || !target.providerTarget || !!target.unavailableReason || profilesBlocked;
+  const generateDisabled = !guard.ready || busy || state.pendingRestore || serverCooldown || (target.location === 'client' && !target.mode) || !target.providerTarget || !!target.unavailableReason || profilesBlocked;
   const generate = () => {
     if (generateDisabled || exporting.current || session.isBusy()) return;
     try {
       const draft = session.getSnapshot().draft;
       normalizeNameGenerationInput({ realName: draft.inputName, language: draft.selectedLanguage });
+      const confirmUncertain = session.getSnapshot().phase === 'uncertain';
+      if (confirmUncertain && !window.confirm('上次生成是否已在服务器执行仍无法确认。再次生成会发起新请求，可能产生重复调用与费用。确认继续？')) return;
       setError(null);
       void aiStore.withPreparedGeneration(async (prepared) => {
-        if (prepared.location !== 'client' || (prepared.mode !== 'direct-local' && prepared.mode !== 'direct-remote') || !prepared.providerTarget) throw new Error('名字生成当前仅支持客户端执行，请选择本机直连连接。');
+        if (!prepared.providerTarget || (prepared.location === 'client' && !prepared.mode)) throw new Error('请选择可用的生成通道。');
+        const hosted = prepared.location === 'server';
         await session.generate(
-          { invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget },
+          { invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget,
+            ...(hosted ? { onHostedDispatchSettled: (retryAfterSeconds?: number) => startCooldown(retryAfterSeconds === undefined ? 60000 : retryAfterSeconds * 1000) } : {}) },
           { realName: draft.inputName, language: draft.selectedLanguage },
-          { mode: prepared.mode, generationMode: 'non-stream', modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides },
+          { mode: hosted ? 'hosted-json' : prepared.mode!, generationMode: 'non-stream', modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides },
+          confirmUncertain,
         );
-      }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'AI 配置准备失败'));
+      }, { serverPolicy: 'fixed-default' }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'AI 配置准备失败'));
     } catch (cause) { setError(cause instanceof Error ? cause.message : '生成失败'); }
   };
   const result = (state.card as unknown as NameGenerationResult | null) ?? state.draft.lastSuccessfulResult ?? null;
@@ -83,15 +91,15 @@ function NameForm({ session }: { session: NameSession }) {
     onNameChange={inputName => session.updateDraft({ ...session.getSnapshot().draft, inputName })}
     onLanguageChange={selectedLanguage => session.updateDraft({ ...session.getSnapshot().draft, selectedLanguage })}
     onGenerate={generate} isGenerating={state.phase === 'generating'} disabled={busy || state.pendingRestore || !guard.ready} generateDisabled={generateDisabled}
+    generateLabel={serverCooldown ? `冷却中 (${remainingTime}s)` : undefined}
     magicalGirl={result} resultRef={resultRef}
     captureImage={captureLocalImage} onExportingChange={onExportingChange}
     onSaveImage={(blob, result) => downloadBlobFile(`${result.name || 'magical-girl'}.png`, blob)}
     onSaveJson={result => downloadTextFile(`魔法少女_${result.name}.json`, serializeNameGenerationResult(result))}
     navigation={<><p className="subtitle text-center">或者要不要来试试 {link('/details', '奇妙妖精大调查')}？</p><div className="text-center">{link('/encyclopedia/character-generator', '百科：角色生成（/name、/details、/canshou）')}</div></>}
     configuration={<fieldset disabled={busy || state.pendingRestore} className="mb-4 min-w-0 space-y-3">
-      <p className="text-sm">名字生成使用客户端直连与结构化 JSON 输出。当前不支持服务器执行；结果卡截图不需要立绘生成。</p>
-      <DesktopAiProviderPanel generationMode="non-stream" showConnectionTest={false} copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请先配置客户端连接。', serverFootnote: '', payloadNoun: '名字' }} />
-      {target.location === 'server' && <p role="status">请选择「客户端执行」后生成；服务器模式不支持此页面。</p>}
+      <p className="text-sm">名字生成支持客户端直连或服务器系统默认 JSON 通道。服务器仅接收名字和语言；结果卡截图不需要立绘生成。</p>
+      <DesktopAiProviderPanel generationMode="non-stream" serverPolicy="fixed-default" showConnectionTest={false} copy={{ serverOutput: { stream: '', nonStream: '系统默认 JSON' }, emptyProfilesHint: '请先配置客户端连接。', serverFootnote: '', payloadNoun: '名字' }} />
     </fieldset>}
     actions={<>
       {state.phase === 'generating' && <button className="footer-link" onClick={() => session.cancel()}>取消生成</button>}
@@ -109,9 +117,9 @@ function NameForm({ session }: { session: NameSession }) {
       {error && <p role="alert">{error}</p>}
       {showingPreviousResult && <p role="status">下方保留的是上次成功结果，图片与 JSON 导出均使用该结果；本次生成的原始输出单独列出。</p>}
       {state.message && <p role={state.phase === 'failed' ? 'alert' : 'status'}>{state.phase === 'completed' ? '生成完成，可下载图片或 JSON。' : state.message}</p>}
-      {aiState.profilesState === 'failed' && <p role="alert">{aiState.profilesError}</p>}
+      {target.location === 'client' && aiState.profilesState === 'failed' && <p role="alert">{aiState.profilesError}</p>}
     </>}
-    afterResult={state.rawText && <details open={state.phase !== 'completed'}><summary>原始输出正文</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-3">{state.rawText}</pre></details>}
+    afterResult={state.rawText && <details open={state.phase !== 'completed'}><summary>{session.executionMode() === 'hosted-json' ? '服务器原始响应（签名仅属于原数据，展示卡为未签名转换结果）' : '原始输出正文'}</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-3">{state.rawText}</pre></details>}
     footer={<ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={href => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />}
   />;
 }

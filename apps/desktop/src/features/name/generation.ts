@@ -1,9 +1,8 @@
 import { MAGICAL_GIRL_GENERATION_CONFIG, MAGICAL_GIRL_GENERATION_SCHEMA } from '@mahoshojo/ai-core/name-generation';
 import { buildNameGenerationResult, isNameWithinLength, type NameGenerationInput } from '@mahoshojo/domain/name-generation';
-import type { DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
-import { executeDirectGeneration, GenerationTransportError, type DesktopDirectGenerationFamily, type DesktopGenerationIntent } from '../generation/executor';
+import { executeDirectGeneration, executeDesktopHostedJsonGeneration, GenerationTransportError, type DesktopDirectGenerationFamily, type DesktopHostedJsonGenerationFamily, type DesktopHostedJsonExecutionOptions, type DesktopGenerationIntent } from '../generation/executor';
 
-export type NameGenerationIntent = DesktopGenerationIntent & { mode: 'direct-local' | 'direct-remote'; generationMode?: 'non-stream' };
+export type NameGenerationIntent = DesktopGenerationIntent & { mode: 'direct-local' | 'direct-remote' | 'hosted-json'; generationMode?: 'non-stream' };
 export type NameCardKind = 'name';
 
 /** Match the Web form's raw UTF-16 limit before trimming the dispatched name. */
@@ -34,5 +33,22 @@ const NAME_FAMILY: DesktopDirectGenerationFamily<NameGenerationInput, NameGenera
   cardNoun: '名字生成结果',
 };
 
-export const executeNameGeneration = (options: DesktopAiExecutionOptions, input: NameGenerationInput, intent: NameGenerationIntent, signal: AbortSignal, onPartialText?: (text: string) => void) =>
-  executeDirectGeneration(NAME_FAMILY, options, input, intent, signal, onPartialText);
+const HOSTED_NAME_FAMILY: DesktopHostedJsonGenerationFamily<NameGenerationInput, NameGenerationIntent, NameCardKind> = {
+  validateInput: normalizeNameGenerationInput,
+  jsonRouteId: 'generate-magical-girl',
+  buildHostedBody: (input) => {
+    const normalized = normalizeNameGenerationInput(input);
+    return { name: normalized.realName, language: normalized.language };
+  },
+  // 服务端原始 flowerName/signature 留在 rawText；七字段展示卡是 unsigned 转换结果。
+  normalizeHostedJsonCard: (data, input) => ({
+    card: { ...buildNameGenerationResult(input.realName.trim(), MAGICAL_GIRL_GENERATION_SCHEMA.parse(data)) },
+    cardKind: 'name',
+  }),
+  cardNoun: '名字生成结果',
+};
+
+export const executeNameGeneration = (options: DesktopHostedJsonExecutionOptions, input: NameGenerationInput, intent: NameGenerationIntent, signal: AbortSignal, onPartialText?: (text: string) => void) =>
+  intent.mode === 'hosted-json'
+    ? executeDesktopHostedJsonGeneration(HOSTED_NAME_FAMILY, options, input, intent, signal)
+    : executeDirectGeneration(NAME_FAMILY, options, input, { ...intent, mode: intent.mode }, signal, onPartialText);

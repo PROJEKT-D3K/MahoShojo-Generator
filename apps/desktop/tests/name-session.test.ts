@@ -92,3 +92,19 @@ describe('NameSession inherits the original generation owner', () => {
   });
 
 });
+
+
+describe('NameSession hosted uncertainty and authority', () => {
+  it('restores unknown without replay and requires explicit confirmation for a new attempt', async () => {
+    const disk = storage(); const execute = vi.fn<GenerationExecutor<NameGenerationInput, NameGenerationIntent, 'name'>>(async () => ({ status: 'uncertain', mode: 'hosted-json', rawText: '', message: 'unknown' }));
+    const session = new NameSession({ storage: disk, repository, execute });
+    await session.generate(options, input, { mode: 'hosted-json' }); session.dispose();
+    const reopened = new NameSession({ storage: disk, repository, execute }); reopened.restoreDraft(false);
+    expect(reopened.getSnapshot().phase).toBe('uncertain'); expect(execute).toHaveBeenCalledTimes(1);
+    await reopened.generate(options, input, { mode: 'hosted-json' }); expect(execute).toHaveBeenCalledTimes(1);
+    execute.mockResolvedValue({ ...completed, mode: 'hosted-json', rawText: JSON.stringify({ ...generated, signature: 'synthetic' }) });
+    await reopened.generate(options, input, { mode: 'hosted-json' }, true); expect(execute).toHaveBeenCalledTimes(2);
+    expect(reopened.getSnapshot().rawText).toContain('synthetic'); expect(reopened.resultSignatureKind()).toBe('unsigned');
+    expect(reopened.getSnapshot().card).not.toHaveProperty('signature');
+  });
+});

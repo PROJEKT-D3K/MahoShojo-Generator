@@ -10,6 +10,7 @@ import type {
 import type { AIReasoningEnvelope } from '@mahoshojo/contracts/ai-reasoning';
 import {
   hostedGenerationBodyMaxBytes,
+  DesktopHostedJsonRequestSchema,
   type DesktopHostedSystemConfig,
   type DesktopHostedPresetConfig,
   type HostedGenerationRouteId,
@@ -151,6 +152,20 @@ export interface DesktopDirectGenerationFamily<
   createError(rawText: string, cause: unknown): GenerationTransportError;
   /** invalid-output 文案中的卡片名词（'角色卡'/'数据卡'/'情景卡'）。 */
   cardNoun: string;
+}
+
+/** 仅有 JSON 的服务器家族，无 Direct/SSE 占位或虚构路由。 */
+export interface DesktopHostedJsonGenerationFamily<TInput, TIntent extends DesktopGenerationIntent = DesktopGenerationIntent, TCardKind extends string = string> {
+  validateInput?(input: TInput, intent: TIntent): void;
+  jsonRouteId: HostedJsonGenerationRouteId;
+  buildHostedBody(input: TInput): Record<string, JsonValue>;
+  normalizeHostedJsonCard(data: unknown, input: TInput): GenerationCardProjection<TCardKind>;
+  cardNoun: string;
+}
+
+export interface DesktopHostedJsonExecutionOptions extends DesktopAiExecutionOptions {
+  /** 仅在确认或可能已派发后通知冷却 owner；通知失败不能改写生成结果。 */
+  onHostedDispatchSettled?: (retryAfterSeconds?: number) => void;
 }
 
 export interface DesktopGenerationFamily<TInput, TIntent extends DesktopGenerationIntent = DesktopGenerationIntent, TCardKind extends string = string>
@@ -485,6 +500,7 @@ const HOSTED_JSON_PRE_DISPATCH_CODES: ReadonlySet<DesktopCloudError['code']> = n
   'protocol-mismatch',
   'server-unavailable',
   'storage-unavailable',
+  'cancelled-before-dispatch',
 ]);
 
 const HOSTED_JSON_UNCERTAIN_MESSAGE =
@@ -495,8 +511,8 @@ const executeHostedJsonGeneration = async <
   TIntent extends DesktopGenerationIntent,
   TCardKind extends string,
 >(
-  family: DesktopGenerationFamily<TInput, TIntent, TCardKind>,
-  options: DesktopAiExecutionOptions,
+  family: DesktopHostedJsonGenerationFamily<TInput, TIntent, TCardKind>,
+  options: DesktopHostedJsonExecutionOptions,
   input: TInput,
   intent: TIntent,
   signal: AbortSignal,
@@ -507,6 +523,8 @@ const executeHostedJsonGeneration = async <
   const onAbort = () => cancel();
   signal.addEventListener('abort', onAbort, { once: true });
 
+  let mayHaveDispatched = false;
+  let retryAfterSeconds: number | undefined;
   try {
     const response = await hostedAiRequest(options.invoke, {
       requestId: intent.requestId,
@@ -514,6 +532,8 @@ const executeHostedJsonGeneration = async <
       body,
       ...providerConfig,
     });
+    mayHaveDispatched = true;
+    retryAfterSeconds = readRetryAfterSeconds(response.body, response.status) ?? response.retryAfterSeconds;
     if (signal.aborted) {
       // 响应已返回但用户已要求取消：请求肯定到达过服务器，不能声称干净取消。
       return { status: 'uncertain', mode: intent.mode, rawText: '', message: HOSTED_JSON_UNCERTAIN_MESSAGE };
@@ -524,8 +544,10 @@ const executeHostedJsonGeneration = async <
         status: 'failed',
         mode: intent.mode,
         rawText: '',
-        message: readErrorMessage(payload, status),
-        retryAfterSeconds: readRetryAfterSeconds(payload, status),
+        message: status === 429 && (!isRecord(payload) || !(readStringField(payload, 'error') ?? readStringField(payload, 'message'))?.trim())
+          ? `请求过于频繁${retryAfterSeconds ? `，请在 ${retryAfterSeconds} 秒后重试` : '，请稍后重试'}`
+          : readErrorMessage(payload, status),
+        retryAfterSeconds,
       };
     }
     const { data, reasoning } = unwrapAiMetaPayload(payload);
@@ -565,7 +587,7 @@ const executeHostedJsonGeneration = async <
     }
     const cloudCode = cause instanceof DesktopCloudError ? cause.code : null;
     if (cloudCode !== null && HOSTED_JSON_PRE_DISPATCH_CODES.has(cloudCode)) {
-      if (signal.aborted) {
+      if (signal.aborted || cloudCode === 'cancelled-before-dispatch') {
         return { status: 'cancelled', mode: intent.mode, rawText: '', reason: 'aborted' };
       }
       return {
@@ -578,9 +600,13 @@ const executeHostedJsonGeneration = async <
     }
     // cancelled / network-error / timeout / invalid-response / bridge-invalid / 未知异常：
     // 服务器是否已执行无从确认——诚实投影为 uncertain，由用户显式决定是否再试。
+    mayHaveDispatched = true;
     return { status: 'uncertain', mode: intent.mode, rawText: '', message: HOSTED_JSON_UNCERTAIN_MESSAGE };
   } finally {
     signal.removeEventListener('abort', onAbort);
+    if (mayHaveDispatched) {
+      try { options.onHostedDispatchSettled?.(retryAfterSeconds); } catch { /* 冷却通知不改变业务终态 */ }
+    }
   }
 };
 
@@ -646,4 +672,29 @@ export const executeDesktopGeneration = async <
       : executeHostedJsonGeneration(family, options, input, intent, signal, body, providerConfig);
   }
   return executeDirectGeneration(family, options, input, { ...intent, mode: intent.mode }, signal, onPartialText);
+};
+
+/** 单次固定系统 JSON 请求；校验失败、预取消与 native 准备失败均不计冷却。 */
+export const executeDesktopHostedJsonGeneration = async <TInput, TIntent extends DesktopGenerationIntent, TCardKind extends string>(
+  family: DesktopHostedJsonGenerationFamily<TInput, TIntent, TCardKind>,
+  options: DesktopHostedJsonExecutionOptions,
+  input: TInput,
+  intent: TIntent,
+  signal: AbortSignal,
+): Promise<DesktopGenerationOutcome<TCardKind>> => {
+  if (signal.aborted) return { status: 'cancelled', mode: intent.mode, rawText: '', reason: 'aborted' };
+  if (intent.mode !== 'hosted-json' || (options.providerTarget && options.providerTarget.kind !== 'system')) {
+    return { status: 'failed', mode: intent.mode, rawText: '', code: 'invalid-request', message: '该服务器 JSON 通道仅支持系统默认配置。' };
+  }
+  const snapshot = clone(input);
+  family.validateInput?.(snapshot, intent);
+  const body = family.buildHostedBody(snapshot);
+  const providerConfig = { systemConfig: {
+    ...(intent.modelId === undefined ? {} : { modelId: intent.modelId }),
+    ...(intent.overrides === undefined ? {} : { generationOverrides: intent.overrides }),
+  } };
+  const parsed = DesktopHostedJsonRequestSchema.safeParse({ requestId: intent.requestId, routeId: family.jsonRouteId, body, ...providerConfig });
+  const oversize = hostedBodyOversizeMessage(body, family.jsonRouteId);
+  if (!parsed.success || oversize) return { status: 'failed', mode: intent.mode, rawText: '', code: 'invalid-request', message: oversize ?? '服务器生成请求不符合该通道的固定配置要求。' };
+  return executeHostedJsonGeneration(family, options, snapshot, intent, signal, body, providerConfig);
 };

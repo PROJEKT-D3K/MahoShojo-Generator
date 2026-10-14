@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildNameGenerationResult } from '@mahoshojo/domain/name-generation';
+import { writeCooldownSnapshot } from '@mahoshojo/ui-web/cooldown';
 import { NAME_DRAFT_KEY } from '../src/features/name/session';
 import { resetDesktopAiConfigStoreForTests, getDesktopAiConfigStore } from '../src/features/ai-config/use-desktop-ai-config';
 import { listDesktopPresetEntries } from '../src/features/ai-config/desktop-ai-config';
@@ -29,7 +30,7 @@ const click = async (text: string) => { await act(async () => button(text).click
 const draft = (inputName = '小满') => ({ version: 1, inputName, selectedLanguage: 'zh-CN' });
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.clearAllMocks(); mocks.invoke.mockReset(); mocks.invoke.mockResolvedValue(true); localStorage.clear();
+  vi.clearAllMocks(); mocks.invoke.mockReset(); mocks.invoke.mockResolvedValue(true); localStorage.clear(); writeCooldownSnapshot('generateMagicalGirlCooldown', null);
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'client', clientConnectionId: 'local' }, hiddenPresetIds: [] }));
   localStorage.setItem(NAME_DRAFT_KEY, JSON.stringify(draft()));
   resetDesktopAiConfigStoreForTests();
@@ -39,7 +40,7 @@ beforeEach(() => {
   vi.spyOn(window, 'confirm').mockReturnValue(false); vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
   window.location.hash = '#/name'; host = document.createElement('div'); document.body.append(host); root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 const mount = async () => { const router = createDesktopRouter(); await router.load(); await act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>)); await settle(); return router; };
 
 describe('Desktop classic route with the existing owner and AI configuration', () => {
@@ -84,10 +85,28 @@ describe('Desktop classic route with the existing owner and AI configuration', (
     expect(router.state.location.pathname).toBe('/');
     expect(localStorage.getItem(NAME_DRAFT_KEY)).toBe(original);
   });
-  it('shows server unsupported rather than dispatching a fake hosted route', async () => {
-    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] }));
+  it('uses the fixed server policy through real JSON IPC while preserving ordinary provider preferences', async () => {
+    const preference = { version: 5, selection: { executionPreference: 'server', clientConnectionId: 'missing', clientTarget: { kind: 'custom', profileId: 'missing' }, serverTarget: { kind: 'preset', providerId: 'deepseek' }, systemModelId: 'removed-model' }, hiddenPresetIds: [], modelsByProfileId: {}, presetsByProviderId: { deepseek: { selectedModelId: 'deepseek-chat', generationOverrides: {} } }, generationOverrides: { system: { default: { temperature: 0.3 } } } };
+    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify(preference));
+    const actual = await vi.importActual<typeof import('../src/features/name/generation')>('../src/features/name/generation');
+    mocks.execute.mockImplementation(actual.executeNameGeneration);
+    const signed = { ...generated, templateId: '名字生成', signature: 'synthetic-signed' };
+    mocks.invoke.mockImplementation(async (command: string) => command === 'hosted_ai_request' ? { status: 200, body: signed } : true);
     resetDesktopAiConfigStoreForTests(); await mount();
-    expect(host.textContent).toContain('服务器模式不支持此页面'); expect(button('へんしん').disabled).toBe(true); expect(mocks.execute).not.toHaveBeenCalled();
+    const original = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+    expect(host.textContent).toContain('本页服务器使用固定系统默认配置'); expect(button('へんしん').disabled).toBe(false);
+    const selectors = [...host.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="listbox"]')];
+    expect(selectors.filter(item => item.disabled).length).toBeGreaterThanOrEqual(2);
+    await click('へんしん');
+    expect(mocks.invoke).toHaveBeenCalledWith('hosted_ai_request', { request: expect.objectContaining({ routeId: 'generate-magical-girl', body: { name: '小满', language: 'zh-CN' }, systemConfig: { modelId: 'default' } }) });
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(original);
+    expect(host.querySelector('.result-card')?.textContent).toContain('铃兰'); expect(host.textContent).toContain('synthetic-signed');
+    expect(button('冷却中').disabled).toBe(true); expect(Number(localStorage.getItem('generateMagicalGirlCooldown'))).toBeGreaterThan(Date.now());
+    await click('下载设定文件'); expect(mocks.download.mock.calls.at(-1)?.[1]).toBe(JSON.stringify(card, null, 2));
+    await act(async () => getDesktopAiConfigStore().selectExecutionLocation('client')); await settle();
+    expect(host.textContent).toContain('所选连接已不存在'); expect(host.textContent).not.toContain('本页服务器使用固定系统默认配置');
+    const changed = JSON.parse(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)!);
+    expect(changed.selection.serverTarget).toEqual(preference.selection.serverTarget); expect(changed.selection.systemModelId).toBe('removed-model');
   });
   it('keeps the old successful registration card while a new failed raw attempt is visible', async () => {
     await mount(); await click('へんしん');
@@ -128,6 +147,71 @@ describe('Desktop classic route with the existing owner and AI configuration', (
     expect(localStorage.getItem(NAME_DRAFT_KEY)).toBe('{broken'); expect(input.value).toBe('仍可填写'); expect(host.textContent).toContain('原数据已保留');
     remove.mockRestore(); await click('清除损坏草稿');
     expect(localStorage.getItem(NAME_DRAFT_KEY)).toBeNull(); expect(input.value).toBe(''); expect(host.textContent).not.toContain('清除损坏草稿并重置本页');
+  });
+
+});
+
+
+describe('name hosted cooldown and explicit retry', () => {
+  const seedServer = () => {
+    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
+  };
+  const realExecutor = async () => {
+    const actual = await vi.importActual<typeof import('../src/features/name/generation')>('../src/features/name/generation'); mocks.execute.mockImplementation(actual.executeNameGeneration);
+  };
+  it('reopens unknown without dispatch and requires confirmation before another generation', async () => {
+    seedServer(); localStorage.setItem(NAME_DRAFT_KEY, JSON.stringify({ ...draft(), output: { mode: 'hosted-json', cardKind: 'name', card: null, rawText: '', phase: 'uncertain' } }));
+    await mount(); expect(mocks.execute).not.toHaveBeenCalled();
+    await click('へんしん'); expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('重复调用与费用')); expect(mocks.execute).not.toHaveBeenCalled();
+    vi.mocked(window.confirm).mockReturnValue(true); await click('へんしん'); expect(mocks.execute).toHaveBeenCalledOnce();
+  });
+  it('preserves a stored server cooldown on reopen while Direct stays usable', async () => {
+    seedServer(); localStorage.setItem('generateMagicalGirlCooldown', String(Date.now() + 60000));
+    await mount(); expect(button('冷却中').disabled).toBe(true); expect(mocks.execute).not.toHaveBeenCalled();
+    await act(async () => getDesktopAiConfigStore().selectExecutionLocation('client')); await settle();
+    expect(button('へんしん').disabled).toBe(false); await click('へんしん'); expect(mocks.execute).toHaveBeenCalledOnce();
+  });
+  it.each(['protocol-mismatch', 'storage-unavailable', 'cancelled-before-dispatch'])('does not cool down native preparation result %s', async code => {
+    seedServer(); await realExecutor(); mocks.invoke.mockImplementation(async (command: string) => { if (command === 'hosted_ai_request') throw { code, message: 'prepare stopped' }; return true; });
+    await mount(); await click('へんしん'); expect(localStorage.getItem('generateMagicalGirlCooldown')).toBeNull(); expect(button('へんしん').disabled).toBe(false);
+  });
+  it('unknown invocation is never retried automatically and starts server cooldown', async () => {
+    seedServer(); await realExecutor(); mocks.invoke.mockImplementation(async (command: string) => { if (command === 'hosted_ai_request') throw new Error('native disconnected'); return true; });
+    await mount(); await click('へんしん');
+    expect(host.textContent).toContain('无法确认'); expect(button('冷却中').disabled).toBe(true);
+    expect(JSON.parse(localStorage.getItem(NAME_DRAFT_KEY)!).output.phase).toBe('uncertain');
+    expect(mocks.invoke.mock.calls.filter(call => call[0] === 'hosted_ai_request')).toHaveLength(1);
+  });
+  it('429 without payload shows header retry time and uses its cooldown', async () => {
+    seedServer(); await realExecutor(); mocks.invoke.mockImplementation(async (command: string) => command === 'hosted_ai_request' ? { status: 429, body: null, retryAfterSeconds: 75 } : true);
+    await mount(); await click('へんしん'); expect(host.textContent).toContain('75 秒');
+    expect(Number(localStorage.getItem('generateMagicalGirlCooldown')) - Date.now()).toBeGreaterThan(70000);
+  });
+  it('cooldown storage exceptions do not crash mounting or replace a completed result with failure', async () => {
+    seedServer(); await realExecutor(); const get = Storage.prototype.getItem; const set = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key) { if (key === 'generateMagicalGirlCooldown') throw new Error('blocked'); return get.call(this, key); });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) { if (key === 'generateMagicalGirlCooldown') throw new Error('full'); return set.call(this, key, value); });
+    mocks.invoke.mockImplementation(async (command: string) => command === 'hosted_ai_request' ? { status: 200, body: generated } : true);
+    await mount(); await click('へんしん'); expect(host.querySelector('.result-card')?.textContent).toContain('铃兰'); expect(button('冷却中').disabled).toBe(true);
+    expect(JSON.parse(localStorage.getItem(NAME_DRAFT_KEY)!).output.phase).toBe('completed');
+  });
+  it('server cancellation during native preparation does not count as a dispatched attempt', async () => {
+    seedServer(); await realExecutor(); let reject!: (cause: unknown) => void;
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'hosted_ai_request') return new Promise((_resolve, fail) => { reject = fail; });
+      if (command === 'cancel_hosted_ai') reject({ code: 'cancelled-before-dispatch', message: 'prepare cancelled' });
+      return Promise.resolve(true);
+    });
+    await mount(); await click('へんしん'); await click('取消生成');
+    expect(JSON.parse(localStorage.getItem(NAME_DRAFT_KEY)!).output.phase).toBe('cancelled');
+    expect(localStorage.getItem('generateMagicalGirlCooldown')).toBeNull(); expect(button('へんしん').disabled).toBe(false);
+  });
+  it('development keeps the shared cooldown bypass', async () => {
+    vi.stubEnv('NODE_ENV', 'development'); seedServer(); await realExecutor();
+    mocks.invoke.mockImplementation(async (command: string) => command === 'hosted_ai_request' ? { status: 200, body: generated } : true);
+    await mount(); await click('へんしん'); await click('へんしん');
+    expect(mocks.invoke.mock.calls.filter(call => call[0] === 'hosted_ai_request')).toHaveLength(2);
+    expect(localStorage.getItem('generateMagicalGirlCooldown')).toBeNull(); expect(button('へんしん').disabled).toBe(false);
   });
 
 });

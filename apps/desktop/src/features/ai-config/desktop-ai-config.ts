@@ -353,7 +353,13 @@ export const resolveDesktopAiTarget = (
   generationOverrides: Readonly<Record<string, Readonly<Record<string, UserGenerationOverrides>>>>,
   modelsByProfileId: Readonly<Record<string, DesktopProfileModelSelection>>,
   presetsByProviderId: Readonly<Record<string, DesktopPresetSelection>> = {},
+  serverPolicy?: 'fixed-default',
 ): ResolvedDesktopAiTarget => {
+  // 页面能力投影不改持久偏好，也不解析此通道不使用的悬空连接/预设。
+  if (serverPolicy === 'fixed-default' && selection.executionPreference === 'server') {
+    return { location: 'server', providerTarget: { kind: 'system' }, profile: null, mode: null,
+      modelId: 'default', availableModelIds: ['default'], generationOverrides: undefined, unavailableReason: null };
+  }
   const providerTarget = selectedProviderTarget(selection);
   if (providerTarget?.kind === 'preset') {
     const preset = AI_PROVIDER_PRESETS.find((entry) => entry.id === providerTarget.providerId);

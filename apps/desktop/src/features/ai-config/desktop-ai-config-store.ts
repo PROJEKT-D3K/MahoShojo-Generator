@@ -568,16 +568,17 @@ export class DesktopAiConfigStore {
     // 取消派发不等于撤销 native 凭据写入。写入返回前仍持有互斥锁，避免重试混用 Key。
     this.publish({ generationActive: this.state.generationActive });
   };
-  withPreparedGeneration = async (run: (target: ResolvedDesktopAiTarget) => Promise<unknown>, constraint?: { executionLocation: 'server' }): Promise<void> => {
+  withPreparedGeneration = async (run: (target: ResolvedDesktopAiTarget) => Promise<unknown>, constraint?: { executionLocation?: 'server'; serverPolicy?: 'fixed-default' }): Promise<void> => {
     if (this.state.generationActive) return;
     if (!this.overlayWritable) throw new Error('AI 配置尚未就绪');
     if (this.state.savingCredential) throw new Error('凭据正在保存，请稍后生成');
     if (this.saveConnectionInFlight) throw new Error('连接正在保存，请稍后生成');
     if (this.state.deletingConnection) throw new Error('连接正在删除，请稍后生成');
-    if (this.state.modelInputError && (!constraint || this.state.selection.executionPreference === 'server')) throw new Error(this.state.modelInputError);
     // A page constraint changes this dispatch only, never the persisted ordinary preference.
-    const selection = constraint ? { ...this.state.selection, executionPreference: constraint.executionLocation } : this.state.selection;
-    const target = resolveDesktopAiTarget(selection, this.state.profiles, this.state.generationOverrides, this.state.modelsByProfileId, this.state.presetsByProviderId);
+    const selection = constraint?.executionLocation ? { ...this.state.selection, executionPreference: constraint.executionLocation } : this.state.selection;
+    const fixedServer = constraint?.serverPolicy === 'fixed-default' && selection.executionPreference === 'server';
+    if (!fixedServer && this.state.modelInputError && (!constraint?.executionLocation || this.state.selection.executionPreference === 'server')) throw new Error(this.state.modelInputError);
+    const target = resolveDesktopAiTarget(selection, this.state.profiles, this.state.generationOverrides, this.state.modelsByProfileId, this.state.presetsByProviderId, constraint?.serverPolicy);
     if (target.unavailableReason || !target.providerTarget) throw new Error(target.unavailableReason ?? '请选择供应商');
     const epoch = ++this.generationEpoch;
     this.preparing = true;

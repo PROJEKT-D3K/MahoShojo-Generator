@@ -58,7 +58,7 @@ describe('name generation uses the existing Direct request/collector', () => {
     await expect(executeNameGeneration(native.options, { ...input, language }, intent, new AbortController().signal)).rejects.toThrow();
     expect(native.invoke).not.toHaveBeenCalled();
   });
-  it.each(['hosted-json', 'hosted-stream', 'invented'])('rejects unsupported %s modes at runtime without IPC', async mode => {
+  it.each(['hosted-stream', 'invented'])('rejects unsupported %s modes at runtime without IPC', async mode => {
     const native = nativeHarness('{}');
     expect(await executeNameGeneration(native.options, input, { ...intent, mode } as NameGenerationIntent, new AbortController().signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
     expect(native.invoke).not.toHaveBeenCalled();
@@ -86,5 +86,72 @@ describe('name generation uses the existing Direct request/collector', () => {
     expect(await result).toMatchObject({ status: 'cancelled', rawText: JSON.stringify(generated) });
     expect(native.invoke).toHaveBeenCalledWith(CANCEL_DIRECT_AI_COMMAND, { requestId: 'name-1' });
     expect(partial).toHaveBeenCalledWith(JSON.stringify(generated));
+  });
+});
+
+
+describe('name JSON-only fixed server channel', () => {
+  const hosted = { requestId: 'hosted-name-1', mode: 'hosted-json' as const, modelId: 'default' };
+  const signed = { ...generated, templateId: '魔法少女/心之花/魔法少女（名字生成）', signature: 'synthetic.signed-flower' };
+  const options = (invoke: ReturnType<typeof vi.fn>, onHostedDispatchSettled = vi.fn()) => ({ invoke, profileId: '', providerTarget: { kind: 'system' as const }, onHostedDispatchSettled });
+  it('sends only name/language through the real bridge schema, preserves signed original and projects seven unsigned fields', async () => {
+    const invoke = vi.fn(async () => ({ status: 200, body: signed })); const notify = vi.fn();
+    const result = await executeNameGeneration(options(invoke, notify), input, hosted, new AbortController().signal);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith('hosted_ai_request', { request: {
+      requestId: 'hosted-name-1', routeId: 'generate-magical-girl', body: { name: '小满🌸', language: '日本語' }, systemConfig: { modelId: 'default' },
+    } });
+    expect(result).toMatchObject({ status: 'completed', mode: 'hosted-json', cardKind: 'name', card: buildNameGenerationResult('小满🌸', generated), rawText: JSON.stringify(signed) });
+    if (result.status !== 'completed') throw new Error('expected completed');
+    expect(Object.keys(result.card)).toHaveLength(7); expect(result.card).not.toHaveProperty('signature');
+    expect(notify).toHaveBeenCalledOnce();
+  });
+  it.each([{ kind: 'preset', providerId: 'deepseek' }, { kind: 'custom', profileId: 'local' }] as const)('rejects unsupported target $kind without any invoke/cooldown', async providerTarget => {
+    const invoke = vi.fn(); const notify = vi.fn();
+    const result = await executeNameGeneration({ ...options(invoke, notify), providerTarget }, input, hosted, new AbortController().signal);
+    expect(result).toMatchObject({ status: 'failed', code: 'invalid-request' }); expect(invoke).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
+  it.each([{ modelId: 'not-default' }, { modelId: ' ' }, { overrides: { temperature: 0.8 } }, { overrides: { thinking: { mode: 'default' as const } } }])('rejects model/override requests rather than ignoring them', async extra => {
+    const invoke = vi.fn(); const notify = vi.fn();
+    expect(await executeNameGeneration(options(invoke, notify), input, { ...hosted, ...extra }, new AbortController().signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
+    expect(invoke).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
+  it.each(['invalid-request', 'protocol-mismatch', 'server-unavailable', 'storage-unavailable', 'cancelled-before-dispatch'])('does not cool down native preparation failure %s', async code => {
+    const invoke = vi.fn(async () => { throw { code, message: 'not dispatched' }; }); const notify = vi.fn();
+    expect(await executeNameGeneration(options(invoke, notify), input, hosted, new AbortController().signal)).toMatchObject({ status: code === 'cancelled-before-dispatch' ? 'cancelled' : 'failed' });
+    expect(notify).not.toHaveBeenCalled(); expect(invoke).toHaveBeenCalledOnce();
+  });
+  it.each(['cancelled', 'network-error', 'timeout', 'invalid-response', 'internal-error', 'future-native-code'])('keeps %s uncertain, cools down once, and never retries', async code => {
+    const invoke = vi.fn(async () => { throw { code, message: 'cannot confirm' }; }); const notify = vi.fn();
+    const result = await executeNameGeneration(options(invoke, notify), input, hosted, new AbortController().signal);
+    expect(result).toMatchObject({ status: 'uncertain' }); expect(notify).toHaveBeenCalledOnce(); expect(invoke).toHaveBeenCalledOnce();
+  });
+  it('pre-abort never invokes or starts cooldown; a post-invoke abort remains uncertain', async () => {
+    const controller = new AbortController(); controller.abort(); const before = vi.fn(); const notify = vi.fn();
+    expect(await executeNameGeneration(options(before, notify), input, hosted, controller.signal)).toMatchObject({ status: 'cancelled' });
+    expect(before).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+    const after = new AbortController(); let finish!: (value: unknown) => void;
+    const invoke = vi.fn((command: string) => command === 'cancel_hosted_ai' ? Promise.resolve(true) : new Promise(resolve => { finish = resolve; }));
+    const pending = executeNameGeneration(options(invoke, notify), input, hosted, after.signal);
+    after.abort(); finish({ status: 200, body: signed });
+    expect(await pending).toMatchObject({ status: 'uncertain' }); expect(notify).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith('cancel_hosted_ai', { requestId: 'hosted-name-1' });
+    expect(invoke.mock.calls.filter(call => call[0] === 'hosted_ai_request')).toHaveLength(1);
+  });
+  it.each([null, {}])('uses 429 header fallback without a useful payload (%s)', async body => {
+    const invoke = vi.fn(async () => ({ status: 429, body, retryAfterSeconds: 75 })); const notify = vi.fn();
+    expect(await executeNameGeneration(options(invoke, notify), input, hosted, new AbortController().signal)).toMatchObject({ status: 'failed', message: expect.stringContaining('75'), retryAfterSeconds: 75 });
+    expect(notify).toHaveBeenCalledWith(75);
+  });
+  it('preserves invalid signed output for diagnosis, and callback failures never turn success/unknown into failed', async () => {
+    const invalid = { flowerName: 'bad', signature: 'synthetic' };
+    const invoke = vi.fn(async () => ({ status: 200, body: invalid }));
+    expect(await executeNameGeneration(options(invoke), input, hosted, new AbortController().signal)).toMatchObject({ status: 'invalid-output', rawText: JSON.stringify(invalid) });
+    const notify = vi.fn(() => { throw new Error('storage callback failed'); });
+    invoke.mockResolvedValue({ status: 200, body: signed });
+    expect(await executeNameGeneration(options(invoke, notify), input, hosted, new AbortController().signal)).toMatchObject({ status: 'completed' });
+    invoke.mockRejectedValue(new Error('unknown invoke failure'));
+    expect(await executeNameGeneration(options(invoke, notify), input, hosted, new AbortController().signal)).toMatchObject({ status: 'uncertain' });
+    expect(notify).toHaveBeenCalledTimes(2);
   });
 });
