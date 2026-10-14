@@ -1,3 +1,4 @@
+import { isTavernGeneralProjection } from '@mahoshojo/domain/tavern-card';
 import { useEffect, useRef, useState } from 'react';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
@@ -15,7 +16,8 @@ const hasOriginal = (item: LocalCardRecordV1): boolean => {
 export function TavernLocalSources({ repository, disabled, onSource, selection, mode = 'original' }: {
   mode?: 'original' | 'character'; repository: CardRepository; selection: TavernSourceSelection; disabled?: boolean; onSource: (file: TavernInputFile) => void;
 }) {
-  const accepts = (item: LocalCardRecordV1) => item.cardType === 'character' && (mode === 'character' || hasOriginal(item));
+  const accepts = (item: LocalCardRecordV1) => item.deletedAt === undefined && (mode === 'character' ? item.cardType === 'character'
+    : (item.cardType === 'character' || (item.cardType === 'scenario' && isTavernGeneralProjection(item.data))) && hasOriginal(item));
   const [items, setItems] = useState<LocalCardRecordV1[]>([]);
   const [cursor, setCursor] = useState<string>();
   const [opened, setOpened] = useState(false);
@@ -30,7 +32,7 @@ export function TavernLocalSources({ repository, disabled, onSource, selection, 
     if (lock.current || disabled) return;
     lock.current = true; setBusy(true); setError('');
     try {
-      const page = await repository.list({ cardTypes: ['character'], limit: 100, ...(more && cursor ? { cursor } : {}) });
+      const page = await repository.list({ cardTypes: mode === 'character' ? ['character'] : ['character', 'scenario'], limit: 100, ...(more && cursor ? { cursor } : {}) });
       if (!alive.current) return;
       const unreadable = 'unreadable' in page && Array.isArray(page.unreadable) ? page.unreadable.length : 0;
       setUnreadableCount((previous) => (more ? previous : 0) + unreadable);
@@ -56,7 +58,7 @@ export function TavernLocalSources({ repository, disabled, onSource, selection, 
     <button type="button" disabled={disabled || busy} className="text-sm font-semibold text-pink-700 disabled:opacity-50" onClick={() => void load(false)}>{mode === 'character' ? (opened ? '刷新本地角色卡' : '从本地卡库读取角色卡') : (opened ? '刷新本地酒馆原件' : '从本地卡库读取酒馆原件')}</button>
     {opened ? <div className="mt-2 grid gap-2">
       {items.map((item) => <button key={item.id} type="button" disabled={disabled || busy} className="rounded-lg border border-pink-100 p-2 text-left text-sm disabled:opacity-50" onClick={() => void select(item.id)}>{item.title}</button>)}
-      {items.length === 0 ? <p className="text-xs text-gray-600">{mode === 'character' ? '本页暂无角色卡。' : '本页暂无保留 _tavern.raw 的角色卡。'}</p> : null}
+      {items.length === 0 ? <p className="text-xs text-gray-600">{mode === 'character' ? '本页暂无角色卡。' : '本页暂无保留 _tavern.raw 的角色卡或情景卡。'}</p> : null}
       {cursor ? <button type="button" disabled={disabled || busy} className="text-sm text-pink-700" onClick={() => void load(true)}>继续查找下一页</button> : null}
     </div> : null}
     {unreadableCount > 0 ? <p role="status" className="mt-2 text-xs text-amber-800">{unreadableCount} 条本地记录暂不可读，已显示可读子集；原始数据未修改。</p> : null}

@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Blob as NodeBlob } from 'node:buffer';
+import { convertTavernToGeneralScenarioCard, readTavernLocalDocument } from '@mahoshojo/domain/tavern-card';
 import { TavernImportPanel } from '@/components/tavern/TavernImportPanel';
 
 const mocks = vi.hoisted(() => ({ download: vi.fn<(blob: Blob, name: string) => void>(), save: vi.fn(async () => 'saved'), projection: null as Record<string, unknown> | null }));
@@ -10,7 +11,7 @@ vi.mock('@/components/AiProviderSelector', () => ({ default: () => null }));
 vi.mock('@/components/TachieGenerator', () => ({ default: () => null }));
 vi.mock('@/components/SaveToCloudButton', () => ({ default: () => null }));
 vi.mock('@/components/GeneralCharacterCard', () => ({ default: ({ general }: { general: Record<string, unknown> }) => { mocks.projection = general; return <pre data-projection>{String(general.content)}</pre>; } }));
-vi.mock('@/components/GeneralScenarioCard', () => ({ default: () => null }));
+vi.mock('@/components/GeneralScenarioCard', () => ({ default: ({ scenario }: { scenario: Record<string, unknown> }) => { mocks.projection = scenario; return <pre data-projection>{String(scenario.content)}</pre>; } }));
 vi.mock('@/components/MagicalGirlCard', () => ({ default: () => null }));
 vi.mock('@/components/CanshouCard', () => ({ default: () => null }));
 vi.mock('@/lib/useAuth', () => ({ useAuth: () => ({ user: null }) }));
@@ -18,7 +19,7 @@ vi.mock('@/lib/cooldown', () => ({ useCooldown: () => ({ isCooldown: false, rema
 vi.mock('@/lib/app-router-adapter', () => ({ useAppRouterAdapter: () => ({ push: vi.fn() }) }));
 vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: mocks.download, revokeBlobUrl: vi.fn() }));
 vi.mock('@/lib/local-library/card-repository', () => ({ getLocalCardRepository: () => ({}) }));
-vi.mock('@mahoshojo/local-library/imported-unsigned-card', () => ({ saveImportedUnsignedCharacter: mocks.save }));
+vi.mock('@mahoshojo/local-library/imported-unsigned-card', () => ({ saveImportedUnsignedCard: mocks.save }));
 
 let root: Root; let container: HTMLDivElement;
 const key = 'mahoshojo.tavern.import.placeholder.v1';
@@ -48,6 +49,31 @@ describe('Web Tavern real shared placeholder import', () => {
     await click('生成角色卡'); expect(mocks.projection?.content).toContain('Alice Alice');
     await act(async () => field('替换占位符').click()); await click('生成角色卡'); expect(mocks.projection?.content).toContain('{{user}} {{char}}');
     await upload({ bad: true }); expect(container.querySelector('[data-projection]')?.textContent).toContain('{{user}} {{char}}'); expect(field('替换占位符')).not.toBeNull();
+  });
+  it('keeps all five templates and shares the Desktop scenario mapping without changing keepRaw', async () => {
+    await act(async () => root.render(<TavernImportPanel />));
+    const raw = { name: '庭院', description: '背景', scenario: '场景', personality: '安静', first_mes: '开场' };
+    await upload(raw);
+    const selector = [...container.querySelectorAll('select')].find((select) => [...select.options].some((option) => option.value === 'general-scenario'))!;
+    expect([...selector.options].map((option) => option.value)).toEqual(['general', 'general-scenario', 'magical-girl', 'canshou', 'scenario']);
+    await act(async () => { selector.value = 'general-scenario'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    await click('生成情景卡');
+    const desktop = convertTavernToGeneralScenarioCard(readTavernLocalDocument(new TextEncoder().encode(JSON.stringify(raw)), 'json').candidates[0]);
+    expect(mocks.projection).toEqual({ title: desktop.title, content: desktop.content });
+    await click('下载数据卡 JSON');
+    const withoutRaw = JSON.parse(await mocks.download.mock.calls[0][0].text());
+    expect(withoutRaw).toMatchObject({ templateId: desktop.templateId, title: desktop.title, content: desktop.content });
+    expect(withoutRaw._tavern).not.toHaveProperty('raw');
+    await click('保存通用卡到本地库');
+    expect(mocks.save).toHaveBeenNthCalledWith(1, expect.anything(), withoutRaw, '庭院', 'scenario');
+    await act(async () => checkbox('同时保存').click()); await click('生成情景卡');
+    await click('下载数据卡 JSON');
+    const withRaw = JSON.parse(await mocks.download.mock.calls[1][0].text());
+    expect(withRaw).toMatchObject(desktop);
+    expect(withRaw._tavern.raw).toEqual(raw);
+    expect(mocks.projection).toEqual({ title: desktop.title, content: desktop.content });
+    await click('保存通用卡到本地库');
+    expect(mocks.save).toHaveBeenNthCalledWith(2, expect.anything(), withRaw, '庭院', 'scenario');
   });
   it('keeps the original export and settings after amplification rejection and recovers in place', async () => {
     await act(async () => root.render(<TavernImportPanel />));

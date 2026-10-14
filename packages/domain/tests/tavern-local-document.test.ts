@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { zlibSync } from 'fflate';
-import { convertTavernToGeneralCard, decodeBase64ToBytes, getPlaceholderPngBytes, MAX_TAVERN_FILE_BYTES, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_PNG_TEXT_BYTES, encodeBytesToBase64, replacePngTextChunks, parsePngChunkRanges, readTavernLocalDocument, writeTavernCardToPngBytes, crc32Concat, extractPngTextChunks } from '../src/tavern-card';
+import { convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, buildTavernGeneralScenarioCard, normalizeTavernCard, decodeBase64ToBytes, getPlaceholderPngBytes, MAX_TAVERN_FILE_BYTES, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_PNG_TEXT_BYTES, encodeBytesToBase64, replacePngTextChunks, parsePngChunkRanges, readTavernLocalDocument, writeTavernCardToPngBytes, crc32Concat, extractPngTextChunks } from '../src/tavern-card';
 const encoder = new TextEncoder();
 const card = { spec: 'chara_card_v3', spec_version: '3.0', data: { name: '测试', description: '角色', extensions: { custom: { deep: [1, '未知'] } }, character_book: { entries: [{ content: '设定' }] } }, signature: 'not-verified' };
 function withCompressedChunk(text: string, kind: 'zTXt' | 'iTXt', keyword = 'ccv3') {
@@ -36,6 +36,24 @@ describe('Tavern local journey', () => {
     expect(reopened.warnings.join('')).toContain('不会合并');
     const result = readTavernLocalDocument(writeTavernCardToPngBytes(parsed.basePngBytes!, reopened.candidates[0].parsed), 'png');
     expect(result.candidates[0].parsed).toEqual(card);
+  });
+  it('maps a general scenario using the Web rule and reopens only its retained inert original', () => {
+    const raw = { ...card, data: { ...card.data, name: ' {{char}} 庭院 ', scenario: ' 场景 ', description: ' 背景 ', personality: ' 氛围 ', first_mes: ' {{user}} 开场 ', mes_example: ' 对话 ', tags: ['一', '二'] } };
+    const candidate = readTavernLocalDocument(encoder.encode(JSON.stringify(raw)), 'json').candidates[0];
+    const normalized = normalizeTavernCard(candidate).normalized;
+    const projection = convertTavernToGeneralScenarioCard(candidate);
+    expect(projection).toEqual({ ...buildTavernGeneralScenarioCard(normalized), _tavern: { raw } });
+    expect(projection.templateId).toBe('通用情景');
+    expect(projection.content).toContain('## 场景概览\n场景\n\n## 背景摘要\n背景\n\n## 氛围\n氛围');
+    expect(projection.content).toContain('## 标签\n一、二');
+    expect(projection).not.toHaveProperty('signature');
+    const edited = { ...projection, title: '编辑后的标题', content: '修改不会合并回酒馆原件' };
+    expect(readTavernLocalDocument(encoder.encode(JSON.stringify(edited)), 'json').candidates[0].parsed).toEqual(raw);
+    const replaced = convertTavernToGeneralScenarioCard(candidate, { enabled: true, userReplacement: '访客', charReplacementMode: 'custom', customCharReplacement: '春日' });
+    expect(replaced.title).toContain('春日'); expect(replaced.content).toContain('访客 开场'); expect(replaced._tavern.raw).toEqual(raw);
+    const png = writeTavernCardToPngBytes(getPlaceholderPngBytes(), replaced._tavern.raw);
+    expect(readTavernLocalDocument(png, 'png').candidates[0].parsed).toEqual(raw);
+    expect(() => readTavernLocalDocument(encoder.encode(JSON.stringify({ ...projection, _tavern: undefined })), 'json')).toThrow();
   });
   it('preserves a genuine Tavern card whose unknown extension is named _tavern.raw', () => {
     const outer = { ...card, _tavern: { raw: { name: 'nested', description: 'not the selected card' }, extension: 'keep' } };

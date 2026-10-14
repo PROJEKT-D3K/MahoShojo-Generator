@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { saveImportedUnsignedCharacter } from '../src/imported-unsigned-card';
+import { saveImportedUnsignedCharacter, saveImportedUnsignedCard } from '../src/imported-unsigned-card';
 import type { CardRepository } from '../src/repository';
 import type { LocalCardRecordV1 } from '../src/record';
 function repository() {
@@ -17,6 +17,16 @@ describe('imported unsigned local projection', () => {
     expect(await saveImportedUnsignedCharacter(repo.port, data, 'x')).toBe('already-present');
     repo.saved.deletedAt = new Date().toISOString();
     await expect(saveImportedUnsignedCharacter(repo.port, data, 'x')).rejects.toThrow('回收站');
+  });
+  it('saves scenarios with the correct type and preserves existing-wins and tombstones', async () => {
+    const repo = repository();
+    const data = { templateId: '通用情景', title: '庭院', content: '正文', _tavern: { raw: { name: '庭院', signature: 'unverified' } } };
+    expect(await saveImportedUnsignedCard(repo.port, data, data.title, 'scenario')).toBe('saved');
+    expect(repo.saved.cardType).toBe('scenario'); expect(repo.saved.title).toBe('庭院');
+    expect(repo.saved.provenance).toEqual({ kind: 'unsigned', execution: 'imported' });
+    expect(await saveImportedUnsignedCard(repo.port, data, data.title, 'scenario')).toBe('already-present');
+    repo.saved.deletedAt = new Date().toISOString();
+    await expect(saveImportedUnsignedCard(repo.port, data, data.title, 'scenario')).rejects.toThrow('回收站');
   });
   it('does not report success after repository write failure', async () => {
     const repo = repository(); vi.mocked(repo.port.putIfAbsent).mockRejectedValue(new Error('disk full'));

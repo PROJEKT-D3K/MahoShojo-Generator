@@ -57,9 +57,9 @@ describe('shared Tavern placeholder preference owner and controls', () => {
     act(() => root.render(<div />)); act(() => root.render(<Harness disabled />));
     expect(field('用户占位符替换文本').value).toBe('remember'); expect([...container.querySelectorAll('input')].every((input) => input.disabled)).toBe(true);
   });
-  it('enforces the existing exact final JSON UTF-8 budget including raw, Markdown and escapes', async () => {
+  it.each(['character', 'scenario'] as const)('enforces the exact final %s JSON UTF-8 budget including raw, Markdown and escapes', async (kind) => {
     const save = vi.fn(async () => 'saved' as const); const exportFile = vi.fn();
-    const data = { templateId: '通用角色', name: '中😀', content: '# 角色：中😀\n\\\"\u0000', _tavern: { raw: { name: '{{char}}', description: '原件', padding: '' } } };
+    const data = { ...(kind === 'scenario' ? { templateId: '通用情景', title: '中😀' } : { templateId: '通用角色', name: '中😀' }), content: '# 角色：中😀\n\\\"\u0000', _tavern: { raw: { name: '{{char}}', description: '原件', padding: '' } } };
     const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
     data._tavern.raw.padding = 'a'.repeat(MAX_TAVERN_TEXT_BYTES - size(data));
     expect(size(data)).toBe(MAX_TAVERN_TEXT_BYTES);

@@ -12,3 +12,4 @@ export * from './export-file';
 export * from './local-export';
 export * from './placeholder-preference';
 export * from './placeholder-fields';
+export * from './template-selector';

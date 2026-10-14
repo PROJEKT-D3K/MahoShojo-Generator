@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { exportTavernFile, saveDesktopTavernCard } from '../src/features/tavern/host';
-import { buildDefaultFieldsFromDataCard, buildTavernExportCard, convertTavernToGeneralCard, getPlaceholderPngBytes, readTavernLocalDocument, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
+import { buildDefaultFieldsFromDataCard, buildTavernExportCard, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, getPlaceholderPngBytes, readTavernLocalDocument, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
 import { webcrypto } from 'node:crypto';
@@ -16,12 +16,12 @@ describe('Desktop Tavern host adapter', () => {
     expect(click).toHaveBeenCalledTimes(1); expect(document.querySelector('a')).toBeNull(); expect(revoke).not.toHaveBeenCalled();
     vi.advanceTimersByTime(60_000); expect(revoke).toHaveBeenCalledWith('blob:local-png'); expect(create.mock.calls[0][0].type).toBe('image/png');
   });
-  it('saves imported unsigned data through CardRepository and preserves a readable original', async () => {
+  it.each(['character', 'scenario'] as const)('saves imported unsigned %s through CardRepository and preserves a readable original', async (cardType) => {
     vi.stubGlobal('crypto', webcrypto); let saved!: LocalCardRecordV1;
     const repository = { putIfAbsent: vi.fn(async (record) => { saved = record; return { written: true }; }) } as unknown as CardRepository;
     const candidate: TavernCardCandidate = { keyword: 'json', chunkType: 'tEXt', parseMethod: 'json', parsed: { name: '测试', description: 'description', signature: 'unverified', custom: { keep: true } } };
-    const data = convertTavernToGeneralCard(candidate);
-    expect(await saveDesktopTavernCard(repository, data)).toBe('saved'); expect(saved.provenance).toEqual({ kind: 'unsigned', execution: 'imported' });
+    const data = cardType === 'scenario' ? convertTavernToGeneralScenarioCard(candidate) : convertTavernToGeneralCard(candidate);
+    expect(await saveDesktopTavernCard(repository, data)).toBe('saved'); expect(saved.provenance).toEqual({ kind: 'unsigned', execution: 'imported' }); expect(saved.cardType).toBe(cardType); expect(saved.title).toBe('测试');
     expect(readTavernLocalDocument(new TextEncoder().encode(JSON.stringify(saved.data)), 'json').candidates[0].parsed).toEqual(candidate.parsed);
   });
 

@@ -2,10 +2,11 @@
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TavernExportFile } from '@mahoshojo/ui-web/tavern';
 import { DesktopTavern } from '../src/app/tavern-page';
 import { getPlaceholderPngBytes, replacePngTextChunks } from '@mahoshojo/domain/tavern-card';
 
-const mocks = vi.hoisted(() => ({ save: vi.fn<(repository: unknown, data: unknown) => Promise<string>>(async () => 'saved'), export: vi.fn<(file: { bytes: Uint8Array }) => void>() }));
+const mocks = vi.hoisted(() => ({ save: vi.fn<(repository: unknown, data: unknown) => Promise<string>>(async () => 'saved'), export: vi.fn<(file: TavernExportFile) => void>() }));
 vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({}), Link: ({ children }: { children: ReactNode }) => <a>{children}</a> }));
 vi.mock('../src/app/useLeaveGuard', () => ({ useLeaveGuard: () => ({ ready: true }) }));
 vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openFixed: vi.fn() }) }));
@@ -13,6 +14,8 @@ vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: cl
 vi.mock('../src/features/tavern/host', () => ({ saveDesktopTavernCard: mocks.save, exportTavernFile: mocks.export, getDesktopTavernBase: vi.fn() }));
 vi.mock('@mahoshojo/ui-web/shell', () => ({ ProductFooter: () => null }));
 vi.mock('@mahoshojo/ui-web/character-card', () => ({ GeneralCharacterCard: ({ general }: { general: { name: string; content: string } }) => <pre data-projection-name={general.name}>{general.content}</pre> }));
+
+vi.mock('@mahoshojo/ui-web/scenario', () => ({ GeneralScenarioCard: ({ scenario }: { scenario: { title: string; content: string } }) => <pre data-scenario-title={scenario.title}>{scenario.content}</pre> }));
 
 let root: Root; let container: HTMLDivElement;
 const key = 'mahoshojo.tavern.import.placeholder.v1';
@@ -44,6 +47,23 @@ describe('Desktop Tavern real placeholder journey', () => {
     expect(mocks.save.mock.calls[0][1]).toEqual(exported);
     await act(async () => field('替换占位符').click()); expect(projected()).toContain('{{user}} 对 {{char}}');
     await upload({ name: 'Bob', description: '{{char}}' }); await act(async () => field('替换占位符').click()); expect(projected()).toContain('Bob'); expect(projected()).not.toContain('Alice');
+  });
+  it('switches to a general scenario, exports/saves its title and restores its Tavern original', async () => {
+    act(() => root.render(<DesktopTavern />));
+    const raw = { name: '庭院', description: '背景', scenario: '场景', first_mes: '{{user}} 开场', extra: { keep: true } };
+    await upload(raw);
+    const selector = container.querySelector<HTMLSelectElement>('select')!;
+    expect([...selector.options].map((option) => option.value)).toEqual(['general', 'general-scenario']);
+    await act(async () => { selector.value = 'general-scenario'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(projected()).toBeUndefined(); expect(container.querySelector('[data-scenario-title]')?.textContent).toContain('## 场景概览');
+    await act(async () => button('下载通用卡 JSON').click());
+    const file = mocks.export.mock.calls[0][0]; const exported = JSON.parse(new TextDecoder().decode(file.bytes));
+    expect(file.name).toBe('庭院.json'); expect(exported).toMatchObject({ templateId: '通用情景', title: '庭院', _tavern: { raw } });
+    await act(async () => button('保存通用卡到本地库').click()); expect(mocks.save.mock.calls[0][1]).toEqual(exported);
+    await upload(exported); await act(async () => button('导出原件 JSON').click());
+    expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[1][0].bytes))).toEqual(raw);
+    await act(async () => { selector.value = 'general'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(projected()).toContain('背景'); expect(container.querySelector('[data-scenario-title]')).toBeNull();
   });
   it('keeps the selected source, controls and original export after budget failure and recovers without reimport', async () => {
     act(() => root.render(<DesktopTavern />));

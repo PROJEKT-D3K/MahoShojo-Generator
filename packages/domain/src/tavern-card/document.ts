@@ -1,6 +1,6 @@
 import { SafeJsonValueSchema, type JsonValue } from '@mahoshojo/contracts/json-value';
-import { GENERAL_CHARACTER_TEMPLATE_ID } from '../data-cards';
-import { buildGeneralMarkdown } from './general';
+import { GENERAL_CHARACTER_TEMPLATE_ID, GENERAL_SCENARIO_TEMPLATE_ID } from '../data-cards';
+import { buildGeneralMarkdown, buildTavernGeneralScenarioCard } from './general';
 import { MAX_TAVERN_FILE_BYTES, MAX_TAVERN_TEXT_BYTES } from './limits';
 import { isLikelyTavernCard, normalizeTavernCard } from './normalize';
 import { parseTavernCardFromPngBytes } from './parse';
@@ -26,6 +26,13 @@ export function validateTavernRaw(value: unknown): JsonValue {
   return parsed.data;
 }
 
+/** Only known projection shapes may recover their separately preserved Tavern original. */
+export function isTavernGeneralProjection(input: unknown): input is Record<string, unknown> {
+  return record(input) && ((input.templateId === GENERAL_CHARACTER_TEMPLATE_ID && typeof input.name === 'string')
+    || (input.templateId === GENERAL_SCENARIO_TEMPLATE_ID && typeof input.title === 'string'))
+    && typeof input.content === 'string' && !isLikelyTavernCard(input);
+}
+
 export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json'): TavernLocalDocument {
   if (bytes.length > MAX_TAVERN_FILE_BYTES) throw new Error('文件超过 32 MiB 上限。');
   if (format === 'png') {
@@ -38,9 +45,7 @@ export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json
   const input: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   // Only our explicitly preserved original is recoverable. Do not pretend edits to a converted
   // general card have been mapped back into the original Tavern fields.
-  const isProjection = record(input) && input.templateId === GENERAL_CHARACTER_TEMPLATE_ID
-    && typeof input.name === 'string' && typeof input.content === 'string' && !isLikelyTavernCard(input);
-  const archived = isProjection && record(input._tavern) ? input._tavern.raw : undefined;
+  const archived = isTavernGeneralProjection(input) && record(input._tavern) ? input._tavern.raw : undefined;
   const raw = validateTavernRaw(archived ?? input);
   return {
     candidates: [{ keyword: 'json', chunkType: 'tEXt', parseMethod: 'json', parsed: raw }],
@@ -50,17 +55,27 @@ export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json
 }
 
 /** Conversion is an unsigned projection, with the complete inert original retained separately. */
-export function convertTavernToGeneralCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
+function prepareProjection(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
   const raw = validateTavernRaw(candidate.parsed);
   const source = normalizeTavernCard(candidate).normalized;
   const normalized = preference ? applyTavernPlaceholderReplacement(source, {
     enabled: preference.enabled, userReplacement: preference.userReplacement,
     charReplacement: resolveTavernCharReplacement(source.name, preference),
   }) : source;
+  return { raw, normalized };
+}
+
+export function convertTavernToGeneralCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
+  const { raw, normalized } = prepareProjection(candidate, preference);
   return {
     templateId: GENERAL_CHARACTER_TEMPLATE_ID,
     name: normalized.name,
     content: buildGeneralMarkdown(normalized),
     _tavern: { raw },
   };
+}
+
+export function convertTavernToGeneralScenarioCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
+  const { raw, normalized } = prepareProjection(candidate, preference);
+  return { ...buildTavernGeneralScenarioCard(normalized), _tavern: { raw } };
 }

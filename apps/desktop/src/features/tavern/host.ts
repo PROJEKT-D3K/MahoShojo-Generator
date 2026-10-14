@@ -1,5 +1,5 @@
-import { renderTavernDefaultBase } from '@mahoshojo/ui-web/tavern';
-import { saveImportedUnsignedCharacter } from '@mahoshojo/local-library/imported-unsigned-card';
+import { renderTavernDefaultBase, getTavernProjectionTitle, getTavernProjectionCardType } from '@mahoshojo/ui-web/tavern';
+import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { TavernExportFile, TavernGeneralProjection } from '@mahoshojo/ui-web/tavern';
 
@@ -13,7 +13,7 @@ export function exportTavernFile({ name, bytes, mimeType }: TavernExportFile): v
 }
 
 export function saveDesktopTavernCard(repository: CardRepository, data: TavernGeneralProjection) {
-  return saveImportedUnsignedCharacter(repository, data, data.name);
+  return saveImportedUnsignedCard(repository, data, getTavernProjectionTitle(data), getTavernProjectionCardType(data));
 }
 
 let defaultBase: Promise<Uint8Array> | undefined;

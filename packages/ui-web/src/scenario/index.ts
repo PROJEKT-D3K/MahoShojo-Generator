@@ -12,3 +12,4 @@ export { ScenarioResultSurface, type ScenarioResultSurfaceProps } from './Scenar
 export { ScenarioResultContent, ScenarioJsonDetails } from './ScenarioResultContent';
 export { ScenarioFormSections, ScenarioDraftNotice, SCENARIO_CLEAR_DRAFT_CONFIRM } from './ScenarioFormSections';
 export { GeneralScenarioEditor } from './GeneralScenarioEditor';
+export { GeneralScenarioCard, type GeneralScenarioCardProps } from './GeneralScenarioCard';

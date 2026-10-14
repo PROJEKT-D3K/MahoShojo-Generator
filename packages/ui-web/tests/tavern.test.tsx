@@ -2,9 +2,9 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TavernCandidateSelector, TavernFileInput, TavernLocalProjection, TavernOriginalExport, TavernLocalSources, useTavernSourceSelection, readTavernFile } from '../src/tavern';
+import { TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernCandidateSelector, TavernFileInput, TavernLocalProjection, TavernOriginalExport, TavernLocalSources, useTavernSourceSelection, readTavernFile } from '../src/tavern';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
-import { convertTavernToGeneralCard, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_FILE_BYTES, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
+import { convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_FILE_BYTES, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => { (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true; container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container); });
 afterEach(() => { act(() => root.unmount()); container.remove(); });
@@ -21,6 +21,52 @@ describe('shared Tavern original journey controls', () => {
     const select = vi.fn(); act(() => root.render(<TavernCandidateSelector candidates={[candidate, { ...candidate, keyword: 'chara' }]} selectedIndex={0} onSelect={select} disabled />));
     expect([...container.querySelectorAll('input')].every((input) => input.disabled)).toBe(true);
     expect(container.querySelector('input')!.checked).toBe(true);
+  });
+  it('keeps template selection controlled and limited to host-supported choices', () => {
+    const onChange = vi.fn();
+    act(() => root.render(<TavernTemplateSelector value="general" templates={TAVERN_LOCAL_IMPORT_TEMPLATES} onChange={onChange} />));
+    const select = container.querySelector('select')!;
+    expect(container.querySelector('label')!.htmlFor).toBe(select.id);
+    act(() => { select.value = 'general-scenario'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('general-scenario');
+    act(() => root.render(<TavernTemplateSelector value="general-scenario" templates={TAVERN_LOCAL_IMPORT_TEMPLATES} onChange={onChange} disabled />));
+    expect(select.value).toBe('general-scenario'); expect(select.disabled).toBe(true);
+    act(() => { select.value = 'general'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+  it('uses scenario titles for export names and hides old character save notices after a template switch', async () => {
+    let resolve!: (result: 'saved') => void;
+    const save = vi.fn(() => new Promise<'saved'>((done) => { resolve = done; })); const exportFile = vi.fn();
+    const character = convertTavernToGeneralCard(candidate); const scenario = convertTavernToGeneralScenarioCard(candidate);
+    act(() => root.render(<TavernLocalProjection data={character} exportFile={exportFile} saveCard={save} />));
+    act(() => container.querySelectorAll('button')[1].click());
+    act(() => root.render(<TavernLocalProjection data={scenario} exportFile={exportFile} saveCard={save} />));
+    await act(async () => resolve('saved')); expect(container.textContent).not.toContain('已保存到本地卡库');
+    expect(container.textContent).toContain('通用情景（规则映射）');
+    await act(async () => container.querySelector('button')!.click());
+    expect(exportFile.mock.calls[0][0].name).toBe('未知_角色.json');
+    expect(JSON.parse(new TextDecoder().decode(exportFile.mock.calls[0][0].bytes))).toEqual(scenario);
+  });
+  it('reads retained scenario originals but keeps the character export picker character-only', async () => {
+    const character = { id: 'character', cardType: 'character', title: '角色', data: convertTavernToGeneralCard(candidate) };
+    const scenario = { id: 'scenario', cardType: 'scenario', title: '情景', data: convertTavernToGeneralScenarioCard(candidate) };
+    const tombstone = { ...scenario, id: 'deleted', title: '已删除', deletedAt: '2026-10-01T00:00:00Z' };
+    const structured = { id: 'structured', cardType: 'scenario', title: '结构化情景', data: { title: '场景', elements: {}, _tavern: { raw: candidate.parsed } } };
+    const list = vi.fn(async () => ({ items: [character, scenario, tombstone, structured] }));
+    const get = vi.fn(async () => scenario);
+    const repository = { list, get } as unknown as CardRepository; const onSource = vi.fn();
+    function Harness({ mode = 'original' }: { mode?: 'original' | 'character' }) { const selection = useTavernSourceSelection(); return <TavernLocalSources repository={repository} selection={selection} onSource={onSource} mode={mode} />; }
+    act(() => root.render(<Harness />)); await act(async () => container.querySelector('button')!.click());
+    expect(list).toHaveBeenLastCalledWith({ cardTypes: ['character', 'scenario'], limit: 100 });
+    expect(container.textContent).not.toContain('已删除'); expect(container.textContent).not.toContain('结构化情景');
+    await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === '情景')!.click());
+    expect(JSON.parse(new TextDecoder().decode(await onSource.mock.calls[0][0].arrayBuffer()))).toEqual(scenario.data);
+    get.mockResolvedValueOnce(tombstone);
+    await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === '情景')!.click());
+    expect(onSource).toHaveBeenCalledTimes(1); expect(container.textContent).toContain('已不可用');
+    act(() => root.render(<Harness key="character" mode="character" />)); await act(async () => container.querySelector('button')!.click());
+    expect(list).toHaveBeenLastCalledWith({ cardTypes: ['character'], limit: 100 });
+    expect([...container.querySelectorAll('button')].some((button) => button.textContent === '情景')).toBe(false);
   });
   it('exports semantic original JSON with correct extension and reports dispatch, not confirmed filesystem save', async () => {
     const exportFile = vi.fn(); act(() => root.render(<TavernOriginalExport candidate={candidate} exportFile={exportFile} />));

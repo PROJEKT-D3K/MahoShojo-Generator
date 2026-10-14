@@ -1,7 +1,7 @@
-import { saveImportedUnsignedCharacter } from '@mahoshojo/local-library/imported-unsigned-card';
+import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
-import { TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernGeneralProjection } from '@mahoshojo/ui-web/tavern';
-import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown } from '@mahoshojo/domain/tavern-card';
+import { TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernGeneralProjection } from '@mahoshojo/ui-web/tavern';
+import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard } from '@mahoshojo/domain/tavern-card';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -172,50 +172,6 @@ const guessTemplate = (result: TavernParseResult): DataCardTemplate => {
   if (/(残兽|怪物|monster|beast|abomination)/i.test(text)) return 'canshou';
   if (/(魔法少女|mahou|magical girl)/i.test(text)) return 'magical-girl';
   return 'general';
-};
-
-const buildGeneralScenarioMarkdown = (normalized: TavernParseResult['normalized']): string => {
-  const title = normalized.name?.trim() || '未命名情景';
-  const lines: string[] = [];
-  lines.push(`# ${title}`);
-
-  if (normalized.scenario?.trim()) {
-    lines.push('');
-    lines.push('## 场景概览');
-    lines.push(normalized.scenario.trim());
-  }
-
-  if (normalized.description?.trim()) {
-    lines.push('');
-    lines.push('## 背景摘要');
-    lines.push(normalized.description.trim());
-  }
-
-  if (normalized.personality?.trim()) {
-    lines.push('');
-    lines.push('## 氛围');
-    lines.push(normalized.personality.trim());
-  }
-
-  if (normalized.firstMes?.trim()) {
-    lines.push('');
-    lines.push('## 开场白');
-    lines.push(normalized.firstMes.trim());
-  }
-
-  if (normalized.mesExample?.trim()) {
-    lines.push('');
-    lines.push('## 对话样例');
-    lines.push(normalized.mesExample.trim());
-  }
-
-  if (normalized.tags && normalized.tags.length > 0) {
-    lines.push('');
-    lines.push('## 标签');
-    lines.push(normalized.tags.join('、'));
-  }
-
-  return lines.join('\n');
 };
 
 const buildStructuredScenarioFromTavern = (normalized: TavernParseResult['normalized']): ScenarioData => {
@@ -679,11 +635,8 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
     }
 
     if (state.targetTemplate === 'general-scenario') {
-      const base = createBlankDataCard('general-scenario') as GeneralScenarioData;
       const output: WithTavern<GeneralScenarioData> = {
-        ...base,
-        title: normalizedForConvert.name || base.title || '未命名情景',
-        content: buildGeneralScenarioMarkdown(normalizedForConvert),
+        ...buildTavernGeneralScenarioCard(normalizedForConvert),
         _tavern: tavernPayload,
       };
       return output;
@@ -961,22 +914,12 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
             <div className="rounded-xl border border-pink-200 bg-white/70 p-4">
               <div className="grid gap-4">
                 <div>
-                  <label className="block text-sm font-semibold text-pink-700">导入为</label>
-                  <select
-                    className="mt-2 w-full rounded-xl border border-pink-100 bg-white/80 p-3 text-sm text-gray-900"
-                    value={state.targetTemplate}
-                    onChange={(e) => {
-                      dispatch({ type: 'setTemplate', template: e.target.value as DataCardTemplate });
+                  <TavernTemplateSelector value={state.targetTemplate} templates={TAVERN_WEB_IMPORT_TEMPLATES}
+                    onChange={(template) => {
+                      sourceSelection.begin();
+                      dispatch({ type: 'setTemplate', template });
                       resetGeneratedPreview();
-                    }}
-                    disabled={state.step === 'converting' || state.step === 'parsing'}
-                  >
-                    <option value="general">通用角色（最稳，推荐）</option>
-                    <option value="general-scenario">通用情景（规则映射推荐）</option>
-                    <option value="magical-girl">魔法少女（保守填充）</option>
-                    <option value="canshou">残兽（保守填充）</option>
-                    <option value="scenario">情景（结构化 JSON）</option>
-                  </select>
+                    }} disabled={state.step === 'converting' || state.step === 'parsing'} />
                   <div className="mt-2 text-xs text-gray-600">
                     {isScenarioTemplate
                       ? '规则映射更推荐通用情景卡；结构化情景建议使用 AI 转换。'
@@ -1213,10 +1156,10 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                   />
                 )}
 
-                {outputDataCard && state.convertMode === 'rules' && state.targetTemplate === 'general' ? (
+                {outputDataCard && state.convertMode === 'rules' && (state.targetTemplate === 'general' || state.targetTemplate === 'general-scenario') ? (
                   <TavernLocalProjection data={outputDataCard as TavernGeneralProjection} hideExport disabled={state.step === 'parsing' || state.step === 'converting'}
                     exportFile={({ name, bytes, mimeType }) => { downloadBlob(new Blob([new Uint8Array(bytes)], { type: mimeType }), name); }}
-                    saveCard={(data) => saveImportedUnsignedCharacter(getLocalCardRepository(), data, data.name)} />
+                    saveCard={(data) => saveImportedUnsignedCard(getLocalCardRepository(), data, getTavernProjectionTitle(data), getTavernProjectionCardType(data))} />
                 ) : null}
 
                 {outputDataCard ? (
