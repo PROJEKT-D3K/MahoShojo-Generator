@@ -43,25 +43,30 @@ const createParseError = (
   details?: Record<string, unknown>
 ): TavernParseError => ({ code, message, details });
 
-export function parseTavernCandidates(chunks: PngTextChunk[]): TavernCardCandidate[] {
+interface ParsedTavernChunk {
+  chunk: PngTextChunk;
+  parseMethod: TavernCardCandidate['parseMethod'];
+  candidate?: TavernCardCandidateWithSize;
+}
+
+const parseTavernChunks = (chunks: PngTextChunk[]) => {
   const candidates: TavernCardCandidateWithSize[] = [];
+  const records: ParsedTavernChunk[] = [];
 
   for (const chunk of chunks) {
-    const payloadChars = chunk.text.length;
+    const record: ParsedTavernChunk = { chunk, parseMethod: 'base64-json' };
+    records.push(record);
     const text = chunk.text;
     if (!text) continue;
 
     let parsed: unknown;
-    let parseMethod: TavernCardCandidate['parseMethod'] = 'base64-json';
-
     try {
       const decoded = new TextDecoder('utf-8', { fatal: true }).decode(decodeBase64ToBytes(text));
       parsed = JSON.parse(decoded);
-      parseMethod = 'base64-json';
     } catch {
       try {
         parsed = JSON.parse(text);
-        parseMethod = 'json';
+        record.parseMethod = 'json';
       } catch {
         continue;
       }
@@ -69,16 +74,21 @@ export function parseTavernCandidates(chunks: PngTextChunk[]): TavernCardCandida
 
     if (!isLikelyTavernCard(parsed)) continue;
 
-    candidates.push({
+    record.candidate = {
       keyword: chunk.keyword,
       chunkType: chunk.chunkType,
-      parseMethod,
+      parseMethod: record.parseMethod,
       parsed,
-      payloadChars,
-    });
+      payloadChars: text.length,
+    };
+    candidates.push(record.candidate);
   }
 
-  return candidates;
+  return { candidates, records };
+};
+
+export function parseTavernCandidates(chunks: PngTextChunk[]): TavernCardCandidate[] {
+  return parseTavernChunks(chunks).candidates;
 }
 
 export function selectBestTavernCandidate(
@@ -144,58 +154,20 @@ export function selectBestTavernCandidate(
   return { selected, warnings };
 }
 
-const buildCandidatesMeta = (chunks: PngTextChunk[]): TavernImportMeta['candidates'] => {
-  const meta: TavernImportMeta['candidates'] = [];
-
-  for (const chunk of chunks) {
-    const payloadChars = chunk.text.length;
-    let parsed: unknown;
-    let ok = false;
-    let parseMethod: TavernCardCandidate['parseMethod'] = 'base64-json';
-
-    try {
-      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(decodeBase64ToBytes(chunk.text));
-      parsed = JSON.parse(decoded);
-      parseMethod = 'base64-json';
-      ok = isLikelyTavernCard(parsed);
-    } catch {
-      try {
-        parsed = JSON.parse(chunk.text);
-        parseMethod = 'json';
-        ok = isLikelyTavernCard(parsed);
-      } catch {
-        ok = false;
-      }
-    }
-
-    let spec: string | undefined;
-    let specVersion: string | undefined;
-    let name: string | undefined;
-    if (ok) {
-      const info = getCandidateSpecInfo({
-        keyword: chunk.keyword,
-        chunkType: chunk.chunkType,
-        parseMethod,
-        parsed,
-      });
-      spec = info.spec;
-      specVersion = info.specVersion;
-      name = info.name;
-    }
-
-    meta.push({
+const buildCandidatesMeta = (records: ParsedTavernChunk[]): TavernImportMeta['candidates'] => {
+  return records.map(({ chunk, parseMethod, candidate }) => {
+    const info = candidate ? getCandidateSpecInfo(candidate) : undefined;
+    return {
       keyword: chunk.keyword,
       chunkType: chunk.chunkType,
       parseMethod,
-      ok,
-      spec,
-      specVersion,
-      name,
-      sizeChars: payloadChars,
-    });
-  }
-
-  return meta;
+      ok: Boolean(candidate),
+      spec: info?.spec,
+      specVersion: info?.specVersion,
+      name: info?.name,
+      sizeChars: chunk.text.length,
+    };
+  });
 };
 
 export function parseTavernCardFromPngBytes(bytes: Uint8Array): TavernParseResult | TavernParseError {
@@ -207,7 +179,7 @@ export function parseTavernCardFromPngBytes(bytes: Uint8Array): TavernParseResul
       return createParseError('NO_TEXT_CHUNKS', 'PNG 内未找到可读取的文本块（tEXt/iTXt）。');
     }
 
-    const candidates = parseTavernCandidates(chunks);
+    const { candidates, records } = parseTavernChunks(chunks);
     if (candidates.length === 0) {
       return createParseError('NO_TAVERN_CARD_FOUND', '未能在 PNG 文本块中识别到 SillyTavern 角色卡。', {
         chunks: chunks.map((item) => ({ keyword: item.keyword, chunkType: item.chunkType, sizeChars: item.text.length })),
@@ -230,7 +202,7 @@ export function parseTavernCardFromPngBytes(bytes: Uint8Array): TavernParseResul
     const normalizedResult = normalizeTavernCard(selected);
     warnings.push(...selectWarnings, ...normalizedResult.warnings);
 
-    const candidatesMeta = buildCandidatesMeta(chunks);
+    const candidatesMeta = buildCandidatesMeta(records);
     const selectedMeta = candidatesMeta.find(
       (item) => item.keyword === selected.keyword && item.chunkType === (selected.chunkType as TavernChunkType) && item.ok
     );
