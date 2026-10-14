@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 import {
+  createTavernScenarioGenerationConfig,
+  projectTavernScenarioResult,
   createTavernGeneralGenerationConfig,
   createTavernGeneralScenarioGenerationConfig,
   projectTavernGeneralResult,
@@ -68,4 +70,46 @@ describe('Tavern convert real Web handler shared core', () => {
     expect(mocks.generate).not.toHaveBeenCalled();
     expect(mocks.activity).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])('delegates structured scenario with unchanged safety and response wrapping (aiMeta=%s)', async (includeAiMeta) => {
+    const generated = {
+      title: '车站', scenario_type: '日常', description: '',
+      elements: { scene: {}, events: '等车', atmosphere: '', development: [] },
+      metadata: { created_at: '2026-01-01', signature: 'forged' },
+      signature: 'forged', isPreset: true, _source: 'preserved',
+    };
+    mocks.generate.mockResolvedValue(generated);
+    const attachments = [buildTavernAiAttachment({ name: '原情景', description: '原设定' }).attachment];
+    const input = { language: 'ja-JP', sourceName: '原情景', attachments };
+    const response = await appRouteHandler(request({ template: 'scenario', ...input }, includeAiMeta));
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    const result = includeAiMeta ? payload.data : payload;
+    expect(result).toEqual(projectTavernScenarioResult(generated));
+    expect(result).not.toHaveProperty('signature');
+    expect(result).not.toHaveProperty('isPreset');
+    expect(result.metadata).toEqual({ created_at: '2026-01-01' });
+    expect(mocks.generate).toHaveBeenCalledOnce();
+    const [actualInput, actualConfig, options] = mocks.generate.mock.calls[0];
+    expect(actualInput).toEqual(input);
+    expect(actualConfig).toEqual(createTavernScenarioGenerationConfig());
+    expect(options).toMatchObject({ channelContext: { providerId: 'system' }, telemetry: {} });
+    expect(mocks.activity).toHaveBeenCalledOnce();
+    expect(mocks.safety).toHaveBeenCalledWith(expect.objectContaining({ text: `原情景\n\n${attachments[0].content}` }));
+
+    mocks.generate.mockClear();
+    mocks.activity.mockClear();
+    mocks.safety.mockResolvedValue(new Response('blocked', { status: 403 }));
+    expect((await appRouteHandler(request({ template: 'scenario', ...input }))).status).toBe(403);
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.activity).not.toHaveBeenCalled();
+  });
+
+  it('retains structured scenario validation errors as the existing failure response', async () => {
+    mocks.generate.mockResolvedValue({ title: '无效', elements: 'invalid' });
+    const response = await appRouteHandler(request({ template: 'scenario' }));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: '生成失败', message: expect.any(String) });
+  });
+
 });
