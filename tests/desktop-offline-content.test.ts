@@ -168,9 +168,10 @@ describe.skipIf(!REQUIRE_DESKTOP_DIST && !existsSync(DESKTOP_DIST))(
       const actualBodies = readdirSync(encyclopedia).filter((name) => name.endsWith('.md')).sort();
       expect(actualBodies).toEqual(expectedBodies);
       for (const body of expectedBodies) {
-        expect(readFileSync(path.join(encyclopedia, body)), `${body} 应与 content/ 逐字节一致`).toEqual(
-          readFileSync(path.join(SOURCE_ENCYCLOPEDIA, body)),
-        );
+        expect(
+          readFileSync(path.join(encyclopedia, body)).equals(readFileSync(path.join(SOURCE_ENCYCLOPEDIA, body))),
+          `${body} 应与 content/ 逐字节一致`,
+        ).toBe(true);
       }
 
       for (const asset of ['logo.svg', 'logo-white.svg', 'encyclopedia.svg', 'questionnaire-logo.svg']) {
@@ -181,12 +182,18 @@ describe.skipIf(!REQUIRE_DESKTOP_DIST && !existsSync(DESKTOP_DIST))(
     it('ships the default questionnaire and its logo from the shared content authority', () => {
       const relative = 'questionnaires/presets/magical-girl-default.json';
       const bundled = readFileSync(path.join(DESKTOP_DIST, relative));
-      expect(bundled).toEqual(readFileSync(path.join(REPO_ROOT, 'content', relative)));
+      expect(
+        bundled.equals(readFileSync(path.join(REPO_ROOT, 'content', relative))),
+        `${relative} 应与 content/ 逐字节一致`,
+      ).toBe(true);
       const questionnaire = JSON.parse(bundled.toString('utf8'));
       expect(questionnaire.questions).toHaveLength(16);
       expect(isLocalRuntimeRequest(questionnaire.logoUrl)).toBe(true);
-      expect(readFileSync(path.join(DESKTOP_DIST, questionnaire.logoUrl)))
-        .toEqual(readFileSync(path.join(REPO_ROOT, 'content/brand', questionnaire.logoUrl)));
+      expect(
+        readFileSync(path.join(DESKTOP_DIST, questionnaire.logoUrl))
+          .equals(readFileSync(path.join(REPO_ROOT, 'content/brand', questionnaire.logoUrl))),
+        `${questionnaire.logoUrl} 应与 content/brand/ 逐字节一致`,
+      ).toBe(true);
       // 花名经 domain 静态打包，不再为 Desktop 提供第二份 public 资产。
       expect(existsSync(path.join(DESKTOP_DIST, 'flowers.json'))).toBe(false);
     });
@@ -197,14 +204,20 @@ describe.skipIf(!REQUIRE_DESKTOP_DIST && !existsSync(DESKTOP_DIST))(
         const expected = readdirSync(source).sort();
         expect(readdirSync(path.join(DESKTOP_DIST, directory)).sort()).toEqual(expected);
         for (const file of expected) {
-          expect(readFileSync(path.join(DESKTOP_DIST, directory, file))).toEqual(readFileSync(path.join(source, file)));
+          expect(
+            readFileSync(path.join(DESKTOP_DIST, directory, file)).equals(readFileSync(path.join(source, file))),
+            `${directory}/${file} 应与 content/ 逐字节一致`,
+          ).toBe(true);
         }
       }
       const { brand } = JSON.parse(readFileSync(path.join(REPO_ROOT, 'content/sync-manifest.json'), 'utf8')) as {
         brand: { shared: string[]; web: string[] };
       };
       for (const file of brand.shared) {
-        expect(readFileSync(path.join(DESKTOP_DIST, file))).toEqual(readFileSync(path.join(REPO_ROOT, 'content/brand', file)));
+        expect(
+          readFileSync(path.join(DESKTOP_DIST, file)).equals(readFileSync(path.join(REPO_ROOT, 'content/brand', file))),
+          `${file} 应与 content/brand/ 逐字节一致`,
+        ).toBe(true);
       }
       for (const file of brand.web) expect(existsSync(path.join(DESKTOP_DIST, file)), file).toBe(false);
     });
