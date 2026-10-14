@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 import {
+  createTavernMagicalGirlGenerationConfig,
+  createTavernCanshouGenerationConfig,
+  projectTavernMagicalGirlResult,
+  projectTavernCanshouResult,
   createTavernScenarioGenerationConfig,
   projectTavernScenarioResult,
   createTavernGeneralGenerationConfig,
@@ -9,9 +13,13 @@ import {
   projectTavernGeneralScenarioResult,
 } from '@mahoshojo/ai-core/tavern-generation';
 import { buildTavernAiAttachment } from '@/lib/tavern-card/ai';
+import { createBlankDataCard } from '@/lib/data-card-converter';
+import { magicalQuestionnaire, canshouQuestionnaire } from '@/lib/questionnaire-presets';
+import { CANSHOU_LORE } from '@/lib/canshou-lore';
 import { AI_META_REQUEST_HEADER } from '@/lib/ai/meta-response';
 
-const mocks = vi.hoisted(() => ({ generate: vi.fn(), safety: vi.fn(), activity: vi.fn() }));
+const mocks = vi.hoisted(() => ({ generate: vi.fn(), safety: vi.fn(), activity: vi.fn(), flowers: vi.fn(() => '固定花名与花语') }));
+vi.mock('@/lib/random-choose-hana-name', () => ({ getRandomFlowers: mocks.flowers }));
 vi.mock('@/lib/ai', () => ({ generateWithAI: mocks.generate, LoadBalanceStrategy: { CUSTOM: 'custom', SEQUENTIAL: 'sequential' } }));
 vi.mock('@/lib/ai/availability', () => ({ buildChannelContextFromPayload: () => ({ providerId: 'system' }) }));
 vi.mock('@/lib/content-safety/server', () => ({ enforceTextSafety: mocks.safety }));
@@ -112,4 +120,61 @@ describe('Tavern convert real Web handler shared core', () => {
     expect(await response.json()).toMatchObject({ error: '生成失败', message: expect.any(String) });
   });
 
+});
+
+describe('Tavern character Web integration', () => {
+  it.each(['magical-girl', 'canshou'] as const)('uses the shared %s config and projector with Web assets', async (template) => {
+    const questionnaire = template === 'magical-girl' ? magicalQuestionnaire : canshouQuestionnaire;
+    const project = template === 'magical-girl' ? projectTavernMagicalGirlResult : projectTavernCanshouResult;
+    const generated = { ...createBlankDataCard(template), userAnswers: [' ', '保留回答'], signature: 'forged', isPreset: true, templateId: 'forged', _source: 'preserved' };
+    mocks.generate.mockResolvedValue(generated);
+    const attachments = [buildTavernAiAttachment({ name: '原角色', description: '原设定' }).attachment];
+    const input = { language: 'ja-JP', sourceName: '原角色', attachments };
+    for (const includeAiMeta of [false, true]) {
+      mocks.generate.mockClear();
+      mocks.activity.mockClear();
+      mocks.flowers.mockClear();
+      const response = await appRouteHandler(request({ template, ...input }, includeAiMeta));
+      expect(response.status).toBe(200);
+      const payload = await response.json();
+      const result = includeAiMeta ? payload.data : payload;
+      expect(result).toEqual(project(generated, questionnaire));
+      expect(result).not.toHaveProperty('signature');
+      expect(result).not.toHaveProperty('isPreset');
+      expect(result).not.toHaveProperty('_tavern');
+      expect(mocks.generate).toHaveBeenCalledOnce();
+      const [actualInput, config, options] = mocks.generate.mock.calls[0];
+      const shared = template === 'magical-girl'
+        ? createTavernMagicalGirlGenerationConfig({ questionnaire, getRandomFlowers: () => '固定花名与花语' })
+        : createTavernCanshouGenerationConfig({ questionnaire, lore: CANSHOU_LORE });
+      expect(actualInput).toEqual(input);
+      expect(mocks.flowers).not.toHaveBeenCalled();
+      expect(config.promptBuilder(input)).toBe(shared.promptBuilder(input));
+      expect(mocks.flowers).toHaveBeenCalledTimes(template === 'magical-girl' ? 1 : 0);
+      expect(config.schema.shape.userAnswers.description).toBe(shared.schema.shape.userAnswers.description);
+      expect(config.schema.parse({ ...createBlankDataCard(template), userAnswers: [] })).toEqual(shared.schema.parse({ ...createBlankDataCard(template), userAnswers: [] }));
+      expect(config).toMatchObject({ temperature: shared.temperature, taskName: shared.taskName, systemPrompt: shared.systemPrompt });
+      expect(options).toMatchObject({ channelContext: { providerId: 'system' }, telemetry: {} });
+      expect(mocks.activity).toHaveBeenCalledOnce();
+      expect(mocks.generate.mock.invocationCallOrder[0]).toBeLessThan(mocks.activity.mock.invocationCallOrder[0]);
+      expect(mocks.safety).toHaveBeenCalledWith(expect.objectContaining({ text: `原角色\n\n${attachments[0].content}` }));
+    }
+    mocks.generate.mockClear();
+    mocks.activity.mockClear();
+    mocks.safety.mockResolvedValue(new Response('blocked', { status: 403 }));
+    expect((await appRouteHandler(request({ template, ...input }))).status).toBe(403);
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.activity).not.toHaveBeenCalled();
+  });
+
+  it.each(['magical-girl', 'canshou'] as const)('records activity before %s projection rejects invalid generated data', async (template) => {
+    mocks.generate.mockImplementation(async () => {
+      expect(mocks.activity).not.toHaveBeenCalled();
+      return { get userAnswers() { expect(mocks.activity).toHaveBeenCalledOnce(); return []; }, appearance: 123 };
+    });
+    const response = await appRouteHandler(request({ template }));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: '生成失败', message: expect.any(String) });
+    expect(mocks.activity).toHaveBeenCalledOnce();
+  });
 });
