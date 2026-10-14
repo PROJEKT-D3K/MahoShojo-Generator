@@ -8,6 +8,10 @@ import { DesktopTavern } from '../src/app/tavern-page';
 import { getPlaceholderPngBytes, replacePngTextChunks } from '@mahoshojo/domain/tavern-card';
 
 const mocks = vi.hoisted(() => ({ save: vi.fn<(repository: unknown, data: unknown) => Promise<string>>(async () => 'saved'), export: vi.fn<(file: TavernExportFile) => void>() }));
+vi.mock('../src/features/account/use-desktop-cloud-session', () => {
+  const state = { bootstrapped: true, account: null, verification: 'signed-out', authFlow: { kind: 'idle' } };
+  return { useDesktopCloudSession: () => ({ state, store: { getSnapshot: () => state, getCredentialEpoch: () => 0 } }) };
+});
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => true) }));
 vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileIds: async () => [] }));
 vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({}), Link: ({ children }: { children: ReactNode }) => <a>{children}</a> }));

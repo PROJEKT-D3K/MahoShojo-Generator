@@ -13,18 +13,27 @@ import { useExternalLinks } from '../features/external-links/external-links-prov
 import { navigateByProductHref, resolveInternalHrefForHashHistory } from './hash-history-fragment';
 
 import { TavernAiSession } from '../features/tavern/session';
-import { prepareTavernGenerationInput, validateTavernGeneratedCard, type TavernGenerationInput } from '../features/tavern/generation';
+import { buildTavernHostedBody, prepareTavernGenerationInput, validateTavernGeneratedCard, type TavernGenerationInput } from '../features/tavern/generation';
 import { DesktopAiProviderPanel } from '../features/ai-config/desktop-ai-provider-panel';
 import { useDesktopAiConfig } from '../features/ai-config/use-desktop-ai-config';
 import { resolveDesktopAiTarget } from '../features/ai-config/desktop-ai-config';
+import { useCooldown } from '@mahoshojo/ui-web/cooldown';
+import { useDesktopCloudSession } from '../features/account/use-desktop-cloud-session';
 import { QuestionnaireDraftPanel } from './questionnaire-draft-panel';
 
-const SERVER_UNAVAILABLE = '酒馆 AI 转换尚未接入服务器；请明确选择客户端和可直连的供应商。';
+const SYSTEM_COOLDOWN_MS = 120_000;
+const PRESET_COOLDOWN_MS = 3_000;
 
 function TavernPage({ session }: { session: TavernAiSession }) {
   const ai = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const { state: aiState, store: aiStore } = useDesktopAiConfig();
   const target = resolveDesktopAiTarget(aiState.selection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId);
+  const { state: cloudState, store: cloudStore } = useDesktopCloudSession();
+  const preset = target.providerTarget?.kind === 'preset';
+  const cooldownMs = preset ? PRESET_COOLDOWN_MS : SYSTEM_COOLDOWN_MS;
+  const { isCooldown, remainingTime, startCooldown } = useCooldown(`tavernConvertCooldown:${preset ? 'custom' : 'system'}`, cooldownMs);
+  const serverCooldown = target.location === 'server' && isCooldown;
+  const accountBusy = target.location === 'server' && (!cloudState.bootstrapped || cloudState.verification === 'checking' || cloudState.authFlow.kind !== 'idle');
   const [providerDirty, setProviderDirty] = useState(false);
   const [mode, setMode] = useState<'rules' | 'ai'>(ai.draft.input ? 'ai' : 'rules');
   const [languageExpanded, setLanguageExpanded] = useState(false);
@@ -111,21 +120,31 @@ function TavernPage({ session }: { session: TavernAiSession }) {
   const { aiInput, aiInputError, warnings } = useMemo(() => {
     if (!candidate || template === 'canshou') return { aiInput: null, aiInputError: null, warnings: [] };
     const aiInput: TavernGenerationInput = { raw: candidate.parsed, template, language: ai.draft.language, preference };
-    try { return { aiInput, aiInputError: null, warnings: prepareTavernGenerationInput(aiInput).warnings }; }
+    try {
+      if (target.location === 'server') buildTavernHostedBody(aiInput);
+      return { aiInput, aiInputError: null, warnings: prepareTavernGenerationInput(aiInput).warnings };
+    }
     catch (cause) { return { aiInput, aiInputError: cause instanceof Error ? cause.message : 'AI 输入无效', warnings: [] }; }
-  }, [candidate, template, ai.draft.language, preference]);
-  const directUnavailable = target.location !== 'client' ? SERVER_UNAVAILABLE : target.unavailableReason;
-  const generateDisabled = blocked || !placeholderHydrated || !aiInput || !!aiInputError || !!directUnavailable || !target.mode || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
+  }, [candidate, template, ai.draft.language, preference, target.location]);
+  const unavailable = target.unavailableReason;
+  const generateDisabled = blocked || serverCooldown || accountBusy || !placeholderHydrated || !aiInput || !!aiInputError || !!unavailable || (target.location === 'client' && !target.mode) || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
   const generate = () => {
     if (generateDisabled || requestLock.current || session.isBusy() || !aiInput) return;
     if ((session.hasUnsavedResult() || ai.rawText) && !window.confirm('重新转换会替换当前 AI 结果与原始输出，且可能产生新的模型费用。确认继续？')) return;
+    if (ai.phase === 'uncertain' && !window.confirm('上次转换是否已在服务器执行仍无法确认。再次转换可能产生重复调用与费用。确认继续？')) return;
+    const account = cloudStore.getSnapshot();
+    const owner = { userId: account.account?.userId ?? null, epoch: cloudStore.getCredentialEpoch(), verification: account.verification, authFlow: account.authFlow };
     const frozen = JSON.parse(JSON.stringify(aiInput)) as TavernGenerationInput;
     requestLock.current = true; setError('');
     session.updateDraft({ language: frozen.language, input: frozen });
     void aiStore.withPreparedGeneration(async prepared => {
-      if (prepared.location !== 'client' || !prepared.mode || !prepared.providerTarget || prepared.providerTarget.kind === 'system' || prepared.unavailableReason) throw new Error(SERVER_UNAVAILABLE);
-      await session.generate({ invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget }, frozen,
-        { mode: prepared.mode, generationMode: 'non-stream', modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides }, true);
+      if (!prepared.providerTarget || prepared.unavailableReason || (prepared.location === 'client' && !prepared.mode)) throw new Error('请选择可用的转换通道。');
+      const hosted = prepared.location === 'server';
+      const current = cloudStore.getSnapshot();
+      if (hosted && ((current.account?.userId ?? null) !== owner.userId || cloudStore.getCredentialEpoch() !== owner.epoch || current.verification !== owner.verification || current.authFlow !== owner.authFlow || current.authFlow.kind !== 'idle')) throw new Error('准备期间账号状态已变化，输入已保留，请重新确认转换。');
+      await session.generate({ invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget,
+        ...(hosted ? { onHostedDispatchSettled: (retryAfterSeconds?: number) => startCooldown(retryAfterSeconds === undefined ? cooldownMs : retryAfterSeconds * 1000) } : {}) }, frozen,
+        { mode: hosted ? 'hosted-json' : prepared.mode!, generationMode: 'non-stream', modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides }, true);
     }).catch(cause => setError(cause instanceof Error ? cause.message : 'AI 配置准备失败'))
       .finally(() => { requestLock.current = false; });
   };
@@ -145,21 +164,21 @@ function TavernPage({ session }: { session: TavernAiSession }) {
           <TavernPlaceholderFields preference={preference} name={normalized.name} onChange={(next) => { if (confirmChange()) setPreference(next); }} disabled={blocked || !placeholderHydrated} />
           <TavernConversionControls mode={mode} onModeChange={next => { if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={blocked}
             aiDisabledReason={template === 'canshou' ? '残兽目前仅支持规则映射；AI 深度转换仅支持通用角色与通用情景。' : undefined}
-            aiDescription="裁剪后的设定将通过客户端直连发送给所选供应商；结果通过共源 schema 校验，原件单独保留。"
+            aiDescription="裁剪后的设定将通过所选客户端或服务器通道发送；结果通过共源 schema 校验，原件单独保留。"
             language={ai.draft.language} languages={languages.length ? languages : [{ code: ai.draft.language, name: ai.draft.language }]}
             onLanguageChange={language => { if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, language }); }}
             languageExpanded={languageExpanded} onLanguageExpandedChange={setLanguageExpanded}
             generationMode="non-stream" onGenerationModeChange={() => undefined}
-            generationModeDisabledReasons={{ stream: '酒馆客户端当前仅支持非流式转换。' }}
+            generationModeDisabledReasons={{ stream: '酒馆 AI 当前仅支持非流式转换。' }}
             generationModeDescription="非流式生成返回通用角色或通用情景 JSON；转换结果未签名。"
-            provider={<DesktopAiProviderPanel generationMode="non-stream" serverUnavailableReason={SERVER_UNAVAILABLE} showConnectionTest={false} onDirtyChange={setProviderDirty}
-              copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请选择客户端连接。', serverFootnote: SERVER_UNAVAILABLE, payloadNoun: '裁剪后的酒馆设定' }} />}
+            provider={<DesktopAiProviderPanel generationMode="non-stream" showConnectionTest={false} onDirtyChange={setProviderDirty}
+              copy={{ serverOutput: { stream: '', nonStream: '非流式 JSON' }, emptyProfilesHint: '请选择生成通道。', serverFootnote: '服务器仅接收裁剪后的设定；原件和占位符偏好保留本机。', payloadNoun: '裁剪后的酒馆设定' }} />}
             providerFootnote="API Key 使用本机安全存储。失败或取消后不会自动重发，请确认费用与原始输出后再手动重试。" />
           {mode === 'ai' ? <div className="mt-4 space-y-2">
-            {directUnavailable ? <p role="status">{directUnavailable}</p> : null}
+            {unavailable ? <p role="status">{unavailable}</p> : null}
             {aiInputError ? <p role="alert">{aiInputError}</p> : null}
             {warnings.map(warning => <p className="text-xs text-amber-700" key={warning}>{warning}</p>)}
-            <button type="button" className="generate-button" disabled={generateDisabled} onClick={generate}>{generating ? '转换中…' : '开始转换'}</button>
+            <button type="button" className="generate-button" disabled={generateDisabled} onClick={generate}>{generating ? '转换中…' : serverCooldown ? `冷却中 (${remainingTime}s)` : '开始转换'}</button>
             {ai.phase === 'generating' || aiStore.isPreparingGeneration() ? <button type="button" onClick={() => { aiStore.cancelPreparingGeneration(); session.cancel(); }}>取消转换</button> : null}
             {ai.message ? <p role={ai.phase === 'failed' ? 'alert' : 'status'}>{ai.message}</p> : null}
             {ai.rawText ? <details open={ai.phase !== 'completed'}><summary>AI 原始输出</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words">{ai.rawText}</pre></details> : null}

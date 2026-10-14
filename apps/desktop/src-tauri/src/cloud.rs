@@ -87,6 +87,8 @@ const HOSTED_GENERATE_DETAILS_STREAM_PATH: &str = "/api/generate-magical-girl-de
 const HOSTED_ROUTE_DETAILS_STREAM: &str = "generate-magical-girl-details-stream";
 const HOSTED_GENERATE_NAME_PATH: &str = "/api/generate-magical-girl";
 const HOSTED_ROUTE_NAME: &str = "generate-magical-girl";
+const HOSTED_TAVERN_CONVERT_PATH: &str = "/api/tavern/convert";
+const HOSTED_ROUTE_TAVERN: &str = "tavern-convert";
 const HOSTED_GENERATE_DETAILS_PATH: &str = "/api/generate-magical-girl-details";
 const HOSTED_ROUTE_DETAILS: &str = "generate-magical-girl-details";
 const HOSTED_GENERATE_CANSHOU_STREAM_PATH: &str = "/api/generate-canshou-stream";
@@ -128,6 +130,7 @@ const HOSTED_JSON_ROUTES: &[&str] = &[
     HOSTED_ROUTE_SCENARIO,
     HOSTED_ROUTE_CREATOR,
     HOSTED_ROUTE_SUBLIMATION,
+    HOSTED_ROUTE_TAVERN,
 ];
 
 /// routeId → 固定上游路径（仅流式生成；`?format=sse` 由调用方追加）。
@@ -147,6 +150,7 @@ fn hosted_stream_path(route_id: &str) -> Option<&'static str> {
 fn hosted_json_path(route_id: &str) -> Option<&'static str> {
     match route_id {
         HOSTED_ROUTE_NAME => Some(HOSTED_GENERATE_NAME_PATH),
+        HOSTED_ROUTE_TAVERN => Some(HOSTED_TAVERN_CONVERT_PATH),
         HOSTED_ROUTE_DETAILS => Some(HOSTED_GENERATE_DETAILS_PATH),
         HOSTED_ROUTE_CANSHOU => Some(HOSTED_GENERATE_CANSHOU_PATH),
         HOSTED_ROUTE_FREE => Some(HOSTED_GENERATE_FREE_PATH),
@@ -1810,11 +1814,14 @@ const HOSTED_BODY_SUBLIMATION_MAX_BYTES: usize = 4 * 1024 * 1024;
 /// 其余生成路由沿用 256 KiB：问卷/情景回答体量远小于附件场景，
 /// 不随 free 的配额自动放宽（G2-r1 分路由预算）。
 const HOSTED_BODY_DEFAULT_MAX_BYTES: usize = 256 * 1024;
+/// Tavern 附件文本的 JSON 转义与 native 供应商注入共用完整请求预算。
+const HOSTED_BODY_TAVERN_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// routeId → 请求体字节上限；未列入放宽表的路由一律回落默认值。
 /// 与 `fixtures/desktop-cloud.json` 的 `hostedBodyLimits` 同源。
 fn hosted_body_max_bytes(route_id: &str) -> usize {
     match route_id {
+        HOSTED_ROUTE_TAVERN => HOSTED_BODY_TAVERN_MAX_BYTES,
         HOSTED_ROUTE_FREE | HOSTED_ROUTE_FREE_STREAM => HOSTED_BODY_FREE_MAX_BYTES,
         HOSTED_ROUTE_SUBLIMATION | HOSTED_ROUTE_SUBLIMATION_STREAM => {
             HOSTED_BODY_SUBLIMATION_MAX_BYTES
@@ -2089,6 +2096,100 @@ fn build_hosted_name_body(
     Ok(serde_json::json!({ "name": name, "language": language }))
 }
 
+/// Tavern 的业务字段独立严格受检，必须先于任何凭据读取与 HTTP。
+fn build_hosted_tavern_body(value: &serde_json::Value) -> Result<serde_json::Value, CloudError> {
+    let body = value
+        .as_object()
+        .ok_or_else(|| invalid_request("Tavern 请求必须是 JSON 对象"))?;
+    if body.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "template" | "language" | "sourceName" | "attachments"
+        )
+    }) {
+        return Err(invalid_request("Tavern 请求含未知字段"));
+    }
+    if !matches!(
+        body.get("template").and_then(serde_json::Value::as_str),
+        Some("general" | "general-scenario")
+    ) {
+        return Err(invalid_request(
+            "Tavern 仅支持 general 与 general-scenario 模板",
+        ));
+    }
+    let language = body
+        .get("language")
+        .and_then(serde_json::Value::as_str)
+        .map(trim_ecmascript)
+        .filter(|value| !value.is_empty() && value.encode_utf16().count() <= 32)
+        .ok_or_else(|| invalid_request("Tavern 生成语言无效"))?;
+    if !body
+        .get("sourceName")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value.encode_utf16().count() <= 4096)
+    {
+        return Err(invalid_request("Tavern sourceName 无效"));
+    }
+    let attachments = body
+        .get("attachments")
+        .and_then(serde_json::Value::as_array)
+        .filter(|items| items.len() <= 10)
+        .ok_or_else(|| invalid_request("Tavern attachments 必须是最多 10 项的数组"))?;
+    let mut total_bytes = 0usize;
+    for attachment in attachments {
+        let item = attachment
+            .as_object()
+            .ok_or_else(|| invalid_request("Tavern 附件必须是 JSON 对象"))?;
+        if item.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "name" | "content" | "type" | "size" | "truncated"
+            )
+        }) {
+            return Err(invalid_request("Tavern 附件含未知字段"));
+        }
+        if !item
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty() && value.encode_utf16().count() <= 200)
+        {
+            return Err(invalid_request("Tavern 附件 name 无效"));
+        }
+        let content = item
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid_request("Tavern 附件 content 必须是字符串"))?;
+        total_bytes += content.len();
+        if total_bytes > 1024 * 1024 {
+            return Err(invalid_request("Tavern 附件正文合计超过 1 MiB"));
+        }
+        if let Some(value) = item.get("type") {
+            if !value
+                .as_str()
+                .is_some_and(|value| value.encode_utf16().count() <= 200)
+            {
+                return Err(invalid_request("Tavern 附件 type 无效"));
+            }
+        }
+        if let Some(value) = item.get("size") {
+            if !value.as_f64().is_some_and(|value| {
+                value.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(&value)
+            }) {
+                return Err(invalid_request("Tavern 附件 size 必须是非负安全整数"));
+            }
+        }
+        if item
+            .get("truncated")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            return Err(invalid_request("Tavern 附件 truncated 必须是布尔值"));
+        }
+    }
+    let mut result = value.clone();
+    result["language"] = serde_json::json!(language);
+    Ok(result)
+}
+
 /// 组装最终请求体：校验业务 body 形态与大小，并按 `systemConfig` 注入
 /// 系统通道 `customProvider`（D5.1-AIP-r1，与 Web 载荷同形）。
 /// renderer 提供的 body 里出现 `customProvider` 一律拒绝（凭据注入只发生在
@@ -2120,7 +2221,18 @@ fn build_hosted_request_body(
         // 必须早于 inject_hosted_preset、load_session 与兼容探测，不能碰凭据后才拒绝。
         return build_hosted_name_body(request);
     }
-    let mut result = request.body.clone();
+    let mut result = if request.route_id == HOSTED_ROUTE_TAVERN {
+        let body = build_hosted_tavern_body(&request.body)?;
+        // Invalid preset overrides must not trigger a secret read either.
+        if let Some(config) = &request.preset_config {
+            if let Some(overrides) = &config.generation_overrides {
+                normalize_hosted_generation_overrides(overrides)?;
+            }
+        }
+        body
+    } else {
+        request.body.clone()
+    };
     // 系统通道偏好 → `customProvider:{providerId:'system', modelId, apiKey:''}`。
     // 折叠语义与 Web `buildCustomProviderPayload` 一致：'default' 且无生成
     // 覆盖时不注入（普通系统默认），不给服务器发无意义载荷。
@@ -2410,7 +2522,11 @@ async fn prepare_hosted_dispatch(
     inject_hosted_preset(&mut body, request.preset_config.as_ref(), secrets)?;
     check_hosted_body_budget(&body, &request.route_id)?;
     let session = load_session_for(state, secrets).map_err(|error| {
-        if request.route_id == HOSTED_ROUTE_NAME && error.code == CloudErrorCode::InternalError {
+        if matches!(
+            request.route_id.as_str(),
+            HOSTED_ROUTE_NAME | HOSTED_ROUTE_TAVERN
+        ) && error.code == CloudErrorCode::InternalError
+        {
             CloudError::new(
                 CloudErrorCode::StorageUnavailable,
                 "会话状态不可用，生成请求尚未发送",
@@ -2422,8 +2538,10 @@ async fn prepare_hosted_dispatch(
     let compatibility = match probe_hosted_compatibility(state, session.as_ref()).await {
         Ok(value) => value,
         Err(error)
-            if request.route_id == HOSTED_ROUTE_NAME
-                && error.code == CloudErrorCode::InvalidResponse =>
+            if matches!(
+                request.route_id.as_str(),
+                HOSTED_ROUTE_NAME | HOSTED_ROUTE_TAVERN
+            ) && error.code == CloudErrorCode::InvalidResponse =>
         {
             return Err(CloudError::new(
                 CloudErrorCode::ProtocolMismatch,
@@ -2768,7 +2886,7 @@ pub async fn hosted_ai_request(
                 _ = token.cancelled() => {
                     return Err(CloudError::new(CloudErrorCode::Cancelled, "已取消"));
                 }
-                text = read_bounded_text(response, HOSTED_JSON_RESPONSE_MAX_BYTES) => text,
+                text = read_bounded_text(response, if request.route_id == HOSTED_ROUTE_TAVERN { HOSTED_ERROR_BODY_MAX_BYTES } else { HOSTED_JSON_RESPONSE_MAX_BYTES }) => text,
             };
             serde_json::from_str::<serde_json::Value>(&text).unwrap_or(serde_json::Value::Null)
         };
@@ -5912,6 +6030,9 @@ mod tests {
                         assert_eq!(*server.last_generate_body.lock().unwrap(), previous);
                         continue;
                     }
+                    if route == HOSTED_ROUTE_TAVERN {
+                        request.body = serde_json::json!({"template":"general","language":"zh-CN","sourceName":"","attachments":[]});
+                    }
                     if is_stream {
                         let sink = VecSink::new();
                         stream_hosted_ai(&state, &secrets, &registry, request, &sink).await.unwrap();
@@ -6669,6 +6790,11 @@ mod tests {
                 .await
                 .expect("compatible probe must let the request through");
         });
+    }
+
+    mod tavern_conversion {
+        use super::*;
+        include!("cloud_tavern_tests.rs");
     }
 
     mod name_generation {

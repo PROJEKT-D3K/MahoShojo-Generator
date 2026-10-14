@@ -456,3 +456,9 @@ desktop_config_open_directory()
 `/name` 保留 Direct，服务器执行只使用现有名字 JSON 路由的系统默认配置；页面约束不改其他页的供应商偏好。原始签名响应与 unsigned 展示卡分开，未知结果不自动重试。服务器冷却与 Web 共源，准备失败不计冷却，Direct 不受影响。
 
 请求、签名和验收边界见[唯一 Desktop 计划的经典名字生成段](../../docs/plans/2026-09-30_160100_Desktop客户端阶段实施计划.md)。
+
+## 酒馆转换服务器通道
+
+通用角色与通用情景支持非流式 Direct / Hosted JSON。Hosted 只使用固定 Next 路由 `/api/tavern/convert`，系统配置和目录预设 BYOK 由 Native 注入；自定义连接仍只允许 Direct。原始卡、占位符偏好和 PNG 底图不上传，结果从冻结本机原件补回 `_tavern.raw`，始终未签名。
+
+附件正文单件及合计限 1 MiB，最多 10 件；请求 JSON 在注入前后均限 8 MiB，成功响应仍限 4 MiB，Tavern 错误正文限 64 KiB。Desktop 另对 sourceName、附件 name/type 等非正文字段设有限上限，超限拒绝而不静默截断。未知结果不自动重发；准备期账号变化要求重新确认。设备草稿不授予新账号云保存权限，本页不开放云保存。

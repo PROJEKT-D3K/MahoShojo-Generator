@@ -16,6 +16,7 @@
     "hostedGenerateDetailsStream": "/api/generate-magical-girl-details-stream",
     "hostedGenerateDetails": "/api/generate-magical-girl-details",
     "hostedGenerateName": "/api/generate-magical-girl",
+    "hostedTavernConvert": "/api/tavern/convert",
     "hostedGenerateCanshouStream": "/api/generate-canshou-stream",
     "hostedGenerateCanshou": "/api/generate-canshou",
     "hostedGenerateFreeStream": "/api/generate-free-stream",
@@ -87,11 +88,13 @@
     "generate-free",
     "generate-scenario",
     "generate-creator",
-    "generate-sublimation"
+    "generate-sublimation",
+    "tavern-convert"
   ],
   "hostedBodyLimits": {
     "defaultMaxBytes": 262144,
     "routeMaxBytes": {
+      "tavern-convert": 8388608,
       "generate-free": 1048576,
       "generate-free-stream": 1048576,
       "generate-sublimation": 4194304,

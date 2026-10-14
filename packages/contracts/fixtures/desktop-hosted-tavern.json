@@ -1,0 +1,644 @@
+{
+  "valid": [
+    {
+      "label": "system",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "preset-scenario",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general-scenario",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "presetConfig": {
+          "providerId": "deepseek",
+          "modelId": "deepseek-chat"
+        }
+      }
+    },
+    {
+      "label": "empty-attachments",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": []
+        }
+      }
+    },
+    {
+      "label": "utf16-safe-integer",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "﻿ ja ﻿",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 9007199254740991,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "label": "body-template-0",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "canshou",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "body-language-1",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "  ",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "body-language-2",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "body-sourceName-3",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "body-raw-4",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ],
+          "raw": {}
+        }
+      }
+    },
+    {
+      "label": "body-preference-5",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ],
+          "preference": {}
+        }
+      }
+    },
+    {
+      "label": "body-customProvider-6",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ],
+          "customProvider": {}
+        }
+      }
+    },
+    {
+      "label": "body-attachments-7",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": null
+        }
+      }
+    },
+    {
+      "label": "body-attachments-8",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            },
+            {
+              "name": "x",
+              "content": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-name-9",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-name-10",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-type-11",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-size-12",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 9007199254740992,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-size-13",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": -1,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-size-14",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 0.5,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-size-15",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": null,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-truncated-16",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-content-17",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": null,
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "attachment-apiKey-18",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false,
+              "apiKey": "secret"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "missing-template",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "missing-language",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "missing-sourceName",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "missing-attachments",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general",
+          "language": "zh-CN",
+          "sourceName": "Alice"
+        }
+      }
+    },
+    {
+      "label": "forbidden-url",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general-scenario",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "presetConfig": {
+          "providerId": "deepseek",
+          "modelId": "deepseek-chat"
+        },
+        "url": "https://example.test"
+      }
+    },
+    {
+      "label": "forbidden-systemConfig",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "general-scenario",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "presetConfig": {
+          "providerId": "deepseek",
+          "modelId": "deepseek-chat"
+        },
+        "systemConfig": {
+          "modelId": "default"
+        }
+      }
+    }
+  ]
+}

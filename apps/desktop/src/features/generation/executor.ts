@@ -349,6 +349,11 @@ const buildHostedSystemConfig = (
   };
 };
 
+const buildHostedProviderConfig = (target: DesktopAiExecutionOptions['providerTarget'], intent: DesktopGenerationIntent): HostedProviderConfig =>
+  target?.kind === 'preset'
+    ? { presetConfig: { providerId: target.providerId, modelId: intent.modelId?.trim() ?? '', ...(intent.overrides ? { generationOverrides: intent.overrides } : {}) } }
+    : { systemConfig: buildHostedSystemConfig(intent) };
+
 /* ── hosted 流式：Markdown SSE → 流式结果卡（无 resign，DESK-ONLINE-009 延期项） ── */
 
 const executeHostedStreamGeneration = async <
@@ -660,13 +665,7 @@ export const executeDesktopGeneration = async <
     if (target?.kind === 'custom') {
       return { status: 'failed', mode: intent.mode, rawText: '', message: '自定义连接仅支持客户端执行', code: 'invalid-request' };
     }
-    const providerConfig: HostedProviderConfig = target?.kind === 'preset'
-      ? { presetConfig: {
-        providerId: target.providerId,
-        modelId: intent.modelId?.trim() ?? '',
-        ...(intent.overrides ? { generationOverrides: intent.overrides } : {}),
-      } }
-      : { systemConfig: buildHostedSystemConfig(intent) };
+    const providerConfig = buildHostedProviderConfig(target, intent);
     return intent.mode === 'hosted-stream'
       ? executeHostedStreamGeneration(family, options, input, intent, signal, body, providerConfig, onPartialText)
       : executeHostedJsonGeneration(family, options, input, intent, signal, body, providerConfig);
@@ -674,7 +673,7 @@ export const executeDesktopGeneration = async <
   return executeDirectGeneration(family, options, input, { ...intent, mode: intent.mode }, signal, onPartialText);
 };
 
-/** 单次固定系统 JSON 请求；校验失败、预取消与 native 准备失败均不计冷却。 */
+/** 单次 JSON 请求，具体配置权限由路由 contract 限定；校验失败、预取消与 native 准备失败均不计冷却。 */
 export const executeDesktopHostedJsonGeneration = async <TInput, TIntent extends DesktopGenerationIntent, TCardKind extends string>(
   family: DesktopHostedJsonGenerationFamily<TInput, TIntent, TCardKind>,
   options: DesktopHostedJsonExecutionOptions,
@@ -683,16 +682,20 @@ export const executeDesktopHostedJsonGeneration = async <TInput, TIntent extends
   signal: AbortSignal,
 ): Promise<DesktopGenerationOutcome<TCardKind>> => {
   if (signal.aborted) return { status: 'cancelled', mode: intent.mode, rawText: '', reason: 'aborted' };
-  if (intent.mode !== 'hosted-json' || (options.providerTarget && options.providerTarget.kind !== 'system')) {
-    return { status: 'failed', mode: intent.mode, rawText: '', code: 'invalid-request', message: '该服务器 JSON 通道仅支持系统默认配置。' };
+  if (intent.mode !== 'hosted-json' || intent.generationMode === 'stream' || options.providerTarget?.kind === 'custom') {
+    return { status: 'failed', mode: intent.mode, rawText: '', code: 'invalid-request', message: '当前执行模式或供应商不支持该服务器 JSON 通道。' };
   }
   const snapshot = clone(input);
   family.validateInput?.(snapshot, intent);
   const body = family.buildHostedBody(snapshot);
-  const providerConfig = { systemConfig: {
-    ...(intent.modelId === undefined ? {} : { modelId: intent.modelId }),
-    ...(intent.overrides === undefined ? {} : { generationOverrides: intent.overrides }),
-  } };
+  const providerConfig = buildHostedProviderConfig(options.providerTarget, intent);
+  // 固定系统路由必须校验原始选择，不能把无效 model/override 折叠后放行。
+  if (family.jsonRouteId === 'generate-magical-girl' && !providerConfig.presetConfig) {
+    providerConfig.systemConfig = {
+      ...(intent.modelId === undefined ? {} : { modelId: intent.modelId }),
+      ...(intent.overrides === undefined ? {} : { generationOverrides: intent.overrides }),
+    };
+  }
   const parsed = DesktopHostedJsonRequestSchema.safeParse({ requestId: intent.requestId, routeId: family.jsonRouteId, body, ...providerConfig });
   const oversize = hostedBodyOversizeMessage(body, family.jsonRouteId);
   if (!parsed.success || oversize) return { status: 'failed', mode: intent.mode, rawText: '', code: 'invalid-request', message: oversize ?? '服务器生成请求不符合该通道的固定配置要求。' };

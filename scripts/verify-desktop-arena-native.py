@@ -85,6 +85,7 @@ pub mod ipc {
     paths += sorted((PRODUCT / "src").glob("arena_story_*.rs"))
     paths += [PRODUCT / "src/magic_tea_party_tests.rs", PRODUCT / "src/magic_tea_party_journey_tests.rs", ROOT / "packages/contracts/fixtures/desktop-magic-tea-party.json"]
     paths += sorted((PRODUCT / "src/cloud").glob("*.rs"))
+    paths += [PRODUCT / "src/cloud_tavern_tests.rs", ROOT / "packages/contracts/fixtures/desktop-hosted-tavern.json"]
     paths += [ROOT / "packages/contracts/fixtures/battle-report-history.json",
               ROOT / "packages/contracts/fixtures/public-ranking.json",
               ROOT / "packages/contracts/fixtures/arena-strict-preflight.json",

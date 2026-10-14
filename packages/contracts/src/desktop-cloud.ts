@@ -489,6 +489,7 @@ export const HostedJsonGenerationRouteIdSchema = z.enum([
   'generate-scenario',
   'generate-creator',
   'generate-sublimation',
+  'tavern-convert',
 ]);
 export type HostedJsonGenerationRouteId = z.infer<typeof HostedJsonGenerationRouteIdSchema>;
 
@@ -504,6 +505,25 @@ export const DesktopHostedNameBodySchema = z.object({
   language: z.string().trim().min(1).max(32).optional().default('zh-CN'),
 }).strict();
 
+/** 酒馆仅传裁剪后的设定；原件和占位符偏好保留本机。 */
+export const DesktopHostedTavernBodySchema = z.object({
+  template: z.enum(['general', 'general-scenario']),
+  language: z.string().trim().min(1).max(32),
+  sourceName: z.string().max(4096),
+  attachments: z.array(z.object({
+    name: z.string().min(1).max(200),
+    type: z.string().max(200).optional(),
+    size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    content: z.string().max(1024 * 1024),
+    truncated: z.boolean().optional(),
+  }).strict()).max(10),
+}).strict().superRefine((value, context) => {
+  const bytes = value.attachments.map(item => new TextEncoder().encode(item.content).length);
+  if (bytes.some(size => size > 1024 * 1024) || bytes.reduce((sum, size) => sum + size, 0) > 1024 * 1024) {
+    context.addIssue({ code: 'custom', path: ['attachments'], message: '酒馆附件正文单件及合计不得超过 1 MiB' });
+  }
+});
+
 export const DesktopHostedJsonRequestSchema = z.object({
   requestId: z.string().min(1).max(128),
   routeId: HostedJsonGenerationRouteIdSchema,
@@ -513,6 +533,9 @@ export const DesktopHostedJsonRequestSchema = z.object({
 }).strict().refine((value) => !(value.systemConfig && value.presetConfig), {
   message: 'systemConfig 与 presetConfig 不可同时指定',
 }).superRefine((value, context) => {
+  if (value.routeId === 'tavern-convert' && !DesktopHostedTavernBodySchema.safeParse(value.body).success) {
+    context.addIssue({ code: 'custom', path: ['body'], message: '酒馆转换请求字段或附件大小无效' });
+  }
   if (value.routeId !== 'generate-magical-girl') return;
   const body = DesktopHostedNameBodySchema.safeParse(value.body);
   if (!body.success) context.addIssue({ code: 'custom', path: ['body'], message: '名字请求只允许有效的 name 与 language' });
@@ -554,6 +577,8 @@ export const HOSTED_GENERATION_BODY_DEFAULT_MAX_BYTES = 256 * 1024;
  * 超限明确拒绝，不截断原卡或历史；其余生成路由不随这两族自动放宽。
  */
 export const HOSTED_GENERATION_BODY_ROUTE_MAX_BYTES: Readonly<Record<string, number>> = {
+  // 1 MiB 正文最坏 JSON 转义六倍，另留字段及 Native 配置注入余量。
+  'tavern-convert': 8 * 1024 * 1024,
   'generate-free': 1024 * 1024,
   'generate-free-stream': 1024 * 1024,
   'generate-sublimation': 4 * 1024 * 1024,

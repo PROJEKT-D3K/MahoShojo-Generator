@@ -49,11 +49,61 @@ describe('Tavern Direct uses the shared Web generation core', () => {
     expect(await executeTavernGeneration(native.options, input, intent, new AbortController().signal)).toMatchObject({ status: 'invalid-output', rawText: text });
     expect(native.invoke).toHaveBeenCalledTimes(1);
   });
-  it('rejects system, hosted and stream rather than inventing a route or fallback', async () => {
+  it('rejects direct system and stream rather than inventing a fallback', async () => {
     const native = harness('{}'); const signal = new AbortController().signal;
     expect(await executeTavernGeneration({ ...native.options, providerTarget: { kind: 'system' } }, input, intent, signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
-    expect(await executeTavernGeneration(native.options, input, { ...intent, mode: 'hosted-json' } as unknown as TavernGenerationIntent, signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
     expect(await executeTavernGeneration(native.options, input, { ...intent, generationMode: 'stream' } as unknown as TavernGenerationIntent, signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
     expect(native.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('Tavern JSON-only Hosted generation', () => {
+  const hosted = { requestId: 'tavern-hosted', mode: 'hosted-json' as const, generationMode: 'non-stream' as const, modelId: 'default' };
+  it.each(['general', 'general-scenario'] as const)('projects unsigned %s and restores only the frozen local original', async template => {
+    let finish!: (value: unknown) => void;
+    const invoke = vi.fn(() => new Promise(resolve => { finish = resolve; })); const notify = vi.fn();
+    const original = JSON.parse(JSON.stringify(input)) as TavernGenerationInput; original.template = template;
+    const frozenRaw = JSON.parse(JSON.stringify(original.raw));
+    const pending = executeTavernGeneration({ invoke, profileId: '', providerTarget: { kind: 'preset', providerId: 'deepseek' }, onHostedDispatchSettled: notify }, original,
+      { ...hosted, modelId: 'deepseek-chat', overrides: { temperature: 0.4 } }, new AbortController().signal);
+    const request = invoke.mock.calls[0] as unknown as [string, { request: { body: unknown; presetConfig: unknown } }];
+    expect(request[0]).toBe('hosted_ai_request');
+    expect(request[1].request).toMatchObject({ routeId: 'tavern-convert', body: { template, ...prepareTavernGenerationInput(original).promptInput }, presetConfig: { providerId: 'deepseek', modelId: 'deepseek-chat', generationOverrides: { temperature: 0.4 } } });
+    expect(request[1].request.body).not.toHaveProperty('raw'); expect(request[1].request.body).not.toHaveProperty('preference');
+    original.raw = { name: 'changed' };
+    finish({ status: 200, body: { aiMeta: null, data: { name: '角色', title: '情景', content: '正文', signature: 'forged', isPreset: true, _tavern: { raw: { name: 'server' } } } } });
+    const outcome = await pending;
+    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { content: '正文', _tavern: { raw: frozenRaw } } });
+    if (outcome.status !== 'completed') throw new Error('expected completed');
+    expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('isPreset');
+    expect(invoke).toHaveBeenCalledOnce(); expect(notify).toHaveBeenCalledOnce();
+  });
+  it('rejects overlong source metadata before any Native invocation or cooldown', async () => {
+    const invoke = vi.fn(); const notify = vi.fn();
+    await expect(executeTavernGeneration({ invoke, profileId: '', providerTarget: { kind: 'preset', providerId: 'deepseek' }, onHostedDispatchSettled: notify },
+      { ...input, raw: { name: 'x'.repeat(4097), description: '有效的角色设定' } }, { ...hosted, modelId: 'deepseek-chat' }, new AbortController().signal)).rejects.toThrow('4096');
+    expect(invoke).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
+  it('sends system config and keeps 429 cooldown without replay', async () => {
+    const invoke = vi.fn(async () => ({ status: 429, body: { error: 'slow down', retryAfterSeconds: 120 } })); const notify = vi.fn();
+    const result = await executeTavernGeneration({ invoke, profileId: '', providerTarget: { kind: 'system' }, onHostedDispatchSettled: notify }, input, { ...hosted, modelId: 'selected', overrides: { temperature: 0.4 } }, new AbortController().signal);
+    expect(invoke).toHaveBeenCalledWith('hosted_ai_request', { request: expect.objectContaining({ routeId: 'tavern-convert', systemConfig: { modelId: 'selected', generationOverrides: { temperature: 0.4 } } }) });
+    expect(result).toMatchObject({ status: 'failed', retryAfterSeconds: 120 }); expect(notify).toHaveBeenCalledWith(120); expect(invoke).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ['protocol-mismatch', 'failed', false], ['storage-unavailable', 'failed', false],
+    ['invalid-response', 'uncertain', true], ['internal-error', 'uncertain', true],
+  ] as const)('keeps %s tied to its dispatch certainty without replay', async (code, status, cooldown) => {
+    const invoke = vi.fn(async () => { throw { code, message: 'synthetic boundary failure' }; }); const notify = vi.fn();
+    const outcome = await executeTavernGeneration({ invoke, profileId: '', onHostedDispatchSettled: notify }, input, hosted, new AbortController().signal);
+    expect(outcome.status).toBe(status); expect(notify).toHaveBeenCalledTimes(cooldown ? 1 : 0); expect(invoke).toHaveBeenCalledOnce();
+  });
+  it('retains unknown dispatch as uncertain and refuses custom targets before invocation', async () => {
+    const invoke = vi.fn(async () => { throw { code: 'future-native-code', message: 'unknown' }; }); const notify = vi.fn();
+    const options = { invoke, profileId: '', onHostedDispatchSettled: notify };
+    expect(await executeTavernGeneration(options, input, hosted, new AbortController().signal)).toMatchObject({ status: 'uncertain' });
+    expect(invoke).toHaveBeenCalledOnce(); expect(notify).toHaveBeenCalledOnce(); invoke.mockClear(); notify.mockClear();
+    expect(await executeTavernGeneration({ ...options, providerTarget: { kind: 'custom', profileId: 'custom' } }, input, hosted, new AbortController().signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
+    expect(invoke).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
   });
 });

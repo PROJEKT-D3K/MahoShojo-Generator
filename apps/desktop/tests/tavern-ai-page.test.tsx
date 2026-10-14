@@ -8,7 +8,12 @@ import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop
 import { listDesktopPresetEntries } from '../src/features/ai-config/desktop-ai-config';
 import { TAVERN_AI_DRAFT_KEY } from '../src/features/tavern/session';
 import type { TavernGenerationInput } from '../src/features/tavern/generation';
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), execute: vi.fn(), export: vi.fn(), save: vi.fn(), guard: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), execute: vi.fn(), export: vi.fn(), save: vi.fn(), guard: vi.fn(), account: { userId: null as number | null, epoch: 0 } }));
+vi.mock('../src/features/account/use-desktop-cloud-session', () => {
+  const authFlow = { kind: 'idle' };
+  const getSnapshot = () => ({ bootstrapped: true, account: mocks.account.userId === null ? null : { userId: mocks.account.userId }, verification: mocks.account.userId === null ? 'signed-out' : 'verified', authFlow });
+  return { useDesktopCloudSession: () => ({ state: getSnapshot(), store: { getSnapshot, getCredentialEpoch: () => mocks.account.epoch } }) };
+});
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({}), Link: ({ children }: { children: ReactNode }) => <a>{children}</a> }));
 vi.mock('../src/app/useLeaveGuard', () => ({ useLeaveGuard: (...args: unknown[]) => { mocks.guard(...args); return { ready: true }; } }));
@@ -35,6 +40,7 @@ async function template(value: string) { const select = host.querySelector<HTMLS
 const complete = (input: TavernGenerationInput) => ({ status: 'completed', mode: 'direct-local', cardKind: input.template, rawText: '模型输出', card: { templateId: input.template === 'general' ? '通用角色' : '通用情景', ...(input.template === 'general' ? { name: '整理角色' } : { title: '整理情景' }), content: 'AI 整理正文', _tavern: { raw: input.raw } } });
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.account = { userId: null, epoch: 0 };
   vi.clearAllMocks(); mocks.invoke.mockReset(); mocks.invoke.mockResolvedValue(true); mocks.execute.mockReset(); mocks.execute.mockImplementation(async (_options, input) => complete(input));
   localStorage.clear(); localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'client', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [{ code: 'zh-CN', name: '简体中文' }] })));
@@ -80,13 +86,51 @@ describe('Desktop Tavern actual Direct journey', () => {
     await click('取消转换'); expect(signal.aborted).toBe(true); await act(async () => finish(complete(frozen)));
     expect(host.querySelector('[data-result]')).toBeNull(); expect(host.textContent).toContain('模型输出'); expect(mocks.execute).toHaveBeenCalledTimes(1);
   });
-  it('preserves server preference and blocks server/system until the user explicitly selects client', async () => {
+  it('uses Hosted without rewriting the selected server preference', async () => {
     localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
     await mount(); await upload(); const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY); await chooseAi();
-    expect(button('开始转换').disabled).toBe(true); expect(host.textContent).toContain('酒馆 AI 转换尚未接入服务器');
-    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before); expect(mocks.execute).not.toHaveBeenCalled();
-    await act(async () => getDesktopAiConfigStore().selectExecutionLocation('client')); await settle();
-    expect(button('开始转换').disabled).toBe(false); await click('开始转换'); expect(mocks.execute).toHaveBeenCalledTimes(1);
+    expect(button('开始转换').disabled).toBe(false); await click('开始转换');
+    expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'hosted-json', generationMode: 'non-stream' });
+    expect(mocks.execute.mock.calls[0]![0]).toMatchObject({ providerTarget: { kind: 'system' }, onHostedDispatchSettled: expect.any(Function) });
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+  });
+  it.each(['system', 'preset'] as const)('stores Hosted cooldown under the %s key only', async kind => {
+    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
+    await mount(); await upload(); await chooseAi();
+    if (kind === 'preset') {
+      const store = getDesktopAiConfigStore();
+      await act(async () => { store.selectProviderTarget({ kind: 'preset', providerId: 'deepseek' }); store.selectPresetModel('deepseek', 'deepseek-chat'); }); await settle();
+    }
+    await click('开始转换');
+    expect(mocks.execute).toHaveBeenCalledOnce();
+    const start = Date.now();
+    await act(async () => mocks.execute.mock.calls[0]![0].onHostedDispatchSettled());
+    const mode = kind === 'system' ? 'system' : 'custom';
+    expect(Number(localStorage.getItem(`tavernConvertCooldown:${mode}`))).toBeGreaterThanOrEqual(start + (kind === 'system' ? 120_000 : 3_000));
+    expect(localStorage.getItem(`tavernConvertCooldown:${kind === 'system' ? 'custom' : 'system'}`)).toBeNull();
+  });
+  it('rejects oversized Hosted source metadata before preset credential preparation', async () => {
+    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
+    await mount(); await upload({ ...raw, name: 'x'.repeat(4097) }); await chooseAi();
+    const store = getDesktopAiConfigStore();
+    await act(async () => { store.selectProviderTarget({ kind: 'preset', providerId: 'deepseek' }); store.selectPresetModel('deepseek', 'deepseek-chat'); }); await settle();
+    mocks.invoke.mockClear(); expect(button('开始转换').disabled).toBe(true);
+    expect(host.textContent).toContain('4096'); expect(store.isPreparingGeneration()).toBe(false); expect(mocks.invoke).not.toHaveBeenCalled(); expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it.each(['login', 'same-account-credential'] as const)('blocks an account change during preset preparation: %s', async change => {
+    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
+    if (change === 'same-account-credential') mocks.account.userId = 7;
+    await mount(); await upload(); await chooseAi();
+    const store = getDesktopAiConfigStore();
+    const entry = listDesktopPresetEntries(new Set()).find(item => item.preset.id === 'deepseek')!;
+    await act(async () => { store.selectProviderTarget({ kind: 'preset', providerId: entry.preset.id }); store.selectPresetModel(entry.preset.id, 'deepseek-chat'); }); await settle();
+    let finish!: (value: boolean) => void;
+    mocks.invoke.mockImplementation(async (command: string) => command === 'has_provider_secret' ? new Promise<boolean>(resolve => { finish = resolve; }) : true);
+    await click('开始转换'); expect(store.isPreparingGeneration()).toBe(true);
+    mocks.account = { userId: 7, epoch: 1 };
+    await act(async () => finish(true)); await settle();
+    expect(mocks.execute).not.toHaveBeenCalled(); expect(host.textContent).toContain('准备期间账号状态已变化');
+    expect(JSON.parse(localStorage.getItem(TAVERN_AI_DRAFT_KEY)!).input.raw).toEqual(raw);
   });
   it('does not dispatch after preset Key preparation fails or a cancelled preparation returns late', async () => {
     await mount(); await upload(); await chooseAi(); const store = getDesktopAiConfigStore();

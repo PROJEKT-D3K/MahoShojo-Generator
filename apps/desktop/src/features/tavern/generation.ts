@@ -1,3 +1,5 @@
+import { DesktopHostedTavernBodySchema } from '@mahoshojo/contracts/desktop-cloud';
+import type { JsonValue } from '@mahoshojo/contracts/json-value';
 import {
   createTavernGeneralGenerationConfig, createTavernGeneralScenarioGenerationConfig,
   projectTavernGeneralResult, projectTavernGeneralScenarioResult,
@@ -7,11 +9,10 @@ import {
   applyTavernPlaceholderReplacement, buildTavernAiAttachment, normalizeTavernCard,
   resolveTavernCharReplacement, validateTavernRaw, type TavernPlaceholderPreference,
 } from '@mahoshojo/domain/tavern-card';
-import { executeDirectGeneration, GenerationTransportError, type DesktopDirectGenerationFamily, type DesktopDirectGenerationIntent } from '../generation/executor';
-import type { DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
+import { executeDirectGeneration, executeDesktopHostedJsonGeneration, GenerationTransportError, type DesktopDirectGenerationFamily, type DesktopHostedJsonGenerationFamily, type DesktopHostedJsonExecutionOptions, type DesktopGenerationIntent } from '../generation/executor';
 
 export type TavernAiTemplate = 'general' | 'general-scenario';
-export type TavernGenerationIntent = DesktopDirectGenerationIntent & { generationMode: 'non-stream' };
+export type TavernGenerationIntent = DesktopGenerationIntent & { mode: 'direct-local' | 'direct-remote' | 'hosted-json'; generationMode: 'non-stream' };
 export interface TavernGenerationInput {
   raw: unknown;
   template: TavernAiTemplate;
@@ -53,5 +54,23 @@ const FAMILY: DesktopDirectGenerationFamily<TavernGenerationInput, TavernGenerat
   cardNoun: '酒馆转换卡',
 };
 
-export const executeTavernGeneration = (options: DesktopAiExecutionOptions, input: TavernGenerationInput, intent: TavernGenerationIntent, signal: AbortSignal, onPartialText?: (text: string) => void) =>
-  executeDirectGeneration(FAMILY, options, input, intent, signal, onPartialText);
+export function buildTavernHostedBody(input: TavernGenerationInput): Record<string, JsonValue> {
+  const prepared = prepareTavernGenerationInput(input).promptInput;
+  const body = { template: input.template, language: prepared.language, sourceName: prepared.sourceName,
+    attachments: prepared.attachments.map(attachment => ({ ...attachment })) };
+  if (!DesktopHostedTavernBodySchema.safeParse(body).success) throw new Error('酒馆服务器输入超出限制：名称最多 4096 字符，附件正文单件及合计最多 1 MiB。请精简后重试。');
+  return body;
+}
+
+const HOSTED_FAMILY: DesktopHostedJsonGenerationFamily<TavernGenerationInput, TavernGenerationIntent, TavernAiTemplate> = {
+  validateInput: prepareTavernGenerationInput,
+  jsonRouteId: 'tavern-convert',
+  buildHostedBody: buildTavernHostedBody,
+  normalizeHostedJsonCard: FAMILY.buildStructuredCard,
+  cardNoun: FAMILY.cardNoun,
+};
+
+export const executeTavernGeneration = (options: DesktopHostedJsonExecutionOptions, input: TavernGenerationInput, intent: TavernGenerationIntent, signal: AbortSignal, onPartialText?: (text: string) => void) =>
+  intent.mode === 'hosted-json'
+    ? executeDesktopHostedJsonGeneration(HOSTED_FAMILY, options, input, intent, signal)
+    : executeDirectGeneration(FAMILY, options, input, { ...intent, mode: intent.mode }, signal, onPartialText);
