@@ -39,6 +39,7 @@ import { buildMagicTeaPartyMainPrompt, buildWorldbookText } from '@/lib/magic-te
 import { getMagicTeaPartyPreset } from '@/lib/magic-tea-party/presets';
 import { useMagicTeaPartyChat } from '@/lib/magic-tea-party/useMagicTeaPartyChat';
 import { useMagicTeaPartySessions } from '@/lib/magic-tea-party/useMagicTeaPartySessions';
+import { captureMagicTeaPartySummarySnapshot, compareAndPatchMagicTeaPartySummary } from '@/lib/magic-tea-party/storage';
 import { randomUUID } from '@/lib/crypto';
 import type {
   MagicTeaPartyMessage,
@@ -71,6 +72,7 @@ export function MagicTeaPartyPage() {
     preferences,
     applyPreferencePatch,
     persistSession,
+    acceptCommittedSummary,
     createSession,
     deleteSession,
     bulkDeleteSessions,
@@ -148,17 +150,20 @@ export function MagicTeaPartyPage() {
     getMessageCharLimit,
     generateSummary,
     clearSummary,
+    saveSummary,
+    cancelSummary,
   } = useMagicTeaPartyChat({
     activeSession,
     activeSessionId,
     messages,
     setMessages,
     persistSession,
+    onSummaryCommitted: acceptCommittedSummary,
     preferences,
     userProviderConfig,
     onGlobalError: setGlobalError,
     onNotices: appendNotices,
-    onSideChannels: (payload) => void handleSideChannels(payload),
+    onSideChannels: (payload) => handleSideChannels(payload),
     router,
   });
 
@@ -257,6 +262,7 @@ export function MagicTeaPartyPage() {
   }, [activeSession]);
 
   const handleStartEditMessage = (message: MagicTeaPartyMessage) => {
+    cancelSummary();
     setEditingMessageId(message.id);
     setEditingDraft(message.content ?? '');
   };
@@ -302,6 +308,7 @@ export function MagicTeaPartyPage() {
         ? window.confirm('将当前分支合并回父会话会替换父会话分支点之后的内容，确定继续吗？')
         : true;
     if (!confirmed) return;
+    cancelSummary();
     await mergeSessionToParent(sessionId ?? activeSession?.id ?? null);
   };
 
@@ -560,7 +567,7 @@ export function MagicTeaPartyPage() {
         updateSnapshot,
         updatedAt: now,
       };
-      await persistSession(nextSession);
+      await persistSession(nextSession, { preserveSummary: true });
       setUpdateDrafts(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : '写入失败';
@@ -695,11 +702,14 @@ export function MagicTeaPartyPage() {
     summary: { text: string; sections?: Record<string, string> } | null;
     updates: MagicTeaPartyUpdateDraft[] | null;
     updatesMeta: Record<string, unknown> | null;
+    signal?: AbortSignal;
+    isCurrent?: () => boolean;
   }) => {
-    if (!activeSession) return;
+    if (!activeSession || payload.signal?.aborted || payload.isCurrent?.() === false) return false;
     const now = Date.now();
     let nextSession = activeSession;
     let didChange = false;
+    let summaryAccepted = false;
     setUpdateError(null);
 
     const allowSummary = activeSession?.settings.enableSummary ?? preferences.enableSummary;
@@ -707,17 +717,21 @@ export function MagicTeaPartyPage() {
       const safeText = applyShieldWords(payload.summary.text).filteredText;
       if (safeText) {
         const { coverage: _coverage, tokenCount: _tokenCount, ...summaryMeta } = nextSession.summaryMeta ?? {};
-        nextSession = {
-          ...nextSession,
-          summary: safeText,
-          summarySections: payload.summary.sections ?? undefined,
-          summaryMeta: { ...summaryMeta, updatedAt: now },
-          updatedAt: now,
-        };
-        didChange = true;
+        const committed = await compareAndPatchMagicTeaPartySummary({ sessionId: activeSession.id,
+          expectedSnapshot: captureMagicTeaPartySummarySnapshot(activeSession),
+          patch: { summary: safeText, summarySections: payload.summary.sections ?? undefined,
+            summaryMeta: { ...summaryMeta, updatedAt: now } },
+          signal: payload.signal,
+          isCurrent: () => activeSessionRef.current?.id === activeSession.id && payload.isCurrent?.() !== false });
+        if (committed && !payload.signal?.aborted && payload.isCurrent?.() !== false) {
+          nextSession = committed;
+          acceptCommittedSummary(committed);
+          summaryAccepted = true;
+        }
       }
     }
 
+    if (payload.signal?.aborted || payload.isCurrent?.() === false) return summaryAccepted;
     if (payload.updates && payload.updates.length > 0) {
       const messageRange =
         normalizeMessageRange(payload.updatesMeta?.messageRange) ?? extractMessageRangeFromDrafts(payload.updates);
@@ -736,7 +750,7 @@ export function MagicTeaPartyPage() {
     }
 
     if (didChange && nextSession !== activeSession) {
-      await persistSession(nextSession);
+      await persistSession(nextSession, { preserveSummary: true });
     }
 
     if (payload.updates && payload.updates.length > 0 && resolveUpdateApplyMode() === 'auto') {
@@ -747,6 +761,7 @@ export function MagicTeaPartyPage() {
         sessionOverride: didChange ? nextSession : activeSession,
       });
     }
+    return summaryAccepted;
   };
 
   if (loading) {
@@ -798,15 +813,15 @@ export function MagicTeaPartyPage() {
           activeSessionId={activeSessionId}
           activeSession={activeSession}
           preferences={preferences}
-          onCreateSession={(presetId) => void createSession(presetId)}
-          onSelectSession={setActiveSessionId}
-          onDeleteSession={(sessionId) => void deleteSession(sessionId)}
-          onCleanupSessions={(sessionIds) => bulkDeleteSessions(sessionIds)}
+          onCreateSession={(presetId) => { cancelSummary(); void createSession(presetId); }}
+          onSelectSession={(sessionId) => { if (sessionId !== activeSessionId) cancelSummary(); setActiveSessionId(sessionId); }}
+          onDeleteSession={(sessionId) => { if (sessionId === activeSessionId) cancelSummary(); void deleteSession(sessionId); }}
+          onCleanupSessions={(sessionIds) => { if (activeSessionId && sessionIds.includes(activeSessionId)) cancelSummary(); return bulkDeleteSessions(sessionIds); }}
           onToggleSessionPin={(sessionId) => void toggleSessionPin(sessionId)}
           onReorderPinnedSessions={(orderedIds) => void reorderPinnedSessions(orderedIds)}
-          onSessionImported={handleSessionImported}
-          onPresetSelected={(presetId) => applyPreset(presetId)}
-          onProviderConfigChange={setUserProviderConfig}
+          onSessionImported={(sessionId) => { cancelSummary(); return handleSessionImported(sessionId); }}
+          onPresetSelected={(presetId) => { cancelSummary(); applyPreset(presetId); }}
+          onProviderConfigChange={(config) => { cancelSummary(); setUserProviderConfig(config); }}
           onPreferenceChange={applyPreferencePatch}
           onSessionSettingChange={updateActiveSessionSettings}
           onMergeSession={handleMergeSessionToParent}
@@ -829,7 +844,7 @@ export function MagicTeaPartyPage() {
           onUpdatePlayerRole={updatePlayerRole}
           onUpdateTitle={updateSessionTitle}
           onLockTitle={lockSessionTitle}
-          onCreateSession={() => void createSession()}
+          onCreateSession={() => { cancelSummary(); void createSession(); }}
         />
       }
       beforeChat={
@@ -862,9 +877,12 @@ export function MagicTeaPartyPage() {
             isSummarizing={isSummarizing}
             summaryError={summaryError}
             hasMessages={messages.length > 0}
-            onGenerateSummary={() => void generateSummary()}
-            onClearSummary={() => void clearSummary()}
-            onPersistSession={persistSession}
+            onGenerateSummary={generateSummary}
+            onClearSummary={clearSummary}
+            onSaveSummary={saveSummary}
+            onSummaryIntent={cancelSummary}
+            onStopSummary={stopGenerating}
+            onAutoSummaryEnabledChange={(autoSummaryEnabled) => { cancelSummary(); void updateActiveSessionSettings({ autoSummaryEnabled }); }}
             updateDrafts={updateDrafts}
             updateRangeSize={updateRangeSize}
             isGeneratingUpdates={isGeneratingUpdates}

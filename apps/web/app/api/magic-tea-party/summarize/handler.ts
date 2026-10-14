@@ -1,3 +1,4 @@
+import { resolveMagicTeaPartyFinishReason } from '@/lib/magic-tea-party/stream-completion';
 import { z } from 'zod/v3';
 import { projectMagicTeaPartySummaryInput } from '@mahoshojo/ai-core/magic-tea-party';
 import { UserGenerationOverridesSchema } from '@/lib/ai/generation-settings/schemas';
@@ -162,6 +163,7 @@ async function handler(req: NextRequest): Promise<Response> {
 
     const providerOptions: GenerateWithAIOptions = {
       providerOverride,
+      abortSignal: req.signal,
       loadBalanceStrategy: LoadBalanceStrategy.CUSTOM,
       channelContext: buildChannelContextFromResolved(providerId, customProvider.modelId.trim()),
     };
@@ -175,7 +177,12 @@ async function handler(req: NextRequest): Promise<Response> {
     );
     recordUserActivityFromRequest(req);
 
+    const finishReasonPromise = streamResult.finishReasonPromise?.catch(() => null);
     const text = (await streamResult.response.text()).trim();
+    const finishReason = await resolveMagicTeaPartyFinishReason(finishReasonPromise, req.signal);
+    if (req.signal.aborted || finishReason !== 'stop') {
+      return json({ error: '生成失败', message: '模型未正常完成摘要生成' }, { status: 500 });
+    }
     if (!text) {
       return json({ error: '生成失败', message: '模型返回空内容' }, { status: 500 });
     }

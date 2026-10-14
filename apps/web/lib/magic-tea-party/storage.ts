@@ -226,6 +226,119 @@ export const putMagicTeaPartySession = async (session: MagicTeaPartySession): Pr
   });
 };
 
+const summarySettingKeys = [
+  'autoSummaryEnabled', 'providerId', 'modelId', 'language', 'userDisplayName', 'contextWindowTokens',
+  'responseReserveTokens', 'maxContextMessages', 'summaryTriggerRatio', 'summaryMaxTokens', 'summaryMinGapMessages',
+  'enableSummary',
+] as const;
+
+/** Original-turn bookkeeping must not restore summary state captured before another tab's edit. */
+export const putMagicTeaPartySessionKeepingSummary = async (session: MagicTeaPartySession): Promise<MagicTeaPartySession> => {
+  const db = await openMagicTeaPartyDb();
+  return await new Promise((resolve, reject) => {
+    const tx = db.transaction(['sessions'], 'readwrite');
+    let next = session;
+    let missing = false;
+    tx.oncomplete = () => resolve(next);
+    tx.onabort = () => reject(tx.error ?? new Error(missing ? '会话已删除，未保存过时结果' : '保存会话失败'));
+    tx.onerror = () => reject(tx.error ?? new Error('保存会话失败'));
+    const store = tx.objectStore('sessions');
+    const request = store.get(session.id);
+    request.onsuccess = () => {
+      const current = request.result as MagicTeaPartySession | undefined;
+      if (!current) { missing = true; tx.abort(); return; }
+      if (current) {
+        const settings = { ...session.settings };
+        for (const key of summarySettingKeys) Object.assign(settings, { [key]: current.settings[key] });
+        settings.outputPlan = current.settings.outputPlan
+          ? { ...(settings.outputPlan ?? current.settings.outputPlan), summary: current.settings.outputPlan.summary }
+          : undefined;
+        next = { ...session, settings, summary: current.summary, summarySections: current.summarySections,
+          summaryMeta: current.summaryMeta, autoSummaryState: current.autoSummaryState };
+      }
+      store.put(next);
+    };
+  });
+};
+
+/** Explicit opt-in only changes this setting, preserving any other tab's latest summary. */
+export const setMagicTeaPartyAutoSummaryEnabled = async (sessionId: string, enabled: boolean): Promise<MagicTeaPartySession | null> => {
+  const db = await openMagicTeaPartyDb();
+  return await new Promise((resolve, reject) => {
+    const tx = db.transaction(['sessions'], 'readwrite');
+    let next: MagicTeaPartySession | null = null;
+    tx.oncomplete = () => resolve(next);
+    tx.onabort = () => reject(tx.error ?? new Error('保存自动摘要设置失败'));
+    tx.onerror = () => reject(tx.error ?? new Error('保存自动摘要设置失败'));
+    const store = tx.objectStore('sessions');
+    const request = store.get(sessionId);
+    request.onsuccess = () => {
+      const current = request.result as MagicTeaPartySession | undefined;
+      if (!current) return;
+      next = { ...current, settings: { ...current.settings, autoSummaryEnabled: enabled }, updatedAt: Date.now() };
+      store.put(next);
+    };
+  });
+};
+
+/** Only summary ownership participates in this conditional write; unrelated session edits survive. */
+export const captureMagicTeaPartySummarySnapshot = (session: MagicTeaPartySession): string => {
+  const settings = session.settings;
+  return JSON.stringify({
+    summary: session.summary, summarySections: session.summarySections, summaryMeta: session.summaryMeta,
+    autoSummaryState: session.autoSummaryState,
+    settings: {
+      autoSummaryEnabled: settings.autoSummaryEnabled, providerId: settings.providerId, modelId: settings.modelId,
+      language: settings.language, userDisplayName: settings.userDisplayName,
+      contextWindowTokens: settings.contextWindowTokens, responseReserveTokens: settings.responseReserveTokens,
+      maxContextMessages: settings.maxContextMessages, summaryTriggerRatio: settings.summaryTriggerRatio,
+      summaryMaxTokens: settings.summaryMaxTokens, summaryMinGapMessages: settings.summaryMinGapMessages,
+      enableSummary: settings.enableSummary, outputSummary: settings.outputPlan?.summary,
+    },
+  });
+};
+
+export type MagicTeaPartySummaryPatch = Partial<Pick<MagicTeaPartySession,
+  'summary' | 'summarySections' | 'summaryMeta' | 'autoSummaryState'>>;
+
+export const compareAndPatchMagicTeaPartySummary = async (params: {
+  sessionId: string;
+  expectedSnapshot: string;
+  patch: MagicTeaPartySummaryPatch;
+  signal?: AbortSignal;
+  isCurrent?: () => boolean;
+}): Promise<MagicTeaPartySession | null> => {
+  const db = await openMagicTeaPartyDb();
+  if (params.signal?.aborted || params.isCurrent?.() === false) return null;
+  return await new Promise<MagicTeaPartySession | null>((resolve, reject) => {
+    const tx = db.transaction(['sessions'], 'readwrite');
+    let next: MagicTeaPartySession | null = null;
+    const abort = () => { try { tx.abort(); } catch { /* transaction already ended */ } };
+    const cleanup = () => params.signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => { cleanup(); resolve(next); };
+    tx.onabort = () => {
+      cleanup();
+      if (params.signal?.aborted || params.isCurrent?.() === false) resolve(null);
+      else reject(tx.error ?? new Error('保存摘要失败'));
+    };
+    tx.onerror = () => { cleanup(); reject(tx.error ?? new Error('保存摘要失败')); };
+    params.signal?.addEventListener('abort', abort, { once: true });
+    const store = tx.objectStore('sessions');
+    const request = store.get(params.sessionId);
+    request.onsuccess = () => {
+      const current = request.result as MagicTeaPartySession | undefined;
+      if (!current || params.signal?.aborted || params.isCurrent?.() === false
+        || captureMagicTeaPartySummarySnapshot(current) !== params.expectedSnapshot) return;
+      // Explicit keys prevent callers from accidentally turning this into a whole-session put.
+      next = { ...current, updatedAt: Date.now() };
+      for (const key of ['summary', 'summarySections', 'summaryMeta', 'autoSummaryState'] as const) {
+        if (Object.prototype.hasOwnProperty.call(params.patch, key)) Object.assign(next, { [key]: params.patch[key] });
+      }
+      store.put(next);
+    };
+  });
+};
+
 export const getMagicTeaPartySession = async (sessionId: string): Promise<MagicTeaPartySession | null> => {
   const db = await openMagicTeaPartyDb();
   return await new Promise<MagicTeaPartySession | null>((resolve, reject) => {

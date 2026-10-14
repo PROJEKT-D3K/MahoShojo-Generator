@@ -29,6 +29,8 @@ import {
   listMagicTeaPartySessions,
   putMagicTeaPartyMessage,
   putMagicTeaPartySession,
+  putMagicTeaPartySessionKeepingSummary,
+  setMagicTeaPartyAutoSummaryEnabled,
   putMagicTeaPartyTachieAsset,
   putMagicTeaPartyTachieBlob,
 } from '@/lib/magic-tea-party/storage';
@@ -283,7 +285,8 @@ export type UseMagicTeaPartySessionsResult = {
   setMessages: Dispatch<SetStateAction<MagicTeaPartyMessage[]>>;
   preferences: MagicTeaPartyPreferences;
   applyPreferencePatch: (patch: Partial<MagicTeaPartyPreferences>) => void;
-  persistSession: (session: MagicTeaPartySession) => Promise<void>;
+  persistSession: (session: MagicTeaPartySession, options?: { preserveSummary?: boolean }) => Promise<void>;
+  acceptCommittedSummary: (session: MagicTeaPartySession) => void;
   createSession: (presetId?: MagicTeaPartyPresetId | null) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
   bulkDeleteSessions: (sessionIds: string[]) => Promise<void>;
@@ -514,13 +517,24 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
     });
   }, [activeSessionId, onGlobalError, refreshActiveSession]);
 
-  const persistSession = useCallback(async (next: MagicTeaPartySession) => {
+  const persistSession = useCallback(async (next: MagicTeaPartySession, options?: { preserveSummary?: boolean }) => {
+    if (options?.preserveSummary) next = await putMagicTeaPartySessionKeepingSummary(next);
     // 先同步更新 React 状态，避免受控输入在异步落盘后重放 value 导致光标跳到末尾。
     if (isMagicTeaPartySessionCurrent(activeSessionIdRef.current, next.id)) {
       setActiveSession(next);
     }
     setSessions((prev) => sortSessionsByUpdatedAtDesc([next, ...prev.filter((item) => item.id !== next.id)]));
-    await putMagicTeaPartySession(next);
+    if (!options?.preserveSummary) await putMagicTeaPartySession(next);
+  }, []);
+
+  const acceptCommittedSummary = useCallback((committed: MagicTeaPartySession) => {
+    const merge = (current: MagicTeaPartySession): MagicTeaPartySession => ({ ...current,
+      summary: committed.summary, summarySections: committed.summarySections, summaryMeta: committed.summaryMeta,
+      autoSummaryState: committed.autoSummaryState, updatedAt: Math.max(current.updatedAt, committed.updatedAt) });
+    if (isMagicTeaPartySessionCurrent(activeSessionIdRef.current, committed.id)) {
+      setActiveSession(current => current?.id === committed.id ? merge(current) : current);
+    }
+    setSessions(current => sortSessionsByUpdatedAtDesc(current.map(item => item.id === committed.id ? merge(item) : item)));
   }, []);
 
   const createSession = useCallback(
@@ -541,6 +555,7 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         choiceCount: preferences.choiceCount,
         userDisplayName: preferences.userDisplayName,
         enableSummary: preferences.enableSummary,
+        autoSummaryEnabled: false,
         readArenaHistory: preferences.readArenaHistory,
         readArenaHistoryLimit: preferences.readArenaHistoryLimit,
         isArenaHistoryUnlimited: preferences.isArenaHistoryUnlimited,
@@ -707,6 +722,16 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
   const updateActiveSessionSettings = useCallback(
     async (patch: Partial<MagicTeaPartySession['settings']>) => {
       if (!activeSession) return;
+      if (Object.keys(patch).length === 1 && typeof patch.autoSummaryEnabled === 'boolean') {
+        const committed = await setMagicTeaPartyAutoSummaryEnabled(activeSession.id, patch.autoSummaryEnabled);
+        if (!committed) return;
+        acceptCommittedSummary(committed);
+        const merge = (session: MagicTeaPartySession): MagicTeaPartySession => ({ ...session,
+          settings: { ...session.settings, autoSummaryEnabled: committed.settings.autoSummaryEnabled } });
+        setActiveSession(current => current?.id === committed.id ? merge(current) : current);
+        setSessions(current => current.map(session => session.id === committed.id ? merge(session) : session));
+        return;
+      }
       const next: MagicTeaPartySession = {
         ...activeSession,
         updatedAt: Date.now(),
@@ -714,7 +739,7 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
       };
       await persistSession(next);
     },
-    [activeSession, persistSession]
+    [activeSession, acceptCommittedSummary, persistSession]
   );
 
   const updateActiveSessionRoles = useCallback(
@@ -1235,6 +1260,8 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         summary,
         summarySections,
         summaryMeta,
+        settings: { ...activeSession.settings, autoSummaryEnabled: false },
+        autoSummaryState: undefined,
         forkedFrom: { sessionId: activeSession.id, messageId: targetMessage.id, createdAt: now },
         branchLabel,
       };
@@ -1400,6 +1427,7 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
     preferences,
     applyPreferencePatch,
     persistSession,
+    acceptCommittedSummary,
     createSession,
     deleteSession,
     bulkDeleteSessions,

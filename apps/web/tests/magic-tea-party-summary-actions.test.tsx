@@ -8,10 +8,12 @@ import type { MagicTeaPartyMessage, MagicTeaPartySession } from '@/lib/magic-tea
 import { DEFAULT_MAGIC_TEA_PARTY_PREFERENCES } from '@/lib/magic-tea-party/preferences';
 import { useMagicTeaPartyChat, type UseMagicTeaPartyChatResult } from '@/lib/magic-tea-party/useMagicTeaPartyChat';
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn(), headers: vi.fn(), persist: vi.fn(), shield: vi.fn(), globalError: vi.fn() }));
+const mocks = vi.hoisted(() => ({ compare: vi.fn(), read: vi.fn(), fetch: vi.fn(), headers: vi.fn(), persist: vi.fn(), shield: vi.fn(), globalError: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ authStorage: { getActivityHeaders: mocks.headers } }));
 vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntentLatch: () => ({ tryAcquire: vi.fn() }) }));
-vi.mock('@/lib/magic-tea-party/storage', () => ({ putMagicTeaPartyMessage: vi.fn(), deleteMagicTeaPartyMessages: vi.fn() }));
+vi.mock('@/lib/magic-tea-party/storage', async () => ({ ...(await vi.importActual('@/lib/magic-tea-party/storage')),
+  putMagicTeaPartyMessage: vi.fn(), deleteMagicTeaPartyMessages: vi.fn(),
+  compareAndPatchMagicTeaPartySummary: mocks.compare, getMagicTeaPartySession: mocks.read }));
 vi.mock('@/lib/shield-word-filter', () => ({ applyShieldWords: mocks.shield }));
 
 const session: MagicTeaPartySession = {
@@ -39,10 +41,11 @@ const reply = (request: RequestInit, text = '新摘要') => {
   return new Response(JSON.stringify({ summary: text, summaryInput }));
 };
 
+let storedSession: MagicTeaPartySession;
 let root: Root;
 let container: HTMLDivElement;
 let chat: UseMagicTeaPartyChatResult;
-let uiSummaryPending: Promise<void> | undefined;
+let uiSummaryPending: Promise<boolean> | undefined;
 function Harness({ current = session, seed = history, controls = false }: { current?: MagicTeaPartySession; seed?: MagicTeaPartyMessage[]; controls?: boolean }) {
   const [messages, setMessages] = useState(seed);
   const [draft, setDraft] = useState(current.draft ?? '');
@@ -67,12 +70,24 @@ function Harness({ current = session, seed = history, controls = false }: { curr
       isGenerating={value.isGenerating} hasMessages={messages.length > 0} />
   </> : null;
 }
-const render = (current = session, seed = history, controls = false) => act(async () => root.render(<Harness current={current} seed={seed} controls={controls} />));
+const render = (current = session, seed = history, controls = false) => {
+  storedSession = current;
+  return act(async () => root.render(<Harness current={current} seed={seed} controls={controls} />));
+};
 const button = (label: string) => [...container.querySelectorAll('button')].find((candidate) => candidate.textContent === label);
 
 beforeEach(async () => {
   for (const mock of Object.values(mocks)) mock.mockReset();
   mocks.headers.mockResolvedValue({}); mocks.persist.mockResolvedValue(undefined);
+  mocks.read.mockImplementation(async () => storedSession);
+  mocks.compare.mockImplementation(async ({ patch, isCurrent, signal }) => {
+    if (signal?.aborted || isCurrent?.() === false) return null;
+    const next = { ...storedSession, ...patch };
+    await mocks.persist(next);
+    if (signal?.aborted || isCurrent?.() === false) return null;
+    storedSession = next;
+    return next;
+  });
   mocks.shield.mockImplementation((text: string) => ({ filteredText: text }));
   mocks.fetch.mockImplementation(async (_url: string, request: RequestInit) => reply(request));
   vi.stubGlobal('fetch', mocks.fetch);
@@ -188,7 +203,7 @@ describe('Web manual summary projection and ownership', () => {
     mocks.fetch.mockImplementationOnce(async (_url: string, request: RequestInit) => {
       signal = request.signal; entered.resolve(); await release.promise; return reply(request, '新会话摘要');
     });
-    let pending!: Promise<void>;
+    let pending!: Promise<boolean>;
     await act(async () => { pending = chat.generateSummary(); await entered.promise; });
     await act(async () => { await oldClear(); await oldGenerate(); });
     expect(signal?.aborted).toBe(false); expect(chat.isGenerating).toBe(true); expect(chat.isSummarizing).toBe(true);
@@ -227,7 +242,7 @@ describe('Web manual summary projection and ownership', () => {
   it.each(['stop', 'switch'] as const)('dispatches nothing after %s during header preparation', async (outcome) => {
     const entered = deferred<void>(), release = deferred<Record<string, string>>();
     mocks.headers.mockImplementationOnce(async () => { entered.resolve(); return release.promise; });
-    let pending!: Promise<void>;
+    let pending!: Promise<boolean>;
     await act(async () => { pending = chat.generateSummary(); await entered.promise; });
     if (outcome === 'switch') await render({ ...session, id: 'other' });
     await act(async () => { if (outcome === 'stop') chat.stopGenerating(); release.resolve({}); await pending; });
@@ -238,7 +253,7 @@ describe('Web manual summary projection and ownership', () => {
   it.each(['stop', 'clear'] as const)('ignores a successful late response after %s', async (outcome) => {
     const entered = deferred<void>(), release = deferred<void>();
     mocks.fetch.mockImplementationOnce(async (_url: string, request: RequestInit) => { entered.resolve(); await release.promise; return reply(request); });
-    let pending!: Promise<void>;
+    let pending!: Promise<boolean>;
     await act(async () => { pending = chat.generateSummary(); await entered.promise; });
     await act(async () => { if (outcome === 'stop') chat.stopGenerating(); else await chat.clearSummary(); release.resolve(); await pending; });
     expect(mocks.persist).toHaveBeenCalledTimes(outcome === 'clear' ? 1 : 0);
@@ -253,7 +268,7 @@ describe('Web manual summary projection and ownership', () => {
       enteredOld.resolve(); await releaseOld.promise; return reply(request, '旧请求');
     });
     else mocks.persist.mockImplementationOnce(async () => { enteredOld.resolve(); await releaseOld.promise; });
-    let oldPending!: Promise<void>, newPending!: Promise<void>;
+    let oldPending!: Promise<boolean>, newPending!: Promise<boolean>;
     await act(async () => { oldPending = chat.generateSummary(); await enteredOld.promise; });
     await render({ ...session, id: 'other' });
     mocks.fetch.mockImplementationOnce(async (_url: string, request: RequestInit) => { enteredNew.resolve(); await releaseNew.promise; return reply(request, '新请求'); });

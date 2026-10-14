@@ -1,3 +1,4 @@
+import { withMagicTeaPartyCompletionEvidence } from '@/lib/magic-tea-party/stream-completion';
 import { z } from 'zod/v3';
 import { UserGenerationOverridesSchema } from '@/lib/ai/generation-settings/schemas';
 import { NextRequest } from 'next/server';
@@ -350,6 +351,7 @@ async function handler(req: NextRequest): Promise<Response> {
       },
       {
         ...providerOptions,
+        abortSignal: req.signal,
         telemetry: aiTelemetry,
         ...(reasoningBridge ? { onReasoningEvent: reasoningBridge.onReasoningEvent } : {}),
       }
@@ -357,10 +359,10 @@ async function handler(req: NextRequest): Promise<Response> {
     recordUserActivityFromRequest(req);
 
     if (wantsClientSse && reasoningBridge) {
-      return reasoningBridge.toResponse(streamResult.response, {
+      return withMagicTeaPartyCompletionEvidence(reasoningBridge.toResponse(streamResult.response, {
         usagePromise: streamResult.usagePromise,
         aiModel: aiTelemetry.model ?? customProvider.modelId.trim() ?? null,
-      });
+      }), streamResult.finishReasonPromise, req.signal);
     }
 
     return streamResult.response;

@@ -32,7 +32,7 @@ vi.mock('@/lib/ai/constants', () => ({
 vi.mock('@/lib/ai/availability', () => ({ buildChannelContextFromResolved: () => undefined }));
 
 beforeEach(() => {
-  transport.stream.mockReset().mockImplementation(async () => ({ response: new Response('合成模型输出') }));
+  transport.stream.mockReset().mockImplementation(async () => ({ response: new Response('合成模型输出'), finishReasonPromise: Promise.resolve('stop') }));
   transport.structured.mockReset().mockResolvedValue({ updates: [{ roleId: 'r1', characterName: '巡夜人', currentStateSummary: '已换上干衣' }] });
   transport.safety.mockReset().mockResolvedValue(null);
   transport.activity.mockReset();
@@ -82,7 +82,7 @@ const legacySummaryPrefix = `你是“魔法茶会”的摘要助手。你的任
 describe('魔法茶会 Web 兼容路径回用共享实现', () => {
   it('所有旧路径导出与共享公共 API 为同一引用', () => {
     const legacy = { ...webBudget, ...webHistory, ...webJsonl, ...webLimits, ...webNotice, ...webPresets, ...webPrompts, ...webPreview, ...webInstruction, ...webMappers };
-    expect([...Object.keys(legacy), 'projectMagicTeaPartySummaryInput', 'matchesMagicTeaPartySummaryInput'].sort()).toEqual(Object.keys(shared).sort());
+    expect([...Object.keys(legacy), 'projectMagicTeaPartySummaryInput', 'matchesMagicTeaPartySummaryInput', 'createMagicTeaPartyAutoSummaryScan', 'appendMagicTeaPartyAutoSummaryMessage', 'planMagicTeaPartyAutoSummary', 'resolveMagicTeaPartyAutoSummaryBudget', 'projectMagicTeaPartyAutoSummaryInput'].sort()).toEqual(Object.keys(shared).sort());
     for (const name of Object.keys(legacy) as Array<keyof typeof legacy>) expect(legacy[name]).toBe(shared[name]);
   });
 
@@ -202,11 +202,35 @@ describe('魔法茶会 Web 兼容路径回用共享实现', () => {
   });
 
   it('空白输出不会返回成功摘要或输入核验信息', async () => {
-    transport.stream.mockResolvedValueOnce({ response: new Response(' \n ') });
+    transport.stream.mockResolvedValueOnce({ response: new Response(' \n '), finishReasonPromise: Promise.resolve('stop') });
     const response = await post(summarizeHandler, { sessionId: 'tea', messages, customProvider });
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: '生成失败', message: '模型返回空内容' });
     expect(transport.stream).toHaveBeenCalledOnce();
+  });
+
+  it.each(['length', 'unknown', undefined])('summary rejects non-normal finish %s despite nonempty text', async (reason) => {
+    transport.stream.mockResolvedValueOnce({ response: new Response('不可提交'), finishReasonPromise: Promise.resolve(reason) });
+    const response = await post(summarizeHandler, { sessionId: 'tea', messages, customProvider });
+    expect(response.status).toBe(500);
+    expect(await response.json()).not.toHaveProperty('summary');
+    expect(transport.stream).toHaveBeenCalledOnce();
+    expect(transport.stream.mock.calls[0][1].abortSignal).toBeInstanceOf(AbortSignal);
+    expect(transport.stream.mock.calls[0][1].providerOverride.retryCount).toBe(1);
+  });
+
+  it('summary abort and rejected SDK completion cannot publish successful text', async () => {
+    const controller = new AbortController();
+    transport.stream.mockImplementationOnce(async (_input, options) => {
+      expect(options.abortSignal.aborted).toBe(false);
+      controller.abort();
+      return { response: new Response('迟到正文'), finishReasonPromise: Promise.reject(new Error('cancelled')) };
+    });
+    const response = await summarizeHandler(new Request('https://example.test/api/magic-tea-party', {
+      method: 'POST', body: JSON.stringify({ sessionId: 'tea', messages, customProvider }), signal: controller.signal,
+    }) as Parameters<typeof summarizeHandler>[0]);
+    expect(response.status).toBe(500);
+    expect(await response.json()).not.toHaveProperty('summary');
   });
 
   it('真实 generate-updates handler 向结构化模型端口传递共享 builder 引用', async () => {

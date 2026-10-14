@@ -102,7 +102,7 @@ export function MagicTeaPartyGlobalSettingsPanel(props: MagicTeaPartyGlobalSetti
 
       {collapsed ? (
         <div className="space-y-1 text-xs text-gray-500">
-          <div>{enableSummary ? '自动摘要：已开启' : '自动摘要：已关闭'}</div>
+          <div>{enableSummary ? '随剧情输出摘要：已开启' : '随剧情输出摘要：已关闭'}</div>
           <div>
             缓存占用：{cacheStats.totalCount} 张 · {formatMagicTeaPartyBytes(cacheStats.totalBytes)}
           </div>
@@ -114,9 +114,9 @@ export function MagicTeaPartyGlobalSettingsPanel(props: MagicTeaPartyGlobalSetti
       ) : (
         <>
           <div className="space-y-3">
-            <div className="text-xs font-semibold text-gray-600">自动摘要</div>
+            <div className="text-xs font-semibold text-gray-600">合并输出摘要</div>
             <label className="flex items-center justify-between gap-3 text-xs text-gray-700">
-              <span>启用自动摘要</span>
+              <span>允许随剧情输出摘要</span>
               <input
                 type="checkbox"
                 checked={Boolean(enableSummary)}
@@ -128,7 +128,7 @@ export function MagicTeaPartyGlobalSettingsPanel(props: MagicTeaPartyGlobalSetti
               />
             </label>
             <div className="text-[11px] text-gray-500">
-              自动摘要会在上下文接近上限或连续丢弃过多历史时触发，关闭后仅保留手动摘要。
+              控制剧情请求中的摘要输出计划；独立的“自动更新会话摘要”开关位于会话摘要面板。
             </div>
           </div>
 

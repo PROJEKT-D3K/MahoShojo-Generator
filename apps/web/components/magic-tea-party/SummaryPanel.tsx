@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MagicTeaPartySummaryBody } from '@mahoshojo/ui-web/magic-tea-party';
 
 import { ErrorMessage } from '@/components/ErrorMessage';
 
+import type { MagicTeaPartySummaryPatch } from '@/lib/magic-tea-party/storage';
 import type { MagicTeaPartySession, MagicTeaPartyUpdateDraft } from '@/lib/magic-tea-party/types';
 
 type MagicTeaPartySummaryPanelProps = {
@@ -11,9 +12,12 @@ type MagicTeaPartySummaryPanelProps = {
   isSummarizing: boolean;
   summaryError: string | null;
   hasMessages: boolean;
-  onGenerateSummary: () => void;
-  onClearSummary: () => void;
-  onPersistSession: (session: MagicTeaPartySession) => void | Promise<void>;
+  onGenerateSummary: () => Promise<boolean>;
+  onClearSummary: () => Promise<boolean>;
+  onSaveSummary: (patch: MagicTeaPartySummaryPatch) => Promise<boolean>;
+  onSummaryIntent: () => void;
+  onStopSummary: () => void;
+  onAutoSummaryEnabledChange: (enabled: boolean) => void;
   updateDrafts: MagicTeaPartyUpdateDraft[] | null;
   updateRangeSize: number;
   isGeneratingUpdates: boolean;
@@ -41,7 +45,10 @@ export function MagicTeaPartySummaryPanel(props: MagicTeaPartySummaryPanelProps)
     hasMessages,
     onGenerateSummary,
     onClearSummary,
-    onPersistSession,
+    onSaveSummary,
+    onSummaryIntent,
+    onStopSummary,
+    onAutoSummaryEnabledChange,
     updateDrafts,
     updateRangeSize,
     isGeneratingUpdates,
@@ -56,17 +63,35 @@ export function MagicTeaPartySummaryPanel(props: MagicTeaPartySummaryPanelProps)
     onRollbackUpdates,
   } = props;
 
-  const disableActions = !activeSession || isGenerating || isSummarizing;
+  const disableActions = !activeSession || isGenerating;
   const canGenerate = !disableActions && hasMessages;
   const writeArenaHistory = Boolean(activeSession?.settings.writeArenaHistory);
   const writeCurrentState = Boolean(activeSession?.settings.writeCurrentState);
   const hasWriteEnabled = writeArenaHistory || writeCurrentState;
   const hasDrafts = Boolean(updateDrafts && updateDrafts.length > 0);
   const canRollback = Boolean(updateSnapshot && !updateSnapshot.revertedAt);
-  const summarySections = activeSession?.summarySections ?? {};
+  const [draft, setDraft] = useState({ sessionId: activeSession?.id, text: activeSession?.summary ?? '',
+    sections: activeSession?.summarySections, dirty: false });
+  const draftsRef = useRef(new Map<string, typeof draft>());
+  if (draft.sessionId) {
+    if (draft.dirty) draftsRef.current.set(draft.sessionId, draft);
+    else draftsRef.current.delete(draft.sessionId);
+  }
+  const savingRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  useEffect(() => {
+    setDraft(current => current.sessionId !== activeSession?.id
+      ? draftsRef.current.get(activeSession?.id ?? '') ?? { sessionId: activeSession?.id, text: activeSession?.summary ?? '', sections: activeSession?.summarySections, dirty: false }
+      : !current.dirty ? { sessionId: activeSession?.id, text: activeSession?.summary ?? '', sections: activeSession?.summarySections, dirty: false } : current);
+  }, [activeSession?.id, activeSession?.summary, activeSession?.summarySections, draft.dirty]);
+  const currentDraft = draft.sessionId === activeSession?.id ? draft : draftsRef.current.get(activeSession?.id ?? '') ?? {
+    sessionId: activeSession?.id, text: activeSession?.summary ?? '', sections: activeSession?.summarySections, dirty: false };
+  const summarySections = currentDraft.sections ?? {};
   const sectionEntries = Object.entries(summarySections);
   const hasSections = sectionEntries.length > 0;
-  const disableSummaryEditing = !activeSession || isSummarizing;
+  const disableSummaryEditing = !activeSession || (isSummarizing && isGenerating);
   const [collapsed, setCollapsed] = useState(false);
 
   const summaryUpdatedAt = activeSession?.summaryMeta?.updatedAt;
@@ -97,14 +122,31 @@ export function MagicTeaPartySummaryPanel(props: MagicTeaPartySummaryPanelProps)
 
   const persistSummarySections = (entries: Array<[string, string]>): void => {
     if (!activeSession) return;
-    const now = Date.now();
-    const nextSections = buildSectionsRecord(entries);
-    void onPersistSession({
-      ...activeSession,
-      summarySections: nextSections,
-      summaryMeta: { ...(activeSession.summaryMeta ?? {}), updatedAt: now },
-      updatedAt: now,
-    });
+    onSummaryIntent();
+    setDraft({ ...currentDraft, sections: buildSectionsRecord(entries), dirty: true });
+  };
+
+  const saveDraft = async () => {
+    if (!activeSession || !currentDraft.dirty || savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    const submitted = currentDraft;
+    const { coverage: _coverage, tokenCount: _tokenCount, ...metadata } = activeSession.summaryMeta ?? {};
+    try {
+      const saved = await onSaveSummary({ summary: submitted.text.trim() || undefined,
+      summarySections: submitted.sections, summaryMeta: { ...metadata, updatedAt: Date.now() } });
+      if (saved && draftRef.current === submitted) setDraft(current => ({ ...current, dirty: false }));
+    } finally { savingRef.current = false; setIsSaving(false); }
+  };
+
+  const replaceDraft = async (action: () => Promise<boolean>) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    const submitted = currentDraft;
+    try {
+      if (await action() && draftRef.current === submitted) setDraft(current => ({ ...current, dirty: false }));
+    } finally { savingRef.current = false; setIsSaving(false); }
   };
 
   const handleAddSection = () => {
@@ -129,20 +171,20 @@ export function MagicTeaPartySummaryPanel(props: MagicTeaPartySummaryPanelProps)
   };
 
   return (
-    <MagicTeaPartySummaryBody active={Boolean(activeSession)} summary={activeSession?.summary ?? ''} updatedAt={summaryUpdatedAt}
-      disabled={disableActions} editingDisabled={disableSummaryEditing} isSummarizing={isSummarizing} hasMessages={hasMessages}
-      error={summaryError} description="用于长对话压缩（仅保存在本地浏览器）。生成摘要会消耗额外 Token。后续剧情最多读取摘要前 10000 字，保存正文不截断。"
-      collapsed={collapsed} onCollapsedChange={setCollapsed} onGenerate={onGenerateSummary} onClear={onClearSummary}
+    <MagicTeaPartySummaryBody active={Boolean(activeSession)} summary={currentDraft.text} updatedAt={summaryUpdatedAt}
+      disabled={disableActions || isSaving} editingDisabled={disableSummaryEditing} isSummarizing={isSummarizing} hasMessages={hasMessages}
+      error={summaryError} description="用于长对话压缩（仅保存在本地浏览器）。生成摘要会消耗额外 Token。后续剧情最多读取摘要前 10000 字，保存正文不截断。编辑后请点击“保存摘要”；未保存草稿可在本页切换会话后继续编辑。"
+      autoSummaryEnabled={activeSession?.settings.autoSummaryEnabled === true} onAutoSummaryEnabledChange={onAutoSummaryEnabledChange}
+      onSave={() => void saveDraft()} dirty={currentDraft.dirty && !isSaving}
+      collapsed={collapsed} onCollapsedChange={setCollapsed} onStopSummary={onStopSummary} onGenerate={() => void replaceDraft(onGenerateSummary)} onClear={() => void replaceDraft(onClearSummary)}
       collapsedDetails={<> · 分段 {sectionEntries.length} · 更新草案 {updateDrafts?.length ?? 0}{updateError ? <div className="text-xs text-red-600">更新错误：{updateError}</div> : null}</>}
       renderError={message => <ErrorMessage message={message} className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" linkClassName="text-red-700 underline underline-offset-2 hover:opacity-95" />}
       onChange={value => {
         if (!activeSession) return;
-        const trimmed = value.trim(); const now = Date.now();
-        const { coverage: _coverage, tokenCount: _tokenCount, ...summaryMeta } = activeSession.summaryMeta ?? {};
-        void onPersistSession({ ...activeSession, summary: trimmed || undefined,
-          summarySections: trimmed ? activeSession.summarySections : undefined,
-          summaryMeta: trimmed ? { ...summaryMeta, updatedAt: now } : undefined, updatedAt: now });
+        onSummaryIntent();
+        setDraft({ ...currentDraft, text: value, dirty: true });
       }}>
+          {currentDraft.dirty ? <div className="text-xs text-amber-700">有未保存的摘要草稿。生成或清空成功后会替换草稿；失败时保留。</div> : null}
           <div className="rounded-lg border border-pink-100 bg-pink-50/60 p-3 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-semibold text-pink-800">结构化摘要</div>
