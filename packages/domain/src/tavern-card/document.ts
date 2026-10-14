@@ -1,5 +1,6 @@
 import { SafeJsonValueSchema, type JsonValue } from '@mahoshojo/contracts/json-value';
 import { GENERAL_CHARACTER_TEMPLATE_ID, GENERAL_SCENARIO_TEMPLATE_ID } from '../data-cards';
+import { buildTavernCanshouCard, TAVERN_CANSHOU_TEMPLATE_ID } from './canshou';
 import { buildGeneralMarkdown, buildTavernGeneralScenarioCard } from './general';
 import { MAX_TAVERN_FILE_BYTES, MAX_TAVERN_TEXT_BYTES } from './limits';
 import { isLikelyTavernCard, normalizeTavernCard } from './normalize';
@@ -33,6 +34,12 @@ export function isTavernGeneralProjection(input: unknown): input is Record<strin
     && typeof input.content === 'string' && !isLikelyTavernCard(input);
 }
 
+export function isTavernCanshouProjection(input: unknown): input is Record<string, unknown> {
+  return record(input) && input.templateId === TAVERN_CANSHOU_TEMPLATE_ID
+    && ['name', 'appearance', 'coreEmotion', 'researcherNotes'].every((key) => typeof input[key] === 'string')
+    && !isLikelyTavernCard(input);
+}
+
 export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json'): TavernLocalDocument {
   if (bytes.length > MAX_TAVERN_FILE_BYTES) throw new Error('文件超过 32 MiB 上限。');
   if (format === 'png') {
@@ -44,13 +51,13 @@ export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json
   if (bytes.length > MAX_TAVERN_TEXT_BYTES) throw new Error('酒馆 JSON 超过 4 MiB 上限。');
   const input: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   // Only our explicitly preserved original is recoverable. Do not pretend edits to a converted
-  // general card have been mapped back into the original Tavern fields.
-  const archived = isTavernGeneralProjection(input) && record(input._tavern) ? input._tavern.raw : undefined;
+  // projected card have been mapped back into the original Tavern fields.
+  const archived = (isTavernGeneralProjection(input) || isTavernCanshouProjection(input)) && record(input._tavern) ? input._tavern.raw : undefined;
   const raw = validateTavernRaw(archived ?? input);
   return {
     candidates: [{ keyword: 'json', chunkType: 'tEXt', parseMethod: 'json', parsed: raw }],
     selectedIndex: 0,
-    warnings: archived !== undefined ? ['已读取通用卡保留的酒馆原件；通用卡正文后续修改不会合并回原件。'] : [],
+    warnings: archived !== undefined ? ['已读取转换卡保留的酒馆原件；转换卡正文后续修改不会合并回原件。'] : [],
   };
 }
 
@@ -68,7 +75,7 @@ function prepareProjection(candidate: TavernCardCandidate, preference?: TavernPl
 export function convertTavernToGeneralCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
   const { raw, normalized } = prepareProjection(candidate, preference);
   return {
-    templateId: GENERAL_CHARACTER_TEMPLATE_ID,
+    templateId: GENERAL_CHARACTER_TEMPLATE_ID as typeof GENERAL_CHARACTER_TEMPLATE_ID,
     name: normalized.name,
     content: buildGeneralMarkdown(normalized),
     _tavern: { raw },
@@ -78,4 +85,9 @@ export function convertTavernToGeneralCard(candidate: TavernCardCandidate, prefe
 export function convertTavernToGeneralScenarioCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
   const { raw, normalized } = prepareProjection(candidate, preference);
   return { ...buildTavernGeneralScenarioCard(normalized), _tavern: { raw } };
+}
+
+export function convertTavernToCanshouCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
+  const { raw, normalized } = prepareProjection(candidate, preference);
+  return { ...buildTavernCanshouCard(normalized), _tavern: { raw } };
 }

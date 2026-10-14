@@ -9,7 +9,7 @@ const labels: Record<DataCardTemplate, string> = {
   scenario: '情景（结构化 JSON）',
 };
 export const TAVERN_WEB_IMPORT_TEMPLATES = ['general', 'general-scenario', 'magical-girl', 'canshou', 'scenario'] as const;
-export const TAVERN_LOCAL_IMPORT_TEMPLATES = ['general', 'general-scenario'] as const;
+export const TAVERN_LOCAL_IMPORT_TEMPLATES = ['general', 'general-scenario', 'canshou'] as const;
 
 /** Hosts explicitly declare supported templates; this control never launches conversion. */
 export function TavernTemplateSelector<T extends DataCardTemplate>({ value, templates, disabled, onChange }: {

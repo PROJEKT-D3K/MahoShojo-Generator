@@ -1,7 +1,7 @@
 import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
-import { TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernGeneralProjection } from '@mahoshojo/ui-web/tavern';
-import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard } from '@mahoshojo/domain/tavern-card';
+import { TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
+import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard, buildTavernCanshouCard } from '@mahoshojo/domain/tavern-card';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -688,19 +688,8 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
       return output;
     }
 
-    const base = createBlankDataCard('canshou') as CanshouData;
     const output: WithTavern<CanshouData> = {
-      ...base,
-      name: normalizedForConvert.name,
-      appearance: normalizedForConvert.description ?? base.appearance ?? '',
-      coreEmotion: normalizedForConvert.personality ?? base.coreEmotion ?? '',
-      researcherNotes: [
-        base.researcherNotes ? String(base.researcherNotes) : '',
-        normalizedForConvert.scenario ? `【场景】\n${normalizedForConvert.scenario}` : '',
-        normalizedForConvert.mesExample ? `【对话样例】\n${normalizedForConvert.mesExample}` : '',
-      ]
-        .filter((part) => part.trim())
-        .join('\n\n'),
+      ...buildTavernCanshouCard(normalizedForConvert),
       _tavern: tavernPayload,
     };
     return output;
@@ -1156,8 +1145,8 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                   />
                 )}
 
-                {outputDataCard && state.convertMode === 'rules' && (state.targetTemplate === 'general' || state.targetTemplate === 'general-scenario') ? (
-                  <TavernLocalProjection data={outputDataCard as TavernGeneralProjection} hideExport disabled={state.step === 'parsing' || state.step === 'converting'}
+                {outputDataCard && state.convertMode === 'rules' && (state.targetTemplate === 'general' || state.targetTemplate === 'general-scenario' || state.targetTemplate === 'canshou') ? (
+                  <TavernLocalProjection data={outputDataCard as TavernProjection} hideExport disabled={state.step === 'parsing' || state.step === 'converting'}
                     exportFile={({ name, bytes, mimeType }) => { downloadBlob(new Blob([new Uint8Array(bytes)], { type: mimeType }), name); }}
                     saveCard={(data) => saveImportedUnsignedCard(getLocalCardRepository(), data, getTavernProjectionTitle(data), getTavernProjectionCardType(data))} />
                 ) : null}

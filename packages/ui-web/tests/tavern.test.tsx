@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernCandidateSelector, TavernFileInput, TavernLocalProjection, TavernOriginalExport, TavernLocalSources, useTavernSourceSelection, readTavernFile } from '../src/tavern';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
-import { convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_FILE_BYTES, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
+import { convertTavernToCanshouCard, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_FILE_BYTES, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => { (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true; container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container); });
 afterEach(() => { act(() => root.unmount()); container.remove(); });
@@ -46,6 +46,25 @@ describe('shared Tavern original journey controls', () => {
     await act(async () => container.querySelector('button')!.click());
     expect(exportFile.mock.calls[0][0].name).toBe('未知_角色.json');
     expect(JSON.parse(new TextDecoder().decode(exportFile.mock.calls[0][0].bytes))).toEqual(scenario);
+  });
+  it('isolates late saves across all three projections and describes the Canshou loss accurately', async () => {
+    let resolve!: (result: 'saved') => void;
+    const save = vi.fn(() => new Promise<'saved'>((done) => { resolve = done; })); const exportFile = vi.fn();
+    const projections = [convertTavernToGeneralCard(candidate), convertTavernToGeneralScenarioCard(candidate), convertTavernToCanshouCard(candidate)];
+    for (let index = 0; index < projections.length; index++) {
+      const data = projections[index]; const next = projections[(index + 1) % projections.length];
+      act(() => root.render(<TavernLocalProjection data={data} exportFile={exportFile} saveCard={save} />));
+      act(() => container.querySelectorAll('button')[1].click());
+      act(() => root.render(<TavernLocalProjection data={next} exportFile={exportFile} saveCard={save} />));
+      await act(async () => resolve('saved')); expect(container.textContent).not.toContain('已保存到本地卡库');
+    }
+    const data = projections[2];
+    act(() => root.render(<TavernLocalProjection data={data} exportFile={exportFile} saveCard={save} />));
+    expect(container.textContent).toContain('残兽（保守规则映射）'); expect(container.textContent).toContain('开场白与标签不进入残兽正文');
+    expect(container.textContent).not.toContain('正文仅映射描述、性格、场景、开场白');
+    await act(async () => container.querySelector('button')!.click());
+    expect(JSON.parse(new TextDecoder().decode(exportFile.mock.calls[0][0].bytes))).toEqual(data);
+    expect(exportFile.mock.calls[0][0].name).toBe('未知_角色.json');
   });
   it('reads retained scenario originals but keeps the character export picker character-only', async () => {
     const character = { id: 'character', cardType: 'character', title: '角色', data: convertTavernToGeneralCard(candidate) };

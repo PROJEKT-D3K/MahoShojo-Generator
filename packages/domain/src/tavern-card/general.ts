@@ -84,7 +84,7 @@ export const buildGeneralScenarioMarkdown = (normalized: TavernCardNormalized): 
 
 /** Original Web rule mapping, without preservation or host-side save effects. */
 export const buildTavernGeneralScenarioCard = (normalized: TavernCardNormalized) => ({
-  templateId: GENERAL_SCENARIO_TEMPLATE_ID,
+  templateId: GENERAL_SCENARIO_TEMPLATE_ID as typeof GENERAL_SCENARIO_TEMPLATE_ID,
   title: normalized.name || '未命名情景',
   content: buildGeneralScenarioMarkdown(normalized),
 });

@@ -1,10 +1,10 @@
 import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter } from '@tanstack/react-router';
-import { convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, normalizeTavernCard, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
+import { convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
 import { TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
 import { GeneralScenarioCard } from '@mahoshojo/ui-web/scenario';
-import { GeneralCharacterCard } from '@mahoshojo/ui-web/character-card';
+import { CanshouCard, GeneralCharacterCard } from '@mahoshojo/ui-web/character-card';
 import { ProductFooter } from '@mahoshojo/ui-web/shell';
 import { IpcLocalCardRepository } from '../platform/local-card-bridge';
 import { exportTavernFile, getDesktopTavernBase, saveDesktopTavernCard } from '../features/tavern/host';
@@ -25,7 +25,7 @@ export function DesktopTavern() {
   const [result, setResult] = useState<TavernParseResult | null>(null);
   const [basePng, setBasePng] = useState<Uint8Array>();
   const [index, setIndex] = useState(0);
-  const [template, setTemplate] = useState<'general' | 'general-scenario'>('general');
+  const [template, setTemplate] = useState<typeof TAVERN_LOCAL_IMPORT_TEMPLATES[number]>('general');
   const [error, setError] = useState('');
   const [reading, setReading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -47,7 +47,7 @@ export function DesktopTavern() {
   const candidate = result?.candidates[index];
   const normalized = useMemo(() => candidate ? normalizeTavernCard(candidate).normalized : null, [candidate]);
   const conversion = useMemo(() => {
-    try { return { projection: candidate ? (template === 'general-scenario' ? convertTavernToGeneralScenarioCard(candidate, preference) : convertTavernToGeneralCard(candidate, preference)) : null, error: null }; }
+    try { return { projection: candidate ? (template === 'canshou' ? convertTavernToCanshouCard(candidate, preference) : template === 'general-scenario' ? convertTavernToGeneralScenarioCard(candidate, preference) : convertTavernToGeneralCard(candidate, preference)) : null, error: null }; }
     catch (cause) { return { projection: null, error: cause instanceof Error ? cause.message : '转换失败，原件仍保留。' }; }
   }, [candidate, preference, template]);
   const projection = conversion.projection;
@@ -70,7 +70,7 @@ export function DesktopTavern() {
             busy.current = true; setSaving(true);
             try { return await saveDesktopTavernCard(repository, data); } finally { busy.current = false; setSaving(false); }
           }} />
-          {'title' in projection ? <GeneralScenarioCard scenario={projection} /> : <GeneralCharacterCard general={projection} />}</> : null}</div>
+          {projection.templateId === TAVERN_CANSHOU_TEMPLATE_ID ? <CanshouCard canshou={projection} /> : projection.templateId === '通用情景' ? <GeneralScenarioCard scenario={projection} /> : <GeneralCharacterCard general={projection} />}</> : null}</div>
         <div className="space-y-4"><TavernCardPreview normalized={normalized} warnings={result.meta.warnings} />
           <TavernOriginalExport disabled={saving || reading} candidate={candidate} basePngBytes={basePng} exportFile={exportTavernFile} /></div>
       </div> : null}

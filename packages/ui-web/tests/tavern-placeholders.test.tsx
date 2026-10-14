@@ -3,7 +3,7 @@ import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TavernLocalProjection, TavernPlaceholderFields, useTavernPlaceholderPreference, TAVERN_PLACEHOLDER_PREFERENCE_KEY } from '../src/tavern';
-import { MAX_TAVERN_TEXT_BYTES } from '@mahoshojo/domain/tavern-card';
+import { MAX_TAVERN_TEXT_BYTES, buildTavernCanshouCard } from '@mahoshojo/domain/tavern-card';
 
 let root: Root; let container: HTMLDivElement;
 const key = 'mahoshojo.tavern.import.placeholder.v1';
@@ -57,15 +57,15 @@ describe('shared Tavern placeholder preference owner and controls', () => {
     act(() => root.render(<div />)); act(() => root.render(<Harness disabled />));
     expect(field('用户占位符替换文本').value).toBe('remember'); expect([...container.querySelectorAll('input')].every((input) => input.disabled)).toBe(true);
   });
-  it.each(['character', 'scenario'] as const)('enforces the exact final %s JSON UTF-8 budget including raw, Markdown and escapes', async (kind) => {
+  it.each(['character', 'scenario', 'canshou'] as const)('enforces the exact final %s JSON UTF-8 budget including raw, Markdown and escapes', async (kind) => {
     const save = vi.fn(async () => 'saved' as const); const exportFile = vi.fn();
-    const data = { ...(kind === 'scenario' ? { templateId: '通用情景', title: '中😀' } : { templateId: '通用角色', name: '中😀' }), content: '# 角色：中😀\n\\\"\u0000', _tavern: { raw: { name: '{{char}}', description: '原件', padding: '' } } };
+    const data = { ...(kind === 'canshou' ? buildTavernCanshouCard({ name: '中😀' }) : kind === 'scenario' ? { templateId: '通用情景' as const, title: '中😀', content: '# 情景：中😀\n\\\"\u0000' } : { templateId: '通用角色' as const, name: '中😀', content: '# 角色：中😀\n\\\"\u0000' }), _tavern: { raw: { name: '{{char}}', description: '原件', padding: '' } } };
     const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
     data._tavern.raw.padding = 'a'.repeat(MAX_TAVERN_TEXT_BYTES - size(data));
     expect(size(data)).toBe(MAX_TAVERN_TEXT_BYTES);
     act(() => root.render(<TavernLocalProjection data={data} saveCard={save} exportFile={exportFile} />));
     await act(async () => container.querySelector('button')!.click()); expect(exportFile).toHaveBeenCalledTimes(1); expect(exportFile.mock.calls[0][0].bytes.length).toBe(MAX_TAVERN_TEXT_BYTES);
-    const oversized = { ...data, content: data.content + '\n' };
+    const oversized = { ...data, _tavern: { raw: { ...data._tavern.raw, padding: data._tavern.raw.padding + '\n' } } };
     expect(size(oversized)).toBe(MAX_TAVERN_TEXT_BYTES + 2);
     act(() => root.render(<TavernLocalProjection data={oversized} saveCard={save} exportFile={exportFile} />));
     await act(async () => container.querySelector('button')!.click());

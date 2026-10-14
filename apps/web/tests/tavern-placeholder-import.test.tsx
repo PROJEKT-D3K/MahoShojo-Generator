@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Blob as NodeBlob } from 'node:buffer';
-import { convertTavernToGeneralScenarioCard, readTavernLocalDocument } from '@mahoshojo/domain/tavern-card';
+import { convertTavernToCanshouCard, convertTavernToGeneralScenarioCard, readTavernLocalDocument } from '@mahoshojo/domain/tavern-card';
 import { TavernImportPanel } from '@/components/tavern/TavernImportPanel';
 
 const mocks = vi.hoisted(() => ({ download: vi.fn<(blob: Blob, name: string) => void>(), save: vi.fn(async () => 'saved'), projection: null as Record<string, unknown> | null }));
@@ -13,7 +13,7 @@ vi.mock('@/components/SaveToCloudButton', () => ({ default: () => null }));
 vi.mock('@/components/GeneralCharacterCard', () => ({ default: ({ general }: { general: Record<string, unknown> }) => { mocks.projection = general; return <pre data-projection>{String(general.content)}</pre>; } }));
 vi.mock('@/components/GeneralScenarioCard', () => ({ default: ({ scenario }: { scenario: Record<string, unknown> }) => { mocks.projection = scenario; return <pre data-projection>{String(scenario.content)}</pre>; } }));
 vi.mock('@/components/MagicalGirlCard', () => ({ default: () => null }));
-vi.mock('@/components/CanshouCard', () => ({ default: () => null }));
+vi.mock('@/components/CanshouCard', () => ({ default: ({ canshou }: { canshou: Record<string, unknown> }) => { mocks.projection = canshou; return <pre data-projection>{String(canshou.appearance)}</pre>; } }));
 vi.mock('@/lib/useAuth', () => ({ useAuth: () => ({ user: null }) }));
 vi.mock('@/lib/cooldown', () => ({ useCooldown: () => ({ isCooldown: false, remainingTime: 0, startCooldown: vi.fn() }) }));
 vi.mock('@/lib/app-router-adapter', () => ({ useAppRouterAdapter: () => ({ push: vi.fn() }) }));
@@ -49,6 +49,25 @@ describe('Web Tavern real shared placeholder import', () => {
     await click('生成角色卡'); expect(mocks.projection?.content).toContain('Alice Alice');
     await act(async () => field('替换占位符').click()); await click('生成角色卡'); expect(mocks.projection?.content).toContain('{{user}} {{char}}');
     await upload({ bad: true }); expect(container.querySelector('[data-projection]')?.textContent).toContain('{{user}} {{char}}'); expect(field('替换占位符')).not.toBeNull();
+  });
+  it('shares the Desktop conservative Canshou mapping with optional raw and character local save', async () => {
+    await act(async () => root.render(<TavernImportPanel />));
+    const raw = { name: '残兽', description: '外观', personality: '情感', scenario: '场景', mes_example: '样例', first_mes: '不映射开场', tags: ['不映射标签'], extensions: { script: 'inert' } };
+    await upload(raw);
+    const selector = [...container.querySelectorAll('select')].find((select) => [...select.options].some((option) => option.value === 'canshou'))!;
+    await act(async () => { selector.value = 'canshou'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    await click('生成角色卡'); await click('下载数据卡 JSON');
+    const withoutRaw = JSON.parse(await mocks.download.mock.calls[0][0].text());
+    const desktop = convertTavernToCanshouCard(readTavernLocalDocument(new TextEncoder().encode(JSON.stringify(raw)), 'json').candidates[0]);
+    const { _tavern, ...body } = desktop;
+    expect(withoutRaw).toMatchObject(body); expect(withoutRaw._tavern).not.toHaveProperty('raw');
+    expect(container.textContent).toContain('开场白与标签不进入残兽正文'); expect(container.textContent).toContain('未保留完整原件');
+    await click('保存残兽卡到本地库'); expect(mocks.save).toHaveBeenNthCalledWith(1, expect.anything(), withoutRaw, '残兽', 'character');
+    await act(async () => checkbox('同时保存').click()); await click('生成角色卡'); await click('下载数据卡 JSON');
+    const withRaw = JSON.parse(await mocks.download.mock.calls[1][0].text());
+    expect(withRaw).toMatchObject(desktop); expect(_tavern.raw).toEqual(raw);
+    expect(readTavernLocalDocument(new TextEncoder().encode(JSON.stringify(withRaw)), 'json').candidates[0].parsed).toEqual(raw);
+    await click('保存残兽卡到本地库'); expect(mocks.save).toHaveBeenNthCalledWith(2, expect.anything(), withRaw, '残兽', 'character');
   });
   it('keeps all five templates and shares the Desktop scenario mapping without changing keepRaw', async () => {
     await act(async () => root.render(<TavernImportPanel />));

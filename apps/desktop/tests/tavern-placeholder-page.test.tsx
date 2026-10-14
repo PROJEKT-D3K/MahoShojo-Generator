@@ -13,7 +13,7 @@ vi.mock('../src/features/external-links/external-links-provider', () => ({ useEx
 vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: class {} }));
 vi.mock('../src/features/tavern/host', () => ({ saveDesktopTavernCard: mocks.save, exportTavernFile: mocks.export, getDesktopTavernBase: vi.fn() }));
 vi.mock('@mahoshojo/ui-web/shell', () => ({ ProductFooter: () => null }));
-vi.mock('@mahoshojo/ui-web/character-card', () => ({ GeneralCharacterCard: ({ general }: { general: { name: string; content: string } }) => <pre data-projection-name={general.name}>{general.content}</pre> }));
+vi.mock('@mahoshojo/ui-web/character-card', () => ({ CanshouCard: ({ canshou }: { canshou: { name: string; appearance: string; coreEmotion: string; researcherNotes: string } }) => <pre data-canshou-name={canshou.name}>{canshou.appearance}|{canshou.coreEmotion}|{canshou.researcherNotes}</pre>, GeneralCharacterCard: ({ general }: { general: { name: string; content: string } }) => <pre data-projection-name={general.name}>{general.content}</pre> }));
 
 vi.mock('@mahoshojo/ui-web/scenario', () => ({ GeneralScenarioCard: ({ scenario }: { scenario: { title: string; content: string } }) => <pre data-scenario-title={scenario.title}>{scenario.content}</pre> }));
 
@@ -48,12 +48,32 @@ describe('Desktop Tavern real placeholder journey', () => {
     await act(async () => field('替换占位符').click()); expect(projected()).toContain('{{user}} 对 {{char}}');
     await upload({ name: 'Bob', description: '{{char}}' }); await act(async () => field('替换占位符').click()); expect(projected()).toContain('Bob'); expect(projected()).not.toContain('Alice');
   });
+  it('selects the shared Canshou preview and exports, saves and restores the same original', async () => {
+    act(() => root.render(<DesktopTavern />));
+    const raw = { name: '残兽', description: '{{user}} 外观', personality: '情感', scenario: '场景', mes_example: '样例', first_mes: '开场不入正文', tags: ['标签不入正文'] };
+    await upload(raw); await edit('用户占位符替换文本', '访客');
+    const selector = container.querySelector<HTMLSelectElement>('select')!;
+    await act(async () => { selector.value = 'canshou'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    const preview = container.querySelector('[data-canshou-name]')!;
+    expect(preview.textContent).toContain('访客 外观|情感|【场景】'); expect(preview.textContent).not.toContain('不入正文');
+    expect(projected()).toBeUndefined(); expect(container.textContent).toContain('开场白与标签不进入残兽正文');
+    await act(async () => button('下载残兽卡 JSON').click());
+    const file = mocks.export.mock.calls[0][0]; const exported = JSON.parse(new TextDecoder().decode(file.bytes));
+    expect(file.name).toBe('残兽.json'); expect(exported).toMatchObject({ name: '残兽', appearance: '访客 外观', _tavern: { raw } });
+    await act(async () => button('保存残兽卡到本地库').click()); expect(mocks.save.mock.calls[0][1]).toEqual(exported);
+    await upload(exported); await act(async () => button('导出原件 JSON').click());
+    expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[1][0].bytes))).toEqual(raw);
+    await act(async () => { selector.value = 'general-scenario'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(container.querySelector('[data-canshou-name]')).toBeNull(); expect(container.querySelector('[data-scenario-title]')).not.toBeNull();
+    await act(async () => { selector.value = 'general'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(projected()).toContain('开场不入正文');
+  });
   it('switches to a general scenario, exports/saves its title and restores its Tavern original', async () => {
     act(() => root.render(<DesktopTavern />));
     const raw = { name: '庭院', description: '背景', scenario: '场景', first_mes: '{{user}} 开场', extra: { keep: true } };
     await upload(raw);
     const selector = container.querySelector<HTMLSelectElement>('select')!;
-    expect([...selector.options].map((option) => option.value)).toEqual(['general', 'general-scenario']);
+    expect([...selector.options].map((option) => option.value)).toEqual(['general', 'general-scenario', 'canshou']);
     await act(async () => { selector.value = 'general-scenario'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(projected()).toBeUndefined(); expect(container.querySelector('[data-scenario-title]')?.textContent).toContain('## 场景概览');
     await act(async () => button('下载通用卡 JSON').click());

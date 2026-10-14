@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { exportTavernFile, saveDesktopTavernCard } from '../src/features/tavern/host';
-import { buildDefaultFieldsFromDataCard, buildTavernExportCard, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, getPlaceholderPngBytes, readTavernLocalDocument, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
+import { buildDefaultFieldsFromDataCard, buildTavernExportCard, convertTavernToCanshouCard, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, getPlaceholderPngBytes, readTavernLocalDocument, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
 import { webcrypto } from 'node:crypto';
@@ -16,13 +16,26 @@ describe('Desktop Tavern host adapter', () => {
     expect(click).toHaveBeenCalledTimes(1); expect(document.querySelector('a')).toBeNull(); expect(revoke).not.toHaveBeenCalled();
     vi.advanceTimersByTime(60_000); expect(revoke).toHaveBeenCalledWith('blob:local-png'); expect(create.mock.calls[0][0].type).toBe('image/png');
   });
-  it.each(['character', 'scenario'] as const)('saves imported unsigned %s through CardRepository and preserves a readable original', async (cardType) => {
+  it.each(['general', 'general-scenario', 'canshou'] as const)('saves imported unsigned %s through CardRepository and preserves a readable original', async (template) => {
     vi.stubGlobal('crypto', webcrypto); let saved!: LocalCardRecordV1;
     const repository = { putIfAbsent: vi.fn(async (record) => { saved = record; return { written: true }; }) } as unknown as CardRepository;
     const candidate: TavernCardCandidate = { keyword: 'json', chunkType: 'tEXt', parseMethod: 'json', parsed: { name: '测试', description: 'description', signature: 'unverified', custom: { keep: true } } };
-    const data = cardType === 'scenario' ? convertTavernToGeneralScenarioCard(candidate) : convertTavernToGeneralCard(candidate);
+    const cardType = template === 'general-scenario' ? 'scenario' : 'character';
+    const data = template === 'canshou' ? convertTavernToCanshouCard(candidate) : template === 'general-scenario' ? convertTavernToGeneralScenarioCard(candidate) : convertTavernToGeneralCard(candidate);
     expect(await saveDesktopTavernCard(repository, data)).toBe('saved'); expect(saved.provenance).toEqual({ kind: 'unsigned', execution: 'imported' }); expect(saved.cardType).toBe(cardType); expect(saved.title).toBe('测试');
     expect(readTavernLocalDocument(new TextEncoder().encode(JSON.stringify(saved.data)), 'json').candidates[0].parsed).toEqual(candidate.parsed);
+  });
+
+  it('deduplicates Canshou projections and never resurrects a tombstone', async () => {
+    vi.stubGlobal('crypto', webcrypto); let saved: LocalCardRecordV1 | undefined;
+    const put = vi.fn(async (record: LocalCardRecordV1) => { if (saved) return { conflict: saved.id }; saved = record; return { written: true }; });
+    const repository = { putIfAbsent: put, get: vi.fn(async () => saved) } as unknown as CardRepository;
+    const data = convertTavernToCanshouCard({ keyword: 'json', chunkType: 'tEXt', parseMethod: 'json', parsed: { name: '残兽', description: '外观' } });
+    expect(await saveDesktopTavernCard(repository, data)).toBe('saved'); const id = saved!.id;
+    expect(await saveDesktopTavernCard(repository, data)).toBe('already-present'); expect(saved!.id).toBe(id);
+    saved = { ...saved!, deletedAt: '2026-10-01T00:00:00Z' };
+    await expect(saveDesktopTavernCard(repository, data)).rejects.toThrow('回收站'); expect(saved.deletedAt).toBeDefined();
+    expect(put.mock.calls.every(([record]) => record.id === id && record.cardType === 'character')).toBe(true);
   });
 
   it('dispatches shared-builder JSON without rewriting bytes or promoting source signatures', async () => {

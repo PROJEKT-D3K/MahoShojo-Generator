@@ -1,7 +1,7 @@
 import { renderTavernDefaultBase, getTavernProjectionTitle, getTavernProjectionCardType } from '@mahoshojo/ui-web/tavern';
 import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
-import type { TavernExportFile, TavernGeneralProjection } from '@mahoshojo/ui-web/tavern';
+import type { TavernExportFile, TavernProjection } from '@mahoshojo/ui-web/tavern';
 
 /** Uses the existing WebView2 download flow; no new native filesystem or network permission. */
 export function exportTavernFile({ name, bytes, mimeType }: TavernExportFile): void {
@@ -12,7 +12,7 @@ export function exportTavernFile({ name, bytes, mimeType }: TavernExportFile): v
   try { anchor.click(); } finally { anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 60_000); }
 }
 
-export function saveDesktopTavernCard(repository: CardRepository, data: TavernGeneralProjection) {
+export function saveDesktopTavernCard(repository: CardRepository, data: TavernProjection) {
   return saveImportedUnsignedCard(repository, data, getTavernProjectionTitle(data), getTavernProjectionCardType(data));
 }
 

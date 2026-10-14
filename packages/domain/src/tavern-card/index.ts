@@ -10,6 +10,7 @@ export * from './scenario';
 export * from './limits';
 export * from './recommend';
 export * from './general';
+export * from './canshou';
 export * from './document';
 export * from './export';
 export * from './placeholders';
