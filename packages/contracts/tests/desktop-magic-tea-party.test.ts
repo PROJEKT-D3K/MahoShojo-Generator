@@ -10,6 +10,11 @@ const session = () => structuredClone(fixture.session);
 const message = () => structuredClone(fixture.messages[1]);
 const write = () => ({ version: 1, request: { action: 'import', operationId: 'import-a', entries: [{ session: session(), messages: fixture.messages }] } });
 const placeholder = () => ({ id: 'assistant-a', sessionId: fixture.session.id, role: 'assistant', createdAt: 3, content: '', status: 'streaming' });
+const maximumMessage = () => {
+  const doc = { id: 'm', sessionId: 's', role: 'assistant', content: '', createdAt: 1, status: 'done' };
+  doc.content = 'a'.repeat(DESKTOP_TEA_LIMITS.messageBytes - jsonUtf8ByteLength(doc));
+  return doc;
+};
 
 describe('Desktop Tea closed local storage wire', () => {
   it('preserves real text fixture and unknown inert extensions', () => {
@@ -60,12 +65,17 @@ describe('Desktop Tea closed local storage wire', () => {
     for (const expectedRevision of [0, Number.MAX_SAFE_INTEGER + 1, 1.5]) expect(TeaReadRequestSchema.safeParse({ ...value, request: { ...value.request, expectedRevision } }).success).toBe(false);
     expect(TeaReadRequestSchema.safeParse({ ...value, request: { ...value.request, limit: 0 } }).success).toBe(false);
   });
-  it('counts exact serialized bytes rather than raw character count', () => {
-    const doc = { id: 'm', sessionId: 's', role: 'assistant', content: '', createdAt: 1, status: 'done' };
-    const overhead = jsonUtf8ByteLength(doc); doc.content = 'a'.repeat(DESKTOP_TEA_LIMITS.messageBytes - overhead);
+  it('accepts a message at the exact serialized byte limit', () => {
+    const doc = maximumMessage();
     expect(jsonUtf8ByteLength(doc)).toBe(DESKTOP_TEA_LIMITS.messageBytes);
     expect(TeaMessageDocumentSchema.safeParse(doc).success).toBe(true);
+  });
+  it('rejects a message one byte above the serialized byte limit', () => {
+    const doc = maximumMessage();
     expect(TeaMessageDocumentSchema.safeParse({ ...doc, content: `${doc.content}x` }).success).toBe(false);
+  });
+  it('fits a maximum-size message in a complete read response page', () => {
+    const doc = maximumMessage();
     const page = { version: 1, result: { action: 'messages', catalogRevision: Number.MAX_SAFE_INTEGER, sessionId: 's', instance: fixture.instance, revision: Number.MAX_SAFE_INTEGER, rows: [{ ordinal: Number.MAX_SAFE_INTEGER, message: doc }], nextCursor: { ordinal: Number.MAX_SAFE_INTEGER, id: 'm' } } };
     expect(jsonUtf8ByteLength(page)).toBeLessThan(DESKTOP_TEA_LIMITS.pageBytes);
     expect(TeaReadResponseSchema.safeParse(page).success).toBe(true);
