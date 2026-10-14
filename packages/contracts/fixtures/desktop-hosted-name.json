@@ -1,0 +1,381 @@
+{
+  "valid": [
+    {
+      "label": "default-language",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": " 小满 "
+        }
+      }
+    },
+    {
+      "label": "bom-trim",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "﻿ 小满﻿",
+          "language": "﻿ ja ﻿"
+        }
+      }
+    },
+    {
+      "label": "nel-not-trimmed",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "",
+          "language": ""
+        }
+      }
+    },
+    {
+      "label": "utf16-boundary",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸"
+        }
+      }
+    },
+    {
+      "label": "trim-before-length",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": " 名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名 "
+        }
+      }
+    },
+    {
+      "label": "empty-system",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {}
+      }
+    },
+    {
+      "label": "default-model",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "modelId": " default ",
+          "generationOverrides": {}
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "label": "blank",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "﻿ \n"
+        }
+      }
+    },
+    {
+      "label": "too-long",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸"
+        }
+      }
+    },
+    {
+      "label": "name-type",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": 3
+        }
+      }
+    },
+    {
+      "label": "language-blank",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "x",
+          "language": "﻿"
+        }
+      }
+    },
+    {
+      "label": "language-too-long",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "x",
+          "language": "🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸🌸"
+        }
+      }
+    },
+    {
+      "label": "language-null",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "x",
+          "language": null
+        }
+      }
+    },
+    {
+      "label": "body-unknown",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "x",
+          "extra": true
+        }
+      }
+    },
+    {
+      "label": "body-custom-provider",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "x",
+          "customProvider": {
+            "providerId": "system"
+          }
+        }
+      }
+    },
+    {
+      "label": "body-api-key",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "x",
+          "apiKey": "synthetic"
+        }
+      }
+    },
+    {
+      "label": "preset",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "presetConfig": {
+          "providerId": "deepseek",
+          "modelId": "deepseek-chat"
+        }
+      }
+    },
+    {
+      "label": "byok",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "byok": true
+      }
+    },
+    {
+      "label": "secret",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "secretRef": "provider-key:synthetic"
+      }
+    },
+    {
+      "label": "unknown-envelope",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "extra": true
+      }
+    },
+    {
+      "label": "nondefault-model",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "modelId": "other"
+        }
+      }
+    },
+    {
+      "label": "model-nel",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "modelId": "default"
+        }
+      }
+    },
+    {
+      "label": "model-control",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "modelId": "\tdefault"
+        }
+      }
+    },
+    {
+      "label": "model-too-long",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "modelId": "                                                                                                                                                                                                                                                                default"
+        }
+      }
+    },
+    {
+      "label": "temperature",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "generationOverrides": {
+            "temperature": 0.8
+          }
+        }
+      }
+    },
+    {
+      "label": "tokens",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "generationOverrides": {
+            "maxOutputTokens": 100
+          }
+        }
+      }
+    },
+    {
+      "label": "thinking-default",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "generationOverrides": {
+            "thinking": {
+              "mode": "default"
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "unknown-overrides",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "generationOverrides": {
+            "extra": true
+          }
+        }
+      }
+    },
+    {
+      "label": "null-overrides",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        },
+        "systemConfig": {
+          "generationOverrides": null
+        }
+      }
+    },
+    {
+      "label": "sse",
+      "request": {
+        "requestId": "name-contract",
+        "routeId": "generate-magical-girl-stream",
+        "body": {
+          "name": "小满",
+          "language": "zh-CN"
+        }
+      }
+    }
+  ]
+}

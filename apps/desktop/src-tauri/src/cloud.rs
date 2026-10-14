@@ -85,6 +85,8 @@ const ME_PROFILE_AVATAR_PATH: &str = "/api/me/profile/avatar";
 const DR_READINESS_PATH: &str = "/api/hosted/dr-readiness";
 const HOSTED_GENERATE_DETAILS_STREAM_PATH: &str = "/api/generate-magical-girl-details-stream";
 const HOSTED_ROUTE_DETAILS_STREAM: &str = "generate-magical-girl-details-stream";
+const HOSTED_GENERATE_NAME_PATH: &str = "/api/generate-magical-girl";
+const HOSTED_ROUTE_NAME: &str = "generate-magical-girl";
 const HOSTED_GENERATE_DETAILS_PATH: &str = "/api/generate-magical-girl-details";
 const HOSTED_ROUTE_DETAILS: &str = "generate-magical-girl-details";
 const HOSTED_GENERATE_CANSHOU_STREAM_PATH: &str = "/api/generate-canshou-stream";
@@ -119,6 +121,7 @@ const HOSTED_STREAM_ROUTES: &[&str] = &[
 ];
 /// hosted 非流式 JSON 生成命令开放的 routeId 集合。
 const HOSTED_JSON_ROUTES: &[&str] = &[
+    HOSTED_ROUTE_NAME,
     HOSTED_ROUTE_DETAILS,
     HOSTED_ROUTE_CANSHOU,
     HOSTED_ROUTE_FREE,
@@ -143,6 +146,7 @@ fn hosted_stream_path(route_id: &str) -> Option<&'static str> {
 /// routeId → 固定上游路径（非流式 JSON 生成）。
 fn hosted_json_path(route_id: &str) -> Option<&'static str> {
     match route_id {
+        HOSTED_ROUTE_NAME => Some(HOSTED_GENERATE_NAME_PATH),
         HOSTED_ROUTE_DETAILS => Some(HOSTED_GENERATE_DETAILS_PATH),
         HOSTED_ROUTE_CANSHOU => Some(HOSTED_GENERATE_CANSHOU_PATH),
         HOSTED_ROUTE_FREE => Some(HOSTED_GENERATE_FREE_PATH),
@@ -195,6 +199,7 @@ pub enum CloudErrorCode {
     FlowNotFound,
     FlowInProgress,
     Cancelled,
+    CancelledBeforeDispatch,
     Timeout,
     StateMismatch,
     ProtocolMismatch,
@@ -2029,6 +2034,61 @@ fn normalize_hosted_thinking_override(
     Ok(normalized)
 }
 
+/// ECMAScript String.prototype.trim：BOM 是空白，NEL 不是；长度另以 UTF-16 计。
+fn trim_ecmascript(value: &str) -> &str {
+    value.trim_matches(|c| {
+        matches!(c,
+            '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
+            '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+            '\u{205f}' | '\u{3000}' | '\u{feff}'
+        )
+    })
+}
+
+fn build_hosted_name_body(
+    request: &CloudHostedGenerateRequest,
+) -> Result<serde_json::Value, CloudError> {
+    if request.preset_config.is_some() {
+        return Err(invalid_request("名字生成的服务器通道仅支持系统默认配置"));
+    }
+    if let Some(config) = &request.system_config {
+        if config.model_id.as_deref().is_some_and(|id| {
+            trim_ecmascript(id) != "default"
+                || id.encode_utf16().count() > 256
+                || id.chars().any(|c| c <= '\u{001f}' || c == '\u{007f}')
+        }) {
+            return Err(invalid_request("名字生成不支持选择系统模型"));
+        }
+        if let Some(value) = &config.generation_overrides {
+            if normalize_hosted_generation_overrides(value)?.is_some() {
+                return Err(invalid_request("名字生成不支持覆盖服务器生成设置"));
+            }
+        }
+    }
+    let body = request
+        .body
+        .as_object()
+        .ok_or_else(|| invalid_request("名字请求必须是 JSON 对象"))?;
+    if body.keys().any(|key| key != "name" && key != "language") {
+        return Err(invalid_request("名字请求只允许 name 与 language"));
+    }
+    let name = body
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(trim_ecmascript)
+        .filter(|value| !value.is_empty() && value.encode_utf16().count() <= 300)
+        .ok_or_else(|| invalid_request("名字必须为 1 至 300 个 UTF-16 字符"))?;
+    let language = match body.get("language") {
+        None => "zh-CN",
+        Some(value) => value
+            .as_str()
+            .map(trim_ecmascript)
+            .filter(|value| !value.is_empty() && value.encode_utf16().count() <= 32)
+            .ok_or_else(|| invalid_request("生成语言无效"))?,
+    };
+    Ok(serde_json::json!({ "name": name, "language": language }))
+}
+
 /// 组装最终请求体：校验业务 body 形态与大小，并按 `systemConfig` 注入
 /// 系统通道 `customProvider`（D5.1-AIP-r1，与 Web 载荷同形）。
 /// renderer 提供的 body 里出现 `customProvider` 一律拒绝（凭据注入只发生在
@@ -2055,6 +2115,10 @@ fn build_hosted_request_body(
             &request.route_id,
             "生成请求 body 超出大小上限",
         ));
+    }
+    if request.route_id == HOSTED_ROUTE_NAME {
+        // 必须早于 inject_hosted_preset、load_session 与兼容探测，不能碰凭据后才拒绝。
+        return build_hosted_name_body(request);
     }
     let mut result = request.body.clone();
     // 系统通道偏好 → `customProvider:{providerId:'system', modelId, apiKey:''}`。
@@ -2345,8 +2409,30 @@ async fn prepare_hosted_dispatch(
     let mut body = build_hosted_request_body(request)?;
     inject_hosted_preset(&mut body, request.preset_config.as_ref(), secrets)?;
     check_hosted_body_budget(&body, &request.route_id)?;
-    let session = load_session_for(state, secrets)?;
-    match probe_hosted_compatibility(state, session.as_ref()).await? {
+    let session = load_session_for(state, secrets).map_err(|error| {
+        if request.route_id == HOSTED_ROUTE_NAME && error.code == CloudErrorCode::InternalError {
+            CloudError::new(
+                CloudErrorCode::StorageUnavailable,
+                "会话状态不可用，生成请求尚未发送",
+            )
+        } else {
+            error
+        }
+    })?;
+    let compatibility = match probe_hosted_compatibility(state, session.as_ref()).await {
+        Ok(value) => value,
+        Err(error)
+            if request.route_id == HOSTED_ROUTE_NAME
+                && error.code == CloudErrorCode::InvalidResponse =>
+        {
+            return Err(CloudError::new(
+                CloudErrorCode::ProtocolMismatch,
+                "服务器兼容性响应无效，在线生成已停止",
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    match compatibility {
         HostedCompatibility::Ready { .. } => {}
         HostedCompatibility::Unreachable => {
             return Err(CloudError::new(
@@ -2583,6 +2669,8 @@ pub async fn stream_hosted_ai(
 pub struct CloudHostedJsonResponse {
     pub status: u16,
     pub body: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u32>,
 }
 
 /// `hosted_ai_request`：hosted 非流式 JSON 生成（D5.1a，`/details` 双执行的
@@ -2622,6 +2710,10 @@ pub async fn hosted_ai_request(
         .ok_or_else(|| CloudError::new(CloudErrorCode::InvalidRequest, "未知的 hosted 生成路由"))?;
 
     let outcome = async {
+        // 这里只证明 send future 尚未构造；下面 select 的取消仍可能已派发。
+        if token.is_cancelled() {
+            return Err(CloudError::new(CloudErrorCode::CancelledBeforeDispatch, "已取消，生成请求尚未发送"));
+        }
         let builder = match &session {
             Some(session) => authed_request(
                 &state.http,
@@ -2656,6 +2748,9 @@ pub async fn hosted_ai_request(
         let response = response.map_err(|error| CloudError::network("生成请求", &error))?;
 
         let status = response.status().as_u16();
+        let retry_after_seconds = (status == 429).then(|| response.headers()
+            .get(reqwest::header::RETRY_AFTER).and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u32>().ok()).filter(|seconds| *seconds > 0)).flatten();
         let body = if request.preset_config.is_some() && !(200..300).contains(&status) {
             // 不转发可能包含上游凭据的原始失败正文。HTTP 状态仍供错误/限速分类。
             serde_json::json!({"error": "供应商生成失败，请检查凭据、模型或稍后重试"})
@@ -2677,7 +2772,7 @@ pub async fn hosted_ai_request(
             };
             serde_json::from_str::<serde_json::Value>(&text).unwrap_or(serde_json::Value::Null)
         };
-        Ok(CloudHostedJsonResponse { status, body })
+        Ok(CloudHostedJsonResponse { status, body, retry_after_seconds })
     }
     .await;
 
@@ -3440,6 +3535,7 @@ mod tests {
     struct MemorySecrets {
         entries: Mutex<BTreeMap<String, String>>,
         deletions: std::sync::atomic::AtomicUsize,
+        resolves: std::sync::atomic::AtomicUsize,
     }
 
     impl MemorySecrets {
@@ -3447,6 +3543,7 @@ mod tests {
             Self {
                 entries: Mutex::new(BTreeMap::new()),
                 deletions: std::sync::atomic::AtomicUsize::new(0),
+                resolves: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
@@ -3468,6 +3565,7 @@ mod tests {
             Ok(())
         }
         fn resolve(&self, secret_ref: &str) -> Result<Option<String>, SecretStoreError> {
+            self.resolves.fetch_add(1, Ordering::SeqCst);
             Ok(self.entries.lock().unwrap().get(secret_ref).cloned())
         }
     }
@@ -3633,6 +3731,10 @@ mod tests {
         hosted_sse_body: Mutex<Option<String>>,
         /// `Some((status, body))` 时 readiness 路由返回覆盖响应（测门禁分支）。
         readiness_override: Mutex<Option<(u16, String)>>,
+        readiness_count: std::sync::atomic::AtomicUsize,
+        readiness_reply_gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        readiness_seen: Mutex<Option<oneshot::Sender<()>>>,
+        hosted_json_extra_headers: Mutex<Vec<(String, String)>>,
         /// `Some((status, body))` 时非流式生成路由返回覆盖响应（测错误页/透传分支）。
         hosted_json_response: Mutex<Option<(u16, String)>>,
         /// 最近一次命中数据卡路由表路径的请求（target、原始 head、JSON body）。
@@ -3674,6 +3776,10 @@ mod tests {
             sign_out_reply_gate: Mutex::new(None),
             hosted_sse_body: Mutex::new(None),
             readiness_override: Mutex::new(None),
+            readiness_count: std::sync::atomic::AtomicUsize::new(0),
+            readiness_reply_gate: Mutex::new(None),
+            readiness_seen: Mutex::new(None),
+            hosted_json_extra_headers: Mutex::new(Vec::new()),
             hosted_json_response: Mutex::new(None),
             last_card_request: Mutex::new(None),
             card_response_override: Mutex::new(None),
@@ -3747,7 +3853,7 @@ mod tests {
 
                         let response = server.route(&target, &head, body_bytes);
                         let mut reply = format!(
-                            "HTTP/1.1 {}\r\nContent-Length: {}\r\n",
+                            "HTTP/1.1 {}\r\nContent-Length: {}\r\nConnection: close\r\n",
                             response.status,
                             response.body.len()
                         );
@@ -3938,6 +4044,14 @@ mod tests {
                     response
                 }
                 DR_READINESS_PATH => {
+                    self.readiness_count.fetch_add(1, Ordering::SeqCst);
+                    if let Some(seen) = self.readiness_seen.lock().unwrap().take() {
+                        let _ = seen.send(());
+                    }
+                    if let Some(gate) = self.readiness_reply_gate.lock().unwrap().take() {
+                        gate.recv_timeout(Duration::from_secs(3))
+                            .expect("release readiness");
+                    }
                     let override_response = self.readiness_override.lock().unwrap().clone();
                     match override_response {
                         Some((status, body)) => MockResponse {
@@ -4004,10 +4118,12 @@ mod tests {
                     {
                         return MockResponse {
                             status,
-                            headers: vec![(
+                            headers: std::iter::once((
                                 "Content-Type".to_string(),
                                 "application/json".to_string(),
-                            )],
+                            ))
+                            .chain(self.hosted_json_extra_headers.lock().unwrap().clone())
+                            .collect(),
                             body: override_body,
                         };
                     }
@@ -5126,6 +5242,10 @@ mod tests {
             .collect();
         assert_eq!(stream_routes, HOSTED_STREAM_ROUTES);
 
+        assert_eq!(
+            fixture["paths"]["hostedGenerateName"].as_str(),
+            Some(HOSTED_GENERATE_NAME_PATH)
+        );
         // 非流式路由白名单与 fixture `hostedJsonRouteIds` 同源对拍。
         let json_routes: Vec<&str> = fixture["hostedJsonRouteIds"]
             .as_array()
@@ -5171,6 +5291,7 @@ mod tests {
             CloudErrorCode::FlowNotFound,
             CloudErrorCode::FlowInProgress,
             CloudErrorCode::Cancelled,
+            CloudErrorCode::CancelledBeforeDispatch,
             CloudErrorCode::Timeout,
             CloudErrorCode::StateMismatch,
             CloudErrorCode::ProtocolMismatch,
@@ -5774,13 +5895,23 @@ mod tests {
             let secrets = MemorySecrets::new();
             secrets.set(&crate::provider_target::preset_secret_ref("deepseek").unwrap(), "fake-only-key").unwrap();
             let registry = crate::ai::RequestRegistry::default();
-            for (stream_route, json_route) in HOSTED_STREAM_ROUTES.iter().zip(HOSTED_JSON_ROUTES) {
-                for (route, is_stream) in [(*stream_route, true), (*json_route, false)] {
+            // JSON-only 名字通道不能与流式表按位置配对；两张表各自完整遍历。
+            for (route, is_stream) in HOSTED_STREAM_ROUTES.iter().map(|route| (*route, true))
+                .chain(HOSTED_JSON_ROUTES.iter().map(|route| (*route, false))) {
                     let mut request = hosted_request();
                     request.route_id = route.into();
                     request.preset_config = Some(CloudHostedPresetConfig {
                         provider_id: "deepseek".into(), model_id: "custom-model".into(), generation_overrides: None,
                     });
+                    if route == HOSTED_ROUTE_NAME {
+                        request.body = serde_json::json!({"name":"小满"});
+                        let reads = secrets.resolves.load(Ordering::SeqCst);
+                        let previous = server.last_generate_body.lock().unwrap().clone();
+                        assert_eq!(hosted_ai_request(&state, &secrets, &registry, request).await.unwrap_err().code, CloudErrorCode::InvalidRequest);
+                        assert_eq!(secrets.resolves.load(Ordering::SeqCst), reads);
+                        assert_eq!(*server.last_generate_body.lock().unwrap(), previous);
+                        continue;
+                    }
                     if is_stream {
                         let sink = VecSink::new();
                         stream_hosted_ai(&state, &secrets, &registry, request, &sink).await.unwrap();
@@ -5795,7 +5926,6 @@ mod tests {
                         "providerId": "deepseek", "modelId": "custom-model", "apiKey": "fake-only-key"
                     }));
                     assert!(!server.last_generate_headers.lock().unwrap().as_ref().unwrap().contains("fake-only-key"));
-                }
             }
         });
     }
@@ -6541,6 +6671,11 @@ mod tests {
         });
     }
 
+    mod name_generation {
+        use super::*;
+        include!("cloud_name_tests.rs");
+    }
+
     /* ── hosted 非流式 JSON 生成（D5.1a） ────────────────────────────── */
 
     fn hosted_json_request() -> CloudHostedGenerateRequest {
@@ -6769,6 +6904,8 @@ mod tests {
     fn audit_hosted_json_cancellation_drops_body_after_headers() {
         rt().block_on(async {
             for (route_id, path, status) in [
+                (HOSTED_ROUTE_NAME, HOSTED_GENERATE_NAME_PATH, 200),
+                (HOSTED_ROUTE_NAME, HOSTED_GENERATE_NAME_PATH, 500),
                 (HOSTED_ROUTE_DETAILS, HOSTED_GENERATE_DETAILS_PATH, 200),
                 (HOSTED_ROUTE_DETAILS, HOSTED_GENERATE_DETAILS_PATH, 500),
                 (
@@ -6788,6 +6925,9 @@ mod tests {
                 let registry = crate::ai::RequestRegistry::default();
                 let mut request = hosted_json_request();
                 request.route_id = route_id.into();
+                if route_id == HOSTED_ROUTE_NAME {
+                    request.body = serde_json::json!({"name":"小满"});
+                }
                 let operation = hosted_ai_request(&state, &secrets, &registry, request);
                 tokio::pin!(operation);
                 tokio::select! {

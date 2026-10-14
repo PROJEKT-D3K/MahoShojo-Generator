@@ -348,6 +348,7 @@ export const DesktopCloudErrorCodeSchema = z.enum([
   'flow-not-found',
   'flow-in-progress',
   'cancelled',
+  'cancelled-before-dispatch',
   'timeout',
   'state-mismatch',
   'protocol-mismatch',
@@ -481,6 +482,7 @@ export type DesktopHostedGenerateRequest = z.infer<typeof DesktopHostedGenerateR
  * 两条命令各自的合法 routeId 集合不同，单侧扩张不会顺带放宽另一侧。
  */
 export const HostedJsonGenerationRouteIdSchema = z.enum([
+  'generate-magical-girl',
   'generate-magical-girl-details',
   'generate-canshou',
   'generate-free',
@@ -496,6 +498,12 @@ export type HostedJsonGenerationRouteId = z.infer<typeof HostedJsonGenerationRou
  * systemConfig / presetConfig 二选一；前者系统默认，后者受信任目录 BYOK。
  * 顶层 `byok`/`secretRef`/`providerId`/`apiKey` 及预设内的秘密/URL 均拒绝。
  */
+/** 名字服务器通道只接受既有 Web JSON 路由的业务字段。trim/长度按 ECMAScript UTF-16。 */
+export const DesktopHostedNameBodySchema = z.object({
+  name: z.string().trim().min(1).max(300),
+  language: z.string().trim().min(1).max(32).optional().default('zh-CN'),
+}).strict();
+
 export const DesktopHostedJsonRequestSchema = z.object({
   requestId: z.string().min(1).max(128),
   routeId: HostedJsonGenerationRouteIdSchema,
@@ -504,6 +512,14 @@ export const DesktopHostedJsonRequestSchema = z.object({
   presetConfig: DesktopHostedPresetConfigSchema.optional(),
 }).strict().refine((value) => !(value.systemConfig && value.presetConfig), {
   message: 'systemConfig 与 presetConfig 不可同时指定',
+}).superRefine((value, context) => {
+  if (value.routeId !== 'generate-magical-girl') return;
+  const body = DesktopHostedNameBodySchema.safeParse(value.body);
+  if (!body.success) context.addIssue({ code: 'custom', path: ['body'], message: '名字请求只允许有效的 name 与 language' });
+  if (value.presetConfig || (value.systemConfig?.modelId !== undefined && value.systemConfig.modelId.trim() !== 'default') ||
+      Object.keys(value.systemConfig?.generationOverrides ?? {}).length > 0) {
+    context.addIssue({ code: 'custom', message: '名字生成的服务器通道仅支持系统默认配置' });
+  }
 });
 export type DesktopHostedJsonRequest = z.infer<typeof DesktopHostedJsonRequestSchema>;
 
@@ -516,6 +532,8 @@ export type DesktopHostedJsonRequest = z.infer<typeof DesktopHostedJsonRequestSc
 export const DesktopHostedJsonResponseSchema = z.object({
   status: z.number().int().min(100).max(599),
   body: SafeJsonValueSchema,
+  /** 429 数值 Retry-After，仅作正文缺省时的诊断后备。 */
+  retryAfterSeconds: z.number().int().positive().max(4_294_967_295).optional(),
 }).strict();
 export type DesktopHostedJsonResponse = z.infer<typeof DesktopHostedJsonResponseSchema>;
 
