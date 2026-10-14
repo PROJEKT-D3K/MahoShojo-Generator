@@ -447,12 +447,38 @@ describe('Room acceptance owned mock supervision without spawning processes', ()
     child.finish(); await mock.exit; await mock.close();
   });
 
+  it.each([
+    { event: 'exit', code: 1, signal: null },
+    { event: 'exit', code: 0, signal: null },
+    { event: 'exit', code: null, signal: 'SIGTERM' },
+    { event: 'close', code: 1, signal: null },
+  ])('reports premature $event code=$code signal=$signal and preserves the first terminal result', async ({ event, code, signal }) => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    const rejected = expect(mock.ready).rejects.toMatchObject({ message: `mock stopped before ready (code=${code}, signal=${signal})` });
+    child.stderr.write('private-canary cookie=private ticket=private\n');
+    child.emit(event, code, signal);
+    await rejected;
+    await expect(mock.exit).resolves.toEqual({ code, signal });
+    child.emit('close', 99, 'SIGKILL');
+    await expect(mock.exit).resolves.toEqual({ code, signal });
+    const closing = mock.close(); expect(mock.close()).toBe(closing); await closing;
+    expect(child.commands).toEqual([]); expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it('settles spawn errors even when the child never emits exit and redacts diagnostics', async () => {
     const child = new SyntheticChild(), mock = monitorMock(child);
-    const rejected = expect(mock.ready).rejects.toThrow(/mock/);
+    const failure = mock.ready.catch(error => error);
     child.emit('error', new Error('private-canary cookie=private ticket=private'));
-    await rejected; await mock.exit; await mock.close();
-    expect(child.commands).toEqual([]);
+    const error = await failure;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe('mock stopped before ready (code=null, signal=spawn-error)');
+    expect(error.stack).not.toMatch(/private-canary|cookie=private|ticket=private/);
+    expect(error.cause).toBeUndefined();
+    await expect(mock.exit).resolves.toEqual({ code: null, signal: 'spawn-error' });
+    child.emit('close', 1, null);
+    await expect(mock.exit).resolves.toEqual({ code: null, signal: 'spawn-error' });
+    await mock.close();
+    expect(child.commands).toEqual([]); expect(child.kill).not.toHaveBeenCalled();
   });
 
   it('settles pending commands on unexpected backend exit and closes idempotently', async () => {

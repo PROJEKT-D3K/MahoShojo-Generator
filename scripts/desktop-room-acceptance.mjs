@@ -311,7 +311,7 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
   const exit = new Promise(resolve => {
     const finish = (code, signal) => {
       if (stopped) return;
-      stopped = true; clearTimeout(timer); lines.close(); readyReject(new Error('mock stopped before ready'));
+      stopped = true; clearTimeout(timer); lines.close(); readyReject(new Error(`mock stopped before ready (code=${code}, signal=${signal})`));
       for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error('mock stopped')); }
       pending.clear(); resolve({ code, signal });
     };
