@@ -53,7 +53,8 @@ const build = () => { const repo = repository(), storage = memory(); const sessi
 
 describe('未完成草稿保留与已有会话存储', () => {
   it('自动写入关闭时只有显式保存，并可重新打开独立归档', async () => {
-    const f = build(), source = makeDraft('daily', 'stream'); source.settings.writeNarrativeHistory = false;
+    const f = build(), base = makeDraft('daily', 'stream');
+    const source: ArenaDraft = { ...base, settings: { ...base.settings, writeNarrativeHistory: false } };
     f.session.updateDraft(source); await f.session.generate(native(valid(true), 'length'), source, intent('stream'));
     expect(f.session.getSnapshot().narrativeDraftStatus).toBe('available'); expect(f.session.getSnapshot().draft.narrativeDrafts).toBeUndefined();
     expect(f.session.saveNarrativeDraft()).toBe(true); expect(f.session.saveNarrativeDraft()).toBe(true);
@@ -88,7 +89,8 @@ describe('未完成草稿保留与已有会话存储', () => {
     expect(JSON.parse(f.storage.values.get(ARENA_DRAFT_KEY)!).draft.narrativeDrafts).toBeUndefined(); f.session.dispose();
   });
   it('成功请求屏障跨重新打开生效，不把晚到失败复活为草稿', async () => {
-    const f = build(), source = makeDraft('daily', 'stream'); source.settings.writeNarrativeHistory = false;
+    const f = build(), base = makeDraft('daily', 'stream');
+    const source: ArenaDraft = { ...base, settings: { ...base.settings, writeNarrativeHistory: false } };
     f.session.updateDraft(source); await f.session.generate(native(valid(true)), source, intent('stream')); f.session.dispose();
     const reopened = new DesktopArenaSession({ repository: f.port, storage: f.storage, requestId: () => 'arena-fixed' });
     reopened.restoreDraft(); reopened.setScope('A');

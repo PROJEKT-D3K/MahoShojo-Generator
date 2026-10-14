@@ -6,6 +6,7 @@ import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { executeNameGeneration, normalizeNameGenerationInput, type NameGenerationIntent } from '../src/features/name/generation';
 import { STREAM_DIRECT_AI_COMMAND, CANCEL_DIRECT_AI_COMMAND } from '../src/platform/direct-ai-bridge';
+import type { DesktopHostedJsonExecutionOptions } from '../src/features/generation/executor';
 
 const generated = {
   flowerName: '铃兰', flowerDescription: '幸福归来',
@@ -93,7 +94,7 @@ describe('name generation uses the existing Direct request/collector', () => {
 describe('name JSON-only fixed server channel', () => {
   const hosted = { requestId: 'hosted-name-1', mode: 'hosted-json' as const, modelId: 'default' };
   const signed = { ...generated, templateId: '魔法少女/心之花/魔法少女（名字生成）', signature: 'synthetic.signed-flower' };
-  const options = (invoke: ReturnType<typeof vi.fn>, onHostedDispatchSettled = vi.fn()) => ({ invoke, profileId: '', providerTarget: { kind: 'system' as const }, onHostedDispatchSettled });
+  const options = (invoke: DesktopHostedJsonExecutionOptions['invoke'], onHostedDispatchSettled = vi.fn()) => ({ invoke, profileId: '', providerTarget: { kind: 'system' as const }, onHostedDispatchSettled });
   it('sends only name/language through the real bridge schema, preserves signed original and projects seven unsigned fields', async () => {
     const invoke = vi.fn(async () => ({ status: 200, body: signed })); const notify = vi.fn();
     const result = await executeNameGeneration(options(invoke, notify), input, hosted, new AbortController().signal);
