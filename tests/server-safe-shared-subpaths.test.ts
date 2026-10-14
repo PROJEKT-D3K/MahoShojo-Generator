@@ -150,6 +150,21 @@ const collectModuleGraph = (entryFile: string): string[] => {
 };
 
 describe('server-safe shared entrypoints stay free of React hooks', () => {
+  it('Tavern general AI generation exports remain browser-safe without host dependencies', async () => {
+    const aiCoreRoot = path.resolve(PACKAGE_ROOT, '../ai-core');
+    const pkg = JSON.parse(readFileSync(path.join(aiCoreRoot, 'package.json'), 'utf8'));
+    expect(pkg.exports['./tavern-generation']).toBe('./src/tavern-generation.ts');
+    const bundled = await build({
+      entryPoints: [path.join(aiCoreRoot, pkg.exports['./tavern-generation'])],
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true,
+    });
+    const inputs = Object.keys(bundled.metafile!.inputs);
+    expect(inputs.some((file) => file.endsWith('packages/ai-core/src/tavern-generation.ts'))).toBe(true);
+    expect(inputs.some((file) => /(?:packages\/(?:hosted-runtime|hosted-api|ui-web)\/|apps\/|node_modules\/react\/)/u.test(file))).toBe(false);
+    expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
+    expect(Object.values(bundled.metafile!.outputs).flatMap((output) => output.imports)).toEqual([]);
+  });
+
   it('keeps the Hosted/Desktop story request constructor on its own client-safe entrypoint', async () => {
     const domainRoot = path.resolve(PACKAGE_ROOT, '../domain');
     const pkg = JSON.parse(readFileSync(path.join(domainRoot, 'package.json'), 'utf8'));

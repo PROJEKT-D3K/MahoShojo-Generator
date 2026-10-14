@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { buildTavernAiAttachment as sharedBuildTavernAiAttachment } from '@mahoshojo/domain/tavern-card';
 
 import { getUtf8ByteLength } from '@/lib/data-card-size';
 import { buildTavernAiAttachment, type TavernCardNormalized } from '@/lib/tavern-card';
 import { TAVERN_IMPORT_ATTACHMENT_LIMITS } from '@/lib/tavern-card/limits';
 
 describe('tavern-ai-attachment', () => {
+  it('uses the shared implementation through the existing Web entry', () => {
+    expect(buildTavernAiAttachment).toBe(sharedBuildTavernAiAttachment);
+  });
+
   it('builds a single attachment within size limits', () => {
     const big = '很长的文本。'.repeat(20_000);
     const normalized: TavernCardNormalized = {
