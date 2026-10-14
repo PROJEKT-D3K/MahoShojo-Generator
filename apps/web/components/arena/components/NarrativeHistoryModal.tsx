@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NarrativeHistoryEditor, type NarrativeHistoryActionResult } from '@mahoshojo/ui-web/narrative-history';
+import { NarrativeHistoryEditor, NarrativeDraftsPanel, type NarrativeHistoryActionResult } from '@mahoshojo/ui-web/narrative-history';
 import {
   buildNarrativeHistoryCardPayload,
   extractNarrativeHistoryImportEntries,
@@ -19,6 +19,8 @@ import { downloadBlob } from '@/lib/client/blobUrl';
 import { randomUUID } from '@/lib/crypto';
 import { quickCheck } from '@/lib/sensitive-word-filter';
 import { useNarrativeHistoryStore } from '../stores/useNarrativeHistoryStore';
+import { useNarrativeDraftsStore } from '../stores/useNarrativeDraftsStore';
+import { buildNarrativeDraftArchive } from '@mahoshojo/domain/narrative-drafts';
 
 type Props = { isOpen: boolean; onClose: () => void };
 const now = () => new Date().toISOString();
@@ -26,6 +28,9 @@ const now = () => new Date().toISOString();
 /** Web owns persistence, filtering, downloads and explicit cloud capabilities. */
 export function NarrativeHistoryModal({ isOpen, onClose }: Props) {
   const store = useNarrativeHistoryStore();
+  const draftStore = useNarrativeDraftsStore();
+  const draftCount = draftStore.drafts.length + (draftStore.candidate && !draftStore.drafts.some(draft => draft.requestId === draftStore.candidate?.requestId) ? 1 : 0);
+  useEffect(() => { if (isOpen) useNarrativeDraftsStore.getState().loadDrafts(); }, [isOpen]);
   const { entries, lastUpdatedAt, sort } = store;
   const [showCloudImport, setShowCloudImport] = useState(false);
   const [importMode, setImportMode] = useState<NarrativeHistoryImportMode>('append');
@@ -139,7 +144,11 @@ export function NarrativeHistoryModal({ isOpen, onClose }: Props) {
       saveAction={<SaveToCloudButton data={historyCardData} cardType="history" buttonText="保存到云端"
         className="px-3 py-1.5 text-xs font-semibold text-white rounded-lg transition-colors"
         style={{ backgroundColor: '#22c55e', backgroundImage: 'linear-gradient(to right, #22c55e, #16a34a)' }} />}
-      sizeIndicator={<JsonSizeIndicator data={historyCardData} warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。" />}
+      sizeIndicator={<><JsonSizeIndicator data={historyCardData} warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。" />
+        <p>正式 {entries.length} 条 · 未完成草稿 {draftCount} 条</p>
+        <NarrativeDraftsPanel drafts={draftStore.drafts} candidate={draftStore.candidate} status={draftStore.status}
+          onSave={draftStore.saveCandidate} onExport={(drafts) => downloadBlob(new Blob([JSON.stringify(buildNarrativeDraftArchive(drafts), null, 2)], { type: 'application/json' }), '未完成叙事草稿.json')} />
+      </>}
     />
     <BattleDataModal isOpen={isOpen && showCloudImport} onClose={() => { if (!cloudPending.current) setShowCloudImport(false); }}
       onSelectCard={(payload) => void importCloudCard(payload)} selectedType="history" selectionMode="single" titleOverride="导入叙事历史数据卡" externalError={error} />

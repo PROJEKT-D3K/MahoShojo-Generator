@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ProviderCooldownNotice } from '@/components/ai/ProviderCooldownNotice';
 import { TokenIndicator } from '@/components/shared/TokenIndicator';
@@ -16,6 +16,7 @@ import { useBattleEngine } from '../hooks/useBattleEngine';
 import { BattleStoreState } from '../types';
 import { NarrativeHistoryModal } from './NarrativeHistoryModal';
 import { useNarrativeHistoryStore } from '../stores/useNarrativeHistoryStore';
+import { NARRATIVE_DRAFTS_STORAGE_KEY, useNarrativeDraftsStore } from '../stores/useNarrativeDraftsStore';
 import { resolveArenaRoomGenerationAction } from '../multiplayer/generation-bridge';
 import { useArenaRoomContext } from '../multiplayer/useArenaRoom';
 import { ArenaRoomGenerationPreflightDialog } from '../multiplayer/ArenaRoomGenerationPreflightDialog';
@@ -118,6 +119,13 @@ export function BattleActions({ showAdvancedUtilities = true }: { showAdvancedUt
   const teamsState = useBattleSelector((state) => state.teams);
   const userProviderConfig = useBattleSelector((state) => state.userProviderConfig);
   const [showNarrativeModal, setShowNarrativeModal] = useState(false);
+  const draftCount = useNarrativeDraftsStore((state) => state.drafts.length + (state.candidate && !state.drafts.some(draft => draft.requestId === state.candidate?.requestId) ? 1 : 0));
+  useEffect(() => {
+    useNarrativeDraftsStore.getState().loadDrafts();
+    const observe = (event: StorageEvent) => { if (event.key === NARRATIVE_DRAFTS_STORAGE_KEY) useNarrativeDraftsStore.getState().observeStorage(event.newValue); };
+    window.addEventListener('storage', observe);
+    return () => window.removeEventListener('storage', observe);
+  }, []);
   const narrativeCount = useNarrativeHistoryStore((state) => state.entries.length);
   const narrativeLastUpdatedAt = useNarrativeHistoryStore((state) => state.lastUpdatedAt);
   const narrativeEntries = useNarrativeHistoryStore((state) => state.entries);
@@ -392,7 +400,7 @@ export function BattleActions({ showAdvancedUtilities = true }: { showAdvancedUt
                 disabled={isGenerating}
                 title="查看/编辑叙事历史记录"
               >
-                叙事历史：{narrativeCount} 条{narrativeLastUpdatedAt ? `｜${formatDateTime(narrativeLastUpdatedAt)}` : ''}
+                叙事历史：正式 {narrativeCount} 条 · 未完成草稿 {draftCount} 条{narrativeLastUpdatedAt ? `｜${formatDateTime(narrativeLastUpdatedAt)}` : ''}
               </button>
             </div>
 

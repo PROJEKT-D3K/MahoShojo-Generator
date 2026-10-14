@@ -5,7 +5,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ArenaRoomControllerState } from '@/lib/arena-room/controller';
-import type { UserAIProviderConfig } from '@/lib/ai/custom-provider';
+import { useBattleStore } from '@/components/arena/stores/useBattleStore';
+import { useNarrativeHistoryStore } from '@/components/arena/stores/useNarrativeHistoryStore';
+import { useNarrativeDraftsStore } from '@/components/arena/stores/useNarrativeDraftsStore';
+import type { BattleStoreState } from '@/components/arena/types';
 import type { ArenaGenerationConnectionState } from '@/lib/arena/resumable-generation-client';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -47,37 +50,7 @@ vi.mock('@/components/arena/hooks/useBattleEngine', () => ({
   }),
 }));
 
-const battleState = {
-  combatants: [{ data: { name: '甲' } }, { data: { name: '乙' } }],
-  battleMode: 'classic',
-  generationMode: 'stream',
-  scenario: { content: null },
-  auxScenarios: [],
-  selectedLanguage: 'zh-CN',
-  storyLength: 'default',
-  settings: {
-    userGuidance: '',
-    readArenaHistory: false,
-    readArenaHistoryLimit: 3,
-    isArenaHistoryUnlimited: false,
-    readCurrentState: false,
-    readNarrativeHistory: false,
-    readNarrativeHistoryLimit: 10,
-    isNarrativeHistoryUnlimited: false,
-  },
-  teams: [],
-  userProviderConfig: null as UserAIProviderConfig | null,
-};
-
-vi.mock('@/components/arena/stores/useBattleStore', () => ({
-  useBattleStore: (selector: (state: typeof battleState) => unknown) => selector(battleState),
-}));
-
-vi.mock('@/components/arena/stores/useNarrativeHistoryStore', () => ({
-  useNarrativeHistoryStore: (selector: (state: { entries: unknown[]; lastUpdatedAt: null }) => unknown) => (
-    selector({ entries: [], lastUpdatedAt: null })
-  ),
-}));
+let battleState: BattleStoreState;
 
 vi.mock('@/components/arena/multiplayer/useArenaRoom', () => ({
   useArenaRoomContext: () => (
@@ -164,7 +137,14 @@ let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
-  battleState.combatants.splice(0, battleState.combatants.length, { data: { name: '甲' } }, { data: { name: '乙' } });
+  localStorage.clear();
+  const initial = useBattleStore.getInitialState();
+  useBattleStore.setState({ ...initial, battleMode: 'classic', generationMode: 'stream', combatants: ['甲', '乙'].map(name => ({
+    type: 'general-character', filename: `${name}.json`, data: { name }, isValid: true, isPreset: false,
+  })) });
+  useNarrativeHistoryStore.setState(useNarrativeHistoryStore.getInitialState());
+  useNarrativeDraftsStore.setState(useNarrativeDraftsStore.getInitialState());
+  battleState = useBattleStore.getState();
   mocks.handleGenerate.mockClear();
   mocks.stopGeneration.mockClear();
   mocks.isGenerating = false;

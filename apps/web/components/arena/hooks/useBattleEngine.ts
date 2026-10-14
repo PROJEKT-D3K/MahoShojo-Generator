@@ -56,6 +56,9 @@ import {
 } from '@/lib/hono-api-client';
 import { useGenerationApiIntentLatch } from '@/lib/use-generation-api-intent-latch';
 import { useNarrativeHistoryStore } from '../stores/useNarrativeHistoryStore';
+import { useNarrativeDraftsStore } from '../stores/useNarrativeDraftsStore';
+import { createNarrativeDraftCandidate } from '@mahoshojo/domain/narrative-drafts';
+import { createHostedNarrativeDraftEvidence } from '@/lib/arena/narrative-draft-evidence';
 import { resolveApiErrorMessage } from '@/lib/client/apiError';
 import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { appendReasoningDelta, normalizeReasoningSource, updateReasoningStatus } from '@/lib/ai/reasoning-normalizer';
@@ -276,6 +279,8 @@ const checkSensitivePayload = async (
 };
 
 export const useBattleEngine = () => {
+  const draftScopeMounted = useRef(true);
+  useEffect(() => { draftScopeMounted.current = true; return () => { draftScopeMounted.current = false; }; }, []);
   const generationApiIntentLatch = useGenerationApiIntentLatch();
   const queryClient = useQueryClient();
   const router = useClientRouteAdapter();
@@ -477,6 +482,7 @@ export const useBattleEngine = () => {
     latestResultNavigationRequest = null;
     useBattleStore.setState({ resultNavigation: null });
     setIsGenerating(true);
+    useNarrativeDraftsStore.getState().clearCandidate();
     setArenaGenerationConnectionState(null);
     setIsStreaming(false);
     setResultReportFormat(reportFormat);
@@ -901,6 +907,8 @@ export const useBattleEngine = () => {
 	        const abortController = new AbortController();
 	        sharedGenerationAbortController?.abort(STREAM_ABORT_REASON_USER);
 	        sharedGenerationAbortController = abortController;
+          const draftEvidence = createHostedNarrativeDraftEvidence();
+          const draftCreatedAt = new Date().toISOString();
           // 传输 finally 会 abort 做资源清理，不能把成功结果误判为取消。
           // 仅将真正发生在请求期间的取消投影给延后的 DOM 定位。
           const navigationCancellation = new AbortController();
@@ -968,6 +976,9 @@ export const useBattleEngine = () => {
                     isGenerationApiClientErrorCode(error, 'AMBIGUOUS_OPERATION_OUTCOME')
                   ),
                   getInitialRoutePin: () => generationIntent?.getRoutePin() ?? null,
+                  onRequestIdentity: draftEvidence.onRequestIdentity,
+                  observeResponse: draftEvidence.observeResponse,
+                  onTerminalBoundary: draftEvidence.onTerminalBoundary,
                   onStateChange: (state) => {
                     lastArenaConnectionState = state;
                     setArenaGenerationConnectionState(state);
@@ -1514,7 +1525,8 @@ export const useBattleEngine = () => {
               while (idx !== -1) {
                 const block = sseBuffer.slice(0, idx);
                 sseBuffer = sseBuffer.slice(idx + 2);
-                const parsed = parseSseBlock(block);
+                draftEvidence.observeBlock(block);
+              const parsed = parseSseBlock(block);
                 if (parsed) {
                   sseEventsParsed += 1;
                   await handleSseEvent(parsed.event, parsed.data);
@@ -1536,6 +1548,7 @@ export const useBattleEngine = () => {
             while (idx !== -1) {
               const block = sseBuffer.slice(0, idx);
               sseBuffer = sseBuffer.slice(idx + 2);
+              draftEvidence.observeBlock(block);
               const parsed = parseSseBlock(block);
               if (parsed) {
                 sseEventsParsed += 1;
@@ -1634,6 +1647,18 @@ export const useBattleEngine = () => {
               }
 	            }
 	          }
+
+          const currentDraftScope = draftScopeMounted.current && sharedGenerationAbortController === abortController;
+          if (isSseResponse && currentDraftScope && !abortController.signal.aborted && !authoritativeWebContract) {
+            const completedRequest = draftEvidence.completedRequest();
+            if (completedRequest) useNarrativeDraftsStore.getState().completeRequest(completedRequest);
+            const evidence = draftEvidence.resolve(accumulatedText);
+            const candidate = evidence && createNarrativeDraftCandidate({
+              ...evidence, createdAt: draftCreatedAt, source: 'hosted', acceptedText: sanitizeTextByShieldWords(accumulatedText),
+              reportFormat, generationMode, current: currentDraftScope, cancelled: false, completed: authoritativeStreamDone,
+            });
+            if (candidate) useNarrativeDraftsStore.getState().offerDraft(candidate, settings.writeNarrativeHistory);
+          }
 
 	          if (sseEndedWithoutDone) {
 	            setError(arenaGenerationConnectionNotice(lastArenaConnectionState ?? 'unknown')

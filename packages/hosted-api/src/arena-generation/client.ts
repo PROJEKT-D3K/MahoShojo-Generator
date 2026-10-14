@@ -80,6 +80,8 @@ export type PersistedArenaGeneration = {
   routePin?: GenerationApiRoutePin | null;
 };
 
+export type ArenaGenerationTerminalBoundary = Readonly<{ kind: 'terminal' | 'interrupted'; bufferedTail: string; rejectedEvent: boolean }>;
+
 /** Public generation metadata only. Transport owns authentication and request bodies. */
 export type ArenaGenerationClientOptions = {
   endpoint: string;
@@ -93,6 +95,8 @@ export type ArenaGenerationClientOptions = {
   now?: () => Date;
   getInitialRoutePin?(): GenerationApiRoutePin | null;
   onStateChange?(_state: ArenaGenerationConnectionState): void;
+  /** Read-only observation of bytes already read at the first terminal or exhausted-recovery close; never drains the transport. */
+  onTerminalBoundary?(_boundary: ArenaGenerationTerminalBoundary): void;
 };
 
 type RequestOperation = { generationRequestId: string; signal?: AbortSignal };
@@ -210,6 +214,8 @@ export const openArenaGenerationStreamClient = async (
   let cancelConfirmationPromise: Promise<void> | null = null;
   let terminal = false;
   let connectedViaResume = false;
+  let rejectedEvent = false;
+  let lastReadBuffer = '';
   const persistCurrentState = (): void => {
     ports.saveState({
       version: 3,
@@ -498,12 +504,17 @@ export const openArenaGenerationStreamClient = async (
                   if (parsed?.id) {
                     const comparison = lastEventId ? compareStreamIds(parsed.id, lastEventId) : 1;
                     if (comparison === null || comparison <= 0) {
+                      rejectedEvent = true;
                       separator = buffer.indexOf('\n\n');
                       continue;
                     }
                     lastEventId = parsed.id;
                   }
                   const nextTerminal = parsed ? terminalState(parsed.event, parsed.data) : null;
+                  if (nextTerminal) {
+                    try { options.onTerminalBoundary?.(Object.freeze({ kind: 'terminal', bufferedTail: buffer + decoder.decode(), rejectedEvent })); }
+                    catch { /* Observation must not change delivery or recovery semantics. */ }
+                  }
                   controller.enqueue(encoder.encode(`${block}\n\n`));
                   updateState(nextTerminal ?? 'generating');
                   if (nextTerminal) {
@@ -518,6 +529,7 @@ export const openArenaGenerationStreamClient = async (
               // Connection-level failures are recoverable. Cursor only advances after
               // a complete SSE block, so a partial block is safely replayed in full.
             } finally {
+              lastReadBuffer = buffer + decoder.decode();
               currentReader.releaseLock();
               currentReader = null;
             }
@@ -531,6 +543,8 @@ export const openArenaGenerationStreamClient = async (
               error instanceof Error
               && error.message === 'ARENA_RESUME_ATTEMPTS_EXHAUSTED'
             ) {
+              try { options.onTerminalBoundary?.(Object.freeze({ kind: 'interrupted', bufferedTail: lastReadBuffer, rejectedEvent })); }
+              catch { /* Observation must not change exhausted-recovery behavior. */ }
               updateState('interrupted');
               controller.close();
             } else {

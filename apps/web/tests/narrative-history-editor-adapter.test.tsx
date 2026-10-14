@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NarrativeHistoryModal } from '@/components/arena/components/NarrativeHistoryModal';
 import { useNarrativeHistoryStore, NARRATIVE_HISTORY_STORAGE_KEY } from '@/components/arena/stores/useNarrativeHistoryStore';
 import { quickCheck } from '@/lib/sensitive-word-filter';
+import { useNarrativeDraftsStore, NARRATIVE_DRAFTS_STORAGE_KEY } from '@/components/arena/stores/useNarrativeDraftsStore';
+import { createNarrativeDraftCandidate } from '@mahoshojo/domain/narrative-drafts';
 import { downloadBlob } from '@/lib/client/blobUrl';
 vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: vi.fn(async (text: string) => ({ filteredText: text.replace('bad', '***'), hasSensitiveWords: text.includes('bad') })) }));
 vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: vi.fn() }));
@@ -13,13 +15,27 @@ vi.mock('@/components/shared/JsonSizeIndicator', () => ({ JsonSizeIndicator: () 
 vi.mock('@/components/BattleDataModal', () => ({ default: ({ isOpen, onSelectCard }: { isOpen: boolean; onSelectCard: (data: unknown) => void }) => isOpen ? <button onClick={() => onSelectCard({ templateId: 'narrative-history', version: 1, entries: [{ id: 'cloud-entry', title: 'cloud', content: 'cloud body' }], _cardId: 'cloud-original' })}>选择云端历史</button> : null }));
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root, container: HTMLDivElement;
-beforeEach(() => { container = document.createElement('div'); document.body.append(container); root = createRoot(container); useNarrativeHistoryStore.setState({ entries: [], lastUpdatedAt: null, sort: 'updated_desc' }); vi.spyOn(window, 'confirm').mockReturnValue(true); });
+beforeEach(() => { localStorage.clear(); useNarrativeDraftsStore.setState(useNarrativeDraftsStore.getInitialState()); container = document.createElement('div'); document.body.append(container); root = createRoot(container); useNarrativeHistoryStore.setState({ entries: [], lastUpdatedAt: null, sort: 'updated_desc' }); vi.spyOn(window, 'confirm').mockReturnValue(true); });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 async function click(text: string) { const button = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes(text)); expect(button, text).toBeTruthy(); await act(async () => button!.click()); }
 async function input(selector: string, value: string) { const field = document.querySelector(selector) as HTMLInputElement | HTMLTextAreaElement; await act(async () => { Object.getOwnPropertyDescriptor(field instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); }); }
 async function render() { await act(async () => root.render(<NarrativeHistoryModal isOpen onClose={vi.fn()} />)); }
 const raw = JSON.stringify([{ templateId: 'narrative-history', version: 1, entries: [{ id: 'same', title: 'bad title', content: 'bad content' }] }, { templateId: 'narrative-history', version: 1, entries: [{ id: 'same', title: 'another', content: 'body' }] }]);
 describe('real Web narrative editor adapter', () => {
+  it('reopens and refreshes the separate readonly draft archive without exposing it to formal cloud export', async () => {
+    const candidate = createNarrativeDraftCandidate({ requestId: 'request-reopen', createdAt: '2026-10-14T00:00:00Z', source: 'hosted', acceptedText: '# 草稿标题\n未完成正文', completion: { kind: 'server-failed', code: 'AI_STREAM_INCOMPLETE' }, reportFormat: 'markdown', generationMode: 'stream', current: true, cancelled: false, completed: false })!;
+    useNarrativeDraftsStore.getState().offerDraft(candidate, true);
+    await render(); expect(document.body.textContent).toContain('正式 0 条 · 未完成草稿 1 条');
+    const panel = document.querySelector('[aria-label="未完成叙事草稿"]')!;
+    expect(panel.querySelector('textarea,input')).toBeNull(); expect(panel.textContent).toContain('未完成正文');
+    await act(async () => root.render(<NarrativeHistoryModal isOpen={false} onClose={vi.fn()} />));
+    useNarrativeDraftsStore.setState(useNarrativeDraftsStore.getInitialState());
+    await render(); expect(document.body.textContent).toContain('草稿标题');
+    expect(useNarrativeDraftsStore.getState().drafts).toEqual([candidate]);
+    expect(localStorage.getItem(NARRATIVE_DRAFTS_STORAGE_KEY)).not.toContain('"entries"');
+    expect(document.querySelector('[data-cloud-type="history"]')!.getAttribute('data-cloud-payload')).toBe('null');
+    await click('导出未完成草稿'); expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), '未完成叙事草稿.json');
+  });
   it('creates/edits through original store and quickCheck; cloud save receives canonical card', async () => {
     await render(); await click('新建条目'); await input('[aria-label="历史标题"]', 'bad title'); await input('[aria-label="历史正文"]', 'bad body'); await click('创建条目');
     const first = useNarrativeHistoryStore.getState().entries[0]; expect(first.content).toBe('*** body'); expect(first.title).toBe('*** title'); expect(document.body.textContent).toContain('已自动屏蔽敏感词后创建');

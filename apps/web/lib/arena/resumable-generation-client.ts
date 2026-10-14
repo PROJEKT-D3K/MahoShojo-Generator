@@ -1,6 +1,6 @@
 import {
   openArenaGenerationStreamClient,
-  type PersistedArenaGeneration, type ArenaGenerationConnectionState,
+  type PersistedArenaGeneration, type ArenaGenerationConnectionState, type ArenaGenerationTerminalBoundary,
 } from '@mahoshojo/hosted-api/arena-generation/client';
 export {
   arenaGenerationConnectionNotice, isArenaGenerationRecoveryState, mergeArenaGenerationSnapshotMarkdown,
@@ -58,6 +58,10 @@ export type OpenArenaGenerationStreamOptions = {
   isInitialCreateOutcomeAmbiguous?(_error: unknown): boolean;
   getInitialRoutePin?(): GenerationApiRoutePin | null;
   onStateChange?(_state: ArenaGenerationConnectionState): void;
+  onRequestIdentity?(_requestId: string): void;
+  /** The original upstream response, before C0 synthesizes identity headers. */
+  observeResponse?(_response: Response): void;
+  onTerminalBoundary?(_boundary: ArenaGenerationTerminalBoundary): void;
 };
 
 const defaultStorage = (): StoragePort | null => {
@@ -247,6 +251,7 @@ export const openArenaGenerationStream = async (
     cancelConfirmationTimeoutMs: options.cancelConfirmationTimeoutMs,
     random: options.random, now: options.now,
     getInitialRoutePin: options.getInitialRoutePin, onStateChange: options.onStateChange,
+    onTerminalBoundary: options.onTerminalBoundary,
   }, {
     loadState: () => readPersistedArenaGeneration(storage, scopedStateKey),
     saveState: (value) => save(storage, scopedStateKey, value),
@@ -255,12 +260,13 @@ export const openArenaGenerationStream = async (
     classifyExplicitAbort: (reason) => reason === STREAM_ABORT_REASON_CONTENT_POLICY
       ? 'content_policy' : reason === STREAM_ABORT_REASON_USER ? 'user' : null,
     prepareCreate: (generationRequestId) => {
+      options.onRequestIdentity?.(generationRequestId);
       initialHeaders = withActorToken(options.headers, actorStorage, true);
       initialHeaders.set('Accept', 'text/event-stream');
       initialHeaders.set('Content-Type', 'application/json');
       createBody = JSON.stringify({ ...options.body, generationRequestId });
     },
-    observeResponse: (response) => captureActorToken(actorStorage, response),
+    observeResponse: (response) => { captureActorToken(actorStorage, response); options.observeResponse?.(response); },
     transport: {
       create: ({ signal, onRoutePinSelected }) => options.fetcher(options.endpoint, {
         method: 'POST', headers: initialHeaders, body: createBody, signal,
