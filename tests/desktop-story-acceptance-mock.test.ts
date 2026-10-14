@@ -36,7 +36,7 @@ const headers = { 'content-type': 'application/json', [ACTOR]: BOOTSTRAP, [STORY
 const stops: Array<() => Promise<unknown>> = [];
 afterEach(async () => { await Promise.all(stops.splice(0).map((stop) => stop())); });
 
-async function open(options: { streamDelayMs?: number; maxBodyBytes?: number; faults?: Record<string, unknown> } = {}) {
+async function open(options: { streamDelayMs?: number; maxBodyBytes?: number; faults?: Record<string, unknown>; beforeCreateHeaders?: () => Promise<void> } = {}) {
   const mocks = await startStoryMocks({ honoPort: 0, nextPort: 0, streamDelayMs: 0, ...options });
   stops.push(mocks.close);
   return mocks;
@@ -497,19 +497,32 @@ describe('explicit synthetic HTTP fault controls', () => {
   });
 
   it('uses the real Native request-id DELETE before headers, rejects wrong actors/reasons/budgets and keeps completed terminal', async () => {
-    const mocks = await open({ faults: { createDelayMs: 200 } });
-    const pending = fetch(mocks.honoOrigin + CREATE, { method: 'POST', headers, body: JSON.stringify(story()) });
-    await expect.poll(() => mocks.trace().generationCount).toBe(1);
+    let releaseHeaders!: () => void;
+    const headersGate = new Promise<void>((resolve) => { releaseHeaders = resolve; });
+    let waitingForHeaders = false, receivedHeaders = false;
+    const mocks = await open({ beforeCreateHeaders: () => { waitingForHeaders = true; return headersGate; } });
+    const pending = fetch(mocks.honoOrigin + CREATE, { method: 'POST', headers, body: JSON.stringify(story()) })
+      .then(async (response) => { receivedHeaders = true; return { response, wire: await response.text() }; });
+    // Observe rejection immediately, and drain the response after releasing even on assertion failure.
+    const settled = pending.catch(() => undefined);
     const cancel = (actor: string, reason = 'content_policy') => fetch(mocks.honoOrigin + '/api/arena/generate-stream', {
       method: 'DELETE', headers: { 'content-type': 'application/json', [ACTOR]: actor },
       body: JSON.stringify({ generationRequestId: story().generationRequestId, reason }) });
-    expect((await cancel(otherActor)).status).toBe(403);
-    const invalid = await cancel(BOOTSTRAP, 'invented');
-    expect(await invalid.json()).toMatchObject({ code: 'GENERATION_CANCEL_REASON_INVALID' });
-    const accepted = await cancel(BOOTSTRAP);
-    expect(accepted.status).toBe(202);
-    const first = await pending;
-    expect(parsedEvents(await first.text())).toEqual([expect.objectContaining({ data: { ok: false, status: 'cancelled', code: 'CONTENT_POLICY_CANCELLED' } })]);
+    try {
+      await expect.poll(() => waitingForHeaders).toBe(true);
+      expect(mocks.trace().generationCount).toBe(1);
+      expect((await cancel(otherActor)).status).toBe(403);
+      const invalid = await cancel(BOOTSTRAP, 'invented');
+      expect(await invalid.json()).toMatchObject({ code: 'GENERATION_CANCEL_REASON_INVALID' });
+      const accepted = await cancel(BOOTSTRAP);
+      expect(accepted.status).toBe(202);
+      expect(receivedHeaders).toBe(false);
+    } finally {
+      releaseHeaders();
+      await settled;
+    }
+    const { response: first, wire } = await pending;
+    expect(parsedEvents(wire)).toEqual([expect.objectContaining({ data: { ok: false, status: 'cancelled', code: 'CONTENT_POLICY_CANCELLED' } })]);
     const id = first.headers.get('x-mahoshojo-generation-id')!;
     const tooLarge = await raw(mocks.honoOrigin, `/api/arena/generations/${id}/cancel`, { method: 'POST', headers,
       chunks: [JSON.stringify({ reason: 'user', extra: 'x'.repeat(1024) })] });

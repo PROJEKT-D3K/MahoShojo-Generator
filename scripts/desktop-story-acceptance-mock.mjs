@@ -230,14 +230,16 @@ function waitForStream(response, milliseconds) {
 /** Both services bind only 127.0.0.1. Port 0 is reserved for module-level tests.
  * trace() returns sanitized snapshots; callers own any persistence/evidence export.
  * Synthetic HTTP faults never stand in for Native receipt/SecretStore/invoke faults.
- * @param {{ honoPort?: number, nextPort?: number, streamDelayMs?: number, maxBodyBytes?: number, faults?: Record<string, unknown> }} [options]
+ * beforeCreateHeaders is a module-only test barrier; callers must release it in finally.
+ * @param {{ honoPort?: number, nextPort?: number, streamDelayMs?: number, maxBodyBytes?: number, faults?: Record<string, unknown>, beforeCreateHeaders?: () => Promise<void> }} [options]
  */
-export async function startStoryMocks({ honoPort, nextPort, streamDelayMs = 600, maxBodyBytes, faults = {} } = {}) {
+export async function startStoryMocks({ honoPort, nextPort, streamDelayMs = 600, maxBodyBytes, faults = {}, beforeCreateHeaders } = {}) {
   for (const port of [honoPort, nextPort]) {
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Explicit loopback ports are required');
   }
   if (honoPort !== 0 && honoPort === nextPort) throw new Error('Hono and Next ports must differ');
   if (!Number.isInteger(streamDelayMs) || streamDelayMs < 0 || streamDelayMs > 10_000) throw new Error('Invalid stream delay');
+  if (beforeCreateHeaders !== undefined && typeof beforeCreateHeaders !== 'function') throw new Error('Invalid create headers barrier');
   const config = validateStoryMockFaults(faults);
   if (!Object.hasOwn(faults, 'streamDelayMs')) config.streamDelayMs = streamDelayMs;
   const fixture = JSON.parse(await readFile(new URL('../packages/contracts/fixtures/desktop-arena-hosted.json', import.meta.url), 'utf8'));
@@ -368,6 +370,7 @@ export async function startStoryMocks({ honoPort, nextPort, streamDelayMs = 600,
         lastEventId: null, updatedAt: new Date().toISOString() };
       generations.set(id, generation); requestIds.set(input.generationRequestId, id);
       entry.generationId = id; entry.chapterIndex = input.chapterIndex; entry.action = input.action;
+      if (beforeCreateHeaders) await beforeCreateHeaders();
       if (config.createDelayMs) { applied(entry, 'create-delay'); await waitForStream(response, config.createDelayMs); }
       if (response.destroyed || closed) return;
       if (config.createDisconnectBeforeHeaders) { applied(entry, 'create-disconnect-before-headers'); response.destroy(); return; }
