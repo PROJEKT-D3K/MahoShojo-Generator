@@ -606,7 +606,7 @@ export const permanentlyDeleteDataCardsByUserAndIds = async (
 
   const deleted = await db
     .delete(dataCards)
-    .where(and(eq(dataCards.userId, userId), inArray(dataCards.id, safeIds)))
+    .where(and(eq(dataCards.userId, userId), isNotNull(dataCards.deletedAt), inArray(dataCards.id, safeIds)))
     .returning({ id: dataCards.id });
 
   return deleted.length;
@@ -625,17 +625,32 @@ export const listUserRecycleBinDataCards = async (
   return rows.map(mapDataCardDbRow);
 };
 
-export const listUserRecycleBinDataCardIds = async (
+export const pruneUserRecycleBinDataCards = async (
   db: AppDrizzleDb,
   userId: number,
+  keep: number,
 ): Promise<string[]> => {
-  const rows = await db
-    .select({ id: dataCards.id })
-    .from(dataCards)
-    .where(and(eq(dataCards.userId, userId), isNotNull(dataCards.deletedAt)))
-    .orderBy(desc(dataCards.deletedAt));
+  const safeKeep = Math.floor(keep);
+  if (!Number.isFinite(keep) || keep < 0 || !Number.isSafeInteger(safeKeep)) {
+    throw new RangeError('回收站保留数量必须是非负的有限安全数值');
+  }
 
-  return rows.map((row) => row.id).filter((id) => typeof id === 'string' && id.length > 0);
+  // 选择和删除在同一条语句中完成，避免恢复后的卡片仍被过期的 ID 列表物理删除。
+  const deleted = await db
+    .delete(dataCards)
+    .where(and(
+      eq(dataCards.userId, userId),
+      isNotNull(dataCards.deletedAt),
+      inArray(dataCards.id, sql`(
+        SELECT ${dataCards.id} FROM ${dataCards}
+        WHERE ${dataCards.userId} = ${userId} AND ${dataCards.deletedAt} IS NOT NULL
+        ORDER BY ${dataCards.deletedAt} DESC, ${dataCards.id} ASC
+        LIMIT -1 OFFSET ${safeKeep}
+      )`),
+    ))
+    .returning({ id: dataCards.id });
+
+  return deleted.map((row) => row.id);
 };
 
 export const restoreDataCardByIdAndUser = async (

@@ -67,7 +67,7 @@ type DataCardsRepoBundle = {
   softDeleteDataCardByIdAndUser: (db: unknown, cardId: string, userId: number) => Promise<number>;
   permanentlyDeleteDataCardsByUserAndIds: (db: unknown, userId: number, ids: string[]) => Promise<number>;
   listUserRecycleBinDataCards: (db: unknown, userId: number) => Promise<any[]>;
-  listUserRecycleBinDataCardIds: (db: unknown, userId: number) => Promise<string[]>;
+  pruneUserRecycleBinDataCards: (db: unknown, userId: number, keep: number) => Promise<string[]>;
   restoreDataCardByIdAndUser: (db: unknown, cardId: string, userId: number) => Promise<number>;
   hasDataCardOwnership: (db: unknown, cardId: string, userId: number) => Promise<boolean>;
   getDataCardByIdWithAuthorAndTags: (
@@ -148,7 +148,7 @@ const readDataCardsRepoBundle = async (): Promise<DataCardsRepoBundle | null> =>
       softDeleteDataCardByIdAndUser: repo.softDeleteDataCardByIdAndUser as DataCardsRepoBundle['softDeleteDataCardByIdAndUser'],
       permanentlyDeleteDataCardsByUserAndIds: repo.permanentlyDeleteDataCardsByUserAndIds as DataCardsRepoBundle['permanentlyDeleteDataCardsByUserAndIds'],
       listUserRecycleBinDataCards: repo.listUserRecycleBinDataCards as DataCardsRepoBundle['listUserRecycleBinDataCards'],
-      listUserRecycleBinDataCardIds: repo.listUserRecycleBinDataCardIds as DataCardsRepoBundle['listUserRecycleBinDataCardIds'],
+      pruneUserRecycleBinDataCards: repo.pruneUserRecycleBinDataCards as DataCardsRepoBundle['pruneUserRecycleBinDataCards'],
       restoreDataCardByIdAndUser: repo.restoreDataCardByIdAndUser as DataCardsRepoBundle['restoreDataCardByIdAndUser'],
       hasDataCardOwnership: repo.hasDataCardOwnership as DataCardsRepoBundle['hasDataCardOwnership'],
       getDataCardByIdWithAuthorAndTags: repo.getDataCardByIdWithAuthorAndTags as DataCardsRepoBundle['getDataCardByIdWithAuthorAndTags'],
@@ -465,7 +465,7 @@ export async function deleteDataCard(id: string, userId: number): Promise<boolea
   }
 }
 
-// 永久删除（物理删除）指定的数据卡
+// 永久删除（物理删除）回收站中指定的数据卡
 export async function permanentlyDeleteDataCards(ids: string[], userId: number): Promise<number> {
   if (!ids.length) {
     return 0;
@@ -512,15 +512,7 @@ export async function pruneUserRecycleBin(userId: number, keep: number): Promise
     const bundle = await readDataCardsRepoBundle();
     if (!bundle) return [];
 
-    const ids = await bundle.listUserRecycleBinDataCardIds(bundle.db, userId);
-    const safeKeep = Math.max(0, Math.floor(keep));
-    if (ids.length <= safeKeep) {
-      return [];
-    }
-
-    const idsToDelete = ids.slice(safeKeep);
-    await bundle.permanentlyDeleteDataCardsByUserAndIds(bundle.db, userId, idsToDelete);
-    return idsToDelete;
+    return await bundle.pruneUserRecycleBinDataCards(bundle.db, userId, keep);
   } catch (error) {
     console.error('裁剪回收站失败:', error);
     return [];
