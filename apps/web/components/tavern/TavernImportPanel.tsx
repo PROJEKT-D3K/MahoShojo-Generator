@@ -989,10 +989,11 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                   </div>
                 </div>
                 {state.convertMode === 'ai' && generationMode === 'stream' && (
-                  <AiReasoningPanel reasoning={streamingReasoning} status={streamingReasoning?.status ?? 'idle'} compact />
+                  <AiReasoningPanel background="solid-dark" reasoning={streamingReasoning} status={streamingReasoning?.status ?? 'idle'} compact />
                 )}
                 {state.convertMode === 'ai' && generationMode === 'non-stream' && nonStreamReasoning && (
                   <AiReasoningPanel
+                    background="solid-dark"
                     reasoning={nonStreamReasoning}
                     status={nonStreamReasoning.status}
                     displayMode="content-only"

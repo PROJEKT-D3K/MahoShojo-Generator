@@ -59,6 +59,28 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(
 const mount = async () => { await act(async () => root.render(<StrictMode><DesktopTavern /></StrictMode>)); await settle(); };
 
 describe('Desktop Tavern actual Direct journey', () => {
+  it.each(['stream', 'non-stream'] as const)('shows only returned %s reasoning and does not persist it as output or replay on restore', async generationMode => {
+    let finish!: (result: unknown) => void;
+    let frozen!: TavernGenerationInput;
+    mocks.execute.mockImplementation((_options, input) => { frozen = input; return new Promise(resolve => { finish = resolve; }); });
+    await mount(); await upload(); await chooseAi();
+    if (generationMode === 'stream') await selectGenerationMode('流式');
+    await click('开始转换');
+    expect(host.querySelector('.ai-reasoning-panel')).toBeNull();
+    await act(async () => finish({ ...complete(frozen), reasoning: { status: 'done', text: 'API 可展示内容', source: 'provider' } }));
+    const panel = host.querySelector('.ai-reasoning-panel')!;
+    expect(panel).not.toBeNull();
+    expect(panel.classList.contains('bg-slate-900')).toBe(true);
+    expect(panel.textContent).toContain(generationMode === 'stream' ? 'AI 思考过程' : 'AI 思考内容');
+    await act(async () => panel.querySelector('button')!.click());
+    expect(panel.textContent).toContain('API 可展示内容');
+    expect(host.querySelector('[data-result]')?.textContent).not.toContain('API 可展示内容');
+    expect(localStorage.getItem(TAVERN_AI_DRAFT_KEY)).not.toContain('API 可展示内容');
+    await act(async () => root.unmount()); root = createRoot(host); await mount();
+    expect(host.querySelector('.ai-reasoning-panel')).toBeNull();
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou'])('generates %s with frozen source and restores without replay', async kind => {
     await mount(); await upload(); await template(kind); if (kind !== 'scenario' && kind !== 'magical-girl') await chooseAi(); await click('开始转换');
     expect(mocks.execute).toHaveBeenCalledTimes(1);
@@ -103,7 +125,7 @@ describe('Desktop Tavern actual Direct journey', () => {
     await act(async () => { button('开始转换').click(); button('开始转换').click(); });
     expect(mocks.execute).toHaveBeenCalledTimes(1); expect(host.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
     expect(host.querySelector<HTMLSelectElement>('select')?.disabled).toBe(true);
-    await click('取消转换'); expect(signal.aborted).toBe(true); await act(async () => finish(complete(frozen)));
+    await click('取消转换'); expect(host.querySelector('.ai-reasoning-panel')).toBeNull(); expect(signal.aborted).toBe(true); await act(async () => finish(complete(frozen)));
     expect(host.querySelector('[data-result]')).toBeNull(); expect(host.textContent).toContain('模型输出'); expect(mocks.execute).toHaveBeenCalledTimes(1);
   });
   it.each(['general', 'scenario'])('uses Hosted %s without rewriting the selected server preference', async kind => {

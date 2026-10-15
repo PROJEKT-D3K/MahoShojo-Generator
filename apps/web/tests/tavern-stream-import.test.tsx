@@ -278,6 +278,7 @@ describe('Web Tavern real shared streaming projection', () => {
     await emit(markdown, reasoning);
     await click('AI 正在思考…');
     expect(container.querySelector('.ai-reasoning-panel')?.textContent).toContain(reasoning.text);
+    expect(container.querySelector('.ai-reasoning-panel')?.classList.contains('bg-slate-900')).toBe(true);
     expect(projectionNode().textContent).not.toContain('REASONING_ONLY');
     await emit(markdown, { ...reasoning, status: 'done' });
     await finish(markdown);

@@ -22,3 +22,13 @@ export function GenerationActionButton({
 }: GenerationActionButtonProps) {
   return <button {...props} type={type} className={[generationActionClassNames[variant], className].filter(Boolean).join(' ')} />;
 }
+
+/** 残兽结果页的再次生成入口；确认、冷却与派发仍由宿主负责。 */
+export function CanshouRegenerateButton(props: ComponentPropsWithRef<'button'>) {
+  return <button
+    {...props}
+    type="button"
+    className={generationSubmitClassName}
+    style={{ marginTop: '0.5rem', backgroundColor: '#a855f7', backgroundImage: 'linear-gradient(to right, #a855f7, #d946ef)' }}
+  />;
+}

@@ -2,7 +2,7 @@
 import { act, createRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterAll, afterEach, expect, test, vi } from 'vitest';
-import { GenerationActionButton, generationActionClassNames } from '../src/generation-actions';
+import { CanshouRegenerateButton, GenerationActionButton, generationActionClassNames } from '../src/generation-actions';
 import { SaveJsonButton } from '../src/details-controls/SaveJsonButton';
 
 const download = vi.hoisted(() => vi.fn());
@@ -69,4 +69,23 @@ test('uses secondary download and copy actions while retaining the export payloa
   expect(writeText).toHaveBeenCalledWith(JSON.stringify(data, null, 2));
   expect(container.textContent).toContain('JSON 已复制到剪贴板');
   act(() => vi.runAllTimers());
+});
+
+test('shares the canshou result theme without implicit dispatch or form submission', () => {
+  const click = vi.fn(); const submit = vi.fn();
+  const render = (disabled: boolean) => act(() => root.render(<form onSubmit={submit}>
+    <CanshouRegenerateButton disabled={disabled} onClick={click}>不满意？再来一次</CanshouRegenerateButton>
+  </form>));
+  render(true);
+  const button = container.querySelector('button')!;
+  expect(button.type).toBe('button');
+  expect(button.classList.contains('ui-web-generation-submit')).toBe(true);
+  expect(button.style.backgroundImage).toContain('linear-gradient');
+  act(() => button.click());
+  expect(click).not.toHaveBeenCalled();
+  render(false);
+  expect(click).not.toHaveBeenCalled();
+  act(() => button.click());
+  expect(click).toHaveBeenCalledOnce();
+  expect(submit).not.toHaveBeenCalled();
 });

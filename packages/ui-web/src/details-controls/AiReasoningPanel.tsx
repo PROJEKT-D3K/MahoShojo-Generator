@@ -10,6 +10,7 @@ export type AiReasoningPanelProps = {
   summary?: string | null;
   reasoning?: AIReasoningEnvelope | null;
   compact?: boolean;
+  background?: 'overlay' | 'solid-dark';
   displayMode?: AiReasoningDisplayMode;
   defaultExpanded?: boolean;
   onToggle?: (expanded: boolean) => void;
@@ -50,6 +51,7 @@ export function AiReasoningPanel({
   summary,
   reasoning = null,
   compact = false,
+  background = 'overlay',
   displayMode = 'stream',
   defaultExpanded = false,
   onToggle,
@@ -82,7 +84,8 @@ export function AiReasoningPanel({
   return (
     <div
       className={[
-        'ai-reasoning-panel mt-3 rounded-xl border border-white/15 bg-black/20',
+        'ai-reasoning-panel mt-3 rounded-xl border border-white/15',
+        background === 'solid-dark' ? 'bg-slate-900' : 'bg-black/20',
         compact ? 'p-2.5' : 'p-3',
       ].join(' ')}
     >

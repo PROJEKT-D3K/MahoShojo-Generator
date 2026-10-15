@@ -51,7 +51,7 @@ const goToFinalQuestion = async () => {
 };
 const submitQuestionnaire = async () => { await goToFinalQuestion(); await act(async () => finalSubmitButton().click()); await settle(); };
 const regenerate = async () => {
-  const resultButton = [...container.querySelectorAll('button')].find((item) => item.textContent === '重新生成');
+  const resultButton = [...container.querySelectorAll('button')].find((item) => item.textContent === '不满意？再来一次');
   if (resultButton) { await act(async () => resultButton.click()); await settle(); }
   else await submitQuestionnaire();
 };
@@ -193,7 +193,7 @@ describe('Desktop Canshou real route and session UI (native adapter mock)', () =
     window.localStorage.setItem(CANSHOU_DRAFT_KEY, JSON.stringify(draft()));
     const router = await mount(); await submitQuestionnaire(); await click('保存到云端');
     await act(async () => { [...document.querySelectorAll('button')].find((node) => node.textContent === '保存')!.click(); }); await settle();
-    expect(button('重新生成').disabled).toBe(true); expect(button('保存到本地卡库').disabled).toBe(true);
+    expect(button('不满意？再来一次').disabled).toBe(true); expect(button('保存到本地卡库').disabled).toBe(true);
     await act(async () => { void router.navigate({ to: '/' }); }); await settle(); expect(router.state.location.pathname).toBe('/canshou');
     const prevented = vi.fn(); await act(async () => { close({ preventDefault: prevented }); }); expect(prevented).toHaveBeenCalled();
     expect(mocks.execute).toHaveBeenCalledTimes(1); expect(container.textContent).toContain('巢穴回声');
@@ -645,6 +645,10 @@ describe('Desktop Canshou real route and session UI (native adapter mock)', () =
     expect(container.textContent).toContain(stale);
     expect(mocks.execute).toHaveBeenCalledTimes(1);
     expect(mocks.save).toHaveBeenCalledTimes(1);
+    expect(button('不满意？再来一次').closest('section')?.getAttribute('aria-label')).toBe('保存原始数据');
+    expect(button('不满意？再来一次').classList.contains('ui-web-generation-submit')).toBe(true);
+    expect(button('不满意？再来一次').style.backgroundImage).toContain('linear-gradient');
+    expect([...container.querySelectorAll('button')].filter((item) => item.textContent === '不满意？再来一次')).toHaveLength(1);
     await regenerate();
     expect(container.textContent).not.toContain(stale);
     expect(container.textContent).not.toContain('未记录对应的问卷答案');

@@ -1,6 +1,6 @@
 import { PrivateResultSave } from '../features/cloud-save/private-result-save';
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
-import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
+import { CanshouRegenerateButton, generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
 import { QuestionnaireDraftPanel } from './questionnaire-draft-panel';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -764,7 +764,6 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
             )}
             {state.card && <div className="mb-4 flex flex-wrap gap-2">
               <button className={actionClass} onClick={() => { setEditingAnswers((value) => !value); setShowIntroduction(false); }}>{editingAnswers ? '查看当前结果' : '返回编辑答案'}</button>
-              {showResult && <button className={actionClass} disabled={generationDisabled} onClick={() => generate()}>重新生成</button>}
             </div>}
                   {aiState.generationActive && aiStore.isPreparingGeneration() && <button className={actionClass} onClick={() => {
                     aiStore.cancelPreparingGeneration();
@@ -1014,6 +1013,9 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
                 {/* 保存原始数据——与 Web `/canshou` 同一共享控件（下载 JSON / 复制文本）。 */}
                 {resolvedResultPayload && <QuestionnaireResultActions
                   variant="canshou"
+                  regenerateAction={<CanshouRegenerateButton disabled={generationDisabled} onClick={() => generate()}>
+                    {state.phase === 'generating' || aiState.generationActive ? '重新生成中...' : '不满意？再来一次'}
+                  </CanshouRegenerateButton>}
                   resolveInternalHref={resolveInternalHrefForHashHistory}
                   onNavigate={(href) => navigateByProductHref(router, href)}
                   status={<>

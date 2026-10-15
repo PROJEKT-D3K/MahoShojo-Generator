@@ -4,7 +4,7 @@ import { BackHomeLink } from '@mahoshojo/ui-web/shell';
 import { getQuestionnaireQuestionPresentation } from '@mahoshojo/ui-web/questionnaire';
 import { QuestionnaireResultActions } from '@mahoshojo/ui-web/details-controls';
 
-import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
+import { CanshouRegenerateButton, generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
 import { assertSupportedQuestionnaireAnswerDraft, questionnaireAnswerDraftFingerprint } from '@/lib/questionnaire-draft-shape';
@@ -1649,14 +1649,12 @@ export const CanshouPage: React.FC = () => {
                       variant="canshou"
                       renderLink={(props) => <Link {...props} />}
                       sizeIndicator={streamedGeneralCard && <JsonSizeIndicator data={streamedGeneralCard} warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。" />}
-                      regenerateAction={<button
+                      regenerateAction={<CanshouRegenerateButton
                         onClick={handleRegenerate}
                         disabled={submitting || isCooldown}
-                        className={generationSubmitClassName}
-                        style={{ marginTop: '0.5rem', backgroundColor: '#a855f7', backgroundImage: 'linear-gradient(to right, #a855f7, #d946ef)' }}
                       >
                         {isCooldown ? `冷却中 (${remainingTime}s)` : submitting ? '重新生成中...' : '不满意？再来一次'}
-                      </button>}
+                      </CanshouRegenerateButton>}
                     >
                       <button onClick={() => downloadStreamedGeneralCard(streamedGeneralCard)} className={`${generationActionClassNames.secondary} flex-1`}>下载通用角色卡</button>
                       <SaveToCloudButton data={streamedGeneralCard} cardType="character" buttonText="保存到云端" className={`${generationActionClassNames.primary} flex-1`} />
@@ -1697,14 +1695,12 @@ export const CanshouPage: React.FC = () => {
                       variant="canshou"
                       renderLink={(props) => <Link {...props} />}
                       sizeIndicator={resolvedResultPayload && <JsonSizeIndicator data={resolvedResultPayload} warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。" />}
-                      regenerateAction={<button
+                      regenerateAction={<CanshouRegenerateButton
                         onClick={handleRegenerate}
                         disabled={submitting || isCooldown}
-                        className={generationSubmitClassName}
-                        style={{ marginTop: '0.5rem', backgroundColor: '#a855f7', backgroundImage: 'linear-gradient(to right, #a855f7, #d946ef)' }}
                       >
                         {isCooldown ? `冷却中 (${remainingTime}s)` : submitting ? '重新生成中...' : '不满意？再来一次'}
-                      </button>}
+                      </CanshouRegenerateButton>}
                     >
                       {resolvedResultPayload && <>
                         <SaveJsonButton data={resolvedResultPayload} mode={jsonSaveMode} recommendedMode={recommendedJsonMode} resolveFileName={resolveCanshouJsonFileName} downloadLabel="💾 下载残兽档案" />

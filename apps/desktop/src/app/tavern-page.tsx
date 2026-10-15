@@ -21,6 +21,7 @@ import { resolveDesktopAiTarget } from '../features/ai-config/desktop-ai-config'
 import { useCooldown } from '@mahoshojo/ui-web/cooldown';
 import { useDesktopCloudSession } from '../features/account/use-desktop-cloud-session';
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
+import { AiReasoningPanel } from '@mahoshojo/ui-web/details-controls';
 import { QuestionnaireDraftPanel } from './questionnaire-draft-panel';
 
 const SYSTEM_COOLDOWN_MS = 120_000;
@@ -195,6 +196,13 @@ function TavernPage({ session }: { session: TavernAiSession }) {
             {ai.phase === 'generating' || aiStore.isPreparingGeneration() ? <button type="button" onClick={() => { aiStore.cancelPreparingGeneration(); session.cancel(); }}>取消转换</button> : null}
             {ai.message ? <p role={ai.phase === 'failed' ? 'alert' : 'status'}>{ai.message}</p> : null}
             <GenerationMarkdownPreview active={ai.phase === 'generating' && ai.activeGenerationMode === 'stream'} text={ai.rawText} />
+            <AiReasoningPanel
+              reasoning={ai.reasoning}
+              status={ai.reasoning?.status ?? 'idle'}
+              displayMode={ai.activeGenerationMode === 'stream' ? 'stream' : 'content-only'}
+              background="solid-dark"
+              compact
+            />
             {ai.rawText ? <details open={ai.phase !== 'completed'}><summary>AI 原始输出</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words">{ai.rawText}</pre></details> : null}
             {ai.rawText && ai.phase !== 'completed' && ai.phase !== 'generating' ? <div className="space-y-2">
               <p className="text-xs text-amber-700">未完成正文仅供保留，不是完成卡，不能保存到卡库。</p>
