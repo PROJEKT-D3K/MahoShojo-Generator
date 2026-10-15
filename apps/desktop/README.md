@@ -459,6 +459,34 @@ desktop_config_open_directory()
 
 ## 酒馆转换服务器通道
 
+当前另支持 Hosted 流式，隔离宿主验收见下节；下述为既有 JSON 通道边界。
+
 通用角色与通用情景支持非流式 Direct / Hosted JSON。Hosted 只使用固定 Next 路由 `/api/tavern/convert`，系统配置和目录预设 BYOK 由 Native 注入；自定义连接仍只允许 Direct。原始卡、占位符偏好和 PNG 底图不上传，结果从冻结本机原件补回 `_tavern.raw`，始终未签名。
 
 附件正文单件及合计限 1 MiB，最多 10 件；请求 JSON 在注入前后均限 8 MiB，成功响应仍限 4 MiB，Tavern 错误正文限 64 KiB。Desktop 另对 sourceName、附件 name/type 等非正文字段设有限上限，超限拒绝而不静默截断。未知结果不自动重发；准备期账号变化要求重新确认。设备草稿不授予新账号云保存权限，本页不开放云保存。
+
+### Tavern Hosted 流式隔离宿主验收
+
+`scripts/desktop-tavern-acceptance.mjs` 用固定合成卡与 loopback mock 驱动正式 Tavern 页面、Native 与 Channel；不调用模型或真实账号。Node 合同测试不代表 Windows/Tauri/WebView2 已验收。
+
+在 Windows 上准备两个**独立、clean、同一 Git tree** 的 checkout，且测试副本已有项目要求的 pnpm/Rust/前端依赖及离线 Cargo 缓存。入口不会安装工具或依赖；缺条件即停止。以下在原 checkout 的 PowerShell 执行，路径按实际修改；state 父目录须已存在，state 自身须不存在：
+
+```powershell
+$Copy = 'C:\acceptance\tavern-copy'
+$State = 'C:\acceptance\tavern-state'
+node scripts/desktop-tavern-acceptance.mjs preflight --test-tree $Copy --state-root $State --origin http://127.0.0.1:24185
+node scripts/desktop-tavern-acceptance.mjs prepare --test-tree $Copy --state-root $State --origin http://127.0.0.1:24185
+node scripts/desktop-tavern-acceptance.mjs build --state-root $State
+node scripts/desktop-tavern-acceptance.mjs launch --state-root $State
+```
+
+仅一次性副本固定 Cloud/Arena origin、独立 AppData identifier、WebView 与 SecretStore namespace，并拒绝 release。不要启动日常安装版或导入私有资料；在新窗口酒馆页仅导入 `$State\synthetic-tavern.json`，选通用角色、系统默认、服务器流式。
+
+同次启动内在终端输入 `scenario stop|slow|eof|disconnect|length|rate-limit|probe-mismatch` 切换下次请求；必须等待当前 stream 关闭，冷却仍按正式页面执行。`observe` 输出有界服务端观察，`stop` 只结束本次隔离进程。手动检查：
+
+- `stop`：正文逐步显示，只有正常终态且 invoke settle 后可保存；本地保存、草稿恢复和导出保持原件
+- `slow`：收到前缀后手动取消，保留部分正文且不能保存为完成卡；取消后不可自动重发
+- `eof`、`disconnect`、`length`：保留部分正文但不可当作完成；`rate-limit` 显示冷却
+- `probe-mismatch`：明确拒绝，`observe` 中该场景没有业务 POST
+
+`mock-trace.json` 只记录有限路由/状态/事件数量/故障/提前连接关闭；连接关闭不证明 UI 或 IPC 取消正确。真实窗口行为须另行观察，不以这些文件宣称实机通过。build/launch 单次使用；失败或退出后保留隔离目录，重新验收使用新副本与 state，不清理日常环境。
