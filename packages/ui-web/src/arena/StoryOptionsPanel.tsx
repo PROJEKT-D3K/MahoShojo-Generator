@@ -12,6 +12,7 @@ export type LanguageOption = {
 };
 
 type Props = {
+  idPrefix?: string;
   isGenerating: boolean;
   enableUserGuidance: boolean;
   languages?: LanguageOption[];
@@ -33,6 +34,7 @@ type Props = {
 };
 
 export function StoryOptionsPanel({
+  idPrefix = '',
   isGenerating,
   enableUserGuidance,
   languages,
@@ -49,6 +51,7 @@ export function StoryOptionsPanel({
   selectedLanguage,
   onSelectedLanguageChange,
 }: Props) {
+  const controlId = (id: string) => (idPrefix ? `${idPrefix}-${id}` : id);
   const storyOptions: { value: StoryLengthOption; label: string }[] = [
     { value: 'default', label: '默认' },
     { value: 'short', label: '简短(300+)' },
@@ -76,7 +79,7 @@ export function StoryOptionsPanel({
     <>
       {enableUserGuidance && (
         <div className="input-group">
-          <label htmlFor="arena-story-guidance" className="input-label">
+          <label htmlFor={controlId('arena-story-guidance')} className="input-label">
             故事方向引导 (可选)
           </label>
           {/* 诱饵字段：优先吸收部分浏览器/系统的账号自动填充，避免误填到业务输入框 */}
@@ -86,7 +89,7 @@ export function StoryOptionsPanel({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <input
-              id="arena-story-guidance"
+              id={controlId('arena-story-guidance')}
               name="arena_story_guidance"
               type="text"
               className="input-field flex-1 min-w-[12rem]"
@@ -160,11 +163,11 @@ export function StoryOptionsPanel({
           </div>
           {isCustomStoryLengthMode || normalizedCustomStoryLength ? (
             <div className="mt-3 space-y-1">
-              <label htmlFor="custom-story-length" className="input-label">
+              <label htmlFor={controlId('custom-story-length')} className="input-label">
                 自定义目标字数
               </label>
               <input
-                id="custom-story-length"
+                id={controlId('custom-story-length')}
                 name="custom_story_length"
                 type="text"
                 inputMode="numeric"
@@ -185,12 +188,12 @@ export function StoryOptionsPanel({
 
       {showLanguage ? (
         <div className="input-group">
-          <label htmlFor="language-select" className="input-label">
+          <label htmlFor={controlId('language-select')} className="input-label">
             <img src="/globe.svg" alt="Language" className="inline-block w-4 h-4 mr-2" />
             生成语言
           </label>
           <select
-            id="language-select"
+            id={controlId('language-select')}
             className="input-field"
             disabled={isGenerating}
             value={selectedLanguage}

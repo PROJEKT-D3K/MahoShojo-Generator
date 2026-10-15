@@ -267,7 +267,7 @@ beforeEach(() => {
   });
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url === '/languages.json') return new Response(JSON.stringify([{ code: 'zh-CN', name: '简体中文' }]));
+    if (url === '/languages.json') return new Response(JSON.stringify([{ code: 'zh-CN', name: '简体中文' }, { code: 'en-US', name: '英语' }]));
     if (url.startsWith('/presets/') || url.startsWith('/scenario-presets/') || url.startsWith('/questionnaires/')) return new Response(readFileSync(resolve(process.cwd(), '../../content', url.slice(1)), 'utf8'));
     throw new Error(`Unexpected browser request: ${url}`);
   }));
@@ -303,6 +303,43 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(reportText);
     expect(getDesktopAiConfigStore().getSnapshot().modelsByProfileId[profile.id]?.selectedModelId).toBe('ordinary-selected-model');
     assertNoExecution();
+  });
+
+  it('edits only four local host story fields while preserving authority and requiring a fresh explicit publish', async () => {
+    const seed = savedDraft(); seedOrdinary({ ...seed, scenario: { ...seed.scenario, isPreset: false } }); await mount(); await click('恢复草稿'); const before = ordinarySnapshot(); await open();
+    const create = await startAction('创建多人房间', 'create'); const authority = await confirmMembership(create, 'host');
+    const editor = container.querySelector<HTMLElement>('[aria-label="房主本地故事设置"]')!;
+    expect(editor).not.toBeNull(); expect(editor.querySelector('input[name="arena_story_guidance"]')!.matches(':disabled')).toBe(true);
+    await publishOnline(authority); assertConstrained();
+    expect(editor.querySelector('input[name="arena_story_guidance"]')!.matches(':disabled')).toBe(false);
+    expect(container.querySelectorAll('#arena-story-guidance')).toHaveLength(1);
+    expect(container.querySelectorAll('#room-host-draft-arena-story-guidance')).toHaveLength(1);
+    expect(editor.querySelector<HTMLLabelElement>('label[for="room-host-draft-arena-story-guidance"]')!.control).toBe(editor.querySelector('#room-host-draft-arena-story-guidance'));
+    await click('比较本地与房间设置', room());
+    await vi.waitFor(async () => { await act(async () => { await Promise.resolve(); }); expect(button('发布已比较的设置', room())).toBeDefined(); });
+    await click('发布已比较的设置', room()); expect(room().querySelector('[aria-label="确认发布房间配置"]')).not.toBeNull();
+    await change('#room-host-draft-arena-story-guidance', '房主本地新引导');
+    expect(room().querySelector('[aria-label="确认发布房间配置"]')).toBeNull();
+    await click('自定义', editor); await change('#room-host-draft-custom-story-length', '1234'); await click('长篇(2000+)', editor);
+    const language = editor.querySelector<HTMLSelectElement>('#room-host-draft-language-select')!;
+    const other = [...language.options].find(option => option.value && option.value !== language.value)!; expect(other).toBeDefined();
+    await act(async () => { language.value = other.value; language.dispatchEvent(new Event('change', { bubbles: true })); });
+    const after = ordinarySnapshot(), oldStored = JSON.parse(before.advanced!), newStored = JSON.parse(after.advanced!);
+    expect(newStored.draft).toEqual({ ...oldStored.draft, settings: { ...oldStored.draft.settings, userGuidance: '房主本地新引导' }, storyLength: 'long', customStoryLength: '', selectedLanguage: other.value });
+    // The legacy fixture omits optional output fields; the existing autosave serializes their null defaults.
+    expect(newStored.output).toEqual({ ...oldStored.output, hosted: null, hostedGenerationId: null, renderSnapshot: null }); expect({ ...after, advanced: before.advanced }).toEqual(before);
+    expect(port.actions.map(value => value.action.kind)).toEqual(['create']);
+    expect(room().textContent).toContain(`修订 ${authority.snapshot.revision}`); assertConstrained();
+    await click('比较本地与房间设置', room()); await vi.waitFor(async () => { await act(async () => { await Promise.resolve(); }); expect(button('发布已比较的设置', room())).toBeDefined(); });
+    await click('发布已比较的设置', room()); const publishing = await startAction('确认发布房间配置', 'config');
+    expect(publishing.action).toMatchObject({ kind: 'config', request: { expectedRevision: authority.snapshot.revision,
+      sharedConfig: { userGuidance: '房主本地新引导', storyLength: 'long', customStoryLength: null, selectedLanguage: other.value } } });
+    expect(editor.querySelector('input[name="arena_story_guidance"]')!.matches(':disabled')).toBe(true);
+    await port.deliver({ kind: 'mutation-unknown', operation: 'config', intentId: 'config-unknown', roomId: authority.roomId });
+    await port.deliver({ kind: 'request-error', operation: 'config', requestId: publishing.requestId, error: ipcFixture.error });
+    expect(editor.querySelector('input[name="arena_story_guidance"]')!.matches(':disabled')).toBe(true);
+    await change('#room-host-draft-arena-story-guidance', 'must remain blocked');
+    expect(ordinarySnapshot().advanced).toBe(after.advanced); expect(port.actions.map(value => value.action.kind)).toEqual(['create', 'config']); assertNoExecution();
   });
 
   it('creates as host, waits for HTTP ACK before subscribe and for snapshot plus presence before online, then closes explicitly', async () => {
