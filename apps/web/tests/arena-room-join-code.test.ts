@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parseArenaRoomJoinCode as parseSharedRoomJoinCode } from '@mahoshojo/multiplayer-core/room-join-code';
 
 import {
   buildArenaRoomInviteText,
@@ -8,6 +9,10 @@ import {
 const UUID = '5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f';
 
 describe('parseArenaRoomJoinCode', () => {
+  it('旧 Web 入口直接回用共享解析器', () => {
+    expect(parseArenaRoomJoinCode).toBe(parseSharedRoomJoinCode);
+  });
+
   it('纯房间码（UUID 或简单 ID）直接使用', () => {
     expect(parseArenaRoomJoinCode(UUID)).toEqual({ ok: true, roomId: UUID });
     expect(parseArenaRoomJoinCode('room-1')).toEqual({ ok: true, roomId: 'room-1' });

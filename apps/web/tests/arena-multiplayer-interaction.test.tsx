@@ -101,6 +101,7 @@ vi.mock('@/components/arena/stores/useBattleStore', () => ({
   useBattleStore: { getState: vi.fn(() => ({ safe: 'battle-state' })) },
 }));
 
+import { buildArenaRoomInviteText } from '@/lib/arena-room/join-code';
 import { ArenaMultiplayerContextPanel } from '@/components/arena/multiplayer/ArenaMultiplayerPanel';
 
 const readyState: ArenaRoomControllerState = {
@@ -412,6 +413,29 @@ describe('Arena multiplayer panel real React interactions', () => {
 
     expect(mocks.discover).toHaveBeenCalledTimes(1);
     expect(mocks.join).toHaveBeenCalledWith('room-visible-1', '测试玩家');
+  });
+
+  it.each([
+    [buildArenaRoomInviteText('https://untrusted.invalid', '5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f'), '5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f', null],
+    ['这段邀请没有可用房间码', null, '未识别到有效房间码'],
+    ['5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f 0f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e20', null, '检测到多个房间码'],
+  ])('真实 Web 加入入口解析邀请输入：%s', async (text, roomId, error) => {
+    await act(async () => button('打开多人房间').click());
+    const input = document.body.querySelector<HTMLInputElement>('#arena-room-join-code')!;
+    const location = window.location.href;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(mocks.join).not.toHaveBeenCalled();
+    await act(async () => button('加入房间').click());
+    if (roomId) {
+      expect(mocks.join).toHaveBeenCalledExactlyOnceWith(roomId, '测试玩家');
+    } else {
+      expect(mocks.join).not.toHaveBeenCalled();
+      expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain(error);
+    }
+    expect(window.location.href).toBe(location);
   });
 
   it('公开房间 Modal 有界展示 cursor 第二页入口', async () => {

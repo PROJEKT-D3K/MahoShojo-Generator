@@ -2,6 +2,7 @@ import { DesktopRoomProposalReview, DesktopRoomProposalStatus } from './room-pro
 import { DesktopRoomConfigComparison } from './room-config-comparison';
 import { useState, useSyncExternalStore } from 'react';
 import { RoomConfigPublishStatus, RoomProposalReadOnlyList, RoomLobbyContent, RoomMembersView, RoomExitActions, projectRoomMembers, type RoomExitConfirmation } from '@mahoshojo/ui-web/arena-room';
+import { parseArenaRoomJoinCode } from '@mahoshojo/multiplayer-core/room-join-code';
 import type { RoomDirectoryVisibility } from '@mahoshojo/contracts/arena-room';
 import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
 import { prepareDesktopRoomSource } from './room-source';
@@ -18,6 +19,8 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
   const [title, setTitle] = useState('多人房间'); const [visibility, setVisibility] = useState<RoomDirectoryVisibility>('public');
   const [joinCode, setJoinCode] = useState('');
+  const [joinCodeError, setJoinCodeError] = useState<string | null>(null);
+  const joinCodePreview = parseArenaRoomJoinCode(joinCode);
   const [confirmation, setConfirmation] = useState<{ action: RoomExitConfirmation; scope: string; identity: symbol | null } | null>(null);
   const session = state.session;
   const scope = session ? `${session.roomId}\n${session.roomEpoch}\n${session.self.userId}` : '';
@@ -30,7 +33,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
   };
   const disconnect = () => {
     if (owner.needsLeaveConfirmation() && !window.confirm('确认断开本机房间连接？未提交成员草稿将丢弃，原普通 Arena 草稿、结果和模型会恢复。成员资格不会因此退出，服务器任务也不会停止；未知操作仍可能已发生。应用关闭后未确认意图不能跨进程恢复，请优先核对。')) return;
-    owner.detach(); setConfirmation(null);
+    owner.detach(); setConfirmation(null); setJoinCodeError(null);
   };
   const view = projectRoomMembers({ roomId: session?.roomId ?? null, roomEpoch: session?.roomEpoch ?? null, members: session?.snapshot.members ?? [], presence: state.presence,
     presenceEligible: state.phase === 'online' && state.snapshotReceived && !!state.presence?.onlineUserIds.includes(session?.self.userId ?? '') });
@@ -77,9 +80,17 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
         {!pending && !state.busy && ['offline', 'unavailable'].includes(state.phase) ? <button type="button" className={secondary} onClick={() => { if (currentScope() === scope) void owner.reconnect(); }}>读取房间并重连</button> : null}
       </> : !state.memberModel && !pending && !tracking && !proposalBlocked && state.phase === 'ready' ? <>
         <p className="text-sm">创建只共享当前可共享设定和来源引用；本地正文不会上传。加入不上传本机草稿。目录只保留当前页，人数不是在线人数。</p>
+        {joinCodeError ? <p role="alert">{joinCodeError}</p> : null}
         <RoomLobbyContent roomTitle={title} visibility={visibility} joinCode={joinCode} rooms={state.rooms} loading={state.busy} loadingMore={state.busy} nextCursor={state.nextCursor} nextPageLabel="下一页" busy={state.busy || disabled}
-          joinCodeHint="填写单个房间码；此处不解析邀请文案或任意网址。" onRoomTitleChange={setTitle} onVisibilityChange={setVisibility} onJoinCodeChange={setJoinCode}
-          onCreate={() => create()} onDiscover={() => { void owner.discover(); }} onDiscoverMore={() => { void owner.discover(true); }} onJoin={id => { void owner.join(id, displayName); }} />
+          joinCodeHint={<>填写房间码或粘贴完整邀请文案，再点击加入房间。{joinCodePreview.ok ? <span className="mt-1 block" role="status">将加入：{joinCodePreview.roomId}</span> : null}</>} onRoomTitleChange={setTitle} onVisibilityChange={setVisibility}
+          onJoinCodeChange={value => { setJoinCodeError(null); setJoinCode(value); }}
+          onCreate={() => create()} onDiscover={() => { void owner.discover(); }} onDiscoverMore={() => { void owner.discover(true); }} onJoin={input => {
+            if (disabled || owner.getSnapshot().busy) return;
+            setJoinCodeError(null);
+            const parsed = parseArenaRoomJoinCode(input);
+            if (!parsed.ok) { setJoinCodeError(parsed.error); return; }
+            void owner.join(parsed.roomId, displayName);
+          }} />
       </> : !state.memberModel && !state.busy && !pending && !tracking && !proposalBlocked ? <button type="button" className={secondary} disabled={disabled || !authenticated} onClick={() => { void owner.open(); }}>重新打开房间会话</button> : null}
     </> : null}
   </section>;

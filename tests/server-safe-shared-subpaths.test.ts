@@ -150,6 +150,21 @@ const collectModuleGraph = (entryFile: string): string[] => {
 };
 
 describe('server-safe shared entrypoints stay free of React hooks', () => {
+  it('keeps room join parsing as a pure leaf shared by the Web entrypoint', async () => {
+    const root = path.resolve(PACKAGE_ROOT, '../multiplayer-core');
+    const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const entry = manifest.exports['./room-join-code'];
+    expect(entry).toEqual({ types: './src/room-join-code.ts', import: './src/room-join-code.ts', default: './src/room-join-code.ts' });
+    const webPath = path.resolve(PACKAGE_ROOT, '../../apps/web/lib/arena-room/join-code.ts');
+    const bundled = await build({ entryPoints: [webPath],
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true });
+    expect(Object.keys(bundled.metafile!.inputs).map(file => path.resolve(file)).sort())
+      .toEqual([webPath, path.join(root, entry.import)].sort());
+    expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
+    expect(bundled.outputFiles[0].text).not.toMatch(/\b(?:window|document|navigator|localStorage|fetch|WebSocket)\b/u);
+    expect(Object.values(bundled.metafile!.outputs).flatMap(output => output.imports)).toEqual([]);
+  });
+
   it('keeps the detached member proposal model free of UI, host and persistence dependencies', async () => {
     const root = path.resolve(PACKAGE_ROOT, '../multiplayer-core');
     const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));

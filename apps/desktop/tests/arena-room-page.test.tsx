@@ -334,6 +334,72 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     expect(port.order).toEqual([]); assertNoExecution();
   });
 
+  it('explains invalid and ambiguous pasted invitations without dispatching any Native action', async () => {
+    seedOrdinary(); await mount(); await click('恢复草稿'); await open();
+    const before = ordinarySnapshot(), location = window.location.href;
+    for (const [input, error] of [
+      ['邀请里没有可用房间码', '未识别到有效房间码'],
+      ['https://untrusted.invalid/invite', '未识别到有效房间码'],
+      ['5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f 0f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e20', '检测到多个房间码'],
+    ]) {
+      await change('#arena-room-join-code', input);
+      expect(room().querySelector('[role="alert"]')).toBeNull();
+      expect(room().textContent).not.toContain('将加入：');
+      await click('加入房间', room());
+      expect(room().querySelector('[role="alert"]')?.textContent).toContain(error);
+    }
+    expect(port.actions).toEqual([]);
+    expect(port.order).toEqual(['attach']);
+    expect(ordinarySnapshot()).toEqual(before); expect(window.location.href).toBe(location);
+    await change('#arena-room-join-code', 'room-valid');
+    expect(room().querySelector('[role="alert"]')).toBeNull();
+    expect(room().textContent).toContain('将加入：room-valid');
+    assertNoExecution();
+  });
+
+  it.each([
+    ['魔法少女竞技场邀请你加入多人房间！\n房间：邀请测试\n房间码：5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f\n\n打开 https://untrusted.invalid/arena ，在「多人房间」中粘贴邀请', '5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f'],
+    ['欢迎加入 https://untrusted.invalid/?room=5F0C9A2E-3B1D-4C8A-9E2F-7A6B5C4D3E2F 再次确认 5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f', '5f0c9a2e-3b1d-4c8a-9e2f-7a6b5c4d3e2f'],
+    ['Room ID: room-invite-1（欢迎） https://untrusted.invalid', 'room-invite-1'],
+  ])('previews the canonical invite target and sends it only once after an explicit join: %s', async (input, roomId) => {
+    const clipboard = { readText: vi.fn() };
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: clipboard });
+    try {
+      seedOrdinary(); await mount(); await click('恢复草稿'); await open();
+      const before = ordinarySnapshot(), location = window.location.href;
+      const openWindow = vi.spyOn(window, 'open').mockReturnValue(null);
+      await change('#arena-room-join-code', input);
+      expect(room().textContent).toContain(`将加入：${roomId}`);
+      expect(port.actions).toEqual([]);
+      const joining = requiredButton('加入房间', room());
+      await act(async () => { joining.click(); joining.click(); });
+      expect(port.actions.map(item => item.action)).toEqual([{ kind: 'join', roomId, request: { displayName: '普通账号' } }]);
+      expect(joining.matches(':disabled')).toBe(true);
+      expect(JSON.stringify(mocks.invoke.mock.calls)).not.toContain('untrusted.invalid');
+      expect(JSON.stringify(vi.mocked(fetch).mock.calls)).not.toContain('untrusted.invalid');
+      expect(openWindow).not.toHaveBeenCalled(); expect(clipboard.readText).not.toHaveBeenCalled();
+      expect(window.location.href).toBe(location); expect(ordinarySnapshot()).toEqual(before); assertNoExecution();
+    } finally {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
+  it.each(['account', 'document'] as const)('keeps a parsed invite behind the %s fence before join', async retirement => {
+    await mount(); await open();
+    await change('#arena-room-join-code', '房间码：room-retired（欢迎）');
+    expect(room().textContent).toContain('将加入：room-retired');
+    const join = requiredButton('加入房间', room());
+    if (retirement === 'account') {
+      await act(async () => { await getDesktopCloudSessionStore().signOut(); });
+    } else {
+      Object.defineProperty(window, '__MAHOSHOJO_ROOM_DOCUMENT_V1__', { configurable: true, writable: true, value: 'b'.repeat(64) });
+    }
+    await act(async () => join.click());
+    expect(port.actions).toEqual([]); expect(port.subscriptions).toEqual([]); assertNoExecution();
+  });
+
   it('keeps the ordinary preference, model, independent drafts and result through lobby cancellation', async () => {
     seedOrdinary(); await mount(); await click('恢复草稿');
     expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(reportText);
@@ -704,6 +770,8 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   it.each(['join', 'leave', 'close'] as const)('reconciles an unknown %s only with a scoped session read', async operation => {
     port.pendingIntent = { operation, intentId: `original-${operation}-intent`, roomId: serviceFixture.operations.session.success.result.roomId };
     await mount(); await open(); assertConstrained();
+    expect(room().querySelector('#arena-room-join-code')).toBeNull();
+    expect(button('加入房间', room())).toBeUndefined();
     expect(port.actions).toEqual([]);
     const read = await startAction('读取房间核对结果', 'session');
     expect(read.action).toEqual({ kind: 'session', roomId: port.pendingIntent.roomId });

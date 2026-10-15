@@ -18,6 +18,11 @@
       "types": "./src/member-proposal.ts",
       "import": "./src/member-proposal.ts",
       "default": "./src/member-proposal.ts"
+    },
+    "./room-join-code": {
+      "types": "./src/room-join-code.ts",
+      "import": "./src/room-join-code.ts",
+      "default": "./src/room-join-code.ts"
     }
   },
   "scripts": {
