@@ -314,6 +314,7 @@
       "import": "./src/generation-lifecycle.ts",
       "default": "./src/generation-lifecycle.ts"
     },
+    "./db/data-card-owned-deletion": "./src/db/data-card-owned-deletion.ts",
     "./db/drizzle": {
       "types": "./src/db/drizzle.ts",
       "import": "./src/db/drizzle.ts",

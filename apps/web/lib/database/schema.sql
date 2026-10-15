@@ -112,8 +112,17 @@ CREATE TABLE IF NOT EXISTS data_cards (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME,                   -- 软删除标记，存在值则表示位于回收站
+  recycle_generation TEXT,               -- 每次进入回收站的新代际；恢复时保留
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE TRIGGER data_cards_recycle_generation
+AFTER UPDATE OF deleted_at ON data_cards
+WHEN OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL
+  AND (NEW.recycle_generation IS NULL OR NEW.recycle_generation IS OLD.recycle_generation)
+BEGIN
+  UPDATE data_cards SET recycle_generation = lower(hex(randomblob(16))) WHERE id = NEW.id;
+END;
 
 CREATE INDEX idx_data_cards_user_id ON data_cards(user_id);
 CREATE INDEX idx_data_cards_type ON data_cards(type);

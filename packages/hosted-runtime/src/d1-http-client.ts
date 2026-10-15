@@ -4,6 +4,8 @@ export type D1QueryRetryMode = 'none' | 'safe-read';
 
 export interface D1QueryOptions {
   retry?: D1QueryRetryMode;
+  /** Explicit receipt validation for one confirmed RETURNING mutation; never inferred from SQL. */
+  strictReturning?: true;
 }
 
 export const D1_INDETERMINATE_OUTCOME_ERROR_CODE = 'D1_INDETERMINATE_OUTCOME' as const;
@@ -35,6 +37,24 @@ export type D1LikeStatementResult = {
   meta: Record<string, unknown>;
   error?: string;
 };
+
+/** Preserve evidence instead of turning malformed mutation rows into a known empty result. */
+export function validateD1ReturningResult(value: unknown): D1LikeStatementResult {
+  const record = typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+  const rows = record?.results;
+  const meta = typeof record?.meta === 'object' && record.meta !== null && !Array.isArray(record.meta)
+    ? record.meta as Record<string, unknown> : null;
+  const changes = meta?.changes;
+  if (record?.success !== true || !Array.isArray(rows)
+    || rows.some((row) => typeof row !== 'object' || row === null || Array.isArray(row))
+    || typeof changes !== 'number' || !Number.isSafeInteger(changes) || changes < 0
+    || (rows.length === 0 ? changes !== 0 : changes === 0)) {
+    throw new D1IndeterminateOutcomeError();
+  }
+  // Cascades/triggers can affect the change count. Exact returned IDs are verified by the caller.
+  return { success: true, results: rows as D1LikeRow[], meta: meta! };
+}
 
 export type D1LikeRawStatementResult = {
   success: boolean;
@@ -295,6 +315,7 @@ function parseStatement(payload: unknown): ParsedStatement {
 const parseTransportStatements = (
   payload: unknown,
   expectedCount?: number,
+  strictReturning = false,
 ): ParsedStatement[] => {
   const envelope = asObject(payload) as ApiEnvelope | null;
   if (!envelope) throw literalError('parse');
@@ -315,6 +336,7 @@ const parseTransportStatements = (
     const hasValidResults = Array.isArray(result.results)
       || Boolean(rawResult && Array.isArray(rawResult.rows));
     if (result.success !== true || !hasValidResults) throw literalError('parse');
+    if (strictReturning) validateD1ReturningResult(result);
 
     const error = textOf(result.error);
     return {
@@ -751,8 +773,8 @@ function createD1HttpTransport(config: D1HttpTransportConfig): D1HttpTransport {
       queryUrl,
       { sql, params },
       options,
-      (payload) => parseTransportStatements(payload),
-      isMutationSql(sql) ? 'write' : 'read',
+      (payload) => parseTransportStatements(payload, options.strictReturning ? 1 : undefined, options.strictReturning),
+      options.strictReturning || isMutationSql(sql) ? 'write' : 'read',
     ),
     queryRaw: (sql, params, options = {}) => operation(
       rawUrl,
@@ -800,6 +822,17 @@ export class D1PreparedStatement {
 
   async all(options?: D1QueryOptions): Promise<D1LikeStatementResult> {
     return this.run(options);
+  }
+
+  async allStrict(): Promise<D1LikeStatementResult> {
+    const payload = await this.transport.query(this.sqlText, this.params, { retry: 'none', strictReturning: true });
+    try {
+      // Validate again for injected transports that do not implement the HTTP dispatch guard.
+      const statement = parseTransportStatements(payload, 1, true)[0]!;
+      return validateD1ReturningResult({ success: true, results: statement.results, meta: statement.meta });
+    } catch {
+      throw new D1IndeterminateOutcomeError();
+    }
   }
 
   async first<T = unknown>(columnName?: string): Promise<T | null> {

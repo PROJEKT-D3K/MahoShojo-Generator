@@ -170,3 +170,51 @@ export const OwnedRecycleBinDetailResponseSchema = z.object({
   success: z.literal(true), accountFenceVersion: z.literal(1), ownerUserId: DataCardExpectedOwnerSchema,
   card: OwnedRecycleBinCardDetailSchema,
 }).strict();
+
+// 确认式删除使用内容与回收代际快照；永久删除只接受明确列出的目标。
+export const OWNED_DELETE_TARGET_LIMIT = 16;
+export const OwnedDataCardDeletionVersionSchema = z.string().regex(/^[a-f0-9]{64}$/);
+export const OwnedDataCardDeletionReferenceSchema = z.object({
+  id: z.string().min(1).max(200), version: OwnedDataCardDeletionVersionSchema,
+}).strict();
+export type OwnedDataCardDeletionReference = z.infer<typeof OwnedDataCardDeletionReferenceSchema>;
+export const OwnedDataCardDeletionTargetSchema = OwnedDataCardDeletionReferenceSchema.extend({
+  type: OnlineDataCardTypeSchema, name: z.string(), description: z.string().nullable(),
+}).strict();
+export type OwnedDataCardDeletionTarget = z.infer<typeof OwnedDataCardDeletionTargetSchema>;
+export const OwnedDataCardDeletionPreviewQuerySchema = z.object({
+  expectedUserId: DataCardExpectedOwnerSchema,
+  scope: z.enum(['active', 'recycle']), id: z.string().min(1).max(200).optional(),
+}).strict().refine((query) => query.scope !== 'active' || query.id !== undefined, '活动卡预览必须指定 id');
+export const OwnedDataCardDeletionRequestSchema = OwnedDataCardDeletionReferenceSchema.extend({
+  expectedUserId: DataCardExpectedOwnerSchema,
+}).strict();
+export const OwnedRecycleBinPurgeRequestSchema = z.object({
+  expectedUserId: DataCardExpectedOwnerSchema,
+  targets: z.array(OwnedDataCardDeletionReferenceSchema).min(1).max(OWNED_DELETE_TARGET_LIMIT),
+  continuationTarget: OwnedDataCardDeletionReferenceSchema.optional(),
+}).strict().refine((request) => new Set(request.targets.map((target) => target.id)).size === request.targets.length, '删除目标不能重复');
+export type OwnedRecycleBinPurgeRequest = z.infer<typeof OwnedRecycleBinPurgeRequestSchema>;
+const ownedDeletionFence = {
+  success: z.literal(true), accountFenceVersion: z.literal(1), deleteProtocolVersion: z.literal(1),
+  ownerUserId: DataCardExpectedOwnerSchema,
+};
+export const OwnedDataCardDeletionPreviewSchema = z.object({
+  ...ownedDeletionFence, operation: z.enum(['preview-active', 'preview-recycle']),
+  targets: z.array(OwnedDataCardDeletionTargetSchema).max(OWNED_DELETE_TARGET_LIMIT),
+  total: z.number().int().nonnegative().max(OWNED_DELETE_TARGET_LIMIT),
+  recycleLimit: z.number().int().nonnegative(),
+}).strict().refine((response) => response.total === response.targets.length
+  && new Set(response.targets.map((target) => target.id)).size === response.targets.length
+  && (response.operation !== 'preview-active' || response.targets.length === 1), '删除预览必须完整且不重复');
+export type OwnedDataCardDeletionPreview = z.infer<typeof OwnedDataCardDeletionPreviewSchema>;
+export const OwnedDataCardSoftDeleteAcknowledgementSchema = z.object({
+  ...ownedDeletionFence, operation: z.literal('soft-delete'), id: z.string().min(1).max(200),
+}).strict();
+export const OwnedDataCardPurgeActiveAcknowledgementSchema = z.object({
+  ...ownedDeletionFence, operation: z.literal('purge-active'), id: z.string().min(1).max(200),
+}).strict();
+export const OwnedRecycleBinPurgeAcknowledgementSchema = z.object({
+  ...ownedDeletionFence, operation: z.literal('purge-recycle'),
+  ids: z.array(z.string().min(1).max(200)).min(1).max(OWNED_DELETE_TARGET_LIMIT),
+}).strict().refine((response) => new Set(response.ids).size === response.ids.length, '删除回执不能重复');

@@ -88,6 +88,7 @@ export const dataCards = sqliteTable('data_cards', {
   createdAt: text('created_at'),
   updatedAt: text('updated_at'),
   deletedAt: text('deleted_at'),
+  recycleGeneration: text('recycle_generation'),
 });
 
 export const reportCases = sqliteTable(
