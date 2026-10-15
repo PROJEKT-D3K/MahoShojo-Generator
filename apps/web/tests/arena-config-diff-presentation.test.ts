@@ -28,6 +28,7 @@ const historySettings = {
 
 const baseConfig = (overrides: Partial<ArenaRoomSharedConfig> = {}): ArenaRoomSharedConfig => ({
   battleMode: 'classic',
+  reportFormat: 'markdown',
   combatants: [],
   teams: [],
   scenario: null,

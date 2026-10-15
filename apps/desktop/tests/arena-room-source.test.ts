@@ -259,6 +259,15 @@ describe('Desktop Room current-source adapter', () => {
     expect(rejectedReferences).toMatchObject({ ok: false, issues: [expect.stringMatching(/最多支持 256/)] });
   });
 
+  it('converts rejected hashing into safe projection issues without leaking platform details', async () => {
+    const digest = vi.fn().mockRejectedValue(new Error('private-platform-failure'));
+    vi.stubGlobal('crypto', { subtle: { digest } });
+    const result = await prepareDesktopRoomSource(draft({ combatants: [local()] }));
+    expect(digest).toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, issues: [expect.any(String)] });
+    expect(JSON.stringify(result)).not.toContain('private-platform-failure');
+  });
+
   it('fails closed on malformed current content without leaking the body or exception details', async () => {
     const result = await prepareDesktopRoomSource(draft({ materials: [{ privateBody: 'secret-invalid-material' }] }));
     expect(result).toMatchObject({ ok: false, issues: [expect.stringMatching(/共享格式/)] });

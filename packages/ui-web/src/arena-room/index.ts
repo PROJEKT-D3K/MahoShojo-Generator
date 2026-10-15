@@ -7,3 +7,8 @@ export type {
 } from './session-views';
 export { projectRoomMembers } from './room-members';
 export type { RoomMembersProjectionInput, RoomMembersViewModel, RoomMemberView } from './room-members';
+
+export { RoomConfigDiffView } from './RoomConfigDiffView';
+export { buildArenaRoomConfigDiffEntries, collectArenaRoomConfigDiffReferenceRequests } from './config-diff';
+export type { ArenaConfigDiffEntry, ArenaRoomConfigReferenceRequest } from './config-diff';
+export { arenaBattleModeCopy, arenaStoryLengthCopy, arenaStoryLengthValueCopy } from './config-value-copy';

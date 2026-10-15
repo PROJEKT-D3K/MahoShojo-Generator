@@ -1,3 +1,4 @@
+import { DesktopRoomConfigComparison } from './room-config-comparison';
 import { useState, useSyncExternalStore } from 'react';
 import { RoomLobbyContent, RoomMembersView, RoomExitActions, projectRoomMembers, type RoomExitConfirmation } from '@mahoshojo/ui-web/arena-room';
 import type { RoomDirectoryVisibility } from '@mahoshojo/contracts/arena-room';
@@ -7,11 +8,12 @@ import type { ArenaDraft } from './session';
 import type { DesktopArenaRoomSession } from './room-session';
 const secondary = generationActionClassNames.secondary;
 export interface DesktopArenaRoomPanelProps {
+  languages?: readonly { code: string; name: string }[];
   owner: DesktopArenaRoomSession; draft: ArenaDraft; isDraftCurrent: (draft: ArenaDraft) => boolean;
   disabled: boolean; authenticated: boolean; displayName: string; onAuthenticate: () => void;
 }
 /** Shared product sections; only this Desktop host binds the fixed Native owner. */
-export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, authenticated, displayName, onAuthenticate }: DesktopArenaRoomPanelProps) {
+export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, authenticated, displayName, onAuthenticate, languages }: DesktopArenaRoomPanelProps) {
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
   const [title, setTitle] = useState('多人房间'); const [visibility, setVisibility] = useState<RoomDirectoryVisibility>('public');
   const [joinCode, setJoinCode] = useState('');
@@ -56,6 +58,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
         <p>{view.summary}</p>
         <RoomMembersView view={view} selfUserId={session.self.userId} membershipHint="断网或关闭页面只会离线，成员席位仍保留；要退出请明确离开，房主则关闭房间。" />
         <section aria-label="房间权威设定摘要"><h3>服务器房间设定</h3><p>修订 {session.snapshot.revision} · {session.snapshot.sharedConfig.combatants.length} 位角色 · {session.snapshot.sharedConfig.auxScenarios.length} 个辅助情景 · {session.snapshot.sharedConfig.materials.length} 份素材</p><p>生成状态：{session.snapshot.activeGeneration?.state ?? '无活动生成'}。此页不读取或恢复故事正文。</p></section>
+        {session.self.role === 'host' ? <DesktopRoomConfigComparison key={`comparison:${scope}`} owner={owner} session={session} draft={draft} isDraftCurrent={isDraftCurrent} languages={languages} disabled={state.busy || disabled || !!pending} /> : null}
         {!pending ? <RoomExitActions key={scope} role={session.self.role} busy={state.busy} confirmation={confirmation?.scope === scope && confirmation.identity === owner.confirmationOwner() ? confirmation.action : null}
           onConfirmationChange={action => setConfirmation({ action, scope, identity: owner.confirmationOwner() })}
           onClose={() => { if (currentScope() === scope && confirmation?.scope === scope && confirmation.identity === owner.confirmationOwner()) { setConfirmation(null); void owner.close(); } }}

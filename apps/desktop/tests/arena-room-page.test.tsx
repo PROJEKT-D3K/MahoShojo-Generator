@@ -315,6 +315,12 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     expect(port.order.indexOf(`acknowledged:${delivered.batch.batchId}`)).toBeLessThan(port.order.indexOf('subscribe'));
     expect(room().querySelectorAll('[data-member-presence="unknown"]')).toHaveLength(2);
     await publishOnline(session); assertConstrained();
+    const beforeComparison = mocks.invoke.mock.calls.length;
+    await click('比较本地与房间设置', room());
+    await vi.waitFor(async () => { await act(async () => { await Promise.resolve(); }); expect(room().textContent).toContain('与房间当前设置相比，本地修改了'); });
+    expect(mocks.invoke.mock.calls.length).toBe(beforeComparison);
+    expect(room().textContent).not.toContain('完整本机设定');
+    expect(ordinarySnapshot()).toEqual(before);
     await click('关闭房间', room()); await click('取消', room());
     expect(port.actions.map(item => item.action.kind)).toEqual(['create']);
     await click('关闭房间', room());
@@ -334,6 +340,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     const joining = await startAction('加入房间', 'join');
     expect(joining.action).toEqual({ kind: 'join', roomId: serviceFixture.operations.join.success.result.roomId, request: { displayName: '普通账号' } });
     const session = await confirmMembership(joining, 'member');
+    expect(button('比较本地与房间设置', room())).toBeUndefined();
     expect(room().textContent).toContain('你是成员'); expect(button('关闭房间', room())).toBeUndefined();
     await publishOnline(session); assertConstrained();
     await click('离开房间', room()); await click('取消', room());
