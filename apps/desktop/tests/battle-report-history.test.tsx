@@ -14,8 +14,8 @@ vi.mock('../src/features/account/use-desktop-cloud-session', () => {
   return { useDesktopCloudSession: () => ({ state: state(), store }) };
 });
 vi.mock('../src/features/account/AccountPanel', () => ({ AccountPanel: () => null }));
-vi.mock('../src/features/account/ProfileSignaturePanel', () => ({ ProfileSignaturePanel: () => null }));
-vi.mock('../src/features/account/use-topbar-avatar', () => ({ useTopbarAvatar: () => null }));
+vi.mock('../src/features/account/use-topbar-avatar', () => ({ useMyProfile: () => ({ profile: { signature: '' }, error: null, retry: vi.fn() }) }));
+vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate: vi.fn(async () => {}) }), Link: ({ to, children }: { to: string; children: import('react').ReactNode }) => <a href={to}>{children}</a> }));
 import { DesktopMe } from '../src/app/me-page';
 import { readCloudBattleReports } from '../src/platform/battle-report-bridge';
 let root: Root; let container: HTMLDivElement;

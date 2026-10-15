@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./me": {
+      "types": "./src/me/index.tsx",
+      "import": "./src/me/index.tsx",
+      "default": "./src/me/index.tsx"
+    },
     "./styles.css": "./src/styles.css",
     "./navigation": {
       "types": "./src/navigation.ts",

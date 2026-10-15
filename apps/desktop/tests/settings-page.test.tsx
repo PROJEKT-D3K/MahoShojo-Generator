@@ -869,7 +869,7 @@ describe.each([DESKTOP_DETAILS_PREFERENCES, DESKTOP_CANSHOU_PREFERENCES])('$page
 
 
 describe('desktop profile avatar routes', () => {
-  it.each(['/me', '/settings?section=account'])('real %s edits shared avatar and updates the shell cache', async (path) => {
+  it.each(['/me', '/settings?section=account'])('real %s reaches account editing and shares confirmed profile with Me', async (path) => {
     const account = { userId: 7, username: 'avatar-owner' };
     const avatar = 'data:image/webp;base64,QUJD'; const updated = 'data:image/webp;base64,bmV3';
     vi.stubGlobal('FileReader', class { result = 'data:image/png;base64,aW1n'; onload: (() => void) | null = null; readAsDataURL() { queueMicrotask(() => this.onload?.()); } });
@@ -886,8 +886,29 @@ describe('desktop profile avatar routes', () => {
     });
     try {
       const router = await mountAt(path);
+      if (path === '/me') {
+        expect(container.querySelector('section[aria-label="个人资料"]')?.textContent).toContain('real signature');
+        expect(container.querySelector('section[aria-label="个人资料"] textarea')).toBeNull();
+        await click([...container.querySelectorAll('button')].find((button) => button.textContent === '编辑资料')!);
+        expect(router.state.location.pathname).toBe('/settings');
+        expect(router.state.location.search).toMatchObject({ section: 'account' });
+      }
       const panel = container.querySelector('section[aria-label="个人资料"]')!;
       expect(panel.querySelector('textarea')?.value).toBe('real signature');
+      if (path === '/me') {
+        const textarea = panel.querySelector('textarea')!;
+        const setSignature = (value: string) => act(() => {
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, value);
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+        setSignature('尚未保存的编辑');
+        await act(async () => { void router.navigate({ to: '/me' }); }); await settle();
+        expect(confirm).toHaveBeenCalledOnce();
+        expect(router.state.location.pathname).toBe('/settings');
+        expect(textarea.value).toBe('尚未保存的编辑');
+        setSignature('real signature'); confirm.mockRestore();
+      }
       const input = panel.querySelector<HTMLInputElement>('input[type="file"]')!;
       expect(input.accept).toBe('image/*');
       await act(async () => { Object.defineProperty(input, 'files', { configurable: true, value: [new File(['x'], 'avatar.png', { type: 'image/png' })] }); input.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
@@ -897,8 +918,9 @@ describe('desktop profile avatar routes', () => {
       expect(panel.textContent).toContain('头像已更新');
       await click([...panel.querySelectorAll('button')].find((button) => button.textContent === '清除头像')!);
       expect([...container.querySelectorAll('img')].filter((img) => img.getAttribute('src') === updated)).toHaveLength(0);
-      await act(async () => router.navigate({ to: path.startsWith('/me') ? '/settings' : '/me' })); await settle();
-      expect(container.querySelector('section[aria-label="个人资料"] textarea')?.textContent).toBe('real signature');
+      await act(async () => router.navigate({ to: '/me' })); await settle();
+      expect(container.querySelector('section[aria-label="个人资料"]')?.textContent).toContain('real signature');
+      expect(container.querySelector('section[aria-label="个人资料"] textarea')).toBeNull();
       expect(invokeMock.mock.calls.filter(([command]) => command === 'cloud_me_profile')).toHaveLength(1);
     } finally { canvas.mockRestore(); encoded.mockRestore(); vi.unstubAllGlobals(); }
   });

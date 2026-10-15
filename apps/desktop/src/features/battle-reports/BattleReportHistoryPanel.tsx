@@ -52,7 +52,6 @@ function OwnedBattleReportHistory({ store, userId, epoch }: { store: DesktopClou
   const currentList = list.key === listKey ? list : pending<BattleReportList>(listKey);
   const currentDetail = detail.key === detailKey ? detail : pending<BattleReportDetail>(detailKey);
   return <>
-    <p className="mt-2 text-xs text-gray-600">服务器战报可能被清理，预览按现存内容展示。此页不保存本地副本。</p>
     <BattleReportsListView filters={filters} onFiltersChange={setFilters} searchInput={searchInput} onSearchInputChange={setSearchInput}
       data={currentList.data} loading={currentList.loading} refreshing={currentList.loading} error={currentList.error}
       onRefresh={() => setRefresh((value) => value + 1)} onOpenDetails={(id) => { setGenerationId(id); setDetailRefresh((value) => value + 1); }} />

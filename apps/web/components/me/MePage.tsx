@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { MePageFrame, MeRetentionNotice } from '@mahoshojo/ui-web/me';
 import { isBattleReportIdentityCurrent, useBattleReportIdentity } from './battle-report-reader';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -66,69 +67,35 @@ function MePageForIdentity() {
     },
   });
 
-  const retentionNotice = (
-    <div className="rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
-      提示：受资源限制，战报记录 <span className="font-semibold">随时可能被清理</span>，不保证长期保存。建议你及时保存战报卡片图片/Markdown 作为留档。
-    </div>
-  );
 
   return (
     <>
-      <div className="magic-background-white">
-        <div className="container">
-          <div className="card">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h1 className="text-xl font-bold">个人页</h1>
-              <div className="flex items-center gap-3">
-                <Link href="/settings" className="text-sm text-blue-600 hover:underline">
-                  设置
-                </Link>
-                <Link href="/" className="text-sm text-blue-600 hover:underline">
-                  返回首页
-                </Link>
-              </div>
-            </div>
-
-            {loading ? <div className="mt-3 text-sm text-gray-600">加载中…</div> : null}
-
-            {!loading && !isAuthenticated ? (
-              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                你尚未登录。请先前往 <Link href="/character-manager" className="underline">角色管理器</Link> 完成登录后再访问个人页。
-              </div>
-            ) : null}
-
-            {!loading && isAuthenticated && user ? (
-              <ProfileHeader
-                user={user}
-                badges={userBadges}
-                onOpenSettings={() => router.push(LEGACY_ME_SETTINGS_TARGET)}
-                onOpenProfileCard={() => setShowProfileCardModal(true)}
-              />
-            ) : null}
-
-            <div className="mt-4">{retentionNotice}</div>
-
-            <div className="mt-4">
-              <h2 className="text-sm font-semibold text-gray-700">战报记录</h2>
-              <div className="mt-2">
-                <BattleReportsPanel
-                  isAuthenticated={Boolean(isAuthenticated)}
-                  onOpenDetails={(generationId) => {
-                    setReportOwnerScope(reportIdentity.scope);
-                    setActiveReportId(generationId);
-                    setShowReportDetails(true);
-                  }}
-                  onRegenerate={(generationId) => regenerateMutation.mutate(generationId)}
-                  isRegenerating={regenerateMutation.isPending}
-                  regenerateError={regenerateMutation.error ? (regenerateMutation.error as Error).message : null}
-                />
-              </div>
-            </div>
+      <MePageFrame
+        navigation={<><Link href="/settings" className="text-sm text-blue-600 hover:underline">设置</Link><Link href="/" className="text-sm text-blue-600 hover:underline">返回首页</Link></>}
+        sessionStatus={loading ? <div className="text-sm text-gray-600">加载中…</div> : !isAuthenticated ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          你尚未登录。请先前往 <Link href="/character-manager" className="underline">角色管理器</Link> 完成登录后再访问个人页。
+        </div> : null}
+        profile={!loading && isAuthenticated && user ? <ProfileHeader user={user} badges={userBadges} onOpenSettings={() => router.push(LEGACY_ME_SETTINGS_TARGET)} onOpenProfileCard={() => setShowProfileCardModal(true)} /> : null}
+        notice={<MeRetentionNotice>建议保存战报卡片图片/Markdown 作为留档。</MeRetentionNotice>}
+        footer={<Footer />}
+      >
+        <div>
+          <h2 className="text-sm font-semibold text-gray-700">战报记录</h2>
+          <div className="mt-2">
+            <BattleReportsPanel
+              isAuthenticated={Boolean(isAuthenticated)}
+              onOpenDetails={(generationId) => {
+                setReportOwnerScope(reportIdentity.scope);
+                setActiveReportId(generationId);
+                setShowReportDetails(true);
+              }}
+              onRegenerate={(generationId) => regenerateMutation.mutate(generationId)}
+              isRegenerating={regenerateMutation.isPending}
+              regenerateError={regenerateMutation.error ? (regenerateMutation.error as Error).message : null}
+            />
           </div>
-
-          <Footer />
         </div>
-      </div>
+      </MePageFrame>
 
       <BattleReportDetailsModal
         isOpen={showReportDetails && reportOwnerScope === reportIdentity.scope}

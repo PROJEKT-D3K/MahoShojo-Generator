@@ -5,18 +5,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from '@mahoshojo/contracts/fixtures/battle-report-history.json';
 const mocks = vi.hoisted(() => ({
+  loading: false,
   snapshot: { user: null as { id: number; username: string } | null },
   listeners: new Set<() => void>(), fetch: vi.fn(), buildInit: vi.fn(), regenerate: vi.fn(), search: new URLSearchParams(),
   record: vi.fn(), access: vi.fn(), combatants: vi.fn(), output: vi.fn(), governance: vi.fn(), sensitive: vi.fn(),
 }));
 vi.mock('next/navigation', () => ({ usePathname: () => '/me', useSearchParams: () => mocks.search, useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('@/lib/auth-client-store', () => ({ getAuthSnapshot: () => mocks.snapshot, subscribeAuthSnapshot: (listener: () => void) => { mocks.listeners.add(listener); return () => mocks.listeners.delete(listener); } }));
-vi.mock('@/lib/useAuth', () => ({ useAuth: () => ({ user: mocks.snapshot.user, isAuthenticated: mocks.snapshot.user !== null, loading: false, userBadges: [] }) }));
+vi.mock('@/lib/useAuth', () => ({ useAuth: () => ({ user: mocks.snapshot.user, isAuthenticated: mocks.snapshot.user !== null, loading: mocks.loading, userBadges: [] }) }));
 vi.mock('@/lib/auth', () => ({ authStorage: { buildAuthenticatedRequestInit: mocks.buildInit } }));
 vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntentLatch: () => ({ tryAcquire: () => ({ dispatch: mocks.regenerate }) }) }));
 vi.mock('@/components/Footer', () => ({ default: () => null }));
-vi.mock('@/components/me/ProfileHeader', () => ({ ProfileHeader: () => null }));
-vi.mock('@/components/me/ProfileCardModal', () => ({ ProfileCardModal: () => null }));
+vi.mock('@/components/me/ProfileHeader', () => ({ ProfileHeader: ({ onOpenProfileCard }: { onOpenProfileCard: () => void }) => <button onClick={onOpenProfileCard}>生成资料卡</button> }));
+vi.mock('@/components/me/ProfileCardModal', () => ({ ProfileCardModal: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => isOpen ? <button onClick={onClose}>关闭资料卡</button> : null }));
 vi.mock('@/components/me/BattleReportCardModal', () => ({ BattleReportCardModal: ({ isOpen }: { isOpen: boolean }) => isOpen ? <div>重生结果窗口</div> : null }));
 vi.mock('@/lib/database/battle-report-generations', () => ({ getBattleReportGenerationByIdLite: mocks.record, updateBattleReportGenerationOutputHasSensitiveWords: mocks.governance }));
 vi.mock('@/lib/database/battle-report-generation-combatants', () => ({ getBattleReportGenerationCombatantsByGenerationId: mocks.combatants }));
@@ -40,6 +41,7 @@ const render = async () => { await act(async () => { root.render(<QueryClientPro
 const click = async (text: string) => { await act(async () => { [...document.querySelectorAll('button')].find((node) => node.textContent === text)!.click(); await flush(); }); await act(flush); };
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.loading = false;
   mocks.snapshot = { user: { id: 42, username: 'user42' } }; mocks.search = new URLSearchParams(); mocks.listeners.clear();
   mocks.fetch.mockReset(); mocks.regenerate.mockReset();
   for (const mock of [mocks.record, mocks.access, mocks.combatants, mocks.output, mocks.governance, mocks.sensitive]) mock.mockReset(); mocks.buildInit.mockReset().mockImplementation(async (init) => init);
@@ -50,6 +52,17 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); vi.unstubAllGlobals(); });
 
 describe('Web actual me shared report host', () => {
+  it('retains loading, signed-out navigation and profile-card lifecycle in the shared frame', async () => {
+    mocks.loading = true; mocks.snapshot.user = null; await render();
+    expect(container.textContent).toContain('加载中…'); expect(container.textContent).not.toContain('你尚未登录');
+    mocks.loading = false; await render(); expect(container.textContent).toContain('你尚未登录');
+    expect(container.querySelector('nav a[href="/settings"]')).not.toBeNull();
+    expect(container.querySelector('.border-yellow-200')?.textContent).toContain('不保证长期保存');
+    expect(container.querySelector('.border-yellow-200')?.textContent).toContain('卡片图片/Markdown');
+    await login(42); await click('生成资料卡'); expect(container.textContent).toContain('关闭资料卡');
+    await click('关闭资料卡'); expect(container.textContent).not.toContain('关闭资料卡');
+    await click('生成资料卡'); await login(43); expect(container.textContent).not.toContain('关闭资料卡');
+  });
   it('does not query signed out, preserves URL filters, uses shared text detail and original Web action', async () => {
     mocks.snapshot.user = null; await render(); expect(mocks.fetch).not.toHaveBeenCalled();
     await login(42); expect(container.textContent).toContain('账号42战报');

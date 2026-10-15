@@ -31,7 +31,7 @@ const StatusChip = ({ label, className }: { label: string; className: string }) 
   <span className={`rounded-full border px-2 py-0.5 text-xs ${className}`}>{label}</span>
 );
 
-export const AccountPanel = () => {
+export const AccountPanel = ({ presentation = 'full' }: { presentation?: 'full' | 'summary' }) => {
   const { state: sessionState, store: sessionStore } = useDesktopCloudSession();
   const { account, bootstrapped, verification } = sessionState;
   const attempt =
@@ -133,7 +133,7 @@ export const AccountPanel = () => {
         )}
         {account !== null && (
           <StatusChip
-            label={`已登录 · ${account.displayName ?? account.username}`}
+            label={`${verification === 'verified' ? '已登录' : '本机账号'} · ${account.displayName ?? account.username}`}
             className="border-(--app-accent) text-(--app-accent-strong)"
           />
         )}
@@ -194,6 +194,7 @@ export const AccountPanel = () => {
             退出登录
           </button>
         )}
+        {presentation === 'full' && (
         <button
           type="button"
           className="rounded-md border border-(--app-border) px-3 py-1.5 hover:bg-(--app-surface-muted)"
@@ -202,6 +203,7 @@ export const AccountPanel = () => {
         >
           {probeBusy ? '正在探测…' : '检查在线服务'}
         </button>
+        )}
       </div>
 
       {attempt && (
@@ -223,7 +225,7 @@ export const AccountPanel = () => {
         </div>
       )}
 
-      {probe && (
+      {presentation === 'full' && probe && (
         <dl className="mt-3 grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm">
           <dt className="text-(--app-text-muted)">服务可达</dt>
           <dd>{probe.reachable ? '是' : '否'}</dd>
