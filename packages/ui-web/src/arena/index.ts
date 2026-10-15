@@ -35,3 +35,5 @@ export { WebPackagePickerModal } from './features/web-package/WebPackagePickerMo
 export { WebPackageCardGrid, type WebPackageCardItem } from './features/web-package/WebPackageCardGrid';
 export type { ArenaWebPackageOptionView, ArenaWebPackageSectionCapabilities, ArenaWebPackageImportFeedback, ArenaWebPackageSectionModel } from './features/web-package/web-package-contract';
 export type { ArenaWebPackageViewHost, WebPackageSavePreferenceProps } from './features/web-package/web-package-host';
+
+export { buildArenaEditorSections, type ArenaEditorSectionKind, type ArenaEditorSemanticSection } from './editor-sections';

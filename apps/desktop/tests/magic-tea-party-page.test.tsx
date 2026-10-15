@@ -324,3 +324,17 @@ it('persists the actual per-session automatic switch without invoking a model, t
   expect(JSON.stringify(messages.slice(0, 8))).toBe(before);
   expect(messages.at(-1)?.meta?.kind).toBe('summary');
 });
+
+it('restores sidebar folding and persists toggles without mutating tea sessions', async () => {
+  const key = 'magic-tea-party:session-sidebar-v1';
+  localStorage.setItem(key, JSON.stringify({ pinnedCollapsed: true, recentCollapsed: true }));
+  await mount(); await click('新建会话');
+  native.invoke.mockClear();
+  const recent = () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('最近会话（'));
+  expect(recent()?.textContent).toContain('展开');
+  await act(async () => recent()!.click());
+  expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ pinnedCollapsed: true, recentCollapsed: false });
+  await act(async () => root.unmount()); root = createRoot(container); await mount();
+  expect(recent()?.textContent).toContain('收起');
+  expect(native.invoke.mock.calls.some(([command]) => command === 'mutate_magic_tea_party')).toBe(false);
+});

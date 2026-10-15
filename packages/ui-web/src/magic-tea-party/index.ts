@@ -10,3 +10,5 @@ export { MagicTeaPartyHero, type MagicTeaPartyHeroProps } from './Hero';
 export { MagicTeaPartyNoticePanel, type MagicTeaPartyNoticePanelProps } from './NoticePanel';
 export { useChatAutoScroll, type UseChatAutoScrollOptions } from './useChatAutoScroll';
 export { MagicTeaPartySummaryBody, type MagicTeaPartySummaryBodyProps } from './SummaryPanel';
+
+export { useSessionSidebarPreference, MAGIC_TEA_PARTY_SIDEBAR_PREFERENCE_KEY } from './useSessionSidebarPreference';

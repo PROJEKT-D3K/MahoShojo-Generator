@@ -11,7 +11,7 @@ import { normalizeCustomStoryLength } from '@mahoshojo/domain/story-length';
 import { parseCombatantsFromText } from '@mahoshojo/domain/arena-file-parser';
 import { buildArenaMaterialState, type ArenaMaterialState } from '@mahoshojo/domain/arena-materials';
 import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-operations';
-import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
+import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
 import { ArenaReportFormatSelectorView, BattleReportCard, StreamingBattleReportCard, CombatantUpdatesPresentation } from '@mahoshojo/ui-web/arena-report';
 import { CardLibraryModal, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { NarrativeHistoryPicker, NarrativeDraftsPanel } from '@mahoshojo/ui-web/narrative-history';
@@ -532,19 +532,19 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   };
   return <>
     {product === 'arena' ? <AdvancedArenaPageView header={<AdvancedArenaHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} description="桌面高级单次 · 角色、主辅情景与故事设定" guideChildren={<p>配置输入后生成单次战报。此页使用独立本机草稿，支持客户端 Direct、官方服务器流式/非流式报告与 Web 源码生成/验证/导出；角色更新遵循服务器冻结权限；线性连续故事使用本机独立目录；隔离运行和插图尚未开放。<button className="footer-link" type="button" onClick={() => navigateByProductHref(router, '/battle')}>前往简洁版</button></p>} />} beforeWorkspace={<DesktopArenaRoomPanel owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} />} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
-      {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained}><ArenaEditorWorkspaceLayout disabled={disabled} sections={[
-        { kind: 'presets', title: '🎴 预设角色', column: 'left', description: '选择内置角色', defaultOpen: true, content: slots.presets },
-        { kind: 'database', title: '📚 角色库', column: 'left', description: '本地、公开或缓存副本', defaultOpen: true, content: slots.database },
-        { kind: 'import', title: '📁 本地导入', column: 'left', description: '上传或粘贴角色 JSON', defaultOpen: true, keepMounted: true, content: slots.localImport },
-        { kind: 'roster', title: '👥 已选角色 / 分队', column: 'left', description: `${draft.combatants.length}/32`, defaultOpen: true, keepMounted: true, content: slots.roster },
-        { kind: 'mode', title: '🎮 模式选择', column: 'right', description: '普通单次故事模式', defaultOpen: true, content: slots.mode },
-        ...(draft.battleMode === 'scenario' ? [{ kind: 'scenario', title: '🎭 情景设置', column: 'right' as const, description: `主情景与 ${draft.auxScenarios.length} 个辅助情景`, defaultOpen: true, keepMounted: true, content: slots.scenario }] : []),
-        { kind: 'materials', title: '📎 素材注入', column: 'right', description: `参考项 ${referenceCount}/256`, defaultOpen: false, keepMounted: true, content: slots.materials },
-        { kind: 'settings', title: '⚙️ 读写设置', column: 'right', description: '角色工作副本与叙事历史', defaultOpen: false, keepMounted: true, content: settings },
-        { kind: 'story', title: '🧠 故事引导 / 判定 / AI 模型', column: 'right', description: '辅助设定、活动历史编辑与 AI 目标', defaultOpen: true, keepMounted: true, content: slots.storyOptions },
-        { kind: 'generation', title: '⚡ 生成方式', column: 'right', description: 'Markdown 或 Web 源码；流式/非流式', defaultOpen: true, content: slots.generationMode },
-        { kind: 'actions', title: '🚀 开始生成', column: 'right', description: '一次冻结，一个请求', collapsible: false, content: slots.actions },
-      ]} /></fieldset>
+      {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained}><ArenaEditorWorkspaceLayout disabled={disabled} sections={buildArenaEditorSections([
+        { kind: 'presetCharacters', description: '选择内置角色', defaultOpen: true, content: slots.presets },
+        { kind: 'characterDatabase', title: '📚 角色库', description: '本地、公开或缓存副本', defaultOpen: true, content: slots.database },
+        { kind: 'localImport', description: '上传或粘贴角色 JSON', defaultOpen: true, keepMounted: true, content: slots.localImport },
+        { kind: 'roster', description: `${draft.combatants.length}/32`, defaultOpen: true, keepMounted: true, content: slots.roster },
+        { kind: 'battleMode', description: '普通单次故事模式', defaultOpen: true, content: slots.mode },
+        ...(draft.battleMode === 'scenario' ? [{ kind: 'scenario' as const, autoOpen: draft.scenario.content === null, description: `主情景与 ${draft.auxScenarios.length} 个辅助情景`, defaultOpen: true, keepMounted: true, content: slots.scenario }] : []),
+        { kind: 'materials', description: `参考项 ${referenceCount}/256`, defaultOpen: false, keepMounted: true, content: slots.materials },
+        { kind: 'settings', description: '角色工作副本与叙事历史', defaultOpen: false, keepMounted: true, content: settings },
+        { kind: 'story', description: '辅助设定、活动历史编辑与 AI 目标', defaultOpen: true, keepMounted: true, content: slots.storyOptions },
+        { kind: 'generationMode', description: 'Markdown 或 Web 源码；流式/非流式', defaultOpen: true, content: slots.generationMode },
+        { kind: 'generationActions', description: '一次冻结，一个请求', collapsible: false, content: slots.actions },
+      ])} /></fieldset>
     </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
       showScenario={draft.battleMode === 'scenario'} hasScenario={!!draft.scenario.content} materialCount={draft.materials.length} referenceItemCount={referenceCount} maxReferenceItems={limits.maxReferenceItemsSanity}
       copy={{ databaseTitle: '📚 角色库', databaseDescription: '选择本地卡、在线公开卡或已缓存副本', modeDescription: '不同模式决定故事风格', storyOptionsDescription: '设置故事方向、历史读写和 AI 目标' }} slots={slots} />}

@@ -1342,3 +1342,35 @@ describe('Desktop Strict preparation and real dispatch boundary', () => {
     expect(container.textContent).toContain('线上角色身份尚未确认'); expect(container.textContent).not.toContain('退出严格排位准备');
   });
 });
+
+it('restores advanced Arena section folding without changing the lite layout', async () => {
+  localStorage.setItem('arena.section.presetCharacters.open', '0');
+  window.location.hash = '#/arena';
+  const router = await mount();
+  const presets = () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('🎴 预设角色'));
+  expect(presets()?.getAttribute('aria-expanded')).toBe('false');
+  await act(async () => presets()!.click());
+  expect(localStorage.getItem('arena.section.presetCharacters.open')).toBe('1');
+  await act(async () => router.navigate({ to: '/battle' })); await settle();
+  expect(container.textContent).toContain('简洁');
+  expect(localStorage.getItem('arena.section.presetCharacters.open')).toBe('1');
+  await act(async () => router.navigate({ to: '/arena' })); await settle();
+  expect(presets()?.getAttribute('aria-expanded')).toBe('true');
+});
+
+it('advanced scenario opens after main removal but leaves manual folding intact on draft edits', async () => {
+  window.location.hash = '#/arena';
+  localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: { ...draft('scenario', 'stream'), scenarioDisplayName: '车站' } }));
+  localStorage.setItem('arena.section.scenario.open', '0');
+  await mount(); await click('恢复草稿');
+  const scenario = () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('🎭 情景设置'));
+  expect(scenario()?.getAttribute('aria-expanded')).toBe('false');
+  // keepMounted preserves the real clear action even while its section is folded.
+  await click('清除主情景');
+  expect(scenario()?.getAttribute('aria-expanded')).toBe('true');
+  await act(async () => scenario()!.click());
+  await click('+ 新建分队'); await change('[aria-label="分队名称"]', '折叠回归');
+  expect(scenario()?.getAttribute('aria-expanded')).toBe('false');
+  expect(localStorage.getItem('arena.section.scenario.open')).toBe('0');
+  expect(JSON.parse(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)!).draft.scenario.content).toBeNull();
+});

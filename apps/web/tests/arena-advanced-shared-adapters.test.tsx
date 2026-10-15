@@ -22,6 +22,19 @@ describe('real Web advanced adapters', () => {
     await act(async () => root.render(<ArenaEditorWorkspaceLayout sections={[{ kind: 'story', description: 'original description', defaultOpen: true, keepMounted: true, content: <input aria-label="preserved draft" /> }]} />));
     expect(container.textContent).toContain('🧠 故事引导 / 判定 / AI 模型'); expect(container.querySelector('input')?.parentElement?.hidden).toBe(true); await click('故事引导'); expect(localStorage.getItem('arena.section.storyOptions.open')).toBe('1');
   });
+  it('opens missing scenarios once but respects subsequent manual folding', async () => {
+    localStorage.setItem('arena.section.scenario.open', '0');
+    const render = (autoOpen: boolean) => act(async () => root.render(<ArenaEditorWorkspaceLayout sections={[
+      { kind: 'scenario', description: '', defaultOpen: true, autoOpen, keepMounted: true, content: <input aria-label="scenario draft" /> },
+    ]} />));
+    await render(true);
+    expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
+    await click('情景设置'); await render(true);
+    expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
+    expect(localStorage.getItem('arena.section.scenario.open')).toBe('0');
+    await render(false); await render(true);
+    expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
+  });
   it('Lore paste/enable/reorder/remove mutate actual Web store and shared token input', async () => {
     await act(async () => root.render(<QuestionnaireLorePanel />));
     for (const id of ['A', 'B']) {

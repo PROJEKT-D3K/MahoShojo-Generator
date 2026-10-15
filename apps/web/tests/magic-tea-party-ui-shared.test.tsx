@@ -118,3 +118,13 @@ describe('Web Tea actual shared composition', () => {
     expect(ports.push).not.toHaveBeenCalled();
   });
 });
+
+it('renders sidebar preference defaults on the server without window', () => {
+  function PreferenceProbe() {
+    const preference = shared.useSessionSidebarPreference();
+    return <span>{String(preference.pinnedCollapsed)}:{String(preference.recentCollapsed)}</span>;
+  }
+  vi.stubGlobal('window', undefined);
+  try { expect(renderToStaticMarkup(<PreferenceProbe />)).toBe('<span>false:false</span>'); }
+  finally { vi.unstubAllGlobals(); }
+});

@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { CardLibraryModal, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import {
-  MagicTeaPartyPageView, MagicTeaPartyHero, MagicTeaPartySessionList, MagicTeaPartySessionSetupPanel,
+  useSessionSidebarPreference, MagicTeaPartyPageView, MagicTeaPartyHero, MagicTeaPartySessionList, MagicTeaPartySessionSetupPanel,
   MagicTeaPartyOutputPreferencesPanel, MagicTeaPartyTransferPanel, MagicTeaPartyChatTimeline,
   MagicTeaPartyChatComposer, MagicTeaPartyChatMessage, MagicTeaPartySummaryBody,
 } from '@mahoshojo/ui-web/magic-tea-party';
@@ -27,7 +27,7 @@ export default function MagicTeaPartyPage() {
   const [library, setLibrary] = useState<'character' | 'scenario' | null>(null);
   const [summaryCollapsed, setSummaryCollapsed] = useState(false);
   const [outputView, setOutputView] = useState<'raw' | 'rendered'>('rendered');
-  const [pinnedCollapsed, setPinnedCollapsed] = useState(false); const [recentCollapsed, setRecentCollapsed] = useState(false);
+  const { pinnedCollapsed, setPinnedCollapsed, recentCollapsed, setRecentCollapsed } = useSessionSidebarPreference();
   const [importBusy, setImportBusy] = useState(false); const importRunning = useRef(false);
   const [providerDirty, setProviderDirty] = useState(false);
   const preparing = useRef(false); const [preparingView, setPreparingView] = useState(false); const pasteDirty = useRef(false);

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { MagicTeaPartySessionList, MagicTeaPartyOutputPreferencesPanel } from '@mahoshojo/ui-web/magic-tea-party';
+import { useState } from 'react';
+import { MagicTeaPartySessionList, MagicTeaPartyOutputPreferencesPanel, useSessionSidebarPreference } from '@mahoshojo/ui-web/magic-tea-party';
 
 import AiProviderSelector, { type UserAIProviderConfig } from '@/components/AiProviderSelector';
 import { MagicTeaPartyBranchChainModal } from '@/components/magic-tea-party/BranchChainModal';
@@ -52,9 +52,7 @@ export function MagicTeaPartySessionSidebar(props: MagicTeaPartySidebarProps) {
     onCleanupSessions,
   } = props;
   const [showBranchModal, setShowBranchModal] = useState(false);
-  const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
-  const [recentCollapsed, setRecentCollapsed] = useState(false);
-  const sidebarPrefKey = 'magic-tea-party:session-sidebar-v1';
+  const { pinnedCollapsed, setPinnedCollapsed, recentCollapsed, setRecentCollapsed } = useSessionSidebarPreference();
 
   const selectedPresetId = activeSession ? activeSession.settings.presetId : preferences.lastPresetId;
   const readArenaHistory = activeSession?.settings.readArenaHistory ?? preferences.readArenaHistory;
@@ -79,31 +77,6 @@ export function MagicTeaPartySessionSidebar(props: MagicTeaPartySidebarProps) {
   const hasParent = Boolean(activeSession?.forkedFrom?.sessionId);
   const hasChildren = sessions.some((session) => session.forkedFrom?.sessionId === activeSession?.id);
   const activeTitle = activeSession?.title ?? '当前会话';
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(sidebarPrefKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as { pinnedCollapsed?: boolean; recentCollapsed?: boolean };
-      if (typeof parsed.pinnedCollapsed === 'boolean') setPinnedCollapsed(parsed.pinnedCollapsed);
-      if (typeof parsed.recentCollapsed === 'boolean') setRecentCollapsed(parsed.recentCollapsed);
-    } catch {
-      // ignore
-    }
-  }, [sidebarPrefKey]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(
-        sidebarPrefKey,
-        JSON.stringify({ pinnedCollapsed, recentCollapsed })
-      );
-    } catch {
-      // ignore
-    }
-  }, [pinnedCollapsed, recentCollapsed, sidebarPrefKey]);
 
   return (
     <aside className="space-y-4 min-w-0">
