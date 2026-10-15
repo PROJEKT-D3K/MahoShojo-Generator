@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import fixture from '../fixtures/desktop-room-session.json';
+import proposalFixtures from '../fixtures/desktop-room-proposals.json';
 import { ARENA_ROOM_HTTP_ERROR_CODES } from '../src/arena-error-taxonomy';
 import {
   DESKTOP_ROOM_SESSION_ERROR_CODES,
@@ -29,6 +30,9 @@ import {
   ArenaRoomEpochMutationRequestSchema,
   ArenaRoomJoinRequestSchema,
   ArenaRoomPublishConfigRequestSchema,
+  ArenaRoomProposalSubmitRequestSchema,
+  ArenaRoomProposalWithdrawRequestSchema,
+  ArenaRoomProposalResolveRequestSchema,
   ArenaRoomSessionResponseSchema,
   ArenaRoomTicketRequestSchema,
   ArenaRoomTicketResponseSchema,
@@ -39,6 +43,7 @@ import { jsonUtf8ByteLength } from '../src/wire-size';
 const sessionFixture = fixture.operations.session.success.result;
 const operationFixtures = {
   ...fixture.operations,
+  ...proposalFixtures,
   config: {
     method: 'POST',
     path: ARENA_ROOM_HTTP_ROUTES.config.replace(':roomId', sessionFixture.roomId),
@@ -65,6 +70,9 @@ const originalRequestSchemas = {
   leave: ArenaRoomEpochMutationRequestSchema,
   close: ArenaRoomEpochMutationRequestSchema,
   config: ArenaRoomPublishConfigRequestSchema,
+  proposalSubmit: ArenaRoomProposalSubmitRequestSchema,
+  proposalWithdraw: ArenaRoomProposalWithdrawRequestSchema,
+  proposalResolve: ArenaRoomProposalResolveRequestSchema,
 };
 const objectAt = (root: unknown, path: string): Record<string, unknown> => path.split('/').filter(Boolean)
   .reduce<unknown>((value, key) => (value as Record<string, unknown>)[key], root) as Record<string, unknown>;
@@ -125,7 +133,7 @@ describe('Desktop Native Room session opt-in contract', () => {
   it.each(operations)('round-trips the shared %s serializer fixture through real schemas', (operation) => {
     const sample = operationFixtures[operation];
     expect(DESKTOP_ROOM_SESSION_OPERATIONS[operation].method).toBe(sample.method);
-    expect(sample.path).toBe(DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', fixture.operations.session.success.result.roomId));
+    expect(sample.path).toBe(DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', fixture.operations.session.success.result.roomId).replace(':proposalId', proposalFixtures.proposalSubmit.request.request.proposalId));
     for (const response of [sample.success, sample.error]) {
       expect(DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].parse(response)).toEqual(response);
       expect(parseDesktopRoomSessionResponse(operation, JSON.parse(JSON.stringify(response)), owner)).toEqual(response);
@@ -371,5 +379,55 @@ describe('Desktop Native Room session opt-in contract', () => {
     expectCode(() => parseDesktopRoomSessionRequest('join', {}, owner), 'ROOM_DESKTOP_PROTOCOL_INVALID');
     expectCode(() => parseDesktopRoomSessionResponse('ticket', fixture.operations.session.success, owner), 'ROOM_DESKTOP_RESPONSE_INVALID');
     expectCode(() => parseDesktopRoomSessionResponse('kick' as DesktopRoomSessionOperation, {}, owner), 'ROOM_DESKTOP_OPERATION_UNSUPPORTED');
+  });
+});
+
+
+describe('Desktop proposal wire semantics', () => {
+  it('keeps ordinary merge and explicit override revision semantics', () => {
+    const base = { ...proposalFixtures.proposalResolve.request, request: {
+      expectedRoomEpoch: sessionFixture.roomEpoch, resolution: 'accept-selected', selectedChangeIds: ['guidance-1'],
+    } };
+    expect(parseDesktopRoomSessionRequest('proposalResolve', base, owner).request).not.toHaveProperty('expectedRevision');
+    expect(parseDesktopRoomSessionRequest('proposalResolve', { ...base, request: { ...base.request, expectedRevision: 0 } }, owner).request).toHaveProperty('expectedRevision', 0);
+    expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS.proposalResolve.safeParse({ ...base, request: { ...base.request, overrideChangeIds: ['guidance-1'] } }).success).toBe(false);
+    expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS.proposalResolve.safeParse({ ...base, request: { ...base.request, expectedRevision: 0, overrideChangeIds: ['guidance-1'] } }).success).toBe(true);
+  });
+
+  it('requires directly addressable Desktop submit IDs without changing legacy DTOs', () => {
+    for (const proposalId of ['提案 甲', 'proposal-1', 'a.b']) {
+      const request = { ...proposalFixtures.proposalSubmit.request, request: { ...proposalFixtures.proposalSubmit.request.request, proposalId } };
+      expect(parseDesktopRoomSessionRequest('proposalSubmit', request, owner).request.proposalId).toBe(proposalId);
+    }
+    for (const proposalId of [' leading', 'trailing ', '/', 'a/b', 'a\\b', 'a%2Fb', 'a%252Fb', '.', '..']) {
+      const request = { ...proposalFixtures.proposalSubmit.request, request: { ...proposalFixtures.proposalSubmit.request.request, proposalId } };
+      expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS.proposalSubmit.safeParse(request).success).toBe(false);
+      if (proposalId !== '.' && proposalId !== '..') expect(ArenaRoomProposalSubmitRequestSchema.safeParse(request.request).success).toBe(true);
+    }
+  });
+
+  it('rejects submit authority injection while retaining old baseline and ordered typed intent', () => {
+    const base = proposalFixtures.proposalSubmit.request;
+    expect(parseDesktopRoomSessionRequest('proposalSubmit', { ...base, request: { ...base.request, baseRevision: 0 } }, owner).request.baseRevision).toBe(0);
+    for (const key of ['authorUserId', 'createdAt', 'status', 'expectedRevision', 'expectedControlSeq']) {
+      expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS.proposalSubmit.safeParse({ ...base, request: { ...base.request, [key]: 'injected' } }).success).toBe(false);
+    }
+  });
+
+  it('requires complete resolve state and equal duplicate sharedConfig independently of object key order', () => {
+    const response = structuredClone(proposalFixtures.proposalResolve.success);
+    response.result.sharedConfig = Object.fromEntries(Object.entries(response.result.sharedConfig).reverse()) as typeof response.result.sharedConfig;
+    expect(parseDesktopRoomSessionResponse('proposalResolve', response, owner)).toEqual(response);
+    for (const key of ['snapshot', 'sharedConfig']) expect(DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS.proposalResolve.safeParse(without(response, 'result', key)).success).toBe(false);
+    response.result.sharedConfig.userGuidance = 'mismatch';
+    expect(DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS.proposalResolve.safeParse(response).success).toBe(false);
+  });
+
+  it('keeps summary statuses operation-specific and cannot invent terminal replay receipts', () => {
+    expect(DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS.proposalSubmit.safeParse(patch(proposalFixtures.proposalSubmit.success, 'result/result', 'idempotent')).success).toBe(true);
+    for (const operation of ['proposalWithdraw', 'proposalResolve'] as const) {
+      expect(DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS[operation].safeParse(patch(proposalFixtures[operation].success, 'result/result', 'idempotent')).success).toBe(false);
+      expect(DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS[operation].safeParse(patch(proposalFixtures[operation].success, 'result/status', 'submitted')).success).toBe(false);
+    }
   });
 });

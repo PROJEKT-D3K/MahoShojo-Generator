@@ -3,7 +3,8 @@ import { z } from './zod';
 import { ARENA_ROOM_HTTP_ERROR_CODES } from './arena-error-taxonomy';
 import { JsonValueSchema, SAFE_JSON_VALUE_MAX_DEPTH, type JsonValue } from './json-value';
 import { MAX_CONTROL_FRAME_BYTES } from './limits';
-import { WireErrorMessageSchema } from './primitives';
+import { OpaqueKeySchema, WireErrorMessageSchema } from './primitives';
+import { ArenaProposalIdSchema } from './proposals';
 import { RoomDirectoryPageSchema } from './room-directory';
 import {
   ARENA_ROOM_HTTP_ROUTES,
@@ -13,6 +14,10 @@ import {
   ArenaRoomJoinRequestSchema,
   ArenaRoomLeaveResponseSchema,
   ArenaRoomPublishConfigRequestSchema,
+  ArenaRoomProposalSubmitRequestSchema,
+  ArenaRoomProposalWithdrawRequestSchema,
+  ArenaRoomProposalResolveRequestSchema,
+  ArenaRoomProposalMutationResponseSchema,
   ArenaRoomSessionResponseSchema,
   ArenaRoomTicketRequestSchema,
   ArenaRoomTicketResponseSchema,
@@ -41,13 +46,25 @@ export const DESKTOP_ROOM_SESSION_OPERATIONS = Object.freeze({
   leave: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.leave },
   close: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.close },
   config: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.config },
+  proposalSubmit: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.proposals },
+  proposalWithdraw: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.proposalWithdraw },
+  proposalResolve: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.proposalResolve },
 } as const);
 export const DesktopRoomSessionOperationSchema = z.enum([
-  'discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config',
+  'discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve',
 ]);
-export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'ticket', 'leave', 'close', 'config']);
+export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 export type DesktopRoomSessionOperation = z.infer<typeof DesktopRoomSessionOperationSchema>;
 export type DesktopRoomSessionPostOperation = z.infer<typeof DesktopRoomSessionPostOperationSchema>;
+
+/** Desktop write targets must be canonical single URL segments; legacy IDs remain readable. */
+const desktopPathId = (schema: z.ZodType<string, string>) => z.string().refine((value) => {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success || parsed.data !== value || value === '.' || value === '..' || /[\\/%]/u.test(value)) return false;
+  try { encodeURIComponent(value); return true; } catch { return false; }
+}).pipe(schema);
+export const DesktopRoomSessionRoomIdSchema = desktopPathId(OpaqueKeySchema);
+export const DesktopRoomSessionProposalIdSchema = desktopPathId(ArenaProposalIdSchema);
 
 export const DesktopRoomSessionUserIdSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 export const DesktopRoomSessionExpectedUserIdHeaderSchema = z.string()
@@ -113,6 +130,9 @@ export const DesktopRoomSessionTicketRequestSchema = postRequest(ArenaRoomTicket
 export const DesktopRoomSessionLeaveRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);
 export const DesktopRoomSessionCloseRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);
 export const DesktopRoomSessionConfigRequestSchema = postRequest(ArenaRoomPublishConfigRequestSchema);
+export const DesktopRoomSessionProposalSubmitRequestSchema = postRequest(ArenaRoomProposalSubmitRequestSchema.extend({ proposalId: DesktopRoomSessionProposalIdSchema }));
+export const DesktopRoomSessionProposalWithdrawRequestSchema = postRequest(ArenaRoomProposalWithdrawRequestSchema);
+export const DesktopRoomSessionProposalResolveRequestSchema = postRequest(ArenaRoomProposalResolveRequestSchema);
 export const DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS = Object.freeze({
   create: DesktopRoomSessionCreateRequestSchema,
   join: DesktopRoomSessionJoinRequestSchema,
@@ -120,6 +140,9 @@ export const DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS = Object.freeze({
   leave: DesktopRoomSessionLeaveRequestSchema,
   close: DesktopRoomSessionCloseRequestSchema,
   config: DesktopRoomSessionConfigRequestSchema,
+  proposalSubmit: DesktopRoomSessionProposalSubmitRequestSchema,
+  proposalWithdraw: DesktopRoomSessionProposalWithdrawRequestSchema,
+  proposalResolve: DesktopRoomSessionProposalResolveRequestSchema,
 });
 export type DesktopRoomSessionRequest<Operation extends DesktopRoomSessionPostOperation = DesktopRoomSessionPostOperation> =
   z.infer<(typeof DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS)[Operation]>;
@@ -141,6 +164,32 @@ export const DesktopRoomSessionTicketSuccessSchema = successResponse(desktopTick
 export const DesktopRoomSessionLeaveSuccessSchema = successResponse(ArenaRoomLeaveResponseSchema);
 export const DesktopRoomSessionCloseSuccessSchema = successResponse(ArenaRoomLeaveResponseSchema);
 export const DesktopRoomSessionConfigSuccessSchema = successResponse(ArenaRoomSessionResponseSchema);
+// Summary receipts do not establish a complete replica cursor. Only resolve installs a snapshot.
+export const DesktopRoomSessionProposalSubmitSuccessSchema = successResponse(
+  ArenaRoomProposalMutationResponseSchema.refine((result) => result.status === 'submitted'),
+);
+export const DesktopRoomSessionProposalWithdrawSuccessSchema = successResponse(
+  ArenaRoomProposalMutationResponseSchema.refine((result) => result.status === 'withdrawn' && result.result === 'applied'),
+);
+const equalJson = (left: unknown, right: unknown): boolean => {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const a = left as Record<string, unknown>; const b = right as Record<string, unknown>;
+  return Object.keys(a).length === Object.keys(b).length
+    && Object.keys(a).every((key) => Object.hasOwn(b, key) && equalJson(a[key], b[key]));
+};
+export const DesktopRoomSessionProposalResolveSuccessSchema = successResponse(
+  ArenaRoomProposalMutationResponseSchema.superRefine((result, context) => {
+    if (!['accepted', 'partially_accepted', 'rejected'].includes(result.status) || result.result !== 'applied') {
+      context.addIssue({ code: 'custom', message: 'resolve requires an applied resolution' });
+    }
+    if (result.snapshot === undefined || result.sharedConfig === undefined
+      || !equalJson(result.sharedConfig, result.snapshot.sharedConfig)) {
+      context.addIssue({ code: 'custom', path: ['snapshot'], message: 'resolve requires a complete consistent snapshot' });
+    }
+  }),
+);
 export const DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS = Object.freeze({
   discover: DesktopRoomSessionDiscoverSuccessSchema,
   create: DesktopRoomSessionCreateSuccessSchema,
@@ -150,6 +199,9 @@ export const DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS = Object.freeze({
   leave: DesktopRoomSessionLeaveSuccessSchema,
   close: DesktopRoomSessionCloseSuccessSchema,
   config: DesktopRoomSessionConfigSuccessSchema,
+  proposalSubmit: DesktopRoomSessionProposalSubmitSuccessSchema,
+  proposalWithdraw: DesktopRoomSessionProposalWithdrawSuccessSchema,
+  proposalResolve: DesktopRoomSessionProposalResolveSuccessSchema,
 });
 export type DesktopRoomSessionSuccess<Operation extends DesktopRoomSessionOperation = DesktopRoomSessionOperation> =
   z.infer<(typeof DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS)[Operation]>;
@@ -223,6 +275,9 @@ export const DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS = Object.freeze({
   leave: z.union([DesktopRoomSessionLeaveSuccessSchema, postErrorResponse]),
   close: z.union([DesktopRoomSessionCloseSuccessSchema, postErrorResponse]),
   config: z.union([DesktopRoomSessionConfigSuccessSchema, postErrorResponse]),
+  proposalSubmit: z.union([DesktopRoomSessionProposalSubmitSuccessSchema, postErrorResponse]),
+  proposalWithdraw: z.union([DesktopRoomSessionProposalWithdrawSuccessSchema, postErrorResponse]),
+  proposalResolve: z.union([DesktopRoomSessionProposalResolveSuccessSchema, postErrorResponse]),
 });
 export type DesktopRoomSessionResponse<Operation extends DesktopRoomSessionOperation = DesktopRoomSessionOperation> =
   z.infer<(typeof DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS)[Operation]>;

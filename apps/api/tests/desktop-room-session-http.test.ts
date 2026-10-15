@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import fixture from '@mahoshojo/contracts/fixtures/desktop-room-session.json';
+import proposalFixtures from '@mahoshojo/contracts/fixtures/desktop-room-proposals.json';
 import {
   DESKTOP_ROOM_SESSION_LIMITS,
   DESKTOP_ROOM_SESSION_OPERATIONS,
@@ -12,6 +13,7 @@ import {
 } from '@mahoshojo/contracts/desktop-room-session';
 import {
   ArenaRoomCreateRequestSchema,
+  ArenaRoomProposalMutationResponseSchema,
   ArenaRoomPublishConfigRequestSchema,
   ArenaRoomSessionResponseSchema,
   RoomDirectoryPageSchema,
@@ -52,6 +54,7 @@ const configBody = {
 const fixtureSession = fixture.operations.session.success.result;
 const operationFixtures = {
   ...fixture.operations,
+  ...proposalFixtures,
   config: {
     method: 'POST',
     path: DESKTOP_ROOM_SESSION_OPERATIONS.config.path.replace(':roomId', fixtureSession.roomId),
@@ -81,6 +84,8 @@ const wrap = (request: unknown, createMode?: 'new' | 'resume-only') => ({
   }, request,
 });
 const inputFor = (operation: DesktopRoomSessionOperation) => {
+  if (operation === 'proposalSubmit') return wrap({ ...proposalFixtures.proposalSubmit.request.request, expectedRoomEpoch: snapshot.roomEpoch, baseRevision: snapshot.revision });
+  if (operation === 'proposalWithdraw' || operation === 'proposalResolve') return wrap({ ...proposalFixtures[operation].request.request, expectedRoomEpoch: snapshot.roomEpoch });
   if (operation === 'create') return wrap(createBody, 'new');
   if (operation === 'join') return wrap({ displayName: 'Member' });
   if (operation === 'ticket') return wrap({});
@@ -89,7 +94,7 @@ const inputFor = (operation: DesktopRoomSessionOperation) => {
   return undefined;
 };
 const pathFor = (operation: DesktopRoomSessionOperation) => (
-  DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', snapshot.roomId)
+  DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', snapshot.roomId).replace(':proposalId', proposalFixtures.proposalSubmit.request.request.proposalId)
 );
 const depsFor = (): ArenaRoomHttpDependencies => ({
   resolveAuthentication: vi.fn(async () => ({ status: 'authenticated' as const, userId: 101 })),
@@ -102,11 +107,10 @@ const depsFor = (): ArenaRoomHttpDependencies => ({
   },
   directory: { discoverPublic: vi.fn(async () => ({ items: [], nextCursor: null })) },
   websocketAuthority: { issue: vi.fn(async () => 'synthetic-room-ticket') },
-  // Unsupported capabilities must never reach any service, even on a valid account.
   proposals: {
-    submit: vi.fn(async () => { throw new Error('unexpected proposal'); }),
-    resolve: vi.fn(async () => { throw new Error('unexpected proposal'); }),
-    withdraw: vi.fn(async () => { throw new Error('unexpected proposal'); }),
+    submit: vi.fn(async () => ({ ...ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalSubmit.success.result), roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, controlSeq: snapshot.controlSeq, revision: snapshot.revision })),
+    resolve: vi.fn(async () => ({ ...ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalResolve.success.result), roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, controlSeq: snapshot.controlSeq, revision: snapshot.revision, snapshot, sharedConfig: snapshot.sharedConfig })),
+    withdraw: vi.fn(async () => ({ ...ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalWithdraw.success.result), roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, controlSeq: snapshot.controlSeq, revision: snapshot.revision })),
   },
   generations: {
     start: vi.fn(async () => { throw new Error('unexpected generation'); }),
@@ -146,6 +150,9 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     vi.mocked(deps.memberships.leave).mockResolvedValue({ ...current, member: { ...current.member, role: 'member' } });
     vi.mocked(deps.directory.discoverPublic).mockResolvedValue(RoomDirectoryPageSchema.parse(fixture.operations.discover.success.result));
     vi.mocked(deps.websocketAuthority.issue).mockResolvedValue(fixture.operations.ticket.success.result.ticket);
+    vi.mocked(deps.proposals.submit).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalSubmit.success.result));
+    vi.mocked(deps.proposals.withdraw).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalWithdraw.success.result));
+    vi.mocked(deps.proposals.resolve).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalResolve.success.result));
     const response = await appFor(deps).request(sample.path, {
       method: sample.method, headers: { ...headers, ...fixture.headers },
       ...(sample.request === null ? {} : { body: JSON.stringify(sample.request) }),
@@ -236,7 +243,6 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
   });
 
   it.each([
-    'proposals', 'proposals/proposal-1/resolve', 'proposals/proposal-1/withdraw',
     'members/member-1/kick', 'generations', 'generations/generation-1/cancel',
   ])('unsupported POST %s rejects any negotiation marker instead of legacy fallback', async (suffix) => {
     for (const markers of [headers, { ...headers, 'x-mahoshojo-desktop-room-protocol': '' }, { ...headers, 'x-mahoshojo-room-expected-user-id': '' }]) {
@@ -427,7 +433,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     else expect(body).toHaveProperty('protocolVersion', 1);
   });
 
-  it.each(['create', 'config'] as const)('unmarked %s with Native body does not silently unwrap on the Web path', async (operation) => {
+  it.each(['create', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve'] as const)('unmarked %s with Native body does not silently unwrap on the Web path', async (operation) => {
     const deps = depsFor(); const h = new Headers(headers);
     h.delete('x-mahoshojo-desktop-room-protocol'); h.delete('x-mahoshojo-room-expected-user-id');
     const response = await appFor(deps).request(pathFor(operation), { ...requestFor(operation), headers: h });
@@ -578,5 +584,100 @@ describe('Desktop raw budgets on the actual producer', () => {
     expect(Buffer.byteLength(text)).toBeGreaterThan(65_536);
     expect(parseDesktopRoomSessionResponse('session', JSON.parse(text), 101)).toEqual(JSON.parse(text));
     padding.key += 'x'; expect(RoomEventSchema.safeParse(frame()).success).toBe(false);
+  });
+});
+
+
+const proposalOperations = ['proposalSubmit', 'proposalWithdraw', 'proposalResolve'] as const;
+const proposalPort = (deps: ArenaRoomHttpDependencies, operation: typeof proposalOperations[number]) => (
+  operation === 'proposalSubmit' ? deps.proposals.submit
+    : operation === 'proposalWithdraw' ? deps.proposals.withdraw : deps.proposals.resolve
+);
+describe('Desktop proposal write boundaries', () => {
+  it.each(proposalOperations)('%s consumes the prepared request exactly once and preserves service authority', async (operation) => {
+    const deps = depsFor();
+    const response = await appFor(deps).request(pathFor(operation), requestFor(operation));
+    expect(response.status).toBe(200);
+    expect(proposalPort(deps, operation)).toHaveBeenCalledExactlyOnceWith({
+      roomId: snapshot.roomId, accountUserId: 101, request: inputFor(operation)!.request,
+      ...(operation === 'proposalSubmit' ? {} : { proposalId: proposalFixtures.proposalSubmit.request.request.proposalId }),
+    });
+    const result = (await response.json()).result;
+    if (operation === 'proposalResolve') expect(result.snapshot).toEqual(snapshot);
+    else { expect(result).not.toHaveProperty('snapshot'); expect(result).not.toHaveProperty('sharedConfig'); }
+  });
+
+  it.each(proposalOperations)('%s cannot report not-applied after entering a throwing service', async (operation) => {
+    const deps = depsFor();
+    vi.mocked(proposalPort(deps, operation)).mockRejectedValue(new Error('private-service-canary'));
+    const response = await appFor(deps).request(pathFor(operation), requestFor(operation));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ desktopRoom: { viewerUserId: 101 }, error: { outcome: 'unknown' } });
+    expect(proposalPort(deps, operation)).toHaveBeenCalledOnce();
+  });
+
+  it.each(proposalOperations)('%s oversized raw request rejects before authentication, limit or recovery', async (operation) => {
+    const deps = depsFor();
+    const compact = JSON.stringify(inputFor(operation));
+    const raw = compact + ' '.repeat(DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes + 1 - Buffer.byteLength(compact));
+    const response = await appFor(deps).request(pathFor(operation), { method: 'POST', headers, body: raw });
+    expect(response.status).toBe(413); expect(deps.resolveAuthentication).not.toHaveBeenCalled();
+    expect(deps.rateLimit).not.toHaveBeenCalled(); assertNoBusiness(deps);
+  });
+
+  it.each(proposalOperations)('%s accepts the exact outer byte budget with a valid original DTO', async (operation) => {
+    const deps = depsFor(); const compact = JSON.stringify(inputFor(operation));
+    const raw = compact + ' '.repeat(DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes - Buffer.byteLength(compact));
+    expect((await appFor(deps).request(pathFor(operation), { method: 'POST', headers, body: raw })).status).toBe(200);
+    expect(proposalPort(deps, operation)).toHaveBeenCalledOnce();
+  });
+
+  it.each(['%2F', '%252F', '%5C', '%255C', '%20trimmed', 'alias%2d1', '%ZZ'])('rejects noncanonical target segment %s before authority work', async (segment) => {
+    for (const field of ['roomId', 'proposalId']) {
+      const deps = depsFor();
+      const path = DESKTOP_ROOM_SESSION_OPERATIONS.proposalWithdraw.path
+        .replace(':roomId', field === 'roomId' ? segment : snapshot.roomId)
+        .replace(':proposalId', field === 'proposalId' ? segment : 'proposal-1');
+      const response = await appFor(deps).request(path, requestFor('proposalWithdraw'));
+      expect(response.status).toBe(400); expect(deps.resolveAuthentication).not.toHaveBeenCalled();
+      expect(deps.rateLimit).not.toHaveBeenCalled(); assertNoBusiness(deps);
+    }
+  });
+
+  it('accepts canonical Unicode proposal IDs without normalizing the target', async () => {
+    const deps = depsFor(); const proposalId = '提案 甲';
+    const response = await appFor(deps).request(pathFor('proposalWithdraw').replace('desktop-proposal-1', encodeURIComponent(proposalId)), requestFor('proposalWithdraw'));
+    expect(response.status).toBe(200);
+    expect(deps.proposals.withdraw).toHaveBeenCalledWith(expect.objectContaining({ proposalId }));
+  });
+
+  it.each(['snapshot', 'sharedConfig', 'inconsistent', 'cursor'] as const)('resolve %s corruption stays unknown after the service and does not return a partial success', async (fault) => {
+    const deps = depsFor();
+    const result = { ...ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalResolve.success.result),
+      roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, revision: snapshot.revision, controlSeq: snapshot.controlSeq,
+      snapshot: structuredClone(snapshot), sharedConfig: structuredClone(snapshot.sharedConfig) };
+    if (fault === 'inconsistent') result.sharedConfig.userGuidance = 'different';
+    else if (fault === 'cursor') result.snapshot.controlSeq += 1;
+    else delete (result as Record<string, unknown>)[fault];
+    vi.mocked(deps.proposals.resolve).mockResolvedValue(result);
+    const response = await appFor(deps).request(pathFor('proposalResolve'), requestFor('proposalResolve'));
+    expect([502, 503]).toContain(response.status);
+    expect(await response.json()).toMatchObject({ error: { outcome: 'unknown' } });
+    expect(deps.proposals.resolve).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe('Desktop proposal ID compatibility', () => {
+  it.each([' trimmed', 'trailing ', 'a/b', 'a\\b', 'a%2Fb', 'a%252Fb'])('refuses unsafe submit ID %s before business while leaving Web parsing unchanged', async (proposalId) => {
+    const original = { ...proposalFixtures.proposalSubmit.request.request, proposalId, expectedRoomEpoch: snapshot.roomEpoch };
+    const deps = depsFor();
+    const response = await appFor(deps).request(pathFor('proposalSubmit'), { method: 'POST', headers, body: JSON.stringify(wrap(original)) });
+    expect(response.status).toBe(400); expect(deps.resolveAuthentication).not.toHaveBeenCalled();
+    expect(deps.rateLimit).not.toHaveBeenCalled(); assertNoBusiness(deps);
+    const web = depsFor(); const h = new Headers(headers);
+    h.delete('x-mahoshojo-desktop-room-protocol'); h.delete('x-mahoshojo-room-expected-user-id');
+    expect((await appFor(web).request(pathFor('proposalSubmit'), { method: 'POST', headers: h, body: JSON.stringify(original) })).status).toBe(200);
+    expect(web.proposals.submit).toHaveBeenCalledWith(expect.objectContaining({ request: { ...original, proposalId: proposalId.trim() } }));
   });
 });

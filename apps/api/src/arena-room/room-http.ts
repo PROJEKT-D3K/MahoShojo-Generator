@@ -728,9 +728,13 @@ const desktopRoomSession = createDesktopRoomSessionAdapter({
   isBodyTooLarge: (error) => error instanceof ArenaRoomRequestError && error.kind === 'too-large',
 });
 
-const readOperationBody = (context: ArenaRoomHttpContext): Promise<unknown> => {
+const readOperationBody = (
+  context: ArenaRoomHttpContext,
+  maxBytes = MAX_CONTROL_MESSAGE_BYTES,
+  tooLargeIssue?: ArenaRoomRequestIssue,
+): Promise<unknown> => {
   const prepared = desktopRoomSession.requestBody(context);
-  return prepared ? Promise.resolve(prepared.value) : readBoundedBody(context.req.raw);
+  return prepared ? Promise.resolve(prepared.value) : readBoundedBody(context.req.raw, maxBytes, tooLargeIssue);
 };
 
 const parseRoomId = (context: ArenaRoomHttpContext): string | Response => {
@@ -1124,13 +1128,14 @@ export const registerArenaRoomHttpRoutes = (
     try {
       const request = parseRequest(
         ArenaRoomProposalSubmitRequestSchema,
-        await readBoundedBody(
-          context.req.raw,
+        await readOperationBody(
+          context,
           MAX_PROPOSAL_BYTES,
           { code: 'ROOM_PROPOSAL_BYTE_LIMIT', maximum: MAX_PROPOSAL_BYTES },
         ),
         'proposal',
       );
+      desktopRoomSession.enterBusiness(context);
       const result = await dependencies.proposals.submit({
         roomId,
         accountUserId: authorization.accountUserId,
@@ -1304,9 +1309,10 @@ export const registerArenaRoomHttpRoutes = (
     try {
       const request = parseRequest(
         ArenaRoomProposalResolveRequestSchema,
-        await readBoundedBody(context.req.raw),
+        await readOperationBody(context),
         'proposal',
       );
+      desktopRoomSession.enterBusiness(context);
       const result = await dependencies.proposals.resolve({
         roomId,
         proposalId,
@@ -1335,8 +1341,9 @@ export const registerArenaRoomHttpRoutes = (
     try {
       const request = parseRequest(
         ArenaRoomProposalWithdrawRequestSchema,
-        await readBoundedBody(context.req.raw),
+        await readOperationBody(context),
       );
+      desktopRoomSession.enterBusiness(context);
       const result = await dependencies.proposals.withdraw({
         roomId,
         proposalId,

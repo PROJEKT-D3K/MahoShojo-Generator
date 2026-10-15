@@ -8,6 +8,8 @@ import {
   DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS,
   DesktopRoomSessionErrorResponseSchema,
   DesktopRoomSessionExpectedUserIdHeaderSchema,
+  DesktopRoomSessionProposalIdSchema,
+  DesktopRoomSessionRoomIdSchema,
   parseDesktopRoomSessionRequest,
   type DesktopRoomSessionErrorCode,
   type DesktopRoomSessionErrorOutcome,
@@ -35,9 +37,21 @@ const encodedBytes = (value: unknown): number => (
 const resolveOperation = (method: string, path: string): DesktopRoomSessionOperation | null => {
   for (const [name, route] of Object.entries(DESKTOP_ROOM_SESSION_OPERATIONS)) {
     if (method !== route.method) continue;
-    const pattern = route.path.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-      .replace(':roomId', '[^/]+');
-    if (new RegExp(`^${pattern}$`, 'u').test(path)) return name as DesktopRoomSessionOperation;
+    const template = route.path.split('/');
+    const segments = path.split('/');
+    if (template.length !== segments.length) continue;
+    const matches = template.every((segment, index) => {
+      const raw = segments[index]!;
+      if (segment !== ':roomId' && segment !== ':proposalId') return raw === segment;
+      try {
+        const decoded = decodeURIComponent(raw);
+        const schema = segment === ':proposalId' ? DesktopRoomSessionProposalIdSchema : DesktopRoomSessionRoomIdSchema;
+        const parsed = schema.safeParse(decoded);
+        // A single canonical segment only: no slash, backslash, or second decoding layer.
+        return parsed.success && encodeURIComponent(parsed.data) === raw;
+      } catch { return false; }
+    });
+    if (matches) return name as DesktopRoomSessionOperation;
   }
   return null;
 };
@@ -115,7 +129,7 @@ export const createDesktopRoomSessionAdapter = (options: {
     if (protocol !== DESKTOP_ROOM_SESSION_PROTOCOL_VERSION || !parsedOwner.success) {
       return errorResponse(context, 'ROOM_DESKTOP_PROTOCOL_INVALID', '桌面房间协议协商无效', 400);
     }
-    const operation = resolveOperation(context.req.method, context.req.path);
+    const operation = resolveOperation(context.req.method, new URL(context.req.url).pathname);
     if (operation === null) {
       return errorResponse(context, 'ROOM_DESKTOP_OPERATION_UNSUPPORTED', '当前桌面房间版本不支持此操作', 400);
     }

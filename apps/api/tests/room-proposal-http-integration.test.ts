@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DESKTOP_ROOM_SESSION_PROTOCOL_VERSION } from '@mahoshojo/contracts/desktop-room-session';
 
 import { createHonoApp } from '#/app';
 import {
@@ -88,7 +89,7 @@ const post = (body: Record<string, unknown>) => ({
 });
 
 describe('Arena Proposal Hono authority composition', () => {
-  it('real HTTP -> membership -> proposal service -> RoomActor closes submit/reject lifecycle', async () => {
+  it.each(['web', 'desktop'] as const)('%s real HTTP -> membership -> proposal service -> RoomActor closes submit/reject lifecycle', async (wire) => {
     const store = new MemoryRoomStore();
     let userIndex = 0;
     const actors = createRoomActorRegistry({
@@ -148,8 +149,21 @@ describe('Arena Proposal Hono authority composition', () => {
         })),
       },
     });
+    const mutation = (body: Record<string, unknown>) => wire === 'web' ? post(body) : {
+      ...post({ desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: accountUserId }, request: body }),
+      headers: { ...post({}).headers, 'x-mahoshojo-desktop-room-protocol': DESKTOP_ROOM_SESSION_PROTOCOL_VERSION,
+        'x-mahoshojo-room-expected-user-id': `v1:${accountUserId}` },
+    };
+    const readResult = async (response: Response) => {
+      const body = await response.json();
+      if (wire === 'desktop') {
+        expect(body.desktopRoom).toEqual({ version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, viewerUserId: accountUserId });
+        return body.result;
+      }
+      return body;
+    };
     const proposalId = 'proposal-http-real';
-    const submit = await app.request(`/api/arena/rooms/v1/${host.roomId}/proposals`, post({
+    const submit = await app.request(`/api/arena/rooms/v1/${host.roomId}/proposals`, mutation({
       proposalId,
       expectedRoomEpoch: host.roomEpoch,
       baseRevision: 0,
@@ -162,7 +176,7 @@ describe('Arena Proposal Hono authority composition', () => {
     }));
 
     expect(submit.status).toBe(200);
-    expect(await submit.json()).toMatchObject({
+    expect(await readResult(submit)).toMatchObject({
       proposalId,
       status: 'submitted',
       revision: 0,
@@ -176,7 +190,7 @@ describe('Arena Proposal Hono authority composition', () => {
     accountUserId = 101;
     const resolve = await app.request(
       `/api/arena/rooms/v1/${host.roomId}/proposals/${proposalId}/resolve`,
-      post({
+      mutation({
         expectedRoomEpoch: host.roomEpoch,
         expectedRevision: 0,
         resolution: 'reject',
@@ -184,7 +198,7 @@ describe('Arena Proposal Hono authority composition', () => {
     );
 
     expect(resolve.status).toBe(200);
-    const resolveBody = await resolve.json();
+    const resolveBody = await readResult(resolve);
     expect(resolveBody).toMatchObject({
       proposalId,
       status: 'rejected',

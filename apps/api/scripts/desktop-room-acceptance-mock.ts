@@ -41,6 +41,8 @@ import { ARENA_ROOM_WEBSOCKET_PATH, RoomWebSocketGateway } from '../src/arena-ro
 import { createRoomRequestDispatcher, createRoomWebSocketApp, createRoomWebSocketServer } from '../src/arena-room/room-websocket-transport';
 import type { HonoAppVariables } from '../src/middleware/request-metadata';
 
+// This Native acceptance harness only exposes capabilities already implemented by its consumer.
+export const ROOM_ACCEPTANCE_OPERATIONS = ['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config'] as const satisfies readonly DesktopRoomSessionOperation[];
 export const ROOM_ACCEPTANCE_HOST = 'room.acceptance.invalid';
 export const ROOM_ACCEPTANCE_PORT = 34443;
 export const ROOM_ACCEPTANCE_AUTH_PORT = 34080;
@@ -167,7 +169,8 @@ const roomServices = () => {
 
 const operationFor = (request: Request): DesktopRoomSessionOperation | null => {
   const pathname = new URL(request.url).pathname;
-  for (const [operation, definition] of Object.entries(DESKTOP_ROOM_SESSION_OPERATIONS)) {
+  for (const operation of ROOM_ACCEPTANCE_OPERATIONS) {
+    const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
     const pattern = new RegExp(`^${definition.path.replace(':roomId', '[A-Za-z0-9._:-]{1,256}')}$`, 'u');
     if (request.method === definition.method && pattern.test(pathname)) return operation as DesktopRoomSessionOperation;
   }

@@ -1,0 +1,313 @@
+{
+  "proposalSubmit": {
+    "method": "POST",
+    "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/proposals",
+    "request": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "expectedUserId": 42
+      },
+      "request": {
+        "proposalId": "desktop-proposal-1",
+        "expectedRoomEpoch": "epoch_01JARENA",
+        "baseRevision": 7,
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "A proposal",
+            "expectedBase": {
+              "kind": "value",
+              "value": "第一行\n第二行，保留 \\ 与 \"引号\" 😀"
+            }
+          }
+        ]
+      }
+    },
+    "success": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "result": {
+        "protocolVersion": 1,
+        "roomId": "room_01JARENAEXAMPLE",
+        "roomEpoch": "epoch_01JARENA",
+        "controlSeq": 24,
+        "revision": 7,
+        "proposalId": "desktop-proposal-1",
+        "status": "submitted",
+        "result": "applied"
+      }
+    },
+    "error": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "error": {
+        "code": "ROOM_RATE_LIMITED",
+        "message": "房间请求过于频繁，请稍后重试。",
+        "outcome": "not-applied",
+        "retryAfterSeconds": 3
+      }
+    }
+  },
+  "proposalWithdraw": {
+    "method": "POST",
+    "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/proposals/desktop-proposal-1/withdraw",
+    "request": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "expectedUserId": 42
+      },
+      "request": {
+        "expectedRoomEpoch": "epoch_01JARENA"
+      }
+    },
+    "success": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "result": {
+        "protocolVersion": 1,
+        "roomId": "room_01JARENAEXAMPLE",
+        "roomEpoch": "epoch_01JARENA",
+        "controlSeq": 24,
+        "revision": 7,
+        "proposalId": "desktop-proposal-1",
+        "status": "withdrawn",
+        "result": "applied"
+      }
+    },
+    "error": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "error": {
+        "code": "ROOM_RATE_LIMITED",
+        "message": "房间请求过于频繁，请稍后重试。",
+        "outcome": "not-applied",
+        "retryAfterSeconds": 3
+      }
+    }
+  },
+  "proposalResolve": {
+    "method": "POST",
+    "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/proposals/desktop-proposal-1/resolve",
+    "request": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "expectedUserId": 42
+      },
+      "request": {
+        "expectedRoomEpoch": "epoch_01JARENA",
+        "resolution": "reject"
+      }
+    },
+    "success": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "result": {
+        "protocolVersion": 1,
+        "roomId": "room_01JARENAEXAMPLE",
+        "roomEpoch": "epoch_01JARENA",
+        "controlSeq": 24,
+        "revision": 7,
+        "proposalId": "desktop-proposal-1",
+        "status": "rejected",
+        "result": "applied",
+        "sharedConfig": {
+          "battleMode": "scenario",
+          "reportFormat": "markdown",
+          "combatants": [
+            {
+              "key": "data-card:character-001",
+              "ref": {
+                "id": "character-001",
+                "kind": "character",
+                "versionToken": "v2026-08-22-001"
+              },
+              "characterGuidance": "优先保护队友"
+            },
+            {
+              "key": "host-local:character-opaque-1",
+              "displayName": "房主本地角色",
+              "type": "magical-girl",
+              "source": "host-local",
+              "characterGuidance": "保持谨慎"
+            }
+          ],
+          "teams": [
+            {
+              "key": "team-alpha",
+              "displayName": "第一队",
+              "combatantKeys": [
+                "data-card:character-001"
+              ]
+            }
+          ],
+          "scenario": {
+            "key": "data-card:scenario-001",
+            "ref": {
+              "id": "scenario-001",
+              "kind": "scenario",
+              "versionToken": "v2026-08-22-scenario-001"
+            }
+          },
+          "auxScenarios": [
+            {
+              "key": "data-card:scenario-aux-001",
+              "ref": {
+                "id": "scenario-aux-001",
+                "kind": "scenario",
+                "versionToken": "v2026-08-22-scenario-aux-001"
+              }
+            }
+          ],
+          "materials": [
+            {
+              "key": "data-card:material-001",
+              "ref": {
+                "id": "material-001",
+                "kind": "material",
+                "versionToken": "v2026-08-22-material-001"
+              }
+            }
+          ],
+          "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+          "storyLength": "standard",
+          "customStoryLength": null,
+          "selectedLanguage": "zh-CN",
+          "historySettings": {
+            "readArenaHistory": true,
+            "readArenaHistoryLimit": 3,
+            "isArenaHistoryUnlimited": false,
+            "writeArenaHistory": true,
+            "readCurrentState": true,
+            "writeCurrentState": true,
+            "readNarrativeHistory": false,
+            "readNarrativeHistoryLimit": 10,
+            "isNarrativeHistoryUnlimited": false,
+            "writeNarrativeHistory": false
+          }
+        },
+        "snapshot": {
+          "protocolVersion": 1,
+          "schemaVersion": 1,
+          "roomId": "room_01JARENAEXAMPLE",
+          "roomEpoch": "epoch_01JARENA",
+          "controlSeq": 24,
+          "revision": 7,
+          "sharedConfig": {
+            "battleMode": "scenario",
+            "reportFormat": "markdown",
+            "combatants": [
+              {
+                "key": "data-card:character-001",
+                "ref": {
+                  "id": "character-001",
+                  "kind": "character",
+                  "versionToken": "v2026-08-22-001"
+                },
+                "characterGuidance": "优先保护队友"
+              },
+              {
+                "key": "host-local:character-opaque-1",
+                "displayName": "房主本地角色",
+                "type": "magical-girl",
+                "source": "host-local",
+                "characterGuidance": "保持谨慎"
+              }
+            ],
+            "teams": [
+              {
+                "key": "team-alpha",
+                "displayName": "第一队",
+                "combatantKeys": [
+                  "data-card:character-001"
+                ]
+              }
+            ],
+            "scenario": {
+              "key": "data-card:scenario-001",
+              "ref": {
+                "id": "scenario-001",
+                "kind": "scenario",
+                "versionToken": "v2026-08-22-scenario-001"
+              }
+            },
+            "auxScenarios": [
+              {
+                "key": "data-card:scenario-aux-001",
+                "ref": {
+                  "id": "scenario-aux-001",
+                  "kind": "scenario",
+                  "versionToken": "v2026-08-22-scenario-aux-001"
+                }
+              }
+            ],
+            "materials": [
+              {
+                "key": "data-card:material-001",
+                "ref": {
+                  "id": "material-001",
+                  "kind": "material",
+                  "versionToken": "v2026-08-22-material-001"
+                }
+              }
+            ],
+            "userGuidance": "第一行\n第二行，保留 \\ 与 \"引号\" 😀",
+            "storyLength": "standard",
+            "customStoryLength": null,
+            "selectedLanguage": "zh-CN",
+            "historySettings": {
+              "readArenaHistory": true,
+              "readArenaHistoryLimit": 3,
+              "isArenaHistoryUnlimited": false,
+              "writeArenaHistory": true,
+              "readCurrentState": true,
+              "writeCurrentState": true,
+              "readNarrativeHistory": false,
+              "readNarrativeHistoryLimit": 10,
+              "isNarrativeHistoryUnlimited": false,
+              "writeNarrativeHistory": false
+            }
+          },
+          "members": [
+            {
+              "userId": "user-host",
+              "role": "host",
+              "displayName": "房主😀 \"第一队\"",
+              "membershipState": "active"
+            },
+            {
+              "userId": "user-member",
+              "role": "member",
+              "displayName": "成员",
+              "membershipState": "active"
+            }
+          ],
+          "proposals": [],
+          "activeGeneration": null
+        }
+      }
+    },
+    "error": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "error": {
+        "code": "ROOM_RATE_LIMITED",
+        "message": "房间请求过于频繁，请稍后重试。",
+        "outcome": "not-applied",
+        "retryAfterSeconds": 3
+      }
+    }
+  }
+}

@@ -14,7 +14,7 @@ import { ARENA_ROOM_PRESENCE_WEBSOCKET_PROTOCOL, type RoomServerTransportMessage
 import { DESKTOP_ROOM_SESSION_OPERATIONS, DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, parseDesktopRoomSessionResponse, type DesktopRoomSessionOperation } from '@mahoshojo/contracts/desktop-room-session';
 import { DesktopAuthExchangeResponseSchema } from '@mahoshojo/contracts/desktop-cloud';
 import { MessageSummarySchema } from '@mahoshojo/contracts/messages';
-import { ROOM_ACCEPTANCE_HOST, selfCheckRoomAcceptanceMock, startRoomAcceptanceMock, type RoomAcceptancePki, type RoomAcceptanceRuntime } from '../scripts/desktop-room-acceptance-mock';
+import { ROOM_ACCEPTANCE_HOST, ROOM_ACCEPTANCE_OPERATIONS, selfCheckRoomAcceptanceMock, startRoomAcceptanceMock, type RoomAcceptancePki, type RoomAcceptanceRuntime } from '../scripts/desktop-room-acceptance-mock';
 import { createArenaRoomState } from './arena-room-fixtures';
 import { monitorMock } from '../../../scripts/desktop-room-acceptance.mjs';
 
@@ -222,7 +222,7 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     ]);
   });
 
-  it('uses all fixed HTTP operations, real WSS double presence, replay rejection and terminal readback', async () => {
+  it('uses all implemented Native HTTP operations, real WSS double presence, replay rejection and terminal readback', async () => {
     const runtime = await start(); const hostCookie = await login(runtime, 101); const memberCookie = await login(runtime, 202);
     const host = await success(room(runtime, 'create', hostCookie, 101, creation()));
     expect((await success(room(runtime, 'discover', hostCookie, 101))).items).toHaveLength(1);
@@ -272,7 +272,7 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     expect(await success(room(runtime, 'close', hostCookie, 101, { expectedRoomEpoch: host.roomEpoch }, host.roomId))).toMatchObject({ outcome: 'closed' });
     expect((await room(runtime, 'session', hostCookie, 101, undefined, host.roomId)).status).toBe(404);
     expect((await success(room(runtime, 'discover', hostCookie, 101))).items).toEqual([]);
-    expect(new Set(runtime.observations().trace.filter((entry) => entry.kind === 'room-http').map((entry) => entry.operation))).toEqual(new Set(Object.keys(DESKTOP_ROOM_SESSION_OPERATIONS)));
+    expect(new Set(runtime.observations().trace.filter((entry) => entry.kind === 'room-http').map((entry) => entry.operation))).toEqual(new Set(ROOM_ACCEPTANCE_OPERATIONS));
   });
 
   it('config keeps actual host, epoch, revision and controlSeq authority ahead of mutation', async () => {
