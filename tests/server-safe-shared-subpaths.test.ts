@@ -150,6 +150,22 @@ const collectModuleGraph = (entryFile: string): string[] => {
 };
 
 describe('server-safe shared entrypoints stay free of React hooks', () => {
+  it('keeps the detached member proposal model free of UI, host and persistence dependencies', async () => {
+    const root = path.resolve(PACKAGE_ROOT, '../multiplayer-core');
+    const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const entry = manifest.exports['./member-proposal'];
+    expect(entry).toEqual({ types: './src/member-proposal.ts', import: './src/member-proposal.ts', default: './src/member-proposal.ts' });
+    const bundled = await build({ entryPoints: [path.join(root, entry.import)],
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true });
+    const inputs = Object.keys(bundled.metafile!.inputs);
+    expect(inputs.some(file => /(?:apps\/|packages\/(?:hosted-runtime|hosted-api|ui-web)\/|node_modules\/(?:react|react-dom|next|zustand|@tauri-apps)\/)/u.test(file))).toBe(false);
+    expect(inputs.some(file => file.endsWith('/member-proposal-model.ts'))).toBe(true);
+    expect(inputs.some(file => file.endsWith('/member-proposal-actions.ts'))).toBe(true);
+    expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
+    expect(bundled.outputFiles[0].text).not.toMatch(/\b(?:localStorage|sessionStorage|indexedDB|fetch|WebSocket)\b/u);
+    expect(Object.values(bundled.metafile!.outputs).flatMap(output => output.imports)).toEqual([]);
+  });
+
   it('keeps the Web proposal editor on the runtime-neutral multiplayer core', async () => {
     const webPath = path.resolve(PACKAGE_ROOT, '../../apps/web/lib/arena-room/proposal-editor.ts');
     const bundled = await build({

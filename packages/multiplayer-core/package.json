@@ -13,6 +13,11 @@
       "types": "./src/preset-catalog.ts",
       "import": "./src/preset-catalog.ts",
       "default": "./src/preset-catalog.ts"
+    },
+    "./member-proposal": {
+      "types": "./src/member-proposal.ts",
+      "import": "./src/member-proposal.ts",
+      "default": "./src/member-proposal.ts"
     }
   },
   "scripts": {

@@ -35,3 +35,12 @@ export { RoomProposalReadOnlyList } from './RoomProposalReadOnlyList';
 export { RoomProposalHostReview, arenaProposalSelectionError, arenaProposalConflictSummary } from './RoomProposalHostReview';
 export type { RoomProposalHostReviewProps } from './RoomProposalHostReview';
 export { ArenaProposalConflictReview } from './ArenaProposalConflictReview';
+
+export * from './member-proposal/types';
+export * from './member-proposal/projection';
+export * from './member-proposal/section-models';
+export * from './member-proposal/web-package-model';
+export * from './member-proposal/labels';
+export { RoomMemberProposalWorkspace } from './member-proposal/RoomMemberProposalWorkspace';
+export { RoomMemberProposalPreview } from './member-proposal/RoomMemberProposalPreview';
+export { RoomMemberProposalStatus } from './member-proposal/RoomMemberProposalStatus';

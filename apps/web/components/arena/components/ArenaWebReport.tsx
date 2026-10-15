@@ -83,7 +83,7 @@ function subscribeConsent(listener: () => void) {
   };
 }
 
-function useWebConsent(roomId?: string) {
+export function useWebConsent(roomId?: string) {
   const key = consentKey(roomId);
   const accepted = useSyncExternalStore(subscribeConsent, () => hasConsent(key), () => false);
   const accept = (remember: boolean) => {

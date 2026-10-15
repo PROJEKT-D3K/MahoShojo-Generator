@@ -9,6 +9,7 @@ import type {
 
 import {
   RoomProposalHostReview,
+  RoomMemberProposalStatus,
   type RoomProposalHostReviewProps,
   arenaProposalChangeSummary as sharedArenaProposalChangeSummary,
   arenaProposalChangeProposedSummary as sharedArenaProposalChangeProposedSummary,
@@ -411,54 +412,9 @@ export function ArenaMemberProposalStatus({
   readonly state: ArenaRoomControllerState;
   readonly controller: Pick<ArenaRoomController, 'endProposalTracking' | 'reconnect' | 'withdrawProposal'>;
 }) {
-  const session = state.session;
-  if (!session || session.self.role !== 'member') return null;
-  const disabled = state.proposalOperation !== null || state.proposalResultUnknown || state.proposalTracking?.phase === 'ended-needs-read';
-  const proposals = session.snapshot.proposals.filter((proposal) => (
-    proposal.authorUserId === session.self.userId
-  ));
-  return (
-    <>
-      {state.proposalOutcome ? <p role="status" className="mt-3 text-sm">{state.proposalOutcome}</p> : null}
-      {state.proposalResultUnknown || state.proposalTracking?.phase === 'ended-needs-read' ? (
-        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-          <p>{state.proposalTracking?.phase === 'ended-needs-read' ? '已结束本机跟踪，不取消服务器操作；请先重新读取房间状态。' : '上次提案请求结果未知，已冻结重复提交。'}</p>
-          <button type="button" className={buttonClassName({ className: 'mt-2' })} onClick={controller.reconnect}>
-            重新连接并对账
-          </button>
-          {state.proposalTracking?.phase === 'unknown' ? (
-            <button type="button" className={buttonClassName({ className: 'mt-2 ml-2' })}
-              onClick={() => controller.endProposalTracking(state.proposalTracking!.id)}>
-              结束本机跟踪（不取消服务器操作）
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {proposals.length > 0 ? (
-        <div className="mt-4">
-          <h4 className="text-sm font-semibold text-gray-950 dark:text-gray-100">我的待处理提案</h4>
-          <ul className="mt-2 space-y-2">
-            {proposals.map((proposal) => (
-              <li key={proposal.proposalId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 p-2 dark:border-gray-700">
-                <span className="text-xs text-gray-600 dark:text-gray-400" title={proposal.proposalId}>
-                  提交于 {proposal.createdAt}
-                </span>
-                <button
-                  type="button"
-                  className={buttonClassName({ variant: 'danger' })}
-                  disabled={disabled}
-                  onClick={() => { void controller.withdrawProposal(proposal.proposalId); }}
-                >
-                  撤回提案
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </>
-  );
+  return <RoomMemberProposalStatus scopeIdentity={controller}
+    room={{ session: state.session, operation: state.proposalOperation, resultUnknown: state.proposalResultUnknown, tracking: state.proposalTracking, outcome: state.proposalOutcome }}
+    actions={{ withdraw: controller.withdrawProposal, read: controller.reconnect, endTracking: controller.endProposalTracking }} />;
 }
 
 export function ArenaProposalPanel(props: ArenaProposalPanelProps) {

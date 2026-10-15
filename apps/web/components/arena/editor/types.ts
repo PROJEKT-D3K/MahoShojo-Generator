@@ -145,6 +145,7 @@ export type ArenaRoomProposalPreview = Readonly<{
 
 export type RoomProposalArenaEditorSession = ArenaEditorSession & Readonly<{
   mode: 'room-proposal';
+  memberModel: import('@mahoshojo/multiplayer-core/member-proposal').ArenaMemberProposalModel;
   update(
     updater: (draft: ArenaRoomSharedConfig) => ArenaRoomSharedConfig,
   ): void;

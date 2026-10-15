@@ -21,6 +21,7 @@ import type { ArenaRoomControllerState } from '@/lib/arena-room/controller';
 
 export const sharedConfig: ArenaRoomSharedConfig = {
   battleMode: 'classic',
+  reportFormat: 'markdown',
   combatants: [{
     key: 'data-card:character-base',
     ref: {
@@ -70,6 +71,15 @@ export const buildArenaRoomState = (
     unknownOperation: null,
     proposalOperation: null,
     proposalResultUnknown: false,
+    configPublishPending: false,
+    configPublishResultUnknown: false,
+    managementOperation: null,
+    managementResultUnknown: false,
+    generation: {
+      mirror: null, phase: 'idle', status: null, authoritativeMarkdown: '', markdown: '', storyCursor: null,
+      gap: null, finalAuthoritative: false, generationRecordId: null, errorCode: null,
+      pendingRequestId: null, startResultUnknown: false, result: null,
+    },
     session: {
       protocolVersion: 1,
       roomId: 'room-1',

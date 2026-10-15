@@ -37,3 +37,5 @@ export type { ArenaWebPackageOptionView, ArenaWebPackageSectionCapabilities, Are
 export type { ArenaWebPackageViewHost, WebPackageSavePreferenceProps } from './features/web-package/web-package-host';
 
 export { buildArenaEditorSections, type ArenaEditorSectionKind, type ArenaEditorSemanticSection } from './editor-sections';
+
+export { ArenaCharacterDatabaseSelector, type ArenaCharacterDatabaseSelectorProps } from './ArenaCharacterDatabaseSelector';

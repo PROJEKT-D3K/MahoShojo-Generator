@@ -1,29 +1,9 @@
 import { createStore } from 'zustand/vanilla';
-
-import type { ArenaRoomSharedConfig } from '@mahoshojo/contracts/arena-room';
-
-import {
-  buildArenaProposalSubmitIntent,
-  createArenaProposalEditor,
-  editWorkingConfig,
-  previewArenaProposal,
-  resetArenaProposalEditor,
-  syncArenaProposalEditor,
-  type ArenaProposalEditorState,
-} from '@/lib/arena-room/proposal-editor';
-
-import {
-  cloneArenaEditorSharedConfig,
-  mapSharedConfigToArenaEditorView,
-} from './shared-config-mapper';
+import { createArenaMemberProposalModel } from '@mahoshojo/multiplayer-core/member-proposal';
+import { buildArenaProposalSubmitIntent, previewArenaProposal } from '@mahoshojo/multiplayer-core';
 import { isBuiltinWebPackageRef } from '@mahoshojo/web-package';
-import type {
-  ArenaEditorActions,
-  ArenaEditorCapabilities,
-  ArenaEditorState,
-  ArenaProposalEditorSnapshotInput,
-  RoomProposalArenaEditorSession,
-} from './types';
+import { cloneArenaEditorSharedConfig, mapSharedConfigToArenaEditorView } from './shared-config-mapper';
+import type { ArenaEditorActions, ArenaEditorCapabilities, ArenaEditorState, ArenaProposalEditorSnapshotInput, RoomProposalArenaEditorSession } from './types';
 
 export const ROOM_PROPOSAL_ARENA_EDITOR_CAPABILITIES: ArenaEditorCapabilities = Object.freeze({
   canUploadLocalPayload: false,
@@ -37,104 +17,28 @@ export const ROOM_PROPOSAL_ARENA_EDITOR_CAPABILITIES: ArenaEditorCapabilities = 
   canUseHostOnlyGenerationOptions: false,
 });
 
-const disposedError = (): Error => new Error('Arena editor session is disposed');
-
-const buildState = (
-  editor: ArenaProposalEditorState,
-  actions: ArenaEditorActions,
-  disposed: boolean,
-): ArenaEditorState => Object.freeze({
-  mode: 'room-proposal' as const,
-  ...mapSharedConfigToArenaEditorView(editor.workingConfig),
-  roomId: editor.roomId,
-  baselineEpoch: editor.baselineEpoch,
-  baselineRevision: editor.baselineRevision,
-  baselineConfig: cloneArenaEditorSharedConfig(editor.baselineConfig),
-  dirty: editor.dirty,
-  stale: editor.stale,
-  replacementRequired: editor.replacementRequired,
-  workspaceStatus: null,
-  disposed,
-  actions,
-});
-
-export const createRoomProposalArenaEditorSession = (
-  snapshot: ArenaProposalEditorSnapshotInput,
-): RoomProposalArenaEditorSession => {
-  let editor = createArenaProposalEditor(snapshot);
-  let disposed = false;
-  const assertActive = (): void => {
-    if (disposed) throw disposedError();
-  };
-  function update(
-    updater: (draft: ArenaRoomSharedConfig) => ArenaRoomSharedConfig,
-  ): void {
-    assertActive();
-    commit(editWorkingConfig(editor, updater));
-  }
+/** Web compatibility bridge; the detached member model owns all working-copy mutations. */
+export const createRoomProposalArenaEditorSession = (snapshot: ArenaProposalEditorSnapshotInput): RoomProposalArenaEditorSession => {
+  const memberModel = createArenaMemberProposalModel(snapshot);
   const actions: ArenaEditorActions = Object.freeze({
-    setBattleMode: (value) => update((draft) => ({ ...draft, battleMode: value })),
-    setReportFormat: (value) => update((draft) => ({ ...draft, reportFormat: value, webPackageRef: value === 'web' ? draft.webPackageRef : undefined })),
-    setWebPackageRef: (value) => update((draft) => ({
-      ...draft,
-      webPackageRef: value && isBuiltinWebPackageRef(value) ? value : undefined,
-    })),
-    setStoryLength: (value) => update((draft) => ({ ...draft, storyLength: value })),
-    setCustomStoryLength: (value) => update((draft) => ({
-      ...draft,
-      customStoryLength: value.trim() || null,
-    })),
-    setSelectedLanguage: (value) => update((draft) => ({
-      ...draft,
-      selectedLanguage: value,
-    })),
-    setUserGuidance: (value) => update((draft) => ({
-      ...draft,
-      userGuidance: value,
-    })),
-    updateHistorySettings: (value) => update((draft) => ({
-      ...draft,
-      historySettings: { ...draft.historySettings, ...value },
-    })),
+    ...memberModel.actions,
+    setWebPackageRef: value => memberModel.actions.setWebPackageRef(value && isBuiltinWebPackageRef(value) ? value : null),
   });
-  const store = createStore<ArenaEditorState>()(() => buildState(editor, actions, false));
-  const commit = (nextEditor: ArenaProposalEditorState): void => {
-    editor = nextEditor;
-    store.setState(buildState(editor, actions, disposed), true);
+  const buildState = (): ArenaEditorState => {
+    const { editor, disposed } = memberModel.store.getState();
+    return Object.freeze({ mode: 'room-proposal', ...mapSharedConfigToArenaEditorView(editor.workingConfig),
+      roomId: editor.roomId, baselineEpoch: editor.baselineEpoch, baselineRevision: editor.baselineRevision,
+      baselineConfig: cloneArenaEditorSharedConfig(editor.baselineConfig), dirty: editor.dirty, stale: editor.stale,
+      replacementRequired: editor.replacementRequired, workspaceStatus: null, disposed, actions });
   };
-
-  const session: RoomProposalArenaEditorSession = Object.freeze({
-    mode: 'room-proposal' as const,
-    capabilities: ROOM_PROPOSAL_ARENA_EDITOR_CAPABILITIES,
-    store,
-    update,
-    sync(incoming) {
-      assertActive();
-      const next = syncArenaProposalEditor(editor, incoming);
-      if (next !== editor) commit(next);
-    },
-    replace(incoming) {
-      assertActive();
-      commit(resetArenaProposalEditor(incoming));
-    },
-    exportSharedConfig(): ArenaRoomSharedConfig {
-      assertActive();
-      return cloneArenaEditorSharedConfig(editor.workingConfig);
-    },
-    preview(selectedChangeIds) {
-      assertActive();
-      return previewArenaProposal(editor, selectedChangeIds);
-    },
-    buildSubmitIntent(proposalId, selectedChangeIds) {
-      assertActive();
-      return buildArenaProposalSubmitIntent(editor, proposalId, selectedChangeIds);
-    },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      store.setState(buildState(editor, actions, true), true);
-    },
+  const store = createStore<ArenaEditorState>()(() => buildState());
+  const unsubscribe = memberModel.store.subscribe(() => store.setState(buildState(), true));
+  const assertActive = () => { if (memberModel.store.getState().disposed) throw new Error('Arena editor session is disposed'); };
+  return Object.freeze({ mode: 'room-proposal', capabilities: ROOM_PROPOSAL_ARENA_EDITOR_CAPABILITIES,
+    memberModel, store, update: memberModel.update, sync: memberModel.sync, replace: memberModel.replace,
+    exportSharedConfig: memberModel.exportSharedConfig,
+    preview(selectedChangeIds) { assertActive(); return previewArenaProposal(memberModel.store.getState().editor, selectedChangeIds); },
+    buildSubmitIntent(proposalId, selectedChangeIds) { assertActive(); return buildArenaProposalSubmitIntent(memberModel.store.getState().editor, proposalId, selectedChangeIds); },
+    dispose() { memberModel.dispose(); unsubscribe(); },
   });
-
-  return session;
 };
