@@ -333,9 +333,9 @@ fn expire(session: &mut Option<ExportSession>, now: Instant) {
 }
 
 fn require_token(session: &Option<ExportSession>, token: &str) -> Result<(), StoryError> {
-    if !session
+    if session
         .as_ref()
-        .is_some_and(|session| session.token == token)
+        .is_none_or(|session| session.token != token)
     {
         return Err(StoryError::Stale);
     }

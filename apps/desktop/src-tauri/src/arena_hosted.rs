@@ -1871,7 +1871,7 @@ impl Budget {
                     return Err(protocol());
                 }
                 if data.get("terminalResultRef").is_some_and(|v| {
-                    !v.is_null() && !v.as_str().is_some_and(|s| s.encode_utf16().count() <= 2048)
+                    !v.is_null() && v.as_str().is_none_or(|s| s.encode_utf16().count() > 2048)
                 }) || data.get("persistenceWarning").is_some_and(|v| {
                     !v.is_null()
                         && !v.as_str().is_some_and(|s| {
@@ -2033,9 +2033,10 @@ fn validate_terminal_fields(data: &serde_json::Map<String, Value>) -> Result<(),
     {
         return Err(protocol());
     }
-    if data.get("resultRef").is_some_and(|v| {
-        !v.is_null() && !v.as_str().is_some_and(|s| s.encode_utf16().count() <= 2048)
-    }) {
+    if data
+        .get("resultRef")
+        .is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|s| s.encode_utf16().count() > 2048))
+    {
         return Err(protocol());
     }
     if data.get("persistenceWarning").is_some_and(|v| {

@@ -475,7 +475,6 @@ fn display_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-#[cfg(unix)]
 /// **Windows 上是 no-op**，如实记录该平台没有这项保证而不是假装它存在（与 `blob.rs` 同一处理）。
 ///
 /// 缺它不会让读者看到一个半截的 `.zip`：`MoveFileExW` 对可见性是原子的，桥也只在 `complete`

@@ -1567,10 +1567,10 @@ impl Authority {
             let mut online = BTreeSet::new();
             for id in ids {
                 let id = id.as_str().ok_or_else(invalid)?;
-                if !self
+                if self
                     .members
                     .get(id)
-                    .is_some_and(|(_, state)| state == "active")
+                    .is_none_or(|(_, state)| state != "active")
                     || !online.insert(id.to_owned())
                 {
                     return Err(invalid());

@@ -1453,7 +1453,7 @@ mod tests {
             .expect("live record remains readable")
             .is_some());
         assert!(
-            !library.enter_maintenance("probe").is_err(),
+            library.enter_maintenance("probe").is_ok(),
             "failed backup releases its permit"
         );
     }

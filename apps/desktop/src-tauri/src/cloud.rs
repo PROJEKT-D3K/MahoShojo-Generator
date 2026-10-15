@@ -2123,10 +2123,10 @@ fn build_hosted_tavern_body(value: &serde_json::Value) -> Result<serde_json::Val
         .map(trim_ecmascript)
         .filter(|value| !value.is_empty() && value.encode_utf16().count() <= 32)
         .ok_or_else(|| invalid_request("Tavern 生成语言无效"))?;
-    if !body
+    if body
         .get("sourceName")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|value| value.encode_utf16().count() <= 4096)
+        .is_none_or(|value| value.encode_utf16().count() > 4096)
     {
         return Err(invalid_request("Tavern sourceName 无效"));
     }
@@ -2164,9 +2164,9 @@ fn build_hosted_tavern_body(value: &serde_json::Value) -> Result<serde_json::Val
             return Err(invalid_request("Tavern 附件正文合计超过 1 MiB"));
         }
         if let Some(value) = item.get("type") {
-            if !value
+            if value
                 .as_str()
-                .is_some_and(|value| value.encode_utf16().count() <= 200)
+                .is_none_or(|value| value.encode_utf16().count() > 200)
             {
                 return Err(invalid_request("Tavern 附件 type 无效"));
             }
