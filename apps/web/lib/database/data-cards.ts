@@ -1,5 +1,5 @@
 import { config } from '@/lib/config';
-import type { SoftDeleteDataCardResult } from '@/lib/db/repositories/data-cards-core';
+import type { RestoreDataCardResult, SoftDeleteDataCardResult } from '@/lib/db/repositories/data-cards-core';
 import { generateUUID } from './core';
 import type { DataCardListPage } from '@/lib/data-card-list-page';
 import type {
@@ -70,7 +70,7 @@ type DataCardsRepoBundle = {
   permanentlyDeleteDataCardsByUserAndIds: (db: unknown, userId: number, ids: string[]) => Promise<number>;
   listUserRecycleBinDataCards: (db: unknown, userId: number) => Promise<any[]>;
   pruneUserRecycleBinDataCards: (db: unknown, userId: number, keep: number) => Promise<string[]>;
-  restoreDataCardByIdAndUser: (db: unknown, cardId: string, userId: number) => Promise<number>;
+  restoreDataCardByIdAndUser: (db: unknown, cardId: string, userId: number, defaultCapacity: number) => Promise<RestoreDataCardResult>;
   hasDataCardOwnership: (db: unknown, cardId: string, userId: number) => Promise<boolean>;
   getDataCardByIdWithAuthorAndTags: (
     db: unknown,
@@ -489,16 +489,10 @@ export async function getUserRecycleBinCards(userId: number): Promise<any[]> {
 }
 
 // 从回收站恢复数据卡
-export async function restoreDataCard(cardId: string, userId: number): Promise<boolean> {
-  try {
-    const bundle = await readDataCardsRepoBundle();
-    if (!bundle) return false;
-    const changes = await bundle.restoreDataCardByIdAndUser(bundle.db, cardId, userId);
-    return changes > 0;
-  } catch (error) {
-    console.error('恢复数据卡失败:', error);
-    return false;
-  }
+export async function restoreDataCard(cardId: string, userId: number): Promise<RestoreDataCardResult> {
+  const bundle = await readDataCardsRepoBundle();
+  if (!bundle) throw new Error('未检测到可用的 D1 连接，无法恢复数据卡');
+  return bundle.restoreDataCardByIdAndUser(bundle.db, cardId, userId, config.DEFAULT_DATA_CARD_CAPACITY);
 }
 
 // 显式裁剪辅助能力，只保留最新的 keep 条目；普通删除不得调用。

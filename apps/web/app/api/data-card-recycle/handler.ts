@@ -1,13 +1,5 @@
-import {
-  getUserRecycleBinCards,
-  getUserUsedSlots,
-  getDataCardUpdate,
-  restoreDataCard
-} from '@/lib/database/data-cards';
-import { getUserDataCardCapacity } from '@/lib/database/users';
+import { getUserRecycleBinCards, restoreDataCard } from '@/lib/database/data-cards';
 import { requireAuthUser } from '@/lib/auth/server';
-import { config as appConfig } from '@/lib/config';
-import { getDataCardSlotUsage } from '@/lib/data-card-quota';
 
 async function handler(req: Request): Promise<Response> {
   const auth = await requireAuthUser(req);
@@ -27,48 +19,24 @@ async function handler(req: Request): Promise<Response> {
       case 'PATCH': {
         const { id } = await req.json();
 
-        if (!id) {
+        if (typeof id !== 'string' || !id.trim()) {
           return new Response(JSON.stringify({ error: '缺少数据卡ID' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json' }
           });
         }
 
-        const [recycleCards, usedSlots, capacity] = await Promise.all([
-          getUserRecycleBinCards(userId),
-          getUserUsedSlots(userId),
-          getUserDataCardCapacity(userId, appConfig.DEFAULT_DATA_CARD_CAPACITY),
-        ]);
-        const recycleCard = recycleCards.find((card) => card.id === id);
-        if (!recycleCard) {
+        const result = await restoreDataCard(id, userId);
+        if (result.status === 'not_found') {
           return new Response(JSON.stringify({ error: '数据卡不存在或无法恢复' }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' }
+            status: 404, headers: { 'Content-Type': 'application/json' },
           });
         }
-        const pendingUpdate = await getDataCardUpdate(id);
-        const requiredSlots = getDataCardSlotUsage({
-          data: recycleCard.data,
-          pendingData: pendingUpdate?.data ?? null,
-          favoriteCount: recycleCard.favorite_count,
-          usageCount: recycleCard.usage_count,
-        });
-
-        if (usedSlots + requiredSlots > capacity) {
-          return new Response(JSON.stringify({
-            error: `恢复该数据卡需要 ${requiredSlots} 个槽位，当前已用 ${usedSlots}/${capacity}，请释放足够槽位后再尝试恢复`
-          }), {
-            status: 409,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        const restored = await restoreDataCard(id, userId);
-
-        if (!restored) {
-          return new Response(JSON.stringify({ error: '数据卡不存在或无法恢复' }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' }
+        if (result.status !== 'restored') {
+          return new Response(JSON.stringify({ error: result.status === 'quota_exceeded'
+            ? '恢复该数据卡所需槽位超出当前容量，请释放足够槽位后再尝试恢复'
+            : '数据卡状态已变化，请刷新后重试' }), {
+            status: 409, headers: { 'Content-Type': 'application/json' },
           });
         }
 

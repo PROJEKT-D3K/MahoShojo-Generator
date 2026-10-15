@@ -21,6 +21,7 @@ import {
   type OnlineDataCardType,
   type OnlineDataCardVisibility,
 } from '@mahoshojo/contracts/data-cards';
+import { D1PreparedStatement, validateD1ReturningResult } from '@mahoshojo/hosted-runtime/d1-http-client';
 import type { AppDrizzleDb } from '@/lib/db/drizzle';
 import { dataCardMetrics, dataCards, dataCardTags, dataCardUpdates, users } from '@/lib/db/schema';
 import { HOT_CARD_FAVORITE_THRESHOLD, HOT_CARD_USAGE_THRESHOLD } from '@/lib/constants';
@@ -511,6 +512,20 @@ export const upsertDataCardUpdateByDataCardId = async (
   return upserted.length > 0;
 };
 
+// SQLite BLOB length counts UTF-8 bytes, matching the client quota calculation.
+const dataCardChargedSlotsSql = (data: SQL, pendingData: SQL, favoriteCount: SQL, usageCount: SQL): SQL<number> => {
+  const currentBytes = sql<number>`length(CAST(${data} AS BLOB))`;
+  const pendingBytes = sql<number>`COALESCE(length(CAST(${pendingData} AS BLOB)), 0)`;
+  const effectiveBytes = sql<number>`MAX(${currentBytes}, ${pendingBytes})`;
+  const baseSlots = sql<number>`MAX(1, CAST((${effectiveBytes} + ${DATA_CARD_SLOT_BYTES - 1}) / ${DATA_CARD_SLOT_BYTES} AS INTEGER))`;
+  const hotDiscount = sql<number>`CASE
+    WHEN COALESCE(${favoriteCount}, 0) > ${HOT_CARD_FAVORITE_THRESHOLD}
+      AND COALESCE(${usageCount}, 0) > ${HOT_CARD_USAGE_THRESHOLD}
+    THEN 1 ELSE 0 END`;
+
+  return sql<number>`MAX(0, ${baseSlots} - ${hotDiscount})`;
+};
+
 export const countUserUsedDataCardSlots = async (
   db: AppDrizzleDb,
   userId: number,
@@ -521,17 +536,11 @@ export const countUserUsedDataCardSlots = async (
     conditions.push(sql`${dataCards.id} <> ${excludeCardId}`);
   }
 
-  const currentBytes = sql<number>`length(CAST(${dataCards.data} AS BLOB))`;
-  const pendingBytes = sql<number>`COALESCE(length(CAST(${dataCardUpdates.data} AS BLOB)), 0)`;
-  const effectiveBytes = sql<number>`MAX(${currentBytes}, ${pendingBytes})`;
-  const baseSlots = sql<number>`MAX(1, CAST((${effectiveBytes} + ${DATA_CARD_SLOT_BYTES - 1}) / ${DATA_CARD_SLOT_BYTES} AS INTEGER))`;
-  const hotDiscount = sql<number>`CASE
-    WHEN COALESCE(${dataCards.favoriteCount}, 0) > ${HOT_CARD_FAVORITE_THRESHOLD}
-      AND COALESCE(${dataCards.usageCount}, 0) > ${HOT_CARD_USAGE_THRESHOLD}
-    THEN 1 ELSE 0 END`;
+  const chargedSlots = dataCardChargedSlotsSql(sql`${dataCards.data}`, sql`${dataCardUpdates.data}`,
+    sql`${dataCards.favoriteCount}`, sql`${dataCards.usageCount}`);
 
   const rows = await db
-    .select({ usedSlots: sql<number>`COALESCE(SUM(MAX(0, ${baseSlots} - ${hotDiscount})), 0)` })
+    .select({ usedSlots: sql<number>`COALESCE(SUM(${chargedSlots}), 0)` })
     .from(dataCards)
     .leftJoin(dataCardUpdates, eq(dataCardUpdates.dataCardId, dataCards.id))
     .where(and(...conditions));
@@ -685,21 +694,58 @@ export const pruneUserRecycleBinDataCards = async (
   return deleted.map((row) => row.id);
 };
 
+export type RestoreDataCardResult =
+  | { status: 'restored'; id: string }
+  | { status: 'not_found' | 'quota_exceeded' | 'conflict' };
+
 export const restoreDataCardByIdAndUser = async (
   db: AppDrizzleDb,
   cardId: string,
   userId: number,
-): Promise<number> => {
-  const updated = await db
-    .update(dataCards)
-    .set({
-      deletedAt: null,
-      updatedAt: sql`CURRENT_TIMESTAMP`,
-    })
-    .where(and(eq(dataCards.id, cardId), eq(dataCards.userId, userId), isNotNull(dataCards.deletedAt)))
-    .returning({ id: dataCards.id });
+  defaultCapacity: number,
+): Promise<RestoreDataCardResult> => {
+  if (!Number.isSafeInteger(defaultCapacity) || defaultCapacity < 0) {
+    throw new RangeError('默认数据卡容量必须是非负安全整数');
+  }
+  const chargedSlots = dataCardChargedSlotsSql(sql`c.data`, sql`p.data`, sql`c.favorite_count`, sql`c.usage_count`);
+  // Includes the target's current body/pending cost and every active card across all types.
+  const restoredSlots = sql<number>`(SELECT COALESCE(SUM(${chargedSlots}), 0)
+    FROM data_cards c LEFT JOIN data_card_updates p ON p.data_card_id = c.id
+    WHERE c.user_id = ${userId} AND (c.deleted_at IS NULL OR c.id = ${cardId}))`;
+  // Normal INTEGER-affinity values follow getUserDataCardCapacity's positive/truncated/default rule.
+  // Malformed TEXT (e.g. '0x1') must not silently become a larger default; unknown capacity fails closed.
+  const capacity = sql<number>`(SELECT CASE
+    WHEN slot_count IS NULL THEN ${defaultCapacity}
+    WHEN typeof(slot_count) NOT IN ('integer', 'real')
+      OR slot_count > ${Number.MAX_SAFE_INTEGER} OR slot_count < ${-Number.MAX_SAFE_INTEGER} THEN NULL
+    WHEN CAST(slot_count AS INTEGER) > 0 THEN CAST(slot_count AS INTEGER)
+    ELSE ${defaultCapacity} END
+    FROM users WHERE id = ${userId}
+    UNION ALL SELECT ${defaultCapacity} LIMIT 1)`;
+  // The admission decision and restore must share one database write snapshot.
+  const query = db.update(dataCards)
+    .set({ deletedAt: null, updatedAt: sql`CURRENT_TIMESTAMP` })
+    .where(and(eq(dataCards.id, cardId), eq(dataCards.userId, userId), isNotNull(dataCards.deletedAt),
+      sql`${restoredSlots} <= ${capacity}`))
+    .returning({ id: dataCards.id }).toSQL();
+  type Statement = { bind(...params: unknown[]): Statement; all(): Promise<unknown> };
+  const client = (db as AppDrizzleDb & { $client?: { prepare(text: string): Statement } }).$client;
+  if (!client || typeof client.prepare !== 'function') throw new Error('Strict D1 returning client unavailable');
+  const statement = client.prepare(query.sql).bind(...query.params);
+  const receipt = validateD1ReturningResult(statement instanceof D1PreparedStatement
+    ? await statement.allStrict() : await statement.all());
+  if (receipt.results.length > 1 || receipt.results.some((row) => Object.keys(row).length !== 1 || row.id !== cardId)) {
+    throw new Error('Invalid restore RETURNING identity');
+  }
+  if (receipt.results.length === 1) return { status: 'restored', id: cardId };
 
-  return updated.length;
+  // Read-only diagnosis after a verified zero; never retry or attribute another request's write to this one.
+  const [current] = await db.select({ deletedAt: dataCards.deletedAt, restoredSlots, capacity })
+    .from(dataCards).where(and(eq(dataCards.id, cardId), eq(dataCards.userId, userId))).limit(1);
+  if (!current || current.deletedAt === null) return { status: 'not_found' };
+  if (!Number.isSafeInteger(current.restoredSlots) || current.restoredSlots < 0
+    || !Number.isSafeInteger(current.capacity) || current.capacity < 0) throw new Error('Invalid restore quota diagnosis');
+  return { status: current.restoredSlots > current.capacity ? 'quota_exceeded' : 'conflict' };
 };
 
 export const hasDataCardOwnership = async (

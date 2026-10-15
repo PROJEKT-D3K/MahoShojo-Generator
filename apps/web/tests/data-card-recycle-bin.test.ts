@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { drizzle as drizzleD1 } from 'drizzle-orm/d1';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,7 +41,9 @@ const createD1Db = (
       all: async () => {
         queries.push(text);
         await beforeExecute?.();
-        return { success: true, results: connection.prepare(text).all(...params) };
+        const results = connection.prepare(text).all(...params);
+        const { n } = connection.prepare('SELECT changes() AS n').get() as { n: number };
+        return { success: true, results, meta: { changes: n } };
       },
     }),
   }),
@@ -50,12 +51,16 @@ const createD1Db = (
 
 beforeEach(() => {
   sqlite = new Database(':memory:');
-  db = drizzle(sqlite, { schema }) as unknown as AppDrizzleDb;
+  db = createD1Db(sqlite, []);
   runtime.db = db;
   sqlite.exec(`
     CREATE TABLE data_cards (
-      id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, deleted_at TEXT, updated_at TEXT
+      id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, deleted_at TEXT, updated_at TEXT,
+      data TEXT NOT NULL DEFAULT '{}', favorite_count INTEGER DEFAULT 0, usage_count INTEGER DEFAULT 0
     );
+    CREATE TABLE data_card_updates (data_card_id TEXT UNIQUE, data TEXT);
+    CREATE TABLE users (id INTEGER PRIMARY KEY, slot_count INTEGER);
+    INSERT INTO users VALUES (7, 20);
     INSERT INTO data_cards (id, user_id, deleted_at) VALUES
       ('oldest', 7, '2026-01-01'), ('middle', 7, '2026-01-02'),
       ('newest', 7, '2026-01-03'), ('active', 7, NULL),
@@ -81,7 +86,7 @@ describe('回收站永久删除边界', () => {
   });
 
   test('恢复先提交后，旧的显式永久删除请求不能删除活动卡', async () => {
-    expect(await restoreDataCardByIdAndUser(db, 'oldest', 7)).toBe(1);
+    expect(await restoreDataCardByIdAndUser(db, 'oldest', 7, 20)).toEqual({ status: 'restored', id: 'oldest' });
     expect(await permanentlyDeleteDataCardsByUserAndIds(db, 7, ['oldest'])).toBe(0);
     expect(sqlite.prepare('SELECT deleted_at FROM data_cards WHERE id = ?').get('oldest'))
       .toEqual({ deleted_at: null });
@@ -147,7 +152,7 @@ describe('回收站原子裁剪', () => {
   });
 
   test('恢复发生在裁剪前，当前回收站已达上限时不按旧列表继续删', async () => {
-    expect(await restoreDataCardByIdAndUser(db, 'oldest', 7)).toBe(1);
+    expect(await restoreDataCardByIdAndUser(db, 'oldest', 7, 20)).toEqual({ status: 'restored', id: 'oldest' });
     const before = readCards();
     expect(await pruneUserRecycleBin(7, 2)).toEqual([]);
     expect(readCards()).toEqual(before);
@@ -198,21 +203,21 @@ describe('回收站原子裁剪', () => {
       if (order === 'restore-first') {
         const pendingCleanup = pruneUserRecycleBinDataCards(cleanupDb, 7, 1);
         await started;
-        expect(await restoreDataCardByIdAndUser(restoreDb, 'oldest', 7)).toBe(1);
+        expect(await restoreDataCardByIdAndUser(restoreDb, 'oldest', 7, 20)).toEqual({ status: 'restored', id: 'oldest' });
         release();
         expect(await pendingCleanup).toEqual(['middle']);
         expect(cleanup.prepare('SELECT deleted_at FROM data_cards WHERE id = ?').get('oldest'))
           .toEqual({ deleted_at: null });
       } else {
-        const pendingRestore = restoreDataCardByIdAndUser(restoreDb, 'oldest', 7);
+        const pendingRestore = restoreDataCardByIdAndUser(restoreDb, 'oldest', 7, 20);
         await started;
         expect((await pruneUserRecycleBinDataCards(cleanupDb, 7, 1)).sort()).toEqual(['middle', 'oldest']);
         release();
-        expect(await pendingRestore).toBe(0);
+        expect(await pendingRestore).toEqual({ status: 'not_found' });
         expect(cleanup.prepare('SELECT id FROM data_cards WHERE id = ?').get('oldest')).toBeUndefined();
       }
       expect(cleanupQueries).toHaveLength(1);
-      expect(restoreQueries).toHaveLength(1);
+      expect(restoreQueries).toHaveLength(order === 'restore-first' ? 1 : 2);
       expect(cleanup.prepare('SELECT id FROM data_cards WHERE deleted_at IS NOT NULL AND user_id = 7').all())
         .toEqual([{ id: 'newest' }]);
     } finally {
