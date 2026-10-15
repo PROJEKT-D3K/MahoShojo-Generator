@@ -1,3 +1,5 @@
+import { config } from '@/lib/config';
+import type { SoftDeleteDataCardResult } from '@/lib/db/repositories/data-cards-core';
 import { generateUUID } from './core';
 import type { DataCardListPage } from '@/lib/data-card-list-page';
 import type {
@@ -64,7 +66,7 @@ type DataCardsRepoBundle = {
   countUserUsedDataCardSlots: (db: unknown, userId: number, excludeCardId?: string) => Promise<number>;
   getDataCardUpdateByDataCardId: (db: unknown, dataCardId: string) => Promise<any | null>;
   deleteDataCardUpdateByDataCardId: (db: unknown, dataCardId: string) => Promise<void>;
-  softDeleteDataCardByIdAndUser: (db: unknown, cardId: string, userId: number) => Promise<number>;
+  softDeleteDataCardByIdAndUser: (db: unknown, cardId: string, userId: number, limit: number) => Promise<SoftDeleteDataCardResult>;
   permanentlyDeleteDataCardsByUserAndIds: (db: unknown, userId: number, ids: string[]) => Promise<number>;
   listUserRecycleBinDataCards: (db: unknown, userId: number) => Promise<any[]>;
   pruneUserRecycleBinDataCards: (db: unknown, userId: number, keep: number) => Promise<string[]>;
@@ -452,17 +454,10 @@ export async function deleteDataCardUpdate(dataCardId: string): Promise<boolean>
   }
 }
 
-// 删除数据卡
-export async function deleteDataCard(id: string, userId: number): Promise<boolean> {
-  try {
-    const bundle = await readDataCardsRepoBundle();
-    if (!bundle) return false;
-    const changes = await bundle.softDeleteDataCardByIdAndUser(bundle.db, id, userId);
-    return changes > 0;
-  } catch (error) {
-    console.error('删除数据卡失败:', error);
-    return false;
-  }
+// 普通删除只移入回收站；容量不足和存储故障不能伪装成删除成功或不存在。
+export async function deleteDataCard(id: string, userId: number): Promise<SoftDeleteDataCardResult> {
+  const bundle = await readDataCardsRepoBundleStrict();
+  return bundle.softDeleteDataCardByIdAndUser(bundle.db, id, userId, config.RECYCLE_BIN_LIMIT);
 }
 
 // 永久删除（物理删除）回收站中指定的数据卡
@@ -506,7 +501,7 @@ export async function restoreDataCard(cardId: string, userId: number): Promise<b
   }
 }
 
-// 裁剪回收站，只保留最新的 keep 条目
+// 显式裁剪辅助能力，只保留最新的 keep 条目；普通删除不得调用。
 export async function pruneUserRecycleBin(userId: number, keep: number): Promise<string[]> {
   try {
     const bundle = await readDataCardsRepoBundle();

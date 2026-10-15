@@ -14,7 +14,7 @@ export interface RecycleBinModalProps {
   isOpen: boolean;
   onClose(): void;
   port: OwnedRecycleBinReadPort;
-  limit: number;
+  limit?: number;
   type?: OnlineDataCardType;
   refreshKey?: number;
   busy?: boolean;
@@ -108,9 +108,9 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
   const disabled = busy || loading || writing || detailLoading !== null;
   return <>
     <BaseModal isOpen={isOpen} title="云端回收站" onClose={close} closeOnBackdrop={!writing && !busy} description={
-      <span>账号所有类型共用 {limit} 个回收站名额，超出会永久清理最早删除的记录，清理后无法恢复。</span>}>
+      <span>{limit === undefined ? '账号所有类型共享回收站容量' : `账号所有类型共用 ${limit} 个回收站名额`}，满时会停止移入，不会自动清理已有卡片。</span>}>
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <p className="text-sm text-gray-600">账号回收站：{page ? `${page.total}/${limit}` : '未知'}{type && page ? ` · 当前类型 ${page.filteredCount} 个` : ''}</p>
+        <p className="text-sm text-gray-600">账号回收站：{page ? (limit === undefined ? `${page.total} 个` : `${page.total}/${limit}`) : '未知'}{type && page ? ` · 当前类型 ${page.filteredCount} 个` : ''}</p>
         {!fixedType && <select aria-label="回收站类型" value={type ?? ''} disabled={disabled} className="rounded border border-gray-300 p-1 text-sm" onChange={(event) => { setOffset(0); setType((event.target.value || undefined) as OnlineDataCardType | undefined); }}>
           <option value="">全部类型</option>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>}

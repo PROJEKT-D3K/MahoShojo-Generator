@@ -11,7 +11,7 @@ let host: DataCardsModalHost;
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.trim() === label)!;
 const render = (props: Partial<DataCardsModalProps> = {}) => act(async () => { root.render(<DataCardsModal host={host} isOpen dataCards={[row]} currentPage={1} cardsPerPage={12} onPageChange={() => {}} onClose={() => {}} {...props} />); });
 const click = (element: HTMLElement) => act(async () => { element.click(); });
-const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((accept) => { resolve = accept; }); return { promise, resolve }; };
+const deferred = <T,>() => { let resolve!: (value: T) => void; let reject!: (cause: unknown) => void; const promise = new Promise<T>((accept, fail) => { resolve = accept; reject = fail; }); return { promise, resolve, reject }; };
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
@@ -33,7 +33,7 @@ describe('Web / Desktop 真实管理模态框共源控制', () => {
   });
   it('Web已提供的资料编辑、取消、删除、回收入口继续工作', async () => {
     const edit = vi.fn(); const remove = vi.fn(); const recycle = vi.fn();
-    await render({ onEditCard: edit, onDeleteCard: remove, onOpenRecycleBin: recycle });
+    await render({ onEditCard: edit, onDeleteCard: remove, onOpenRecycleBin: recycle, recycleCount: 0 });
     await click(button('修改信息')); expect(edit).toHaveBeenCalledWith(expect.objectContaining(row));
     await click(button('删除')); expect(remove).toHaveBeenCalledWith(row.id);
     await click(button('回收站 0/5')); expect(recycle).toHaveBeenCalledOnce();
@@ -41,6 +41,37 @@ describe('Web / Desktop 真实管理模态框共源控制', () => {
     await render({ editingCard: row, onCancelEdit: cancel, onUpdateCard: update });
     await click(button('取消')); expect(cancel).toHaveBeenCalledOnce();
     await click(button('保存')); expect(update).toHaveBeenCalledWith(row.id, row.name, row.description, 1);
+  });
+  it('删除错误在当前对话框内显示原文并优先于旧列表错误，不自动重发或额外读取正文', async () => {
+    const message = '回收站已满，本次未删除任何卡片';
+    const remove = vi.fn().mockRejectedValueOnce(new Error(message)).mockResolvedValue(undefined);
+    await render({ onDeleteCard: remove, error: '旧列表刷新失败' });
+    await click(button('删除'));
+    expect(document.querySelector('[role=dialog] [role=alert]')?.textContent).toBe(message);
+    expect(document.querySelector('[role=dialog]')?.textContent).toContain('雾灯');
+    expect(remove).toHaveBeenCalledExactlyOnceWith(row.id); expect(host.loadFullCard).not.toHaveBeenCalled();
+    await click(button('删除')); expect(remove).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[role=dialog] [role=alert]')?.textContent).not.toContain(message);
+  });
+  it.each(['close-reopen', 'account-change'])('删除single-flight与%s不认领旧失败，也不释放新动作', async (change) => {
+    const old = deferred<void>(), next = deferred<void>();
+    const remove = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
+    await render({ onDeleteCard: remove, scopeKey: 'owner-1:epoch-1' });
+    await act(async () => { button('删除').click(); button('删除').click(); });
+    expect(remove).toHaveBeenCalledOnce();
+    if (change === 'close-reopen') await render({ isOpen: false, onDeleteCard: remove, scopeKey: 'owner-1:epoch-1' });
+    const nextScope = change === 'account-change' ? 'owner-2:epoch-2' : 'owner-1:epoch-1';
+    await render({ onDeleteCard: remove, scopeKey: nextScope }); await click(button('删除'));
+    await act(async () => { old.reject(new Error('上一对话的失败')); });
+    expect(document.querySelector('[role=dialog] [role=alert]')).toBeNull();
+    await click(button('删除')); expect(remove).toHaveBeenCalledTimes(2);
+    await act(async () => { next.reject(new Error('当前对话的失败')); });
+    expect(document.querySelector('[role=dialog] [role=alert]')?.textContent).toBe('当前对话的失败');
+  });
+  it('宿主busy阻断普通删除，保留同步void回调兼容', async () => {
+    const remove = vi.fn();
+    await render({ busy: true, onDeleteCard: remove }); await click(button('删除')); expect(remove).not.toHaveBeenCalled();
+    await render({ onDeleteCard: remove }); await click(button('删除')); expect(remove).toHaveBeenCalledExactlyOnceWith(row.id);
   });
   it('同轮重复点击只认领一次，关闭后迟到单卡响应不能执行选择', async () => {
     const pending = deferred<unknown>(); host.loadFullCard = vi.fn(() => pending.promise); const replace = vi.fn();

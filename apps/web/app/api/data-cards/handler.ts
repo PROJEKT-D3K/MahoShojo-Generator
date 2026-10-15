@@ -11,7 +11,6 @@ import {
   getUserDataCards,
   updateDataCard,
   deleteDataCard,
-  pruneUserRecycleBin,
   upsertDataCardUpdate,
   getDataCardById,
   getUserUsedSlots,
@@ -503,10 +502,15 @@ export async function updateDataCardForUser(
 }
 
 async function handler(req: Request): Promise<Response> {
-  const auth = await requireAuthUser(req);
+  const auth = req.method === 'DELETE'
+    ? await requireAuthUser(req, { strict: true }).catch(() => ({
+      response: Response.json({ code: 'AUTH_UNAVAILABLE', error: '身份验证服务暂不可用，请稍后重试' }, {
+        status: 503, headers: { 'Cache-Control': 'private, no-store' },
+      }),
+    }))
+    : await requireAuthUser(req);
   if ('response' in auth) return auth.response;
   const user = auth.user;
-  const db = getDrizzleDbFromRuntime();
 
   const userId = user.id;
 
@@ -514,6 +518,7 @@ async function handler(req: Request): Promise<Response> {
     case 'GET':
       // 有界分页，避免一次读取所有正文耗尽 Worker 内存。
       try {
+        const db = getDrizzleDbFromRuntime();
         const url = getRequestUrl(req);
         if (url.searchParams.has('id')) {
           const id = url.searchParams.get('id')?.trim();
@@ -578,16 +583,23 @@ async function handler(req: Request): Promise<Response> {
           });
         }
 
-        const success = await deleteDataCard(id, userId);
+        const result = await deleteDataCard(id, userId);
 
-        if (!success) {
-          return new Response(JSON.stringify({ error: '数据卡不存在或无权访问' }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' }
-          });
+        if (result.status === 'not_found') {
+          return Response.json({ error: '数据卡不存在或无权访问' }, { status: 404 });
         }
-
-        await pruneUserRecycleBin(userId, appConfig.RECYCLE_BIN_LIMIT);
+        if (result.status === 'already_deleted') {
+          return Response.json({ code: 'DATA_CARD_ALREADY_DELETED', error: '数据卡已在回收站中，请刷新列表' }, { status: 409 });
+        }
+        if (result.status === 'recycle_bin_full') {
+          return Response.json({
+            code: 'RECYCLE_BIN_FULL',
+            error: '回收站已满，所有类型的数据卡共享账号回收站容量。本次未删除该卡或其他卡片，请先到回收站恢复或彻底删除不需要的卡片后重试。',
+          }, { status: 409 });
+        }
+        if (result.status === 'conflict') {
+          return Response.json({ code: 'DATA_CARD_DELETE_CONFLICT', error: '数据卡或回收站状态已变化，本次未执行删除，请刷新后重试' }, { status: 409 });
+        }
 
         return new Response(JSON.stringify({ success: true, message: '数据卡已移入回收站' }), {
           status: 200,

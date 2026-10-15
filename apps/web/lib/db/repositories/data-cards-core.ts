@@ -580,20 +580,52 @@ export const deleteDataCardUpdateByDataCardId = async (
   await db.delete(dataCardUpdates).where(eq(dataCardUpdates.dataCardId, dataCardId));
 };
 
+export type SoftDeleteDataCardResult =
+  | { status: 'deleted'; id: string }
+  | { status: 'not_found' | 'already_deleted' | 'recycle_bin_full' | 'conflict' };
+
 export const softDeleteDataCardByIdAndUser = async (
   db: AppDrizzleDb,
   cardId: string,
   userId: number,
-): Promise<number> => {
+  limit: number,
+): Promise<SoftDeleteDataCardResult> => {
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    throw new RangeError('回收站容量必须是非负安全整数');
+  }
+
+  // 所有类型共享账号容量；必须与软删除处于同一 SQL，最后一个位置不能被并发请求重复占用。
+  const recycleCount = sql<number>`(
+    SELECT COUNT(*) FROM ${dataCards}
+    WHERE ${dataCards.userId} = ${userId} AND ${dataCards.deletedAt} IS NOT NULL
+  )`;
   const updated = await db
     .update(dataCards)
-    .set({
-      deletedAt: sql`CURRENT_TIMESTAMP`,
-    })
-    .where(and(eq(dataCards.id, cardId), eq(dataCards.userId, userId), isNull(dataCards.deletedAt)))
+    .set({ deletedAt: sql`CURRENT_TIMESTAMP` })
+    .where(and(
+      eq(dataCards.id, cardId),
+      eq(dataCards.userId, userId),
+      isNull(dataCards.deletedAt),
+      sql`${recycleCount} < ${limit}`,
+    ))
     .returning({ id: dataCards.id });
 
-  return updated.length;
+  if (updated.length > 0) return { status: 'deleted', id: updated[0].id };
+
+  // 诊断只解释拒绝，不授权写入，也不能把另一请求的删除当成本次成功。
+  const [current] = await db
+    .select({ deletedAt: dataCards.deletedAt, recycleCount })
+    .from(dataCards)
+    .where(and(eq(dataCards.id, cardId), eq(dataCards.userId, userId)))
+    .limit(1);
+  if (!current) return { status: 'not_found' };
+  if (current.deletedAt !== null) return { status: 'already_deleted' };
+  if (!Number.isSafeInteger(current.recycleCount) || current.recycleCount < 0) {
+    throw new Error('无法读取回收站容量');
+  }
+  if (current.recycleCount >= limit) return { status: 'recycle_bin_full' };
+  // 拒绝后可能发生恢复或清理；此时只能提示重试，不能虚称已移入回收站。
+  return { status: 'conflict' };
 };
 
 export const permanentlyDeleteDataCardsByUserAndIds = async (

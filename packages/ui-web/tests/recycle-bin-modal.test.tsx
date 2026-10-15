@@ -32,6 +32,18 @@ it('双端真实列表摘要先行，显示原可见性/审核/删除时间，�
   await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   expect(props.onClose).toHaveBeenCalledOnce();
 });
+it('容量使用宿主配置，满时停止移入且不承诺自动清理；未知上限只显示账号总数', async () => {
+  await render({ limit: 9 });
+  expect(text()).toContain('账号所有类型共用 9 个回收站名额');
+  expect(text()).toContain('满时会停止移入，不会自动清理已有卡片');
+  expect(text()).toContain('账号回收站：8/9');
+  expect(text()).not.toContain('永久清理最早');
+  await render({ limit: undefined });
+  expect(text()).toContain('账号所有类型共享回收站容量');
+  expect(text()).toContain('账号回收站：8 个');
+  expect(text()).not.toContain('8/');
+  expect(text()).not.toContain('undefined');
+});
 it('loading/error不伪装为空，刷新后才显示已确认空态', async () => {
   const pending = deferred<OwnedRecycleBinPage>(); port.readPage = vi.fn(() => pending.promise);
   await render(); expect(text()).toContain('正在加载'); expect(text()).not.toContain('回收站为空'); expect(button('刷新').disabled).toBe(true);

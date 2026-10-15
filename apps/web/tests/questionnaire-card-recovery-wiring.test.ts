@@ -16,8 +16,9 @@ const compatModalSource = readFileSync(
 );
 
 describe('legacy questionnaire data-card recovery wiring', () => {
-  test('问卷编辑器把内容识别出的旧卡投影到问卷库', () => {
-    expect(questionnaireEditorSource).toContain('normalizeQuestionnaireDataCard');
+  test('问卷编辑器通过摘要纳入旧问卷，并保留显式类型修复', () => {
+    expect(questionnaireEditorSource).toContain("useDataCardSummaryPage('my'");
+    expect(questionnaireEditorSource).toContain("types: ['questionnaire'], includeLegacyQuestionnaires: true");
     expect(questionnaireEditorSource).toContain('isLegacyQuestionnaire');
     expect(questionnaireEditorSource).toContain('repairQuestionnaireType');
   });

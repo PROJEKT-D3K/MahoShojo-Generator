@@ -101,7 +101,7 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
     onOpenRecycleBin={() => setRecycleOpen(true)} recycleLabel="云端回收站" recycleCount={null}
     allowHistoryReplace={true} />
     <RecycleBinModal isOpen={isOpen && recycleOpen} onClose={() => setRecycleOpen(false)} port={recyclePort}
-      limit={host.recycleLimit} type={selectedType} refreshKey={refreshToken} busy={isBusy} operationGuard={metadataEditing}
+      type={selectedType} refreshKey={refreshToken} busy={isBusy} operationGuard={metadataEditing}
       DetailsModal={host.DetailsModal} />
   </>;
 }

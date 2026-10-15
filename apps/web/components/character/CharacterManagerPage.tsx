@@ -721,7 +721,9 @@ export const CharacterManagerPage: React.FC = () => {
             loadUserDataCards();
             loadUserBadges();
         } else {
-            setMessage({ type: 'error', text: result.error || '删除失败' });
+            const error = result.error || '删除失败';
+            setMessage({ type: 'error', text: error });
+            throw new Error(error);
         }
     };
 

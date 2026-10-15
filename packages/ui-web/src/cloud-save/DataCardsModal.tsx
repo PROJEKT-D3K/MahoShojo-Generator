@@ -32,7 +32,7 @@ export interface DataCardsModalProps {
   onPageChange: (page: number) => void;
   onEditCard?: (card: any) => void;
   onUpdateCard?: (id: string, name: string, description: string, isPublic: number) => void;
-  onDeleteCard?: (id: string) => void;
+  onDeleteCard?: (id: string) => void | Promise<void>;
   onLoadCard?: (card: any) => void | Promise<void>;
   onCancelEdit?: () => void;
   onShareCard?: (card: any) => void;
@@ -295,21 +295,25 @@ function DataCardsModalScope({
     if (!isOpen) { setSelectedCard(null); setShowDetailsModal(false); setActionError(null); }
     return () => { actionController.current?.abort(); actionController.current = null; };
   }, [isOpen]);
-  const withFullCard = async (card: any, action: (full: any) => void | Promise<void>) => {
-    // 重复点击不派生第二个同源读取/动作；关闭或账号代际变化会中止认领。
+  const withCardAction = async (action: (signal: AbortSignal) => void | Promise<void>, failureMessage: string) => {
+    // 重复点击不派生第二个动作；关闭或账号代际变化后不认领迟到的错误。
     if (suppliedBusy || metadata.isBusy() || actionController.current !== null) return;
     const controller = new AbortController();
     actionController.current = controller;
     setActionError(null);
     try {
-      const full = await host.loadFullCard(card, 'my', controller.signal);
-      if (!controller.signal.aborted) await action(full);
+      await action(controller.signal);
     } catch (cause) {
-      if (!controller.signal.aborted) setActionError(cause instanceof Error ? cause.message : '读取数据卡失败');
+      if (!controller.signal.aborted) setActionError(cause instanceof Error ? cause.message : failureMessage);
     } finally {
       if (actionController.current === controller) actionController.current = null;
     }
   };
+  const withFullCard = (card: any, action: (full: any) => void | Promise<void>) => withCardAction(async (signal) => {
+    const full = await host.loadFullCard(card, 'my', signal);
+    if (!signal.aborted) await action(full);
+  }, '读取数据卡失败');
+
 
 
   useEffect(() => {
@@ -599,7 +603,7 @@ function DataCardsModalScope({
         <div className={BASE_MODAL_BODY_LAYOUT_CLASS_NAME} role="region" aria-labelledby={titleId} tabIndex={0}>
         {/* fieldset 只承载禁用语义，普通 div 负责 flex 收缩与原生滚动。 */}
         <fieldset disabled={busy} className="min-w-0">
-          {(error || actionError) && <p role="alert" className="text-red-600 text-center py-3">{error && dataCards.length > 0 ? `刷新失败，当前显示上次成功结果：${error}` : error || actionError}</p>}
+          {(error || actionError) && <p role="alert" className="text-red-600 text-center py-3">{actionError || (error && dataCards.length > 0 ? `刷新失败，当前显示上次成功结果：${error}` : error)}</p>}
           <>
               {/* 搜索 / 排序 / 筛选 */}
               <div className="mb-3">
@@ -793,7 +797,7 @@ function DataCardsModalScope({
                           })}
                           onEditInfo={metadataEditor ? () => { if (!suppliedBusy && actionController.current === null) void metadata.begin(card); } : onEditCard ? () => void withFullCard(card, onEditCard) : undefined}
                           onEditData={!hideEditData && onLoadCard ? () => void withFullCard(card, onLoadCard) : undefined}
-                          onDelete={onDeleteCard ? () => { if (!suppliedBusy && !metadata.isBusy()) onDeleteCard(card.id); } : undefined}
+                          onDelete={onDeleteCard ? () => void withCardAction(() => onDeleteCard(card.id), '删除失败') : undefined}
                           onShare={onShareCard ? () => void withFullCard(card, onShareCard) : undefined}
                           onReplace={
                             onReplaceCard && (card.type !== 'history' || allowHistoryReplace)

@@ -158,6 +158,7 @@ export const config = {
 
   // 数据卡管理配置
   DEFAULT_DATA_CARD_CAPACITY: 20,
+  // 账号全部类型合计；满时拒绝软删，不自动淘汰旧卡。
   RECYCLE_BIN_LIMIT: 5,
 
   // 数据卡自动审查（公开卡）配置

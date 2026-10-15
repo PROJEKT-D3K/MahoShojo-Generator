@@ -80,6 +80,10 @@ it('真实云端管理入口进入共源回收站，列表与详情固定读取�
   const busy = vi.fn();
   await act(async () => root.render(<DesktopOwnedCardsModal isOpen expectedUserId={7} onClose={() => {}} invokeFn={invoke} metadataEditing={{ isBlocked: () => false, onBusyChange: busy }} />));
   await act(async () => button('云端回收站').click()); expect(document.body.textContent).toContain('已删云端卡'); expect(document.body.textContent).not.toContain('云端墓碑正文');
+  expect(document.body.textContent).toContain('账号所有类型共享回收站容量');
+  expect(document.body.textContent).toContain('满时会停止移入，不会自动清理已有卡片');
+  expect(document.body.textContent).toContain('账号回收站：1 个');
+  expect(document.body.textContent).not.toContain('1/5');
   expect(button('恢复')).toBeUndefined(); expect(button('彻底删除')).toBeUndefined();
   await act(async () => button('查看详情').click()); expect(document.body.textContent).toContain('云端墓碑正文'); expect(button('下载 JSON')).toBeDefined();
   expect(invoke.mock.calls.map(([, { request }]) => request.routeId)).toEqual(['data-cards.recycle.query', 'data-cards.recycle-detail.query']);

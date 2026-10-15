@@ -244,7 +244,9 @@ export const QuestionnaireEditorPage: React.FC = () => {
       flashMessage('✅ 问卷数据卡已移入回收站');
       loadUserQuestionnaireCards();
     } else {
-      setEditorError(result.error || '删除失败');
+      const error = result.error || '删除失败';
+      setEditorError(error);
+      throw new Error(error);
     }
   };
 

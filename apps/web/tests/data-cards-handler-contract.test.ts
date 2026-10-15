@@ -33,7 +33,7 @@ vi.mock('@/lib/database/data-cards', () => ({
   createDataCardWithAuthor: mocks.createDataCardWithAuthor,
   getUserDataCards: mocks.getUserDataCards,
   updateDataCard: mocks.updateDataCard,
-  deleteDataCard: vi.fn(async () => true),
+  deleteDataCard: vi.fn(async () => ({ status: 'deleted', id: 'card-existing' })),
   pruneUserRecycleBin: vi.fn(async () => undefined),
   upsertDataCardUpdate: vi.fn(async () => true),
   getDataCardById: mocks.getDataCardById,
