@@ -31,3 +31,7 @@ export type {
 } from './proposal-presentation';
 
 export { RoomProposalReadOnlyList } from './RoomProposalReadOnlyList';
+
+export { RoomProposalHostReview, arenaProposalSelectionError, arenaProposalConflictSummary } from './RoomProposalHostReview';
+export type { RoomProposalHostReviewProps } from './RoomProposalHostReview';
+export { ArenaProposalConflictReview } from './ArenaProposalConflictReview';

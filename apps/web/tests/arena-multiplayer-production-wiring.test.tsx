@@ -4,6 +4,7 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ArenaRoomProposalSubmitRequest } from '@mahoshojo/contracts/arena-room';
 
 import {
   ArenaMultiplayerContextPanel,
@@ -742,11 +743,12 @@ describe('Arena multiplayer production client/hook wiring', () => {
     expect(document.body.textContent).not.toContain(proposal.proposalId);
   });
 
-  it('malformed Proposal 2xx 只发一次并冻结，projected session snapshot 对账后才解锁', async () => {
+  it.each(['absent', 'matching-terminal'] as const)('malformed Proposal 2xx 只发一次；%s 对账仅在完整身份匹配终态时解锁', async (evidence) => {
     const memberSession = sessionFor('member');
     let proposalCalls = 0;
     let ticketIndex = 0;
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
+    let submittedRequest: ArenaRoomProposalSubmitRequest | null = null;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/languages.json')) return Response.json([]);
       if (requestPath(url) === '/api/auth/verify') return Response.json({ success: false });
@@ -768,12 +770,26 @@ describe('Arena multiplayer production client/hook wiring', () => {
       }
       if (url.endsWith('/proposals')) {
         proposalCalls += 1;
+        submittedRequest = JSON.parse(String(init?.body)) as ArenaRoomProposalSubmitRequest;
         return Response.json({ ok: true, malformed: true });
       }
       if (url.endsWith('/session')) {
+        const confirmed = evidence === 'matching-terminal' ? submittedRequest : null;
         return Response.json({
           ...memberSession,
-          snapshot: { ...memberSession.snapshot, controlSeq: 1, proposals: [] },
+          snapshot: { ...memberSession.snapshot, controlSeq: 1,
+            ...(confirmed ? { revision: 1, sharedConfig: { ...sharedConfig, userGuidance: 'unknown 对账建议' } } : {}),
+            proposals: confirmed ? [{
+              proposalVersion: 1,
+              proposalId: confirmed.proposalId,
+              roomId: memberSession.roomId,
+              authorUserId: memberSession.self.userId,
+              baseRevision: confirmed.baseRevision,
+              changes: confirmed.changes,
+              status: 'accepted',
+              createdAt: '2026-08-28T00:01:00.000Z',
+            }] : [],
+          },
         });
       }
       if (url.endsWith('/generations')) {
@@ -805,7 +821,16 @@ describe('Arena multiplayer production client/hook wiring', () => {
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith('/session'))).toBe(true);
     expect(ticketIndex).toBe(2);
     expect(WiringSocket.instances).toHaveLength(2);
-    expect(container.textContent).not.toContain('上次提案请求结果未知');
+    expect(proposalCalls).toBe(1);
+    if (evidence === 'absent') {
+      // A successful GET and an absent ID cannot confirm the dispatched POST outcome.
+      expect(container.textContent).toContain('上次提案请求结果未知');
+      expect(button('预览提案').disabled).toBe(true);
+    } else {
+      expect(container.textContent).not.toContain('上次提案请求结果未知');
+      expect(container.textContent).toContain('提案已全量接受');
+      expect(button('预览提案').disabled).toBe(false);
+    }
   });
 });
 

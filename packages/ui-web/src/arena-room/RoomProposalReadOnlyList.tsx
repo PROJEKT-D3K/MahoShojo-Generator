@@ -46,7 +46,7 @@ export function RoomProposalReadOnlyList({ session, isLive, labels }: {
   return <section aria-label="房间提案只读预览" className="mt-3 space-y-2">
     <h3>已收到的配置提案</h3>
     <p>{isLive ? '已收到的房间快照' : '最后已收到的房间快照（当前未同步）'}：修订 {session.snapshot.revision} · 控制序号 {session.snapshot.controlSeq}</p>
-    <p>这里只读展示，并按提案依赖顺序模拟；预览不修改本机草稿、房间配置或提案状态。桌面暂不提供提交、撤回或审阅操作。</p>
+    <p>这里只读展示，并按提案依赖顺序模拟；预览不修改本机草稿、房间配置或提案状态。此只读视图不提供提交、撤回或审阅操作。</p>
     {session.snapshot.proposals.length ? <ul aria-label="已收到提案列表" className="space-y-3">
       {session.snapshot.proposals.map(proposal => <ProposalObservation key={proposal.proposalId} proposal={proposal} session={session} labels={labels} />)}
     </ul> : <p>此快照没有当前账号可见的待处理提案。</p>}

@@ -20,6 +20,8 @@ it('previews the received proposal immutably without write controls, network or 
   const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
   await act(async () => root.render(<RoomProposalReadOnlyList session={session} isLive />));
   expect(container.textContent).toContain('全局引导改为');
+  expect(container.textContent).toContain('此只读视图不提供提交、撤回或审阅操作');
+  expect(container.textContent).not.toContain('桌面暂不提供');
   expect(container.textContent).toContain('这不代表服务器已接受或允许采纳');
   expect(container.querySelector('button, input, select, textarea, img')).toBeNull(); expect(fetch).not.toHaveBeenCalled(); expect(session).toEqual(before);
 });

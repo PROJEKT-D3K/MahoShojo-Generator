@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ArenaRoomCreateRequestSchema, ArenaRoomSessionResponseSchema } from '@mahoshojo/contracts/arena-room';
+import { ArenaRoomCreateRequestSchema, ArenaRoomSessionResponseSchema, type ArenaProposal, type ArenaRoomProposalResolveRequest, type ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
 import {
   DESKTOP_ROOM_ERROR_MESSAGE, DESKTOP_ROOM_IPC_COMMANDS,
   DesktopRoomBatchSchema, DesktopRoomEventSchema, DesktopRoomRequestSchema,
@@ -13,6 +13,7 @@ import { type ArenaRoomChannel } from '../src/platform/arena-room-bridge';
 import { CLOUD_AUTH_STATUS_COMMAND, CLOUD_SIGN_OUT_COMMAND } from '../src/platform/cloud-bridge';
 
 const fixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-ipc.json', import.meta.url), 'utf8'));
+const proposalFixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-proposals.json', import.meta.url), 'utf8'));
 const events: DesktopRoomEvent[] = fixture.pulls.map((pull: { batch: unknown }) => DesktopRoomBatchSchema.parse(pull.batch).event);
 const createRequest = ArenaRoomCreateRequestSchema.parse(fixture.requests.find((entry: { request: { kind: string } }) => entry.request.kind === 'create').request.request);
 const host = ArenaRoomSessionResponseSchema.parse(fixture.pulls[2].batch.event.response.result);
@@ -116,7 +117,11 @@ async function harness() {
       delivery.ackEntered.resolve();
       return delivery.ack.promise;
     }
-    if (request.kind === 'end-proposal-tracking') throw new Error('No proposal tracking control is exposed by this page');
+    if (request.kind === 'end-proposal-tracking') {
+      if (endFails) throw new Error('Lost end receipt');
+      if (pendingIntent?.intentId !== request.intentId) throw new Error('Wrong proposal token');
+      pendingIntent = null; return { kind: 'proposal-tracking-ended', intentId: request.intentId, ended: true };
+    }
     if (request.kind === 'end-config-tracking') {
       if (endFails) throw new Error('Lost end receipt');
       if (pendingIntent?.intentId !== request.intentId) throw new Error('Wrong config token');
@@ -181,7 +186,247 @@ async function joinRoom(h: Harness, result = member) {
   await ready;
 }
 
+const proposal: ArenaProposal = {
+  proposalVersion: 1, proposalId: 'desktop-proposal-1', roomId: host.roomId, authorUserId: String(member.self.userId),
+  baseRevision: host.snapshot.revision, status: 'submitted', createdAt: '2026-10-01T00:00:00Z',
+  changes: [{ type: 'setUserGuidance', changeId: 'guidance', value: 'proposal guidance', expectedBase: { kind: 'value', value: host.snapshot.sharedConfig!.userGuidance } },
+    { type: 'setSelectedLanguage', changeId: 'language', value: 'zh-CN', expectedBase: { kind: 'value', value: host.snapshot.sharedConfig!.selectedLanguage } }],
+};
+const proposalHost = (value: ArenaProposal = proposal): ArenaRoomSessionResponse => ArenaRoomSessionResponseSchema.parse({
+  ...host, snapshot: { ...host.snapshot, proposals: [value] },
+});
+const rejectProposal = (session: ArenaRoomSessionResponse): ArenaRoomProposalResolveRequest => ({ expectedRoomEpoch: session.roomEpoch, resolution: 'reject' });
+async function installOnlineSnapshot(h: Harness, value: ArenaRoomSessionResponse) {
+  const event = socket('room.snapshot');
+  if (event.kind !== 'socket' || event.message.type !== 'room.snapshot') throw new Error('Missing room snapshot');
+  await h.receive(DesktopRoomEventSchema.parse({ kind: 'socket', message: { ...event.message, roomId: value.roomId, roomEpoch: value.roomEpoch,
+    controlSeq: value.snapshot.controlSeq, payload: value.snapshot } }));
+  await h.receive({ kind: 'status', state: 'online' });
+  await whenState(h.session, state => state.phase === 'online' && state.snapshotReceived && !state.busy);
+}
+async function joinProposalHost(h: Harness, value = proposalHost()) {
+  await joinRoom(h, value); await installOnlineSnapshot(h, value); return h.session.getSnapshot().session!;
+}
+const resolved = (requestId: string, value: ArenaRoomSessionResponse, proposalId = proposal.proposalId): DesktopRoomEvent => DesktopRoomEventSchema.parse({
+  kind: 'http-result', operation: 'proposalResolve', requestId, response: { ...proposalFixture.proposalResolve.success,
+    result: { ...proposalFixture.proposalResolve.success.result, proposalId, roomId: value.roomId, roomEpoch: value.roomEpoch,
+      revision: value.snapshot.revision, controlSeq: value.snapshot.controlSeq, sharedConfig: value.snapshot.sharedConfig, snapshot: value.snapshot } },
+});
+
 describe('Desktop Arena Room session through the real Native bridge', () => {
+  it('resolves a current host proposal through the fixed bridge and settles only its exact ACK', async () => {
+    const h = await harness(); const current = await joinProposalHost(h);
+    const request = h.plan('proposal-resolve');
+    const resolving = h.session.resolveProposal(current, proposal, rejectProposal(current), h.session.confirmationOwner()!);
+    expect(await request.entered.promise).toEqual({ kind: 'proposal-resolve', roomId: current.roomId, proposalId: proposal.proposalId, request: rejectProposal(current) });
+    expect(h.session.getSnapshot().proposalTracking).toEqual({ id: null, roomId: current.roomId, proposalId: proposal.proposalId, operation: 'proposalResolve', phase: 'resolving', observation: null });
+    request.accept(); await resolving;
+    await h.session.resolveProposal(current, proposal, rejectProposal(current), h.session.confirmationOwner()!);
+    expect(h.requests.map(value => value.kind)).toEqual(['join', 'proposal-resolve']);
+    const result = { ...current, snapshot: { ...current.snapshot, proposals: [], controlSeq: current.snapshot.controlSeq + 1 } };
+    const delivery = h.emit(resolved(request.requestId, result)); await delivery.ackEntered.promise;
+    expect(h.session.getSnapshot()).toMatchObject({ busy: true, session: result, proposalTracking: { phase: 'resolving' } });
+    expect(h.subscriptions()).toHaveLength(1);
+    delivery.acknowledge(); await whenState(h.session, state => !state.busy && state.phase === 'connecting');
+    expect(h.session.getSnapshot().proposalTracking).toMatchObject({ phase: 'settled', observation: null });
+    expect(h.subscriptions()).toHaveLength(2);
+  });
+
+  it('keeps an ordinary selection and its old diagnostic revision after unrelated authority advances', async () => {
+    const h = await harness(); const reviewed = await joinProposalHost(h);
+    const latest = { ...reviewed, snapshot: { ...reviewed.snapshot, revision: reviewed.snapshot.revision + 1, controlSeq: reviewed.snapshot.controlSeq + 1 } };
+    await installOnlineSnapshot(h, latest);
+    const selection: ArenaRoomProposalResolveRequest = { expectedRoomEpoch: reviewed.roomEpoch, expectedRevision: reviewed.snapshot.revision,
+      resolution: 'accept-selected', selectedChangeIds: ['language', 'guidance'] };
+    const request = h.plan('proposal-resolve');
+    const resolving = h.session.resolveProposal(reviewed, proposal, selection, h.session.confirmationOwner()!);
+    expect(await request.entered.promise).toMatchObject({ request: selection });
+    selection.selectedChangeIds!.reverse();
+    expect(h.requests.at(-1)).toMatchObject({ request: { selectedChangeIds: ['language', 'guidance'], expectedRevision: reviewed.snapshot.revision } });
+    request.accept(); await resolving;
+  });
+
+  it('requires override review to match both the reviewed and current revisions without rewriting it', async () => {
+    const h = await harness(); const reviewed = await joinProposalHost(h);
+    const latest = { ...reviewed, snapshot: { ...reviewed.snapshot, revision: reviewed.snapshot.revision + 1, controlSeq: reviewed.snapshot.controlSeq + 1 } };
+    await installOnlineSnapshot(h, latest);
+    const selection: ArenaRoomProposalResolveRequest = { expectedRoomEpoch: reviewed.roomEpoch, expectedRevision: reviewed.snapshot.revision,
+      resolution: 'accept-selected', selectedChangeIds: ['guidance'], overrideChangeIds: ['guidance'] };
+    await h.session.resolveProposal(reviewed, proposal, selection, h.session.confirmationOwner()!);
+    await h.session.resolveProposal(reviewed, proposal, { ...selection, expectedRevision: latest.snapshot.revision }, h.session.confirmationOwner()!);
+    expect(h.requests.map(value => value.kind)).toEqual(['join']);
+    expect(h.session.getSnapshot().error).toContain('重新审阅');
+    const request = h.plan('proposal-resolve');
+    const resolving = h.session.resolveProposal(h.session.getSnapshot().session!, proposal, { ...selection, expectedRevision: latest.snapshot.revision }, h.session.confirmationOwner()!);
+    await request.entered.promise; request.accept(); await resolving;
+  });
+
+  it.each(['stale-owner', 'member', 'inactive', 'offline', 'missing-snapshot', 'can-start', 'room', 'epoch', 'self', 'changed-identity', 'removed', 'terminal'] as const)(
+    'does not dispatch a proposal resolve for %s', async guard => {
+      const h = await harness(); let reviewed = await joinProposalHost(h); let identity = h.session.confirmationOwner()!;
+      if (guard === 'stale-owner') identity = Symbol('old');
+      if (guard === 'can-start') h.setCanStart(false);
+      if (guard === 'offline') { await h.receive({ kind: 'status', state: 'offline' }); await whenState(h.session, state => state.phase === 'offline'); }
+      if (guard === 'missing-snapshot') { await h.receive({ kind: 'status', state: 'offline' }); await h.receive({ kind: 'status', state: 'online' }); }
+      if (guard === 'room') reviewed = { ...reviewed, roomId: 'another-room' };
+      if (guard === 'epoch') reviewed = { ...reviewed, roomEpoch: 'another-epoch' };
+      if (guard === 'self') reviewed = { ...reviewed, self: { ...reviewed.self, userId: 'another-self' } };
+      if (guard === 'member') reviewed = { ...reviewed, self: { ...reviewed.self, role: 'member' } };
+      if (guard === 'inactive') reviewed = { ...reviewed, self: { ...reviewed.self, membershipState: 'revoked' } };
+      if (guard === 'changed-identity' || guard === 'removed' || guard === 'terminal') {
+        const proposals: ArenaProposal[] = guard === 'removed' ? [] : [{ ...proposal, ...(guard === 'terminal' ? { status: 'rejected' as const } : { authorUserId: host.self.userId }) }];
+        await installOnlineSnapshot(h, { ...reviewed, snapshot: { ...reviewed.snapshot, proposals, controlSeq: reviewed.snapshot.controlSeq + 1 } });
+      }
+      await h.session.resolveProposal(reviewed, proposal, rejectProposal(reviewed), identity);
+      expect(h.requests.map(value => value.kind)).toEqual(['join']);
+    });
+
+  it.each(['../legacy', 'with/slash', 'with\\backslash', 'encoded%2Fid', 'double%252Fid'])(
+    'keeps legacy unsafe proposal ID %s read-only', async proposalId => {
+      const h = await harness(); const value = { ...proposal, proposalId }; const current = await joinProposalHost(h, proposalHost(value));
+      await h.session.resolveProposal(current, value, rejectProposal(current), h.session.confirmationOwner()!);
+      expect(h.requests.map(value => value.kind)).toEqual(['join']);
+      expect(h.session.getSnapshot().error).toContain('只读');
+    });
+
+  it('preserves a safe Unicode proposal ID exactly and rejects normalized selections', async () => {
+    const h = await harness(); const value = { ...proposal, proposalId: '提案 内部空格' }; const current = await joinProposalHost(h, proposalHost(value));
+    await h.session.resolveProposal(current, value, { expectedRoomEpoch: current.roomEpoch, resolution: 'accept-selected', selectedChangeIds: [' guidance '] }, h.session.confirmationOwner()!);
+    expect(h.requests.map(value => value.kind)).toEqual(['join']);
+    const request = h.plan('proposal-resolve'); const resolving = h.session.resolveProposal(current, value, rejectProposal(current), h.session.confirmationOwner()!);
+    expect(await request.entered.promise).toMatchObject({ proposalId: '提案 内部空格' }); request.accept(); await resolving;
+  });
+
+  it('keeps a real resolve unknown through GET and partial evidence until exact Native observation ACK', async () => {
+    const h = await harness(); const current = await joinProposalHost(h);
+    const request = h.plan('proposal-resolve'); const resolving = h.session.resolveProposal(current, proposal, rejectProposal(current), h.session.confirmationOwner()!);
+    await request.entered.promise; request.accept(); await resolving;
+    const pending = { operation: 'proposalResolve' as const, roomId: current.roomId, intentId: 'resolve-unknown' };
+    h.setPending(pending);
+    await h.receive({ kind: 'mutation-unknown', ...pending });
+    await h.receive({ kind: 'request-error', operation: 'proposalResolve', requestId: request.requestId,
+      error: { code: 'network-error', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'unknown' } });
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().proposalTracking).toMatchObject({ operation: pending.operation, roomId: pending.roomId, id: pending.intentId, proposalId: proposal.proposalId, phase: 'unknown' });
+    const read = h.plan('session'); const reading = h.session.checkProposalTracking(); await read.entered.promise; read.accept(); await reading;
+    await h.receive(success('session', read.requestId, current)); await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
+    const observation = { observation: 'terminal' as const, linked: true, settle: true, outcome: 'scope-unverified' as const, terminalStatus: 'partially_accepted' as const };
+    const delivery = h.emit({ kind: 'proposal-observation', intentId: pending.intentId, observation }); await delivery.ackEntered.promise;
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: pending, proposalTracking: { phase: 'unknown', observation } });
+    await h.session.resolveProposal(current, proposal, rejectProposal(current), h.session.confirmationOwner()!);
+    delivery.acknowledge(); await whenState(h.session, state => state.unknown === null && !state.busy);
+    expect(h.session.getSnapshot().proposalTracking).toMatchObject({ phase: 'settled', observation });
+    expect(h.requests.map(value => value.kind)).toEqual(['join', 'proposal-resolve', 'session']);
+  });
+
+  it.each(['different', 'scope-unverified'] as const)('retains the true %s terminal observation after ACK', async outcome => {
+    const h = await harness(); const pending = { operation: 'proposalResolve' as const, roomId: host.roomId, intentId: 'old-resolve' };
+    h.setPending(pending); await h.session.open();
+    const observation = { observation: 'terminal' as const, linked: true, settle: true, outcome,
+      terminalStatus: outcome === 'different' ? 'withdrawn' as const : 'partially_accepted' as const };
+    await h.receive({ kind: 'proposal-observation', intentId: pending.intentId, observation });
+    await whenState(h.session, state => state.unknown === null);
+    expect(h.session.getSnapshot().proposalTracking).toMatchObject({ phase: 'settled', observation });
+    expect(h.session.isConstrained()).toBe(false);
+  });
+
+  it.each(['pending', 'absent', 'conflict', 'scope-changed', 'target-unavailable'] as const)('keeps unknown for Native %s evidence even after exact ACK', async observation => {
+    const h = await harness(); const pending = { operation: 'proposalResolve' as const, roomId: host.roomId, intentId: 'pending-resolve' };
+    h.setPending(pending); await h.session.open();
+    const evidence = { observation, linked: observation === 'pending' || observation === 'absent', settle: false, outcome: null, terminalStatus: null };
+    await h.receive({ kind: 'proposal-observation', intentId: pending.intentId, observation: evidence });
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: pending, proposalTracking: { phase: 'unknown', observation: evidence } });
+    expect(h.session.isConstrained()).toBe(true);
+  });
+
+  it.each(['not-applied', 'invalid-ack', 'wrong-proposal', 'regressed-snapshot'] as const)('handles a resolve %s without manufacturing a successful receipt', async outcome => {
+    const h = await harness(); const current = await joinProposalHost(h);
+    const request = h.plan('proposal-resolve'); const resolving = h.session.resolveProposal(current, proposal, rejectProposal(current), h.session.confirmationOwner()!);
+    await request.entered.promise; request.accept(); await resolving;
+    if (outcome === 'not-applied') {
+      await h.receive({ kind: 'request-error', operation: 'proposalResolve', requestId: request.requestId,
+        error: { code: 'service-rejected', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applied', serverCode: 'ROOM_DESKTOP_OPERATION_UNSUPPORTED' } });
+      await whenState(h.session, state => !state.busy);
+      expect(h.session.getSnapshot()).toMatchObject({ unknown: null, proposalTracking: null, session: current });
+    } else {
+      const result = outcome === 'regressed-snapshot' ? { ...current, snapshot: { ...current.snapshot, controlSeq: current.snapshot.controlSeq - 1 } } : current;
+      const delivery = h.emit(resolved(request.requestId, result, outcome === 'wrong-proposal' ? 'other-proposal' : proposal.proposalId));
+      if (outcome === 'invalid-ack') { await delivery.ackEntered.promise; delivery.acknowledge({ batchId: 'wrong-batch' }); }
+      await whenState(h.session, state => state.phase === 'unavailable');
+      expect(h.session.getSnapshot()).toMatchObject({ unknown: { operation: 'proposalResolve' }, proposalTracking: { phase: 'unknown' } });
+      expect(h.subscriptions()).toHaveLength(1);
+    }
+    expect(h.requests.map(value => value.kind)).toEqual(['join', 'proposal-resolve']);
+  });
+
+  it('rejects partial atomic groups and missing dependencies without expanding the selection', async () => {
+    const h = await harness(); const value: ArenaProposal = { ...proposal, changes: proposal.changes.map((change, index) => ({ ...change,
+      atomicGroupId: 'together', ...(index === 1 ? { dependsOn: ['guidance'] } : {}) })) };
+    const current = await joinProposalHost(h, proposalHost(value));
+    for (const selectedChangeIds of [['language'], ['guidance'], ['guidance', 'guidance'], ['missing'], []]) {
+      await h.session.resolveProposal(current, value, { expectedRoomEpoch: current.roomEpoch, resolution: 'accept-selected', selectedChangeIds }, h.session.confirmationOwner()!);
+    }
+    expect(h.requests.map(value => value.kind)).toEqual(['join']);
+    expect(h.session.getSnapshot().proposalTracking).toBeNull();
+  });
+
+  it('requires a fresh read when an end receipt was lost but Native later reports no pending intent', async () => {
+    const h = await harness(); const pending = { operation: 'proposalResolve' as const, roomId: host.roomId, intentId: 'lost-end' };
+    h.setPending(pending); await h.session.open(); h.setEndFails(); await h.session.endProposalTracking(pending.intentId);
+    h.setPending(null); await h.session.checkProposalTracking();
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: null, proposalTracking: { phase: 'ended-needs-read' } });
+    await h.session.create(details, source, () => true); await h.session.join(host.roomId, 'host'); await h.session.discover();
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it('ends only the explicit proposal token and requires a fresh GET ACK before further writes', async () => {
+    const h = await harness(); const pending = { operation: 'proposalResolve' as const, roomId: host.roomId, intentId: 'end-resolve' };
+    h.setPending(pending); await h.session.open();
+    expect(h.session.getSnapshot().proposalTracking).toMatchObject({ id: pending.intentId, proposalId: null, observation: { observation: 'target-unavailable', linked: false } });
+    await h.session.endProposalTracking('wrong-token');
+    expect(h.invoke.mock.calls.some(([, args]) => (args?.request as { request?: { kind: string } })?.request?.kind === 'end-proposal-tracking')).toBe(false);
+    await h.session.endProposalTracking(pending.intentId);
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: null, session: null, proposalTracking: { phase: 'ended-needs-read' } });
+    await h.session.create(details, source, () => true); await h.session.join(host.roomId, 'host'); await h.session.discover();
+    expect(h.requests).toHaveLength(0);
+    const read = h.plan('session'); const reading = h.session.readProposalAfterEnd(); await read.entered.promise; read.accept(); await reading;
+    const delivery = h.emit(success('session', read.requestId, proposalHost())); await delivery.ackEntered.promise;
+    expect(h.session.getSnapshot().proposalTracking?.phase).toBe('ended-needs-read');
+    const current = h.session.getSnapshot().session!;
+    await h.session.resolveProposal(current, proposal, rejectProposal(current), h.session.confirmationOwner()!);
+    delivery.acknowledge(); await whenState(h.session, state => !state.busy && state.phase === 'connecting');
+    expect(h.session.getSnapshot().proposalTracking).toBeNull();
+    await installOnlineSnapshot(h, proposalHost());
+    const request = h.plan('proposal-resolve'); const resolving = h.session.resolveProposal(h.session.getSnapshot().session!, proposal, rejectProposal(current), h.session.confirmationOwner()!);
+    await request.entered.promise; request.accept(); await resolving;
+    expect(h.requests.map(value => value.kind)).toEqual(['session', 'proposal-resolve']);
+  });
+
+  it('preserves proposal tracking if reattachment fails or a fresh read proves the room unavailable', async () => {
+    const h = await harness(); const pending = { operation: 'proposalResolve' as const, roomId: host.roomId, intentId: 'retained-resolve' };
+    h.setPending(pending); await h.session.open();
+    const gate = h.holdAttach(); const reopening = h.session.open(); await gate.entered.promise; gate.response.resolve({ invalid: true }); await reopening;
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'unavailable', constrained: true, unknown: pending, proposalTracking: { phase: 'unknown', id: pending.intentId } });
+    await h.session.open(); await h.session.endProposalTracking(pending.intentId);
+    const read = h.plan('session'); const reading = h.session.readProposalAfterEnd(); await read.entered.promise; read.accept(); await reading;
+    await h.receive({ kind: 'request-error', operation: 'session', requestId: read.requestId,
+      error: { code: 'service-rejected', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applicable', serverCode: 'ROOM_NOT_FOUND' } });
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot()).toMatchObject({ session: null, phase: 'closed', constrained: true, proposalTracking: { phase: 'ended-needs-read' } });
+    expect(h.session.needsLeaveConfirmation()).toBe(true);
+  });
+
+  it('does not claim old proposal basis or check a replacement token after reopen', async () => {
+    const h = await harness(); const pending = { operation: 'proposalResolve' as const, roomId: host.roomId, intentId: 'resolve-A' };
+    h.setPending(pending); await h.session.open();
+    h.setEndFails(); await h.session.endProposalTracking(pending.intentId);
+    expect(h.session.getSnapshot().phase).toBe('unavailable');
+    h.setPending({ ...pending, intentId: 'resolve-B' }); await h.session.checkProposalTracking();
+    expect(h.session.getSnapshot().proposalTracking).toMatchObject({ id: 'resolve-B', proposalId: null, phase: 'unknown', observation: { observation: 'target-unavailable', linked: false } });
+    expect(h.requests).toHaveLength(0);
+  });
+
   it('publishes only an explicitly compared current host projection with exact CAS scope', async () => {
     const h = await harness(); await joinRoom(h, host);
     const original = h.session.getSnapshot().session!;

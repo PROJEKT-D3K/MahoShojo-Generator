@@ -498,6 +498,38 @@ describe('房主人工覆盖真实交互', () => {
       expectedRevision: 2, overrideChangeIds: ['guidance'],
     }));
   });
+  it('共源审阅失效后回到旧快照不会复活此前的覆盖同意', async () => {
+    const controller = createController(); const original = reviewState();
+    await renderReview(original, controller);
+    await act(async () => button('采用提案值').click());
+    await renderReview(reviewState(overrideProposal(), 2, 'D'), controller);
+    await renderReview(original, controller);
+    expect(button('采用提案值').getAttribute('aria-pressed')).toBe('false');
+    expect(button('接受所选').disabled).toBe(true);
+    expect(controller.resolveProposal).not.toHaveBeenCalled();
+  });
+  it('宿主 controller 换代即使同房间同修订也需重新确认覆盖', async () => {
+    const originalController = createController(); const replacementController = createController();
+    const state = reviewState();
+    await renderReview(state, originalController);
+    await act(async () => button('采用提案值').click());
+    await renderReview(state, replacementController);
+    expect(button('接受所选').disabled).toBe(true);
+    expect(button('采用提案值').getAttribute('aria-pressed')).toBe('false');
+    await renderReview(state, originalController);
+    expect(button('接受所选').disabled).toBe(true);
+    expect(originalController.resolveProposal).not.toHaveBeenCalled();
+    expect(replacementController.resolveProposal).not.toHaveBeenCalled();
+  });
+  it('共源普通接受允许无关 revision 前进且不构造 override', async () => {
+    const controller = createController();
+    await renderReview(reviewState(overrideProposal(), 7, 'A'), controller);
+    expect(button('接受所选').disabled).toBe(false);
+    await act(async () => button('接受所选').click());
+    expect(controller.resolveProposal).toHaveBeenCalledWith('proposal-override', {
+      expectedRoomEpoch: 'epoch-1', expectedRevision: 7, resolution: 'accept-selected', selectedChangeIds: ['guidance'],
+    });
+  });
   it('即使 timestamp 未变，提案内容更新也不能沿用旧同ID覆盖', async () => {
     const controller = createController(); await renderReview(reviewState(), controller);
     await act(async () => button('采用提案值').click());

@@ -11,11 +11,11 @@ import ipcFixture from '@mahoshojo/contracts/fixtures/desktop-room-ipc.json';
 import serviceFixture from '@mahoshojo/contracts/fixtures/desktop-room-session.json';
 import {
   DESKTOP_ROOM_IPC_COMMANDS, DesktopRoomAttachRequestSchema, DesktopRoomBatchSchema,
-  DesktopRoomRequestSchema, DesktopRoomSubscribeRequestSchema,
+  DesktopRoomRequestSchema, DesktopRoomSubscribeRequestSchema, getDesktopRoomHttpOperation,
   type DesktopRoomAttachResponse, type DesktopRoomBatch, type DesktopRoomHttpAction,
   type DesktopRoomSubscribeRequest,
 } from '@mahoshojo/contracts/desktop-room-ipc';
-import { PROPOSAL_VERSION, type ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
+import { PROPOSAL_VERSION, type ArenaProposal, type ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
 import { createDesktopRouter } from '../src/app/router';
 import { ADVANCED_ARENA_DRAFT_KEY, ARENA_DRAFT_KEY, createInitialArenaDraft, type ArenaDraft } from '../src/features/arena/session';
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
@@ -96,12 +96,15 @@ class RoomNativeFixture {
       if (!delivery) throw new Error('ACK without a queued batch');
       this.acknowledgements.push(action); this.order.push(`ack:${action.batchId}`); delivery.ackStarted.resolve();
       await delivery.ackGate.promise; this.deliveries.delete(action.subscriptionId);
+      const event = delivery.batch.event;
+      if (event.kind === 'proposal-observation' && event.observation.settle && this.pendingIntent?.intentId === event.intentId) this.pendingIntent = null;
       this.order.push(`acknowledged:${action.batchId}`);
       return { kind: 'acknowledged', handle: envelope.handle, subscriptionId: action.subscriptionId, batchId: action.batchId, sequence: action.sequence, accepted: true };
     }
-    if (action.kind === 'end-config-tracking') {
+    if (action.kind === 'end-config-tracking' || action.kind === 'end-proposal-tracking') {
       expect(this.pendingIntent?.intentId).toBe(action.intentId); this.pendingIntent = null;
-      this.order.push('end-config-tracking'); return { kind: 'config-tracking-ended', intentId: action.intentId, ended: true };
+      this.order.push(action.kind);
+      return { kind: action.kind === 'end-config-tracking' ? 'config-tracking-ended' : 'proposal-tracking-ended', intentId: action.intentId, ended: true };
     }
     const operation = { action, handle: this.handle, subscriptionId: this.subscriptionId, requestId: `page-request-${this.actions.length}` };
     this.actions.push(operation); this.order.push(`request:${action.kind}`);
@@ -115,6 +118,10 @@ class RoomNativeFixture {
     expect(this.deliveries.has(this.subscriptionId), 'one bounded batch at a time').toBe(false);
     const sequence = this.sequence++;
     const batch = DesktopRoomBatchSchema.parse({ handle: this.handle, subscriptionId: this.subscriptionId, batchId: `page-batch-${this.attachCount}-${this.subscriptions.length}-${sequence}`, sequence, event });
+    if (batch.event.kind === 'mutation-unknown') {
+      const { operation, intentId, roomId } = batch.event;
+      this.pendingIntent = { operation, intentId, roomId };
+    }
     const delivery = { batch, channel: this.channel, pullStarted: deferred<void>(), ackStarted: deferred<void>(), pullGate: deferred<void>(), ackGate: deferred<void>(), pullReturned: deferred<void>() };
     if (!options.holdPull) delivery.pullGate.resolve();
     if (!options.holdAck) delivery.ackGate.resolve();
@@ -211,7 +218,7 @@ const startAction = async (label: string, kind: DesktopRoomHttpAction['kind']) =
 };
 const responseEvent = (operation: Operation, result: unknown) => ({
   kind: 'http-result', requestId: operation.requestId,
-  operation: operation.action.kind === 'resume-create' ? 'create' : operation.action.kind,
+  operation: getDesktopRoomHttpOperation(operation.action),
   response: { desktopRoom: serviceFixture.operations.create.success.desktopRoom, result },
 });
 const sessionFor = (role: 'host' | 'member'): ArenaRoomSessionResponse => {
@@ -220,15 +227,15 @@ const sessionFor = (role: 'host' | 'member'): ArenaRoomSessionResponse => {
   expect(session.snapshot.members.find(member => member.userId === session.self.userId)).toEqual(session.self);
   return session;
 };
-const confirmMembership = async (operation: Operation, role: 'host' | 'member') => {
-  const session = sessionFor(role), subscribed = port.nextSubscription();
+const confirmMembership = async (operation: Operation, role: 'host' | 'member', session = sessionFor(role)) => {
+  const subscribed = port.nextSubscription();
   await port.deliver(responseEvent(operation, session));
   await act(async () => { expect(await subscribed).toMatchObject({ roomId: session.roomId, expectedRoomEpoch: session.roomEpoch }); });
   return session;
 };
 const publishOnline = async (session: ArenaRoomSessionResponse) => {
   await port.deliver({ kind: 'status', state: 'online' }); assertNoOnline();
-  const snapshot = structuredClone(ipcFixture.pulls[12]!.batch.event);
+  const snapshot = snapshotEvent(session);
   await port.deliver(snapshot); assertNoOnline();
   const presence = structuredClone(ipcFixture.pulls[13]!.batch.event) as { kind: 'socket'; message: { onlineUserIds: string[] } };
   presence.message.onlineUserIds = [session.self.userId];
@@ -236,6 +243,42 @@ const publishOnline = async (session: ArenaRoomSessionResponse) => {
   expect(room().querySelectorAll('[data-member-presence="online"]')).toHaveLength(1);
   expect(room().querySelectorAll('[data-member-presence="offline"]')).toHaveLength(1);
   expect(room().textContent).toContain('当前 2 位成员，1 人在线，1 人离线。');
+};
+const snapshotEvent = (session: ArenaRoomSessionResponse) => ({
+  kind: 'socket', message: { protocolVersion: 1, type: 'room.snapshot', roomId: session.roomId,
+    roomEpoch: session.roomEpoch, controlSeq: session.snapshot.controlSeq, timestamp: '2026-10-15T12:00:00Z', payload: session.snapshot },
+});
+const reviewSession = (): ArenaRoomSessionResponse => {
+  const session = sessionFor('host');
+  const proposal: ArenaProposal = { proposalVersion: PROPOSAL_VERSION, proposalId: 'host-review-proposal', roomId: session.roomId,
+    authorUserId: session.snapshot.members.find(member => member.role === 'member')!.userId,
+    baseRevision: session.snapshot.revision - 2, status: 'submitted', createdAt: '2026-10-15T12:00:00Z',
+    changes: [
+      { changeId: 'guidance', type: 'setUserGuidance', expectedBase: { kind: 'value', value: session.snapshot.sharedConfig.userGuidance }, value: '仅更新服务器提案引导' },
+      { changeId: 'language', type: 'setSelectedLanguage', expectedBase: { kind: 'value', value: session.snapshot.sharedConfig.selectedLanguage }, value: 'en-US' },
+    ],
+  };
+  session.snapshot.proposals = [proposal];
+  return session;
+};
+const proposalCard = (proposalId = 'host-review-proposal') => {
+  const title = [...room().querySelectorAll<HTMLElement>('[title]')].find(item => item.title === proposalId);
+  const card = title?.closest('li'); expect(card, proposalId).toBeTruthy(); return card!;
+};
+const proposalResult = (session: ArenaRoomSessionResponse, status: 'accepted' | 'partially_accepted' = 'partially_accepted') => ({
+  protocolVersion: 1, roomId: session.roomId, roomEpoch: session.roomEpoch, controlSeq: session.snapshot.controlSeq,
+  revision: session.snapshot.revision, proposalId: 'host-review-proposal', status, result: 'applied',
+  sharedConfig: session.snapshot.sharedConfig, snapshot: session.snapshot,
+});
+const beginReview = async (session = reviewSession()) => {
+  seedOrdinary(); await mount(); await click('恢复草稿'); await open();
+  const creating = await startAction('创建多人房间', 'create');
+  await confirmMembership(creating, 'host', session); await publishOnline(session);
+  return session;
+};
+const loseProposalResult = async (resolving: Operation, session: ArenaRoomSessionResponse, intentId: string) => {
+  await port.deliver({ kind: 'mutation-unknown', operation: 'proposalResolve', intentId, roomId: session.roomId });
+  await port.deliver({ kind: 'request-error', operation: 'proposalResolve', requestId: resolving.requestId, error: ipcFixture.error });
 };
 
 beforeEach(() => {
@@ -342,9 +385,10 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     expect(ordinarySnapshot().advanced).toBe(after.advanced); expect(port.actions.map(value => value.action.kind)).toEqual(['create', 'config']); assertNoExecution();
   });
 
-  it('shows only received proposal snapshots and removes them on account retirement without writes', async () => {
+  it('keeps received proposals read-only for members and removes them on account retirement without writes', async () => {
     seedOrdinary(); await mount(); await click('恢复草稿'); const before = ordinarySnapshot(); await open();
-    const create = await startAction('创建多人房间', 'create'); const authority = await confirmMembership(create, 'host');
+    await change('#arena-room-join-code', serviceFixture.operations.join.success.result.roomId);
+    const joining = await startAction('加入房间', 'join'); const authority = await confirmMembership(joining, 'member');
     await publishOnline(authority);
     const event = structuredClone(ipcFixture.pulls[12]!.batch.event) as { kind: 'socket'; message: { controlSeq: number; payload: ArenaRoomSessionResponse['snapshot'] } };
     event.message.controlSeq += 1; event.message.payload.controlSeq = event.message.controlSeq;
@@ -355,11 +399,144 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     const view = () => container.querySelector('[aria-label="房间提案只读预览"]');
     expect(view()?.textContent).toContain('只读提案目标'); expect(view()?.textContent).toContain(`修订 ${event.message.payload.revision}`);
     expect(view()?.querySelector('button, input, select, textarea')).toBeNull();
+    for (const label of ['接受所选', '拒绝全部', '提交提案', '撤回提案']) expect(button(label, room())).toBeUndefined();
     await port.deliver({ kind: 'status', state: 'resync-required' });
     expect(view()?.textContent).toContain('最后已收到的房间快照（当前未同步）'); expect(view()?.textContent).toContain('received-proposal');
-    expect(ordinarySnapshot()).toEqual(before); expect(port.actions.map(value => value.action.kind)).toEqual(['create']); assertNoExecution();
+    expect(ordinarySnapshot()).toEqual(before); expect(port.actions.map(value => value.action.kind)).toEqual(['join']); assertNoExecution();
     await act(async () => { await getDesktopCloudSessionStore().signOut(); });
     expect(view()).toBeNull(); expect(container.textContent).not.toContain('只读提案目标');
+  });
+
+  it('reviews only active host pending proposals and installs the resolved authority without touching the dirty local draft', async () => {
+    const session = reviewSession(), original = structuredClone(session.snapshot.proposals[0]!);
+    session.snapshot.proposals.push({ ...structuredClone(original), proposalId: 'legacy/unsafe-proposal' },
+      { ...structuredClone(original), proposalId: 'already-terminal', status: 'accepted' });
+    seedOrdinary(); await mount(); await click('恢复草稿'); await open();
+    const creating = await startAction('创建多人房间', 'create'); await confirmMembership(creating, 'host', session);
+    expect(requiredButton('接受所选', proposalCard()).disabled).toBe(true);
+    await publishOnline(session);
+    const safe = proposalCard(), unsafe = proposalCard('legacy/unsafe-proposal');
+    expect(requiredButton('接受所选', safe).disabled).toBe(false);
+    expect(requiredButton('拒绝全部', safe).disabled).toBe(false);
+    expect(requiredButton('接受所选', unsafe).disabled).toBe(true);
+    expect(requiredButton('拒绝全部', unsafe).disabled).toBe(true);
+    await click('拒绝全部', unsafe);
+    expect(buttons(room()).filter(item => item.textContent?.trim() === '接受所选')).toHaveLength(2);
+    for (const label of ['提交提案', '撤回提案']) expect(button(label, room())).toBeUndefined();
+    await change('#room-host-draft-arena-story-guidance', '尚未发布的本机 dirty draft');
+    const before = ordinarySnapshot();
+    const selected = safe.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'); expect(selected).toHaveLength(2);
+    await act(async () => selected[1]!.click());
+    const resolving = await startAction('接受所选', 'proposal-resolve');
+    expect(resolving.action).toMatchObject({ kind: 'proposal-resolve', roomId: session.roomId, proposalId: original.proposalId,
+      request: { expectedRoomEpoch: session.roomEpoch, resolution: 'accept-selected', selectedChangeIds: ['guidance'] } });
+    if (resolving.action.kind !== 'proposal-resolve') throw new Error('Expected proposal resolution');
+    expect(resolving.action.request).not.toHaveProperty('expectedControlSeq');
+    expect(resolving.action.request).not.toHaveProperty('overrideChangeIds');
+    // The proposal is older than the room revision, but its selected target's expectedBase still matches.
+    expect(original.baseRevision).toBeLessThan(session.snapshot.revision);
+    expect(original.changes[0]!.expectedBase).toEqual({ kind: 'value', value: session.snapshot.sharedConfig.userGuidance });
+    expect(session.snapshot.proposals[0]).toEqual(original);
+    const resolved = structuredClone(session); resolved.snapshot.revision += 1; resolved.snapshot.controlSeq += 1;
+    resolved.snapshot.sharedConfig.userGuidance = '仅更新服务器提案引导';
+    resolved.snapshot.proposals = resolved.snapshot.proposals.filter(item => item.proposalId !== original.proposalId);
+    const delivered = await port.deliver(responseEvent(resolving, proposalResult(resolved)), { holdAck: true });
+    expect(room().querySelector('[aria-label="房间权威设定摘要"]')?.textContent).toContain(`修订 ${resolved.snapshot.revision}`);
+    expect(port.subscriptions).toHaveLength(1); expect(ordinarySnapshot()).toEqual(before);
+    const subscribed = port.nextSubscription(); await act(async () => { delivered.ackGate.resolve(); await subscribed; });
+    await publishOnline(resolved);
+    expect(room().textContent).not.toContain('提案 ID：host-review-proposal');
+    expect(container.querySelector<HTMLInputElement>('#room-host-draft-arena-story-guidance')!.value).toBe('尚未发布的本机 dirty draft');
+    await click('比较本地与房间设置', room());
+    await vi.waitFor(async () => { await act(async () => { await Promise.resolve(); }); expect(room().querySelector('[aria-label="本地与房间配置比较"] pre')).not.toBeNull(); });
+    const comparison = room().querySelectorAll('[aria-label="本地与房间配置比较"] pre');
+    expect(JSON.parse(comparison[0]!.textContent!)).toEqual(resolved.snapshot.sharedConfig);
+    expect(JSON.parse(comparison[1]!.textContent!)).toMatchObject({ userGuidance: '尚未发布的本机 dirty draft' });
+    expect(ordinarySnapshot()).toEqual(before); expect(port.actions.map(item => item.action.kind)).toEqual(['create', 'proposal-resolve']); assertNoExecution();
+  });
+
+  it('keeps unknown resolutions blocked until exact Native observation ACK and distinguishes different from partial scope-unverified outcomes', async () => {
+    let session = await beginReview(); const before = ordinarySnapshot();
+    const cases = [
+      { proposalId: 'host-review-proposal', intentId: 'unknown-different', outcome: 'different', terminalStatus: 'withdrawn', text: '结果与原意图不同' },
+      { proposalId: 'next-review-proposal', intentId: 'unknown-partial', outcome: 'scope-unverified', terminalStatus: 'partially_accepted', text: '具体接受范围尚无法确认' },
+    ] as const;
+    for (const [index, outcome] of cases.entries()) {
+      const resolving = await startAction('接受所选', 'proposal-resolve');
+      await loseProposalResult(resolving, session, outcome.intentId);
+      expect(requiredButton('接受所选', proposalCard(outcome.proposalId)).disabled).toBe(true);
+      expect(requiredButton('拒绝全部', proposalCard(outcome.proposalId)).disabled).toBe(true);
+      await click('接受所选', proposalCard(outcome.proposalId));
+      expect(port.actions.filter(item => item.action.kind === 'proposal-resolve')).toHaveLength(index + 1);
+      const read = await startAction('读取房间核对提案', 'session');
+      const observed = structuredClone(session); observed.snapshot.controlSeq += 1;
+      observed.snapshot.proposals = [{ ...observed.snapshot.proposals.find(item => item.proposalId === outcome.proposalId)!, status: outcome.terminalStatus }];
+      if (index === 0) observed.snapshot.proposals.push({ ...structuredClone(reviewSession().snapshot.proposals[0]!), proposalId: 'next-review-proposal' });
+      const subscriptionCount = port.subscriptions.length;
+      await port.deliver(responseEvent(read, observed));
+      expect(port.subscriptions).toHaveLength(subscriptionCount);
+      const evidence = await port.deliver({ kind: 'proposal-observation', intentId: outcome.intentId,
+        observation: { observation: 'terminal', linked: true, settle: true, outcome: outcome.outcome, terminalStatus: outcome.terminalStatus } }, { holdAck: true });
+      expect(port.pendingIntent?.intentId).toBe(outcome.intentId);
+      expect(room().querySelector('[aria-label="提案处理状态"]')).not.toBeNull();
+      expect(room().querySelector('[aria-label="提案处理状态"]')?.textContent).toContain('原提案操作结果未知');
+      expect(room().textContent).not.toContain(outcome.text);
+      expect(buttons(room()).filter(item => item.textContent?.trim() === '接受所选').every(item => item.disabled)).toBe(true);
+      expect(port.subscriptions).toHaveLength(subscriptionCount);
+      const subscribed = port.nextSubscription(); await act(async () => { evidence.ackGate.resolve(); await subscribed; });
+      expect(port.pendingIntent).toBeNull(); expect(room().textContent).toContain(outcome.text);
+      expect(port.order.indexOf(`acknowledged:${evidence.batch.batchId}`)).toBeLessThan(port.order.lastIndexOf('subscribe'));
+      session = observed; await publishOnline(session);
+      if (index === 0) expect(requiredButton('接受所选', proposalCard('next-review-proposal')).disabled).toBe(false);
+      expect(ordinarySnapshot()).toEqual(before); assertNoExecution();
+    }
+    expect(port.actions.map(item => item.action.kind)).toEqual(['create', 'proposal-resolve', 'session', 'proposal-resolve', 'session']);
+  });
+
+  it('ends proposal tracking explicitly and requires a fresh read before making a new review selection', async () => {
+    const session = await beginReview(); const before = ordinarySnapshot();
+    const boxes = proposalCard().querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    await act(async () => boxes[1]!.click());
+    const resolving = await startAction('拒绝全部', 'proposal-resolve');
+    expect(resolving.action).toEqual({ kind: 'proposal-resolve', roomId: session.roomId, proposalId: 'host-review-proposal',
+      request: { expectedRoomEpoch: session.roomEpoch, expectedRevision: session.snapshot.revision, resolution: 'reject' } });
+    await loseProposalResult(resolving, session, 'ending-proposal-intent');
+    await click('明确结束本机提案跟踪', room());
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('不会'));
+    expect(port.order).not.toContain('end-proposal-tracking');
+    vi.mocked(window.confirm).mockReturnValue(true); await click('明确结束本机提案跟踪', room());
+    expect(port.order.filter(item => item === 'end-proposal-tracking')).toHaveLength(1);
+    expect(button('接受所选', room())).toBeUndefined(); expect(button('创建多人房间', room())).toBeUndefined();
+    expect(port.actions.map(item => item.action.kind)).toEqual(['create', 'proposal-resolve']);
+    const read = await startAction('读取最新房间后重新审阅', 'session');
+    const fresh = structuredClone(session); fresh.snapshot.controlSeq += 1;
+    await confirmMembership(read, 'host', fresh);
+    expect(requiredButton('接受所选', proposalCard()).disabled).toBe(true);
+    await publishOnline(fresh);
+    const refreshedBoxes = proposalCard().querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    expect([...refreshedBoxes].every(input => input.checked && !input.disabled)).toBe(true);
+    expect(requiredButton('接受所选', proposalCard()).disabled).toBe(false);
+    expect(port.actions.map(item => item.action.kind)).toEqual(['create', 'proposal-resolve', 'session']);
+    expect(ordinarySnapshot()).toEqual(before); assertNoExecution();
+  });
+
+  it('drops a late proposal resolution after owner retirement without replacing the current ordinary draft', async () => {
+    const session = await beginReview();
+    const resolving = await startAction('接受所选', 'proposal-resolve');
+    const resolved = structuredClone(session); resolved.snapshot.revision += 1; resolved.snapshot.controlSeq += 1;
+    resolved.snapshot.sharedConfig.userGuidance = '旧账号晚到的服务器设定'; resolved.snapshot.proposals = [];
+    const late = port.queue(responseEvent(resolving, proposalResult(resolved, 'accepted')), { holdPull: true });
+    await act(async () => { port.notify(late); await late.pullStarted.promise; });
+    await act(async () => { await getDesktopCloudSessionStore().signOut(); });
+    expect(room().querySelector('[aria-label="房主提案审阅"]')).toBeNull();
+    await change('#arena-story-guidance', '账号退休后的当前普通草稿');
+    const afterRetirement = ordinarySnapshot(), textAfterRetirement = container.textContent;
+    await act(async () => { late.pullGate.resolve(); await late.pullReturned.promise; });
+    await act(async () => port.notify(late));
+    expect(ordinarySnapshot()).toEqual(afterRetirement); expect(container.textContent).toBe(textAfterRetirement);
+    expect(container.querySelector<HTMLInputElement>('#arena-story-guidance')!.value).toBe('账号退休后的当前普通草稿');
+    expect(container.textContent).not.toContain('旧账号晚到的服务器设定'); expect(port.subscriptions).toHaveLength(1);
+    expect(port.actions.map(item => item.action.kind)).toEqual(['create', 'proposal-resolve']); assertNoExecution();
   });
 
   it('creates as host, waits for HTTP ACK before subscribe and for snapshot plus presence before online, then closes explicitly', async () => {
