@@ -301,6 +301,37 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     expect(observed.snapshot).toEqual(current.snapshot);
   });
 
+  it('one-shot old producer rejection is unpaired and pre-business, with no configuration change or secret trace', async () => {
+    const runtime = await start(); const cookie = await login(runtime, 101);
+    const host = await success(room(runtime, 'create', cookie, 101, creation()));
+    const target = { ...host.snapshot.sharedConfig, userGuidance: 'CONFIG-PRIVATE-CANARY' };
+    const intent = { expectedRoomEpoch: host.roomEpoch, expectedRevision: host.snapshot.revision,
+      expectedControlSeq: host.snapshot.controlSeq, sharedConfig: target };
+    runtime.armFault('config-unsupported');
+    expect(() => runtime.armFault('config')).toThrow('ACCEPTANCE_FAULT_INVALID');
+    await success(room(runtime, 'session', cookie, 101, undefined, host.roomId));
+    const malformed = await request(runtime, DESKTOP_ROOM_SESSION_OPERATIONS.config.path.replace(':roomId', host.roomId), {
+      headers: { ...headers(101, cookie), 'x-mahoshojo-room-expected-user-id': 'invalid' }, body: {},
+    });
+    expect(malformed.status).toBe(400);
+    expect(JSON.parse(malformed.text).error.code).toBe('ROOM_DESKTOP_PROTOCOL_INVALID');
+    const rejected = await room(runtime, 'config', cookie, 101, intent, host.roomId);
+    expect(rejected.status).toBe(400);
+    expect(rejected.parsed).toEqual({ desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, viewerUserId: null },
+      error: { code: 'ROOM_DESKTOP_OPERATION_UNSUPPORTED', message: '当前桌面房间版本不支持此操作', outcome: 'not-applied' } });
+    const current = await success(room(runtime, 'session', cookie, 101, undefined, host.roomId));
+    expect(current.snapshot).toEqual(host.snapshot); expect(runtime.observations()).toMatchObject({ rooms: 1, receipts: 1 });
+    const published = await success(room(runtime, 'config', cookie, 101, intent, host.roomId));
+    expect(published.snapshot).toMatchObject({ revision: host.snapshot.revision + 1, controlSeq: host.snapshot.controlSeq + 1, sharedConfig: target });
+    expect(runtime.observations().trace.filter(entry => entry.kind === 'room-http' && entry.operation === 'config')).toEqual([
+      { kind: 'room-http', operation: 'config', status: 400, dropped: false },
+      { kind: 'room-http', operation: 'config', status: 400, dropped: false },
+      { kind: 'room-http', operation: 'config', status: 200, dropped: false },
+    ]);
+    expect(JSON.stringify(runtime.observations())).not.toContain('CONFIG-PRIVATE-CANARY');
+    expect(JSON.stringify(runtime.observations())).not.toContain(cookie);
+  });
+
   it('a lost config HTTP receipt leaves a committed state that later GET only observes without another POST', async () => {
     const runtime = await start(); const cookie = await login(runtime, 101);
     const host = await success(room(runtime, 'create', cookie, 101, creation()));

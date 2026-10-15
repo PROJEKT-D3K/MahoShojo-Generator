@@ -424,6 +424,19 @@ const readyMessage = () => ({ event: 'ready', roomOrigin: ENDPOINTS.room, authOr
 const observations = (id: unknown) => ({ id, event: 'observations', rooms: 1, receipts: 1, actors: 1, activeConnections: 0, authSessions: 2, trace: [{ kind: 'room-http', operation: 'create', status: 200, dropped: false }] });
 
 describe('Room acceptance owned mock supervision without spawning processes', () => {
+  it.each(['config', 'config-unsupported'])('supervises bounded %s fault and config observations', async operation => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    try {
+    const armed = mock.command('arm-fault', operation);
+    child.line({ id: 1, event: 'armed', operation }); await armed;
+    const reading = mock.command('observe'); const value = observations(2);
+    value.trace = [{ kind: 'room-http', operation: 'config', status: operation === 'config' ? 200 : 400, dropped: operation === 'config' }];
+    child.line(value); await expect(reading).resolves.toEqual(value);
+    expect(child.kill).not.toHaveBeenCalled();
+    } finally { child.finish(); await mock.exit; await mock.close(); }
+  });
+
   it('waits for validated readiness and correlates one bounded command at a time', async () => {
     const child = new SyntheticChild(), mock = monitorMock(child);
     child.line(readyMessage()); await expect(mock.ready).resolves.toMatchObject({ event: 'ready', roomOrigin: ENDPOINTS.room });
@@ -594,6 +607,15 @@ function applicationPairFixture() {
 }
 
 describe('Room acceptance two-application lifecycle without a GUI', () => {
+  it('forwards both config console fault modes through the bounded control channel', async () => {
+    const fixture = applicationPairFixture(); const running = runApplicationPair(fixture.manifest, fixture.mock, fixture);
+    fixture.ready.resolve(readyMessage()); await fixture.started.promise;
+    fixture.inputStream.write('fault config\nfault config-unsupported\n');
+    await vi.waitFor(() => expect(fixture.mock.command).toHaveBeenCalledWith('arm-fault', 'config-unsupported'));
+    expect(fixture.mock.command).toHaveBeenCalledWith('arm-fault', 'config');
+    fixture.inputStream.write('stop\n'); await running;
+  });
+
   it('never starts an application if SIGINT precedes a late readiness result', async () => {
     const fixture = applicationPairFixture();
     const running = runApplicationPair(fixture.manifest, fixture.mock, fixture);

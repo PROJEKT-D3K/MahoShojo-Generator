@@ -255,7 +255,7 @@ function checkedObservations(value) {
   for (const event of value.trace) {
     if (event.kind === 'refused' && exactKeys(event, ['kind'])) continue;
     if (event.kind === 'ws' && exactKeys(event, ['kind', 'outcome']) && ['accepted', 'rejected'].includes(event.outcome)) continue;
-    if (event.kind === 'room-http' && exactKeys(event, ['kind', 'operation', 'status', 'dropped']) && ['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close'].includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599 && typeof event.dropped === 'boolean') continue;
+    if (event.kind === 'room-http' && exactKeys(event, ['kind', 'operation', 'status', 'dropped']) && ['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config'].includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599 && typeof event.dropped === 'boolean') continue;
     fail('invalid observation event');
   }
   return value;
@@ -320,7 +320,7 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
   });
   const command = async (command, operation) => {
     if (stopped || aborted || !readySeen || pending.size) fail('mock unavailable or control already pending');
-    if (!['observe', 'stop', 'arm-fault'].includes(command) || (command === 'arm-fault' ? !['create', 'join', 'leave', 'close'].includes(operation) : operation !== undefined)) fail('invalid control command');
+    if (!['observe', 'stop', 'arm-fault'].includes(command) || (command === 'arm-fault' ? !['create', 'join', 'leave', 'close', 'config', 'config-unsupported'].includes(operation) : operation !== undefined)) fail('invalid control command');
     const id = ++nextId;
     return new Promise((resolve, reject) => {
       const entry = { command, operation, resolve, reject, timer: setTimeout(() => { pending.delete(id); reject(new Error('mock control timeout')); child.kill(); }, stopTimeoutMs) };
@@ -381,12 +381,12 @@ export async function runApplicationPair(manifest, mock, {
       children.push(child);
       exits.push(new Promise(resolve => { child.once('error', () => { stop(); resolve({ role: instance.role, code: null, signal: 'spawn-error' }); }); child.once('exit', (code, signal) => { if (code !== 0 || signal) stop(); resolve({ role: instance.role, code, signal }); }); }));
     }
-    report('Two isolated apps started. Commands: fault create|join|leave|close, observe, stop. Use synthetic accounts 101 and 202.');
+    report('Two isolated apps started. Commands: fault create|join|leave|close|config|config-unsupported, observe, stop. Use synthetic accounts 101 and 202.');
     let control = Promise.resolve();
     input.on('line', line => { control = control.then(async () => {
       if (line === 'stop') { requested(); return; }
       if (line === 'observe') { report(JSON.stringify(await mock.command('observe'))); return; }
-      const match = /^fault (create|join|leave|close)$/.exec(line);
+      const match = /^fault (create|join|leave|close|config|config-unsupported)$/.exec(line);
       if (match) report(JSON.stringify(await mock.command('arm-fault', match[1])));
       else report('Unknown command');
     }).catch(() => report('Mock control failed')); });

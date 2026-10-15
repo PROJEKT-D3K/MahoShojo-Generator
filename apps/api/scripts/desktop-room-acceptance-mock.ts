@@ -16,6 +16,7 @@ import {
 } from '@mahoshojo/contracts/arena-room';
 import {
   DESKTOP_ROOM_SESSION_OPERATIONS, DESKTOP_ROOM_SESSION_PROTOCOL_VERSION,
+  DesktopRoomSessionExpectedUserIdHeaderSchema, DesktopRoomSessionErrorResponseSchema, parseDesktopRoomSessionResponse,
   type DesktopRoomSessionOperation,
 } from '@mahoshojo/contracts/desktop-room-session';
 import {
@@ -52,8 +53,8 @@ const digest = (value: string) => createHash('sha256').update(value).digest('bas
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const unavailable = (): never => { throw new Error('ACCEPTANCE_UNSUPPORTED'); };
 export type RoomAcceptancePki = { ca: string; cert: string; key: string };
-export type RoomAcceptanceFault = 'create' | 'join' | 'leave' | 'close' | 'config';
-const faults: readonly string[] = ['create', 'join', 'leave', 'close', 'config'];
+export type RoomAcceptanceFault = 'create' | 'join' | 'leave' | 'close' | 'config' | 'config-unsupported';
+const faults: readonly string[] = ['create', 'join', 'leave', 'close', 'config', 'config-unsupported'];
 export type RoomAcceptanceObservation =
   | { kind: 'room-http'; operation: DesktopRoomSessionOperation; status: number; dropped: boolean }
   | { kind: 'ws'; outcome: 'accepted' | 'rejected' }
@@ -215,6 +216,16 @@ export const startRoomAcceptanceMock = async (options: {
       || context.req.header('x-mahoshojo-desktop-room-protocol') !== DESKTOP_ROOM_SESSION_PROTOCOL_VERSION) {
       observe({ kind: 'refused' }); return context.json({ code: 'ACCEPTANCE_ROUTE_REFUSED' }, 404);
     }
+    // Test service only: mirror the older adapter's pre-auth operation rejection.
+    // Invalid owner headers retain the real adapter's protocol error and do not consume this fault.
+    if (armed === 'config-unsupported' && operationFor(context.req.raw) === 'config'
+      && DesktopRoomSessionExpectedUserIdHeaderSchema.safeParse(context.req.header('x-mahoshojo-room-expected-user-id')).success) {
+      armed = null;
+      return context.json(DesktopRoomSessionErrorResponseSchema.parse({
+        desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, viewerUserId: null },
+        error: { code: 'ROOM_DESKTOP_OPERATION_UNSUPPORTED', message: '当前桌面房间版本不支持此操作', outcome: 'not-applied' },
+      }), 400);
+    }
     await next();
   });
   registerArenaRoomHttpRoutes(http, {
@@ -357,7 +368,7 @@ export const startRoomAcceptanceMock = async (options: {
         actors: services.actors.size, activeConnections: websocketServer.clients.size, authSessions: sessions.size, trace: structuredClone(trace) }),
     };
     resetForSelfCheck.set(runtime, async () => {
-      await services.actors.shutdown(); services = roomServices(); sessions.clear(); flows.clear(); grants.clear(); trace.length = 0;
+      await services.actors.shutdown(); services = roomServices(); sessions.clear(); flows.clear(); grants.clear(); trace.length = 0; armed = null;
     });
     return runtime;
   } catch { await close(); throw new Error('ACCEPTANCE_BIND_FAILED'); }
@@ -413,10 +424,34 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
         headers: { cookie, origin: runtime.roomOrigin, 'x-mahoshojo-desktop-room-protocol': DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, 'x-mahoshojo-room-expected-user-id': `v1:${userId}` },
         ...(definition.method === 'POST' ? { body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: userId, ...(operation === 'create' ? { createMode: 'new' } : {}) }, request } } : {}),
       });
-      assert(response.status === (operation === 'create' ? 201 : 200)); return JSON.parse(response.body).result;
+      const parsed = parseDesktopRoomSessionResponse(operation, JSON.parse(response.body), userId);
+      assert(response.status === (operation === 'create' ? 201 : 200) && 'result' in parsed); return JSON.parse(response.body).result;
     };
     const config = ArenaRoomSharedConfigSchema.parse({ battleMode: 'classic', combatants: [], teams: [], scenario: null, auxScenarios: [], materials: [], userGuidance: '', storyLength: 'standard', customStoryLength: null, selectedLanguage: 'zh-CN', historySettings: { readArenaHistory: true, readArenaHistoryLimit: 3, isArenaHistoryUnlimited: false, writeArenaHistory: true, readCurrentState: true, writeCurrentState: true, readNarrativeHistory: false, readNarrativeHistoryLimit: 10, isNarrativeHistoryUnlimited: false, writeNarrativeHistory: false } });
     const created = await roomRequest('create', 101, hostCookie, { creationRequestId: 'acceptance-self-check', displayName: 'Synthetic 101', directory: { title: 'Self check', visibility: 'public' }, sharedConfig: config });
+    const configPath = DESKTOP_ROOM_SESSION_OPERATIONS.config.path.replace(':roomId', created.roomId);
+    const configHeaders = { cookie: hostCookie, origin: runtime.roomOrigin, 'x-mahoshojo-desktop-room-protocol': DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, 'x-mahoshojo-room-expected-user-id': 'v1:101' };
+    const target = { ...created.snapshot.sharedConfig, userGuidance: 'Synthetic config acceptance' };
+    const configRequest = { expectedRoomEpoch: created.roomEpoch, expectedRevision: created.snapshot.revision,
+      expectedControlSeq: created.snapshot.controlSeq, sharedConfig: target };
+    runtime.armFault('config-unsupported');
+    const unsupported = await probe(runtime, pki, configPath, { headers: configHeaders,
+      body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: 101 }, request: configRequest } });
+    const rejection = parseDesktopRoomSessionResponse('config', JSON.parse(unsupported.body), 101);
+    assert(unsupported.status === 400 && 'error' in rejection && rejection.error.code === 'ROOM_DESKTOP_OPERATION_UNSUPPORTED'
+      && rejection.error.outcome === 'not-applied' && rejection.desktopRoom.viewerUserId === null);
+    assert(same((await roomRequest('session', 101, hostCookie, undefined, created.roomId)).snapshot, created.snapshot));
+    runtime.armFault('config');
+    let dropped = false;
+    try { await roomRequest('config', 101, hostCookie, configRequest, created.roomId); }
+    catch { dropped = true; }
+    const observed = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+    assert(dropped && observed.snapshot.revision === created.snapshot.revision + 1
+      && observed.snapshot.controlSeq === created.snapshot.controlSeq + 1 && same(observed.snapshot.sharedConfig, target));
+    assert(same(runtime.observations().trace.filter(entry => entry.kind === 'room-http' && entry.operation === 'config'), [
+      { kind: 'room-http', operation: 'config', status: 400, dropped: false },
+      { kind: 'room-http', operation: 'config', status: 200, dropped: true },
+    ]));
     await roomRequest('discover', 101, hostCookie);
     await roomRequest('join', 202, memberCookie, { displayName: 'Synthetic 202' }, created.roomId);
     await roomRequest('session', 202, memberCookie, undefined, created.roomId);
