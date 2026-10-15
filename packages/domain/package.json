@@ -272,7 +272,8 @@
     "./name-generation": "./src/name-generation.ts",
     "./narrative-drafts": "./src/narrative-drafts.ts",
     "./sensitive-word-filter": "./src/sensitive-word-filter.ts",
-    "./word-filter-utils": "./src/word-filter-utils.ts"
+    "./word-filter-utils": "./src/word-filter-utils.ts",
+    "./shield-word-filter": "./src/shield-word-filter.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",
