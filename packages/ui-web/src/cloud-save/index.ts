@@ -14,7 +14,7 @@ export type { OwnedCardMetadataPort, OwnedCardMetadataDraft, OwnedCardMetadataRe
 export { RecycleBinModal } from './RecycleBinModal';
 export type { RecycleBinModalProps, OwnedRecycleBinReadPort } from './RecycleBinModal';
 export { OwnedCardDeleteDialog, useOwnedCardDelete } from './OwnedCardDeleteDialog';
-export { createOwnedCardDeleteController, verifyOwnedDeleteResponse, DELETE_UNKNOWN_MESSAGE } from './owned-card-delete';
-export type { OwnedCardDeletePort, OwnedCardDeleteController, DeleteResponse, DeleteWrite } from './owned-card-delete';
+export { createOwnedCardDeleteController, getOwnedCardDeleteNotice, verifyOwnedDeleteResponse, DELETE_UNKNOWN_MESSAGE } from './owned-card-delete';
+export type { OwnedCardDeletePort, OwnedCardDeleteNotice, OwnedCardDeleteController, DeleteResponse, DeleteWrite } from './owned-card-delete';
 export { createOwnedCardRestoreController, getOwnedCardRestoreNotice, verifyOwnedRestoreResponse, RESTORE_UNKNOWN_MESSAGE } from './owned-card-restore';
 export type { OwnedCardRestorePort, OwnedCardRestoreNotice, OwnedCardRestoreState, RestoreResponse } from './owned-card-restore';

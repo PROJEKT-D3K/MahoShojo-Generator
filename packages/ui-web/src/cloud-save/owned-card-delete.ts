@@ -7,11 +7,16 @@ import {
   type OwnedDataCardDeletionTarget,
 } from '@mahoshojo/contracts/data-cards';
 
+import { createOwnedCardOperationNoticeRegistry, type OwnedCardOperationNotice } from './owned-card-operation-notice';
+export type OwnedCardDeleteNotice = OwnedCardOperationNotice;
+export const getOwnedCardDeleteNotice = createOwnedCardOperationNoticeRegistry();
+
 export type DeleteOperation = 'soft-delete' | 'purge-active' | 'purge-recycle';
 export type DeleteResponse = { status: number; body: unknown };
 export type DeleteWrite = { operation: 'soft-delete' | 'purge-active'; target: OwnedDataCardDeletionReference }
   | { operation: 'purge-recycle'; targets: OwnedDataCardDeletionReference[]; continuationTarget?: OwnedDataCardDeletionReference };
 export interface OwnedCardDeletePort {
+  readonly notice?: OwnedCardDeleteNotice;
   readonly expectedUserId: number;
   isCurrent(): boolean;
   isBlocked?(): boolean;
@@ -53,7 +58,11 @@ export function verifyOwnedDeleteResponse(response: DeleteResponse, owner: numbe
 
 /** Owns one page guard for the whole preview/confirmation sequence, never reacquires its own guard. */
 export function createOwnedCardDeleteController(port: OwnedCardDeletePort) {
-  let state = initial;
+  const notice = port.notice ?? { uncertain: false };
+  let noticeOwner: object | undefined;
+  let observedNoticeOwner = notice.uncertain ? notice.owner : undefined;
+  let state: OwnedCardDeleteState = notice.uncertain && port.isCurrent()
+    ? { ...initial, phase: 'unknown', message: DELETE_UNKNOWN_MESSAGE } : initial;
   let epoch = 0;
   let disposed = false;
   let held = false;
@@ -65,11 +74,20 @@ export function createOwnedCardDeleteController(port: OwnedCardDeletePort) {
   const current = (token: number) => !disposed && token === epoch && port.isCurrent();
   const settle = (phase: 'success' | 'rejected' | 'unknown', message: string, changed = false) => {
     request = null;
+    if (notice.owner === noticeOwner) notice.uncertain = phase === 'unknown';
+    if (phase === 'unknown' && notice.owner === noticeOwner) observedNoticeOwner = noticeOwner;
     if (phase !== 'unknown') release();
     emit({ phase, message, ...(changed ? { refresh: state.refresh + 1 } : {}) });
     if (changed) port.onChanged?.();
   };
+  const activate = () => {
+    if (notice.uncertain && !held && port.isCurrent()) {
+      observedNoticeOwner = notice.owner;
+      emit({ ...initial, phase: 'unknown', message: DELETE_UNKNOWN_MESSAGE, refresh: state.refresh });
+    }
+  };
   const begin = () => {
+    if (notice.uncertain && !held) { activate(); return null; }
     if (disposed || state.phase !== 'idle' || held || !port.isCurrent() || port.isBlocked?.()) return null;
     held = true; port.onBusyChange?.(true);
     return ++epoch;
@@ -107,30 +125,36 @@ export function createOwnedCardDeleteController(port: OwnedCardDeletePort) {
   };
   const confirm = async () => {
     if (!held || !port.isCurrent() || !['confirm-soft', 'confirm-purge-active', 'confirm-purge-recycle'].includes(state.phase)) return;
+    if (notice.uncertain) { observedNoticeOwner = notice.owner; settle('unknown', DELETE_UNKNOWN_MESSAGE); return; }
     const before = state;
     const token = epoch;
     const input: DeleteWrite = before.phase === 'confirm-purge-recycle'
       ? { operation: 'purge-recycle', targets: before.targets.map(reference), ...(before.active ? { continuationTarget: reference(before.active) } : {}) }
       : { operation: before.phase === 'confirm-soft' ? 'soft-delete' : 'purge-active', target: reference(before.active!) };
+    // Publish before replacement renders and old effect cleanup can run.
+    noticeOwner = {}; notice.owner = noticeOwner; observedNoticeOwner = noticeOwner; notice.uncertain = true;
     emit({ phase: 'writing', message: null });
     const result = await write(input, token);
     if (disposed || token !== epoch) return;
+    if (notice.owner !== noticeOwner) { invalidate(); emit({ ...initial, refresh: state.refresh }); return; }
     if (!current(token)) { settle('unknown', DELETE_UNKNOWN_MESSAGE); return; }
     if (result === 'success' && input.operation === 'purge-recycle' && before.active) {
       // Only a strict successful phase-one receipt authorizes phase two. Never refresh its version.
       const next = await write({ operation: 'soft-delete', target: reference(before.active) }, token);
       if (disposed || token !== epoch) return;
+      if (notice.owner !== noticeOwner) { invalidate(); emit({ ...initial, refresh: state.refresh }); return; }
       if (!current(token) || next === 'unknown' || next === 'stale') { settle('unknown', `本次确认清单中的数据卡已永久删除；原卡是否移入无法确认。${DELETE_UNKNOWN_MESSAGE}`, true); return; }
       if (next === 'success') settle('success', '本次确认清单中的数据卡已永久删除，原卡已移入回收站', true);
       else settle('rejected', `本次确认清单中的数据卡已永久删除，但原卡未移入回收站。${next === 'full' ? '间隙中回收站再次满额。' : next === 'changed' ? '原卡版本已改变。' : '移动请求被拒绝。'}请核对后重新选择原卡。`, true);
       return;
     }
     if (result === 'success') settle('success', input.operation === 'soft-delete' ? '数据卡已移入回收站' : '已永久删除确认清单中的数据卡', true);
-    else if (result === 'full') emit({ phase: 'full', message: '回收站已满，当前卡尚未移入。请选择下一步' });
+    else if (result === 'full') { if (notice.owner === noticeOwner) notice.uncertain = false; emit({ phase: 'full', message: '回收站已满，当前卡尚未移入。请选择下一步' }); }
     else if (result === 'unknown' || result === 'stale') settle('unknown', DELETE_UNKNOWN_MESSAGE);
     else settle('rejected', `${input.operation === 'purge-recycle' && before.active ? '回收站未清空，原卡也未移入。' : ''}${result === 'blocked' ? '可用回收站名额已变化，已停止清空。请重新整理后再试。' : result === 'changed' ? '确认后目标已变化，未执行删除。请关闭后重新读取并确认' : '请求被拒绝，未继续删除。请核对登录状态或等待服务更新'}`);
   };
   return {
+    activate,
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     beginActive: (id: string) => read('active', id),
@@ -147,7 +171,16 @@ export function createOwnedCardDeleteController(port: OwnedCardDeletePort) {
         emit({ phase: 'confirm-purge-recycle', targets: result.targets });
       } catch (cause) { if (!disposed && token === epoch) settle('rejected', cause instanceof Error ? cause.message : '读取清空预览失败'); }
     },
-    cancel: () => { if (state.phase === 'writing') return false; invalidate(); emit({ ...initial, refresh: state.refresh }); return true; },
+    cancel: () => {
+      if (state.phase === 'writing') return false;
+      invalidate(); emit({ ...initial, refresh: state.refresh }); return true;
+    },
+    acknowledge: () => {
+      if (state.phase !== 'unknown') return false;
+      // Closing UI never means cancelling the server write or acknowledging its outcome.
+      if (notice.owner === observedNoticeOwner) { notice.uncertain = false; notice.owner = undefined; }
+      invalidate(); emit({ ...initial, refresh: state.refresh }); return true;
+    },
     invalidate: () => { invalidate(); emit({ ...initial, refresh: state.refresh }); },
     dispose: () => { disposed = true; invalidate(); state = { ...initial, refresh: state.refresh }; listeners.clear(); },
   };

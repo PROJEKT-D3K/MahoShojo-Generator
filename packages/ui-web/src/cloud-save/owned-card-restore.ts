@@ -1,13 +1,8 @@
 import { OwnedDataCardDeletionPreviewSchema, OwnedDataCardRestoreAcknowledgementSchema, type OwnedDataCardDeletionReference } from '@mahoshojo/contracts/data-cards';
 export type RestoreResponse = { status: number; body: unknown };
-export type OwnedCardRestoreNotice = { uncertain: boolean; owner?: object };
-const notices = new WeakMap<object, { generation: number; owner: number; notice: OwnedCardRestoreNotice }>();
-/** One ephemeral notice per session, not a receipt or a retry ledger. */
-export function getOwnedCardRestoreNotice(scope: object, generation: number, owner: number): OwnedCardRestoreNotice {
-  const existing = notices.get(scope);
-  if (existing?.generation === generation && existing.owner === owner) return existing.notice;
-  const notice = { uncertain: false }; notices.set(scope, { generation, owner, notice }); return notice;
-}
+import { createOwnedCardOperationNoticeRegistry, type OwnedCardOperationNotice } from './owned-card-operation-notice';
+export type OwnedCardRestoreNotice = OwnedCardOperationNotice;
+export const getOwnedCardRestoreNotice = createOwnedCardOperationNoticeRegistry();
 export interface OwnedCardRestorePort {
   readonly notice?: OwnedCardRestoreNotice;
   readonly expectedUserId: number;
@@ -46,7 +41,7 @@ export function createOwnedCardRestoreController(port: OwnedCardRestorePort) {
   const listeners = new Set<() => void>();
   const emit = (patch: Partial<OwnedCardRestoreState>) => { state = { ...state, ...patch }; listeners.forEach(listener => listener()); };
   const release = () => { if (held) { held = false; if (port.isCurrent()) port.onBusyChange?.(false); } };
-  const invalidate = () => { epoch++; request?.abort(); request = null; release(); if ((state.phase === 'unknown' && notice.owner === observedNoticeOwner) || (noticeOwner && notice.owner === noticeOwner)) notice.uncertain = false; emit({ ...initial, refresh: state.refresh }); };
+  const invalidate = () => { epoch++; request?.abort(); request = null; release(); if ((state.phase === 'unknown' && notice.owner === observedNoticeOwner) || (noticeOwner && notice.owner === noticeOwner)) { notice.uncertain = false; notice.owner = undefined; } emit({ ...initial, refresh: state.refresh }); };
   const suspend = () => {
     const uncertain = state.phase === 'writing' || state.phase === 'unknown';
     epoch++; request?.abort(); request = null; release();
@@ -55,7 +50,7 @@ export function createOwnedCardRestoreController(port: OwnedCardRestorePort) {
   const current = (ticket: number) => ticket === epoch && port.isCurrent();
   const settle = (phase: 'success' | 'rejected' | 'unknown', message: string) => {
     request = null; if (notice.owner === noticeOwner) notice.uncertain = phase === 'unknown'; if (phase !== 'unknown') release();
-    if (phase === 'unknown') observedNoticeOwner = notice.owner;
+    if (phase === 'unknown' && notice.owner === noticeOwner) observedNoticeOwner = noticeOwner;
     emit({ phase, message, ...(phase === 'success' ? { refresh: state.refresh + 1 } : {}) });
     if (phase === 'success') port.onChanged?.();
   };
@@ -93,6 +88,7 @@ export function createOwnedCardRestoreController(port: OwnedCardRestorePort) {
       try { result = verifyOwnedRestoreResponse(await port.write(target, controller.signal), port.expectedUserId, target); }
       catch { result = 'unknown'; }
       if (!current(ticket)) return;
+      if (notice.owner !== noticeOwner) { invalidate(); return; }
       if (result === 'success') settle('success', '数据卡已恢复');
       else if (result === 'unknown') settle('unknown', RESTORE_UNKNOWN_MESSAGE);
       else settle('rejected', result === 'capacity' ? '当前数据卡容量不足，未恢复；请先整理容量' : result === 'changed' ? '目标已变化或已不在回收站，未恢复；请刷新核对' : result === 'account' ? '登录状态已改变，未恢复；请重新打开数据卡管理' : '恢复请求在写入前被拒绝；请核对后重新选择');

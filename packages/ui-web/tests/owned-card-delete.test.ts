@@ -89,3 +89,94 @@ describe('strict delete acknowledgements', () => {
   });
   it('accepts exact sets in either order, never a subset', () => expect(verifyOwnedDeleteResponse({ status: 200, body: { ...success(request).body as object, ids: ['recycled', 'active'] } }, 7, request)).toBe('success'));
 });
+
+it('same-session replacement preserves a possibly dispatched deletion before old cleanup', async () => {
+  const notice = { uncertain: false };
+  const shared = { ...port, notice };
+  const owner = createOwnedCardDeleteController(shared);
+  await owner.beginRecycle(recycled.id);
+  const pending = deferred<DeleteResponse>(); vi.mocked(port.write).mockReturnValueOnce(pending.promise);
+  const action = owner.confirm();
+  const replacement = createOwnedCardDeleteController(shared);
+  expect(replacement.getSnapshot().phase).toBe('unknown');
+  owner.invalidate();
+  await replacement.beginRecycle(recycled.id);
+  expect(port.write).toHaveBeenCalledTimes(1);
+  pending.resolve(success({ operation: 'purge-recycle', targets: [recycled] })); await action;
+  expect(port.onChanged).not.toHaveBeenCalled();
+  expect(replacement.getSnapshot().phase).toBe('unknown');
+});
+
+it.each(['invalidate', 'dispose'] as const)('%s preserves unknown across remount without completing clear continuation', async method => {
+  const notice = { uncertain: false }; port = { ...port, notice };
+  const owner = await fill(); await owner.chooseClear();
+  const pending = deferred<DeleteResponse>(); vi.mocked(port.write).mockReturnValueOnce(pending.promise);
+  const action = owner.confirm(); owner[method]();
+  const replacement = createOwnedCardDeleteController(port);
+  expect(replacement.getSnapshot().phase).toBe('unknown');
+  await replacement.confirm(); await replacement.beginActive(active.id);
+  pending.resolve(success({ operation: 'purge-recycle', targets: [recycled] })); await action;
+  expect(port.write).toHaveBeenCalledTimes(2); expect(port.onChanged).not.toHaveBeenCalled();
+  expect(notice.uncertain).toBe(true);
+  replacement.cancel(); expect(notice.uncertain).toBe(true); replacement.activate(); replacement.acknowledge(); expect(notice.uncertain).toBe(false);
+  await replacement.beginActive(active.id); expect(replacement.getSnapshot().phase).toBe('confirm-soft');
+});
+it('idle cleanup and stale unknown dismissal cannot erase a newer operation', async () => {
+  const notice = { uncertain: false }; port = { ...port, notice };
+  const idle = createOwnedCardDeleteController(port);
+  const first = createOwnedCardDeleteController(port);
+  vi.mocked(port.write).mockRejectedValue(new Error('lost'));
+  await first.beginRecycle(recycled.id); await first.confirm();
+  const stale = createOwnedCardDeleteController(port);
+  idle.invalidate(); idle.cancel(); expect(notice.uncertain).toBe(true);
+  first.acknowledge(); expect(notice.uncertain).toBe(false);
+  const next = createOwnedCardDeleteController(port); await next.beginRecycle(recycled.id); await next.confirm();
+  stale.acknowledge(); idle.dispose(); expect(notice.uncertain).toBe(true);
+});
+it('mounted idle owners activate shared warning and cannot send a fresh preview', async () => {
+  const notice = { uncertain: false }; port = { ...port, notice };
+  const idle = createOwnedCardDeleteController(port), writer = createOwnedCardDeleteController(port);
+  vi.mocked(port.write).mockRejectedValue(new Error('lost'));
+  await writer.beginRecycle(recycled.id); await writer.confirm();
+  await idle.beginActive(active.id);
+  expect(idle.getSnapshot().phase).toBe('unknown'); expect(port.preview).toHaveBeenCalledTimes(1);
+});
+it('preview cancellation leaves no possible-dispatch warning', async () => {
+  const notice = { uncertain: false }; port = { ...port, notice };
+  const pending = deferred<DeleteResponse>(); vi.mocked(port.preview).mockReturnValueOnce(pending.promise);
+  const owner = createOwnedCardDeleteController(port); const action = owner.beginActive(active.id); owner.invalidate();
+  pending.resolve(preview('active')); await action;
+  expect(createOwnedCardDeleteController(port).getSnapshot().phase).toBe('idle'); expect(notice.uncertain).toBe(false);
+});
+it.each(['success', 'unknown'] as const)('late %s after another observer ends the warning cannot adopt a newer operation token or continue clearing', async outcome => {
+  const notice = { uncertain: false }; port = { ...port, notice };
+  // Independent page guards, same authenticated session notice.
+  const firstPort = { ...port, isBlocked: () => false, onBusyChange: vi.fn() };
+  const first = createOwnedCardDeleteController(firstPort);
+  vi.mocked(port.write).mockResolvedValueOnce(full); await first.beginActive(active.id); await first.confirm(); await first.chooseClear();
+  const old = deferred<DeleteResponse>(); vi.mocked(port.write).mockReturnValueOnce(old.promise); const oldTask = first.confirm();
+  const second = createOwnedCardDeleteController(firstPort); second.acknowledge();
+  const newer = deferred<DeleteResponse>(); vi.mocked(port.write).mockReturnValueOnce(newer.promise);
+  await second.beginRecycle(recycled.id); const newTask = second.confirm();
+  old.resolve(outcome === 'success' ? success({ operation: 'purge-recycle', targets: [recycled] }) : { status: 503, body: null }); await oldTask;
+  expect(port.write).toHaveBeenCalledTimes(3); expect(port.onChanged).not.toHaveBeenCalled();
+  first.acknowledge(); expect(notice.uncertain).toBe(true);
+  newer.resolve({ status: 503, body: null }); await newTask; expect(second.getSnapshot().phase).toBe('unknown');
+});
+it.each(['success', 'unknown'] as const)('explicit acknowledgement revokes late %s and pending clear continuation before any new write', async outcome => {
+  const notice = { uncertain: false }; port = { ...port, notice };
+  const owner = await fill(); await owner.chooseClear();
+  const pending = deferred<DeleteResponse>(); vi.mocked(port.write).mockReturnValueOnce(pending.promise); const action = owner.confirm();
+  createOwnedCardDeleteController(port).acknowledge();
+  pending.resolve(outcome === 'success' ? success({ operation: 'purge-recycle', targets: [recycled] }) : { status: 503, body: null }); await action;
+  expect(port.write).toHaveBeenCalledTimes(2); expect(port.onChanged).not.toHaveBeenCalled(); expect(owner.getSnapshot().phase).toBe('idle'); expect(notice.uncertain).toBe(false);
+});
+it('superseded phase-two reply cannot refresh the replacement owner', async () => {
+  const notice = { uncertain: false }; port = { ...port, notice };
+  const owner = await fill(); await owner.chooseClear();
+  const pending = deferred<DeleteResponse>(); vi.mocked(port.write).mockResolvedValueOnce(success({ operation: 'purge-recycle', targets: [recycled] })).mockReturnValueOnce(pending.promise);
+  const action = owner.confirm(); await Promise.resolve(); await Promise.resolve();
+  expect(port.write).toHaveBeenCalledTimes(3); createOwnedCardDeleteController(port).acknowledge();
+  pending.resolve(success({ operation: 'soft-delete', target: active })); await action;
+  expect(port.onChanged).not.toHaveBeenCalled(); expect(notice.uncertain).toBe(false);
+});

@@ -1,5 +1,5 @@
 import { OwnedDataCardDeletionPreviewQuerySchema, OwnedDataCardDeletionRequestSchema, OwnedRecycleBinPurgeRequestSchema } from '@mahoshojo/contracts/data-cards';
-import type { OwnedCardDeletePort, DeleteResponse, DeleteWrite } from '@mahoshojo/ui-web/cloud-save';
+import { getOwnedCardDeleteNotice, type OwnedCardDeletePort, type DeleteResponse, type DeleteWrite } from '@mahoshojo/ui-web/cloud-save';
 import { authStorage } from './auth';
 import type { AuthIdentity } from './auth-identity';
 
@@ -39,7 +39,7 @@ export function createWebOwnedCardDeletePort(expectedUserId: number, identity: A
     } finally { clearTimeout(timer); signal.removeEventListener('abort', abort); controller.abort(); }
   };
   return {
-    ...options, expectedUserId, isCurrent: identity.isCurrent,
+    ...options, expectedUserId, isCurrent: identity.isCurrent, notice: getOwnedCardDeleteNotice(identity, identity.epoch, expectedUserId),
     preview(scope, id, signal) {
       const query = OwnedDataCardDeletionPreviewQuerySchema.parse({ expectedUserId, scope, ...(id !== undefined ? { id } : {}) });
       return request(`/api/data-cards/delete-preview-owned?${new URLSearchParams({ expectedUserId: String(query.expectedUserId), scope: query.scope, ...(query.id !== undefined ? { id: query.id } : {}) })}`, 'GET', undefined, signal);

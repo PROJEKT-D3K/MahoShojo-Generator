@@ -90,7 +90,7 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
   useEffect(() => invalidate, [invalidate]);
   const close = () => {
     if (deletion.busy || (latest.current.busy && !writing && !uncertain)) return;
-    if (writing) restoration?.suspend(); else restoration?.dismiss();
+    restoration?.suspend();
     invalidate(); setSelected(null); onClose();
   };
   const detail = async (id: string) => {

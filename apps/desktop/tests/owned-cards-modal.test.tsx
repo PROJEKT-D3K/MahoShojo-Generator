@@ -4,13 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopCardDetailsModal } from '../src/features/card-details/card-details-modal';
 import { DesktopOwnedCardsModal } from '../src/features/cloud-save/owned-cards-modal';
-const mocks = vi.hoisted(() => ({ accountId: 7, epoch: 1, details: false, fetch: vi.fn(), load: vi.fn(), capacity: vi.fn(), createPort: vi.fn(), download: vi.fn() }));
+const mocks = vi.hoisted(() => ({ accountId: 7, epoch: 1, details: false, store: {} as { getCredentialEpoch: () => number; getSnapshot: () => any }, fetch: vi.fn(), load: vi.fn(), capacity: vi.fn(), createPort: vi.fn(), download: vi.fn() }));
 vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openContent: vi.fn() }) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('../src/platform/private-cloud-save', async (original) => ({ ...await original<typeof import('../src/platform/private-cloud-save')>(), readPrivateCloudCapacity: mocks.capacity }));
-vi.mock('../src/features/account/use-desktop-cloud-session', () => ({ useDesktopCloudSession: () => ({ state: { account: { userId: mocks.accountId }, verification: 'verified', authFlow: { kind: 'idle' } }, store: {
-  getCredentialEpoch: () => mocks.epoch, getSnapshot: () => ({ account: { userId: mocks.accountId }, verification: 'verified', authFlow: { kind: 'idle' } }),
-} }) }));
+vi.mock('../src/features/account/use-desktop-cloud-session', () => ({ useDesktopCloudSession: () => ({ state: { account: { userId: mocks.accountId }, verification: 'verified', authFlow: { kind: 'idle' } }, store: mocks.store }) }));
 const platform = { Link: ({ children, ...props }: any) => <a {...props}>{children}</a>, marks: { isLiked: () => false, markLiked: () => true }, copyText: vi.fn(), downloadJson: mocks.download };
 vi.mock('../src/platform/card-library-host', () => ({
   createDesktopCardLibraryOnlinePort: (...args: unknown[]) => { mocks.createPort(...args); return { fetchSummaryPage: mocks.fetch, loadFullCard: mocks.load }; },
@@ -22,6 +20,7 @@ const button = (label: string) => [...document.querySelectorAll<HTMLButtonElemen
 const render = (replace = vi.fn(), load = vi.fn()) => act(async () => { root.render(<DesktopOwnedCardsModal isOpen expectedUserId={7} onClose={() => {}} onReplaceCard={replace} onSelectCard={load} />); });
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; mocks.accountId = 7; mocks.epoch = 1; mocks.details = false;
+  mocks.store = { getCredentialEpoch: () => mocks.epoch, getSnapshot: () => ({ account: { userId: mocks.accountId }, verification: 'verified', authFlow: { kind: 'idle' } }) };
   mocks.fetch.mockResolvedValue({ success: true, cards: [card], total: 1, nextOffset: null }); mocks.load.mockResolvedValue({ ...card, data: '{"name":"正文"}' }); mocks.capacity.mockResolvedValue(null);
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
@@ -111,4 +110,20 @@ it('Desktop恢复单击读取新墓碑再固定写入，成功刷新卡库与容
   expect(document.body.textContent).toContain('已恢复');
   expect(mocks.capacity).toHaveBeenCalledTimes(2);
   expect(held).toBe(false);
+});
+it('Desktop真实宿主重建保留同session删除提示，换凭据代次不继承且迟到回执不刷新', async () => {
+  let finish!: (value: unknown) => void;
+  const invoke = vi.fn(async (_command: string, { request }: any) => {
+    if (request.routeId === 'data-cards.delete-preview.query') return { status: 200, body: { success: true, accountFenceVersion: 1, deleteProtocolVersion: 1, ownerUserId: 7, operation: 'preview-active', targets: [{ id: card.id, type: card.type, name: card.name, description: card.description, version: 'a'.repeat(64) }], total: 1, recycleLimit: 5 } };
+    if (request.routeId === 'data-cards.soft-delete') return new Promise(resolve => { finish = resolve; });
+    throw Error('非预期路由');
+  });
+  const mount = (key: string) => act(async () => root.render(<DesktopOwnedCardsModal key={key} isOpen expectedUserId={7} onClose={() => {}} invokeFn={invoke} />));
+  await mount('a'); await act(async () => button('删除').click()); await act(async () => button('移入回收站').click());
+  await mount('b'); expect(document.body.textContent).toContain('删除结果不确定');
+  const capacityReads = mocks.capacity.mock.calls.length;
+  await act(async () => finish({ status: 200, body: { success: true, accountFenceVersion: 1, deleteProtocolVersion: 1, ownerUserId: 7, operation: 'soft-delete', id: card.id } }));
+  expect(mocks.capacity).toHaveBeenCalledTimes(capacityReads); expect(document.body.textContent).toContain('删除结果不确定');
+  expect(invoke.mock.calls.filter(([, { request }]) => request.routeId === 'data-cards.soft-delete')).toHaveLength(1);
+  mocks.epoch++; await mount('c'); expect(document.body.textContent).not.toContain('删除结果不确定'); expect(button('删除')).toBeDefined();
 });

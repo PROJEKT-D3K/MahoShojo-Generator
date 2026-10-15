@@ -41,3 +41,11 @@ describe('Web owned delete transport', () => {
     expect(() => port().write({ operation: 'purge-recycle', targets: [] }, signal())).toThrow(); expect(fetcher).not.toHaveBeenCalled();
   });
 });
+it('new Web ports in the same captured identity retain deletion warnings; new identities do not', () => {
+  const identity = { epoch: 1, isCurrent: () => true };
+  const first = createWebOwnedCardDeletePort(7, identity); first.notice!.uncertain = true;
+  const next = createWebOwnedCardDeletePort(7, identity);
+  expect(next.notice).toBe(first.notice); expect(createOwnedCardDeleteController(next).getSnapshot().phase).toBe('unknown');
+  expect(createWebOwnedCardDeletePort(8, identity).notice!.uncertain).toBe(false);
+  expect(createWebOwnedCardDeletePort(7, { epoch: 2, isCurrent: () => true }).notice!.uncertain).toBe(false);
+});

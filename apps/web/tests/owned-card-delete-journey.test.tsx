@@ -28,7 +28,7 @@ function Harness({ external = false }: { external?: boolean }) {
   </>;
 }
 beforeEach(() => {
-  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; blocked = false; session.epoch = captureAuthIdentity().epoch;
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; blocked = false; beginAuthIdentityTransition(); session.epoch = captureAuthIdentity().epoch;
   vi.spyOn(authStorage, 'getAuth').mockResolvedValue({ userId: 7, username: 'owner' }); vi.spyOn(authStorage, 'getAuthHeader').mockResolvedValue(null);
   vi.spyOn(list, 'getDataCardSummaryPage').mockResolvedValue({ success: true, cards: [row], total: 1, nextOffset: null } as never);
   vi.spyOn(list, 'loadFullDataCard').mockRejectedValue(new Error('删除不能载入或替换编辑器正文'));
@@ -98,4 +98,14 @@ it.each([undefined, 'questionnaire' as const])('真实Web回收站宿主一键�
   expect(JSON.parse(writes()[0][1].body)).toEqual({ expectedUserId: 7, id: old.id, version: old.version });
   expect(changed).toHaveBeenCalledOnce(); expect(document.body.textContent).toContain('数据卡已恢复');
   expect(fetcher.mock.calls.some(([url]) => String(url).includes('/api/data-card-recycle'))).toBe(false);
+});
+it('真实Web宿主卸载后同identity保留删除提示，迟到清空回执不继续原卡', async () => {
+  const ordinary = fetcher.getMockImplementation()!; let finish!: (response: Response) => void;
+  fetcher.mockImplementation((url, init) => url === '/api/data-cards/purge-recycle-owned' ? new Promise<Response>(resolve => { finish = resolve; }) : ordinary(url, init));
+  await act(async () => root.render(<Harness key="a" />)); await click('删除'); await click('移入回收站'); await click('清空回收站并继续…'); await click('永久清空并继续');
+  await act(async () => root.render(<Harness key="b" />)); expect(document.body.textContent).toContain('删除结果不确定');
+  await act(async () => finish(Response.json({ ...fence, operation: 'purge-recycle', ids: ['old'] })));
+  expect(changed).not.toHaveBeenCalled(); expect(writes()).toHaveLength(2); expect(document.body.textContent).toContain('删除结果不确定');
+  await click('关闭'); await act(async () => root.render(<Harness key="c" />)); expect(document.body.textContent).toContain('删除结果不确定');
+  await click('已知晓，结束本次操作'); await act(async () => root.render(<Harness key="d" />)); expect(document.body.textContent).not.toContain('删除结果不确定'); expect(writes()).toHaveLength(2);
 });

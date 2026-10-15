@@ -6,9 +6,9 @@ const labels = { character: '角色', scenario: '情景', history: '叙事历史
 export function useOwnedCardDelete(port: OwnedCardDeletePort | undefined, open: boolean) {
   const controller = useMemo(() => port ? createOwnedCardDeleteController(port) : null, [port]);
   const state = useSyncExternalStore(controller?.subscribe ?? (() => () => {}), controller?.getSnapshot ?? (() => null), controller?.getSnapshot ?? (() => null));
-  useEffect(() => { if (!open) controller?.invalidate(); }, [controller, open]);
+  useEffect(() => { if (!open) controller?.invalidate(); else controller?.activate(); }, [controller, open]);
   useEffect(() => () => controller?.invalidate(), [controller]);
-  return { controller, state, busy: state !== null && state.phase !== 'idle', refresh: state?.refresh ?? 0 };
+  return { controller: open ? controller : null, state, busy: open && state !== null && state.phase !== 'idle', refresh: state?.refresh ?? 0 };
 }
 export function OwnedCardDeleteDialog({ controller, onManageRecycle }: { controller: OwnedCardDeleteController | null; onManageRecycle?: () => void }) {
   const state = useSyncExternalStore(controller?.subscribe ?? (() => () => {}), controller?.getSnapshot ?? (() => null), controller?.getSnapshot ?? (() => null));
@@ -18,7 +18,7 @@ export function OwnedCardDeleteDialog({ controller, onManageRecycle }: { control
   const targets = state.phase === 'confirm-purge-recycle' ? state.targets : state.active ? [state.active] : [];
   const cancel = () => { controller.cancel(); };
   const manage = () => { if (controller.cancel()) onManageRecycle?.(); };
-  return <BaseModal key={state.phase} isOpen title={permanent ? '确认永久删除' : '删除数据卡'} onClose={cancel} closeButtonAriaLabel="取消" closeButtonContent="取消" closeOnBackdrop={!pending} zIndexClassName="z-[70]" maxWidthClassName="max-w-xl">
+  return <BaseModal key={state.phase} isOpen title={permanent ? '确认永久删除' : '删除数据卡'} onClose={cancel} closeButtonAriaLabel={state.phase === 'unknown' ? '关闭' : '取消'} closeButtonContent={state.phase === 'unknown' ? '关闭' : '取消'} closeOnBackdrop={!pending} zIndexClassName="z-[70]" maxWidthClassName="max-w-xl">
     {pending && <p role="status">{state.phase === 'reading' ? '正在核对完整删除清单…' : '正在处理，请等待结果…'}</p>}
     {state.message && <p role={state.phase === 'success' ? 'status' : 'alert'} className="mb-3 whitespace-pre-wrap">{state.message}</p>}
     {(state.phase === 'confirm-soft' || permanent) && <>
@@ -34,6 +34,8 @@ export function OwnedCardDeleteDialog({ controller, onManageRecycle }: { control
       <button type="button" onClick={() => void controller.chooseClear()}>清空回收站并继续…</button>
       {onManageRecycle && <button type="button" onClick={manage}>整理回收站</button>}
     </div>}
+    {state.phase === 'unknown' && <p className="mt-3 text-sm text-gray-600">关闭会保留提示；明确结束只清除此提示，不会撤销服务器请求或确认删除成功。</p>}
+    {state.phase === 'unknown' && <button type="button" className="mt-4 mr-3 rounded border px-3 py-2" onClick={() => controller.acknowledge()}>已知晓，结束本次操作</button>}
     {['success', 'rejected', 'unknown'].includes(state.phase) && <button type="button" className="mt-4 rounded border px-3 py-2" onClick={cancel}>关闭</button>}
   </BaseModal>;
 }

@@ -69,3 +69,24 @@ test('already mounted idle controller activates shared notice and offers an expl
   await writer.controller.restore('r1'); idle.controller.activate(); expect(idle.controller.getSnapshot().phase).toBe('unknown');
   idle.controller.dismiss(); expect(notice.uncertain).toBe(false);
 });
+test.each(['success', 'unknown'] as const)('late restore %s cannot adopt or clear a replacement operation notice', async outcome => {
+  const notice = { uncertain: false };
+  let oldResolve!: (value: { status: number; body: unknown }) => void;
+  const first = setup({ notice, write: () => new Promise(resolve => { oldResolve = resolve; }) });
+  const oldTask = first.controller.restore('r1'); await Promise.resolve();
+  const observer = setup({ notice }); observer.controller.dismiss();
+  let nextResolve!: (value: { status: number; body: unknown }) => void;
+  const next = setup({ notice, write: () => new Promise(resolve => { nextResolve = resolve; }) });
+  const nextTask = next.controller.restore('r1'); await Promise.resolve();
+  oldResolve(outcome === 'success' ? { status: 200, body: ack } : { status: 503, body: null }); await oldTask;
+  expect(first.port.onChanged).not.toHaveBeenCalled(); first.controller.dismiss(); expect(notice.uncertain).toBe(true);
+  nextResolve({ status: 503, body: null }); await nextTask; expect(next.controller.getSnapshot().phase).toBe('unknown');
+});
+test.each(['success', 'unknown'] as const)('explicitly ending an observed in-flight warning revokes late restore %s without a replacement write', async outcome => {
+  const notice = { uncertain: false }; let resolve!: (value: { status: number; body: unknown }) => void;
+  const first = setup({ notice, write: () => new Promise(done => { resolve = done; }) });
+  const action = first.controller.restore('r1'); await Promise.resolve();
+  setup({ notice }).controller.dismiss();
+  resolve(outcome === 'success' ? { status: 200, body: ack } : { status: 503, body: null }); await action;
+  expect(first.port.onChanged).not.toHaveBeenCalled(); expect(notice.uncertain).toBe(false); expect(first.controller.getSnapshot().phase).toBe('idle');
+});

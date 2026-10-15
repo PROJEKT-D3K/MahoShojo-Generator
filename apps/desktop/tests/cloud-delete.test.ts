@@ -27,3 +27,10 @@ describe('Desktop confirmed-delete thin adapter', () => {
     const invoke = vi.fn(); const port = createDesktopOwnedCardDeletePort(invoke, 7, () => false); await expect(port.write(input, signal())).rejects.toThrow(); expect(invoke).not.toHaveBeenCalled();
   });
 });
+it('Desktop passes its session notice through replacement adapters without dispatch', async () => {
+  const invoke = vi.fn(); const notice = { uncertain: true };
+  const port = createDesktopOwnedCardDeletePort(invoke, 7, () => true, { notice });
+  expect(port.notice).toBe(notice);
+  const owner = createOwnedCardDeleteController(port); await owner.beginActive(target.id); await owner.confirm();
+  expect(owner.getSnapshot().phase).toBe('unknown'); expect(invoke).not.toHaveBeenCalled();
+});

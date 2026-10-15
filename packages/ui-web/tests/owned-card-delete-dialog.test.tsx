@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { OwnedCardDeleteDialog, createOwnedCardDeleteController, RecycleBinModal, type OwnedCardDeletePort, type DeleteResponse } from '../src/cloud-save';
+import { OwnedCardDeleteDialog, useOwnedCardDelete, createOwnedCardDeleteController, RecycleBinModal, type OwnedCardDeletePort, type DeleteResponse } from '../src/cloud-save';
 const active = { id: 'card-1234567890', type: 'character' as const, name: '当前角色', description: null, version: 'a'.repeat(64) };
 const targets = [
   { id: 'old-history-123', type: 'history' as const, name: '同名卡', description: null, version: 'b'.repeat(64) },
@@ -46,4 +46,27 @@ it('recycle controller acquires guard once, without nesting read/write self-lock
   await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   expect(blocked).toBe(false); expect(document.querySelectorAll('[role=dialog]')).toHaveLength(1); expect(port.write).not.toHaveBeenCalled();
   await click('清空全部类型回收站…'); expect(port.preview).toHaveBeenLastCalledWith('recycle', undefined, expect.any(AbortSignal)); expect(document.body.textContent).toContain('问卷');
+});
+it('real shared hook hides a closed host but retains in-flight warning on reopen and remount', async () => {
+  const notice = { uncertain: false }; port = { ...port, notice, onChanged: vi.fn() };
+  let finish!: (value: DeleteResponse) => void;
+  vi.mocked(port.write).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  function Host({ open }: { open: boolean }) {
+    const deletion = useOwnedCardDelete(port, open);
+    return <><button onClick={() => void deletion.controller?.beginRecycle(targets[0]!.id)}>选择删除</button><OwnedCardDeleteDialog controller={deletion.controller} /></>;
+  }
+  const render = (open: boolean, key = 'a') => act(async () => root.render(<Host key={key} open={open} />));
+  await render(true); await click('选择删除'); await click('确认永久删除');
+  expect(blocked).toBe(true);
+  await render(false); expect(document.querySelector('[role=dialog]')).toBeNull(); expect(blocked).toBe(false);
+  await render(true); expect(document.body.textContent).toContain('删除结果不确定');
+  await render(false); await render(true, 'b'); expect(document.body.textContent).toContain('删除结果不确定');
+  await act(async () => finish({ status: 200, body: { success: true, accountFenceVersion: 1, deleteProtocolVersion: 1, ownerUserId: 7, operation: 'purge-recycle', ids: [targets[0]!.id] } }));
+  expect(port.onChanged).not.toHaveBeenCalled(); expect(port.write).toHaveBeenCalledTimes(1);
+  expect(document.body.textContent).toContain('删除结果不确定');
+  await click('关闭'); expect(notice.uncertain).toBe(true);
+  await render(false); await render(true); expect(document.body.textContent).toContain('删除结果不确定');
+  await click('已知晓，结束本次操作'); expect(notice.uncertain).toBe(false);
+  await render(false); await render(true); expect(document.querySelector('[role=dialog]')).toBeNull();
+  await click('选择删除'); expect(document.body.textContent).toContain('确认永久删除'); expect(port.write).toHaveBeenCalledTimes(1);
 });

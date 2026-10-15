@@ -128,3 +128,15 @@ it('未提供宿主guard也阻止同tick恢复与删除并发', async () => {
   expect(deletion.preview).not.toHaveBeenCalled(); expect(port.readDetail).not.toHaveBeenCalled();
   await act(async () => pending.resolve(restoreAck));
 });
+it('ordinary close hides an unknown restore; only explicit acknowledgement clears its notice', async () => {
+  const notice = { uncertain: false };
+  const restore = { ...restorePort(vi.fn(async () => { throw Error('lost'); })), notice };
+  await render({ restorePort: restore }); await click('恢复');
+  expect(text()).toContain('恢复结果不确定');
+  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  expect(props.onClose).toHaveBeenCalledOnce(); expect(notice.uncertain).toBe(true);
+  await render({ isOpen: false }); await render({ isOpen: true });
+  expect(text()).toContain('恢复结果不确定'); expect(restore.write).toHaveBeenCalledOnce();
+  await click('已核对，结束本次操作'); expect(notice.uncertain).toBe(false);
+  await render({ isOpen: false }); await render({ isOpen: true }); expect(text()).not.toContain('恢复结果不确定');
+});

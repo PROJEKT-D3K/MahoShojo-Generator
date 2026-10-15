@@ -5,7 +5,7 @@ import type { InvokeFn } from './cloud-bridge';
 
 /** Fixed Native routes only; no legacy, HTTP or transport retry path. */
 export function createDesktopOwnedCardDeletePort(invokeFn: InvokeFn, expectedUserId: number, isCurrent: () => boolean,
-  options: Pick<OwnedCardDeletePort, 'isBlocked' | 'onBusyChange' | 'onChanged'> = {},
+  options: Pick<OwnedCardDeletePort, 'isBlocked' | 'onBusyChange' | 'onChanged' | 'notice'> = {},
 ): OwnedCardDeletePort {
   const assertCurrent = (signal: AbortSignal) => { if (signal.aborted || !isCurrent()) throw new Error('账号会话已改变'); };
   const run = async (request: Parameters<typeof requestCardLibraryRoute>[1], signal: AbortSignal) => {
