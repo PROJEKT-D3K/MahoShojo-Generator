@@ -1,3 +1,4 @@
+import { DesktopCloudError, STREAM_HOSTED_AI_COMMAND } from '../platform/cloud-bridge';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter } from '@tanstack/react-router';
@@ -42,8 +43,6 @@ function TavernPage({ session }: { session: TavernAiSession }) {
   const requestLock = useRef(false);
   const generating = ai.phase === 'generating' || aiState.generationActive;
   const generationMode = ai.draft.generationMode ?? 'non-stream';
-  const hostedStreamUnavailable = generationMode === 'stream' && target.location === 'server';
-  const streamUnavailableReason = '酒馆服务器目前仅支持非流式 JSON；流式转换请选择客户端执行。';
 
   const router = useRouter();
   const idPrefix = useId();
@@ -133,7 +132,7 @@ function TavernPage({ session }: { session: TavernAiSession }) {
     catch (cause) { return { aiInput, aiInputError: cause instanceof Error ? cause.message : 'AI 输入无效', warnings: [] }; }
   }, [candidate, template, ai.draft.language, preference, target.location]);
   const unavailable = target.unavailableReason;
-  const generateDisabled = blocked || hostedStreamUnavailable || serverCooldown || accountBusy || !placeholderHydrated || !aiInput || !!aiInputError || !!unavailable || (target.location === 'client' && !target.mode) || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
+  const generateDisabled = blocked || serverCooldown || accountBusy || !placeholderHydrated || !aiInput || !!aiInputError || !!unavailable || (target.location === 'client' && !target.mode) || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
   const generate = () => {
     if (generateDisabled || requestLock.current || session.isBusy() || !aiInput) return;
     if ((session.hasUnsavedResult() || ai.rawText) && !window.confirm('重新转换会替换当前 AI 结果与原始输出，且可能产生新的模型费用。确认继续？')) return;
@@ -147,12 +146,19 @@ function TavernPage({ session }: { session: TavernAiSession }) {
     void aiStore.withPreparedGeneration(async prepared => {
       if (!prepared.providerTarget || prepared.unavailableReason || (prepared.location === 'client' && !prepared.mode)) throw new Error('请选择可用的转换通道。');
       const hosted = prepared.location === 'server';
-      if (hosted && frozenGenerationMode === 'stream') throw new Error(streamUnavailableReason);
-      const current = cloudStore.getSnapshot();
-      if (hosted && ((current.account?.userId ?? null) !== owner.userId || cloudStore.getCredentialEpoch() !== owner.epoch || current.verification !== owner.verification || current.authFlow !== owner.authFlow || current.authFlow.kind !== 'idle')) throw new Error('准备期间账号状态已变化，输入已保留，请重新确认转换。');
-      await session.generate({ invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget,
+      const assertOwner = () => {
+        const current = cloudStore.getSnapshot();
+        if (hosted && ((current.account?.userId ?? null) !== owner.userId || cloudStore.getCredentialEpoch() !== owner.epoch || current.verification !== owner.verification || current.authFlow !== owner.authFlow || current.authFlow.kind !== 'idle')) throw new DesktopCloudError(STREAM_HOSTED_AI_COMMAND, 'invalid-request', '准备期间账号状态已变化，输入已保留，请重新确认转换。');
+      };
+      assertOwner();
+      await session.generate({ invoke: hosted && frozenGenerationMode === 'stream' ? async (command, args) => {
+        // 严格词库 readiness 会异步等待；在真正提交 Native 前再次核对冻结身份。
+        // 此处拒绝时尚未调用底层 invoke，cancel 命令始终透传。
+        if (command === STREAM_HOSTED_AI_COMMAND) assertOwner();
+        return invoke(command, args as never);
+      } : invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget,
         ...(hosted ? { onHostedDispatchSettled: (retryAfterSeconds?: number) => startCooldown(retryAfterSeconds === undefined ? cooldownMs : retryAfterSeconds * 1000) } : {}) }, frozen,
-        { ...(hosted ? { mode: 'hosted-json' as const, generationMode: 'non-stream' as const } : { mode: prepared.mode!, generationMode: frozenGenerationMode }), modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides }, true);
+        { ...(hosted ? frozenGenerationMode === 'stream' ? { mode: 'hosted-stream' as const, generationMode: 'stream' as const } : { mode: 'hosted-json' as const, generationMode: 'non-stream' as const } : { mode: prepared.mode!, generationMode: frozenGenerationMode }), modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides }, true);
     }).catch(cause => setError(cause instanceof Error ? cause.message : 'AI 配置准备失败'))
       .finally(() => { requestLock.current = false; });
   };
@@ -176,15 +182,13 @@ function TavernPage({ session }: { session: TavernAiSession }) {
             language={ai.draft.language} languages={languages.length ? languages : [{ code: ai.draft.language, name: ai.draft.language }]}
             onLanguageChange={language => { if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, language }); }}
             languageExpanded={languageExpanded} onLanguageExpandedChange={setLanguageExpanded}
-            generationMode={generationMode} onGenerationModeChange={next => { if (next === 'stream' && target.location === 'server') return; if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, generationMode: next }); }}
-            generationModeDisabledReasons={target.location === 'server' ? { stream: streamUnavailableReason } : undefined}
+            generationMode={generationMode} onGenerationModeChange={next => { if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, generationMode: next }); }}
             generationModeDescription={describeTavernGenerationMode(template, generationMode)}
-            provider={<DesktopAiProviderPanel generationMode={generationMode} serverUnavailableReason={generationMode === 'stream' ? streamUnavailableReason : undefined} showConnectionTest={false} onDirtyChange={setProviderDirty}
-              copy={{ serverOutput: { stream: '', nonStream: '非流式 JSON' }, emptyProfilesHint: '请选择生成通道。', serverFootnote: '服务器仅接收裁剪后的设定；原件和占位符偏好保留本机。', payloadNoun: '裁剪后的酒馆设定' }} />}
+            provider={<DesktopAiProviderPanel generationMode={generationMode} showConnectionTest={false} onDirtyChange={setProviderDirty}
+              copy={{ serverOutput: { stream: '流式 Markdown', nonStream: '非流式 JSON' }, emptyProfilesHint: '请选择生成通道。', serverFootnote: '服务器仅接收裁剪后的设定；原件和占位符偏好保留本机。', payloadNoun: '裁剪后的酒馆设定' }} />}
             providerFootnote="API Key 使用本机安全存储。失败或取消后不会自动重发，请确认费用与原始输出后再手动重试。" />
           {mode === 'ai' ? <div className="mt-4 space-y-2">
             {unavailable ? <p role="status">{unavailable}</p> : null}
-            {hostedStreamUnavailable ? <p role="status">{streamUnavailableReason}</p> : null}
             {aiInputError ? <p role="alert">{aiInputError}</p> : null}
             {warnings.map(warning => <p className="text-xs text-amber-700" key={warning}>{warning}</p>)}
             <button type="button" className="generate-button" disabled={generateDisabled} onClick={generate}>{generating ? '转换中…' : serverCooldown ? `冷却中 (${remainingTime}s)` : '开始转换'}</button>

@@ -218,3 +218,64 @@ describe('Tavern Markdown owns real generation and recovery', () => {
     expect(native.invoke).toHaveBeenCalledOnce(); session.dispose();
   });
 });
+
+describe('Tavern Hosted stream session acceptance', () => {
+  function hostedNative() {
+    let send!: (event: unknown) => void; let finish!: () => void; let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const settled = new Promise<void>(resolve => { finish = resolve; });
+    const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'cancel_hosted_ai') return false;
+      expect(command).toBe('stream_hosted_ai');
+      send = (args!.onEvent as { onmessage: typeof send }).onmessage; started(); await settled;
+    });
+    return { ready, invoke, emit: (event: unknown) => send(event), finish, options: { invoke, profileId: '', providerTarget: { kind: 'system' as const }, createChannel: () => ({}) } };
+  }
+  const stream = { mode: 'hosted-stream' as const, generationMode: 'stream' as const };
+  const done = { event: 'done', data: { ok: true, tavernCompletion: { version: 1, finishReason: 'stop' } } };
+  it('persists an interrupted Hosted stream as uncertain, retains input/body, and restores without generation', async () => {
+    const disk = storage(); const native = hostedNative(); const putIfAbsent = vi.fn();
+    const session = new TavernAiSession({ storage: disk, repository: { putIfAbsent } as unknown as CardRepository, requestId: () => 'hosted-session' });
+    session.updateDraft({ language: input.language, generationMode: 'stream', input });
+    const pending = session.generate(native.options, input, stream); await native.ready;
+    native.emit({ event: 'markdown', data: { chunk: '已收到前缀' } });
+    await session.generate(native.options, { ...input, template: 'scenario' }, stream);
+    session.updateDraft({ language: 'new', input: null }); session.clearOutput();
+    expect(session.getSnapshot().draft).toMatchObject({ input, generationMode: 'stream' });
+    session.cancel();
+    expect(JSON.parse(disk.getItem(TAVERN_AI_DRAFT_KEY)!).output).toMatchObject({ phase: 'uncertain', rawText: '已收到前缀', card: null });
+    const restored = new TavernAiSession({ storage: disk, repository }); restored.restoreDraft(false);
+    expect(restored.getSnapshot()).toMatchObject({ phase: 'uncertain', rawText: '已收到前缀', card: null });
+    expect(native.invoke.mock.calls.filter(([command]) => command === 'stream_hosted_ai')).toHaveLength(1);
+    native.emit(done); native.finish(); await pending;
+    expect(session.getSnapshot()).toMatchObject({ phase: 'uncertain', card: null, rawText: '已收到前缀' });
+    expect(await session.saveResult()).toBe(false); expect(putIfAbsent).not.toHaveBeenCalled(); session.dispose(); restored.dispose();
+  });
+  it('saves and restores the actual stream kind and retries storage only', async () => {
+    const disk = storage(); const native = hostedNative();
+    const putIfAbsent = vi.fn<CardRepository['putIfAbsent']>().mockRejectedValueOnce(new Error('disk full')).mockResolvedValue({ written: true });
+    const repo = { putIfAbsent } as unknown as CardRepository; const selected = { ...input, template: 'scenario' as const };
+    const session = new TavernAiSession({ storage: disk, repository: repo });
+    session.updateDraft({ language: input.language, generationMode: 'stream', input: selected });
+    const pending = session.generate(native.options, selected, stream); await native.ready;
+    native.emit({ event: 'markdown', data: { chunk: '# 情景\n完整正文' } }); native.emit(done); native.finish(); await pending;
+    expect(session.getSnapshot()).toMatchObject({ phase: 'completed', cardKind: 'general-scenario', card: { content: '# 情景\n完整正文', _tavern: { raw: input.raw } } });
+    expect(await session.saveResult()).toBe(false); expect(await session.saveResult()).toBe(true);
+    expect(putIfAbsent.mock.calls[1]![0]).toMatchObject({ cardType: 'scenario', provenance: { kind: 'unsigned', execution: 'hosted' } });
+    session.dispose(); const restored = new TavernAiSession({ storage: disk, repository: repo }); restored.restoreDraft(false);
+    expect(restored.getSnapshot()).toMatchObject({ phase: 'completed', resultRestored: true, cardKind: 'general-scenario', draft: { generationMode: 'stream', input: selected } });
+    expect(native.invoke).toHaveBeenCalledOnce(); restored.dispose();
+  });
+  it.each(['hosted-stream', 'hosted-json'] as const)('treats late abort in %s cooldown as uncertain using the real executor', async mode => {
+    const disk = storage(); const native = hostedNative();
+    const session = new TavernAiSession({ storage: disk, repository }); session.updateDraft({ language: input.language, input, generationMode: mode === 'hosted-stream' ? 'stream' : 'non-stream' });
+    const jsonInvoke = vi.fn(async () => ({ status: 200, body: tavernModelResult('general') }));
+    const pending = session.generate({ ...native.options, invoke: mode === 'hosted-stream' ? native.invoke : jsonInvoke, onHostedDispatchSettled: () => session.cancel() } as typeof native.options,
+      input, mode === 'hosted-stream' ? stream : { mode, generationMode: 'non-stream' });
+    if (mode === 'hosted-stream') { await native.ready; native.emit({ event: 'markdown', data: { chunk: '完整但已取消' } }); native.emit(done); native.finish(); }
+    await pending;
+    expect(session.getSnapshot()).toMatchObject({ phase: 'uncertain', card: null });
+    expect(session.getSnapshot().rawText).not.toBe(''); expect(session.getSnapshot().message).toContain('重复调用与费用');
+    expect(JSON.parse(disk.getItem(TAVERN_AI_DRAFT_KEY)!).output.phase).toBe('uncertain'); expect(await session.saveResult()).toBe(false); session.dispose();
+  });
+});

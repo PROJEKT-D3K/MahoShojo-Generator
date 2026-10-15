@@ -10,6 +10,7 @@ import { listDesktopPresetEntries } from '../src/features/ai-config/desktop-ai-c
 import { TAVERN_AI_DRAFT_KEY } from '../src/features/tavern/session';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
+import * as safety from '@mahoshojo/domain/sensitive-word-filter';
 import type { TavernGenerationInput } from '../src/features/tavern/generation';
 import { convertTavernToMagicalGirlCard, readTavernLocalDocument } from '@mahoshojo/domain/tavern-card';
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), execute: vi.fn(), export: vi.fn(), save: vi.fn(), put: vi.fn(), guard: vi.fn(), account: { userId: null as number | null, epoch: 0 } }));
@@ -328,17 +329,15 @@ describe('Desktop Tavern Direct streaming journey', () => {
     expect(host.textContent).not.toContain('AI 原始输出'); expect(modeButton('非流式').getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('preserves a stream choice across an unavailable Hosted target and requires an explicit non-stream change', async () => {
+  it('keeps the selected stream mode when switching to Hosted, and chooses JSON only explicitly', async () => {
     await mount(); await upload(); await chooseAi(); await selectGenerationMode('流式');
-    expect(modeButton('服务器').disabled).toBe(true);
-    const store = getDesktopAiConfigStore();
-    await act(async () => store.selectExecutionLocation('server')); await settle();
-    expect(modeButton('流式').getAttribute('aria-pressed')).toBe('true'); expect(modeButton('流式').disabled).toBe(true);
-    expect(host.textContent).toContain('酒馆服务器目前仅支持非流式 JSON'); expect(button('开始转换').disabled).toBe(true);
-    await click('开始转换'); expect(mocks.execute).not.toHaveBeenCalled();
-    expect(JSON.parse(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)!).selection.executionPreference).toBe('server');
-    await selectGenerationMode('非流式'); await click('开始转换');
-    expect(mocks.execute).toHaveBeenCalledOnce(); expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'hosted-json', generationMode: 'non-stream' });
+    expect(modeButton('服务器').disabled).toBe(false);
+    await click('服务器');
+    expect(modeButton('流式').getAttribute('aria-pressed')).toBe('true'); expect(modeButton('流式').disabled).toBe(false);
+    expect(button('开始转换').disabled).toBe(false); await click('开始转换');
+    expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'hosted-stream', generationMode: 'stream' });
+    vi.mocked(window.confirm).mockReturnValue(true); await selectGenerationMode('非流式'); await click('开始转换');
+    expect(mocks.execute.mock.calls[1]![2]).toMatchObject({ mode: 'hosted-json', generationMode: 'non-stream' });
   });
 
   it('cancels stream credential preparation before dispatch and keeps frozen draft input/mode', async () => {
@@ -377,5 +376,76 @@ describe('Desktop Tavern Direct streaming journey', () => {
     await click('导出未完成正文（文本）'); expect(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes)).toBe(native.text);
     await click('导出原件 JSON'); expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[1]![0].bytes))).toEqual(raw);
     expect(mocks.execute).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Desktop Tavern Hosted streaming page', () => {
+  async function hostedStream() {
+    const actual = await vi.importActual<typeof import('../src/features/tavern/generation')>('../src/features/tavern/generation');
+    mocks.execute.mockImplementation((options, input, intent, signal, onPartialText) => actual.executeTavernGeneration({ ...options, createChannel: () => ({}) }, input, intent, signal, onPartialText));
+    let channel!: { onmessage(event: unknown): void }; let finish!: () => void;
+    const markdown = '# 星光\n完整正文';
+    mocks.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command !== 'stream_hosted_ai') return true;
+      channel = args!.onEvent as typeof channel;
+      channel.onmessage({ event: 'markdown', data: { chunk: markdown } });
+      await new Promise<void>(resolve => { finish = resolve; });
+    });
+    return { markdown, emit: (event: unknown) => channel.onmessage(event), finish: async (reason?: string) => {
+      await act(async () => { if (reason) channel.onmessage({ event: 'done', data: { ok: true, tavernCompletion: { version: 1, finishReason: reason } } }); finish(); }); await settle();
+    } };
+  }
+  async function setup(preset = false) {
+    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
+    await mount(); await upload(); await chooseAi(); await selectGenerationMode('流式');
+    if (preset) {
+      const store = getDesktopAiConfigStore();
+      await act(async () => { store.selectProviderTarget({ kind: 'preset', providerId: 'deepseek' }); store.selectPresetModel('deepseek', 'deepseek-chat'); }); await settle();
+    }
+  }
+  it.each(['system', 'preset'] as const)('dispatches frozen %s stream, single-flights and applies its cooldown only', async provider => {
+    const native = await hostedStream(); await setup(provider === 'preset');
+    await act(async () => { button('开始转换').click(); button('开始转换').click(); }); await settle();
+    expect(mocks.execute).toHaveBeenCalledOnce(); expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'hosted-stream', generationMode: 'stream' });
+    expect(host.querySelector('input[type="file"]')?.hasAttribute('disabled')).toBe(true);
+    expect(modeButton('非流式').disabled).toBe(true); expect(host.querySelector('[data-result]')).toBeNull();
+    await native.finish('stop'); expect(host.querySelector('[data-result]')?.textContent).toBe(native.markdown);
+    expect(localStorage.getItem(`tavernConvertCooldown:${provider === 'system' ? 'system' : 'custom'}`)).not.toBeNull();
+    expect(localStorage.getItem(`tavernConvertCooldown:${provider === 'system' ? 'custom' : 'system'}`)).toBeNull();
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'stream_hosted_ai')).toHaveLength(1);
+  });
+  it('keeps cancelled body export-only, waits for invoke, and confirms uncertain regeneration', async () => {
+    const native = await hostedStream(); await setup(); await click('开始转换'); await click('取消转换');
+    expect(button('转换中…').disabled).toBe(true); expect(host.querySelector('[data-result]')).toBeNull();
+    await native.finish('stop');
+    expect(host.textContent).toContain('无法确认'); expect(host.querySelector('[data-result]')).toBeNull();
+    await click('导出未完成正文'); expect(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes)).toBe(native.markdown);
+    expect(mocks.put).not.toHaveBeenCalled();
+    const now = Date.now(); vi.spyOn(Date, 'now').mockReturnValue(now + 121_000);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1050)); });
+    vi.mocked(window.confirm).mockReturnValueOnce(true).mockReturnValueOnce(false);
+    await click('开始转换'); expect(mocks.execute).toHaveBeenCalledOnce();
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('上次转换是否已在服务器执行仍无法确认'));
+  });
+  it.each(['identity', 'credential'] as const)('rechecks %s after async readiness and never calls underlying stream invoke or cooldown', async change => {
+    await hostedStream(); await setup();
+    const actualCheck = safety.strictCheck; let ready!: (value: Awaited<ReturnType<typeof safety.strictCheck>>) => void;
+    vi.spyOn(safety, 'strictCheck').mockImplementationOnce(() => new Promise(resolve => { ready = resolve; }));
+    await click('开始转换');
+    expect(mocks.execute).toHaveBeenCalledOnce(); expect(mocks.invoke.mock.calls.filter(([command]) => command === 'stream_hosted_ai')).toHaveLength(0);
+    if (change === 'identity') mocks.account.userId = 7; else mocks.account.epoch++;
+    await act(async () => ready(await actualCheck(''))); await settle();
+    expect(host.textContent).toContain('准备期间账号状态已变化');
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'stream_hosted_ai')).toHaveLength(0);
+    expect(localStorage.getItem('tavernConvertCooldown:system')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(TAVERN_AI_DRAFT_KEY)!)).toMatchObject({ input: { raw }, generationMode: 'stream', output: { phase: 'failed', card: null } });
+  });
+  it('reports 429 retry seconds, keeps body exportable and never offers a completed-card save', async () => {
+    const native = await hostedStream(); await setup(); await click('开始转换');
+    const start = Date.now();
+    await act(async () => native.emit({ event: 'error', data: { ok: false, error: '请稍后再试', code: 'rate-limited', retryAfterSeconds: 9 } })); await native.finish();
+    expect(host.textContent).toContain('请稍后再试'); expect(host.querySelector('[data-result]')).toBeNull();
+    expect(Number(localStorage.getItem('tavernConvertCooldown:system'))).toBeGreaterThanOrEqual(start + 9000);
+    await click('导出未完成正文'); expect(mocks.export).toHaveBeenCalledOnce(); expect(mocks.put).not.toHaveBeenCalled();
   });
 });

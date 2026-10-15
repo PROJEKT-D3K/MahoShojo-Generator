@@ -189,3 +189,44 @@ describe.skipIf(!process.env.MAHO_TAVERN_HOSTED_STREAM_BINARY)('Tavern stream br
     } finally { pipe.dispose(); }
   }, 25_000);
 });
+
+// Native HTTP/SSE parsing is real here; the pipe relays buffered events and does not
+// emulate Tauri registration/cancel timing (covered separately by deferred Channel tests).
+describe.skipIf(!process.env.MAHO_TAVERN_HOSTED_STREAM_BINARY)('Tavern Hosted owner through the real Native pipe', () => {
+  it('accepts only a safe stop and preserves rejected or uncertain output without replay', async () => {
+    const { executeTavernGeneration } = await import('../src/features/tavern/generation');
+    const { DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE } = await import('@mahoshojo/domain/tavern-card');
+    const pipe = openNativePipe();
+    try {
+      await pipe.ready;
+      const cases = [
+        { response: { responseBody: event('markdown', { chunk: '# 情景\n完整正文 VPN' }) + completed }, status: 'completed', raw: '# 情景\n完整正文 VPN', posts: 1 },
+        { response: { responseBody: markdown + event('done', { ok: true, tavernCompletion: { version: 1, finishReason: 'length' } }) }, status: 'invalid-output', raw: '正文🌸', posts: 1 },
+        { response: { responseBody: completed, capabilityVersion: 'v2' }, status: 'failed', raw: '', posts: 0 },
+        { response: { responseBody: markdown + completed, responseVersion: 'v2' }, status: 'uncertain', raw: '', posts: 1 },
+        { response: { responseBody: markdown }, status: 'uncertain', raw: '正文🌸', posts: 1 },
+        { response: { responseStatus: 429, responseBody: JSON.stringify({ error: '请稍后再试', retryAfterSeconds: 7 }) }, status: 'failed', raw: '', posts: 1 },
+      ];
+      for (const [index, scenario] of cases.entries()) {
+        let reply: Reply | undefined; let invokeCount = 0; const cooldown: (number | undefined)[] = [];
+        const channel: HostedAiChannel = {};
+        const invoke: InvokeFn = async (command, args) => {
+          expect(command).toBe('stream_hosted_ai'); invokeCount++;
+          reply = await pipe.request(args?.request, scenario.response);
+          for (const event of reply.events) channel.onmessage?.(event);
+          if (reply.error) throw reply.error;
+        };
+        const raw = { name: '原件', description: '保留原始设定', custom: { keep: true } };
+        const outcome = await executeTavernGeneration({ invoke, profileId: '', providerTarget: { kind: 'system' }, createChannel: () => channel, onHostedDispatchSettled: seconds => { cooldown.push(seconds); } },
+          { raw, template: 'scenario', language: 'zh-CN', preference: DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE },
+          { requestId: `owner-pipe-${index}`, mode: 'hosted-stream', generationMode: 'stream' }, new AbortController().signal);
+        expect(outcome).toMatchObject({ status: scenario.status, rawText: scenario.raw }); expect(invokeCount).toBe(1);
+        expect(reply!.observed.filter(value => value.method === 'POST')).toHaveLength(scenario.posts);
+        expect(cooldown).toHaveLength(scenario.posts);
+        if (outcome.status === 'completed') expect(outcome).toMatchObject({ cardKind: 'general-scenario', card: { content: '# 情景\n完整正文 ❀❀❀', _tavern: { raw } } });
+        if (index === 5) { expect(outcome).toMatchObject({ code: 'rate-limited', retryAfterSeconds: 7 }); expect(cooldown).toEqual([7]); }
+      }
+      await pipe.finish();
+    } finally { pipe.dispose(); }
+  }, 25_000);
+});

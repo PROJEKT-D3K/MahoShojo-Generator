@@ -349,7 +349,7 @@ const buildHostedSystemConfig = (
   };
 };
 
-const buildHostedProviderConfig = (target: DesktopAiExecutionOptions['providerTarget'], intent: DesktopGenerationIntent): HostedProviderConfig =>
+export const buildHostedProviderConfig = (target: DesktopAiExecutionOptions['providerTarget'], intent: DesktopGenerationIntent): HostedProviderConfig =>
   target?.kind === 'preset'
     ? { presetConfig: { providerId: target.providerId, modelId: intent.modelId?.trim() ?? '', ...(intent.overrides ? { generationOverrides: intent.overrides } : {}) } }
     : { systemConfig: buildHostedSystemConfig(intent) };
@@ -620,7 +620,7 @@ const executeHostedJsonGeneration = async <
  * 对比路由配额（与 native `hosted_body_max_bytes` 同一 fixture 来源）。
  * 超限返回用户可读文案；未超限返回 null。
  */
-const hostedBodyOversizeMessage = (
+export const hostedBodyOversizeMessage = (
   body: Record<string, JsonValue>,
   routeId: HostedGenerationRouteId | HostedJsonGenerationRouteId,
 ): string | null => {

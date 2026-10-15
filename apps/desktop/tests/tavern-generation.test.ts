@@ -174,11 +174,11 @@ describe('Tavern Direct Markdown generation', () => {
   });
 });
 
-describe('Tavern JSON-only Hosted generation', () => {
+describe('Tavern Hosted JSON generation', () => {
   const hosted = { requestId: 'tavern-hosted', mode: 'hosted-json' as const, generationMode: 'non-stream' as const, modelId: 'default' };
-  it.each(['hosted-json', 'hosted-stream'] as const)('rejects a forged %s stream intent before Native dispatch', async mode => {
+  it.each(['hosted-json', 'hosted-stream'] as const)('rejects a mismatched %s output intent before Native dispatch', async mode => {
     const invoke = vi.fn(); const notify = vi.fn();
-    const outcome = await executeTavernGeneration({ invoke, profileId: '', onHostedDispatchSettled: notify }, input, { ...hosted, mode, generationMode: 'stream' } as unknown as TavernGenerationIntent, new AbortController().signal);
+    const outcome = await executeTavernGeneration({ invoke, profileId: '', onHostedDispatchSettled: notify }, input, { ...hosted, mode, generationMode: mode === 'hosted-json' ? 'stream' : 'non-stream' } as unknown as TavernGenerationIntent, new AbortController().signal);
     expect(outcome).toMatchObject({ status: 'failed', code: 'invalid-request' });
     expect(invoke).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
   });

@@ -418,3 +418,22 @@ describe('流式预览的派发快照', () => {
     session.dispose(); restored.dispose();
   });
 });
+
+describe('共享会话的 Hosted 取消边界', () => {
+  it.each(['hosted-stream', 'hosted-json', 'direct-local', 'direct-remote'] as const)('%s 在途草稿与接纳前晚取消保持执行位置语义', async mode => {
+    const storage = memoryStorage();
+    let finish!: () => void; const ready = new Promise<void>(resolve => { finish = resolve; });
+    const session = new DesktopGenerationSession(fakeSessionFamily({ executeGeneration: async (_options, _input, _intent, _signal, partial) => {
+      partial?.('保留正文'); await ready;
+      session.cancel();
+      return { status: 'completed', mode, rawText: '保留正文', cardKind: 'fake-structured', card: { title: '完整但已取消' } };
+    } }), { storage, repository: repository(), initialDraft: { prompt: '原输入' } });
+    const pending = session.generate({ invoke: vi.fn(), profileId: '' }, { prompt: '原输入' }, { mode });
+    session.retryDraftSave();
+    const expected = mode.startsWith('hosted-') ? 'uncertain' : 'cancelled';
+    expect(JSON.parse(storage.getItem(DRAFT_KEY)!).output).toMatchObject({ phase: expected, rawText: '保留正文', card: null });
+    finish(); await pending;
+    expect(session.getSnapshot()).toMatchObject({ phase: expected, rawText: '保留正文', card: null });
+    expect(await session.saveResult()).toBe(false); session.dispose();
+  });
+});

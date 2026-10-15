@@ -225,10 +225,10 @@ export class DesktopGenerationSession<
     this.draftSaveTimer = null;
     if (this.disposed || this.blocked || this.state.pendingRestore) return;
     const { draft, card, cardKind, rawText, phase } = this.state;
-    // hosted-json 在途时被中止/切页：无法确认服务器是否已执行——
+    // Hosted 在途时被中止/切页：无法确认服务器是否已执行——
     // 草稿持久化为 uncertain 而非干净 cancelled，恢复后继续如实呈现。
     const storedPhase = phase === 'generating'
-      ? (this.mode === 'hosted-json' ? 'uncertain' : 'cancelled')
+      ? (this.mode === 'hosted-json' || this.mode === 'hosted-stream' ? 'uncertain' : 'cancelled')
       : phase;
     const savedAt = Date.now();
     const stored: StoredGenerationDraft<TDraft, TCardKind> = { version: 1, ...clone(draft), savedAt, output: { mode: this.mode, cardKind, card, rawText, phase: storedPhase } };
@@ -277,6 +277,9 @@ export class DesktopGenerationSession<
         // 不变量，两个入口（新鲜响应/草稿恢复）对称执行（G2-r1 复审）。
         if (this.mode !== 'hosted-json') this.family.stripSignature(card);
         this.publish({ phase: 'completed', card: this.family.validateCard(outcome.cardKind, card), cardKind: outcome.cardKind, resultRestored: false, reasoning: outcome.reasoning ?? null, rawText: outcome.rawText, message: '生成完成，可保存到本地卡库。' });
+      } else if (outcome.status === 'completed' && controller.signal.aborted && (this.mode === 'hosted-stream' || this.mode === 'hosted-json')) {
+        // invoke settle 与 owner 接纳之间仍可取消；收到完整响应也不能宣称服务器未执行。
+        this.publish({ phase: 'uncertain', rawText: outcome.rawText, reasoning: null, message: '服务器结果在本地接纳前已取消，不能确认本次生成结果。不会自动重试；再次生成可能产生重复调用与费用。' });
       } else if (outcome.status === 'uncertain') {
         // uncertain 不落入 failed/cancelled：服务器是否已执行无从确认，
         // 提示语里必须包含「可能重复调用与费用」的警告，供再生成时复述。
