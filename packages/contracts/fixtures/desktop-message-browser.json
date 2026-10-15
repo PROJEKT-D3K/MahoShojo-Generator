@@ -1,0 +1,70 @@
+[
+  {
+    "request": {
+      "page": "report-appeals",
+      "appealId": "case-1"
+    },
+    "expected": {
+      "page": "report-appeals",
+      "appealId": "case-1"
+    }
+  },
+  {
+    "request": {
+      "page": "report-appeals",
+      "appealId": "legacy id&/?"
+    },
+    "expected": {
+      "page": "report-appeals",
+      "appealId": "legacy id&/?"
+    }
+  },
+  {
+    "request": {
+      "page": "report-appeals",
+      "appealId": "\ufeffcase-1\ufeff"
+    },
+    "expected": {
+      "page": "report-appeals",
+      "appealId": "case-1"
+    }
+  },
+  {
+    "request": {
+      "page": "report-appeals",
+      "appealId": "\tcase-1\n"
+    },
+    "expected": {
+      "page": "report-appeals",
+      "appealId": "case-1"
+    }
+  },
+  {
+    "request": {
+      "page": "report-appeals",
+      "appealId": "\u0085case-1"
+    },
+    "expected": null
+  },
+  {
+    "request": {
+      "page": "report-appeals",
+      "appealId": "case\u0085one"
+    },
+    "expected": null
+  },
+  {
+    "request": {
+      "page": "report-appeals",
+      "appealId": "case\none"
+    },
+    "expected": null
+  },
+  {
+    "request": {
+      "page": "report-appeals",
+      "appealId": "  "
+    },
+    "expected": null
+  }
+]

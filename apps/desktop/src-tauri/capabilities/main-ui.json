@@ -111,6 +111,7 @@
     "allow-cancel-hosted-ai",
     "allow-open-external-url",
     "allow-open-cloud-account-page",
+    "allow-open-cloud-message-page",
     "allow-announcements-get-cached",
     "allow-announcements-refresh",
     "allow-desktop-config-read",

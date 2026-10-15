@@ -84,6 +84,95 @@ pub fn cloud_account_page_url(
     validate_external_url(url.as_str())
 }
 
+/// 消息 Web 流程只有两个固定目标；查询参数不能改变 origin/path。
+#[derive(Debug)]
+pub struct OpenCloudMessagePageRequest {
+    pub page: String,
+    pub appeal_id: Option<String>,
+    pub report_case_id: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for OpenCloudMessagePageRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ObjectOnly;
+        impl<'de> serde::de::Visitor<'de> for ObjectOnly {
+            type Value = OpenCloudMessagePageRequest;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("固定消息页面请求对象")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                fn present_string<'de, D: serde::Deserializer<'de>>(
+                    d: D,
+                ) -> Result<Option<String>, D::Error> {
+                    String::deserialize(d).map(Some)
+                }
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields, rename_all = "camelCase")]
+                struct Fields {
+                    page: String,
+                    #[serde(default, deserialize_with = "present_string")]
+                    appeal_id: Option<String>,
+                    #[serde(default, deserialize_with = "present_string")]
+                    report_case_id: Option<String>,
+                }
+                let fields =
+                    Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(OpenCloudMessagePageRequest {
+                    page: fields.page,
+                    appeal_id: fields.appeal_id,
+                    report_case_id: fields.report_case_id,
+                })
+            }
+        }
+        deserializer.deserialize_map(ObjectOnly)
+    }
+}
+
+pub fn cloud_message_page_url(
+    origin: &str,
+    request: &OpenCloudMessagePageRequest,
+) -> Result<url::Url, ExternalLinkError> {
+    let mut url = validate_external_url(origin)?;
+    let reference = match (
+        request.appeal_id.as_deref(),
+        request.report_case_id.as_deref(),
+    ) {
+        (None, None) => None,
+        (Some(id), None) => Some(("appealId", id)),
+        (None, Some(id)) => Some(("reportCaseId", id)),
+        _ => return Err(ExternalLinkError::invalid("消息目标只允许一个查询标识")),
+    };
+    match request.page.as_str() {
+        "investigation" if reference.is_none() => url.set_path("/investigation"),
+        "report-appeals" => url.set_path("/report-appeals"),
+        _ => return Err(ExternalLinkError::invalid("未知的消息目标")),
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    if let Some((key, id)) = reference {
+        // 与 Web handler / TS schema 的 String.trim 同义：BOM 是空白，NEL 不是。
+        let id = id.trim_matches(|c| {
+            matches!(c,
+                '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
+                '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+                '\u{205f}' | '\u{3000}' | '\u{feff}'
+            )
+        });
+        // 编码前的粗上限；下面仍校验含当前 origin 的完整 URL 字节预算。
+        if id.is_empty()
+            || id.encode_utf16().count() > MAX_EXTERNAL_URL_LENGTH
+            || id.chars().any(char::is_control)
+        {
+            return Err(ExternalLinkError::invalid("消息查询标识无效"));
+        }
+        url.query_pairs_mut().append_pair(key, id);
+    }
+    validate_external_url(url.as_str())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExternalLinkErrorCode {
@@ -158,6 +247,111 @@ pub fn open_validated_url(url: &url::Url) -> Result<(), ExternalLinkError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_reference_normalization_matches_shared_ecmascript_fixture() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../../packages/contracts/fixtures/desktop-message-browser.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let request: OpenCloudMessagePageRequest =
+                serde_json::from_value(case["request"].clone()).unwrap();
+            let target = cloud_message_page_url("https://example.test", &request);
+            if case["expected"].is_null() {
+                assert!(target.is_err(), "{case}");
+            } else {
+                let target = target.unwrap();
+                let query: Vec<_> = target.query_pairs().collect();
+                assert_eq!(query.len(), 1);
+                assert_eq!(query[0].0, "appealId");
+                assert_eq!(query[0].1, case["expected"]["appealId"].as_str().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn message_pages_preserve_only_validated_query_values_on_current_origin() {
+        for origin in [
+            "https://mahoshojo.colanns.me",
+            "http://localhost:8787",
+            "https://dev.example.test",
+        ] {
+            for (request, path, query) in [
+                (
+                    serde_json::json!({"page":"investigation"}),
+                    "/investigation",
+                    None,
+                ),
+                (
+                    serde_json::json!({"page":"report-appeals"}),
+                    "/report-appeals",
+                    None,
+                ),
+                (
+                    serde_json::json!({"page":"report-appeals","appealId":" legacy id&/? "}),
+                    "/report-appeals",
+                    Some(("appealId", "legacy id&/?")),
+                ),
+                (
+                    serde_json::json!({"page":"report-appeals","reportCaseId":"case-1"}),
+                    "/report-appeals",
+                    Some(("reportCaseId", "case-1")),
+                ),
+            ] {
+                let request = serde_json::from_value(request).unwrap();
+                let target =
+                    cloud_message_page_url(&format!("{origin}/old?token=secret#private"), &request)
+                        .unwrap();
+                assert_eq!(target.origin(), url::Url::parse(origin).unwrap().origin());
+                assert_eq!(target.path(), path);
+                assert_eq!(target.fragment(), None);
+                assert_eq!(
+                    target
+                        .query_pairs()
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect::<Vec<_>>(),
+                    query
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn message_pages_reject_injections_and_invalid_requests() {
+        for value in [
+            serde_json::json!([]),
+            serde_json::json!(["investigation"]),
+            serde_json::json!({"page":"investigation","url":"https://evil.test"}),
+            serde_json::json!({"page":"report-appeals","appealId":null}),
+            serde_json::json!({"page":"report-appeals","origin":"https://evil.test"}),
+            serde_json::json!({"page":"report-appeals","returnTo":"x"}),
+        ] {
+            assert!(serde_json::from_value::<OpenCloudMessagePageRequest>(value).is_err());
+        }
+        assert!(serde_json::from_str::<OpenCloudMessagePageRequest>(
+            r#"{"page":"investigation","page":"report-appeals"}"#
+        )
+        .is_err());
+        for value in [
+            serde_json::json!({"page":"unknown"}),
+            serde_json::json!({"page":"investigation","appealId":"x"}),
+            serde_json::json!({"page":"report-appeals","appealId":"x","reportCaseId":"y"}),
+            serde_json::json!({"page":"report-appeals","appealId":" "}),
+            serde_json::json!({"page":"report-appeals","appealId":"x\ny"}),
+            serde_json::json!({"page":"report-appeals","appealId":"x".repeat(2048)}),
+        ] {
+            let request = serde_json::from_value(value).unwrap();
+            assert!(cloud_message_page_url("https://example.test", &request).is_err());
+        }
+        let request = serde_json::from_value(serde_json::json!({"page":"investigation"})).unwrap();
+        for origin in ["file:///tmp", "https://user:pass@example.test", "invalid"] {
+            assert!(cloud_message_page_url(origin, &request).is_err());
+        }
+    }
 
     #[test]
     fn cloud_account_pages_use_only_fixed_paths_on_the_current_origin() {

@@ -4,7 +4,7 @@
 // 取数（`cloud_messages_request` 固定路由而不是 fetch）、竞态归属
 // （requestId + userId 双闸，与 Web 同一组纯函数）、已读分发（写回顶栏
 // 摘要缓存而不是 `dispatchMessagesUpdatedEvent`）、链接策略（产品路径走
-// hash-history，站外走 `openContent` 确认 + native 校验）。
+// 已交付路径走 hash-history，固定 Web 流程走受控浏览器；普通站外内容仍经确认 + native 校验）。
 //
 // 诚实性口径与 Web 一致：加载失败给「请稍后重试」而不是空列表；无身份只
 // 拉公开全站消息；会话被拒（Required 路由 401 native 已清凭据，或登录态
@@ -25,6 +25,8 @@ import {
   shouldApplyMessagesLoadMore,
   type MessagesPageState,
 } from '@mahoshojo/ui-web/messages';
+import { BaseModal } from '@mahoshojo/ui-web/modal';
+import type { DesktopOpenCloudMessagePageRequest } from '@mahoshojo/contracts/desktop-ipc';
 import type { MessageFilter } from '@mahoshojo/contracts/messages';
 
 import { useDesktopCloudSession } from '../features/account/use-desktop-cloud-session';
@@ -39,18 +41,42 @@ import {
 import { refreshMessagesSummary } from '../features/messages/topbar-messages';
 import { navigateByProductHref, resolveInternalHrefForHashHistory } from './hash-history-fragment';
 
+import { resolveMessageDestination } from '../features/messages/message-destination';
+import { openCloudMessagePage } from '../platform/external-links-bridge';
+
 const MESSAGES_PAGE_LIMIT = 20;
 
 export function DesktopMessages() {
   const router = useRouter();
   const { state: cloudSession, store: sessionStore } = useDesktopCloudSession();
   const { openContent } = useExternalLinks();
+  const [browserTarget, setBrowserTarget] = useState<DesktopOpenCloudMessagePageRequest | null>(null);
+  const browserTargetRef = useRef<{ request: DesktopOpenCloudMessagePageRequest; userId: number | null; epoch: number } | null>(null);
+  const credentialEpoch = sessionStore.getCredentialEpoch();
+  const [destinationError, setDestinationError] = useState<string | null>(null);
+  const handleNavigate = (href: string) => {
+    const target = resolveMessageDestination(href);
+    if (target.kind === 'local') navigateByProductHref(router, target.href);
+    else if (target.kind === 'browser') {
+      browserTargetRef.current = { request: target.request, userId: cloudSession.account?.userId ?? null, epoch: credentialEpoch };
+      setBrowserTarget(target.request);
+    } else setDestinationError(target.reason);
+  };
+  const closeBrowserTarget = () => {
+    browserTargetRef.current = null;
+    setBrowserTarget(null);
+  };
 
   // 与 Web 同源的控制器状态机：`account` 即「本机认识谁」——匿名时只
   // 拉公开全站；userId 是状态归属键，换号时旧账号数据不跨身份可见。
   const account = cloudSession.account;
   const effectiveIsAuthenticated = account !== null;
   const effectiveUserId = account?.userId ?? null;
+  useEffect(() => {
+    browserTargetRef.current = null;
+    setBrowserTarget(null);
+    setDestinationError(null);
+  }, [effectiveUserId, credentialEpoch]);
   const [state, setState] = useState<MessagesPageState>(() =>
     createMessagesPageState(effectiveIsAuthenticated),
   );
@@ -253,6 +279,7 @@ export function DesktopMessages() {
   );
 
   return (
+    <>
     <MessagesPageView
       isAuthenticated={effectiveIsAuthenticated}
       appliedFilter={visibleAppliedFilter}
@@ -275,9 +302,24 @@ export function DesktopMessages() {
       onMarkAllRead={() => void handleMarkAllRead()}
       onMarkRead={(id) => void handleMarkRead(id)}
       onLoadMore={() => void handleLoadMore()}
-      onNavigate={(href) => navigateByProductHref(router, href)}
+      onNavigate={handleNavigate}
       onNavigateExternal={openContent}
-      resolveInternalHref={resolveInternalHrefForHashHistory}
+      resolveInternalHref={(href) => resolveInternalHrefForHashHistory(resolveMessageDestination(href).kind === 'local' ? href : '/messages')}
     />
+    <BaseModal isOpen={browserTarget !== null} title="在浏览器继续处理消息" onClose={closeBrowserTarget}
+      footer={<div className="flex justify-end gap-2">
+        <button type="button" className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800" onClick={closeBrowserTarget}>取消</button>
+        <button type="button" className="rounded-md bg-pink-500 px-4 py-2 text-sm font-medium text-white hover:bg-pink-600" onClick={() => {
+          const target = browserTargetRef.current;
+          closeBrowserTarget();
+          if (target && target.epoch === sessionStore.getCredentialEpoch() && target.userId === (sessionStore.getSnapshot().account?.userId ?? null)) void openCloudMessagePage(invoke, target.request).catch(() => setDestinationError('系统浏览器打开失败，请稍后重试。'));
+        }}>在系统浏览器打开</button>
+      </div>}>
+      <p>此流程在网页版{browserTarget?.page === 'investigation' ? '调查院' : '举报申诉'}继续。浏览器登录的账号可能与 Desktop 不同，请核对后操作；不会传递 Desktop 会话或本地内容。</p>
+    </BaseModal>
+    <BaseModal isOpen={destinationError !== null} title="无法打开消息目标" onClose={() => setDestinationError(null)}>
+      <p>{destinationError}</p>
+    </BaseModal>
+    </>
   );
 }

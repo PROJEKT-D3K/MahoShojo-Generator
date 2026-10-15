@@ -1747,6 +1747,16 @@ fn open_cloud_account_page(
     external_link::open_validated_url(&url)
 }
 
+/// 固定消息流程在当前项目的系统浏览器页面继续，不传 Desktop 凭据。
+#[tauri::command]
+fn open_cloud_message_page(
+    cloud: State<'_, cloud::CloudState>,
+    request: external_link::OpenCloudMessagePageRequest,
+) -> Result<(), external_link::ExternalLinkError> {
+    let url = external_link::cloud_message_page_url(cloud.origin(), &request)?;
+    external_link::open_validated_url(&url)
+}
+
 /// 公告快照：上次成功刷新的落盘结果；没有或损坏返回 `None`，
 /// renderer 据此回退内置快照。
 #[tauri::command]
@@ -2167,6 +2177,7 @@ pub fn run() {
             cancel_hosted_ai,
             open_external_url,
             open_cloud_account_page,
+            open_cloud_message_page,
             announcements_get_cached,
             announcements_refresh,
             desktop_config_read,

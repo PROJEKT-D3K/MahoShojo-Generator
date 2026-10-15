@@ -78,3 +78,15 @@ describe('openExternalUrl bridge', () => {
     expect((error as DesktopExternalLinkError).code).toBe('open-failed');
   });
 });
+
+describe('openCloudMessagePage bridge', () => {
+  it('only forwards a closed fixed request and preserves native failures', async () => {
+    const { openCloudMessagePage } = await import('../src/platform/external-links-bridge');
+    const invoke: InvokeFn = vi.fn(async () => undefined);
+    await openCloudMessagePage(invoke, { page: 'report-appeals', appealId: 'legacy id&/?' });
+    expect(invoke).toHaveBeenCalledWith('open_cloud_message_page', { request: { page: 'report-appeals', appealId: 'legacy id&/?' } });
+    await expect(openCloudMessagePage(invoke, { page: 'investigation', url: 'https://evil.test' } as never)).rejects.toMatchObject({ code: 'bridge-invalid' });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await expect(openCloudMessagePage(async () => { throw { code: 'open-failed', message: 'mock failure' }; }, { page: 'investigation' })).rejects.toMatchObject({ code: 'open-failed', message: 'mock failure' });
+  });
+});

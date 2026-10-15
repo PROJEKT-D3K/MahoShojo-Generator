@@ -68,7 +68,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 }));
 
 import { createDesktopRouter } from '../src/app/router';
-import { resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
+import { getDesktopCloudSessionStore, resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
 import { resetTopbarAvatarForTests } from '../src/features/account/use-topbar-avatar';
 import { resetDesktopAnnouncementsStoreForTests } from '../src/features/announcements/use-desktop-announcements';
 import { resetMessagesSummaryForTests } from '../src/features/messages/topbar-messages';
@@ -205,6 +205,69 @@ describe('desktop messages page', () => {
     );
     expect(router.state.location.pathname).toBe('/character-manager');
     expect(window.location.hash).toBe('#/character-manager');
+  });
+
+  it.each(['/investigation', '/report-appeals?appealId=legacy%20id%26%2F%3F', '/report-appeals?reportCaseId=case-1'])('opens %s only after an explicit browser action', async (href) => {
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === 'open_cloud_message_page') return undefined;
+      if (command === 'cloud_messages_request' && (args as { request: { routeId: string } }).request.routeId === 'messages.list') {
+        return { status: 200, body: { ...LIST, messages: [{ ...LIST.messages[0], actionUrl: href }] } };
+      }
+      return signedInImpl(command, args);
+    });
+    const router = await mountAt('/messages');
+    const action = () => [...container.querySelectorAll('a')].find(a => a.textContent === '查看详情') ?? null;
+    await click(action());
+    expect(document.body.textContent).toContain('浏览器登录的账号可能与 Desktop 不同');
+    expect(invokeMock.mock.calls.some(call => call[0] === 'open_cloud_message_page')).toBe(false);
+    await click([...document.body.querySelectorAll('button')].find(b => b.textContent === '取消') ?? null);
+    expect(router.state.location.pathname).toBe('/messages');
+    await click(action());
+    const confirm = [...document.body.querySelectorAll('button')].find(b => b.textContent === '在系统浏览器打开');
+    expect(confirm).toBeDefined();
+    await act(async () => {
+      confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    await settle();
+    expect(invokeMock.mock.calls.filter(call => call[0] === 'open_cloud_message_page')).toHaveLength(1);
+    const request = href === '/investigation' ? { page: 'investigation' } : href.includes('appealId=') ? { page: 'report-appeals', appealId: 'legacy id&/?' } : { page: 'report-appeals', reportCaseId: 'case-1' };
+    expect(invokeMock).toHaveBeenCalledWith('open_cloud_message_page', { request });
+    expect(router.state.location.pathname).toBe('/messages');
+  });
+
+  it.each(['viewer', 'credential-epoch'])('revokes a pending browser target when %s changes', async (change) => {
+    let changed = false;
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === 'cloud_auth_status' && changed && change === 'viewer') return { state: 'active', account: { ...ACCOUNT, userId: 8 }, sessionExpiresAt: EXPIRES };
+      if (command === 'cloud_messages_request' && (args as { request: { routeId: string } }).request.routeId === 'messages.list') {
+        return { status: 200, body: { ...LIST, messages: [{ ...LIST.messages[0], actionUrl: '/report-appeals?appealId=case-1' }] } };
+      }
+      return signedInImpl(command, args);
+    });
+    await mountAt('/messages');
+    await click([...container.querySelectorAll('a')].find(a => a.textContent === '查看详情') ?? null);
+    expect(document.body.textContent).toContain('浏览器登录的账号可能与 Desktop 不同');
+    changed = true;
+    if (change === 'credential-epoch') vi.spyOn(getDesktopCloudSessionStore(), 'getCredentialEpoch').mockReturnValue(1);
+    await act(async () => { await getDesktopCloudSessionStore().refresh(); });
+    await settle();
+    expect([...document.body.querySelectorAll('button')].some(b => b.textContent === '在系统浏览器打开')).toBe(false);
+    expect(invokeMock.mock.calls.some(call => call[0] === 'open_cloud_message_page')).toBe(false);
+  });
+
+  it('unknown product paths give feedback without navigation or browser invocation', async () => {
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === 'cloud_messages_request' && (args as { request: { routeId: string } }).request.routeId === 'messages.list') {
+        return { status: 200, body: { ...LIST, messages: [{ ...LIST.messages[0], actionUrl: '/not-delivered' }] } };
+      }
+      return signedInImpl(command, args);
+    });
+    const router = await mountAt('/messages');
+    await click([...container.querySelectorAll('a')].find(a => a.textContent === '查看详情') ?? null);
+    expect(document.body.textContent).toContain('该消息目标暂时无法在 Desktop 打开');
+    expect(router.state.location.pathname).toBe('/messages');
+    expect(invokeMock.mock.calls.some(call => String(call[0]).startsWith('open_'))).toBe(false);
   });
 
   it('anonymous: only public site list, no summary call, login CTA replaces mark-all', async () => {

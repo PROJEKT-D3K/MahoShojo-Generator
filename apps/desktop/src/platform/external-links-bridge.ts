@@ -2,9 +2,10 @@ import {
   DesktopExternalLinkErrorCodeSchema,
   DesktopOpenExternalUrlRequestSchema,
   DesktopOpenCloudAccountPageRequestSchema,
+  DesktopOpenCloudMessagePageRequestSchema,
   MAX_DESKTOP_EXTERNAL_URL_LENGTH,
 } from '@mahoshojo/contracts/desktop-ipc';
-import type { DesktopExternalLinkErrorCode, DesktopOpenCloudAccountPageRequest } from '@mahoshojo/contracts/desktop-ipc';
+import type { DesktopExternalLinkErrorCode, DesktopOpenCloudAccountPageRequest, DesktopOpenCloudMessagePageRequest } from '@mahoshojo/contracts/desktop-ipc';
 
 /**
  * 受控外链的 renderer 侧薄桥（D5.1-P1，`DESK-PARITY-003` / `DESK-ONLINE-014`）。
@@ -104,3 +105,11 @@ export const openCloudAccountPage = async (
 };
 
 export { MAX_DESKTOP_EXTERNAL_URL_LENGTH };
+
+export const openCloudMessagePage = async (invoke: InvokeFn, request: DesktopOpenCloudMessagePageRequest): Promise<void> => {
+  const command = 'open_cloud_message_page';
+  const parsed = DesktopOpenCloudMessagePageRequestSchema.safeParse(request);
+  if (!parsed.success) throw new DesktopExternalLinkError(command, 'bridge-invalid', '消息目标无效');
+  try { await invoke(command, { request: parsed.data }); }
+  catch (cause) { throw toExternalLinkError(cause, command); }
+};

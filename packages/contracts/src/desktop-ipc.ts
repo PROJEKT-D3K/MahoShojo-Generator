@@ -952,6 +952,18 @@ export const DesktopOpenCloudAccountPageRequestSchema = z
   .strict();
 export type DesktopOpenCloudAccountPageRequest = z.infer<typeof DesktopOpenCloudAccountPageRequestSchema>;
 
+/** 消息中的固定 Web 流程；ID 仅是查询值，不接受 URL、origin 或会话参数。 */
+// UTF-16 粗上限不保证可打开：Native 构造当前 origin 后，完整 URL 的 UTF-8 2048 字节预算是最终门。
+const DesktopMessageReferenceIdSchema = z.string().trim().min(1).max(MAX_DESKTOP_EXTERNAL_URL_LENGTH)
+  .regex(/^[^\p{Cc}]+$/u);
+export const DesktopOpenCloudMessagePageRequestSchema = z.union([
+  z.object({ page: z.literal('investigation') }).strict(),
+  z.object({ page: z.literal('report-appeals') }).strict(),
+  z.object({ page: z.literal('report-appeals'), appealId: DesktopMessageReferenceIdSchema }).strict(),
+  z.object({ page: z.literal('report-appeals'), reportCaseId: DesktopMessageReferenceIdSchema }).strict(),
+]);
+export type DesktopOpenCloudMessagePageRequest = z.infer<typeof DesktopOpenCloudMessagePageRequestSchema>;
+
 export const DesktopExternalLinkErrorCodeSchema = z.enum([
   'invalid-url',
   'open-failed',
