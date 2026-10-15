@@ -138,3 +138,11 @@ describe('Tavern local journey', () => {
     expect(() => decodeBase64ToBytes(input)).toThrow();
   });
 });
+
+
+it('recovers historical magical-girl originals only after full domain validation', () => {
+  const projected = { ...createBlankDataCard('magical-girl'), codename: '星花', _tavern: { raw: card } };
+  expect(readTavernLocalDocument(encoder.encode(JSON.stringify(projected)), 'json').candidates[0]!.parsed).toEqual(card);
+  expect(() => readTavernLocalDocument(encoder.encode(JSON.stringify({ ...projected, codename: 7 })), 'json')).toThrow();
+  expect(() => readTavernLocalDocument(encoder.encode(JSON.stringify({ ...projected, unknownAuthority: true })), 'json')).toThrow();
+});

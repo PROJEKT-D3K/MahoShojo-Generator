@@ -507,7 +507,7 @@ export const DesktopHostedNameBodySchema = z.object({
 
 /** 酒馆仅传裁剪后的设定；原件和占位符偏好保留本机。 */
 export const DesktopHostedTavernBodySchema = z.object({
-  template: z.enum(['general', 'general-scenario', 'scenario']),
+  template: z.enum(['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou']),
   language: z.string().trim().min(1).max(32),
   sourceName: z.string().max(4096),
   attachments: z.array(z.object({

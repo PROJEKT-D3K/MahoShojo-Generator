@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createTavernGeneralGenerationConfig, createTavernGeneralScenarioGenerationConfig, createTavernScenarioGenerationConfig } from '@mahoshojo/ai-core/tavern-generation';
+import { tavernModelResult } from './tavern-character-fixtures';
+import magicalQuestionnaire from '../../../content/questionnaires/presets/magical-girl-default.json';
+import canshouQuestionnaire from '../../../content/questionnaires/presets/canshou-default.json';
 import { buildStructuredJsonInstructionFromZodSchema } from '@mahoshojo/ai-core/structured-json';
 import { DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE } from '@mahoshojo/domain/tavern-card';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
-import { executeTavernGeneration, prepareTavernGenerationInput, validateTavernGeneratedCard, type TavernGenerationInput, type TavernGenerationIntent } from '../src/features/tavern/generation';
+import { createDesktopTavernGenerationConfig, executeTavernGeneration, prepareTavernGenerationInput, validateTavernGeneratedCard, type TavernGenerationInput, type TavernGenerationIntent } from '../src/features/tavern/generation';
 import { STREAM_DIRECT_AI_COMMAND, STREAM_TARGET_AI_COMMAND } from '../src/platform/direct-ai-bridge';
 
 const scenario = { title: '情景', scenario_type: '互动', description: '简介', elements: { scene: {}, events: '事件', atmosphere: '轻松', development: [] } };
@@ -25,11 +27,12 @@ function harness(text: string) {
 }
 
 describe('Tavern Direct uses the shared Web generation core', () => {
-  it.each(['general', 'general-scenario', 'scenario'] as const)('dispatches %s prompt/schema to Direct and retains the untouched original', async template => {
-    const native = harness(JSON.stringify({ ...scenario, name: '角色', content: '正文', metadata: { signature: 'forged' }, signature: 'forged', isPreset: true }));
+  it.each(['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou'] as const)('dispatches %s prompt/schema to Direct and retains the untouched original', async template => {
+    const native = harness(JSON.stringify({ ...tavernModelResult(template), metadata: { signature: 'forged' }, signature: 'forged', isPreset: true }));
     const selected = { ...input, template };
     const prepared = prepareTavernGenerationInput(selected);
-    const config = template === 'scenario' ? createTavernScenarioGenerationConfig() : template === 'general' ? createTavernGeneralGenerationConfig() : createTavernGeneralScenarioGenerationConfig();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const config = createDesktopTavernGenerationConfig(template);
     const target = { kind: 'preset' as const, providerId: 'deepseek' };
     const outcome = await executeTavernGeneration({ ...native.options, providerTarget: target }, selected, { ...intent, overrides: { temperature: 0.4, maxOutputTokens: 900 } }, new AbortController().signal);
     expect(native.invoke).toHaveBeenCalledTimes(1);
@@ -40,9 +43,10 @@ describe('Tavern Direct uses the shared Web generation core', () => {
       { role: 'user', content: config.promptBuilder(prepared.promptInput) },
     ]);
     expect(prepared.promptInput.attachments[0].content).toContain('旅人 对 Alice 说话');
-    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { ...(template === 'scenario' ? scenario : { templateId: template === 'general' ? '通用角色' : '通用情景', content: '正文' }), _tavern: { raw: input.raw } } });
+    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { ...(template === 'scenario' ? scenario : template === 'magical-girl' ? { codename: '星花' } : template === 'canshou' ? { name: '雾兽' } : { templateId: template === 'general' ? '通用角色' : '通用情景', content: '正文' }), _tavern: { raw: input.raw } } });
     if (outcome.status !== 'completed') throw new Error('expected completed');
     expect(outcome.card).not.toHaveProperty('metadata.signature'); expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('isPreset');
+    random.mockRestore();
     expect(input.raw).toMatchObject({ description: '{{user}} 对 {{char}} 说话' });
   });
   it.each(['not JSON', '{"name":"missing content"}', '{"title":1,"content":{}}'])('rejects malformed model output without retry: %s', async text => {
@@ -69,7 +73,7 @@ describe('Tavern Direct uses the shared Web generation core', () => {
 
 describe('Tavern JSON-only Hosted generation', () => {
   const hosted = { requestId: 'tavern-hosted', mode: 'hosted-json' as const, generationMode: 'non-stream' as const, modelId: 'default' };
-  it.each(['general', 'general-scenario', 'scenario'] as const)('projects unsigned %s and restores only the frozen local original', async template => {
+  it.each(['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou'] as const)('projects unsigned %s and restores only the frozen local original', async template => {
     let finish!: (value: unknown) => void;
     const invoke = vi.fn(() => new Promise(resolve => { finish = resolve; })); const notify = vi.fn();
     const original = JSON.parse(JSON.stringify(input)) as TavernGenerationInput; original.template = template;
@@ -81,9 +85,9 @@ describe('Tavern JSON-only Hosted generation', () => {
     expect(request[1].request).toMatchObject({ routeId: 'tavern-convert', body: { template, ...prepareTavernGenerationInput(original).promptInput }, presetConfig: { providerId: 'deepseek', modelId: 'deepseek-chat', generationOverrides: { temperature: 0.4 } } });
     expect(request[1].request.body).not.toHaveProperty('raw'); expect(request[1].request.body).not.toHaveProperty('preference');
     original.raw = { name: 'changed' };
-    finish({ status: 200, body: { aiMeta: null, data: { ...scenario, name: '角色', content: '正文', metadata: { signature: 'forged' }, signature: 'forged', isPreset: true, _tavern: { raw: { name: 'server' } } } } });
+    finish({ status: 200, body: { aiMeta: null, data: { ...tavernModelResult(template), metadata: { signature: 'forged' }, signature: 'forged', isPreset: true, _tavern: { raw: { name: 'server' } } } } });
     const outcome = await pending;
-    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { ...(template === 'scenario' ? scenario : { content: '正文' }), _tavern: { raw: frozenRaw } } });
+    expect(outcome).toMatchObject({ status: 'completed', cardKind: template, card: { ...(template === 'scenario' ? scenario : template === 'magical-girl' ? { codename: '星花' } : template === 'canshou' ? { name: '雾兽' } : { content: '正文' }), _tavern: { raw: frozenRaw } } });
     if (outcome.status !== 'completed') throw new Error('expected completed');
     expect(outcome.card).not.toHaveProperty('metadata.signature'); expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('isPreset');
     expect(invoke).toHaveBeenCalledOnce(); expect(notify).toHaveBeenCalledOnce();
@@ -116,4 +120,48 @@ describe('Tavern JSON-only Hosted generation', () => {
     expect(await executeTavernGeneration({ ...options, providerTarget: { kind: 'custom', profileId: 'custom' } }, input, hosted, new AbortController().signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
     expect(invoke).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
   });
+});
+
+
+describe('Tavern character questionnaire and restore boundaries', () => {
+  it.each(['magical-girl', 'canshou'] as const)('uses the default %s questions and accepts the canonical answer shape', template => {
+    const questionnaire = template === 'magical-girl' ? magicalQuestionnaire : canshouQuestionnaire;
+    const config = createDesktopTavernGenerationConfig(template);
+    const prompt = config.promptBuilder(prepareTavernGenerationInput({ ...input, template }).promptInput);
+    for (const question of questionnaire.questions) expect(prompt).toContain(question.question);
+    expect(config.schema.safeParse(tavernModelResult(template)).success).toBe(true);
+    expect(config.schema.safeParse({ ...tavernModelResult(template), userAnswers: [123] }).success).toBe(false);
+    expect(config.schema.safeParse({ ...tavernModelResult(template), appearance: 5 }).success).toBe(false);
+  });
+  it.each(['general', 'general-scenario', 'magical-girl', 'canshou'] as const)('retains full stored %s data and extensions without model renormalization', template => {
+    const original = { ...tavernModelResult(template), ...(template === 'general' ? { templateId: '通用角色' } : template === 'general-scenario' ? { templateId: '通用情景' } : {}),
+      _custom: { keep: [1, '中文'] }, current_state: { summary: '仍需保留', fields: [] },
+      ...(template === 'magical-girl' || template === 'canshou' ? { userAnswers: { custom: { question: '旧问题', value: '旧回答' } } } : {}),
+      signature: 'forged', isPreset: true, _tavern: { raw: input.raw } };
+    const card = validateTavernGeneratedCard(template, original);
+    expect(card).toMatchObject({ _custom: original._custom, current_state: original.current_state, _tavern: original._tavern });
+    if ('userAnswers' in original) {
+      expect(card).toHaveProperty('userAnswers');
+      if (!('userAnswers' in card)) throw new Error('Restored character answers are missing');
+      expect(card.userAnswers).toEqual(original.userAnswers);
+    }
+    expect(card).not.toHaveProperty('signature'); expect(card).not.toHaveProperty('isPreset');
+  });
+  it.each([[], 'broken', 42, { signature: 3 }])('rejects malformed restored scenario metadata %j', metadata => {
+    expect(() => validateTavernGeneratedCard('scenario', { ...scenario, metadata, _tavern: { raw: input.raw } })).toThrow();
+  });
+});
+
+
+it.each(['magical-girl', 'canshou'] as const)('applies every placeholder option to %s prompt data only', template => {
+  for (const [preference, expected] of [
+    [{ ...input.preference, enabled: false }, '{{user}} 对 {{char}} 说话'],
+    [{ ...input.preference, enabled: true, charReplacementMode: 'auto' as const }, '旅人 对 Alice 说话'],
+    [{ ...input.preference, enabled: true, charReplacementMode: 'custom' as const, customCharReplacement: '花' }, '旅人 对 花 说话'],
+  ] as const) {
+    const prepared = prepareTavernGenerationInput({ ...input, template, preference });
+    expect(prepared.promptInput.attachments[0].content).toContain(expected);
+    expect(prepared.raw).toEqual(input.raw);
+    expect(prepared.raw).toMatchObject({ extensions: { script: '{{user}} 原件' } });
+  }
 });

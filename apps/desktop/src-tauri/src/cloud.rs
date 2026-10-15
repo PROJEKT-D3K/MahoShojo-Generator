@@ -2111,10 +2111,10 @@ fn build_hosted_tavern_body(value: &serde_json::Value) -> Result<serde_json::Val
     }
     if !matches!(
         body.get("template").and_then(serde_json::Value::as_str),
-        Some("general" | "general-scenario" | "scenario")
+        Some("general" | "general-scenario" | "scenario" | "magical-girl" | "canshou")
     ) {
         return Err(invalid_request(
-            "Tavern 仅支持 general、general-scenario 与 scenario 模板",
+            "Tavern 仅支持 general、general-scenario、scenario、magical-girl 与 canshou 模板",
         ));
     }
     let language = body

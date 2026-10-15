@@ -2,6 +2,7 @@
 import { act, StrictMode, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tavernModelResult } from './tavern-character-fixtures';
 import { DesktopTavern } from '../src/app/tavern-page';
 import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
@@ -23,7 +24,7 @@ vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileI
 vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: class {} }));
 vi.mock('../src/features/tavern/host', () => ({ saveDesktopTavernCard: mocks.save, exportTavernFile: mocks.export, getDesktopTavernBase: vi.fn() }));
 vi.mock('@mahoshojo/ui-web/shell', () => ({ ProductFooter: () => null }));
-vi.mock('@mahoshojo/ui-web/character-card', () => ({ CanshouCard: () => null, GeneralCharacterCard: ({ general }: { general: { content: string } }) => <pre data-result="character">{general.content}</pre> }));
+vi.mock('@mahoshojo/ui-web/character-card', () => ({ resolveMagicalGirlGradient: () => 'pink', MagicalGirlCard: ({ magicalGirl }: { magicalGirl: { appearance: { overallLook: string } } }) => <pre data-result="magical-girl">{magicalGirl.appearance.overallLook}</pre>, CanshouCard: ({ canshou }: { canshou: { appearance: string } }) => <pre data-result="canshou">{canshou.appearance}</pre>, GeneralCharacterCard: ({ general }: { general: { content: string } }) => <pre data-result="character">{general.content}</pre> }));
 vi.mock('@mahoshojo/ui-web/scenario', () => ({ GeneralScenarioCard: ({ scenario }: { scenario: { content: string } }) => <pre data-result="scenario">{scenario.content}</pre> }));
 let root: Root; let host: HTMLDivElement;
 const raw = { name: 'Alice', description: '{{user}} 对 {{char}} 说话', unknown: { keep: true } };
@@ -38,7 +39,7 @@ async function upload(value = raw) {
 async function chooseAi() { const input = host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]:not(:checked)')!; await act(async () => input.click()); await settle(); }
 async function template(value: string) { const select = host.querySelector<HTMLSelectElement>('select')!; await act(async () => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); }); }
 const scenario = { title: '整理情景', scenario_type: '互动', description: '简介', elements: { scene: { place: '庭院' }, events: 'AI 整理正文', atmosphere: '轻松', development: ['探访'] } };
-const complete = (input: TavernGenerationInput) => ({ status: 'completed', mode: 'direct-local', cardKind: input.template, rawText: '模型输出', card: input.template === 'scenario' ? { ...scenario, _tavern: { raw: input.raw } } : { templateId: input.template === 'general' ? '通用角色' : '通用情景', ...(input.template === 'general' ? { name: '整理角色' } : { title: '整理情景' }), content: 'AI 整理正文', _tavern: { raw: input.raw } } });
+const complete = (input: TavernGenerationInput) => ({ status: 'completed', mode: 'direct-local', cardKind: input.template, rawText: '模型输出', card: input.template === 'magical-girl' || input.template === 'canshou' ? { ...tavernModelResult(input.template), _tavern: { raw: input.raw } } : input.template === 'scenario' ? { ...scenario, _tavern: { raw: input.raw } } : { templateId: input.template === 'general' ? '通用角色' : '通用情景', ...(input.template === 'general' ? { name: '整理角色' } : { title: '整理情景' }), content: 'AI 整理正文', _tavern: { raw: input.raw } } });
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.account = { userId: null, epoch: 0 };
@@ -52,8 +53,8 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(
 const mount = async () => { await act(async () => root.render(<StrictMode><DesktopTavern /></StrictMode>)); await settle(); };
 
 describe('Desktop Tavern actual Direct journey', () => {
-  it.each(['general', 'general-scenario', 'scenario'])('generates %s with frozen source and restores without replay', async kind => {
-    await mount(); await upload(); await template(kind); if (kind !== 'scenario') await chooseAi(); await click('开始转换');
+  it.each(['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou'])('generates %s with frozen source and restores without replay', async kind => {
+    await mount(); await upload(); await template(kind); if (kind !== 'scenario' && kind !== 'magical-girl') await chooseAi(); await click('开始转换');
     expect(mocks.execute).toHaveBeenCalledTimes(1);
     expect(mocks.execute.mock.calls[0]!.slice(0, 3)).toEqual([
       expect.objectContaining({ profileId: 'local', providerTarget: { kind: 'custom', profileId: 'local' } }),
@@ -61,8 +62,8 @@ describe('Desktop Tavern actual Direct journey', () => {
       expect.objectContaining({ mode: 'direct-local', generationMode: 'non-stream', modelId: 'model' }),
     ]);
     expect(host.querySelector('[data-result]')?.textContent).toContain('AI 整理正文');
-    await click(kind === 'scenario' ? '下载情景卡 JSON' : '下载通用卡 JSON'); const exported = JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes));
-    expect(exported).toMatchObject({ ...(kind === 'scenario' ? scenario : { content: 'AI 整理正文' }), _tavern: { raw } });
+    await click(kind === 'scenario' ? '下载情景卡 JSON' : kind === 'magical-girl' ? '下载魔法少女卡 JSON' : kind === 'canshou' ? '下载残兽卡 JSON' : '下载通用卡 JSON'); const exported = JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes));
+    expect(exported).toMatchObject({ ...(kind === 'scenario' ? scenario : kind === 'magical-girl' ? { codename: '星花' } : kind === 'canshou' ? { name: '雾兽' } : { content: 'AI 整理正文' }), _tavern: { raw } });
     if (kind === 'scenario') { expect(exported).not.toHaveProperty('content'); expect(exported).not.toHaveProperty('templateId'); }
     await act(async () => root.unmount()); root = createRoot(host); await mount();
     expect(mocks.execute).toHaveBeenCalledTimes(1); expect(host.textContent).toContain('已恢复 AI 结果');
@@ -101,7 +102,7 @@ describe('Desktop Tavern actual Direct journey', () => {
   });
   it.each(['general', 'scenario'])('uses Hosted %s without rewriting the selected server preference', async kind => {
     localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
-    await mount(); await upload(); const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY); await template(kind); if (kind !== 'scenario') await chooseAi();
+    await mount(); await upload(); const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY); await template(kind); if (kind !== 'scenario' && kind !== 'magical-girl') await chooseAi();
     expect(button('开始转换').disabled).toBe(false); await click('开始转换');
     expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'hosted-json', generationMode: 'non-stream' });
     expect(mocks.execute.mock.calls[0]![0]).toMatchObject({ providerTarget: { kind: 'system' }, onHostedDispatchSettled: expect.any(Function) });
@@ -157,11 +158,11 @@ describe('Desktop Tavern actual Direct journey', () => {
     await click('开始转换'); expect(store.isPreparingGeneration()).toBe(true); await click('取消转换');
     await act(async () => finish(true)); await settle(); expect(mocks.execute).not.toHaveBeenCalled();
   });
-  it.each(['rules', 'canshou'])('protects unsaved connection edits when switching to %s', async destination => {
+  it.each(['rules'])('protects unsaved connection edits when switching to %s', async () => {
     await mount(); await upload(); await chooseAi(); await click('更新凭据');
     const name = [...host.querySelectorAll('label')].find(label => label.textContent?.includes('显示名'))!.querySelector('input')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, '未保存连接'); name.dispatchEvent(new Event('input', { bubbles: true })); });
-    const change = async () => destination === 'canshou' ? template('canshou') : act(async () => host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')!.click());
+    const change = async () => act(async () => host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')!.click());
     await change(); expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('尚未保存'));
     expect(name.isConnected).toBe(true); expect(name.value).toBe('未保存连接');
     expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]:checked')?.parentElement?.textContent).toContain('AI 深度转换');
@@ -178,4 +179,23 @@ describe('Desktop Tavern actual Direct journey', () => {
     expect(mocks.execute).toHaveBeenCalledTimes(1);
   });
 
+});
+
+
+describe('Desktop Tavern character mode selection', () => {
+  it('keeps Canshou rules and AI available, but magical-girl rules explicitly unavailable', async () => {
+    await mount(); await upload(); await template('canshou');
+    expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')?.disabled).toBe(false);
+    expect(host.querySelector('[data-result="canshou"]')).not.toBeNull();
+    await chooseAi(); expect(button('开始转换').disabled).toBe(false);
+    await template('magical-girl');
+    expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')?.disabled).toBe(true);
+    expect(host.textContent).toContain('Web 的规则映射尚未接入本地');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    await template('canshou');
+    expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]:checked')?.parentElement?.textContent).toContain('AI 深度转换');
+    await act(async () => host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')!.click());
+    expect(host.querySelector('[data-result="canshou"]')).not.toBeNull();
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
 });

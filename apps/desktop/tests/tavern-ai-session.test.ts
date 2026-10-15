@@ -1,3 +1,4 @@
+import { tavernModelResult } from './tavern-character-fixtures';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import { DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE } from '@mahoshojo/domain/tavern-card';
@@ -81,4 +82,21 @@ describe('Tavern uses the existing generation owner', () => {
     expect(putIfAbsent.mock.calls[1]![0].data).toMatchObject(appFields);
   });
 
+});
+
+
+it.each(['magical-girl', 'canshou'] as const)('restores and saves %s as an unsigned character without replay or answer loss', async template => {
+  const disk = storage(); const selected = { ...input, template };
+  const card = { ...tavernModelResult(template), userAnswers: { legacy: { question: '旧问题', value: '旧回答' } }, _custom: { retained: true }, _tavern: { raw: input.raw }, signature: 'old-claim', isPreset: true };
+  const execute = vi.fn(async () => ({ ...completed, cardKind: template, card }));
+  const putIfAbsent = vi.fn<CardRepository['putIfAbsent']>().mockResolvedValue({ written: true });
+  const repo = { putIfAbsent } as unknown as CardRepository;
+  const session = new TavernAiSession({ storage: disk, repository: repo, execute });
+  session.updateDraft({ language: input.language, input: selected }); await session.generate(options, selected, intent); session.dispose();
+  const restored = new TavernAiSession({ storage: disk, repository: repo, execute }); restored.restoreDraft(false);
+  expect(restored.getSnapshot()).toMatchObject({ resultRestored: true, cardKind: template, card: { userAnswers: card.userAnswers, _custom: card._custom, _tavern: card._tavern } });
+  expect(await restored.saveResult()).toBe(true); expect(execute).toHaveBeenCalledOnce();
+  expect(putIfAbsent.mock.calls[0]![0]).toMatchObject({ cardType: 'character', title: template === 'magical-girl' ? '星花' : '雾兽', provenance: { kind: 'unsigned' } });
+  expect(putIfAbsent.mock.calls[0]![0].data).not.toHaveProperty('signature');
+  expect(putIfAbsent.mock.calls[0]![0].data).not.toHaveProperty('isPreset');
 });

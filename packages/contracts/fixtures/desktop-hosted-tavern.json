@@ -128,6 +128,104 @@
           "modelId": "deepseek-chat"
         }
       }
+    },
+    {
+      "label": "magical-girl-system",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "magical-girl",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "systemConfig": {
+          "modelId": "default"
+        }
+      }
+    },
+    {
+      "label": "magical-girl-preset",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "magical-girl",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "presetConfig": {
+          "providerId": "deepseek",
+          "modelId": "deepseek-chat"
+        }
+      }
+    },
+    {
+      "label": "canshou-system",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "canshou",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "systemConfig": {
+          "modelId": "default"
+        }
+      }
+    },
+    {
+      "label": "canshou-preset",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "canshou",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        },
+        "presetConfig": {
+          "providerId": "deepseek",
+          "modelId": "deepseek-chat"
+        }
+      }
     }
   ],
   "invalid": [
@@ -137,7 +235,7 @@
         "requestId": "tavern-contract",
         "routeId": "tavern-convert",
         "body": {
-          "template": "canshou",
+          "template": "unsupported-character",
           "language": "zh-CN",
           "sourceName": "Alice",
           "attachments": [
@@ -690,27 +788,6 @@
       }
     },
     {
-      "label": "unsupported-template-magical-girl",
-      "request": {
-        "requestId": "tavern-contract",
-        "routeId": "tavern-convert",
-        "body": {
-          "template": "magical-girl",
-          "language": "zh-CN",
-          "sourceName": "Alice",
-          "attachments": [
-            {
-              "name": "设定.txt",
-              "content": "设定",
-              "type": "text/plain",
-              "size": 6,
-              "truncated": false
-            }
-          ]
-        }
-      }
-    },
-    {
       "label": "unsupported-template-custom",
       "request": {
         "requestId": "tavern-contract",
@@ -759,6 +836,90 @@
         "routeId": "tavern-convert",
         "body": {
           "template": " scenario ",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "unsupported-template-magical-girl-wrong-case",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "MAGICAL-GIRL",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "unsupported-template-magical-girl-whitespace",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": " magical-girl ",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "unsupported-template-canshou-wrong-case",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": "CANSHOU",
+          "language": "zh-CN",
+          "sourceName": "Alice",
+          "attachments": [
+            {
+              "name": "设定.txt",
+              "content": "设定",
+              "type": "text/plain",
+              "size": 6,
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "unsupported-template-canshou-whitespace",
+      "request": {
+        "requestId": "tavern-contract",
+        "routeId": "tavern-convert",
+        "body": {
+          "template": " canshou ",
           "language": "zh-CN",
           "sourceName": "Alice",
           "attachments": [

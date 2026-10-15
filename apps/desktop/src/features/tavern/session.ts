@@ -12,11 +12,11 @@ const FAMILY: GenerationSessionFamily<TavernAiDraft, TavernGenerationInput, Tave
     if (value.input !== null) prepareTavernGenerationInput(value.input as TavernGenerationInput);
     return { language: value.language, input: value.input as TavernGenerationInput | null };
   },
-  normalizeStoredCardKind: value => value === 'general-scenario' || value === 'scenario' ? value : 'general',
+  normalizeStoredCardKind: value => value === 'general-scenario' || value === 'scenario' || value === 'magical-girl' || value === 'canshou' ? value : 'general',
   isResidueDraft: draft => !draft.input && !draft.output?.card && !draft.output?.rawText,
   validateCard: validateTavernGeneratedCard,
-  cardTypeOf: kind => kind !== 'general' ? 'scenario' : 'character',
-  titleOf: (kind, card) => String(kind !== 'general' ? card.title : card.name),
+  cardTypeOf: kind => kind === 'scenario' || kind === 'general-scenario' ? 'scenario' : 'character',
+  titleOf: (kind, card) => String(kind === 'scenario' || kind === 'general-scenario' ? card.title : kind === 'magical-girl' ? card.codename : card.name),
   signatureFrom: () => undefined,
   stripSignature: card => { delete card.signature; delete card.isPreset; },
   executeGeneration: executeTavernGeneration,

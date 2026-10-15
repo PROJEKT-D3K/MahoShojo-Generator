@@ -1,5 +1,5 @@
 import { SafeJsonValueSchema, type JsonValue } from '@mahoshojo/contracts/json-value';
-import { ScenarioSchema, type ScenarioData } from '../data-card-schemas';
+import { MagicalGirlSchema, ScenarioSchema, type ScenarioData } from '../data-card-schemas';
 import { GENERAL_CHARACTER_TEMPLATE_ID, GENERAL_SCENARIO_TEMPLATE_ID } from '../data-cards';
 import { buildTavernCanshouCard, TAVERN_CANSHOU_TEMPLATE_ID } from './canshou';
 import { buildGeneralMarkdown, buildTavernGeneralScenarioCard } from './general';
@@ -46,6 +46,11 @@ export function isTavernCanshouProjection(input: unknown): input is Record<strin
     && !isLikelyTavernCard(input);
 }
 
+/** Full domain validation recognizes both current and historical magical-girl imports. */
+export function isTavernMagicalGirlProjection(input: unknown): input is import('../data-card-schemas').MagicalGirlData {
+  return MagicalGirlSchema.safeParse(input).success && !isLikelyTavernCard(input);
+}
+
 export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json'): TavernLocalDocument {
   if (bytes.length > MAX_TAVERN_FILE_BYTES) throw new Error('文件超过 32 MiB 上限。');
   if (format === 'png') {
@@ -58,7 +63,7 @@ export function readTavernLocalDocument(bytes: Uint8Array, format: 'png' | 'json
   const input: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   // Only our explicitly preserved original is recoverable. Do not pretend edits to a converted
   // projected card have been mapped back into the original Tavern fields.
-  const archived = (isTavernGeneralProjection(input) || isTavernCanshouProjection(input) || isTavernScenarioProjection(input)) && record(input._tavern) ? input._tavern.raw : undefined;
+  const archived = (isTavernMagicalGirlProjection(input) || isTavernGeneralProjection(input) || isTavernCanshouProjection(input) || isTavernScenarioProjection(input)) && record(input._tavern) ? input._tavern.raw : undefined;
   const raw = validateTavernRaw(archived ?? input);
   return {
     candidates: [{ keyword: 'json', chunkType: 'tEXt', parseMethod: 'json', parsed: raw }],

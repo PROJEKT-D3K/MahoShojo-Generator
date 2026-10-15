@@ -4,12 +4,12 @@ import type { DataCardTemplate } from '@mahoshojo/domain/data-cards';
 const labels: Record<DataCardTemplate, string> = {
   general: '通用角色（最稳，推荐）',
   'general-scenario': '通用情景（规则映射推荐）',
-  'magical-girl': '魔法少女（保守填充）',
+  'magical-girl': '魔法少女',
   canshou: '残兽（保守填充）',
   scenario: '情景（结构化 JSON）',
 };
 export const TAVERN_WEB_IMPORT_TEMPLATES = ['general', 'general-scenario', 'magical-girl', 'canshou', 'scenario'] as const;
-export const TAVERN_LOCAL_IMPORT_TEMPLATES = ['general', 'general-scenario', 'canshou', 'scenario'] as const;
+export const TAVERN_LOCAL_IMPORT_TEMPLATES = ['general', 'general-scenario', 'magical-girl', 'canshou', 'scenario'] as const;
 
 /** Hosts explicitly declare supported templates; this control never launches conversion. */
 export function TavernTemplateSelector<T extends DataCardTemplate>({ value, templates, disabled, onChange }: {

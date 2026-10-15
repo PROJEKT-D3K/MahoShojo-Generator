@@ -6,18 +6,30 @@ const fixture = JSON.parse(readFileSync(new URL('../fixtures/desktop-hosted-tave
   valid: { label: string; request: Record<string, unknown> }[];
   invalid: { label: string; request: Record<string, unknown> }[];
 };
+const templates = ['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou'] as const;
+
 describe('酒馆 Hosted JSON contract', () => {
   it.each(fixture.valid)('accepts $label', ({ request }) => expect(DesktopHostedJsonRequestSchema.safeParse(request).success).toBe(true));
   it.each(fixture.invalid)('rejects $label', ({ request }) => expect(DesktopHostedJsonRequestSchema.safeParse(request).success).toBe(false));
-  it.each(fixture.invalid.filter(({ request }) => {
-    const body = request.body as Record<string, unknown>;
-    return body.template === 'general' || body.template === 'general-scenario';
-  }))('retains the same scenario boundary for $label', ({ request }) => {
-    expect(DesktopHostedJsonRequestSchema.safeParse({
-      ...request, body: { ...(request.body as Record<string, unknown>), template: 'scenario' },
-    }).success).toBe(false);
+  describe.each(templates)('%s boundaries', (template) => {
+    it.each(fixture.invalid.filter(({ request }) => {
+      const body = request.body as Record<string, unknown>;
+      return body.template === 'general' || body.template === 'general-scenario';
+    }))('retains the same boundary for $label', ({ request }) => {
+      expect(DesktopHostedJsonRequestSchema.safeParse({
+        ...request, body: { ...(request.body as Record<string, unknown>), template },
+      }).success).toBe(false);
+    });
   });
-  it.each(['general', 'general-scenario', 'scenario'])('retains UTF-8 content limits and JSON escaping room for %s', (template) => {
+  it.each(templates)('rejects noncanonical spellings of %s', (template) => {
+    for (const invalid of [template.toUpperCase(), ` ${template}`, `${template} `]) {
+      const request = fixture.valid[0]!.request;
+      expect(DesktopHostedJsonRequestSchema.safeParse({
+        ...request, body: { ...(request.body as Record<string, unknown>), template: invalid },
+      }).success).toBe(false);
+    }
+  });
+  it.each(templates)('retains UTF-8 content limits and JSON escaping room for %s', (template) => {
     const body = { template, language: 'zh-CN', sourceName: '', attachments: [{ name: 'x', content: '\u0000'.repeat(1024 * 1024) }] };
     expect(DesktopHostedTavernBodySchema.safeParse(body).success).toBe(true);
     expect(new TextEncoder().encode(JSON.stringify(body)).length).toBeLessThan(hostedGenerationBodyMaxBytes('tavern-convert'));

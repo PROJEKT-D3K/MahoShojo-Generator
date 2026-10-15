@@ -80,7 +80,7 @@ describe('Desktop Tavern real placeholder journey', () => {
     const raw = { name: '庭院', description: '背景', scenario: '场景', first_mes: '{{user}} 开场', extra: { keep: true } };
     await upload(raw);
     const selector = container.querySelector<HTMLSelectElement>('select')!;
-    expect([...selector.options].map((option) => option.value)).toEqual(['general', 'general-scenario', 'canshou', 'scenario']);
+    expect([...selector.options].map((option) => option.value)).toEqual(['general', 'general-scenario', 'magical-girl', 'canshou', 'scenario']);
     await act(async () => { selector.value = 'general-scenario'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(projected()).toBeUndefined(); expect(container.querySelector('[data-scenario-title]')?.textContent).toContain('## 场景概览');
     await act(async () => button('下载通用卡 JSON').click());

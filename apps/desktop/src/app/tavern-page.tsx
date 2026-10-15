@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter } from '@tanstack/react-router';
-import { buildTavernScenarioFragment, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
-import { TavernConversionControls, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
+import { isTavernMagicalGirlProjection, buildTavernScenarioFragment, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
+import { isTavernGeneralCharacter, isTavernGeneralScenario, getTavernMagicalGirlPreview, TavernConversionControls, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
 import { GeneralScenarioCard } from '@mahoshojo/ui-web/scenario';
-import { CanshouCard, GeneralCharacterCard } from '@mahoshojo/ui-web/character-card';
+import { MagicalGirlCard, resolveMagicalGirlGradient, type CanshouDetails, CanshouCard, GeneralCharacterCard } from '@mahoshojo/ui-web/character-card';
 import { ProductFooter } from '@mahoshojo/ui-web/shell';
 import { IpcLocalCardRepository } from '../platform/local-card-bridge';
 import { exportTavernFile, getDesktopTavernBase, saveDesktopTavernCard } from '../features/tavern/host';
@@ -112,7 +112,7 @@ function TavernPage({ session }: { session: TavernAiSession }) {
   const candidate = result?.candidates[index];
   const normalized = useMemo(() => candidate ? normalizeTavernCard(candidate).normalized : null, [candidate]);
   const conversion = useMemo(() => {
-    try { return { projection: candidate && template !== 'scenario' ? (template === 'canshou' ? convertTavernToCanshouCard(candidate, preference) : template === 'general-scenario' ? convertTavernToGeneralScenarioCard(candidate, preference) : convertTavernToGeneralCard(candidate, preference)) : null, error: null }; }
+    try { return { projection: candidate && template !== 'scenario' && template !== 'magical-girl' ? (template === 'canshou' ? convertTavernToCanshouCard(candidate, preference) : template === 'general-scenario' ? convertTavernToGeneralScenarioCard(candidate, preference) : convertTavernToGeneralCard(candidate, preference)) : null, error: null }; }
     catch (cause) { return { projection: null, error: cause instanceof Error ? cause.message : '转换失败，原件仍保留。' }; }
   }, [candidate, preference, template]);
   const aiCard = useMemo(() => ai.card ? validateTavernGeneratedCard(ai.cardKind, ai.card) : null, [ai.card, ai.cardKind]);
@@ -120,7 +120,7 @@ function TavernPage({ session }: { session: TavernAiSession }) {
     ? buildTavernScenarioFragment(aiCard) ?? { title: '情景', content: JSON.stringify(aiCard, null, 2) } : null, [aiCard]);
   const projection = mode === 'ai' ? aiCard : conversion.projection;
   const { aiInput, aiInputError, warnings } = useMemo(() => {
-    if (!candidate || template === 'canshou') return { aiInput: null, aiInputError: null, warnings: [] };
+    if (!candidate) return { aiInput: null, aiInputError: null, warnings: [] };
     const aiInput: TavernGenerationInput = { raw: candidate.parsed, template, language: ai.draft.language, preference };
     try {
       if (target.location === 'server') buildTavernHostedBody(aiInput);
@@ -162,18 +162,17 @@ function TavernPage({ session }: { session: TavernAiSession }) {
       {candidate && normalized && result ? <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4"><TavernCandidateSelector candidates={result.candidates} selectedIndex={index} onSelect={(next) => { if (confirmChange()) { sourceSelection.begin(); setIndex(next); } }} disabled={blocked} />
           <TavernTemplateSelector value={template} templates={TAVERN_LOCAL_IMPORT_TEMPLATES} disabled={blocked}
-            onChange={(next) => { if (confirmChange(true, next === 'canshou')) { sourceSelection.begin(); setTemplate(next); if (next === 'canshou') setMode('rules'); if (next === 'scenario') setMode('ai'); } }} />
+            onChange={(next) => { if (confirmChange()) { sourceSelection.begin(); setTemplate(next); if (next === 'scenario' || next === 'magical-girl') setMode('ai'); } }} />
           <TavernPlaceholderFields preference={preference} name={normalized.name} onChange={(next) => { if (confirmChange()) setPreference(next); }} disabled={blocked || !placeholderHydrated} />
-          <TavernConversionControls mode={mode} onModeChange={next => { if (next === 'rules' && template === 'scenario') return; if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={blocked}
-            rulesDisabledReason={template === 'scenario' ? '结构化情景目前仅支持 AI 深度转换，尚未提供规则映射。' : undefined}
-            aiDisabledReason={template === 'canshou' ? '残兽目前仅支持规则映射；AI 深度转换仅支持通用角色、通用情景与结构化情景。' : undefined}
+          <TavernConversionControls mode={mode} onModeChange={next => { if (next === 'rules' && (template === 'scenario' || template === 'magical-girl')) return; if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={blocked}
+            rulesDisabledReason={template === 'magical-girl' ? '魔法少女在此入口仅支持 AI 深度转换；Web 的规则映射尚未接入本地。' : template === 'scenario' ? '结构化情景目前仅支持 AI 深度转换，尚未提供规则映射。' : undefined}
             aiDescription="裁剪后的设定将通过所选客户端或服务器通道发送；结果通过共源 schema 校验，原件单独保留。"
             language={ai.draft.language} languages={languages.length ? languages : [{ code: ai.draft.language, name: ai.draft.language }]}
             onLanguageChange={language => { if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, language }); }}
             languageExpanded={languageExpanded} onLanguageExpandedChange={setLanguageExpanded}
             generationMode="non-stream" onGenerationModeChange={() => undefined}
             generationModeDisabledReasons={{ stream: '酒馆 AI 当前仅支持非流式转换。' }}
-            generationModeDescription="非流式生成返回通用角色、通用情景或结构化情景 JSON；转换结果未签名。"
+            generationModeDescription="非流式生成返回所选模板的完整 JSON；转换结果未签名。"
             provider={<DesktopAiProviderPanel generationMode="non-stream" showConnectionTest={false} onDirtyChange={setProviderDirty}
               copy={{ serverOutput: { stream: '', nonStream: '非流式 JSON' }, emptyProfilesHint: '请选择生成通道。', serverFootnote: '服务器仅接收裁剪后的设定；原件和占位符偏好保留本机。', payloadNoun: '裁剪后的酒馆设定' }} />}
             providerFootnote="API Key 使用本机安全存储。失败或取消后不会自动重发，请确认费用与原始输出后再手动重试。" />
@@ -191,7 +190,7 @@ function TavernPage({ session }: { session: TavernAiSession }) {
             busy.current = true; setSaving(true);
             try { if (mode === 'ai') { const saved = await session.saveResult(); if (!saved) throw new Error(session.getSnapshot().saveError ?? '保存失败'); return session.getSnapshot().saveStatus === 'already-present' ? 'already-present' : 'saved'; } return await saveDesktopTavernCard(repository, data); } finally { busy.current = false; setSaving(false); }
           }} />
-          {isTavernStructuredScenario(projection) ? <GeneralScenarioCard scenario={scenarioPreview ?? { title: '未命名情景', content: '' }} /> : projection.templateId === TAVERN_CANSHOU_TEMPLATE_ID ? <CanshouCard canshou={projection} /> : projection.templateId === '通用情景' ? <GeneralScenarioCard scenario={projection} /> : <GeneralCharacterCard general={projection} />}</> : null}</div>
+          {isTavernMagicalGirlProjection(projection) ? <MagicalGirlCard magicalGirl={getTavernMagicalGirlPreview(projection)} gradientStyle={resolveMagicalGirlGradient(projection.appearance?.colorScheme)} /> : isTavernStructuredScenario(projection) ? <GeneralScenarioCard scenario={scenarioPreview ?? { title: '未命名情景', content: '' }} /> : projection.templateId === TAVERN_CANSHOU_TEMPLATE_ID ? <CanshouCard canshou={projection as unknown as CanshouDetails} /> : isTavernGeneralScenario(projection) ? <GeneralScenarioCard scenario={projection} /> : isTavernGeneralCharacter(projection) ? <GeneralCharacterCard general={projection} /> : null}</> : null}</div>
         <div className="space-y-4"><TavernCardPreview normalized={normalized} warnings={result.meta.warnings} />
           <TavernOriginalExport disabled={blocked} candidate={candidate} basePngBytes={basePng} exportFile={exportTavernFile} /></div>
       </div> : null}

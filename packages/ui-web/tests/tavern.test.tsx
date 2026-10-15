@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getTavernProjectionTitle, getTavernProjectionCardType, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernCandidateSelector, TavernFileInput, TavernLocalProjection, TavernOriginalExport, TavernLocalSources, useTavernSourceSelection, readTavernFile } from '../src/tavern';
+import { isTavernGeneralCharacter, isTavernGeneralScenario, getTavernMagicalGirlPreview, getTavernProjectionTitle, getTavernProjectionCardType, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernCandidateSelector, TavernFileInput, TavernLocalProjection, TavernOriginalExport, TavernLocalSources, useTavernSourceSelection, readTavernFile } from '../src/tavern';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import { convertTavernToCanshouCard, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_FILE_BYTES, type TavernCardCandidate } from '@mahoshojo/domain/tavern-card';
 let root: Root; let container: HTMLDivElement;
@@ -131,4 +131,53 @@ describe('shared Tavern original journey controls', () => {
   it.each([['large.png', MAX_TAVERN_FILE_BYTES + 1], ['large.json', MAX_TAVERN_TEXT_BYTES + 1]])('rejects %s before materializing bytes', async (name, size) => {
     const arrayBuffer = vi.fn(); await expect(readTavernFile({ name: name as string, size: size as number, arrayBuffer })).rejects.toThrow('上限'); expect(arrayBuffer).not.toHaveBeenCalled();
   });
+});
+
+
+it('previews sparse historical magical-girl cards without altering structured export or unsigned status', async () => {
+  const data = { codename: '星/花', _tavern: { raw: candidate.parsed }, _custom: { retain: true } };
+  expect(getTavernMagicalGirlPreview(data).appearance.overallLook).toBe('');
+  expect(data).not.toHaveProperty('appearance');
+  expect(getTavernProjectionTitle(data)).toBe('星/花'); expect(getTavernProjectionCardType(data)).toBe('character');
+  const exportFile = vi.fn(); const save = vi.fn().mockResolvedValue('saved');
+  act(() => root.render(<TavernLocalProjection conversionMode="ai" data={data} exportFile={exportFile} saveCard={save} />));
+  expect(container.textContent).toContain('魔法少女（AI 深度转换）');
+  await act(async () => container.querySelector('button')!.click());
+  expect(exportFile.mock.calls[0][0].name).toBe('星_花.json');
+  expect(JSON.parse(new TextDecoder().decode(exportFile.mock.calls[0][0].bytes))).toEqual(data);
+  await act(async () => container.querySelectorAll('button')[1].click());
+  expect(container.textContent).toContain('未签名 AI 转换');
+});
+
+
+it('requires the actual general-card shape before classifying a templateId as a preview', () => {
+  const general = convertTavernToGeneralCard(candidate);
+  const scenario = convertTavernToGeneralScenarioCard(candidate);
+  expect(isTavernGeneralCharacter(general)).toBe(true);
+  expect(isTavernGeneralScenario(scenario)).toBe(true);
+  expect(isTavernGeneralCharacter(scenario)).toBe(false);
+  expect(isTavernGeneralScenario(general)).toBe(false);
+  const sparseCharacter = { name: '残兽', templateId: '通用情景' };
+  expect(isTavernGeneralScenario(sparseCharacter)).toBe(false);
+  expect(getTavernProjectionCardType(sparseCharacter)).toBe('character');
+  expect(getTavernProjectionTitle(sparseCharacter)).toBe('残兽');
+  expect(isTavernGeneralScenario({ ...scenario, content: 7 })).toBe(false);
+  expect(isTavernGeneralCharacter({ ...general, name: 7 })).toBe(false);
+});
+
+
+it('keeps legal general-card extensions visible even when they resemble a Tavern source', async () => {
+  const general = { ...convertTavernToGeneralCard(candidate), description: '合法扩展' };
+  const scenario = { ...convertTavernToGeneralScenarioCard(candidate), name: '旧名称扩展', description: '合法扩展' };
+  expect(isTavernGeneralCharacter(general)).toBe(true);
+  expect(isTavernGeneralScenario(scenario)).toBe(true);
+  expect(getTavernProjectionTitle(general)).toBe(general.name);
+  expect(getTavernProjectionTitle(scenario)).toBe(scenario.title);
+  expect(getTavernProjectionCardType(scenario)).toBe('scenario');
+  const exportFile = vi.fn();
+  for (const data of [general, scenario]) {
+    act(() => root.render(<TavernLocalProjection conversionMode="ai" data={data} exportFile={exportFile} saveCard={vi.fn()} />));
+    await act(async () => container.querySelector('button')!.click());
+    expect(JSON.parse(new TextDecoder().decode(exportFile.mock.calls.at(-1)![0].bytes))).toEqual(data);
+  }
 });
