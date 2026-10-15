@@ -19,3 +19,4 @@ export * from './state-machine';
 export * from './state-machine-model';
 
 export * from './config-publish-observation';
+export * from './proposal-reconciliation';

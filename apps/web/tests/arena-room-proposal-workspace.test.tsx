@@ -127,7 +127,7 @@ describe('Arena room Proposal workspace', () => {
     const controller = {
       submitProposal: vi.fn(async () => undefined),
       withdrawProposal: vi.fn(async () => undefined),
-      reconnect: vi.fn(),
+      endProposalTracking: vi.fn(), reconnect: vi.fn(),
     } satisfies Pick<ArenaRoomController, 'reconnect' | 'submitProposal' | 'withdrawProposal'>;
 
     await act(async () => root.render(
@@ -325,7 +325,7 @@ describe('Arena room Proposal workspace', () => {
     const controller = {
       submitProposal: vi.fn(async () => undefined),
       withdrawProposal: vi.fn(async () => undefined),
-      reconnect: vi.fn(),
+      endProposalTracking: vi.fn(), reconnect: vi.fn(),
     } satisfies Pick<ArenaRoomController, 'reconnect' | 'submitProposal' | 'withdrawProposal'>;
 
     await act(async () => root.render(
@@ -403,7 +403,7 @@ describe('Arena room Proposal workspace', () => {
     const controller = {
       submitProposal: vi.fn(async () => undefined),
       withdrawProposal: vi.fn(async () => undefined),
-      reconnect: vi.fn(),
+      endProposalTracking: vi.fn(), reconnect: vi.fn(),
     } satisfies Pick<ArenaRoomController, 'reconnect' | 'submitProposal' | 'withdrawProposal'>;
 
     await act(async () => root.render(
@@ -454,7 +454,7 @@ describe('Arena room Proposal workspace', () => {
     const controller = {
       submitProposal: vi.fn(async () => undefined),
       withdrawProposal: vi.fn(async () => undefined),
-      reconnect: vi.fn(),
+      endProposalTracking: vi.fn(), reconnect: vi.fn(),
     } satisfies Pick<ArenaRoomController, 'reconnect' | 'submitProposal' | 'withdrawProposal'>;
 
     await act(async () => root.render(
@@ -500,7 +500,7 @@ describe('Arena room Proposal workspace', () => {
     const controller = {
       submitProposal: vi.fn(async () => undefined),
       withdrawProposal: vi.fn(async () => undefined),
-      reconnect: vi.fn(),
+      endProposalTracking: vi.fn(), reconnect: vi.fn(),
     } satisfies Pick<ArenaRoomController, 'reconnect' | 'submitProposal' | 'withdrawProposal'>;
 
     await act(async () => root.render(
@@ -558,7 +558,7 @@ describe('Arena room Proposal workspace', () => {
     const controller = {
       submitProposal: vi.fn(async () => undefined),
       withdrawProposal: vi.fn(async () => undefined),
-      reconnect: vi.fn(),
+      endProposalTracking: vi.fn(), reconnect: vi.fn(),
     } satisfies Pick<ArenaRoomController, 'reconnect' | 'submitProposal' | 'withdrawProposal'>;
     let releaseMatch!: (value: unknown) => void;
     const pendingMatch = new Promise((resolve) => { releaseMatch = resolve; });
@@ -627,7 +627,7 @@ describe('Arena room Proposal workspace', () => {
     const controller = {
       submitProposal: vi.fn(async () => undefined),
       withdrawProposal: vi.fn(async () => undefined),
-      reconnect: vi.fn(),
+      endProposalTracking: vi.fn(), reconnect: vi.fn(),
     } satisfies Pick<ArenaRoomController, 'reconnect' | 'submitProposal' | 'withdrawProposal'>;
 
     await act(async () => root.render(
@@ -670,7 +670,7 @@ describe('旧基准草稿提交策略', () => {
       revision: 8, sharedConfig: { ...sharedConfig, userGuidance: '房主已改C' },
     } } };
     editor.sync(latest.session.snapshot);
-    const controller = { submitProposal: vi.fn(async () => undefined), withdrawProposal: vi.fn(async () => undefined), reconnect: vi.fn() };
+    const controller = { submitProposal: vi.fn(async () => undefined), withdrawProposal: vi.fn(async () => undefined), endProposalTracking: vi.fn(), reconnect: vi.fn() };
     await act(async () => root.render(<ArenaRoomProposalWorkspaceView editor={editor} state={latest} controller={controller} />));
     expect(container.textContent).toContain('草稿仍可提交，冲突项将由房主审阅决定');
     expect(editor.store.getState()).toMatchObject({ baselineRevision: 7, stale: true, dirty: true });
@@ -684,7 +684,7 @@ describe('旧基准草稿提交策略', () => {
     const editor = createRoomProposalArenaEditorSession(state.session!.snapshot);
     editor.update((draft) => ({ ...draft, userGuidance: 'B' }));
     editor.sync({ ...state.session!.snapshot, roomEpoch: 'epoch-2' });
-    const controller = { submitProposal: vi.fn(async () => undefined), withdrawProposal: vi.fn(async () => undefined), reconnect: vi.fn() };
+    const controller = { submitProposal: vi.fn(async () => undefined), withdrawProposal: vi.fn(async () => undefined), endProposalTracking: vi.fn(), reconnect: vi.fn() };
     await act(async () => root.render(<ArenaRoomProposalWorkspaceView editor={editor} state={state} controller={controller} />));
     expect(container.textContent).toContain('房间实例已变化，请重新同步');
     expect(button('预览提案').disabled).toBe(true);

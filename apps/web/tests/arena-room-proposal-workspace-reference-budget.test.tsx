@@ -107,7 +107,7 @@ describe('Arena 房间参考项联合预算', () => {
     const controller = {
       submitProposal: vi.fn(async () => undefined),
       withdrawProposal: vi.fn(async () => undefined),
-      reconnect: vi.fn(),
+      endProposalTracking: vi.fn(), reconnect: vi.fn(),
     } satisfies Pick<ArenaRoomController, 'reconnect' | 'submitProposal' | 'withdrawProposal'>;
 
     await act(async () => root.render(

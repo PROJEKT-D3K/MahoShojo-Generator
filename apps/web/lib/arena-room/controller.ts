@@ -1,4 +1,12 @@
-import { observeArenaRoomConfigPublish, type ArenaRoomConfigPublishTarget, type ArenaRoomConfigPublishObservation } from '@mahoshojo/multiplayer-core';
+import {
+  createArenaRoomProposalReconciliationTarget,
+  observeArenaRoomProposalReconciliation,
+  type ArenaRoomProposalReconciliationTarget,
+  type ArenaRoomProposalReconciliationObservation,
+  observeArenaRoomConfigPublish,
+  type ArenaRoomConfigPublishTarget,
+  type ArenaRoomConfigPublishObservation,
+} from '@mahoshojo/multiplayer-core';
 import {
   ARENA_ROOM_PRESENCE_WEBSOCKET_PROTOCOL,
   ArenaRoomPublishConfigRequestSchema,
@@ -69,6 +77,9 @@ export type ArenaRoomControllerState = {
   readonly unknownOperation: 'create' | 'join' | null;
   readonly proposalOperation: 'resolve' | 'submit' | 'withdraw' | null;
   readonly proposalResultUnknown: boolean;
+  /** Latest observed business outcome, separate from connection status; scoped to this session. */
+  readonly proposalOutcome?: string | null;
+  readonly proposalTracking?: Readonly<{ id: string; phase: 'unknown' | 'ended-needs-read' }> | null;
   readonly configPublishPending: boolean;
   readonly configPublishResultUnknown: boolean;
   readonly configTracking?: ArenaRoomConfigTracking | null;
@@ -124,8 +135,9 @@ export type ArenaRoomGenerationControllerView = {
 type ProposalMutationOperation = 'resolve' | 'submit' | 'withdraw';
 
 type UnknownProposalMutation = {
-  readonly operation: ProposalMutationOperation;
-  readonly proposalId: string;
+  readonly id: string;
+  readonly target: ArenaRoomProposalReconciliationTarget;
+  observation: ArenaRoomProposalReconciliationObservation;
 };
 
 type UnknownManagementMutation =
@@ -183,6 +195,8 @@ export type ArenaRoomController = {
   submitProposal(request: ArenaRoomProposalSubmitRequest): Promise<void>;
   resolveProposal(proposalId: string, request: ArenaRoomProposalResolveRequest): Promise<void>;
   withdrawProposal(proposalId: string): Promise<void>;
+  /** Ends only local tracking; a fresh explicit read is required before another mutation. */
+  endProposalTracking(id: string): void;
   publishConfig(request: ArenaRoomPublishConfigRequest): Promise<ArenaRoomConfigPublishResult>;
   /** 只读核对服务器权威，不重放配置发布；显式同步再决定如何处理本地草稿。 */
   refreshSession(): Promise<ArenaRoomSessionResponse>;
@@ -228,6 +242,8 @@ const READY_STATE: ArenaRoomControllerState = Object.freeze({
   unknownOperation: null,
   proposalOperation: null,
   proposalResultUnknown: false,
+  proposalOutcome: null,
+  proposalTracking: null,
   configPublishPending: false,
   configPublishResultUnknown: false,
   configTracking: null,
@@ -609,7 +625,33 @@ export const createArenaRoomController = (
 
   const publish = (patch: Partial<ArenaRoomControllerState>): void => {
     if (!isActive()) return;
-    const next = { ...state, ...patch };
+    let next = { ...state, ...patch };
+    if (unknownProposalMutation) {
+      if (patch.session) observeProposalAuthority(patch.session);
+      if (unknownProposalMutation.observation.observation === 'scope-changed' && !next.proposalResultUnknown) {
+        proposalMutationGeneration += 1;
+        proposalMutationPending = false;
+        next = { ...next, proposalOperation: null, proposalResultUnknown: true };
+      }
+      if (next.proposalResultUnknown) {
+        const tracked = unknownProposalMutation;
+        if (tracked.observation.settle) {
+          next = { ...next, proposalResultUnknown: false, proposalOperation: null,
+            proposalTracking: null, notice: proposalObservationNotice(tracked.observation),
+            proposalOutcome: proposalObservationNotice(tracked.observation), error: null };
+          unknownProposalMutation = null;
+        } else {
+          next = { ...next, proposalResultUnknown: true,
+            proposalTracking: { id: tracked.id, phase: 'unknown' },
+            ...(tracked.observation.observation === 'conflict' ? { notice: '同一提案 ID 的内容与原意图不符，无法确认结果；请勿换 ID 重复提交' } : {}),
+            ...(tracked.observation.observation === 'scope-changed' ? { notice: '房间作用域已变化，旧提案结果无法核对；可结束本机跟踪' } : {}),
+          };
+        }
+      }
+    }
+    if (patch.session && (patch.session.roomId !== state.session?.roomId
+      || patch.session.roomEpoch !== state.session?.roomEpoch
+      || patch.session.self.userId !== state.session?.self.userId)) next.proposalOutcome = null;
     // Authority is an observation, never a receipt for an earlier POST.
     if (patch.session && next.configTracking && !('configTracking' in patch)) {
       next.configTracking = {
@@ -791,18 +833,30 @@ export const createArenaRoomController = (
     }, reconnectDelayMs(reconnectAttempts));
   };
 
-  const proposalEventReconcilesUnknown = (
-    event: Extract<RoomEvent, {
-      type: 'proposal.resolved' | 'proposal.submitted' | 'proposal.updated';
-    }>,
-  ): boolean => {
-    const unknown = unknownProposalMutation;
-    if (unknown === null) return false;
-    if (event.type === 'proposal.resolved') {
-      return event.payload.proposalId === unknown.proposalId;
+  const proposalObservationNotice = (observation: ArenaRoomProposalReconciliationObservation): string => {
+    if (observation.observation === 'submitted') return '已确认提案进入房间';
+    if (observation.terminalStatus === 'partially_accepted') return '提案已部分接受，具体裁决范围无法核对';
+    if (observation.terminalStatus === 'accepted' && observation.outcome === 'different') {
+      return '提案已全量接受，实际裁决结果与本次操作不同';
     }
-    return unknown.operation === 'submit'
-      && event.payload.proposal.proposalId === unknown.proposalId;
+    if (observation.terminalStatus === 'accepted') return '提案已全量接受';
+    if (observation.terminalStatus === 'stale') return '提案已失效，未按本次操作完成';
+    return observation.terminalStatus ? proposalResolvedNotice(observation.terminalStatus) : '提案结果仍需核对';
+  };
+
+  const observeProposalAuthority = (
+    authority: ArenaRoomSessionResponse,
+    event?: Extract<RoomEvent, { type: 'proposal.resolved' | 'proposal.submitted' | 'proposal.updated' }>,
+  ): void => {
+    const tracked = unknownProposalMutation;
+    if (!tracked) return;
+    const observation = observeArenaRoomProposalReconciliation(tracked.target, {
+      roomId: authority.roomId, roomEpoch: authority.roomEpoch, selfUserId: authority.self.userId,
+      ...(event ? { event } : { proposals: authority.snapshot.proposals }),
+    }, tracked.observation.linked);
+    // A later absent list is not a receipt, nor does it erase an already observed outcome.
+    if (observation.observation === 'absent' && tracked.observation.settle) return;
+    tracked.observation = observation;
   };
 
   const recoveryKeyFor = (
@@ -1263,8 +1317,9 @@ export const createArenaRoomController = (
         configPublishOperation += 1;
         configPublishPending = false;
         invalidateManagementMutation();
+        proposalMutationGeneration += 1;
+        proposalMutationPending = false;
       }
-      unknownProposalMutation = null;
       advanceGenerationFence();
       publish({
         session: {
@@ -1276,8 +1331,7 @@ export const createArenaRoomController = (
         },
         generation: generationViewForSnapshot(event.payload.activeGeneration, epochChanged),
         ...(epochChanged ? { notice: '房间已由服务器恢复，需要重新同步' } : {}),
-        proposalOperation: null,
-        proposalResultUnknown: false,
+        ...(epochChanged ? { proposalOperation: null } : {}),
         ...(epochChanged ? {
           ...(state.configTracking ? { configTracking: { ...state.configTracking, checking: false, observation: 'scope-changed' as const } } : {}),
           configPublishPending: false,
@@ -1338,8 +1392,7 @@ export const createArenaRoomController = (
         item.proposalId !== proposal.proposalId
       ));
       proposals.push(proposal);
-      const reconciledUnknown = proposalEventReconcilesUnknown(event);
-      if (reconciledUnknown) unknownProposalMutation = null;
+      observeProposalAuthority(current, event);
       publish({
         session: {
           ...current,
@@ -1349,7 +1402,7 @@ export const createArenaRoomController = (
             proposals,
           },
         },
-        ...(state.proposalResultUnknown && !reconciledUnknown ? {} : {
+        ...(state.proposalResultUnknown ? {} : {
           proposalOperation: null,
           proposalResultUnknown: false,
           notice: event.type === 'proposal.submitted' ? '提案已进入房间' : '提案已更新',
@@ -1360,8 +1413,7 @@ export const createArenaRoomController = (
     }
 
     if (event.type === 'proposal.resolved') {
-      const reconciledUnknown = proposalEventReconcilesUnknown(event);
-      if (reconciledUnknown) unknownProposalMutation = null;
+      observeProposalAuthority(current, event);
       publish({
         session: {
           ...current,
@@ -1373,7 +1425,7 @@ export const createArenaRoomController = (
             )),
           },
         },
-        ...(state.proposalResultUnknown && !reconciledUnknown ? {} : {
+        ...(state.proposalResultUnknown ? {} : {
           proposalOperation: null,
           proposalResultUnknown: false,
           notice: proposalResolvedNotice(event.payload.status),
@@ -1537,6 +1589,8 @@ export const createArenaRoomController = (
       unknownOperation: null,
       proposalOperation: null,
       proposalResultUnknown: false,
+      proposalTracking: null,
+      proposalOutcome: null,
       managementOperation: null,
       managementResultUnknown: false,
     });
@@ -1554,6 +1608,7 @@ export const createArenaRoomController = (
     generation: number,
   ): Promise<void> => {
     if (!operationIsCurrent(generation)) return;
+    const endedTrackingId = state.proposalTracking?.phase === 'ended-needs-read' ? state.proposalTracking.id : null;
     clearReconnectTimer();
     detachSocket(true);
     publish({
@@ -1589,7 +1644,10 @@ export const createArenaRoomController = (
         controlSeq: authoritative.snapshot.controlSeq,
       };
       reconnectAttempts = 0;
-      unknownProposalMutation = null;
+      if (authoritative.roomEpoch !== latest.roomEpoch) {
+        proposalMutationGeneration += 1;
+        proposalMutationPending = false;
+      }
       advanceGenerationFence();
       publish({
         session: authoritative,
@@ -1597,8 +1655,8 @@ export const createArenaRoomController = (
           authoritative.snapshot.activeGeneration,
           authoritative.roomEpoch !== current.roomEpoch,
         ),
-        proposalOperation: null,
-        proposalResultUnknown: false,
+        ...(endedTrackingId !== null && state.proposalTracking?.id === endedTrackingId
+          && state.proposalTracking.phase === 'ended-needs-read' ? { proposalTracking: null } : {}),
         notice: '已核对当前房间状态，正在重新连接…',
         error: null,
       });
@@ -1648,8 +1706,8 @@ export const createArenaRoomController = (
 
   const runProposalMutation = async (
     operation: ProposalMutationOperation,
-    proposalId: string,
     requiredRole: 'host' | 'member',
+    captureTarget: (session: ArenaRoomSessionResponse) => ArenaRoomProposalReconciliationTarget,
     execute: (session: ArenaRoomSessionResponse) => Promise<ArenaRoomProposalMutationResponse>,
   ): Promise<void> => {
     const current = state.session;
@@ -1661,13 +1719,27 @@ export const createArenaRoomController = (
       || current.self.role !== requiredRole
       || proposalMutationPending
       || state.proposalResultUnknown
+      || state.proposalTracking?.phase === 'ended-needs-read'
     ) return;
+    const target = captureTarget(current);
+    if (target.roomEpoch !== current.roomEpoch) {
+      publish({ error: '房间会话已变化，请先核对最新状态', notice: null });
+      return;
+    }
     proposalMutationPending = true;
     unknownProposalMutation = null;
     proposalMutationGeneration += 1;
     const generation = proposalMutationGeneration;
+    unknownProposalMutation = {
+      id: `${configTrackingScope}:proposal:${generation}`, target,
+      observation: observeArenaRoomProposalReconciliation(target, {
+        roomId: current.roomId, roomEpoch: current.roomEpoch, selfUserId: current.self.userId,
+        proposals: current.snapshot.proposals,
+      }),
+    };
     publish({
       proposalOperation: operation,
+      proposalOutcome: null,
       notice: operation === 'submit'
         ? '正在提交提案…'
         : operation === 'resolve'
@@ -1695,16 +1767,17 @@ export const createArenaRoomController = (
           controlSeq: installed.snapshot.controlSeq,
         };
       }
+      unknownProposalMutation = null;
       publish({
         ...(installed ? { session: installed } : {}),
         proposalOperation: null,
         proposalResultUnknown: false,
+        proposalTracking: null,
         notice: installed
           ? proposalResolvedNotice(response.status)
           : '请求已确认，等待房间状态同步',
         error: null,
       });
-      unknownProposalMutation = null;
     } catch (error) {
       if (
         !isActive()
@@ -1713,7 +1786,6 @@ export const createArenaRoomController = (
         || state.session.roomEpoch !== current.roomEpoch
       ) return;
       if (error instanceof ArenaRoomClientError && error.code === 'ROOM_RESULT_UNKNOWN') {
-        unknownProposalMutation = { operation, proposalId };
         publish({
           proposalOperation: null,
           proposalResultUnknown: true,
@@ -1725,6 +1797,7 @@ export const createArenaRoomController = (
         publish({
           proposalOperation: null,
           proposalResultUnknown: false,
+          proposalTracking: null,
           notice: null,
           error: safeErrorMessage(error),
         });
@@ -2983,22 +3056,37 @@ export const createArenaRoomController = (
       await runCancelGeneration();
     },
 
-    async submitProposal(request) {
-      await runProposalMutation('submit', request.proposalId, 'member', (current) => (
-        options.client.submitProposal(current.roomId, request)
-      ));
+    async submitProposal(input) {
+      const request = structuredClone(input);
+      await runProposalMutation('submit', 'member', (current) => createArenaRoomProposalReconciliationTarget({
+        operation: 'submit', roomId: current.roomId, selfUserId: current.self.userId, request,
+      }), (current) => options.client.submitProposal(current.roomId, request));
     },
 
-    async resolveProposal(proposalId, request) {
-      await runProposalMutation('resolve', proposalId, 'host', (current) => (
-        options.client.resolveProposal(current.roomId, proposalId, request)
-      ));
+    async resolveProposal(proposalId, input) {
+      const request = structuredClone(input);
+      await runProposalMutation('resolve', 'host', (current) => createArenaRoomProposalReconciliationTarget({
+        operation: 'resolve', roomId: current.roomId, selfUserId: current.self.userId, proposalId, request,
+        pendingProposal: current.snapshot.proposals.find((proposal) => proposal.proposalId === proposalId) ?? null,
+      }), (current) => options.client.resolveProposal(current.roomId, proposalId, request));
     },
 
     async withdrawProposal(proposalId) {
-      await runProposalMutation('withdraw', proposalId, 'member', (current) => (
-        options.client.withdrawProposal(current.roomId, proposalId, current.roomEpoch)
-      ));
+      await runProposalMutation('withdraw', 'member', (current) => createArenaRoomProposalReconciliationTarget({
+        operation: 'withdraw', roomId: current.roomId, selfUserId: current.self.userId, proposalId,
+        request: { expectedRoomEpoch: current.roomEpoch },
+        pendingProposal: current.snapshot.proposals.find((proposal) => proposal.proposalId === proposalId) ?? null,
+      }), (current) => options.client.withdrawProposal(current.roomId, proposalId, current.roomEpoch));
+    },
+
+    endProposalTracking(id) {
+      if (!isActive() || !state.proposalResultUnknown || state.proposalTracking?.id !== id) return;
+      proposalMutationGeneration += 1;
+      proposalMutationPending = false;
+      unknownProposalMutation = null;
+      publish({ proposalResultUnknown: false, proposalOperation: null,
+        proposalTracking: { id, phase: 'ended-needs-read' },
+        notice: '已结束本机跟踪，不会取消服务器操作；请重新读取房间状态后明确下一操作', error: null });
     },
 
     async publishConfig(request) {
@@ -3065,6 +3153,9 @@ export const createArenaRoomController = (
 
     reconnect() {
       if (!state.session || !isActive() || !access.enabled || !access.authenticated) return;
+      if (proposalMutationPending && unknownProposalMutation) {
+        publish({ proposalOperation: null, proposalResultUnknown: true, notice: '提案请求尚未确认，正在只读核对' });
+      }
       operationGeneration += 1;
       proposalMutationGeneration += 1;
       proposalMutationPending = false;
@@ -3073,7 +3164,7 @@ export const createArenaRoomController = (
         void reconcileUnknownManagementMutation();
         return;
       }
-      if (state.proposalResultUnknown || state.configPublishResultUnknown) {
+      if (state.proposalResultUnknown || state.proposalTracking || state.configPublishResultUnknown) {
         void reconcileUnknownMutations(state.session, operationGeneration);
         return;
       }

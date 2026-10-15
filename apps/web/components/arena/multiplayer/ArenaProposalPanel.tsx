@@ -56,7 +56,7 @@ import { arenaLanguageCopy } from './presentation/value-copy';
 
 type ProposalController = Pick<
   ArenaRoomController,
-  'reconnect' | 'resolveProposal' | 'submitProposal' | 'withdrawProposal'
+  'endProposalTracking' | 'reconnect' | 'resolveProposal' | 'submitProposal' | 'withdrawProposal'
 >;
 
 export type ArenaProposalPanelProps = {
@@ -451,7 +451,7 @@ const HostProposalInbox = ({
 }) => {
   const session = state.session;
   if (!session) return null;
-  const disabled = state.proposalOperation !== null || state.proposalResultUnknown;
+  const disabled = state.proposalOperation !== null || state.proposalResultUnknown || state.proposalTracking?.phase === 'ended-needs-read';
   const proposals = session.snapshot.proposals;
   return (
     <section aria-labelledby="arena-proposal-inbox-heading" className="rounded-xl border border-gray-200 bg-white/50 p-3 dark:border-gray-700 dark:bg-gray-950/20">
@@ -463,12 +463,19 @@ const HostProposalInbox = ({
           在当前房间提案窗口逐项审阅配置变更，不占用主编辑区。
         </p>
       </div>
-      {state.proposalResultUnknown ? (
+      {state.proposalOutcome ? <p role="status" className="mt-3 text-sm">{state.proposalOutcome}</p> : null}
+      {state.proposalResultUnknown || state.proposalTracking?.phase === 'ended-needs-read' ? (
         <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-          <p>上次审阅结果未知，已冻结重复处理。</p>
+          <p>{state.proposalTracking?.phase === 'ended-needs-read' ? '已结束本机跟踪，不取消服务器操作；请先重新读取房间状态。' : '上次审阅结果未知，已冻结重复处理。'}</p>
           <button type="button" className={buttonClassName({ className: 'mt-2' })} onClick={controller.reconnect}>
             重新连接并对账
           </button>
+          {state.proposalTracking?.phase === 'unknown' ? (
+            <button type="button" className={buttonClassName({ className: 'mt-2 ml-2' })}
+              onClick={() => controller.endProposalTracking(state.proposalTracking!.id)}>
+              结束本机跟踪（不取消服务器操作）
+            </button>
+          ) : null}
         </div>
       ) : null}
       {state.error && !state.proposalResultUnknown ? (
@@ -606,22 +613,29 @@ export function ArenaMemberProposalStatus({
   controller,
 }: {
   readonly state: ArenaRoomControllerState;
-  readonly controller: Pick<ArenaRoomController, 'reconnect' | 'withdrawProposal'>;
+  readonly controller: Pick<ArenaRoomController, 'endProposalTracking' | 'reconnect' | 'withdrawProposal'>;
 }) {
   const session = state.session;
   if (!session || session.self.role !== 'member') return null;
-  const disabled = state.proposalOperation !== null || state.proposalResultUnknown;
+  const disabled = state.proposalOperation !== null || state.proposalResultUnknown || state.proposalTracking?.phase === 'ended-needs-read';
   const proposals = session.snapshot.proposals.filter((proposal) => (
     proposal.authorUserId === session.self.userId
   ));
   return (
     <>
-      {state.proposalResultUnknown ? (
+      {state.proposalOutcome ? <p role="status" className="mt-3 text-sm">{state.proposalOutcome}</p> : null}
+      {state.proposalResultUnknown || state.proposalTracking?.phase === 'ended-needs-read' ? (
         <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-          <p>上次提案请求结果未知，已冻结重复提交。</p>
+          <p>{state.proposalTracking?.phase === 'ended-needs-read' ? '已结束本机跟踪，不取消服务器操作；请先重新读取房间状态。' : '上次提案请求结果未知，已冻结重复提交。'}</p>
           <button type="button" className={buttonClassName({ className: 'mt-2' })} onClick={controller.reconnect}>
             重新连接并对账
           </button>
+          {state.proposalTracking?.phase === 'unknown' ? (
+            <button type="button" className={buttonClassName({ className: 'mt-2 ml-2' })}
+              onClick={() => controller.endProposalTracking(state.proposalTracking!.id)}>
+              结束本机跟踪（不取消服务器操作）
+            </button>
+          ) : null}
         </div>
       ) : null}
 

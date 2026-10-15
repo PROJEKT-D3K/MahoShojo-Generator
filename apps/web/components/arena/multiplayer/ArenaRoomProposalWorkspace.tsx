@@ -47,7 +47,7 @@ import { useArenaRoomContext } from './useArenaRoom';
 type ModalKind = 'character' | 'scenario' | 'auxScenario' | 'material';
 type ProposalController = Pick<
   ArenaRoomController,
-  'reconnect' | 'submitProposal' | 'withdrawProposal'
+  'endProposalTracking' | 'reconnect' | 'submitProposal' | 'withdrawProposal'
 >;
 
 const ResyncConfirmDialog = ({
@@ -374,7 +374,7 @@ const ProposalWorkspaceInner = ({
   };
 
   const submit = async (): Promise<void> => {
-    if (!preview || submitLock.current || state.proposalOperation !== null || state.proposalResultUnknown) return;
+    if (!preview || submitLock.current || state.proposalOperation !== null || (state.proposalResultUnknown || state.proposalTracking?.phase === 'ended-needs-read')) return;
     submitLock.current = true;
     try {
       await controller.submitProposal(editor.buildSubmitIntent(proposalId(), [...selected]));
@@ -387,7 +387,7 @@ const ProposalWorkspaceInner = ({
     }
   };
 
-  const disabled = snapshot.replacementRequired || state.proposalOperation !== null || state.proposalResultUnknown;
+  const disabled = snapshot.replacementRequired || state.proposalOperation !== null || (state.proposalResultUnknown || state.proposalTracking?.phase === 'ended-needs-read');
 
   return (
     <section aria-labelledby="arena-room-proposal-workspace-heading" className="mt-6 rounded-2xl border border-fuchsia-200 bg-fuchsia-50/40 p-4 dark:border-fuchsia-900 dark:bg-fuchsia-950/10 sm:p-5">

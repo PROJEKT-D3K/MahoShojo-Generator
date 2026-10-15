@@ -121,13 +121,13 @@ const stateFor = (
 });
 
 const createController = () => ({
-  reconnect: vi.fn(),
+  endProposalTracking: vi.fn(), reconnect: vi.fn(),
   resolveProposal: vi.fn(async () => undefined),
   submitProposal: vi.fn(async () => undefined),
   withdrawProposal: vi.fn(async () => undefined),
 }) satisfies Pick<
   ArenaRoomController,
-  'reconnect' | 'resolveProposal' | 'submitProposal' | 'withdrawProposal'
+  'endProposalTracking' | 'reconnect' | 'resolveProposal' | 'submitProposal' | 'withdrawProposal'
 >;
 
 const createWorkspace = (): ArenaRoomProposalWorkspace => ({
@@ -514,6 +514,26 @@ describe('房主人工覆盖真实交互', () => {
     expect(button('保留当前值').disabled).toBe(true);
     expect(button('接受所选').disabled).toBe(true);
     await act(async () => button('采用提案值').click());
+    expect(controller.resolveProposal).not.toHaveBeenCalled();
+  });
+  it('提案业务结局独立于重连提示显示', async () => {
+    await renderReview({ ...reviewState(), notice: '已连接房间',
+      proposalOutcome: '提案已部分接受，具体裁决范围无法核对' }, createController());
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('提案已部分接受，具体裁决范围无法核对');
+  });
+  it('unknown 提供明确结束入口，结束后先读取且不能重复裁决', async () => {
+    const controller = createController();
+    await renderReview({ ...reviewState(), proposalResultUnknown: true,
+      proposalTracking: { id: 'tracking-1', phase: 'unknown' } }, controller);
+    await act(async () => button('结束本机跟踪（不取消服务器操作）').click());
+    expect(controller.endProposalTracking).toHaveBeenCalledWith('tracking-1');
+    await renderReview({ ...reviewState(), proposalResultUnknown: false,
+      proposalTracking: { id: 'tracking-1', phase: 'ended-needs-read' } }, controller);
+    expect(container.textContent).toContain('不取消服务器操作');
+    expect(button('接受所选').disabled).toBe(true);
+    expect(button('拒绝全部').disabled).toBe(true);
+    await act(async () => button('重新连接并对账').click());
+    expect(controller.reconnect).toHaveBeenCalledOnce();
     expect(controller.resolveProposal).not.toHaveBeenCalled();
   });
   it('目标消失显示原因且不提供采用按钮', async () => {

@@ -1022,7 +1022,7 @@ describe('Arena Room browser controller', () => {
     expect(synced?.snapshot.proposals).toEqual([]);
   });
 
-  it('Proposal 结果未知时冻结重复 mutation，等待 WSS/snapshot 对账', async () => {
+  it('Proposal 在途冻结重复 mutation，精确 WSS 先于 unknown 也能确认进入房间', async () => {
     const { client, controller, sockets } = createHarness();
     const memberSession = {
       ...session,
@@ -1083,38 +1083,23 @@ describe('Arena Room browser controller', () => {
       type: 'proposal.submitted',
       payload: { proposal },
     }));
+    await controller.submitProposal(intent);
     rejectMutation(new ArenaRoomClientError(
       'ROOM_RESULT_UNKNOWN',
       503,
       '请求可能已提交，请先确认房间状态，不要重复提交',
     ));
     await mutation;
-    await controller.submitProposal(intent);
 
     expect(client.submitProposal).toHaveBeenCalledOnce();
     expect(controller.getSnapshot()).toMatchObject({
       phase: 'connected',
       proposalOperation: null,
-      proposalResultUnknown: true,
-      notice: '请求可能已提交，请先确认房间状态，不要重复提交',
+      proposalResultUnknown: false,
+      notice: '已确认提案进入房间',
     });
     expect(sockets[0]!.close).not.toHaveBeenCalled();
 
-    vi.mocked(client.getSession).mockResolvedValueOnce({
-      ...memberSession,
-      snapshot: {
-        ...memberSession.snapshot,
-        controlSeq: 1,
-        proposals: [proposal],
-      },
-    });
-    controller.reconnect();
-    await vi.waitFor(() => expect(client.getSession).toHaveBeenCalledWith('room-1'));
-    await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({
-      proposalResultUnknown: false,
-      session: { snapshot: { controlSeq: 1, proposals: [{ proposalId: 'proposal-stable' }] } },
-    }));
-    expect(client.issueTicket).toHaveBeenCalledTimes(2);
   });
 
   it('config publish 重做 host/epoch/revision fence，并拒绝 stale intent', async () => {
@@ -1346,6 +1331,279 @@ describe('Arena Room browser controller', () => {
     }
   });
 
+  describe('Proposal unknown 只读核对', () => {
+    const proposal = {
+      proposalVersion: 1 as const, proposalId: 'proposal-observed', roomId: 'room-1',
+      authorUserId: 'user-member', baseRevision: 0, status: 'submitted' as const,
+      changes: [{ changeId: 'guidance-1', type: 'setUserGuidance' as const,
+        value: '成员建议', expectedBase: { kind: 'value' as const, value: '' } }],
+      createdAt: '2026-08-28T00:01:00.000Z',
+    };
+    const member = { userId: 'user-member', role: 'member' as const,
+      displayName: '成员', membershipState: 'active' as const };
+    const memberSession = { ...session, self: member,
+      snapshot: { ...snapshot, members: [...snapshot.members, member] } };
+    const intent = { proposalId: proposal.proposalId, expectedRoomEpoch: 'epoch-1',
+      baseRevision: 0, changes: proposal.changes };
+    const unknown = () => new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '结果未知');
+    const event = (type: string, payload: unknown, controlSeq = 1, roomEpoch = 'epoch-1') => JSON.stringify({
+      protocolVersion: 1, roomId: 'room-1', roomEpoch, controlSeq,
+      timestamp: '2026-08-28T00:02:00.000Z', type, payload,
+    });
+    const submitUnknown = async () => {
+      const h = createHarness();
+      vi.mocked(h.client.join).mockResolvedValueOnce(memberSession);
+      vi.mocked(h.client.submitProposal).mockRejectedValueOnce(unknown());
+      await h.controller.join('room-1', '成员'); h.sockets[0]!.open();
+      await h.controller.submitProposal(structuredClone(intent));
+      return h;
+    };
+
+    it.each(['snapshot', 'GET'])('%s 缺少目标提案不能解锁重复提交', async (source) => {
+      const h = await submitUnknown();
+      if (source === 'snapshot') h.sockets[0]!.message(event('room.snapshot', memberSession.snapshot, 0));
+      else {
+        vi.mocked(h.client.getSession).mockResolvedValueOnce(memberSession);
+        h.controller.reconnect();
+        await vi.waitFor(() => expect(h.client.issueTicket).toHaveBeenCalledTimes(2));
+      }
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+      await h.controller.submitProposal(intent);
+      expect(h.client.submitProposal).toHaveBeenCalledOnce();
+    });
+
+    it.each(['author', 'baseRevision', 'changes'])('同 ID 的 %s 不符不能认领 submit', async (field) => {
+      const h = await submitUnknown();
+      const different = structuredClone(proposal);
+      if (field === 'author') different.authorUserId = 'other-author';
+      if (field === 'baseRevision') different.baseRevision = 1;
+      if (field === 'changes') different.changes[0]!.value = '不同内容';
+      h.sockets[0]!.message(event('proposal.submitted', { proposal: different }));
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+      h.sockets[0]!.message(event('proposal.resolved', { proposalId: proposal.proposalId, status: 'accepted' }, 2));
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+    });
+
+    it('只有同 ID terminal、没有完整原提案关联时保留 unknown', async () => {
+      const h = await submitUnknown();
+      h.sockets[0]!.message(event('proposal.resolved', { proposalId: proposal.proposalId, status: 'withdrawn' }));
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+    });
+
+    it('旧 epoch 的目标不能被新 epoch 同 ID snapshot 认领', async () => {
+      const h = await submitUnknown();
+      h.sockets[0]!.message(event('room.snapshot', {
+        ...memberSession.snapshot, roomEpoch: 'epoch-2', proposals: [proposal],
+      }, 0, 'epoch-2'));
+      expect(h.controller.getSnapshot().session?.roomEpoch).toBe('epoch-2');
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+    });
+
+    it.each(['snapshot', 'GET'])('%s 精确原意图可以确认 submit', async (source) => {
+      const h = await submitUnknown();
+      const authority = { ...memberSession, snapshot: { ...memberSession.snapshot, proposals: [proposal] } };
+      if (source === 'snapshot') h.sockets[0]!.message(event('room.snapshot', authority.snapshot, 0));
+      else {
+        vi.mocked(h.client.getSession).mockResolvedValueOnce(authority);
+        h.controller.reconnect();
+        await vi.waitFor(() => expect(h.client.issueTicket).toHaveBeenCalledTimes(2));
+      }
+      h.sockets.at(-1)!.open();
+      expect(h.controller.getSnapshot()).toMatchObject({ proposalResultUnknown: false, proposalTracking: null,
+        proposalOutcome: '已确认提案进入房间' });
+      expect(h.client.submitProposal).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['reject', 'rejected', '提案已拒绝'],
+      ['reject', 'accepted', '实际裁决结果与本次操作不同'],
+      ['accept-selected', 'accepted', '提案已全量接受'],
+      ['accept-selected', 'partially_accepted', '具体裁决范围无法核对'],
+    ] as const)('%s 的可信 terminal %s 结束等待并呈现真实结果', async (resolution, status, notice) => {
+      const h = createHarness();
+      vi.mocked(h.client.create).mockResolvedValueOnce({ ...session, snapshot: { ...snapshot, proposals: [proposal] } });
+      vi.mocked(h.client.resolveProposal).mockRejectedValueOnce(unknown());
+      await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+      h.sockets[0]!.open();
+      await h.controller.resolveProposal(proposal.proposalId, { expectedRoomEpoch: 'epoch-1', resolution,
+        ...(resolution === 'accept-selected' ? { selectedChangeIds: ['guidance-1'] } : {}) });
+      h.sockets[0]!.message(event('proposal.resolved', { proposalId: proposal.proposalId, status }));
+      expect(h.controller.getSnapshot()).toMatchObject({ proposalResultUnknown: false, proposalTracking: null });
+      expect(h.controller.getSnapshot().notice).toContain(notice);
+      expect(h.client.resolveProposal).toHaveBeenCalledOnce();
+    });
+
+    it('GET 确认提交后再收到 terminal 不持续声称仍在等待处理', async () => {
+      const h = await submitUnknown();
+      vi.mocked(h.client.getSession).mockResolvedValueOnce({ ...memberSession,
+        snapshot: { ...memberSession.snapshot, proposals: [proposal] } });
+      h.controller.reconnect();
+      await vi.waitFor(() => expect(h.client.issueTicket).toHaveBeenCalledTimes(2));
+      h.sockets[1]!.open();
+      h.sockets[1]!.message(event('proposal.resolved', { proposalId: proposal.proposalId, status: 'rejected' }));
+      expect(h.controller.getSnapshot()).toMatchObject({
+        proposalOutcome: '已确认提案进入房间', notice: '提案已拒绝', proposalResultUnknown: false,
+      });
+      expect(h.controller.getSnapshot().proposalOutcome).not.toContain('等待');
+      expect(h.controller.getSnapshot().session?.snapshot.proposals).toEqual([]);
+    });
+
+    it('GET terminal 的真实结局在 socket open 后仍保留，换 epoch 清除', async () => {
+      const h = createHarness();
+      vi.mocked(h.client.join).mockResolvedValueOnce({ ...memberSession, snapshot: { ...memberSession.snapshot, proposals: [proposal] } });
+      vi.mocked(h.client.withdrawProposal).mockRejectedValueOnce(unknown());
+      await h.controller.join('room-1', '成员'); h.sockets[0]!.open();
+      await h.controller.withdrawProposal(proposal.proposalId);
+      vi.mocked(h.client.getSession).mockResolvedValueOnce({ ...memberSession,
+        snapshot: { ...memberSession.snapshot, proposals: [{ ...proposal, status: 'rejected' }] } });
+      h.controller.reconnect();
+      await vi.waitFor(() => expect(h.client.issueTicket).toHaveBeenCalledTimes(2));
+      h.sockets[1]!.open();
+      expect(h.controller.getSnapshot()).toMatchObject({ proposalResultUnknown: false, proposalOutcome: '提案已拒绝' });
+      h.sockets[1]!.message(event('room.snapshot', { ...memberSession.snapshot, roomEpoch: 'epoch-2' }, 0, 'epoch-2'));
+      expect(h.controller.getSnapshot().proposalOutcome).toBeNull();
+    });
+
+    it('全选 frozen 身份收到异体 updated 后不能再用 ID-only terminal 认领', async () => {
+      const h = createHarness();
+      vi.mocked(h.client.create).mockResolvedValueOnce({ ...session, snapshot: { ...snapshot, proposals: [proposal] } });
+      vi.mocked(h.client.resolveProposal).mockRejectedValueOnce(unknown());
+      await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+      h.sockets[0]!.open();
+      await h.controller.resolveProposal(proposal.proposalId, { expectedRoomEpoch: 'epoch-1', resolution: 'reject' });
+      h.sockets[0]!.message(event('proposal.updated', { proposal: { ...proposal, baseRevision: 1 } }));
+      h.sockets[0]!.message(event('proposal.resolved', { proposalId: proposal.proposalId, status: 'rejected' }, 2));
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+    });
+
+    it('已关联 terminal 先于 POST unknown 也结束等待', async () => {
+      const h = createHarness();
+      vi.mocked(h.client.join).mockResolvedValueOnce({ ...memberSession, snapshot: { ...memberSession.snapshot, proposals: [proposal] } });
+      let reject!: (error: unknown) => void;
+      vi.mocked(h.client.withdrawProposal).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+      await h.controller.join('room-1', '成员'); h.sockets[0]!.open();
+      const pending = h.controller.withdrawProposal(proposal.proposalId);
+      h.sockets[0]!.message(event('proposal.resolved', { proposalId: proposal.proposalId, status: 'withdrawn' }));
+      reject(unknown()); await pending;
+      expect(h.controller.getSnapshot()).toMatchObject({ proposalResultUnknown: false, proposalTracking: null });
+      expect(h.controller.getSnapshot().notice).toContain('撤回');
+    });
+
+    it('显式结束不重发、不取消，fresh GET 前继续冻结新写', async () => {
+      const h = await submitUnknown();
+      const id = h.controller.getSnapshot().proposalTracking!.id;
+      h.controller.endProposalTracking('stale-tracking-id');
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+      h.controller.endProposalTracking(id);
+      expect(h.controller.getSnapshot()).toMatchObject({ proposalResultUnknown: false,
+        proposalTracking: { id, phase: 'ended-needs-read' } });
+      await h.controller.submitProposal(intent);
+      expect(h.client.submitProposal).toHaveBeenCalledOnce();
+      expect(h.client.getSession).not.toHaveBeenCalled();
+      expect(h.client.withdrawProposal).not.toHaveBeenCalled();
+      vi.mocked(h.client.getSession).mockResolvedValueOnce(memberSession);
+      h.controller.reconnect();
+      await vi.waitFor(() => expect(h.controller.getSnapshot().proposalTracking).toBeNull());
+      await h.controller.submitProposal(intent);
+      expect(h.client.submitProposal).toHaveBeenCalledTimes(2);
+    });
+
+    it('结束跟踪之前发出的 GET 不满足结束后 fresh read 围栏', async () => {
+      const h = await submitUnknown();
+      let complete!: (value: ArenaRoomSessionResponse) => void;
+      vi.mocked(h.client.getSession).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+      h.controller.reconnect();
+      h.controller.endProposalTracking(h.controller.getSnapshot().proposalTracking!.id);
+      complete(memberSession);
+      await vi.waitFor(() => expect(h.client.issueTicket).toHaveBeenCalledTimes(2));
+      expect(h.controller.getSnapshot().proposalTracking?.phase).toBe('ended-needs-read');
+      await h.controller.submitProposal(intent);
+      expect(h.client.submitProposal).toHaveBeenCalledOnce();
+    });
+
+    it('请求中的 epoch 与当前房间不符时不派发也不制造 unknown', async () => {
+      const h = createHarness();
+      vi.mocked(h.client.join).mockResolvedValueOnce(memberSession);
+      await h.controller.join('room-1', '成员');
+      await h.controller.submitProposal({ ...intent, expectedRoomEpoch: 'old-epoch' });
+      expect(h.client.submitProposal).not.toHaveBeenCalled();
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(false);
+      expect(h.controller.getSnapshot().error).toContain('房间会话已变化');
+    });
+
+    it('凭据换代后的旧结果不能复活 unknown 或影响新控制器', async () => {
+      let current = true;
+      const h = createHarness({ identity: { epoch: 1, isCurrent: () => current } });
+      vi.mocked(h.client.join).mockResolvedValueOnce(memberSession);
+      let reject!: (error: unknown) => void;
+      vi.mocked(h.client.submitProposal).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+      await h.controller.join('room-1', '成员');
+      const pending = h.controller.submitProposal(intent);
+      current = false;
+      const newer = await submitUnknown();
+      reject(unknown()); await pending;
+      expect(h.controller.getSnapshot()).toMatchObject({ phase: 'unauthenticated', proposalResultUnknown: false });
+      expect(newer.controller.getSnapshot().proposalResultUnknown).toBe(true);
+    });
+
+    it('提交参数深冻结；调用方改写原对象不能改变核对意图或发送体', async () => {
+      const h = createHarness();
+      vi.mocked(h.client.join).mockResolvedValueOnce(memberSession);
+      let reject!: (error: unknown) => void;
+      vi.mocked(h.client.submitProposal).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+      await h.controller.join('room-1', '成员'); h.sockets[0]!.open();
+      const input = structuredClone(intent);
+      const pending = h.controller.submitProposal(input);
+      input.changes[0]!.value = '后来修改';
+      reject(unknown()); await pending;
+      expect(vi.mocked(h.client.submitProposal).mock.calls[0]![1].changes[0]).toEqual(proposal.changes[0]);
+      h.sockets[0]!.message(event('proposal.submitted', { proposal }));
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(false);
+    });
+
+    it('旧 epoch 请求的 finally 不能释放显式重新读取后新请求的 busy', async () => {
+      const h = createHarness();
+      vi.mocked(h.client.join).mockResolvedValueOnce(memberSession);
+      let rejectOld!: (error: unknown) => void;
+      let rejectNew!: (error: unknown) => void;
+      vi.mocked(h.client.submitProposal)
+        .mockImplementationOnce(() => new Promise((_, fail) => { rejectOld = fail; }))
+        .mockImplementationOnce(() => new Promise((_, fail) => { rejectNew = fail; }));
+      await h.controller.join('room-1', '成员'); h.sockets[0]!.open();
+      const old = h.controller.submitProposal(intent);
+      const next = { ...memberSession, roomEpoch: 'epoch-2', snapshot: { ...memberSession.snapshot, roomEpoch: 'epoch-2' } };
+      h.sockets[0]!.message(event('room.snapshot', next.snapshot, 0, 'epoch-2'));
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+      h.controller.endProposalTracking(h.controller.getSnapshot().proposalTracking!.id);
+      vi.mocked(h.client.getSession).mockResolvedValueOnce(next);
+      h.controller.reconnect();
+      await vi.waitFor(() => expect(h.controller.getSnapshot().proposalTracking).toBeNull());
+      const newIntent = { ...intent, expectedRoomEpoch: 'epoch-2' };
+      const newer = h.controller.submitProposal(newIntent);
+      rejectOld(unknown()); await old;
+      expect(h.controller.getSnapshot().proposalOperation).toBe('submit');
+      await h.controller.submitProposal(newIntent);
+      expect(h.client.submitProposal).toHaveBeenCalledTimes(2);
+      rejectNew(unknown()); await newer;
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+    });
+
+    it('withdraw 仍 pending 时 GET 不解除防重发', async () => {
+      const h = createHarness();
+      const pending = { ...memberSession, snapshot: { ...memberSession.snapshot, proposals: [proposal] } };
+      vi.mocked(h.client.join).mockResolvedValueOnce(pending);
+      vi.mocked(h.client.withdrawProposal).mockRejectedValueOnce(unknown());
+      await h.controller.join('room-1', '成员'); h.sockets[0]!.open();
+      await h.controller.withdrawProposal(proposal.proposalId);
+      vi.mocked(h.client.getSession).mockResolvedValueOnce(pending);
+      h.controller.reconnect();
+      await vi.waitFor(() => expect(h.client.issueTicket).toHaveBeenCalledTimes(2));
+      expect(h.controller.getSnapshot().proposalResultUnknown).toBe(true);
+      await h.controller.withdrawProposal(proposal.proposalId);
+      expect(h.client.withdrawProposal).toHaveBeenCalledOnce();
+    });
+  });
+
   it('Proposal unknown 只由同一 proposal 的权威事件解锁', async () => {
     const memberSession = {
       ...session,
@@ -1428,6 +1686,8 @@ describe('Arena Room browser controller', () => {
     expect(submit.controller.getSnapshot().proposalResultUnknown).toBe(false);
 
     const resolve = createHarness();
+    vi.mocked(resolve.client.create).mockResolvedValueOnce({ ...session, snapshot: { ...snapshot,
+      proposals: [proposal('proposal-resolve-target')] } });
     vi.mocked(resolve.client.resolveProposal).mockRejectedValueOnce(unknown());
     await resolve.controller.create({
       displayName: '房主',
@@ -1446,7 +1706,8 @@ describe('Arena Room browser controller', () => {
     expect(resolve.controller.getSnapshot().proposalResultUnknown).toBe(false);
 
     const withdraw = createHarness();
-    vi.mocked(withdraw.client.join).mockResolvedValueOnce(memberSession);
+    vi.mocked(withdraw.client.join).mockResolvedValueOnce({ ...memberSession, snapshot: { ...memberSession.snapshot,
+      proposals: [proposal('proposal-withdraw-target')] } });
     vi.mocked(withdraw.client.withdrawProposal).mockRejectedValueOnce(unknown());
     await withdraw.controller.join('room-1', '成员');
     withdraw.sockets[0]!.open();
