@@ -1,5 +1,7 @@
 'use client';
 
+import { buildCreatorInputEstimateText } from '@mahoshojo/domain/creator/input-estimate';
+
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
 import { BackHomeLink } from '@mahoshojo/ui-web/shell';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -23,7 +25,6 @@ import {
   buildQuestionnaireFlow,
   collectStoredQuestionnaireAnswerItems,
   compactQuestionnaireAnswerItems,
-  formatQuestionnaireAnswers,
   normalizeQuestionnaireDefinition,
   parseQuestionnaireDataCardPayload,
   normalizeUserAnswers,
@@ -519,11 +520,18 @@ export const CreatorPage: React.FC = () => {
     [selectedQuestionnaires]
   );
 
-  const tokenEstimateText = useMemo(() => {
-    const answerText = formatQuestionnaireAnswers(answerItems);
-    if (questionnaireLoreText && answerText) return `${questionnaireLoreText}\n\n${answerText}`;
-    return questionnaireLoreText || answerText;
-  }, [answerItems, questionnaireLoreText]);
+  const tokenEstimateText = useMemo(() => buildCreatorInputEstimateText({
+    template: creatorTemplate,
+    freeformBrief,
+    questionnaires: selectedQuestionnaires.map((selection) => ({
+      questionnaireId: selection.questionnaire.id,
+      title: selection.questionnaire.title,
+    })),
+    questionnaireAnswers: answerItems,
+    buildRules: buildRuleRuntimeResults,
+    primaryRuleId: primaryBuildRuleId,
+  }, questionnaireLoreText), [creatorTemplate, freeformBrief, selectedQuestionnaires,
+    answerItems, buildRuleRuntimeResults, primaryBuildRuleId, questionnaireLoreText]);
 
   const shouldDisableRemove = selectedQuestionnaires.length <= 1;
 

@@ -269,10 +269,10 @@ test('BuildRulePanel 在属性超预算时于属性区立即显示错误提示',
   expect(html).toContain('已超出 280 点上限');
 });
 
-test('CreatorAdvancedSidebarPanel 使用统一的工作台子卡片外观', () => {
+test.each(['一段示例输入', null])('CreatorAdvancedSidebarPanel 使用统一的工作台子卡片外观及真实估算状态 %s', (tokenEstimateText) => {
   const html = renderToStaticMarkup(
     <CreatorAdvancedSidebarPanel
-      tokenEstimateText="一段示例输入"
+      tokenEstimateText={tokenEstimateText}
       selectedLanguage="zh-CN"
       languages={[
         { code: 'zh-CN', name: '简体中文' },
@@ -298,6 +298,14 @@ test('CreatorAdvancedSidebarPanel 使用统一的工作台子卡片外观', () =
     />
   );
 
+  expect(html).toContain('输入内容近似估算');
+  expect(html).toContain('不含系统指令、模板包装和输出');
+  if (tokenEstimateText === null) {
+    expect(html).toContain('当前输入暂不可估算');
+    expect(html).not.toContain(' tokens');
+  } else {
+    expect(html).toContain(' tokens');
+  }
   expect(html).toContain('data-creator-advanced-card="language"');
   expect(html).toContain('data-creator-advanced-card="generation-mode"');
   expect(html).toContain('data-creator-advanced-card="provider"');

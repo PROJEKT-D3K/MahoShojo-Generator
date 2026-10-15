@@ -10,7 +10,7 @@ import { TokenIndicator } from '@/components/shared/TokenIndicator';
 import type { ProviderCooldownMode } from '@/lib/cooldown';
 
 type CreatorAdvancedSidebarPanelProps = {
-  tokenEstimateText: string;
+  tokenEstimateText: string | null;
   selectedLanguage: string;
   languages: Array<{ code: string; name: string }>;
   showLanguageSection: boolean;
@@ -56,10 +56,12 @@ export function CreatorAdvancedSidebarPanel({
 }: CreatorAdvancedSidebarPanelProps) {
   return (
     <div className="space-y-4">
-      <TokenIndicator
-        text={tokenEstimateText}
-        warningText="⚠️ 预计问卷回答较长，可能更易超时/失败。可尝试精简答案或减少问卷数量。"
-      />
+      <div>
+        {tokenEstimateText === null ? <p role="status">当前输入暂不可估算</p> : (
+          <TokenIndicator text={tokenEstimateText} warningText="⚠️ 输入内容较长，可尝试精简说明、答案或设定。" />
+        )}
+        <p className="mt-1 text-center text-xs text-[color:var(--app-text-muted)]">输入内容近似估算，包含自由说明、规则约束、问卷回答与启用的设定；不含系统指令、模板包装和输出。</p>
+      </div>
 
       <div
         data-creator-advanced-card="language"

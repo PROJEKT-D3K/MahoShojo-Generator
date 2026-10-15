@@ -1,3 +1,4 @@
+import { buildCreatorInputEstimateText } from '@mahoshojo/domain/creator/input-estimate';
 import { PrivateResultSave } from '../features/cloud-save/private-result-save';
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
@@ -61,6 +62,7 @@ import {
 } from '@mahoshojo/domain/creator/selection';
 import {
   AiReasoningPanel,
+  TokenIndicator,
   AnswerReviewList,
   APP_FIELD_GUIDE_THEME,
   APP_SAVE_PREFERENCES_THEME,
@@ -582,6 +584,25 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
     () => buildQuestionnaireSelectionLoreText(effectiveSelections),
     [effectiveSelections],
   );
+  const tokenEstimateText = useMemo(() => {
+    try {
+      return buildCreatorInputEstimateText({
+        template,
+        freeformBrief,
+        questionnaireAnswers: collectQuestionnaireFlowAnswerItems(flow, answersByKey),
+        questionnaires: effectiveSelections.map((selection) => ({
+          questionnaireId: selection.questionnaire.id,
+          title: selection.questionnaire.title,
+        })),
+        buildRules: buildRuleRuntimeResults,
+        primaryRuleId,
+      }, questionnaireLoreText);
+    } catch {
+      // 恢复/导入的封闭题答案可能暂不合法；计数不能绕过或提前触发提交校验。
+      return null;
+    }
+  }, [template, freeformBrief, flow, answersByKey,
+    effectiveSelections, buildRuleRuntimeResults, primaryRuleId, questionnaireLoreText]);
   const hasLoreOnly = effectiveSelections.length > 0 && flow.length === 0
     && effectiveSelections.some((selection) => Boolean(selection.questionnaire.loreMarkdown?.trim()));
 
@@ -987,6 +1008,12 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
   const advancedSidebarPanel = (
     <fieldset disabled={busy || blockedDraft || questionnaireLoading || !guard.ready} className="flex min-w-0 flex-col gap-4">
       <legend className="mb-2 font-semibold">高级生成</legend>
+      <div>
+        {tokenEstimateText === null ? <p role="status">当前输入暂不可估算</p> : (
+          <TokenIndicator text={tokenEstimateText} warningText="⚠️ 输入内容较长，可尝试精简说明、答案或设定。" />
+        )}
+        <p className="mt-1 text-center text-xs text-(--app-text-muted)">输入内容近似估算，包含自由说明、规则约束、问卷回答与启用的设定；不含系统指令、模板包装和输出。</p>
+      </div>
       <DesktopAiProviderPanel
         generationMode={generationMode}
         copy={{

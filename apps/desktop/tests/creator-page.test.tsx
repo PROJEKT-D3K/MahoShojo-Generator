@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildUnsignedMagicalGirlDetailsCard } from '@mahoshojo/ai-core/magical-girl-details-generation';
 import { GENERAL_CHARACTER_TEMPLATE_ID } from '@mahoshojo/domain/data-cards';
 import type { CreatorGenerationOutcome } from '../src/features/creator/generation';
+import { estimateTokensFromText } from '@mahoshojo/domain/token-estimate';
+import { buildCreatorInputEstimateText } from '@mahoshojo/domain/creator/input-estimate';
 import { CREATOR_DRAFT_KEY } from '../src/features/creator/session';
 import { builtinSelectionId } from '../src/features/details/questionnaire';
 import { resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
@@ -289,6 +291,40 @@ describe('Desktop /creator workbench (native adapter mock)', () => {
     expect(container.textContent).toContain('创作完成');
     expect(container.textContent).toMatch(/共 \d+ 题，已进入结果阶段/);
     expect(container.textContent).not.toContain('请以当前结果数据为准');
+  });
+
+  it('keeps restored invalid closed-question answers editable when estimation is unavailable', async () => {
+    const closed = {
+      ...selection,
+      questionnaire: { ...questionnaire, questions: [{ id: 'closed', question: '选择颜色', required: true, allowCustom: false, options: ['红', '蓝'] }] },
+    };
+    window.localStorage.setItem(CREATOR_DRAFT_KEY, JSON.stringify(draft({
+      questionnaireSelections: [closed],
+      answers: { [`${selection.selectionId}::closed`]: '非法旧答案' },
+      selectedRuleIds: [], primaryRuleId: null,
+    })));
+    await mount();
+    expect(container.textContent).toContain('当前输入暂不可估算');
+    expect(container.textContent).toContain('选择颜色');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    await click('生成数据卡');
+    expect(container.textContent).toContain('请选择一个可用选项');
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it('estimates the actual editable brief with the shared indicator without generating', async () => {
+    const freeformBrief = '只有自由说明也应参与输入估算'.repeat(30);
+    window.localStorage.setItem(CREATOR_DRAFT_KEY, JSON.stringify(draft({
+      freeformBrief, questionnaireSelections: [], selectedRuleIds: [], primaryRuleId: null, answers: {},
+    })));
+    await mount();
+    const projected = buildCreatorInputEstimateText({
+      template: 'magical-girl', freeformBrief, questionnaires: [], questionnaireAnswers: [], buildRules: [], primaryRuleId: null,
+    }, '')!;
+    expect(container.textContent).toContain('输入内容近似估算');
+    expect(container.textContent).toContain('不含系统指令、模板包装和输出');
+    expect(container.textContent).toContain(`~${estimateTokensFromText(projected).toLocaleString()} tokens`);
+    expect(mocks.execute).not.toHaveBeenCalled();
   });
 
   it('automatically restores a valid draft before loading defaults without dispatching generation', async () => {

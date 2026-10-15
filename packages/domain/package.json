@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./creator/input-estimate": "./src/creator/input-estimate.ts",
     "./flowers": "./src/flowers.ts",
     ".": {
       "types": "./src/index.ts",
