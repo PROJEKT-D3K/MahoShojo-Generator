@@ -155,7 +155,8 @@
     "./fixtures/desktop-cloud.json": "./fixtures/desktop-cloud.json",
     "./fixtures/desktop-magic-tea-party.json": "./fixtures/desktop-magic-tea-party.json",
     "./tavern-completion": "./src/tavern-completion.ts",
-    "./fixtures/desktop-room-proposals.json": "./fixtures/desktop-room-proposals.json"
+    "./fixtures/desktop-room-proposals.json": "./fixtures/desktop-room-proposals.json",
+    "./fixtures/arena-room-proposal-reconciliation.json": "./fixtures/arena-room-proposal-reconciliation.json"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

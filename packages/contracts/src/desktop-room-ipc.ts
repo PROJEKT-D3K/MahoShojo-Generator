@@ -6,12 +6,16 @@ import {
   DesktopRoomSessionErrorCodeSchema,
   DesktopRoomSessionErrorOutcomeSchema,
   DesktopRoomSessionUserIdSchema,
+  DesktopRoomSessionRoomIdSchema,
+  DesktopRoomSessionProposalIdSchema,
   parseDesktopRoomSessionResponse,
 } from './desktop-room-session';
 import { JsonValueSchema, type JsonValue } from './json-value';
 import { OpaqueKeySchema } from './primitives';
+import { ResolvedArenaProposalStatusSchema } from './proposals';
 import { RoomDirectoryPageQuerySchema } from './room-directory';
-import { ArenaRoomCreateRequestSchema, ArenaRoomJoinRequestSchema, ArenaRoomPublishConfigRequestSchema } from './room-http';
+import { ArenaRoomCreateRequestSchema, ArenaRoomJoinRequestSchema, ArenaRoomPublishConfigRequestSchema,
+  ArenaRoomProposalSubmitRequestSchema, ArenaRoomProposalWithdrawRequestSchema, ArenaRoomProposalResolveRequestSchema } from './room-http';
 import { RoomServerTransportMessageSchema } from './websocket-transport';
 import { jsonUtf8ByteLength } from './wire-size';
 
@@ -75,8 +79,9 @@ const small = <T extends z.ZodType>(schema: T) => boundedObject(DESKTOP_ROOM_IPC
 const request = <T extends z.ZodType>(schema: T) => boundedObject(DESKTOP_ROOM_IPC_LIMITS.requestBytes).pipe(schema);
 const LocalIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
 const SequenceSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const DesktopRoomHttpOperationSchema = z.enum(['discover', 'create', 'join', 'session', 'leave', 'close', 'config']);
-export const DesktopRoomMutationOperationSchema = z.enum(['create', 'join', 'leave', 'close', 'config']);
+export const DesktopRoomHttpOperationSchema = z.enum(['discover', 'create', 'join', 'session', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
+export const DesktopRoomMutationOperationSchema = z.enum(['create', 'join', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
+export type DesktopRoomMutationOperation = z.infer<typeof DesktopRoomMutationOperationSchema>;
 export type DesktopRoomHttpOperation = z.infer<typeof DesktopRoomHttpOperationSchema>;
 export const DesktopRoomPendingIntentSchema = z.object({
   intentId: LocalIdSchema, operation: DesktopRoomMutationOperationSchema, roomId: OpaqueKeySchema.nullable(),
@@ -121,6 +126,11 @@ export const DesktopRoomDetachResponseSchema = small(z.object({ detached: z.bool
 const createRequest = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes).pipe(ArenaRoomCreateRequestSchema);
 const configRequest = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes).pipe(ArenaRoomPublishConfigRequestSchema);
 const joinRequest = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes).pipe(ArenaRoomJoinRequestSchema);
+const proposalSubmitRequest = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes).pipe(
+  ArenaRoomProposalSubmitRequestSchema.extend({ proposalId: DesktopRoomSessionProposalIdSchema }),
+);
+const proposalWithdrawRequest = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes).pipe(ArenaRoomProposalWithdrawRequestSchema);
+const proposalResolveRequest = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes).pipe(ArenaRoomProposalResolveRequestSchema);
 export const DesktopRoomActionSchema = request(z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('discover'), query: RoomDirectoryPageQuerySchema }).strict(),
   z.object({ kind: z.literal('create'), request: createRequest }).strict(),
@@ -129,6 +139,10 @@ export const DesktopRoomActionSchema = request(z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('session'), roomId: OpaqueKeySchema }).strict(),
   z.object({ kind: z.literal('config'), roomId: OpaqueKeySchema, request: configRequest }).strict(),
   z.object({ kind: z.literal('end-config-tracking'), intentId: LocalIdSchema }).strict(),
+  z.object({ kind: z.literal('proposal-submit'), roomId: DesktopRoomSessionRoomIdSchema, request: proposalSubmitRequest }).strict(),
+  z.object({ kind: z.literal('proposal-withdraw'), roomId: DesktopRoomSessionRoomIdSchema, proposalId: DesktopRoomSessionProposalIdSchema, request: proposalWithdrawRequest }).strict(),
+  z.object({ kind: z.literal('proposal-resolve'), roomId: DesktopRoomSessionRoomIdSchema, proposalId: DesktopRoomSessionProposalIdSchema, request: proposalResolveRequest }).strict(),
+  z.object({ kind: z.literal('end-proposal-tracking'), intentId: LocalIdSchema }).strict(),
   z.object({ kind: z.literal('leave'), roomId: OpaqueKeySchema, expectedRoomEpoch: OpaqueKeySchema }).strict(),
   z.object({ kind: z.literal('close'), roomId: OpaqueKeySchema, expectedRoomEpoch: OpaqueKeySchema }).strict(),
   z.object({ kind: z.literal('pull'), subscriptionId: LocalIdSchema }).strict(),
@@ -136,15 +150,46 @@ export const DesktopRoomActionSchema = request(z.discriminatedUnion('kind', [
 ]));
 export const DesktopRoomRequestSchema = request(z.object({ handle: LocalIdSchema, request: DesktopRoomActionSchema }).strict());
 export type DesktopRoomAction = z.infer<typeof DesktopRoomActionSchema>;
-export type DesktopRoomHttpAction = Exclude<DesktopRoomAction, { kind: 'pull' | 'ack' | 'end-config-tracking' }>;
+export type DesktopRoomHttpAction = Exclude<DesktopRoomAction, { kind: 'pull' | 'ack' | 'end-config-tracking' | 'end-proposal-tracking' }>;
+/** Local action spelling is intentionally distinct from the negotiated producer operation. */
+export const getDesktopRoomHttpOperation = (action: DesktopRoomHttpAction): DesktopRoomHttpOperation => {
+  switch (action.kind) {
+    case 'resume-create': return 'create';
+    case 'proposal-submit': return 'proposalSubmit';
+    case 'proposal-withdraw': return 'proposalWithdraw';
+    case 'proposal-resolve': return 'proposalResolve';
+    default: return action.kind;
+  }
+};
 
 const httpResult = <O extends DesktopRoomHttpOperation>(operation: O) => z.object({
   kind: z.literal('http-result'), requestId: LocalIdSchema, operation: z.literal(operation),
   response: DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation],
 }).strict();
 const socketMessage = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.websocketMessageBytes).pipe(RoomServerTransportMessageSchema);
+/** Current evidence only: neither a POST receipt nor a reusable authorization. */
+export const DesktopRoomProposalObservationSchema = z.object({
+  observation: z.enum(['pending', 'absent', 'conflict', 'scope-changed', 'target-unavailable', 'submitted', 'terminal']),
+  linked: z.boolean(),
+  settle: z.boolean(),
+  outcome: z.enum(['satisfied', 'different', 'scope-unverified']).nullable(),
+  terminalStatus: ResolvedArenaProposalStatusSchema.nullable(),
+}).strict().superRefine((value, context) => {
+  const terminal = value.observation === 'terminal';
+  const submitted = value.observation === 'submitted';
+  if (value.settle !== (terminal || submitted)
+    || (value.settle && !value.linked)
+    || (terminal !== (value.terminalStatus !== null))
+    || (value.settle !== (value.outcome !== null))
+    || (submitted && value.outcome !== 'satisfied')
+    || ((value.observation === 'scope-changed' || value.observation === 'conflict') && value.linked)) {
+    context.addIssue({ code: 'custom', message: 'inconsistent proposal observation' });
+  }
+});
 export const DesktopRoomEventSchema = z.union([
   httpResult('discover'), httpResult('create'), httpResult('join'), httpResult('session'), httpResult('leave'), httpResult('close'), httpResult('config'),
+  httpResult('proposalSubmit'), httpResult('proposalWithdraw'), httpResult('proposalResolve'),
+  z.object({ kind: z.literal('proposal-observation'), intentId: LocalIdSchema, observation: DesktopRoomProposalObservationSchema }).strict(),
   z.object({ kind: z.literal('request-error'), requestId: LocalIdSchema,
     operation: DesktopRoomHttpOperationSchema, error: DesktopRoomErrorSchema }).strict().superRefine((value, context) => {
     const read = value.operation === 'discover' || value.operation === 'session';
@@ -224,3 +269,6 @@ export const parseDesktopRoomBatch = (raw: unknown, expectedUserId: number): Des
 
 /** Ends local tracking only; never a server cancellation or write receipt. */
 export const DesktopRoomConfigTrackingEndedSchema = small(z.object({ kind: z.literal('config-tracking-ended'), intentId: LocalIdSchema, ended: z.literal(true) }).strict());
+
+/** Ends local proposal tracking only; it does not cancel the server operation. */
+export const DesktopRoomProposalTrackingEndedSchema = small(z.object({ kind: z.literal('proposal-tracking-ended'), intentId: LocalIdSchema, ended: z.literal(true) }).strict());

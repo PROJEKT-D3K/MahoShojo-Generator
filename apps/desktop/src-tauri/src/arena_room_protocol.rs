@@ -154,6 +154,12 @@ pub(crate) enum Operation {
     Leave,
     Close,
     Config,
+    #[serde(rename = "proposalSubmit")]
+    ProposalSubmit,
+    #[serde(rename = "proposalWithdraw")]
+    ProposalWithdraw,
+    #[serde(rename = "proposalResolve")]
+    ProposalResolve,
 }
 impl Operation {
     pub(crate) fn as_str(self) -> &'static str {
@@ -166,6 +172,9 @@ impl Operation {
             Self::Leave => "leave",
             Self::Close => "close",
             Self::Config => "config",
+            Self::ProposalSubmit => "proposalSubmit",
+            Self::ProposalWithdraw => "proposalWithdraw",
+            Self::ProposalResolve => "proposalResolve",
         }
     }
     pub(crate) fn is_post(self) -> bool {
@@ -218,6 +227,23 @@ pub(crate) enum Action {
     Config {
         room_id: String,
         request: Value,
+    },
+    ProposalSubmit {
+        room_id: String,
+        request: Value,
+    },
+    ProposalWithdraw {
+        room_id: String,
+        proposal_id: String,
+        request: Value,
+    },
+    ProposalResolve {
+        room_id: String,
+        proposal_id: String,
+        request: Value,
+    },
+    EndProposalTracking {
+        intent_id: String,
     },
     EndConfigTracking {
         intent_id: String,
@@ -298,6 +324,17 @@ fn string(v: &mut Value, min: usize, max: usize, trim: bool) -> Check {
 }
 fn key(v: &mut Value) -> Check {
     string(v, 1, 256, true)
+}
+/// Mirror DesktopRoomSessionRoomId/ProposalIdSchema without repairing the target.
+pub(crate) fn canonical_path_id(raw: &str) -> bool {
+    !raw.is_empty()
+        && raw.encode_utf16().count() <= 256
+        && raw.trim_matches(js_whitespace) == raw
+        && !matches!(raw, "." | "..")
+        && !raw.contains(['\\', '/', '%'])
+}
+fn desktop_path_id(v: &Value) -> Check {
+    ensure(canonical_path_id(text(v)?))
 }
 fn display_name(v: &mut Value) -> Check {
     string(v, 1, 200, true)
@@ -1000,11 +1037,15 @@ fn proposal(v: &mut Value) -> Check {
     if v["status"] != "submitted" {
         resolved_status(&v["status"])?;
     }
-    array(&mut v["changes"], 1, 32, proposal_change)?;
-    unique_field(&v["changes"], "changeId")?;
+    proposal_changes(&mut v["changes"])?;
     timestamp(&v["createdAt"])?;
     optional(v, "updatedAt", time_field)?;
-    let changes = v["changes"].as_array().ok_or(())?;
+    ensure(byte_len(v)? <= MAX_WEBSOCKET_BYTES)
+}
+fn proposal_changes(v: &mut Value) -> Check {
+    array(v, 1, 32, proposal_change)?;
+    unique_field(v, "changeId")?;
+    let changes = v.as_array().ok_or(())?;
     let mut graph = BTreeMap::<&str, Vec<&str>>::new();
     for c in changes {
         let deps = c
@@ -1041,7 +1082,7 @@ fn proposal(v: &mut Value) -> Check {
     for id in graph.keys() {
         visit(id, &graph, &mut BTreeSet::new(), &mut done)?;
     }
-    ensure(byte_len(v)? <= MAX_WEBSOCKET_BYTES)
+    Ok(())
 }
 
 fn snapshot(v: &mut Value) -> Check {
@@ -1190,6 +1231,56 @@ fn leave_result(v: &mut Value) -> Check {
     key(&mut v["roomId"])?;
     one_of(&v["outcome"], &["left", "closed"])
 }
+fn proposal_result(operation: Operation, v: &mut Value) -> Check {
+    closed(
+        v,
+        &[
+            "protocolVersion",
+            "roomId",
+            "roomEpoch",
+            "controlSeq",
+            "revision",
+            "proposalId",
+            "status",
+            "result",
+        ],
+        &["sharedConfig", "snapshot"],
+    )?;
+    version(&mut v["protocolVersion"])?;
+    key(&mut v["roomId"])?;
+    key(&mut v["roomEpoch"])?;
+    integer(&mut v["controlSeq"], 0, MAX_SAFE_INTEGER)?;
+    integer(&mut v["revision"], 0, MAX_SAFE_INTEGER)?;
+    proposal_id(&mut v["proposalId"])?;
+    one_of(&v["result"], &["applied", "idempotent"])?;
+    match operation {
+        Operation::ProposalSubmit => literal(&v["status"], "submitted")?,
+        Operation::ProposalWithdraw => {
+            literal(&v["status"], "withdrawn")?;
+            literal(&v["result"], "applied")?;
+        }
+        Operation::ProposalResolve => {
+            one_of(
+                &v["status"],
+                &["accepted", "partially_accepted", "rejected"],
+            )?;
+            literal(&v["result"], "applied")?;
+            ensure(has(v, "sharedConfig") && has(v, "snapshot"))?;
+        }
+        _ => return Err(()),
+    }
+    optional(v, "sharedConfig", shared_config)?;
+    if has(v, "snapshot") {
+        snapshot(&mut v["snapshot"])?;
+        for field in ["roomId", "roomEpoch", "revision", "controlSeq"] {
+            ensure(v[field] == v["snapshot"][field])?;
+        }
+    }
+    if operation == Operation::ProposalResolve {
+        ensure(v["sharedConfig"] == v["snapshot"]["sharedConfig"])?;
+    }
+    Ok(())
+}
 fn original_request(operation: Operation, v: &mut Value) -> Check {
     bounded(v, MAX_ORIGINAL_REQUEST_BYTES)?;
     match operation {
@@ -1231,11 +1322,53 @@ fn original_request(operation: Operation, v: &mut Value) -> Check {
             integer(&mut v["expectedControlSeq"], 0, MAX_SAFE_INTEGER)?;
             shared_config(&mut v["sharedConfig"])
         }
+        Operation::ProposalSubmit => {
+            closed(
+                v,
+                &["proposalId", "expectedRoomEpoch", "baseRevision", "changes"],
+                &[],
+            )?;
+            desktop_path_id(&v["proposalId"])?;
+            key(&mut v["expectedRoomEpoch"])?;
+            integer(&mut v["baseRevision"], 0, MAX_SAFE_INTEGER)?;
+            proposal_changes(&mut v["changes"])
+        }
+        Operation::ProposalResolve => {
+            closed(
+                v,
+                &["expectedRoomEpoch", "resolution"],
+                &["expectedRevision", "selectedChangeIds", "overrideChangeIds"],
+            )?;
+            key(&mut v["expectedRoomEpoch"])?;
+            if has(v, "expectedRevision") {
+                integer(&mut v["expectedRevision"], 0, MAX_SAFE_INTEGER)?;
+            }
+            one_of(&v["resolution"], &["accept-selected", "reject"])?;
+            if has(v, "selectedChangeIds") {
+                ensure(v["resolution"] != "reject")?;
+                array(&mut v["selectedChangeIds"], 0, 32, key)?;
+            }
+            if has(v, "overrideChangeIds") {
+                ensure(v["resolution"] != "reject")?;
+                array(&mut v["overrideChangeIds"], 0, 32, key)?;
+                unique_strings(&v["overrideChangeIds"])?;
+                let overrides = v["overrideChangeIds"].as_array().ok_or(())?;
+                ensure(overrides.is_empty() || has(v, "expectedRevision"))?;
+                for id in overrides {
+                    ensure(
+                        v["selectedChangeIds"]
+                            .as_array()
+                            .is_some_and(|selected| selected.contains(id)),
+                    )?;
+                }
+            }
+            Ok(())
+        }
         Operation::Ticket => {
             closed(v, &[], &["reconnect"])?;
             optional(v, "reconnect", reconnect)
         }
-        Operation::Leave | Operation::Close => {
+        Operation::Leave | Operation::Close | Operation::ProposalWithdraw => {
             closed(v, &["expectedRoomEpoch"], &[])?;
             key(&mut v["expectedRoomEpoch"])
         }
@@ -1418,6 +1551,9 @@ pub(crate) fn validate_http_response(
                 session(&mut value["result"])
             }
             Operation::Ticket => ticket_result(&mut value["result"]),
+            Operation::ProposalSubmit
+            | Operation::ProposalWithdraw
+            | Operation::ProposalResolve => proposal_result(operation, &mut value["result"]),
             Operation::Leave | Operation::Close => leave_result(&mut value["result"]),
         }?;
         // Defaults can add bytes; the output also needs the complete wire budget.
@@ -1550,6 +1686,52 @@ pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {
                 Ok(Action::Config {
                     room_id: get(&v, "roomId")?,
                     request: v["request"].clone(),
+                })
+            }
+            "proposal-submit" => {
+                closed(&v, &["kind", "roomId", "request"], &[])?;
+                desktop_path_id(&v["roomId"])?;
+                original_request(Operation::ProposalSubmit, &mut v["request"])?;
+                Ok(Action::ProposalSubmit {
+                    room_id: get(&v, "roomId")?,
+                    request: v["request"].clone(),
+                })
+            }
+            "proposal-withdraw" | "proposal-resolve" => {
+                closed(&v, &["kind", "roomId", "proposalId", "request"], &[])?;
+                desktop_path_id(&v["roomId"])?;
+                desktop_path_id(&v["proposalId"])?;
+                let withdraw = kind == "proposal-withdraw";
+                original_request(
+                    if withdraw {
+                        Operation::ProposalWithdraw
+                    } else {
+                        Operation::ProposalResolve
+                    },
+                    &mut v["request"],
+                )?;
+                let room_id = get(&v, "roomId")?;
+                let proposal_id = get(&v, "proposalId")?;
+                let request = v["request"].clone();
+                Ok(if withdraw {
+                    Action::ProposalWithdraw {
+                        room_id,
+                        proposal_id,
+                        request,
+                    }
+                } else {
+                    Action::ProposalResolve {
+                        room_id,
+                        proposal_id,
+                        request,
+                    }
+                })
+            }
+            "end-proposal-tracking" => {
+                closed(&v, &["kind", "intentId"], &[])?;
+                id(&mut v["intentId"], 1)?;
+                Ok(Action::EndProposalTracking {
+                    intent_id: get(&v, "intentId")?,
                 })
             }
             "end-config-tracking" => {
@@ -1785,6 +1967,216 @@ mod tests {
             &encode(value),
             42,
         )
+    }
+    fn proposal_fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../../packages/contracts/fixtures/desktop-room-proposals.json"
+        ))
+        .unwrap()
+    }
+    fn proposal_action(operation: Operation) -> Value {
+        let fixture = proposal_fixture();
+        let kind = match operation {
+            Operation::ProposalSubmit => "proposal-submit",
+            Operation::ProposalWithdraw => "proposal-withdraw",
+            Operation::ProposalResolve => "proposal-resolve",
+            _ => unreachable!(),
+        };
+        let mut action = json!({"kind":kind,"roomId":"room_01JARENAEXAMPLE","request":fixture[operation.as_str()]["request"]["request"]});
+        if operation != Operation::ProposalSubmit {
+            action["proposalId"] = json!("desktop-proposal-1");
+        }
+        json!({"handle":"native-handle","request":action})
+    }
+    #[test]
+    fn proposal_operations_match_producer_dtos_and_closed_receipts() {
+        let fixture = proposal_fixture();
+        for op in [
+            Operation::ProposalSubmit,
+            Operation::ProposalWithdraw,
+            Operation::ProposalResolve,
+        ] {
+            assert!(op.is_post());
+            assert_eq!(serde_json::to_value(op).unwrap(), json!(op.as_str()));
+            let wire = &fixture[op.as_str()];
+            assert_eq!(
+                validate_service_request(op, &wire["request"], 42).unwrap(),
+                wire["request"]
+            );
+            assert_eq!(response(op, &wire["success"]).unwrap(), wire["success"]);
+            assert_eq!(response(op, &wire["error"]).unwrap(), wire["error"]);
+            assert!(parse_request(&proposal_action(op)).is_ok());
+            let mut bad = wire["success"].clone();
+            bad["desktopRoom"]["viewerUserId"] = json!(43);
+            assert_eq!(response(op, &bad).unwrap_err().outcome, "unknown");
+            for field in ["controlSeq", "revision"] {
+                let mut bad = wire["success"].clone();
+                bad["result"][field] = json!(MAX_SAFE_INTEGER + 1);
+                assert!(response(op, &bad).is_err());
+            }
+            for field in ["role", "url", "cookie", "authorUserId", "createdAt"] {
+                let mut bad = proposal_action(op);
+                bad["request"]["request"][field] = json!("injected");
+                assert!(parse_request(&bad).is_err());
+                let mut bad = wire["success"].clone();
+                bad["result"][field] = json!("injected");
+                assert!(response(op, &bad).is_err());
+            }
+        }
+        let mut submit = fixture["proposalSubmit"]["success"].clone();
+        submit["result"]["result"] = json!("idempotent");
+        assert!(response(Operation::ProposalSubmit, &submit).is_ok());
+        submit["result"]["status"] = json!("accepted");
+        assert!(response(Operation::ProposalSubmit, &submit).is_err());
+        let mut withdraw = fixture["proposalWithdraw"]["success"].clone();
+        withdraw["result"]["result"] = json!("idempotent");
+        assert!(response(Operation::ProposalWithdraw, &withdraw).is_err());
+        for field in ["sharedConfig", "snapshot"] {
+            let mut bad = fixture["proposalResolve"]["success"].clone();
+            bad["result"].as_object_mut().unwrap().remove(field);
+            assert!(response(Operation::ProposalResolve, &bad).is_err());
+        }
+        for field in ["roomId", "roomEpoch", "revision", "controlSeq"] {
+            let mut bad = fixture["proposalResolve"]["success"].clone();
+            bad["result"]["snapshot"][field] = if matches!(field, "revision" | "controlSeq") {
+                json!(99)
+            } else {
+                json!("other")
+            };
+            assert!(response(Operation::ProposalResolve, &bad).is_err());
+        }
+        let mut bad = fixture["proposalResolve"]["success"].clone();
+        bad["result"]["sharedConfig"]["combatants"][0]["ref"]["versionToken"] =
+            json!("other-version");
+        assert!(response(Operation::ProposalResolve, &bad).is_err());
+        for status in ["accepted", "partially_accepted", "rejected"] {
+            let mut valid = fixture["proposalResolve"]["success"].clone();
+            valid["result"]["status"] = json!(status);
+            assert!(response(Operation::ProposalResolve, &valid).is_ok());
+        }
+    }
+    #[test]
+    fn proposal_targets_are_canonical_without_rewriting_unicode_or_spaces() {
+        for value in [
+            "房间 提案😀",
+            "a?b#c&d+e=f:@$;,[]",
+            "a!~*'()_-.",
+            "a\tb",
+            "a\0b",
+        ] {
+            assert!(canonical_path_id(value), "{value:?}");
+            for op in [
+                Operation::ProposalSubmit,
+                Operation::ProposalWithdraw,
+                Operation::ProposalResolve,
+            ] {
+                let mut input = proposal_action(op);
+                input["request"]["roomId"] = json!(value);
+                if op == Operation::ProposalSubmit {
+                    input["request"]["request"]["proposalId"] = json!(value);
+                } else {
+                    input["request"]["proposalId"] = json!(value);
+                }
+                match parse_request(&input).unwrap().action {
+                    Action::ProposalSubmit { room_id, request } => {
+                        assert_eq!(room_id, value);
+                        assert_eq!(request["proposalId"], value);
+                    }
+                    Action::ProposalWithdraw {
+                        room_id,
+                        proposal_id,
+                        ..
+                    }
+                    | Action::ProposalResolve {
+                        room_id,
+                        proposal_id,
+                        ..
+                    } => {
+                        assert_eq!(room_id, value);
+                        assert_eq!(proposal_id, value);
+                    }
+                    _ => panic!("wrong proposal action"),
+                }
+            }
+        }
+        for value in [
+            "",
+            ".",
+            "..",
+            " x",
+            "x ",
+            "\u{feff}x",
+            "x\u{3000}",
+            "a/b",
+            "a\\b",
+            "%2e",
+            "%252f",
+            "100%",
+        ] {
+            assert!(!canonical_path_id(value), "{value:?}");
+            for op in [
+                Operation::ProposalSubmit,
+                Operation::ProposalWithdraw,
+                Operation::ProposalResolve,
+            ] {
+                let mut bad = proposal_action(op);
+                bad["request"]["roomId"] = json!(value);
+                assert!(parse_request(&bad).is_err());
+                let mut bad = proposal_action(op);
+                if op == Operation::ProposalSubmit {
+                    bad["request"]["request"]["proposalId"] = json!(value);
+                } else {
+                    bad["request"]["proposalId"] = json!(value);
+                }
+                assert!(parse_request(&bad).is_err());
+            }
+        }
+        assert!(canonical_path_id(&"😀".repeat(128)));
+        assert!(!canonical_path_id(&"😀".repeat(129)));
+    }
+    #[test]
+    fn proposal_requests_preserve_existing_merge_rules_and_original_byte_budget() {
+        let mut submit = proposal_action(Operation::ProposalSubmit);
+        submit["request"]["request"]["baseRevision"] = json!(0);
+        assert!(parse_request(&submit).is_ok());
+        for changes in [
+            json!([]),
+            json!([{"changeId":"x","type":"setUserGuidance","value":"new","expectedBase":{"kind":"value","value":"old"},"dependsOn":["missing"]}]),
+        ] {
+            let mut bad = submit.clone();
+            bad["request"]["request"]["changes"] = changes;
+            assert!(parse_request(&bad).is_err());
+        }
+        let mut resolve = proposal_action(Operation::ProposalResolve);
+        resolve["request"]["request"] = json!({"expectedRoomEpoch":"epoch_01JARENA","resolution":"accept-selected","selectedChangeIds":["guidance-1"]});
+        assert!(parse_request(&resolve).is_ok()); // Ordinary acceptance has no global revision precondition.
+        resolve["request"]["request"]["overrideChangeIds"] = json!(["guidance-1"]);
+        assert!(parse_request(&resolve).is_err());
+        resolve["request"]["request"]["expectedRevision"] = json!(7);
+        assert!(parse_request(&resolve).is_ok());
+        for overrides in [json!(["other"]), json!(["guidance-1", "guidance-1"])] {
+            let mut bad = resolve.clone();
+            bad["request"]["request"]["overrideChangeIds"] = overrides;
+            assert!(parse_request(&bad).is_err());
+        }
+        resolve["request"]["request"]["resolution"] = json!("reject");
+        assert!(parse_request(&resolve).is_err());
+        let mut padded = proposal_action(Operation::ProposalWithdraw);
+        let original = &mut padded["request"]["request"];
+        let padding = MAX_ORIGINAL_REQUEST_BYTES - byte_len(original).unwrap();
+        original["expectedRoomEpoch"] = json!(format!("{}epoch_01JARENA", " ".repeat(padding)));
+        assert!(parse_request(&padded).is_ok());
+        padded["request"]["request"]["expectedRoomEpoch"] =
+            json!(format!("{}epoch_01JARENA", " ".repeat(padding + 1)));
+        assert!(parse_request(&padded).is_err());
+        let ended = json!({"handle":"native-handle","request":{"kind":"end-proposal-tracking","intentId":"intent-a"}});
+        assert!(matches!(
+            parse_request(&ended).unwrap().action,
+            Action::EndProposalTracking { .. }
+        ));
+        let mut bad = ended;
+        bad["request"]["cancelServer"] = json!(true);
+        assert!(parse_request(&bad).is_err());
     }
     #[test]
     fn config_protocol_is_closed_bounded_and_matches_producer_wire() {

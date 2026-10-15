@@ -2,6 +2,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::{header, Client, Method};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -15,6 +16,17 @@ use crate::arena_room_protocol::{
 const HTTP_DEADLINE: Duration = Duration::from_secs(15);
 const MAX_RESPONSE_HEADERS: usize = 16 * 1024;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+// Match encodeURIComponent, including punctuation that URL path-segment encoding leaves raw.
+const PROPOSAL_PATH_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'!')
+    .remove(b'~')
+    .remove(b'*')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')');
 
 // These are build-time repository inputs, never renderer or environment overrides.
 pub(crate) fn service_origin() -> Result<Url, RoomError> {
@@ -56,6 +68,7 @@ fn fixed_https_origin(raw: Option<&str>) -> Result<Url, RoomError> {
 pub(crate) struct HttpRequest {
     pub operation: Operation,
     pub room_id: Option<String>,
+    pub proposal_id: Option<String>,
     pub request: Value,
     pub resume_only: bool,
 }
@@ -144,6 +157,11 @@ impl RoomHttp {
             || cookie.is_empty()
             || cookie.len() > 16 * 1024
             || (input.resume_only && operation != Operation::Create)
+            || (input.proposal_id.is_some()
+                != matches!(
+                    operation,
+                    Operation::ProposalWithdraw | Operation::ProposalResolve
+                ))
         {
             return Err(invalid());
         }
@@ -170,6 +188,31 @@ impl RoomHttp {
                     path.push(room).push(operation.as_str());
                 }
             }
+        }
+        if matches!(
+            operation,
+            Operation::ProposalSubmit | Operation::ProposalWithdraw | Operation::ProposalResolve
+        ) {
+            let room = input.room_id.as_deref().ok_or_else(invalid)?;
+            if !protocol::canonical_path_id(room) {
+                return Err(invalid());
+            }
+            let room = utf8_percent_encode(room, PROPOSAL_PATH_ENCODE_SET);
+            let mut path = format!("/api/arena/rooms/v1/{room}/proposals");
+            if operation != Operation::ProposalSubmit {
+                let proposal = input.proposal_id.as_deref().ok_or_else(invalid)?;
+                if !protocol::canonical_path_id(proposal) {
+                    return Err(invalid());
+                }
+                let proposal = utf8_percent_encode(proposal, PROPOSAL_PATH_ENCODE_SET);
+                let action = if operation == Operation::ProposalWithdraw {
+                    "withdraw"
+                } else {
+                    "resolve"
+                };
+                path.push_str(&format!("/{proposal}/{action}"));
+            }
+            url.set_path(&path);
         }
         if operation == Operation::Discover {
             let query = protocol::validate_discover_query(&input.request).map_err(|_| invalid())?;
@@ -330,6 +373,16 @@ mod tests {
     use tokio::net::TcpListener;
 
     fn fixture(operation: Operation, field: &str) -> Value {
+        if matches!(
+            operation,
+            Operation::ProposalSubmit | Operation::ProposalWithdraw | Operation::ProposalResolve
+        ) {
+            let all: Value = serde_json::from_str(include_str!(
+                "../../../../packages/contracts/fixtures/desktop-room-proposals.json"
+            ))
+            .unwrap();
+            return all[operation.as_str()][field].clone();
+        }
         let all: Value = serde_json::from_str(include_str!(
             "../../../../packages/contracts/fixtures/desktop-room-session.json"
         ))
@@ -348,6 +401,14 @@ mod tests {
                 None
             } else {
                 Some("room_01JARENAEXAMPLE".into())
+            },
+            proposal_id: if matches!(
+                operation,
+                Operation::ProposalWithdraw | Operation::ProposalResolve
+            ) {
+                Some("desktop-proposal-1".into())
+            } else {
+                None
             },
             request,
             resume_only: false,
@@ -417,6 +478,99 @@ mod tests {
         result
     }
 
+    #[test]
+    fn proposal_routes_use_exact_canonical_segments_and_original_dtos() {
+        let client = RoomHttp::new().unwrap();
+        for (op, suffix) in [
+            (Operation::ProposalSubmit, ""),
+            (Operation::ProposalWithdraw, "/desktop-proposal-1/withdraw"),
+            (Operation::ProposalResolve, "/desktop-proposal-1/resolve"),
+        ] {
+            let value = input(op);
+            let request = client.prepare(&value, 42, "session=test").unwrap();
+            assert_eq!(request.method(), Method::POST);
+            assert_eq!(
+                request.url().path(),
+                format!("/api/arena/rooms/v1/room_01JARENAEXAMPLE/proposals{suffix}")
+            );
+            let body: Value =
+                serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+            assert_eq!(body, fixture(op, "request"));
+            assert_eq!(request.headers()[PROTOCOL_HEADER], PROTOCOL_VERSION);
+            assert_eq!(request.headers()[EXPECTED_USER_ID_HEADER], "v1:42");
+        }
+        let mut value = input(Operation::ProposalResolve);
+        value.room_id = Some("房间 空格😀".into());
+        value.proposal_id = Some("p?x#y&z+a=b:@$;,[]!~*'()_-\t\0.".into());
+        let request = client.prepare(&value, 42, "session=test").unwrap();
+        assert_eq!(request.url().path(), "/api/arena/rooms/v1/%E6%88%BF%E9%97%B4%20%E7%A9%BA%E6%A0%BC%F0%9F%98%80/proposals/p%3Fx%23y%26z%2Ba%3Db%3A%40%24%3B%2C%5B%5D!~*'()_-%09%00./resolve");
+        assert_eq!(request.url().query(), None);
+        assert_eq!(request.url().fragment(), None);
+        assert_eq!(request.url().origin(), service_origin().unwrap().origin());
+        for op in [
+            Operation::ProposalSubmit,
+            Operation::ProposalWithdraw,
+            Operation::ProposalResolve,
+        ] {
+            for invalid in [
+                "", ".", "..", " room", "room ", "%2e", "%252f", "a/b", "a\\b",
+            ] {
+                let mut value = input(op);
+                value.room_id = Some(invalid.into());
+                assert_eq!(
+                    client
+                        .prepare(&value, 42, "session=test")
+                        .unwrap_err()
+                        .outcome,
+                    "not-applied"
+                );
+                if op != Operation::ProposalSubmit {
+                    let mut value = input(op);
+                    value.proposal_id = Some(invalid.into());
+                    assert!(client.prepare(&value, 42, "session=test").is_err());
+                }
+            }
+            let mut value = input(op);
+            value.resume_only = true;
+            assert!(client.prepare(&value, 42, "session=test").is_err());
+            let mut value = input(op);
+            value.room_id = None;
+            assert!(client.prepare(&value, 42, "session=test").is_err());
+            let mut value = input(op);
+            value.proposal_id = if op == Operation::ProposalSubmit {
+                Some("not-a-path-target".into())
+            } else {
+                None
+            };
+            assert!(client.prepare(&value, 42, "session=test").is_err());
+        }
+        let mut legacy = input(Operation::Join);
+        legacy.proposal_id = Some("extra".into());
+        assert!(client.prepare(&legacy, 42, "session=test").is_err());
+    }
+    #[tokio::test]
+    async fn proposal_loopback_accepts_negotiated_receipts_and_fails_closed_without_fallback() {
+        for op in [
+            Operation::ProposalSubmit,
+            Operation::ProposalWithdraw,
+            Operation::ProposalResolve,
+        ] {
+            let success = fixture(op, "success");
+            assert_eq!(roundtrip(op, 200, success.clone()).await.unwrap(), success);
+            let error = roundtrip(op, 429, fixture(op, "error")).await.unwrap_err();
+            assert_eq!(error.outcome, "not-applied");
+            assert_eq!(error.server_code, Some("ROOM_RATE_LIMITED"));
+            let error = roundtrip(op, 200, success["result"].clone())
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "invalid-response");
+            assert_eq!(error.outcome, "unknown");
+            let mut wrong_owner = success.clone();
+            wrong_owner["desktopRoom"]["viewerUserId"] = json!(43);
+            let error = roundtrip(op, 200, wrong_owner).await.unwrap_err();
+            assert_eq!(error.outcome, "unknown");
+        }
+    }
     #[test]
     fn production_targets_and_requests_are_fixed() {
         assert_eq!(

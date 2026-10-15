@@ -116,6 +116,7 @@ async function harness() {
       delivery.ackEntered.resolve();
       return delivery.ack.promise;
     }
+    if (request.kind === 'end-proposal-tracking') throw new Error('No proposal tracking control is exposed by this page');
     if (request.kind === 'end-config-tracking') {
       if (endFails) throw new Error('Lost end receipt');
       if (pendingIntent?.intentId !== request.intentId) throw new Error('Wrong config token');
@@ -330,6 +331,67 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     expect(h.requests.map(value => value.kind)).toEqual(['session']);
   });
 
+  it.each(['proposalSubmit', 'proposalWithdraw', 'proposalResolve'] as const)('retains %s unknown after a GET until a separately acknowledged observation', async operation => {
+    const h = await harness();
+    const pending = { operation, roomId: host.roomId, intentId: 'proposal-original' };
+    h.setPending(pending); await h.session.open();
+    const read = h.plan('session'); const reading = h.session.reconcile();
+    await read.entered.promise; read.accept(); await reading;
+    await h.receive(success('session', read.requestId, host));
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.subscriptions()).toHaveLength(0);
+    const event: DesktopRoomEvent = { kind: 'proposal-observation', intentId: pending.intentId,
+      observation: { observation: 'terminal', linked: true, settle: true, outcome: 'scope-unverified', terminalStatus: 'partially_accepted' } };
+    const delivery = h.emit(event); await delivery.ackEntered.promise;
+    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    delivery.acknowledge();
+    await whenState(h.session, state => state.unknown === null && !state.busy && state.phase === 'connecting');
+    expect(h.subscriptions()).toHaveLength(1);
+    expect(h.session.getSnapshot().notice).toContain('具体接受范围尚无法确认');
+    expect(h.requests.map(request => request.kind)).toEqual(['session']);
+  });
+  it.each(['wrong-ack', 'new-owner'] as const)('does not release proposal tracking on %s', async failure => {
+    const h = await harness();
+    const pending = { operation: 'proposalWithdraw' as const, roomId: host.roomId, intentId: 'proposal-original' };
+    h.setPending(pending); await h.session.open();
+    const delivery = h.emit({ kind: 'proposal-observation', intentId: pending.intentId,
+      observation: { observation: 'terminal', linked: true, settle: true, outcome: 'satisfied', terminalStatus: 'withdrawn' } });
+    await delivery.ackEntered.promise;
+    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    let reopening: Promise<symbol | null> | undefined;
+    if (failure === 'new-owner') { h.session.detach(); reopening = h.session.open(); }
+    delivery.acknowledge(failure === 'wrong-ack' ? { batchId: 'wrong-batch' } : {});
+    if (failure === 'wrong-ack') await whenState(h.session, state => state.phase === 'unavailable');
+    else await reopening;
+    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.subscriptions()).toHaveLength(0);
+  });
+  it.each(['ROOM_NOT_FOUND', 'ROOM_FORBIDDEN'] as const)('does not turn proposal recovery %s into a write receipt', async code => {
+    const h = await harness();
+    const pending = { operation: 'proposalSubmit' as const, roomId: host.roomId, intentId: 'proposal-original' };
+    h.setPending(pending); await h.session.open();
+    const read = h.plan('session'); const reading = h.session.reconcile(); await read.entered.promise; read.accept(); await reading;
+    await h.receive({ kind: 'request-error', requestId: read.requestId, operation: 'session',
+      error: { code: 'service-rejected', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applicable', serverCode: code } });
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.requests.map(request => request.kind)).toEqual(['session']);
+  });
+  it('does not resubscribe or release pending tracking for an ordinary socket observation', async () => {
+    const h = await harness();
+    const pending = { operation: 'proposalResolve' as const, roomId: host.roomId, intentId: 'proposal-original' };
+    h.setPending(pending); await h.session.open();
+    const read = h.plan('session'); const reading = h.session.reconcile(); await read.entered.promise; read.accept(); await reading;
+    await h.receive(success('session', read.requestId, host)); await whenState(h.session, state => !state.busy);
+    const observation: DesktopRoomEvent = { kind: 'proposal-observation', intentId: pending.intentId,
+      observation: { observation: 'pending', linked: true, settle: false, outcome: null, terminalStatus: null } };
+    await h.receive(observation); await whenState(h.session, state => !state.busy && state.phase === 'connecting');
+    expect(h.subscriptions()).toHaveLength(1);
+    await h.receive(observation); for (let i = 0; i < 24; i += 1) await Promise.resolve();
+    expect(h.subscriptions()).toHaveLength(1);
+    expect(h.session.getSnapshot().unknown).toEqual(pending);
+  });
   it('requires explicit reopen and resume-create for an unknown create without allocating a replacement creation ID', async () => {
     const h = await harness(); await h.session.open();
     const request = h.plan('create'); const creating = h.session.create(details, source, () => true);

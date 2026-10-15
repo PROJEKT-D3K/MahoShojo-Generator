@@ -1012,6 +1012,11 @@ impl DeliveryQueue {
 
     /// 普通 WS/status event 必须先通过闭合协议验证。不能动用 HTTP 的终结预留。
     pub(crate) fn enqueue(&mut self, event: &Value) -> Result<(), RoomError> {
+        self.enqueue_receipted(event).map(|_| ())
+    }
+
+    /// Exact identity of this enqueued observation, never a later unrelated batch.
+    pub(crate) fn enqueue_receipted(&mut self, event: &Value) -> Result<(String, u64), RoomError> {
         let serial = self.active.ok_or_else(|| error("scope-changed"))?;
         if self.backpressured {
             return Err(error("backpressure"));
@@ -1042,8 +1047,9 @@ impl DeliveryQueue {
             .expect("active scope")
             .next_sequence += 1;
         self.owned_bytes += batch.body.len();
+        let receipt = (batch.batch_id.clone(), batch.sequence);
         self.queued.push_back(batch);
-        Ok(())
+        Ok(receipt)
     }
 
     /// 返回之前转成完整通知债务。无论 send 结果如何都不退款、不重发。

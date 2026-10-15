@@ -20,6 +20,13 @@ use crate::arena_room_state::{
     DeliveryQueue, DocumentId, DocumentProof, DocumentState, InstanceToken,
 };
 
+#[cfg(test)]
+#[path = "arena_room_proposal_capacity_tests.rs"]
+mod capacity_tests;
+#[path = "arena_room_proposal.rs"]
+mod proposal;
+use proposal::ProposalBasis;
+
 pub(crate) type Notify = Arc<dyn Fn(String) -> Result<(), RoomError> + Send + Sync>;
 type AccountCheck = Arc<dyn Fn() -> Result<bool, RoomError> + Send + Sync>;
 
@@ -159,6 +166,8 @@ struct PendingIntent {
     room_id: Option<String>,
     frozen_request: Value,
     config_basis: Option<ConfigBasis>,
+    proposal_basis: Option<ProposalBasis>,
+    proposal_scope: Option<(DocumentId, String)>,
     account: Arc<AccountAccess>,
     phase: IntentPhase,
     receipt: Option<IntentReceipt>,
@@ -517,6 +526,7 @@ impl RoomInstance {
         document: DocumentId,
         input: Request,
     ) -> Result<EngineReply, RoomError> {
+        let ending_proposal = matches!(&input.action, Action::EndProposalTracking { .. });
         match input.action {
             Action::Pull { subscription_id } => {
                 let mut inner = lock(&self.inner);
@@ -592,12 +602,16 @@ impl RoomInstance {
                     "subscriptionId":subscription_id,"batchId":batch_id,"sequence":sequence,"accepted":accepted}),
                 ))
             }
-            Action::EndConfigTracking { intent_id } => {
+            Action::EndConfigTracking { intent_id } | Action::EndProposalTracking { intent_id } => {
                 let mut inner = lock(&self.inner);
                 let context = self.scope_for(&inner, document, &input.handle)?;
                 let pending = inner.pending.as_ref().ok_or_else(stale)?;
                 if pending.id != intent_id
-                    || pending.operation != Operation::Config
+                    || if ending_proposal {
+                        !is_proposal(pending.operation)
+                    } else {
+                        pending.operation != Operation::Config
+                    }
                     || pending.account.user_id != context.account.user_id
                     || pending.account.epoch != context.account.epoch
                     || !pending.account.is_current()?
@@ -609,7 +623,7 @@ impl RoomInstance {
                 Self::retire_locked(&mut inner);
                 inner.pending = None;
                 Ok(EngineReply::Small(
-                    json!({"kind":"config-tracking-ended","intentId":intent_id,"ended":true}),
+                    json!({"kind":if ending_proposal { "proposal-tracking-ended" } else { "config-tracking-ended" },"intentId":intent_id,"ended":true}),
                 ))
             }
             action => self.start_http(document, input.handle, action),
@@ -647,12 +661,14 @@ impl RoomInstance {
                 room_id: None,
                 request: query,
                 resume_only: false,
+                proposal_id: None,
             },
             Action::Create { request } => HttpRequest {
                 operation: Operation::Create,
                 room_id: None,
                 request,
                 resume_only: false,
+                proposal_id: None,
             },
             Action::ResumeCreate { intent_id } => {
                 let pending = inner
@@ -671,6 +687,7 @@ impl RoomInstance {
                     room_id: None,
                     request: pending.frozen_request.clone(),
                     resume_only: true,
+                    proposal_id: None,
                 }
             }
             Action::Join { room_id, request } => HttpRequest {
@@ -678,10 +695,41 @@ impl RoomInstance {
                 room_id: Some(room_id),
                 request,
                 resume_only: false,
+                proposal_id: None,
             },
             Action::Config { room_id, request } => HttpRequest {
                 operation: Operation::Config,
                 room_id: Some(room_id),
+                request,
+                resume_only: false,
+                proposal_id: None,
+            },
+            Action::ProposalSubmit { room_id, request } => HttpRequest {
+                operation: Operation::ProposalSubmit,
+                room_id: Some(room_id),
+                proposal_id: None,
+                request,
+                resume_only: false,
+            },
+            Action::ProposalWithdraw {
+                room_id,
+                proposal_id,
+                request,
+            } => HttpRequest {
+                operation: Operation::ProposalWithdraw,
+                room_id: Some(room_id),
+                proposal_id: Some(proposal_id),
+                request,
+                resume_only: false,
+            },
+            Action::ProposalResolve {
+                room_id,
+                proposal_id,
+                request,
+            } => HttpRequest {
+                operation: Operation::ProposalResolve,
+                room_id: Some(room_id),
+                proposal_id: Some(proposal_id),
                 request,
                 resume_only: false,
             },
@@ -690,6 +738,7 @@ impl RoomInstance {
                 room_id: Some(room_id),
                 request: json!({}),
                 resume_only: false,
+                proposal_id: None,
             },
             Action::Leave {
                 room_id,
@@ -699,6 +748,7 @@ impl RoomInstance {
                 room_id: Some(room_id),
                 request: json!({"expectedRoomEpoch":expected_room_epoch}),
                 resume_only: false,
+                proposal_id: None,
             },
             Action::Close {
                 room_id,
@@ -708,8 +758,12 @@ impl RoomInstance {
                 room_id: Some(room_id),
                 request: json!({"expectedRoomEpoch":expected_room_epoch}),
                 resume_only: false,
+                proposal_id: None,
             },
-            Action::Pull { .. } | Action::Ack { .. } | Action::EndConfigTracking { .. } => {
+            Action::Pull { .. }
+            | Action::Ack { .. }
+            | Action::EndConfigTracking { .. }
+            | Action::EndProposalTracking { .. } => {
                 return Err(RoomError::new("invalid-request", "not-applied"))
             }
         };
@@ -738,6 +792,16 @@ impl RoomInstance {
                 return Err(stale());
             }
         }
+        let proposal_basis = if is_proposal(request.operation) {
+            let session = inner
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.session.as_ref())
+                .ok_or_else(stale)?;
+            Some(session.prepare_proposal(&request)?)
+        } else {
+            None
+        };
         let request_id = random_id()?;
         let new_intent_id = if request.operation.is_post() {
             Some(resume_id.unwrap_or(random_id()?))
@@ -777,12 +841,17 @@ impl RoomInstance {
                 id: id.clone(),
                 operation: request.operation,
                 room_id: request.room_id.clone(),
-                frozen_request: if request.operation == Operation::Config {
+                frozen_request: if request.operation == Operation::Config
+                    || is_proposal(request.operation)
+                {
                     Value::Null
                 } else {
                     request.request.clone()
                 },
                 config_basis,
+                proposal_basis,
+                proposal_scope: is_proposal(request.operation)
+                    .then(|| (context.proof.document, context.handle.clone())),
                 account: context.account.clone(),
                 phase: IntentPhase::InFlight,
                 receipt: None,
@@ -798,6 +867,9 @@ impl RoomInstance {
                 }
                 if let Some(session) = &mut scope.session {
                     session.offline();
+                    if is_proposal(request.operation) {
+                        session.proposals_fresh = false;
+                    }
                 }
             }
         }
@@ -845,6 +917,23 @@ impl RoomInstance {
         if fresh.is_ok() {
             if let Ok(response) = &outcome {
                 if let Err(mut error) = self.install_http(&context, &request, response) {
+                    let mut inner = lock(&self.inner);
+                    if self.identity_current_locked(&inner, &context) {
+                        if let Some(session) = inner
+                            .scope
+                            .as_mut()
+                            .and_then(|scope| scope.session.as_mut())
+                        {
+                            session.proposals_fresh = false;
+                        }
+                        if let Some(basis) = inner
+                            .pending
+                            .as_mut()
+                            .and_then(|pending| pending.proposal_basis.as_mut())
+                        {
+                            basis.invalidate_linkage();
+                        }
+                    }
                     error.outcome = if operation.is_post() {
                         "unknown"
                     } else {
@@ -1006,6 +1095,7 @@ impl RoomInstance {
                     && inner.pending.as_ref().is_some_and(|pending| {
                         pending.phase == IntentPhase::Unknown
                             && !matches!(pending.operation, Operation::Create | Operation::Config)
+                            && !is_proposal(pending.operation)
                             && pending.room_id == request.room_id
                             && pending.account.user_id == context.account.user_id
                             && pending.account.epoch == context.account.epoch
@@ -1018,6 +1108,24 @@ impl RoomInstance {
                         if let Some(scope) = &mut inner.scope {
                             scope.session = None;
                         }
+                    }
+                }
+            }
+            if operation == Operation::Session
+                && fresh.is_ok()
+                && original_queued
+                && outcome.is_ok()
+            {
+                if let Ok(response) = &outcome {
+                    if Self::observe_proposal_locked(
+                        &mut inner,
+                        &context,
+                        &response["result"]["snapshot"],
+                        false,
+                    )
+                    .is_err()
+                    {
+                        Self::delivery_failed(&mut inner, &context);
                     }
                 }
             }
@@ -1204,6 +1312,54 @@ impl RoomInstance {
         result
     }
 
+    /// The retained target is an independent identity guard even after an absent
+    /// snapshot removed the proposal from the bounded pending index.
+    fn reject_proposal_conflict(
+        inner: &mut Inner,
+        context: &ScopeContext,
+        room: &str,
+        epoch: &str,
+        self_id: &str,
+        proposals: &[Value],
+    ) -> Result<(), RoomError> {
+        let conflict = inner.pending.as_ref().is_some_and(|pending| {
+            pending.account.user_id == context.account.user_id
+                && pending.account.epoch == context.account.epoch
+                && pending
+                    .proposal_scope
+                    .as_ref()
+                    .is_some_and(|(document, handle)| {
+                        *document == context.proof.document && handle == &context.handle
+                    })
+                && pending.proposal_basis.as_ref().is_some_and(|basis| {
+                    basis.matches_scope(room, epoch, self_id)
+                        && basis.identity().is_some()
+                        && proposals.iter().any(|value| {
+                            value["proposalId"].as_str() == Some(basis.proposal_id())
+                                && !basis.matches_proposal(value)
+                        })
+                })
+        });
+        if conflict {
+            if let Some(basis) = inner
+                .pending
+                .as_mut()
+                .and_then(|pending| pending.proposal_basis.as_mut())
+            {
+                basis.invalidate_linkage();
+            }
+            if let Some(authority) = inner
+                .scope
+                .as_mut()
+                .and_then(|scope| scope.session.as_mut())
+            {
+                authority.proposals_fresh = false;
+            }
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
     fn install_http(
         &self,
         context: &ScopeContext,
@@ -1213,6 +1369,27 @@ impl RoomInstance {
         let mut inner = lock(&self.inner);
         self.current_locked(&inner, context)?;
         let result = &response["result"];
+        if let Some(proposals) = result["snapshot"]["proposals"].as_array() {
+            let self_id = result["self"]["userId"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| {
+                    inner
+                        .scope
+                        .as_ref()
+                        .and_then(|scope| scope.session.as_ref())
+                        .map(|authority| authority.self_id.clone())
+                })
+                .ok_or_else(invalid)?;
+            Self::reject_proposal_conflict(
+                &mut inner,
+                context,
+                result["roomId"].as_str().ok_or_else(invalid)?,
+                result["roomEpoch"].as_str().ok_or_else(invalid)?,
+                &self_id,
+                proposals,
+            )?;
+        }
         match request.operation {
             Operation::Create | Operation::Join | Operation::Session | Operation::Config => {
                 let authority = Authority::from_session(result)?;
@@ -1235,6 +1412,16 @@ impl RoomInstance {
                     .as_ref()
                     .and_then(|scope| scope.session.as_ref())
                 {
+                    if previous.room_id == authority.room_id
+                        && previous.room_epoch == authority.room_epoch
+                    {
+                        checked_proposal_index(
+                            result["snapshot"]["proposals"]
+                                .as_array()
+                                .ok_or_else(invalid)?,
+                            &previous.proposals,
+                        )?;
+                    }
                     // Normal recovery may observe a new epoch. Within an epoch,
                     // neither a GET nor a POST may replace newer authority.
                     if previous.room_id == authority.room_id
@@ -1300,6 +1487,51 @@ impl RoomInstance {
                     }
                 }
                 inner.scope.as_mut().ok_or_else(stale)?.session = Some(authority);
+            }
+            Operation::ProposalSubmit
+            | Operation::ProposalWithdraw
+            | Operation::ProposalResolve => {
+                let previous = inner
+                    .scope
+                    .as_ref()
+                    .and_then(|scope| scope.session.as_ref())
+                    .ok_or_else(stale)?;
+                let pending = inner.pending.as_ref().ok_or_else(stale)?;
+                let basis = pending.proposal_basis.as_ref().ok_or_else(stale)?;
+                if result["roomId"].as_str() != request.room_id.as_deref()
+                    || result["roomEpoch"] != request.request["expectedRoomEpoch"]
+                    || result["roomEpoch"].as_str() != Some(previous.room_epoch.as_str())
+                    || result["proposalId"].as_str() != Some(basis.proposal_id())
+                    || result["revision"]
+                        .as_u64()
+                        .is_none_or(|revision| revision < previous.revision)
+                    || result["controlSeq"]
+                        .as_u64()
+                        .is_none_or(|sequence| sequence < previous.control_seq)
+                {
+                    return Err(invalid());
+                }
+                if request.operation == Operation::ProposalResolve {
+                    if (request.request["resolution"] == "reject")
+                        != (result["status"] == "rejected")
+                    {
+                        return Err(invalid());
+                    }
+                    let mut authority = previous.clone();
+                    authority.replace_snapshot(&result["snapshot"])?;
+                    for value in result["snapshot"]["proposals"]
+                        .as_array()
+                        .ok_or_else(invalid)?
+                    {
+                        if value["proposalId"].as_str() == Some(basis.proposal_id())
+                            && (!basis.matches_proposal(value)
+                                || value["status"] != result["status"])
+                        {
+                            return Err(invalid());
+                        }
+                    }
+                    inner.scope.as_mut().ok_or_else(stale)?.session = Some(authority);
+                }
             }
             Operation::Leave | Operation::Close => {
                 if result["roomId"].as_str() != request.room_id.as_deref() {
@@ -1406,6 +1638,7 @@ impl RoomInstance {
                 // baseline. Omit it so admission starts with a full snapshot.
                 request: json!({}),
                 resume_only: false,
+                proposal_id: None,
             };
             inner.delivery.reserve_subscription_terminal()?;
             input
@@ -1515,6 +1748,28 @@ impl RoomInstance {
             .await;
             self.clear_presence(&context);
             if let Err(error) = &result {
+                // A cancelled old socket must not revoke a newer HTTP snapshot.
+                {
+                    let mut inner = lock(&self.inner);
+                    if !cancel.is_cancelled() && self.identity_current_locked(&inner, &context) {
+                        if let Some(session) = inner
+                            .scope
+                            .as_mut()
+                            .and_then(|scope| scope.session.as_mut())
+                        {
+                            session.proposals_fresh = false;
+                        }
+                        if error.code != "network-error" {
+                            if let Some(basis) = inner
+                                .pending
+                                .as_mut()
+                                .and_then(|pending| pending.proposal_basis.as_mut())
+                            {
+                                basis.invalidate_linkage();
+                            }
+                        }
+                    }
+                }
                 self.subscription_error(&context, error);
             }
             if cancel.is_cancelled() || self.subscription_current(&context).is_err() {
@@ -1552,6 +1807,66 @@ impl RoomInstance {
         }
     }
 
+    fn observe_proposal_locked(
+        inner: &mut Inner,
+        context: &ScopeContext,
+        evidence: &Value,
+        event: bool,
+    ) -> Result<(), RoomError> {
+        let Some(authority) = inner
+            .scope
+            .as_ref()
+            .and_then(|scope| scope.session.as_ref())
+        else {
+            return Ok(());
+        };
+        let Some(pending) = inner.pending.as_mut().filter(|pending| {
+            pending.phase == IntentPhase::Unknown
+                && pending
+                    .proposal_scope
+                    .as_ref()
+                    .is_some_and(|(document, handle)| {
+                        *document == context.proof.document && handle == &context.handle
+                    })
+                && pending.account.user_id == context.account.user_id
+                && pending.account.epoch == context.account.epoch
+        }) else {
+            return Ok(());
+        };
+        let Some(basis) = pending.proposal_basis.as_mut() else {
+            return Ok(());
+        };
+        let observation = if event {
+            basis.observe_event(
+                &authority.room_id,
+                &authority.room_epoch,
+                &authority.self_id,
+                evidence,
+            )
+        } else {
+            basis.observe_snapshot(
+                &authority.room_id,
+                &authority.room_epoch,
+                &authority.self_id,
+                evidence,
+            )
+        };
+        let settle = observation["settle"] == true;
+        let outgoing = json!({"kind":"proposal-observation", "intentId":pending.id, "observation":observation});
+        let (batch_id, sequence) = inner.delivery.enqueue_receipted(&outgoing)?;
+        if settle {
+            pending.phase = IntentPhase::AwaitingAck;
+            pending.receipt = Some(IntentReceipt {
+                document: context.proof.document,
+                handle: context.handle.clone(),
+                subscription_id: context.subscription_id.clone(),
+                batch_id,
+                sequence,
+            });
+        }
+        Ok(())
+    }
+
     fn process_socket(
         &self,
         context: &ScopeContext,
@@ -1563,12 +1878,50 @@ impl RoomInstance {
         if cancel.is_cancelled() {
             return Err(stale());
         }
-        let effect = inner
+        let self_id = inner
+            .scope
+            .as_ref()
+            .and_then(|scope| scope.session.as_ref())
+            .ok_or_else(stale)?
+            .self_id
+            .clone();
+        let full = match message["type"].as_str() {
+            Some("room.snapshot") => message["payload"]["proposals"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            Some("proposal.submitted" | "proposal.updated") => {
+                std::slice::from_ref(&message["payload"]["proposal"])
+            }
+            _ => &[],
+        };
+        Self::reject_proposal_conflict(
+            &mut inner,
+            context,
+            message["roomId"].as_str().ok_or_else(invalid)?,
+            message["roomEpoch"].as_str().ok_or_else(invalid)?,
+            &self_id,
+            full,
+        )?;
+        let session = inner
             .scope
             .as_mut()
             .and_then(|scope| scope.session.as_mut())
-            .ok_or_else(stale)?
-            .apply(message)?;
+            .ok_or_else(stale)?;
+        let effect = match session.apply(message) {
+            Ok(effect) => effect,
+            Err(error) => {
+                session.proposals_fresh = false;
+                if let Some(basis) = inner
+                    .pending
+                    .as_mut()
+                    .and_then(|pending| pending.proposal_basis.as_mut())
+                {
+                    basis.invalidate_linkage();
+                }
+                return Err(error);
+            }
+        };
         let enqueue = inner
             .delivery
             .enqueue(&json!({"kind":"socket","message":message}));
@@ -1576,6 +1929,12 @@ impl RoomInstance {
             Self::delivery_failed(&mut inner, context);
             let _ = self.notify_locked(&mut inner, context);
             return Err(error);
+        }
+        if !effect.closed {
+            if let Err(error) = Self::observe_proposal_locked(&mut inner, context, message, true) {
+                Self::delivery_failed(&mut inner, context);
+                return Err(error);
+            }
         }
         if effect.closed {
             inner
@@ -1615,12 +1974,122 @@ struct Authority {
     control_seq: u64,
     revision: u64,
     config_digest: Option<[u8; 32]>,
+    proposals: BTreeMap<String, Value>,
+    proposals_fresh: bool,
     snapshot_seen: bool,
     presence_seen: bool,
     online: BTreeSet<String>,
 }
 
+fn is_proposal(operation: Operation) -> bool {
+    matches!(
+        operation,
+        Operation::ProposalSubmit | Operation::ProposalWithdraw | Operation::ProposalResolve
+    )
+}
+
+fn validate_index_budget(index: &BTreeMap<String, Value>) -> Result<(), RoomError> {
+    if index.len() > 256
+        || serde_json::to_vec(&index.values().collect::<Vec<_>>())
+            .map_err(|_| invalid())?
+            .len()
+            > protocol::MAX_RESPONSE_BYTES
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn checked_proposal_index(
+    proposals: &[Value],
+    previous: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>, RoomError> {
+    let mut ids = BTreeSet::new();
+    let mut index = BTreeMap::new();
+    for value in proposals {
+        let id = value["proposalId"].as_str().ok_or_else(invalid)?.to_owned();
+        if !ids.insert(id.clone()) {
+            return Err(invalid());
+        }
+        if let Some(old) = previous.get(&id) {
+            if proposal::identity_of(old) != proposal::identity_of(value) {
+                return Err(invalid());
+            }
+        }
+        if value["status"] == "submitted" {
+            index.insert(id, value.clone());
+        }
+    }
+    validate_index_budget(&index)?;
+    Ok(index)
+}
+
 impl Authority {
+    fn prepare_proposal(&self, request: &HttpRequest) -> Result<ProposalBasis, RoomError> {
+        if !self.proposals_fresh
+            || request.room_id.as_deref() != Some(self.room_id.as_str())
+            || request.request["expectedRoomEpoch"].as_str() != Some(self.room_epoch.as_str())
+            || !self
+                .members
+                .get(&self.self_id)
+                .is_some_and(|(role, state)| role == &self.self_role && state == "active")
+        {
+            return Err(stale());
+        }
+        let id = if request.operation == Operation::ProposalSubmit {
+            request.request["proposalId"].as_str().ok_or_else(invalid)?
+        } else {
+            request.proposal_id.as_deref().ok_or_else(invalid)?
+        };
+        let pending = self.proposals.get(id);
+        match request.operation {
+            Operation::ProposalSubmit => {
+                if self.self_role != "member"
+                    || request.request["baseRevision"]
+                        .as_u64()
+                        .is_none_or(|revision| revision > self.revision)
+                {
+                    return Err(stale());
+                }
+            }
+            Operation::ProposalWithdraw => {
+                if self.self_role != "member"
+                    || pending.is_none_or(|proposal| proposal["authorUserId"] != self.self_id)
+                {
+                    return Err(stale());
+                }
+            }
+            Operation::ProposalResolve => {
+                if self.self_role != "host" || pending.is_none() {
+                    return Err(stale());
+                }
+                if request.request["overrideChangeIds"]
+                    .as_array()
+                    .is_some_and(|ids| !ids.is_empty())
+                    && request.request["expectedRevision"].as_u64() != Some(self.revision)
+                {
+                    return Err(stale());
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        let basis = ProposalBasis::new(
+            request.operation.as_str(),
+            &self.room_id,
+            &self.room_epoch,
+            &self.self_id,
+            id,
+            &request.request,
+            pending,
+        )?;
+        if request.operation == Operation::ProposalSubmit
+            && pending.is_some_and(|value| !basis.matches_proposal(value))
+        {
+            return Err(stale());
+        }
+        Ok(basis)
+    }
+
     fn from_session(session: &Value) -> Result<Self, RoomError> {
         let self_id = session["self"]["userId"]
             .as_str()
@@ -1642,6 +2111,8 @@ impl Authority {
             control_seq: 0,
             revision: 0,
             config_digest: None,
+            proposals: BTreeMap::new(),
+            proposals_fresh: false,
             snapshot_seen: false,
             presence_seen: false,
             online: BTreeSet::new(),
@@ -1685,6 +2156,12 @@ impl Authority {
         {
             return Err(stale());
         }
+        let proposals = checked_proposal_index(
+            snapshot["proposals"].as_array().ok_or_else(invalid)?,
+            &self.proposals,
+        )?;
+        self.proposals = proposals;
+        self.proposals_fresh = true;
         self.revision = revision;
         self.config_digest = Some(digest);
         self.members = members;
@@ -1806,12 +2283,40 @@ impl Authority {
                 self.revision = revision;
                 self.config_digest = Some(exact_config_digest(&message["payload"]["sharedConfig"]));
             }
-            "proposal.submitted"
-            | "proposal.updated"
-            | "proposal.resolved"
-            | "generation.started"
-            | "generation.completed"
-            | "generation.failed" => {}
+            "proposal.submitted" | "proposal.updated" => {
+                if !self.proposals_fresh {
+                    return Err(stale());
+                }
+                let proposal = &message["payload"]["proposal"];
+                let id = proposal["proposalId"]
+                    .as_str()
+                    .ok_or_else(invalid)?
+                    .to_owned();
+                if let Some(old) = self.proposals.get(&id) {
+                    if proposal::identity_of(old) != proposal::identity_of(proposal) {
+                        return Err(invalid());
+                    }
+                }
+                let mut next = self.proposals.clone();
+                if proposal["status"] == "submitted" {
+                    next.insert(id, proposal.clone());
+                } else {
+                    next.remove(&id);
+                }
+                validate_index_budget(&next)?;
+                self.proposals = next;
+            }
+            "proposal.resolved" => {
+                if !self.proposals_fresh {
+                    return Err(stale());
+                }
+                self.proposals.remove(
+                    message["payload"]["proposalId"]
+                        .as_str()
+                        .ok_or_else(invalid)?,
+                );
+            }
+            "generation.started" | "generation.completed" | "generation.failed" => {}
             _ => return Err(invalid()),
         }
         self.control_seq = sequence;
@@ -2048,6 +2553,9 @@ mod tests {
                 room_id: room().into(),
                 expected_room_epoch: epoch().into(),
             },
+            Operation::ProposalSubmit
+            | Operation::ProposalWithdraw
+            | Operation::ProposalResolve => panic!("proposal actions use explicit fixtures"),
             Operation::Ticket => panic!("ticket is not renderer HTTP"),
         }
     }
@@ -2542,6 +3050,7 @@ mod tests {
             room_id: Some(room_id),
             request,
             resume_only: false,
+            proposal_id: None,
         };
         for (field, wrong) in [
             ("revision", json!(6)),
@@ -2591,6 +3100,8 @@ mod tests {
                     room_id: Some(room().into()),
                     frozen_request: Value::Null,
                     config_basis: Some(basis),
+                    proposal_basis: None,
+                    proposal_scope: None,
                     account: account.access.clone(),
                     phase: IntentPhase::Unknown,
                     receipt: None,
@@ -2607,6 +3118,7 @@ mod tests {
                 room_id: Some(room().into()),
                 request: json!({}),
                 resume_only: false,
+                proposal_id: None,
             };
             for case in ["revision", "controlSeq", "config", "epoch"] {
                 let mut response = fixture(Operation::Session, "success");
@@ -3413,6 +3925,8 @@ mod tests {
                 operation: Operation::Create,
                 room_id: None,
                 config_basis: None,
+                proposal_basis: None,
+                proposal_scope: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
                 phase: IntentPhase::Unknown,
@@ -3454,6 +3968,8 @@ mod tests {
                 operation: Operation::Leave,
                 room_id: Some(room().into()),
                 config_basis: None,
+                proposal_basis: None,
+                proposal_scope: None,
                 frozen_request: json!({"expectedRoomEpoch":epoch()}),
                 account: account.access,
                 phase: IntentPhase::Unknown,
@@ -3905,6 +4421,8 @@ mod tests {
                 operation: Operation::Create,
                 room_id: None,
                 config_basis: None,
+                proposal_basis: None,
+                proposal_scope: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
                 phase: IntentPhase::Unknown,
@@ -4016,6 +4534,8 @@ mod tests {
                 operation: Operation::Create,
                 room_id: None,
                 config_basis: None,
+                proposal_basis: None,
+                proposal_scope: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
                 phase: IntentPhase::Unknown,
@@ -4374,5 +4894,502 @@ mod tests {
         http_server.await.unwrap();
         socket_server.await.unwrap();
         instance.destroyed();
+    }
+    fn proposal_fixture(operation: Operation, field: &str) -> Value {
+        let all: Value = serde_json::from_str(include_str!(
+            "../../../../packages/contracts/fixtures/desktop-room-proposals.json"
+        ))
+        .unwrap();
+        all[operation.as_str()][field].clone()
+    }
+    fn member_session() -> Value {
+        let mut session = fixture(Operation::Session, "success")["result"].clone();
+        session["self"] = session["snapshot"]["members"][1].clone();
+        session
+    }
+    fn proposal_value(status: &str) -> Value {
+        let request = proposal_fixture(Operation::ProposalSubmit, "request")["request"].clone();
+        json!({"proposalVersion":1,"proposalId":request["proposalId"],"roomId":room(),"authorUserId":"user-member",
+            "baseRevision":request["baseRevision"],"changes":request["changes"],"status":status,"createdAt":"2026-10-12T00:00:00Z"})
+    }
+    fn proposal_action(operation: Operation) -> Action {
+        let request = proposal_fixture(operation, "request")["request"].clone();
+        match operation {
+            Operation::ProposalSubmit => Action::ProposalSubmit {
+                room_id: room().into(),
+                request,
+            },
+            Operation::ProposalWithdraw => Action::ProposalWithdraw {
+                room_id: room().into(),
+                proposal_id: "desktop-proposal-1".into(),
+                request,
+            },
+            Operation::ProposalResolve => Action::ProposalResolve {
+                room_id: room().into(),
+                proposal_id: "desktop-proposal-1".into(),
+                request,
+            },
+            _ => panic!("proposal operation"),
+        }
+    }
+    fn seed_proposal_authority(instance: &RoomInstance, pending: bool) {
+        let mut session = member_session();
+        if pending {
+            session["snapshot"]["proposals"] = json!([proposal_value("submitted")]);
+        }
+        lock(&instance.inner).scope.as_mut().unwrap().session =
+            Some(Authority::from_session(&session).unwrap());
+    }
+
+    #[test]
+    fn proposal_native_roles_and_baselines_preserve_ordinary_merge_semantics() {
+        let mut session = member_session();
+        session["snapshot"]["proposals"] = json!([proposal_value("submitted")]);
+        let mut authority = Authority::from_session(&session).unwrap();
+        let mut request = HttpRequest {
+            operation: Operation::ProposalSubmit,
+            room_id: Some(room().into()),
+            proposal_id: None,
+            request: proposal_fixture(Operation::ProposalSubmit, "request")["request"].clone(),
+            resume_only: false,
+        };
+        request.request["baseRevision"] = json!(0);
+        request.request["proposalId"] = json!("fresh-id");
+        assert!(authority.prepare_proposal(&request).is_ok());
+        request.request["baseRevision"] = json!(authority.revision + 1);
+        assert!(authority.prepare_proposal(&request).is_err());
+        request.operation = Operation::ProposalWithdraw;
+        request.proposal_id = Some("desktop-proposal-1".into());
+        request.request = json!({"expectedRoomEpoch":epoch()});
+        assert!(authority.prepare_proposal(&request).is_ok());
+        authority.proposals.get_mut("desktop-proposal-1").unwrap()["authorUserId"] = json!("99");
+        assert!(authority.prepare_proposal(&request).is_err());
+        authority.self_role = "host".into();
+        authority.members.get_mut(&authority.self_id).unwrap().0 = "host".into();
+        request.operation = Operation::ProposalResolve;
+        request.request = json!({"expectedRoomEpoch":epoch(),"resolution":"accept-selected","expectedRevision":0});
+        assert!(authority.prepare_proposal(&request).is_ok());
+        request.request["selectedChangeIds"] = json!(["guidance-1"]);
+        request.request["overrideChangeIds"] = json!(["guidance-1"]);
+        assert!(authority.prepare_proposal(&request).is_err());
+        request.request["expectedRevision"] = json!(authority.revision);
+        assert!(authority.prepare_proposal(&request).is_ok());
+        authority.proposals_fresh = false;
+        assert!(authority.prepare_proposal(&request).is_err());
+    }
+
+    #[tokio::test]
+    async fn proposal_summary_matches_target_keeps_cursor_and_requires_ack_then_fresh_read() {
+        for bad in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let raw = read_http(&mut stream).await;
+                assert!(String::from_utf8_lossy(&raw)
+                    .starts_with(&format!("POST /api/arena/rooms/v1/{}/proposals ", room())));
+                assert_eq!(request_body(&raw)["desktopRoom"]["expectedUserId"], 42);
+                let mut response = proposal_fixture(Operation::ProposalSubmit, "success");
+                response["result"]["controlSeq"] = json!(25);
+                if bad {
+                    response["result"]["proposalId"] = json!("wrong-id");
+                }
+                send_http(&mut stream, 200, &response).await;
+            });
+            let account = synthetic_account(1);
+            let instance = make_instance(address, None);
+            let mut attached = attach(instance.clone(), account.access, 1);
+            seed_proposal_authority(&instance, false);
+            let prior = lock(&instance.inner)
+                .scope
+                .as_ref()
+                .unwrap()
+                .session
+                .as_ref()
+                .unwrap()
+                .control_seq;
+            attached
+                .request(proposal_action(Operation::ProposalSubmit))
+                .unwrap();
+            let batch = attached.batch().await;
+            assert_eq!(
+                batch["event"]["kind"],
+                if bad { "request-error" } else { "http-result" }
+            );
+            assert!(lock(&instance.inner).pending.is_some());
+            attached.ack(&batch).unwrap();
+            if bad {
+                assert_eq!(attached.event().await["kind"], "mutation-unknown");
+            } else {
+                assert!(lock(&instance.inner).pending.is_none());
+            }
+            wait_http_idle(&instance).await;
+            {
+                let inner = lock(&instance.inner);
+                let authority = inner.scope.as_ref().unwrap().session.as_ref().unwrap();
+                assert_eq!(authority.control_seq, prior);
+                assert!(!authority.proposals_fresh);
+            }
+            assert_eq!(
+                error_code(attached.request(proposal_action(Operation::ProposalSubmit))),
+                if bad { "busy" } else { "scope-changed" }
+            );
+            instance.destroyed();
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn proposal_unknown_get_observation_uses_business_target_and_exact_ack() {
+        for status in [
+            None,
+            Some("submitted"),
+            Some("accepted"),
+            Some("partially_accepted"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_http(&mut stream).await;
+                drop(stream);
+                let (mut stream, _) = listener.accept().await.unwrap();
+                assert!(String::from_utf8_lossy(&read_http(&mut stream).await).starts_with("GET "));
+                let mut response = fixture(Operation::Session, "success");
+                response["result"] = member_session();
+                response["result"]["snapshot"]["proposals"] = status
+                    .map(|status| json!([proposal_value(status)]))
+                    .unwrap_or(json!([]));
+                send_http(&mut stream, 200, &response).await;
+            });
+            let account = synthetic_account(1);
+            let instance = make_instance(address, None);
+            let mut attached = attach(instance.clone(), account.access, 1);
+            seed_proposal_authority(&instance, true);
+            attached
+                .request(proposal_action(Operation::ProposalWithdraw))
+                .unwrap();
+            assert_eq!(attached.event().await["error"]["outcome"], "unknown");
+            assert_eq!(attached.event().await["kind"], "mutation-unknown");
+            wait_http_idle(&instance).await;
+            attached.request(session_action()).unwrap();
+            let result = attached.event().await;
+            assert_eq!(result["kind"], "http-result", "status={status:?}: {result}");
+            let batch = attached.batch().await;
+            assert_eq!(batch["event"]["kind"], "proposal-observation");
+            let settles = matches!(status, Some("accepted" | "partially_accepted"));
+            assert_eq!(batch["event"]["observation"]["settle"], settles);
+            assert!(lock(&instance.inner).pending.is_some());
+            attached.ack(&batch).unwrap();
+            assert_eq!(lock(&instance.inner).pending.is_none(), settles);
+            instance.destroyed();
+            server.await.unwrap();
+        }
+    }
+
+    fn seed_unknown_proposal(instance: &RoomInstance, operation: Operation) {
+        let mut inner = lock(&instance.inner);
+        let context = inner.scope.as_ref().unwrap().context.clone();
+        let authority = inner.scope.as_ref().unwrap().session.as_ref().unwrap();
+        let request = HttpRequest {
+            operation,
+            room_id: Some(room().into()),
+            proposal_id: Some("desktop-proposal-1".into()),
+            request: proposal_fixture(operation, "request")["request"].clone(),
+            resume_only: false,
+        };
+        let basis = authority.prepare_proposal(&request).unwrap();
+        inner.pending = Some(PendingIntent {
+            id: "proposal-original".into(),
+            operation,
+            room_id: request.room_id,
+            frozen_request: Value::Null,
+            config_basis: None,
+            proposal_basis: Some(basis),
+            proposal_scope: Some((context.proof.document, context.handle)),
+            account: context.account,
+            phase: IntentPhase::Unknown,
+            receipt: None,
+        });
+    }
+
+    #[tokio::test]
+    async fn proposal_socket_terminal_ack_gap_conflict_and_reload_boundaries() {
+        for case in ["terminal", "gap", "conflict", "reload"] {
+            let account = synthetic_account(1);
+            let access = account.access.clone();
+            let instance = make_instance("127.0.0.1:1".parse().unwrap(), None);
+            let mut attached = attach(instance.clone(), access.clone(), 1);
+            seed_proposal_authority(&instance, true);
+            seed_unknown_proposal(&instance, Operation::ProposalWithdraw);
+            if case == "reload" {
+                instance.page_started().unwrap();
+                instance.page_finished().unwrap();
+                attached = attach(instance.clone(), access, 2);
+                seed_proposal_authority(&instance, true);
+            }
+            let context = instance
+                .scope_for(&lock(&instance.inner), attached.document, &attached.handle)
+                .unwrap();
+            let cancel = CancellationToken::new();
+            let mut event = json!({"protocolVersion":1,"type":"proposal.resolved","roomId":room(),"roomEpoch":epoch(),
+                "controlSeq":25,"timestamp":"2026-10-12T00:00:00Z","payload":{"proposalId":"desktop-proposal-1","status":"withdrawn"}});
+            if case == "gap" {
+                event["controlSeq"] = json!(26);
+                assert!(instance.process_socket(&context, &cancel, &event).is_err());
+            } else if case == "conflict" {
+                let mut wrong = proposal_value("submitted");
+                wrong["authorUserId"] = json!("wrong-author");
+                event["type"] = json!("proposal.updated");
+                event["payload"] = json!({"proposal":wrong});
+                assert!(instance.process_socket(&context, &cancel, &event).is_err());
+                let mut inner = lock(&instance.inner);
+                let snapshot = json!({"proposals":[]});
+                let basis = inner
+                    .pending
+                    .as_mut()
+                    .unwrap()
+                    .proposal_basis
+                    .as_mut()
+                    .unwrap();
+                assert!(
+                    !basis.observe_snapshot(room(), epoch(), "user-member", &snapshot)["linked"]
+                        .as_bool()
+                        .unwrap()
+                );
+                event["type"] = json!("proposal.resolved");
+                event["payload"] = json!({"proposalId":"desktop-proposal-1","status":"withdrawn"});
+                assert_eq!(
+                    basis.observe_event(room(), epoch(), "user-member", &event)["settle"],
+                    false
+                );
+            } else {
+                assert!(!instance.process_socket(&context, &cancel, &event).unwrap());
+                assert_eq!(attached.event().await["kind"], "socket");
+                if case == "terminal" {
+                    let batch = attached.batch().await;
+                    assert_eq!(batch["event"]["kind"], "proposal-observation");
+                    assert_eq!(batch["event"]["observation"]["outcome"], "satisfied");
+                    assert!(lock(&instance.inner).pending.is_some());
+                    attached.ack(&batch).unwrap();
+                    assert!(lock(&instance.inner).pending.is_none());
+                } else {
+                    assert!(lock(&instance.inner).pending.is_some());
+                    assert!(attached.notifications.try_recv().is_err());
+                    attached
+                        .request(Action::EndProposalTracking {
+                            intent_id: "proposal-original".into(),
+                        })
+                        .unwrap();
+                    assert!(lock(&instance.inner).pending.is_none());
+                    assert!(lock(&instance.inner).scope.is_none());
+                }
+            }
+            if case == "gap" || case == "conflict" {
+                assert!(
+                    !lock(&instance.inner)
+                        .scope
+                        .as_ref()
+                        .unwrap()
+                        .session
+                        .as_ref()
+                        .unwrap()
+                        .proposals_fresh
+                );
+            }
+            instance.destroyed();
+        }
+    }
+
+    #[tokio::test]
+    async fn proposal_end_revokes_inflight_callback_and_requires_new_authority() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (seen_tx, seen_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http(&mut stream).await;
+            seen_tx.send(()).unwrap();
+            finish_rx.await.unwrap();
+            let response =
+                serde_json::to_vec(&proposal_fixture(Operation::ProposalSubmit, "success"))
+                    .unwrap();
+            let head=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",response.len());
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.write_all(&response).await;
+        });
+        let account = synthetic_account(1);
+        let access = account.access.clone();
+        let instance = make_instance(address, None);
+        let attached = attach(instance.clone(), access.clone(), 1);
+        seed_proposal_authority(&instance, false);
+        attached
+            .request(proposal_action(Operation::ProposalSubmit))
+            .unwrap();
+        seen_rx.await.unwrap();
+        let id = lock(&instance.inner).pending.as_ref().unwrap().id.clone();
+        attached
+            .request(Action::EndProposalTracking { intent_id: id })
+            .unwrap();
+        assert!(lock(&instance.inner).scope.is_none());
+        assert!(lock(&instance.inner).pending.is_none());
+        finish_tx.send(()).unwrap();
+        server.await.unwrap();
+        wait_http_idle(&instance).await;
+        let attached = attach(instance.clone(), access, 2);
+        assert_eq!(
+            error_code(attached.request(proposal_action(Operation::ProposalSubmit))),
+            "scope-changed"
+        );
+        assert!(lock(&instance.inner)
+            .scope
+            .as_ref()
+            .unwrap()
+            .session
+            .is_none());
+        instance.destroyed();
+    }
+
+    #[tokio::test]
+    async fn proposal_resolve_installs_whole_snapshot_monotonically_without_config_cas() {
+        let account = synthetic_account(1);
+        let instance = make_instance("127.0.0.1:1".parse().unwrap(), None);
+        let attached = attach(instance.clone(), account.access, 1);
+        let mut session = fixture(Operation::Session, "success")["result"].clone();
+        session["snapshot"]["proposals"] = json!([proposal_value("submitted")]);
+        lock(&instance.inner).scope.as_mut().unwrap().session =
+            Some(Authority::from_session(&session).unwrap());
+        seed_unknown_proposal(&instance, Operation::ProposalResolve);
+        let context = instance
+            .scope_for(&lock(&instance.inner), attached.document, &attached.handle)
+            .unwrap();
+        let request = HttpRequest {
+            operation: Operation::ProposalResolve,
+            room_id: Some(room().into()),
+            proposal_id: Some("desktop-proposal-1".into()),
+            request: json!({"expectedRoomEpoch":epoch(),"resolution":"reject","expectedRevision":0}),
+            resume_only: false,
+        };
+        let mut response = proposal_fixture(Operation::ProposalResolve, "success");
+        // Unrelated revision progress is legal for ordinary proposals, including reject.
+        response["result"]["snapshot"]["revision"] = json!(10);
+        response["result"]["revision"] = json!(10);
+        response["result"]["snapshot"]["controlSeq"] = json!(30);
+        response["result"]["controlSeq"] = json!(30);
+        instance
+            .install_http(&context, &request, &response)
+            .unwrap();
+        let inner = lock(&instance.inner);
+        let authority = inner.scope.as_ref().unwrap().session.as_ref().unwrap();
+        assert_eq!(authority.revision, 10);
+        assert_eq!(authority.control_seq, 30);
+        assert!(authority.proposals.is_empty());
+        assert!(authority.proposals_fresh);
+        drop(inner);
+        let mut wrong = response.clone();
+        wrong["result"]["proposalId"] = json!("another-id");
+        assert!(instance.install_http(&context, &request, &wrong).is_err());
+        wrong = response.clone();
+        wrong["result"]["snapshot"]["revision"] = json!(9);
+        assert!(instance.install_http(&context, &request, &wrong).is_err());
+        wrong = response.clone();
+        let mut changed = proposal_value("rejected");
+        changed["changes"][0]["value"] = json!("different identity");
+        wrong["result"]["snapshot"]["proposals"] = json!([changed]);
+        assert!(instance.install_http(&context, &request, &wrong).is_err());
+        assert_eq!(
+            lock(&instance.inner)
+                .scope
+                .as_ref()
+                .unwrap()
+                .session
+                .as_ref()
+                .unwrap()
+                .revision,
+            10
+        );
+        instance.destroyed();
+    }
+    #[tokio::test]
+    async fn proposal_absent_then_conflicting_full_evidence_never_restores_write_authority() {
+        for (socket, operation) in [
+            (false, Operation::ProposalWithdraw),
+            (true, Operation::ProposalWithdraw),
+            (false, Operation::ProposalSubmit),
+            (true, Operation::ProposalSubmit),
+        ] {
+            let account = synthetic_account(1);
+            let instance = make_instance("127.0.0.1:1".parse().unwrap(), None);
+            let mut attached = attach(instance.clone(), account.access, 1);
+            seed_proposal_authority(&instance, true);
+            seed_unknown_proposal(&instance, operation);
+            let context = instance
+                .scope_for(&lock(&instance.inner), attached.document, &attached.handle)
+                .unwrap();
+            let request = HttpRequest {
+                operation: Operation::Session,
+                room_id: Some(room().into()),
+                proposal_id: None,
+                request: json!({}),
+                resume_only: false,
+            };
+            let mut response = fixture(Operation::Session, "success");
+            response["result"] = member_session();
+            response["result"]["snapshot"]["proposals"] = json!([]);
+            instance
+                .install_http(&context, &request, &response)
+                .unwrap();
+            assert!(lock(&instance.inner)
+                .scope
+                .as_ref()
+                .unwrap()
+                .session
+                .as_ref()
+                .unwrap()
+                .proposals
+                .is_empty());
+            let mut changed = proposal_value("submitted");
+            changed["changes"][0]["value"] = json!("conflicting intent");
+            if socket {
+                let message = json!({"protocolVersion":1,"type":"proposal.updated","roomId":room(),"roomEpoch":epoch(),"controlSeq":25,
+                    "timestamp":"2026-10-12T00:00:00Z","payload":{"proposal":changed}});
+                assert!(
+                    instance
+                        .process_socket(&context, &CancellationToken::new(), &message)
+                        .is_err(),
+                    "conflicting socket must not be installed or forwarded"
+                );
+            } else {
+                response["result"]["snapshot"]["proposals"] = json!([changed]);
+                assert!(
+                    instance
+                        .install_http(&context, &request, &response)
+                        .is_err(),
+                    "conflicting GET must not be installed as success"
+                );
+            }
+            let mut inner = lock(&instance.inner);
+            let authority = inner.scope.as_ref().unwrap().session.as_ref().unwrap();
+            assert!(authority.proposals.is_empty());
+            assert!(!authority.proposals_fresh);
+            assert_eq!(authority.control_seq, 24);
+            let pending = inner.pending.as_mut().unwrap();
+            assert_eq!(pending.id, "proposal-original");
+            assert!(pending.phase == IntentPhase::Unknown);
+            let terminal = json!({"type":"proposal.resolved","roomId":room(),"roomEpoch":epoch(),"payload":{"proposalId":"desktop-proposal-1","status":"withdrawn"}});
+            assert_eq!(
+                pending.proposal_basis.as_mut().unwrap().observe_event(
+                    room(),
+                    epoch(),
+                    "user-member",
+                    &terminal
+                )["settle"],
+                false
+            );
+            drop(inner);
+            assert!(attached.notifications.try_recv().is_err());
+            instance.destroyed();
+        }
     }
 }

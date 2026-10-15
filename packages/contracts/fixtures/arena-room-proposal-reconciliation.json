@@ -1,0 +1,5534 @@
+{
+  "targets": {
+    "submit": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "submit",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "proposalId": "proposal-1",
+        "baseRevision": 7,
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ]
+      }
+    },
+    "withdraw": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "withdraw",
+      "request": {
+        "expectedRoomEpoch": "epoch-1"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "reject": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "reject"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "accept-all": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "accept-selected"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "accept-explicit-all": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "accept-selected",
+        "selectedChangeIds": [
+          "guidance-1",
+          "guidance-2"
+        ]
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "accept-reversed-all": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "accept-selected",
+        "selectedChangeIds": [
+          "guidance-2",
+          "guidance-1"
+        ]
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "accept-subset": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "accept-selected",
+        "selectedChangeIds": [
+          "guidance-1"
+        ],
+        "expectedRevision": 8,
+        "overrideChangeIds": [
+          "guidance-1"
+        ]
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "accept-duplicates-all": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "accept-selected",
+        "selectedChangeIds": [
+          "guidance-1",
+          "guidance-2",
+          "guidance-1"
+        ]
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "accept-duplicates-subset": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "accept-selected",
+        "selectedChangeIds": [
+          "guidance-1",
+          "guidance-1"
+        ]
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "accept-empty": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "accept-selected",
+        "selectedChangeIds": []
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "accept-outsider": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "resolve",
+      "request": {
+        "expectedRoomEpoch": "epoch-1",
+        "resolution": "accept-selected",
+        "selectedChangeIds": [
+          "guidance-1",
+          "unknown"
+        ]
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "unavailable-missing": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "withdraw",
+      "request": {
+        "expectedRoomEpoch": "epoch-1"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": null
+    },
+    "unavailable-terminal": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "withdraw",
+      "request": {
+        "expectedRoomEpoch": "epoch-1"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "accepted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "unavailable-room": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "withdraw",
+      "request": {
+        "expectedRoomEpoch": "epoch-1"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "another",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "unavailable-id": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "withdraw",
+      "request": {
+        "expectedRoomEpoch": "epoch-1"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "another",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "unavailable-draft": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "withdraw",
+      "request": {
+        "expectedRoomEpoch": "epoch-1"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "member-1",
+        "baseRevision": 7,
+        "status": "draft",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    },
+    "withdraw-other-author": {
+      "roomId": "room-1",
+      "selfUserId": "member-1",
+      "operation": "withdraw",
+      "request": {
+        "expectedRoomEpoch": "epoch-1"
+      },
+      "proposalId": "proposal-1",
+      "pendingProposal": {
+        "proposalVersion": 1,
+        "proposalId": "proposal-1",
+        "roomId": "room-1",
+        "authorUserId": "other",
+        "baseRevision": 7,
+        "status": "submitted",
+        "changes": [
+          {
+            "changeId": "guidance-1",
+            "type": "setUserGuidance",
+            "value": "成员建议 😀",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          },
+          {
+            "changeId": "guidance-2",
+            "type": "setUserGuidance",
+            "value": "second",
+            "expectedBase": {
+              "kind": "value",
+              "value": ""
+            }
+          }
+        ],
+        "createdAt": "2026-08-27T16:00:00.000Z",
+        "updatedAt": "2026-08-27T16:01:00.000Z"
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "submit requires exact association before ID-only terminal",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "submitted",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "draft never links an unlinked submit",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "draft",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "unrelated ID never links or settles",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "other",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "other",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "absence preserves established linkage",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": []
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "other",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "pending",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit full terminal accepted",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "accepted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "withdraw ID-only terminal accepted",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject ID-only terminal accepted",
+      "target": "reject",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-all ID-only terminal accepted",
+      "target": "accept-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-explicit-all ID-only terminal accepted",
+      "target": "accept-explicit-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-reversed-all ID-only terminal accepted",
+      "target": "accept-reversed-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-subset ID-only terminal accepted",
+      "target": "accept-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-all ID-only terminal accepted",
+      "target": "accept-duplicates-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-subset ID-only terminal accepted",
+      "target": "accept-duplicates-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-empty ID-only terminal accepted",
+      "target": "accept-empty",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-outsider ID-only terminal accepted",
+      "target": "accept-outsider",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit full terminal partially_accepted",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "partially_accepted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "withdraw ID-only terminal partially_accepted",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject ID-only terminal partially_accepted",
+      "target": "reject",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-all ID-only terminal partially_accepted",
+      "target": "accept-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "scope-unverified",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-explicit-all ID-only terminal partially_accepted",
+      "target": "accept-explicit-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "scope-unverified",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-reversed-all ID-only terminal partially_accepted",
+      "target": "accept-reversed-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "scope-unverified",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-subset ID-only terminal partially_accepted",
+      "target": "accept-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "scope-unverified",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-all ID-only terminal partially_accepted",
+      "target": "accept-duplicates-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "scope-unverified",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-subset ID-only terminal partially_accepted",
+      "target": "accept-duplicates-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "scope-unverified",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-empty ID-only terminal partially_accepted",
+      "target": "accept-empty",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "scope-unverified",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-outsider ID-only terminal partially_accepted",
+      "target": "accept-outsider",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "partially_accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "scope-unverified",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit full terminal rejected",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "rejected",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "withdraw ID-only terminal rejected",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject ID-only terminal rejected",
+      "target": "reject",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-all ID-only terminal rejected",
+      "target": "accept-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-explicit-all ID-only terminal rejected",
+      "target": "accept-explicit-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-reversed-all ID-only terminal rejected",
+      "target": "accept-reversed-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-subset ID-only terminal rejected",
+      "target": "accept-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-all ID-only terminal rejected",
+      "target": "accept-duplicates-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-subset ID-only terminal rejected",
+      "target": "accept-duplicates-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-empty ID-only terminal rejected",
+      "target": "accept-empty",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-outsider ID-only terminal rejected",
+      "target": "accept-outsider",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "rejected"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit full terminal withdrawn",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "withdrawn",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "withdraw ID-only terminal withdrawn",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject ID-only terminal withdrawn",
+      "target": "reject",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-all ID-only terminal withdrawn",
+      "target": "accept-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-explicit-all ID-only terminal withdrawn",
+      "target": "accept-explicit-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-reversed-all ID-only terminal withdrawn",
+      "target": "accept-reversed-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-subset ID-only terminal withdrawn",
+      "target": "accept-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-all ID-only terminal withdrawn",
+      "target": "accept-duplicates-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-subset ID-only terminal withdrawn",
+      "target": "accept-duplicates-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-empty ID-only terminal withdrawn",
+      "target": "accept-empty",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-outsider ID-only terminal withdrawn",
+      "target": "accept-outsider",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit full terminal stale",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "stale",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "withdraw ID-only terminal stale",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject ID-only terminal stale",
+      "target": "reject",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-all ID-only terminal stale",
+      "target": "accept-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-explicit-all ID-only terminal stale",
+      "target": "accept-explicit-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-reversed-all ID-only terminal stale",
+      "target": "accept-reversed-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-subset ID-only terminal stale",
+      "target": "accept-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-all ID-only terminal stale",
+      "target": "accept-duplicates-all",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-duplicates-subset ID-only terminal stale",
+      "target": "accept-duplicates-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-empty ID-only terminal stale",
+      "target": "accept-empty",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "accept-outsider ID-only terminal stale",
+      "target": "accept-outsider",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "stale"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit exact pending via room.snapshot",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "room.snapshot",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposals": [
+                  {
+                    "proposalVersion": 1,
+                    "proposalId": "proposal-1",
+                    "roomId": "room-1",
+                    "authorUserId": "member-1",
+                    "baseRevision": 7,
+                    "status": "submitted",
+                    "changes": [
+                      {
+                        "changeId": "guidance-1",
+                        "type": "setUserGuidance",
+                        "value": "成员建议 😀",
+                        "expectedBase": {
+                          "kind": "value",
+                          "value": ""
+                        }
+                      },
+                      {
+                        "changeId": "guidance-2",
+                        "type": "setUserGuidance",
+                        "value": "second",
+                        "expectedBase": {
+                          "kind": "value",
+                          "value": ""
+                        }
+                      }
+                    ],
+                    "createdAt": "2026-08-27T16:00:00.000Z",
+                    "updatedAt": "2026-08-27T16:01:00.000Z"
+                  }
+                ]
+              }
+            }
+          },
+          "expected": {
+            "observation": "submitted",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit exact full terminal via room.snapshot",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "room.snapshot",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposals": [
+                  {
+                    "proposalVersion": 1,
+                    "proposalId": "proposal-1",
+                    "roomId": "room-1",
+                    "authorUserId": "member-1",
+                    "baseRevision": 7,
+                    "status": "stale",
+                    "changes": [
+                      {
+                        "changeId": "guidance-1",
+                        "type": "setUserGuidance",
+                        "value": "成员建议 😀",
+                        "expectedBase": {
+                          "kind": "value",
+                          "value": ""
+                        }
+                      },
+                      {
+                        "changeId": "guidance-2",
+                        "type": "setUserGuidance",
+                        "value": "second",
+                        "expectedBase": {
+                          "kind": "value",
+                          "value": ""
+                        }
+                      }
+                    ],
+                    "createdAt": "2026-08-27T16:00:00.000Z",
+                    "updatedAt": "2026-08-27T16:01:00.000Z"
+                  }
+                ]
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit exact pending via proposal.submitted",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.submitted",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposal": {
+                  "proposalVersion": 1,
+                  "proposalId": "proposal-1",
+                  "roomId": "room-1",
+                  "authorUserId": "member-1",
+                  "baseRevision": 7,
+                  "status": "submitted",
+                  "changes": [
+                    {
+                      "changeId": "guidance-1",
+                      "type": "setUserGuidance",
+                      "value": "成员建议 😀",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    },
+                    {
+                      "changeId": "guidance-2",
+                      "type": "setUserGuidance",
+                      "value": "second",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    }
+                  ],
+                  "createdAt": "2026-08-27T16:00:00.000Z",
+                  "updatedAt": "2026-08-27T16:01:00.000Z"
+                }
+              }
+            }
+          },
+          "expected": {
+            "observation": "submitted",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit exact pending via proposal.updated",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.updated",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposal": {
+                  "proposalVersion": 1,
+                  "proposalId": "proposal-1",
+                  "roomId": "room-1",
+                  "authorUserId": "member-1",
+                  "baseRevision": 7,
+                  "status": "submitted",
+                  "changes": [
+                    {
+                      "changeId": "guidance-1",
+                      "type": "setUserGuidance",
+                      "value": "成员建议 😀",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    },
+                    {
+                      "changeId": "guidance-2",
+                      "type": "setUserGuidance",
+                      "value": "second",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    }
+                  ],
+                  "createdAt": "2026-08-27T16:00:00.000Z",
+                  "updatedAt": "2026-08-27T16:01:00.000Z"
+                }
+              }
+            }
+          },
+          "expected": {
+            "observation": "submitted",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "submit exact full terminal via proposal.updated",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.updated",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposal": {
+                  "proposalVersion": 1,
+                  "proposalId": "proposal-1",
+                  "roomId": "room-1",
+                  "authorUserId": "member-1",
+                  "baseRevision": 7,
+                  "status": "stale",
+                  "changes": [
+                    {
+                      "changeId": "guidance-1",
+                      "type": "setUserGuidance",
+                      "value": "成员建议 😀",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    },
+                    {
+                      "changeId": "guidance-2",
+                      "type": "setUserGuidance",
+                      "value": "second",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    }
+                  ],
+                  "createdAt": "2026-08-27T16:00:00.000Z",
+                  "updatedAt": "2026-08-27T16:01:00.000Z"
+                }
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "stale"
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting identity proposalVersion",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 2,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "pending",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting identity roomId",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "other",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "pending",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting identity authorUserId",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "other",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "pending",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting identity baseRevision",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 8,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "pending",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting identity changes",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "pending",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting change value",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              },
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "different",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting change expectedBase",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              },
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": "different"
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting change dependsOn",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              },
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    },
+                    "dependsOn": []
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "same ID conflicting change atomicGroupId",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              },
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    },
+                    "atomicGroupId": "group"
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "accepted"
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "full event conflict beats exact pending in same observation",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.updated",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposal": {
+                  "proposalVersion": 1,
+                  "proposalId": "proposal-1",
+                  "roomId": "room-1",
+                  "authorUserId": "other",
+                  "baseRevision": 7,
+                  "status": "submitted",
+                  "changes": [
+                    {
+                      "changeId": "guidance-1",
+                      "type": "setUserGuidance",
+                      "value": "成员建议 😀",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    },
+                    {
+                      "changeId": "guidance-2",
+                      "type": "setUserGuidance",
+                      "value": "second",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    }
+                  ],
+                  "createdAt": "2026-08-27T16:00:00.000Z",
+                  "updatedAt": "2026-08-27T16:01:00.000Z"
+                }
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "snapshot conflict beats other full matching evidence",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "room.snapshot",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposals": [
+                  {
+                    "proposalVersion": 1,
+                    "proposalId": "proposal-1",
+                    "roomId": "room-1",
+                    "authorUserId": "other",
+                    "baseRevision": 7,
+                    "status": "submitted",
+                    "changes": [
+                      {
+                        "changeId": "guidance-1",
+                        "type": "setUserGuidance",
+                        "value": "成员建议 😀",
+                        "expectedBase": {
+                          "kind": "value",
+                          "value": ""
+                        }
+                      },
+                      {
+                        "changeId": "guidance-2",
+                        "type": "setUserGuidance",
+                        "value": "second",
+                        "expectedBase": {
+                          "kind": "value",
+                          "value": ""
+                        }
+                      }
+                    ],
+                    "createdAt": "2026-08-27T16:00:00.000Z",
+                    "updatedAt": "2026-08-27T16:01:00.000Z"
+                  }
+                ]
+              }
+            }
+          },
+          "expected": {
+            "observation": "conflict",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "changed evidence roomId invalidates linkage",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "different",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "scope-changed",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "changed evidence roomEpoch invalidates linkage",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "different",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "scope-changed",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "changed evidence selfUserId invalidates linkage",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "different",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "scope-changed",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "changed event roomId invalidates linkage",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "different",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "scope-changed",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "changed event roomEpoch invalidates linkage",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "different",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "scope-changed",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "absent",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "unavailable-missing cannot reconstruct original from later authority",
+      "target": "unavailable-missing",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "target-unavailable",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "unavailable-terminal cannot reconstruct original from later authority",
+      "target": "unavailable-terminal",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "target-unavailable",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "unavailable-room cannot reconstruct original from later authority",
+      "target": "unavailable-room",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "target-unavailable",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "unavailable-id cannot reconstruct original from later authority",
+      "target": "unavailable-id",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "target-unavailable",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "unavailable-draft cannot reconstruct original from later authority",
+      "target": "unavailable-draft",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "target-unavailable",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "server timestamps and object key order do not affect identity",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "expectedBase": {
+                      "value": "",
+                      "kind": "value"
+                    },
+                    "value": "成员建议 😀",
+                    "type": "setUserGuidance",
+                    "changeId": "guidance-1"
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-10-01T00:00:00.000Z",
+                "updatedAt": "2026-10-02T00:00:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "submitted",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "trusted original author need not equal resolving viewer",
+      "target": "withdraw-other-author",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    },
+    {
+      "name": "full terminal status precedes simultaneous ID-only terminal",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "rejected",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ],
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "different",
+            "terminalStatus": "rejected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "full terminal content links when no submit event was observed",
+      "target": "submit",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.updated",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposal": {
+                  "proposalVersion": 1,
+                  "proposalId": "proposal-1",
+                  "roomId": "room-1",
+                  "authorUserId": "member-1",
+                  "baseRevision": 7,
+                  "status": "partially_accepted",
+                  "changes": [
+                    {
+                      "changeId": "guidance-1",
+                      "type": "setUserGuidance",
+                      "value": "成员建议 😀",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    },
+                    {
+                      "changeId": "guidance-2",
+                      "type": "setUserGuidance",
+                      "value": "second",
+                      "expectedBase": {
+                        "kind": "value",
+                        "value": ""
+                      }
+                    }
+                  ],
+                  "createdAt": "2026-08-27T16:00:00.000Z",
+                  "updatedAt": "2026-08-27T16:01:00.000Z"
+                }
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "partially_accepted"
+          }
+        }
+      ]
+    },
+    {
+      "name": "matching pending does not settle resolve",
+      "target": "accept-subset",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "pending",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "scope invalidation can only relink through exact full evidence",
+      "target": "withdraw",
+      "steps": [
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "other",
+            "selfUserId": "member-1"
+          },
+          "expected": {
+            "observation": "scope-changed",
+            "linked": false,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "proposals": [
+              {
+                "proposalVersion": 1,
+                "proposalId": "proposal-1",
+                "roomId": "room-1",
+                "authorUserId": "member-1",
+                "baseRevision": 7,
+                "status": "submitted",
+                "changes": [
+                  {
+                    "changeId": "guidance-1",
+                    "type": "setUserGuidance",
+                    "value": "成员建议 😀",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  },
+                  {
+                    "changeId": "guidance-2",
+                    "type": "setUserGuidance",
+                    "value": "second",
+                    "expectedBase": {
+                      "kind": "value",
+                      "value": ""
+                    }
+                  }
+                ],
+                "createdAt": "2026-08-27T16:00:00.000Z",
+                "updatedAt": "2026-08-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "expected": {
+            "observation": "pending",
+            "linked": true,
+            "settle": false,
+            "outcome": null,
+            "terminalStatus": null
+          }
+        },
+        {
+          "evidence": {
+            "roomId": "room-1",
+            "roomEpoch": "epoch-1",
+            "selfUserId": "member-1",
+            "event": {
+              "protocolVersion": 1,
+              "type": "proposal.resolved",
+              "roomId": "room-1",
+              "roomEpoch": "epoch-1",
+              "controlSeq": 1,
+              "timestamp": "2026-08-27T16:01:00.000Z",
+              "payload": {
+                "proposalId": "proposal-1",
+                "status": "withdrawn"
+              }
+            }
+          },
+          "expected": {
+            "observation": "terminal",
+            "linked": true,
+            "settle": true,
+            "outcome": "satisfied",
+            "terminalStatus": "withdrawn"
+          }
+        }
+      ]
+    }
+  ]
+}
