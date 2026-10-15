@@ -13,6 +13,7 @@ export * from './generation-readiness';
 export * from './host-workspace';
 export * from './shared-config-equality';
 export * from './projection';
+export * from './proposal-editor';
 export * from './source-projection';
 export * from './selection';
 export * from './state-machine';

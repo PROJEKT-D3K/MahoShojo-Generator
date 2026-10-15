@@ -150,6 +150,25 @@ const collectModuleGraph = (entryFile: string): string[] => {
 };
 
 describe('server-safe shared entrypoints stay free of React hooks', () => {
+  it('keeps the Web proposal editor on the runtime-neutral multiplayer core', async () => {
+    const webPath = path.resolve(PACKAGE_ROOT, '../../apps/web/lib/arena-room/proposal-editor.ts');
+    const bundled = await build({
+      entryPoints: [webPath],
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true,
+    });
+    const inputs = Object.entries(bundled.metafile!.inputs);
+    const editor = inputs.find(([file]) => file.endsWith('packages/multiplayer-core/src/proposal-editor.ts'));
+    expect(editor).toBeDefined();
+    expect(editor![1].imports.some(({ path: imported }) => imported.endsWith('multiplayer-core/src/index.ts')))
+      .toBe(false);
+    expect(inputs.filter(([file]) => file.includes('apps/')).map(([file]) => path.resolve(file)))
+      .toEqual([webPath]);
+    expect(inputs.some(([file]) => /(?:packages\/(?:hosted-runtime|hosted-api|ui-web)\/|node_modules\/(?:react|react-dom|next|@tauri-apps)\/)/u.test(file)))
+      .toBe(false);
+    expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
+    expect(Object.values(bundled.metafile!.outputs).flatMap((output) => output.imports)).toEqual([]);
+  });
+
   it('Tavern general AI generation exports remain browser-safe without host dependencies', async () => {
     const aiCoreRoot = path.resolve(PACKAGE_ROOT, '../ai-core');
     const pkg = JSON.parse(readFileSync(path.join(aiCoreRoot, 'package.json'), 'utf8'));
