@@ -30,3 +30,14 @@ it('派发后的真实凭据变化保持unknown且不自动重试', async () => 
   fetcher.mockImplementationOnce(async () => { auth = { ...auth, authKey: 'credential-B' }; return Response.json(ack); });
   expect((await port.write(target, { name: '旧稿', description: '', isPublic: 0 })).kind).toBe('uncertain'); expect(fetcher).toHaveBeenCalledOnce();
 });
+
+
+it('同identity重建port共享未确认输入，账号与凭据代次隔离且session不含凭据', () => {
+  const identity = { epoch: 1, isCurrent: () => current };
+  const first = createWebOwnedCardMetadataPort(7, identity); const again = createWebOwnedCardMetadataPort(7, identity);
+  expect(first.session).toBe(again.session);
+  first.session!.uncertain = true;
+  expect(createWebOwnedCardMetadataPort(8, identity).session).toEqual({ uncertain: false });
+  expect(createWebOwnedCardMetadataPort(7, { epoch: 2, isCurrent: () => true }).session).toEqual({ uncertain: false });
+  expect(JSON.stringify(first.session)).not.toContain('credential-A');
+});

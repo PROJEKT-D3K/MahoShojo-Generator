@@ -1,4 +1,4 @@
-import type { OwnedCardMetadataPort } from '@mahoshojo/ui-web/cloud-save';
+import { getOwnedCardMetadataSession, type OwnedCardMetadataPort } from '@mahoshojo/ui-web/cloud-save';
 import { authStorage, dataCardApi, type OwnedDataCardWriteGuard } from './auth';
 import type { AuthIdentity } from './auth-identity';
 
@@ -16,7 +16,7 @@ export function createWebOwnedCardMetadataPort(expectedUserId: number, identity:
     return guard;
   };
   return {
-    ...options, isCurrent: identity.isCurrent,
+    ...options, session: getOwnedCardMetadataSession(identity, identity.epoch, expectedUserId), isCurrent: identity.isCurrent,
     async read(id) {
       const frozen = await getGuard();
       if (!frozen) return { kind: 'rejected', message: '登录状态已改变，请重新打开数据卡管理' };

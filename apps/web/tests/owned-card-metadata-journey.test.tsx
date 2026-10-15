@@ -15,9 +15,9 @@ const ack = { success: true, id: 'c', ownerUserId: 7, accountFenceVersion: 1, me
 let root: Root; let container: HTMLDivElement; const fetcher = vi.fn(); const saved = vi.fn();
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === label)!;
 const click = (label: string) => act(async () => button(label).click());
-function Harness() { const [open, setOpen] = useState(true); return <><a href="/elsewhere">离开页面</a><DataCardsModal isOpen={open} onClose={() => setOpen(false)} dataCards={[]} summaryOwnerId={session.userId} currentPage={1} onPageChange={() => {}} cardsPerPage={12} onMetadataSaved={saved} /></>; }
+function Harness() { const [open, setOpen] = useState(true); return <><button onClick={() => setOpen(true)}>重开管理</button><a href="/elsewhere">离开页面</a><DataCardsModal isOpen={open} onClose={() => setOpen(false)} dataCards={[]} summaryOwnerId={session.userId} currentPage={1} onPageChange={() => {}} cardsPerPage={12} onMetadataSaved={saved} /></>; }
 beforeEach(() => {
-  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; session.userId = 7; session.epoch = captureAuthIdentity().epoch;
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; session.userId = 7; beginAuthIdentityTransition(); session.epoch = captureAuthIdentity().epoch;
   vi.spyOn(authStorage, 'getAuth').mockResolvedValue({ userId: 7, username: 'owner' }); vi.spyOn(authStorage, 'getAuthHeader').mockResolvedValue(null);
   vi.spyOn(list, 'getDataCardSummaryPage').mockResolvedValue({ success: true, cards: [row], total: 1, nextOffset: null } as never);
   vi.spyOn(list, 'loadFullDataCard').mockRejectedValue(new Error('元信息编辑不应加载正文'));
@@ -59,4 +59,20 @@ it('外部导航卸载后迟到写入回执不认领、不重放或触发旧onSa
   await act(async () => root.render(<p>另一页面</p>)); await act(async () => resolve(Response.json(ack)));
   expect(saved).not.toHaveBeenCalled(); expect(document.body.textContent).not.toContain('数据卡信息已更新');
   expect(fetcher.mock.calls.filter(([url]) => url === '/api/data-cards/metadata-owned')).toHaveLength(1);
+});
+
+
+it('Web unknown关闭/重挂载仍保留输入，明确结束才允许新的编辑', async () => {
+  const ordinary = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url, ...args) => url === '/api/data-cards/metadata-owned' ? Response.json({}, { status: 503 }) : ordinary(url, ...args));
+  await act(async () => root.render(<Harness />)); await click('修改信息');
+  await act(async () => { const field = document.querySelector<HTMLInputElement>('[aria-label=名称]')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, '待核对输入'); field.dispatchEvent(new Event('input', { bubbles: true })); });
+  await click('保存');
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label=关闭]')!.click()); await click('重开管理');
+  expect(document.querySelector<HTMLInputElement>('[aria-label=名称]')?.value).toBe('待核对输入'); expect(button('保存').disabled).toBe(true);
+  await act(async () => root.render(null)); await act(async () => root.render(<Harness />));
+  expect(document.querySelector<HTMLInputElement>('[aria-label=名称]')?.value).toBe('待核对输入'); expect(button('保存').disabled).toBe(true);
+  expect(saved).not.toHaveBeenCalled(); expect(fetcher.mock.calls.filter(([url]) => url === '/api/data-cards/metadata-owned')).toHaveLength(1);
+  await click('已知晓，结束本次修改'); expect(document.querySelector('[aria-label=名称]')).toBeNull();
+  await click('修改信息'); expect(button('保存').disabled).toBe(false);
 });

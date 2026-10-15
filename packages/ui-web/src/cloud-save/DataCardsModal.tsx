@@ -251,7 +251,7 @@ function DataCardsModalScope({
   const deletion = useOwnedCardDelete(deletePort, isOpen);
   const isDeleting = () => (deletion.controller?.getSnapshot().phase ?? 'idle') !== 'idle';
   const busy = suppliedBusy || metadata.isBusy() || deletion.busy;
-  const close = () => { if (!suppliedBusy && !metadata.isBusy() && !isDeleting()) { metadata.cancel(); onClose(); } };
+  const close = () => { if (!suppliedBusy && !metadata.isBusy() && !isDeleting()) { metadata.hide(); onClose(); } };
   const { dialogRef, initialFocusRef, titleId } = useBaseModalAccessibility({ isOpen, onClose: close });
   const [selectedCard, setSelectedCard] = useState<any | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -733,10 +733,12 @@ function DataCardsModalScope({
                 <EditCardForm card={{ ...metadata.selection.card, is_public: metadata.selection.target?.isPublic ?? metadata.selection.card.is_public }}
                   showTemplate={false} value={metadata.selection.draft} onChange={metadata.change}
                   onSave={() => void metadata.save()} onCancel={metadata.cancel} busy={busy}
+                  cancelLabel={metadata.selection.phase === 'uncertain' ? '已知晓，结束本次修改' : '取消'}
                   submitDisabled={metadata.selection.phase !== 'editing'} error={metadata.selection.error}
                   supplementaryContent={<>
                     {(metadata.selection.phase === 'reading' || metadata.selection.phase === 'checking') && <p role="status">正在读取云端信息…</p>}
                     {['uncertain', 'conflict'].includes(metadata.selection.phase) && <div className="space-y-2 text-sm">
+                      {metadata.selection.phase === 'uncertain' && <p>关闭只会隐藏本次修改。明确结束会放弃保留的输入和提示，不会撤销服务器可能已执行的修改。</p>}
                       <button type="button" onClick={() => void metadata.check()}>重新读取云端信息</button>
                       {metadata.selection.candidate && <div className="rounded border p-2">
                         <p>当前云端名称：{metadata.selection.candidate.name}</p>

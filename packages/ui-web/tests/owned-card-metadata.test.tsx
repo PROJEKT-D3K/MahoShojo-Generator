@@ -12,7 +12,7 @@ const field = () => document.querySelector<HTMLInputElement>('input[aria-label="
 const edit = (value: string) => act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field(), value); field().dispatchEvent(new Event('input', { bubbles: true })); });
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; };
 const close = vi.fn();
-const render = (scopeKey = '7:1') => act(async () => root.render(<DataCardsModal host={host} metadataEditor={port} isOpen summaryOwnerId={7} scopeKey={scopeKey} dataCards={[]} currentPage={1} cardsPerPage={12} onPageChange={() => {}} onClose={close} />));
+const render = (scopeKey = '7:1', isOpen = true) => act(async () => root.render(<DataCardsModal host={host} metadataEditor={port} isOpen={isOpen} summaryOwnerId={7} scopeKey={scopeKey} dataCards={[]} currentPage={1} cardsPerPage={12} onPageChange={() => {}} onClose={close} />));
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement('div'); document.body.append(container); root = createRoot(container); close.mockReset();
@@ -74,4 +74,17 @@ it('已在读取正文的选择动作先结束，不并行开启元信息编辑'
   await act(async () => { button('编辑档案').click(); button('修改信息').click(); }); expect(port.read).not.toHaveBeenCalled();
   await act(async () => pending.resolve({ ...row, data: '{}' })); await click('修改信息'); expect(port.read).not.toHaveBeenCalled();
   await act(async () => handler.resolve()); await click('修改信息'); expect(port.read).toHaveBeenCalledOnce();
+});
+
+
+it('普通关闭再打开保留未知修改与原输入，不能直接提交另一笔', async () => {
+  port.write = vi.fn(async () => ({ kind: 'uncertain' as const, message: '修改结果不确定' }));
+  await render(); await click('修改信息'); await edit('未核对的原输入'); await click('保存');
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label=关闭]')!.click());
+  expect(close).toHaveBeenCalledOnce();
+  await render('7:1', false); await render();
+  expect(field()?.value).toBe('未核对的原输入');
+  expect(document.body.textContent).toContain('修改结果不确定');
+  expect(button('保存').disabled).toBe(true);
+  await click('修改信息'); await click('保存'); expect(port.write).toHaveBeenCalledOnce();
 });

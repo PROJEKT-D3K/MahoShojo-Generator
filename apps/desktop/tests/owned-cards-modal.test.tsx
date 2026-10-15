@@ -127,3 +127,19 @@ it('Desktop真实宿主重建保留同session删除提示，换凭据代次不�
   expect(invoke.mock.calls.filter(([, { request }]) => request.routeId === 'data-cards.soft-delete')).toHaveLength(1);
   mocks.epoch++; await mount('c'); expect(document.body.textContent).not.toContain('删除结果不确定'); expect(button('删除')).toBeDefined();
 });
+
+
+it('Desktop元信息unknown关闭/卸载后同凭据保留草稿，凭据换代不显示旧输入', async () => {
+  const target = { id: 'owned', type: 'character', name: '权威元信息', description: '', isPublic: 0, reviewStatus: 'approved', hasPendingUpdate: false, version: 'a'.repeat(64) };
+  const invoke = vi.fn(async (_command, { request }: any) => request.routeId === 'data-cards.replace-target.query'
+    ? { status: 200, body: { success: true, ownerUserId: 7, accountFenceVersion: 1, target } } : { status: 503, body: {} });
+  const close = vi.fn(); const guard = { isBlocked: () => false, onBusyChange: vi.fn() };
+  const show = (isOpen = true) => act(async () => root.render(<DesktopOwnedCardsModal isOpen={isOpen} expectedUserId={7} onClose={close} invokeFn={invoke} metadataEditing={guard} />));
+  await show(); await act(async () => button('修改信息').click());
+  await act(async () => { const field = document.querySelector<HTMLInputElement>('[aria-label=名称]')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, 'Desktop待核对'); field.dispatchEvent(new Event('input', { bubbles: true })); });
+  await act(async () => button('保存').click()); await act(async () => document.querySelector<HTMLButtonElement>('[aria-label=关闭]')!.click()); expect(close).toHaveBeenCalledOnce();
+  await show(false); await show(); expect(document.querySelector<HTMLInputElement>('[aria-label=名称]')?.value).toBe('Desktop待核对'); expect(button('保存').disabled).toBe(true);
+  await act(async () => root.render(null)); await show(); expect(document.querySelector<HTMLInputElement>('[aria-label=名称]')?.value).toBe('Desktop待核对'); expect(button('保存').disabled).toBe(true);
+  expect(invoke.mock.calls.filter(([, { request }]) => request.routeId === 'data-cards.metadata')).toHaveLength(1);
+  mocks.epoch++; await show(); expect(document.querySelector('[aria-label=名称]')).toBeNull(); expect(document.body.textContent).not.toContain('修改结果不确定');
+});

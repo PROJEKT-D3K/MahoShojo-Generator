@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { isHotCard } from '@mahoshojo/domain/data-card-size';
 import { ONLINE_DATA_CARD_TYPES, type OnlineDataCardType } from '@mahoshojo/contracts/data-cards';
-import { RecycleBinModal, DataCardsModal, getOwnedCardDeleteNotice, type OwnedCardDeleteNotice, getOwnedCardRestoreNotice, type OwnedCardRestoreNotice, type OwnedCardMetadataPort, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
+import { RecycleBinModal, DataCardsModal, getOwnedCardMetadataSession, type OwnedCardMetadataSession, getOwnedCardDeleteNotice, type OwnedCardDeleteNotice, getOwnedCardRestoreNotice, type OwnedCardRestoreNotice, type OwnedCardMetadataPort, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
 import { createDesktopCardLibraryOnlinePort, useDesktopCardLibraryHost } from '../../platform/card-library-host';
 import { readCloudReplaceTarget, updateCloudCardMetadata, readPrivateCloudCapacity } from '../../platform/private-cloud-save';
 import { createDesktopOwnedCardRestorePort } from '../../platform/cloud-restore';
@@ -48,11 +48,11 @@ export function DesktopOwnedCardsModal(props: DesktopOwnedCardsModalProps) {
   const { state, store } = useDesktopCloudSession();
   const epoch = store.getCredentialEpoch();
   const owns = state.account?.userId === props.expectedUserId && state.verification === 'verified' && state.authFlow.kind === 'idle';
-  return <DesktopOwnedCardsModalScope key={`${props.expectedUserId}:${epoch}:${props.scopeKey ?? ''}`} {...props} deleteNotice={getOwnedCardDeleteNotice(store, epoch, props.expectedUserId)} restoreNotice={getOwnedCardRestoreNotice(store, epoch, props.expectedUserId)} isOpen={props.isOpen && owns}
+  return <DesktopOwnedCardsModalScope key={`${props.expectedUserId}:${epoch}:${props.scopeKey ?? ''}`} {...props} metadataSession={getOwnedCardMetadataSession(store, epoch, props.expectedUserId)} deleteNotice={getOwnedCardDeleteNotice(store, epoch, props.expectedUserId)} restoreNotice={getOwnedCardRestoreNotice(store, epoch, props.expectedUserId)} isOpen={props.isOpen && owns}
     isCurrent={() => store.getCredentialEpoch() === epoch && store.getSnapshot().account?.userId === props.expectedUserId && store.getSnapshot().verification === 'verified' && store.getSnapshot().authFlow.kind === 'idle'} />;
 }
 
-function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selectedType, onReplaceCard, onSelectCard, refreshToken = 0, isBusy = false, metadataEditing, titleOverride = '我的数据卡', invokeFn = invoke, isCurrent, restoreNotice, deleteNotice }: DesktopOwnedCardsModalProps & { isCurrent: () => boolean; restoreNotice: OwnedCardRestoreNotice; deleteNotice: OwnedCardDeleteNotice }) {
+function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selectedType, onReplaceCard, onSelectCard, refreshToken = 0, isBusy = false, metadataEditing, titleOverride = '我的数据卡', invokeFn = invoke, isCurrent, restoreNotice, deleteNotice, metadataSession }: DesktopOwnedCardsModalProps & { isCurrent: () => boolean; restoreNotice: OwnedCardRestoreNotice; deleteNotice: OwnedCardDeleteNotice; metadataSession: OwnedCardMetadataSession }) {
   const libraryHost = useDesktopCardLibraryHost();
   const online = useMemo(() => createDesktopCardLibraryOnlinePort(invokeFn, expectedUserId), [expectedUserId, invokeFn]);
   const host = useMemo<DataCardsModalHost>(() => ({
@@ -87,12 +87,13 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
   const metadataHost = useRef({ isCurrent, metadataEditing });
   metadataHost.current = { isCurrent, metadataEditing };
   const metadataEditor = useMemo<OwnedCardMetadataPort | undefined>(() => metadataEditing ? {
+    session: metadataSession,
     isCurrent: () => metadataHost.current.isCurrent(),
     isBlocked: () => metadataHost.current.metadataEditing?.isBlocked() !== false,
     onBusyChange: (value) => metadataHost.current.metadataEditing?.onBusyChange(value),
     read: (id) => readCloudReplaceTarget(invokeFn, expectedUserId, id),
     write: (target, draft) => updateCloudCardMetadata(invokeFn, expectedUserId, target, draft),
-  } : undefined, [expectedUserId, invokeFn, Boolean(metadataEditing)]);
+  } : undefined, [expectedUserId, invokeFn, Boolean(metadataEditing), metadataSession]);
   const deletePort = useMemo(() => createDesktopOwnedCardDeletePort(invokeFn, expectedUserId, () => metadataHost.current.isCurrent(), {
     notice: deleteNotice,
     isBlocked: () => metadataHost.current.metadataEditing?.isBlocked() ?? false,

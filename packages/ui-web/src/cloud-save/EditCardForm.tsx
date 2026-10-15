@@ -8,6 +8,7 @@ interface EditCardFormProps {
   card: any;
   onSave: (name: string, description: string, isPublic: number) => void;
   onCancel: () => void;
+  cancelLabel?: string;
   showTemplate?: boolean;
   value?: OwnedCardMetadataDraft;
   onChange?: (value: OwnedCardMetadataDraft) => void;
@@ -17,7 +18,7 @@ interface EditCardFormProps {
   supplementaryContent?: React.ReactNode;
 }
 
-export default function EditCardForm({ card, onSave, onCancel, showTemplate = true, value, onChange, busy = false, submitDisabled = false, error, supplementaryContent }: EditCardFormProps) {
+export default function EditCardForm({ card, onSave, onCancel, cancelLabel = '取消', showTemplate = true, value, onChange, busy = false, submitDisabled = false, error, supplementaryContent }: EditCardFormProps) {
   const cardStatus = getDataCardStatus(card).status;
   const isBanned = value?.isPublic === -1 || cardStatus === 'banned';
   const [localFormData, setLocalFormData] = React.useState({
@@ -115,7 +116,7 @@ export default function EditCardForm({ card, onSave, onCancel, showTemplate = tr
             onClick={onCancel}
             className="px-3 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600"
           >
-            取消
+            {cancelLabel}
           </button>
         </div>
       </fieldset>

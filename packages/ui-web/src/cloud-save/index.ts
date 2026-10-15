@@ -18,3 +18,6 @@ export { createOwnedCardDeleteController, getOwnedCardDeleteNotice, verifyOwnedD
 export type { OwnedCardDeletePort, OwnedCardDeleteNotice, OwnedCardDeleteController, DeleteResponse, DeleteWrite } from './owned-card-delete';
 export { createOwnedCardRestoreController, getOwnedCardRestoreNotice, verifyOwnedRestoreResponse, RESTORE_UNKNOWN_MESSAGE } from './owned-card-restore';
 export type { OwnedCardRestorePort, OwnedCardRestoreNotice, OwnedCardRestoreState, RestoreResponse } from './owned-card-restore';
+
+export { getOwnedCardMetadataSession } from './owned-card-metadata';
+export type { OwnedCardMetadataSession } from './owned-card-metadata';
