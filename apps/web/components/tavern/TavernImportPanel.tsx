@@ -1,7 +1,7 @@
 import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
 import { TavernConversionControls, TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
-import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard, buildTavernCanshouCard, buildTavernMagicalGirlCard } from '@mahoshojo/domain/tavern-card';
+import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard, buildTavernCanshouCard, buildTavernMagicalGirlCard, projectTavernStreamMarkdown } from '@mahoshojo/domain/tavern-card';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -30,7 +30,6 @@ import { downloadBlob } from '@/lib/client/blobUrl';
 import { useCooldown } from '@/lib/cooldown';
 import { createBlankDataCard, type DataCardTemplate } from '@/lib/data-card-converter';
 import { formatKilobytes, MAX_DATA_CARD_BYTES } from '@/lib/data-card-size';
-import { buildGeneralCharacterCardFromMarkdown, buildGeneralScenarioCardFromMarkdown } from '@/lib/stream/markdown-card';
 import { STREAM_ABORT_REASON_USER } from '@/lib/stream/abort';
 import { readSafeTextAndReasoningStreamFromResponse } from '@/lib/stream/read-safe-text-and-reasoning-stream';
 import { useAppRouterAdapter } from '@/lib/app-router-adapter';
@@ -386,25 +385,10 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
     const markdown = streamingMarkdown ?? streamedGeneralCard?.content ?? null;
     if (markdown === null) return null;
 
-    const fallbackName = (selectedNormalized?.name ?? '').trim();
-    const isScenarioTarget = state.targetTemplate === 'scenario' || state.targetTemplate === 'general-scenario';
-
-    if (isScenarioTarget) {
-      const { card } = buildGeneralScenarioCardFromMarkdown({
-        markdown,
-        fallbackTitle: fallbackName,
-        defaultTitle: '情景',
-      });
-      return card;
-    }
-
-    const defaultName =
-      state.targetTemplate === 'magical-girl' ? '魔法少女' : state.targetTemplate === 'canshou' ? '残兽' : '角色';
-
-    const { card } = buildGeneralCharacterCardFromMarkdown({
+    const { card } = projectTavernStreamMarkdown({
+      template: state.targetTemplate,
       markdown,
-      fallbackName,
-      defaultName,
+      sourceName: (selectedNormalized?.name ?? '').trim(),
     });
     return card;
   }, [state.convertMode, generationMode, streamingMarkdown, streamedGeneralCard, selectedNormalized?.name, state.targetTemplate]);
@@ -569,24 +553,10 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
           }
 
           if (markdown.trim()) revealGeneratedResult?.();
-          const isScenarioTarget = state.targetTemplate === 'scenario' || state.targetTemplate === 'general-scenario';
-          if (isScenarioTarget) {
-            const { card } = buildGeneralScenarioCardFromMarkdown({
-              markdown,
-              fallbackTitle: selectedNormalized.name,
-              defaultTitle: '情景',
-            });
-            setStreamedGeneralCard(card);
-            startCooldown(tavernAiCooldownMs);
-            return { ...card, _tavern: tavernPayload };
-          }
-
-          const defaultName =
-            state.targetTemplate === 'magical-girl' ? '魔法少女' : state.targetTemplate === 'canshou' ? '残兽' : '角色';
-          const { card } = buildGeneralCharacterCardFromMarkdown({
+          const { card } = projectTavernStreamMarkdown({
+            template: state.targetTemplate,
             markdown,
-            fallbackName: selectedNormalized.name,
-            defaultName,
+            sourceName: selectedNormalized.name,
           });
 
           setStreamedGeneralCard(card);

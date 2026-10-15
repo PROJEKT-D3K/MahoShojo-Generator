@@ -11,6 +11,7 @@ describe('ai-core public entrypoint portability', () => {
     '@mahoshojo/ai-core/reference-attachments',
     '@mahoshojo/ai-core/free-generation',
     '@mahoshojo/ai-core/scenario-generation',
+    '@mahoshojo/ai-core/tavern-generation',
   ] as const)('bundles %s for every target without runtime imports', async (entrypoint) => {
     for (const platform of ['node', 'browser', 'neutral'] as const) {
       const contents = entrypoint.endsWith('/stream-events')
@@ -29,6 +30,8 @@ describe('ai-core public entrypoint portability', () => {
               ? `import { FREE_GENERATION_SCHEMAS, buildFreeStreamPrompt } from '${entrypoint}'; export { FREE_GENERATION_SCHEMAS, buildFreeStreamPrompt };`
             : entrypoint.endsWith('/scenario-generation')
               ? `import { SCENARIO_GENERATION_SCHEMA, buildScenarioStreamPrompt } from '${entrypoint}'; export { SCENARIO_GENERATION_SCHEMA, buildScenarioStreamPrompt };`
+            : entrypoint.endsWith('/tavern-generation')
+              ? `import { buildTavernStreamPrompt, TAVERN_STREAM_TEMPERATURE } from '${entrypoint}'; export { buildTavernStreamPrompt, TAVERN_STREAM_TEMPERATURE };`
               : `import { AiStreamEventSchema, parseStructuredJsonWithSchema } from '${entrypoint}'; export { AiStreamEventSchema, parseStructuredJsonWithSchema };`;
       const result = await build({
         absWorkingDir: process.cwd(),
