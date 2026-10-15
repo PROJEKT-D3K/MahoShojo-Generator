@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { isHotCard } from '@mahoshojo/domain/data-card-size';
 import { ONLINE_DATA_CARD_TYPES, type OnlineDataCardType } from '@mahoshojo/contracts/data-cards';
-import { DataCardsModal, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
+import { DataCardsModal, type OwnedCardMetadataPort, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
 import { createDesktopCardLibraryOnlinePort, useDesktopCardLibraryHost } from '../../platform/card-library-host';
-import { readPrivateCloudCapacity } from '../../platform/private-cloud-save';
+import { readCloudReplaceTarget, updateCloudCardMetadata, readPrivateCloudCapacity } from '../../platform/private-cloud-save';
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import { useDesktopCloudSession } from '../account/use-desktop-cloud-session';
 
@@ -25,6 +25,7 @@ export interface DesktopOwnedCardsModalProps {
   onSelectCard?: (card: DesktopOwnedCard) => void | Promise<void>;
   refreshToken?: number;
   isBusy?: boolean;
+  metadataEditing?: { isBlocked: () => boolean; onBusyChange: (busy: boolean) => void };
   scopeKey?: string;
   titleOverride?: string;
   invokeFn?: InvokeFn;
@@ -48,7 +49,7 @@ export function DesktopOwnedCardsModal(props: DesktopOwnedCardsModalProps) {
     isCurrent={() => store.getCredentialEpoch() === epoch && store.getSnapshot().account?.userId === props.expectedUserId && store.getSnapshot().verification === 'verified' && store.getSnapshot().authFlow.kind === 'idle'} />;
 }
 
-function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selectedType, onReplaceCard, onSelectCard, refreshToken = 0, isBusy = false, titleOverride = '我的数据卡', invokeFn = invoke, isCurrent }: DesktopOwnedCardsModalProps & { isCurrent: () => boolean }) {
+function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selectedType, onReplaceCard, onSelectCard, refreshToken = 0, isBusy = false, metadataEditing, titleOverride = '我的数据卡', invokeFn = invoke, isCurrent }: DesktopOwnedCardsModalProps & { isCurrent: () => boolean }) {
   const libraryHost = useDesktopCardLibraryHost();
   const online = useMemo(() => createDesktopCardLibraryOnlinePort(invokeFn, expectedUserId), [expectedUserId, invokeFn]);
   const host = useMemo<DataCardsModalHost>(() => ({
@@ -75,10 +76,19 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
     void readPrivateCloudCapacity(invokeFn, expectedUserId).then((value) => { if (active) setCapacity(value); });
     return () => { active = false; };
   }, [expectedUserId, invokeFn, isOpen, refreshToken]);
+  const metadataHost = useRef({ isCurrent, metadataEditing });
+  metadataHost.current = { isCurrent, metadataEditing };
+  const metadataEditor = useMemo<OwnedCardMetadataPort | undefined>(() => metadataEditing ? {
+    isCurrent: () => metadataHost.current.isCurrent(),
+    isBlocked: () => metadataHost.current.metadataEditing?.isBlocked() !== false,
+    onBusyChange: (value) => metadataHost.current.metadataEditing?.onBusyChange(value),
+    read: (id) => readCloudReplaceTarget(invokeFn, expectedUserId, id),
+    write: (target, draft) => updateCloudCardMetadata(invokeFn, expectedUserId, target, draft),
+  } : undefined, [expectedUserId, invokeFn, Boolean(metadataEditing)]);
   const allowedTypes = useMemo(() => selectedType ? [selectedType] : ['character', 'scenario'] as OnlineDataCardType[], [selectedType]);
   const defaultFilters = useMemo(() => selectedType ? { type: selectedType } : {}, [selectedType]);
   return <DataCardsModal host={host} isOpen={isOpen} onClose={onClose} summaryOwnerId={expectedUserId} dataCards={[]}
-    currentPage={page} onPageChange={setPage} cardsPerPage={12} refreshKey={refreshToken} busy={isBusy}
+    metadataEditor={metadataEditor} currentPage={page} onPageChange={setPage} cardsPerPage={12} refreshKey={refreshToken} busy={isBusy}
     allowedTypes={allowedTypes} defaultFilters={defaultFilters}
     title={titleOverride} userCapacity={capacity?.capacity} userUsedSlots={capacity?.usedSlots} capacityKnown={capacity !== null}
     onLoadCard={onSelectCard ? async (card) => { if (isCurrent()) await onSelectCard(ownedCard(card)); } : undefined}

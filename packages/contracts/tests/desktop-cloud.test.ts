@@ -76,6 +76,7 @@ type DesktopCloudFixture = {
   cardLibrary: {
     validRequests: unknown[];
     invalidFenceRequests: unknown[];
+    ownedRequests: { valid: unknown[]; invalid: unknown[] };
     routes: Record<string, { method: string; path: string; auth: string }>;
     publicReadCache: {
       sourceRouteId: string;
@@ -649,6 +650,18 @@ describe('card-library account-fenced wire contract', () => {
   it('rejects unsafe IDs, non-camelCase fields and arbitrary URLs', () => {
     for (const wire of fixture.cardLibrary.invalidFenceRequests) {
       expect(DesktopCardLibraryRequestSchema.safeParse(wire).success).toBe(false);
+    }
+  });
+  it('pins metadata to the owned fixed route without a new preview route', () => {
+    expect(fixture.cardLibrary.routes['data-cards.metadata']).toEqual({ method: 'PUT', path: '/api/data-cards/metadata-owned', auth: 'required' });
+    expect(DesktopCardLibraryRouteIdSchema.safeParse('data-cards.metadata-target.query').success).toBe(false);
+  });
+  it('checks every owned request fixture at the renderer IPC boundary', () => {
+    for (const wire of fixture.cardLibrary.ownedRequests.valid) {
+      expect(DesktopCardLibraryRequestSchema.safeParse(wire).success, JSON.stringify(wire)).toBe(true);
+    }
+    for (const wire of fixture.cardLibrary.ownedRequests.invalid) {
+      expect(DesktopCardLibraryRequestSchema.safeParse(wire).success, JSON.stringify(wire)).toBe(false);
     }
   });
 });

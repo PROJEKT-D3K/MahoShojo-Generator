@@ -1,3 +1,8 @@
+import { useMemo, useRef } from 'react';
+import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
+import { useAuth } from '@/lib/useAuth';
+import { captureAuthIdentity } from '@/lib/auth-identity';
+import { createWebOwnedCardMetadataPort } from '@/lib/owned-card-metadata';
 // 真实管理模态框已共源；Web 只装配网络、文件、详情与链接端口。
 import { DataCardsModal as SharedDataCardsModal, type DataCardsModalProps, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
 import DataCardDetailsModal from '../DataCardDetailsModal';
@@ -36,6 +41,31 @@ const host: DataCardsModalHost = {
   },
 };
 
-export default function DataCardsModal(props: Omit<DataCardsModalProps, 'host'>) {
-  return <SharedDataCardsModal {...props} host={host} />;
+type WebDataCardsModalProps = Omit<DataCardsModalProps, 'host' | 'metadataEditor'> & {
+  metadataGuard?: { onBusyChange: (busy: boolean) => void; isBlocked?: () => boolean };
+  onMetadataSaved?: () => void;
+};
+export default function DataCardsModal(props: WebDataCardsModalProps) {
+  const { user, identityEpoch } = useAuth();
+  const ownerId = props.summaryOwnerId ?? user?.id;
+  const identity = captureAuthIdentity();
+  return <WebDataCardsModalScope key={`${ownerId ?? ''}:${identityEpoch ?? identity.epoch}:${props.scopeKey ?? ''}`} {...props} ownerId={ownerId} identity={identity} />;
+}
+function WebDataCardsModalScope(props: WebDataCardsModalProps & { ownerId?: number; identity: ReturnType<typeof captureAuthIdentity> }) {
+  const busy = useRef(false);
+  return props.metadataGuard ? <WebDataCardsModalView {...props} pending={busy} /> : <InternallyGuardedWebDataCardsModal {...props} pending={busy} />;
+}
+function InternallyGuardedWebDataCardsModal(props: WebDataCardsModalProps & { ownerId?: number; identity: ReturnType<typeof captureAuthIdentity>; pending: { current: boolean } }) {
+  useUnsavedPageGuard(() => props.pending.current, '正在修改云端数据卡，请等待响应后再离开', () => false);
+  return <WebDataCardsModalView {...props} />;
+}
+function WebDataCardsModalView({ metadataGuard, onMetadataSaved, ownerId, identity, pending, ...props }: WebDataCardsModalProps & { ownerId?: number; identity: ReturnType<typeof captureAuthIdentity>; pending: { current: boolean } }) {
+  const latest = useRef({ metadataGuard, onMetadataSaved, externalBusy: props.busy });
+  latest.current = { metadataGuard, onMetadataSaved, externalBusy: props.busy };
+  const metadataEditor = useMemo(() => ownerId === undefined ? undefined : createWebOwnedCardMetadataPort(ownerId, identity, {
+    isBlocked: () => Boolean(latest.current.externalBusy || latest.current.metadataGuard?.isBlocked?.()),
+    onBusyChange: (value) => { pending.current = value; latest.current.metadataGuard?.onBusyChange(value); },
+    onSaved: () => latest.current.onMetadataSaved?.(),
+  }), [ownerId, identity, pending]);
+  return <SharedDataCardsModal {...props} host={host} metadataEditor={metadataEditor} />;
 }

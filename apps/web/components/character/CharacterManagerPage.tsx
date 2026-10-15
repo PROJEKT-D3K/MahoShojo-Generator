@@ -308,7 +308,6 @@ export const CharacterManagerPage: React.FC = () => {
   const [showDataCardsModal, setShowDataCardsModal] = useState(false);
   const [recycleBinCards, setRecycleBinCards] = useState<any[]>([]);
   const [showRecycleBinModal, setShowRecycleBinModal] = useState(false);
-  const [editingCard, setEditingCard] = useState<any | null>(null);
   const [showHistoryCardEditor, setShowHistoryCardEditor] = useState(false);
   const [historyCardDraft, setHistoryCardDraft] = useState<NarrativeHistoryDataCardV1 | null>(null);
   const [historyCardTarget, setHistoryCardTarget] = useState<{
@@ -631,7 +630,7 @@ export const CharacterManagerPage: React.FC = () => {
     });
     // 账号变更不将旧的资料编辑/选择/专用云端目标带到新账号；编辑器正文保留。
     useEffect(() => {
-        setEditingCard(null); setShowDataCardsModal(false); setCurrentPage(1); setRecycleBinCards([]); setUserBadges([]);
+        setShowDataCardsModal(false); setCurrentPage(1); setRecycleBinCards([]); setUserBadges([]);
         setShowRecycleBinModal(false); setShowQuestionnaireCompatModal(false);
         setQuestionnaireCompatTargetCard(null); setHistoryCardTarget(null); setShowHistoryCardEditor(false);
     }, [user?.id, authSource]);
@@ -751,34 +750,6 @@ export const CharacterManagerPage: React.FC = () => {
             loadUserBadges();
         } else {
             setMessage({ type: 'error', text: result.error || '删除失败' });
-        }
-    };
-
-    // 更新数据卡信息
-    const handleUpdateDataCard = async (id: string, name: string, description: string, isPublic?: number) => {
-        // 前端敏感词检查
-        const textToCheck = `${name} ${description}`;
-        const sensitiveWordResult = await quickCheck(textToCheck);
-
-        if (sensitiveWordResult.hasSensitiveWords) {
-            // 直接跳转到 /arrested 页面
-            router.push('/arrested');
-            return;
-        }
-
-        const result = await dataCardApi.updateCard(id, name, description, isPublic);
-        if (result.success) {
-            setEditingCard(null);
-            loadUserDataCards();
-            loadUserBadges();
-            setMessage({ type: 'success', text: '数据卡信息已更新' });
-        } else {
-            // 检查是否是敏感词错误，如果是则跳转到 /arrested
-            if (result.error === 'SENSITIVE_WORD_DETECTED' || (result as any).redirect === '/arrested') {
-                router.push('/arrested');
-                return;
-            }
-            setMessage({ type: 'error', text: result.error || '更新失败' });
         }
     };
 
@@ -2159,16 +2130,17 @@ export const CharacterManagerPage: React.FC = () => {
                 summaryOwnerId={user?.id}
                 scopeKey={`${user?.id ?? ''}:${authSource ?? ''}`}
                 busy={cloudWrite.busy && !cloudWrite.replacementPreparing}
+                metadataGuard={{ onBusyChange: (value) => { cloudOperationBusyRef.current = value; }, isBlocked: () => cloudWrite.busy }}
+                onMetadataSaved={() => { void loadUserDataCards(); void loadUserBadges(); }}
                 refreshKey={cardsRefresh}
-                editingCard={editingCard}
+
                 currentPage={currentPage}
                 cardsPerPage={cardsPerPage}
                 onPageChange={setCurrentPage}
-                onEditCard={setEditingCard}
-                onUpdateCard={handleUpdateDataCard}
+
                 onDeleteCard={handleDeleteDataCard}
                 onLoadCard={handleLoadDataCard}
-                onCancelEdit={() => setEditingCard(null)}
+
             onShareCard={handleShareDataCard}
             onReplaceCard={handleReplaceExistingCard}
             allowHistoryReplace={true}

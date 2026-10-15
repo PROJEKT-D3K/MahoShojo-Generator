@@ -7,7 +7,7 @@ import { DesktopOwnedCardsModal } from '../src/features/cloud-save/owned-cards-m
 const mocks = vi.hoisted(() => ({ accountId: 7, epoch: 1, details: false, fetch: vi.fn(), load: vi.fn(), capacity: vi.fn(), createPort: vi.fn(), download: vi.fn() }));
 vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openContent: vi.fn() }) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
-vi.mock('../src/platform/private-cloud-save', () => ({ readPrivateCloudCapacity: mocks.capacity }));
+vi.mock('../src/platform/private-cloud-save', async (original) => ({ ...await original<typeof import('../src/platform/private-cloud-save')>(), readPrivateCloudCapacity: mocks.capacity }));
 vi.mock('../src/features/account/use-desktop-cloud-session', () => ({ useDesktopCloudSession: () => ({ state: { account: { userId: mocks.accountId }, verification: 'verified', authFlow: { kind: 'idle' } }, store: {
   getCredentialEpoch: () => mocks.epoch, getSnapshot: () => ({ account: { userId: mocks.accountId }, verification: 'verified', authFlow: { kind: 'idle' } }),
 } }) }));
@@ -50,4 +50,21 @@ it('真实我的卡详情直接消费已加载私有正文，不额外 HTTP，�
     expect(mocks.load).toHaveBeenCalledOnce(); expect(fetch).not.toHaveBeenCalled(); expect(button('下载 JSON')).toBeDefined();
     mocks.epoch += 1; await render(); expect(button('下载 JSON')).toBeUndefined();
   } finally { vi.unstubAllGlobals(); }
+});
+
+
+it('Desktop真实管理入口使用共源元信息owner与Native固定route，unknown保留输入且不重试', async () => {
+  const target = { id: 'owned', type: 'character', name: '权威名称', description: '云端描述', isPublic: 0, reviewStatus: 'approved', hasPendingUpdate: true, version: 'a'.repeat(64) };
+  const busy = vi.fn(); const invoke = vi.fn(async (_command, { request }: any) => request.routeId === 'data-cards.replace-target.query'
+    ? { status: 200, body: { success: true, ownerUserId: 7, accountFenceVersion: 1, target } }
+    : { status: 503, body: {} });
+  await act(async () => root.render(<DesktopOwnedCardsModal isOpen expectedUserId={7} onClose={() => {}} invokeFn={invoke} metadataEditing={{ isBlocked: () => false, onBusyChange: busy }} />));
+  await act(async () => button('修改信息').click()); expect(document.querySelector<HTMLInputElement>('[aria-label=名称]')?.value).toBe('权威名称'); expect(mocks.load).not.toHaveBeenCalled();
+  await act(async () => { button('保存').click(); button('保存').click(); });
+  const writes = invoke.mock.calls.filter(([, { request }]) => request.routeId === 'data-cards.metadata'); expect(writes).toHaveLength(1);
+  expect(writes[0][1]).toEqual({ request: { routeId: 'data-cards.metadata', expectedUserId: 7, body: { id: 'owned', expectedVersion: target.version, expectedUserId: 7, name: target.name, description: target.description, isPublic: 0 } } });
+  expect(button('保存').disabled).toBe(true); expect(document.body.textContent).toContain('修改结果不确定'); expect(busy).toHaveBeenLastCalledWith(false);
+  await act(async () => button('重新读取云端信息').click()); await act(async () => button('已核对，使用此版本继续编辑').click());
+  invoke.mockResolvedValueOnce({ status: 200, body: { success: true, id: 'owned', ownerUserId: 7, accountFenceVersion: 1, metadataVersion: 1 } } as never);
+  await act(async () => button('保存').click()); expect(document.body.textContent).toContain('数据卡信息已更新'); expect(mocks.fetch).toHaveBeenCalledTimes(2);
 });

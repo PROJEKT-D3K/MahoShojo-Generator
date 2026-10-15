@@ -59,7 +59,6 @@ export default function SaveToCloudButton({
   const [userCapacity, setUserCapacity] = useState<number | undefined>(undefined);
   const [userUsedSlots, setUserUsedSlots] = useState<number | undefined>(undefined);
   const [showDataCardsForReplace, setShowDataCardsForReplace] = useState(false);
-  const [replaceEditingCard, setReplaceEditingCard] = useState<any | null>(null);
   const [replaceCurrentPage, setReplaceCurrentPage] = useState(1);
   const [replacementTarget, setReplacementTarget] = useState<OwnedDataCardReplacementTarget | null>(null);
   const [replacementOpen, setReplacementOpen] = useState(false);
@@ -244,27 +243,6 @@ export default function SaveToCloudButton({
     } finally { if (isCurrent()) { busy.current = false; setIsSaving(false); } }
   };
 
-  const handleUpdateCardInfo = async (id: string, name: string, description: string, isPublic?: number) => {
-    const textToCheck = `${name} ${description}`;
-    const sensitiveWordResult = await quickCheck(textToCheck);
-    if (sensitiveWordResult.hasSensitiveWords) {
-      navigateToArrested();
-      return;
-    }
-
-    const result = await dataCardApi.updateCard(id, name, description, isPublic);
-    if (result.success) {
-      setReplaceEditingCard(null);
-      loadUserDataCards();
-    } else {
-      if (result.error === 'SENSITIVE_WORD_DETECTED' || (result as any).redirect === '/arrested') {
-        navigateToArrested();
-        return;
-      }
-      alert(result.error || '更新失败');
-    }
-  };
-
   const handleDeleteCard = async (id: string) => {
     if (!window.confirm('确认删除此数据卡？')) return;
     try {
@@ -389,7 +367,6 @@ export default function SaveToCloudButton({
         return;
       }
       setShowDataCardsForReplace(true);
-      setReplaceEditingCard(null);
       setReplaceCurrentPage(1);
       void loadUserDataCards();
     })();
@@ -470,20 +447,19 @@ export default function SaveToCloudButton({
           if (isSaving) return;
           operation.current++; busy.current = false; setIsPreparing(false);
           setShowDataCardsForReplace(false);
-          setReplaceEditingCard(null);
         }}
         dataCards={[]}
         summaryOwnerId={user?.id}
+        onMetadataSaved={() => void loadUserDataCards()}
         refreshKey={cardsRefresh}
-        editingCard={replaceEditingCard}
+
         currentPage={replaceCurrentPage}
         cardsPerPage={8}
         onPageChange={setReplaceCurrentPage}
-        onEditCard={setReplaceEditingCard}
-        onUpdateCard={handleUpdateCardInfo}
+
         onDeleteCard={handleDeleteCard}
         onLoadCard={() => {}}
-        onCancelEdit={() => setReplaceEditingCard(null)}
+
         onReplaceCard={handleReplaceFromDataCards}
         userCapacity={userCapacity}
         userUsedSlots={userUsedSlots}

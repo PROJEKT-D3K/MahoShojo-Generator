@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DataCard from '../card-library/DataCard';
 import EditCardForm from './EditCardForm';
+import { useOwnedCardMetadataEditor, type OwnedCardMetadataPort } from './owned-card-metadata';
 import { inferDataCardTemplate as inferTemplate } from '@mahoshojo/domain/data-cards';
 import { useCardLibrarySummaryPage } from '../card-library/use-card-library-summary-page';
 import { normalizePublicVisibilityValue } from '../card-library/read-mappers';
@@ -16,6 +17,7 @@ export interface DataCardsModalProps {
   /** 同账号凭据代际也隔离列表、详情与未完成的动作。 */
   scopeKey?: string | number;
   busy?: boolean;
+  metadataEditor?: OwnedCardMetadataPort;
   isOpen: boolean;
   onClose: () => void;
   dataCards: any[];
@@ -203,7 +205,8 @@ export function DataCardsModal(props: DataCardsModalProps) {
 
 function DataCardsModalScope({
   host,
-  busy = false,
+  busy: suppliedBusy = false,
+  metadataEditor,
   isOpen,
   onClose,
   dataCards: suppliedCards,
@@ -238,7 +241,9 @@ function DataCardsModalScope({
   hideEditData = false,
   allowHistoryReplace = false,
 }: DataCardsModalProps) {
-  const close = () => { if (!busy) onClose(); };
+  const metadata = useOwnedCardMetadataEditor(metadataEditor, isOpen);
+  const busy = suppliedBusy || metadata.isBusy();
+  const close = () => { if (!suppliedBusy && !metadata.isBusy()) { metadata.cancel(); onClose(); } };
   const { dialogRef, initialFocusRef, titleId } = useBaseModalAccessibility({ isOpen, onClose: close });
   const [selectedCard, setSelectedCard] = useState<any | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -283,14 +288,14 @@ function DataCardsModalScope({
   const [actionError, setActionError] = useState<string | null>(null);
   const actionController = useRef<AbortController | null>(null);
   const { reload: reloadSummary } = page;
-  useEffect(() => { if (refreshKey) reloadSummary(); }, [refreshKey, reloadSummary]);
+  useEffect(() => { if (refreshKey || metadata.refresh) reloadSummary(); }, [refreshKey, metadata.refresh, reloadSummary]);
   useEffect(() => {
     if (!isOpen) { setSelectedCard(null); setShowDetailsModal(false); setActionError(null); }
     return () => { actionController.current?.abort(); actionController.current = null; };
   }, [isOpen]);
   const withFullCard = async (card: any, action: (full: any) => void | Promise<void>) => {
     // 重复点击不派生第二个同源读取/动作；关闭或账号代际变化会中止认领。
-    if (busy || actionController.current !== null) return;
+    if (suppliedBusy || metadata.isBusy() || actionController.current !== null) return;
     const controller = new AbortController();
     actionController.current = controller;
     setActionError(null);
@@ -580,7 +585,7 @@ function DataCardsModalScope({
           )}
           {onOpenRecycleBin && (
             <button
-              onClick={onOpenRecycleBin}
+              onClick={() => { if (!suppliedBusy && !metadata.isBusy()) onOpenRecycleBin(); }}
               disabled={busy}
               className="px-3 py-1.5 text-xs bg-gray-100 text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-200 transition-colors"
             >
@@ -711,6 +716,26 @@ function DataCardsModalScope({
                 )}
               </div>
 
+              {metadata.status && <p role="status" className="mb-3 text-sm text-green-700">{metadata.status}</p>}
+              {metadata.selection && <div className="mb-4" aria-label="编辑数据卡信息">
+                <EditCardForm card={{ ...metadata.selection.card, is_public: metadata.selection.target?.isPublic ?? metadata.selection.card.is_public }}
+                  showTemplate={false} value={metadata.selection.draft} onChange={metadata.change}
+                  onSave={() => void metadata.save()} onCancel={metadata.cancel} busy={busy}
+                  submitDisabled={metadata.selection.phase !== 'editing'} error={metadata.selection.error}
+                  supplementaryContent={<>
+                    {(metadata.selection.phase === 'reading' || metadata.selection.phase === 'checking') && <p role="status">正在读取云端信息…</p>}
+                    {['uncertain', 'conflict'].includes(metadata.selection.phase) && <div className="space-y-2 text-sm">
+                      <button type="button" onClick={() => void metadata.check()}>重新读取云端信息</button>
+                      {metadata.selection.candidate && <div className="rounded border p-2">
+                        <p>当前云端名称：{metadata.selection.candidate.name}</p>
+                        <p>当前云端描述：{metadata.selection.candidate.description || '（空）'}</p>
+                        <p>当前云端可见性：{metadata.selection.candidate.isPublic === -1 ? '封禁' : metadata.selection.candidate.isPublic === 1 ? '公开' : '私有'}</p>
+                        <p>此信息仅供核对，不能确认上一请求的结果。编辑输入仍保留。</p>
+                        <button type="button" onClick={metadata.acceptCandidate}>已核对，使用此版本继续编辑</button>
+                      </div>}
+                    </div>}
+                  </>} />
+              </div>}
               {/* 数据卡网格 */}
               {filteredAndSortedCards.length === 0 ? (
                 <p role="status" className="text-gray-500 text-center py-8">{loading || (serverPaged && page.status === 'idle') ? '正在加载数据卡…' : error ? '数据卡未能加载，请重试。' : total === 0 ? emptyText : '暂无匹配的数据卡'}</p>
@@ -764,9 +789,9 @@ function DataCardsModalScope({
                             const dataToDownload = JSON.parse(card.data);
                             return host.downloadJson(`${card.name}.json`, JSON.stringify(dataToDownload, null, 2));
                           })}
-                          onEditInfo={onEditCard ? () => void withFullCard(card, onEditCard) : undefined}
+                          onEditInfo={metadataEditor ? () => { if (!suppliedBusy && actionController.current === null) void metadata.begin(card); } : onEditCard ? () => void withFullCard(card, onEditCard) : undefined}
                           onEditData={!hideEditData && onLoadCard ? () => void withFullCard(card, onLoadCard) : undefined}
-                          onDelete={onDeleteCard ? () => onDeleteCard(card.id) : undefined}
+                          onDelete={onDeleteCard ? () => { if (!suppliedBusy && !metadata.isBusy()) onDeleteCard(card.id); } : undefined}
                           onShare={onShareCard ? () => void withFullCard(card, onShareCard) : undefined}
                           onReplace={
                             onReplaceCard && (card.type !== 'history' || allowHistoryReplace)

@@ -71,3 +71,22 @@ export async function replaceOwnedDataCardAtomically(db: AppDrizzleDb, row: Owne
         WHERE id = ${row.id} AND user_id = ${row.user_id} AND ${condition} RETURNING id`);
   return rows.length === 1;
 }
+
+/** 元信息与完整目标/待审快照在同一语句内比较；不写正文、类型、审核状态或待审行。 */
+export async function updateOwnedDataCardMetadataAtomically(
+  db: AppDrizzleDb,
+  row: OwnedReplacementSnapshot,
+  metadata: { name: string; description: string; isPublic: OnlineDataCardVisibility },
+): Promise<boolean> {
+  // 封禁状态是服务端约束，不能由客户端传入的 0/1 解除。
+  const visibility = row.is_public === -1 ? -1 : metadata.isPublic;
+  const rows = await db.all<{ id: string }>(sql`
+    UPDATE data_cards SET name = ${metadata.name}, description = ${metadata.description},
+      is_public = ${visibility},
+      public_since = CASE WHEN CAST(is_public AS INTEGER) <> ${visibility}
+        THEN (CASE WHEN ${visibility} = 1 THEN CURRENT_TIMESTAMP ELSE NULL END)
+        ELSE public_since END,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${row.id} AND user_id = ${row.user_id} AND ${snapshotCondition(row)} RETURNING id`);
+  return rows.length === 1;
+}

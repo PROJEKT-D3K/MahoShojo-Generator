@@ -2986,6 +2986,12 @@ const CARD_LIBRARY_ROUTES: &[CloudRoute] = &[
         auth: CloudRouteAuth::Required,
     },
     CloudRoute {
+        id: "data-cards.metadata",
+        method: reqwest::Method::PUT,
+        path: "/api/data-cards/metadata-owned",
+        auth: CloudRouteAuth::Required,
+    },
+    CloudRoute {
         id: "favorites.query",
         method: reqwest::Method::GET,
         path: "/api/favorites",
@@ -3089,13 +3095,23 @@ fn lookup_cloud_route(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudRouteRequest {
     pub route_id: String,
-    /// 旧读取兼容可选；新建、替换及替换目标查询必须由 caller 冻结账号后提供。
+    /// 旧读取兼容可选；安全写入及所属卡预览必须由 caller 冻结账号后提供。
     #[serde(default, deserialize_with = "deserialize_expected_user_id")]
     pub expected_user_id: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_cloud_query")]
     pub query: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     pub body: Option<serde_json::Value>,
+}
+
+fn deserialize_cloud_query<'de, D>(
+    deserializer: D,
+) -> Result<Option<std::collections::BTreeMap<String, String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // TS optional() 接受缺省但拒绝显式 null，保留字段是否被携带的边界。
+    std::collections::BTreeMap::deserialize(deserializer).map(Some)
 }
 
 fn deserialize_expected_user_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
@@ -3152,12 +3168,13 @@ async fn read_bounded_json(
     serde_json::from_slice(&buffer).map_err(|_| CloudError::invalid_response(context))
 }
 
-/// 新建/替换只走受服务端账号围栏保护的固定入口；不兼容降级旧写接口。
+/// 所属卡写入只走受服务端账号围栏保护的固定入口；不兼容降级旧写接口。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OwnedCardOperation {
     Create,
     ReplacementTarget,
     Replace,
+    Metadata,
 }
 
 fn owned_card_operation(route_id: &str) -> Option<OwnedCardOperation> {
@@ -3165,12 +3182,13 @@ fn owned_card_operation(route_id: &str) -> Option<OwnedCardOperation> {
         "data-cards.create" => Some(OwnedCardOperation::Create),
         "data-cards.replace-target.query" => Some(OwnedCardOperation::ReplacementTarget),
         "data-cards.replace" => Some(OwnedCardOperation::Replace),
+        "data-cards.metadata" => Some(OwnedCardOperation::Metadata),
         _ => None,
     }
 }
 
 /// 镜像 Zod string.trim() 的 ECMAScript 空白集合；Rust trim() 会额外吞掉
-/// U+0085，却不移除 U+FEFF，不能用于跨运行时 ID 正规化。
+/// U+0085，却不移除 U+FEFF，不能用于跨运行时 ID/名称正规化。
 fn trim_card_id(value: &str) -> &str {
     value.trim_matches(|c: char| {
         matches!(c,
@@ -3244,10 +3262,11 @@ fn prepare_owned_card_request(
         query.insert("expectedUserId".into(), owner.to_string());
         return Ok(());
     }
-    if request
-        .query
-        .as_ref()
-        .is_some_and(|query| !query.is_empty())
+    if (operation == OwnedCardOperation::Metadata && request.query.is_some())
+        || request
+            .query
+            .as_ref()
+            .is_some_and(|query| !query.is_empty())
     {
         return Err(invalid_request("云端写入不允许额外查询参数"));
     }
@@ -3279,6 +3298,38 @@ fn prepare_owned_card_request(
         }
         let id = trim_card_id(body["id"].as_str().expect("validated id")).to_owned();
         body.insert("id".into(), serde_json::Value::String(id));
+    }
+    if operation == OwnedCardOperation::Metadata {
+        if body.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "id" | "expectedVersion" | "name" | "description" | "isPublic" | "expectedUserId"
+            )
+        }) || !body.get("id").is_some_and(valid_card_id)
+            || !body
+                .get("expectedVersion")
+                .is_some_and(valid_replacement_version)
+            || !body
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|name| {
+                    (1..=20).contains(&trim_card_id(name).encode_utf16().count())
+                })
+            || body
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|description| description.encode_utf16().count() > 300)
+            || !body
+                .get("isPublic")
+                .and_then(serde_json::Value::as_f64)
+                .is_some_and(|visibility| [-1.0, 0.0, 1.0].contains(&visibility))
+        {
+            return Err(invalid_request("元数据编辑只允许目标 ID、版本、名称、描述和可见性"));
+        }
+        for field in ["id", "name"] {
+            let value = trim_card_id(body[field].as_str().expect("validated string")).to_owned();
+            body.insert(field.into(), serde_json::Value::String(value));
+        }
     }
     body.insert("expectedUserId".into(), serde_json::Value::from(owner));
     Ok(())
@@ -3320,6 +3371,24 @@ fn validate_owned_card_response(
                         .map(trim_card_id)
                 && body["replacementVersion"].as_f64() == Some(1.0)
                 && body["pendingReview"].is_boolean()
+        }
+        OwnedCardOperation::Metadata => {
+            body.as_object().is_some_and(|body| {
+                body.keys().all(|key| {
+                    matches!(
+                        key.as_str(),
+                        "success" | "id" | "accountFenceVersion" | "ownerUserId" | "metadataVersion"
+                    )
+                })
+            })
+                && valid_card_id(&body["id"])
+                && body["id"].as_str().map(trim_card_id)
+                    == request
+                        .body
+                        .as_ref()
+                        .and_then(|request| request["id"].as_str())
+                        .map(trim_card_id)
+                && body["metadataVersion"].as_f64() == Some(1.0)
         }
         OwnedCardOperation::ReplacementTarget => {
             let target = &body["target"];
@@ -3455,10 +3524,10 @@ async fn dispatch_cloud_route(
         url.query_pairs_mut().extend_pairs(query.iter());
     }
 
-    // 新建/替换不自动重放；连 reqwest 默认协议级 NACK 重试也禁用。
+    // 所属卡写入不自动重放；连 reqwest 默认协议级 NACK 重试也禁用。
     let mutation_http = if matches!(
         owned_operation,
-        Some(OwnedCardOperation::Create | OwnedCardOperation::Replace)
+        Some(OwnedCardOperation::Create | OwnedCardOperation::Replace | OwnedCardOperation::Metadata)
     ) {
         Some(
             cloud_client_builder()
@@ -7189,6 +7258,9 @@ mod tests {
                 Some(OwnedCardOperation::Replace) => Some(
                     serde_json::json!({"id":"owned-card","type":"character","expectedVersion":"a".repeat(64),"data":{}}),
                 ),
+                Some(OwnedCardOperation::Metadata) => Some(
+                    serde_json::json!({"id":"owned-card","expectedVersion":"a".repeat(64),"name":"metadata-name","description":"metadata-description","isPublic":0}),
+                ),
                 _ => None,
             },
         }
@@ -7278,6 +7350,13 @@ mod tests {
                     assert_eq!(request.query.as_ref().unwrap()["expectedUserId"], "7");
                 } else {
                     assert_eq!(request.body.as_ref().unwrap()["expectedUserId"], 7);
+                    if operation == OwnedCardOperation::Metadata {
+                        let body = request.body.as_ref().unwrap();
+                        assert_eq!(body["name"], trim_card_id(wire["body"]["name"].as_str().unwrap()));
+                        assert_eq!(body["description"], wire["body"]["description"]);
+                        assert_eq!(body["isPublic"], wire["body"]["isPublic"]);
+                        assert_eq!(body.as_object().unwrap().len(), 6);
+                    }
                 }
             }
             for wire in fixture["cardLibrary"]["ownedRequests"]["invalid"]
@@ -7350,9 +7429,20 @@ mod tests {
                     } else {
                         let body = body.unwrap();
                         assert_eq!(body["expectedUserId"], 7);
-                        assert_eq!(body["data"]["nested"]["preserved"], true);
+                        if route.id == "data-cards.metadata" {
+                            assert_eq!(body.as_object().unwrap().len(), 6);
+                            assert!(body.get("data").is_none());
+                            assert!(body.get("type").is_none());
+                            assert_eq!(body["name"], "metadata-name");
+                            assert_eq!(body["description"], "metadata-description");
+                            assert_eq!(body["isPublic"], 0);
+                        } else {
+                            assert_eq!(body["data"]["nested"]["preserved"], true);
+                        }
                         if route.method == reqwest::Method::PUT {
-                            assert_eq!(body.as_object().unwrap().len(), 5);
+                            if route.id == "data-cards.replace" {
+                                assert_eq!(body.as_object().unwrap().len(), 5);
+                            }
                             assert_eq!(body["id"], "owned-card");
                             assert_eq!(body["expectedVersion"], "a".repeat(64));
                         }
@@ -7384,6 +7474,7 @@ mod tests {
             for route in [
                 "data-cards.create",
                 "data-cards.replace",
+                "data-cards.metadata",
                 "data-cards.replace-target.query",
             ] {
                 for status in [307, 308, 400, 401, 403, 404, 405, 409, 413, 429, 500, 503] {
@@ -7419,7 +7510,7 @@ mod tests {
     #[test]
     fn card_library_owned_dropping_inflight_response_closes_socket_without_replay() {
         rt().block_on(async {
-            for route_id in ["data-cards.create", "data-cards.replace"] {
+            for route_id in ["data-cards.create", "data-cards.replace", "data-cards.metadata"] {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let state = CloudState::with_origin(&format!("http://{}", listener.local_addr().unwrap()));
                 let secrets = MemorySecrets::new();
@@ -7484,6 +7575,42 @@ mod tests {
     }
 
     #[test]
+    fn card_library_metadata_sends_only_normalized_metadata_and_preserves_conflict_snapshot() {
+        rt().block_on(async {
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("metadata-conflict");
+            store_session(&secrets, &stored_test_session()).unwrap();
+            *server.card_response_override.lock().unwrap() =
+                Some((409, r#"{"error":"TARGET_CHANGED"}"#.into()));
+            for (index, visibility) in [-1, 0, 1].into_iter().enumerate() {
+                let mut request = card_request("data-cards.metadata");
+                let body = request.body.as_mut().unwrap();
+                body["id"] = serde_json::json!("\u{feff} owned-card \u{feff}");
+                body["name"] = serde_json::json!("\u{feff} metadata-name \u{feff}");
+                body["description"] = serde_json::json!("  preserve description \n");
+                body["isPublic"] = serde_json::json!(visibility);
+                let response = cloud_card_library_request(&state, &secrets, cache.get(), request)
+                    .await
+                    .unwrap();
+                assert_eq!(response.status, 409);
+                assert_eq!(response.body["error"], "TARGET_CHANGED");
+                assert!(response.cache.is_none());
+                let (target, head, body) = server.last_card_request.lock().unwrap().clone().unwrap();
+                assert_eq!(target, "/api/data-cards/metadata-owned");
+                assert!(head.starts_with("PUT /api/data-cards/metadata-owned HTTP/1.1"));
+                assert!(head.contains("better-auth.session_token=native.tok"));
+                assert_eq!(body.unwrap(), serde_json::json!({
+                    "expectedUserId": 7, "id": "owned-card", "expectedVersion": "a".repeat(64),
+                    "name": "metadata-name", "description": "  preserve description \n", "isPublic": visibility
+                }));
+                assert_eq!(server.card_request_count.load(std::sync::atomic::Ordering::SeqCst), index + 1);
+            }
+        });
+    }
+
+    #[test]
     fn card_library_owned_html_errors_keep_status_but_success_requires_ack() {
         rt().block_on(async {
             let server = spawn_mock_server();
@@ -7495,6 +7622,7 @@ mod tests {
             for route in [
                 "data-cards.create",
                 "data-cards.replace",
+                "data-cards.metadata",
                 "data-cards.replace-target.query",
             ] {
                 for status in [404, 405, 409, 500, 200, 201] {
@@ -7537,7 +7665,7 @@ mod tests {
             store_session(&secrets, &stored_test_session()).unwrap();
             *server.card_response_override.lock().unwrap() =
                 Some((409, r#"{"error":"TARGET_CHANGED"}"#.into()));
-            for route in ["data-cards.replace-target.query", "data-cards.replace"] {
+            for route in ["data-cards.replace-target.query", "data-cards.replace", "data-cards.metadata"] {
                 for (raw, expected) in [
                     ("\u{feff} owned-card \u{feff}", "owned-card"),
                     ("\u{0085}owned-card\u{0085}", "\u{0085}owned-card\u{0085}"),
@@ -7620,6 +7748,7 @@ mod tests {
                 "data-cards.create",
                 "data-cards.replace-target.query",
                 "data-cards.replace",
+                "data-cards.metadata",
                 "user-capacity.query",
             ] {
                 for expected in [Some(7), Some(8)] {
@@ -7636,6 +7765,7 @@ mod tests {
                 "data-cards.create",
                 "data-cards.replace-target.query",
                 "data-cards.replace",
+                "data-cards.metadata",
                 "user-capacity.query",
             ] {
                 let mut request = card_request(route);
@@ -7708,7 +7838,7 @@ mod tests {
     #[test]
     fn card_library_owned_truncated_responses_are_network_errors_without_replay() {
         rt().block_on(async {
-          for route in ["data-cards.create", "data-cards.replace", "data-cards.replace-target.query"] {
+          for route in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.replace-target.query"] {
             for status in [200, 500] {
             use std::io::{Read, Write};
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -7755,6 +7885,7 @@ mod tests {
                 for (route, expected) in [
                     ("data-cards.create", Some(7)),
                     ("data-cards.replace", Some(7)),
+                    ("data-cards.metadata", Some(7)),
                     ("data-cards.replace-target.query", Some(7)),
                     ("user-capacity.query", Some(7)),
                 ] {

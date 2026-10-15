@@ -115,3 +115,17 @@ export const OwnedDataCardReplacementTargetResponseSchema = z.object({
   ownerUserId: DataCardExpectedOwnerSchema,
   target: OwnedDataCardReplacementTargetSchema,
 });
+
+// 元信息更新复用目标快照，但独立于正文替换，不接受 data/type/审核字段。
+export const OwnedDataCardMetadataRequestSchema = z.object({
+  expectedUserId: DataCardExpectedOwnerSchema,
+  id: z.string().trim().min(1).max(200),
+  expectedVersion: OwnedDataCardReplacementVersionSchema,
+  name: z.string().trim().min(1).max(20),
+  description: z.string().max(300),
+  isPublic: OnlineDataCardVisibilitySchema,
+}).strict();
+export type OwnedDataCardMetadataRequest = z.infer<typeof OwnedDataCardMetadataRequestSchema>;
+export const OwnedDataCardMetadataAcknowledgementSchema = OwnedDataCardCreateAcknowledgementSchema.extend({
+  metadataVersion: z.literal(1),
+}).strict();

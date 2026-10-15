@@ -1,4 +1,4 @@
-import { OnlineDataCardTypeSchema, OwnedDataCardCreateAcknowledgementSchema, OwnedDataCardReplaceAcknowledgementSchema,
+import { OwnedDataCardMetadataRequestSchema, OwnedDataCardMetadataAcknowledgementSchema, OnlineDataCardTypeSchema, OwnedDataCardCreateAcknowledgementSchema, OwnedDataCardReplaceAcknowledgementSchema,
   OwnedDataCardReplacementTargetResponseSchema, type OnlineDataCardType, type OwnedDataCardReplacementTarget } from '@mahoshojo/contracts/data-cards';
 import { requestCardLibraryRoute } from './card-library-bridge';
 import { DesktopCloudError, type InvokeFn } from './cloud-bridge';
@@ -73,5 +73,26 @@ export async function replaceCloudCard(invoke: InvokeFn, expectedUserId: number,
   } catch (cause) {
     return localRejection(cause) ? { kind: 'rejected', message: '账号状态或替换数据已改变，请重新确认；输入已保留' }
       : { kind: 'uncertain', message: CLOUD_REPLACE_UNCERTAIN_MESSAGE };
+  }
+}
+
+/** Metadata is a separate fixed write route; no body replacement or legacy retry. */
+export async function updateCloudCardMetadata(invoke: InvokeFn, expectedUserId: number, target: OwnedDataCardReplacementTarget, draft: {
+  name: string; description: string; isPublic: number;
+}): Promise<{ kind: 'saved' } | { kind: 'rejected' | 'conflict' | 'uncertain'; message: string }> {
+  const uncertain = { kind: 'uncertain' as const, message: '修改结果不确定，服务器可能已保存。输入已保留，请重新读取云端信息并核对；不会自动重发。' };
+  const parsed = OwnedDataCardMetadataRequestSchema.safeParse({ ...draft, expectedUserId, id: target.id, expectedVersion: target.version });
+  if (!parsed.success) return { kind: 'rejected', message: '修改参数无效，尚未发送请求；请检查名称和描述' };
+  try {
+    const response = await requestCardLibraryRoute(invoke, { routeId: 'data-cards.metadata', expectedUserId, body: parsed.data });
+    const body = record(response.body);
+    const ack = OwnedDataCardMetadataAcknowledgementSchema.safeParse(body);
+    if (response.status === 200 && ack.success && ack.data.ownerUserId === expectedUserId && ack.data.id === target.id) return { kind: 'saved' };
+    if (response.status === 409 && ['ACCOUNT_MISMATCH', 'TARGET_CHANGED'].includes(String(body?.error))) return { kind: 'conflict', message: '账号或数据卡已变化，本次未修改。请重新读取并核对；输入已保留' };
+    if ([404, 405].includes(response.status)) return { kind: 'rejected', message: '目标不存在或服务端暂不支持安全信息修改，请保留输入' };
+    if ([400, 401, 403, 413, 429].includes(response.status)) return { kind: 'rejected', message: typeof body?.error === 'string' ? body.error : '修改被拒绝，输入已保留' };
+    return uncertain;
+  } catch (cause) {
+    return localRejection(cause) ? { kind: 'conflict', message: '账号状态或修改参数已变化，尚未发送请求；输入已保留' } : uncertain;
   }
 }

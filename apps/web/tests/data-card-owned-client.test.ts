@@ -50,3 +50,29 @@ describe('owned replacement Web client', () => {
   });
 
 });
+
+const metadataAck = { success: true, id: 'c', accountFenceVersion: 1, ownerUserId: 7, metadataVersion: 1 };
+const metadataDraft = { name: '新名称', description: '描述', isPublic: 1 };
+describe('owned metadata Web client', () => {
+  test('writes only strict metadata to fixed owned endpoint with frozen owner and version', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json(metadataAck)); vi.stubGlobal('fetch', fetcher);
+    expect(await dataCardApi.updateOwnedCardMetadata(target, metadataDraft, guard)).toEqual({ success: true });
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('/api/data-cards/metadata-owned', expect.objectContaining({ method: 'PUT', redirect: 'error', credentials: 'same-origin' }));
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ ...metadataDraft, id: 'c', expectedUserId: 7, expectedVersion: target.version });
+  });
+  test.each([[200, { ...metadataAck, ownerUserId: 8 }], [200, { ...metadataAck, id: 'other' }], [200, { ...metadataAck, metadataVersion: 2 }], [200, { ...metadataAck, extra: true }], [201, metadataAck], [500, {}], [503, {}], [409, { error: 'other' }]])('ambiguous ack/status %s never auto-replays or falls back', async (status, body) => {
+    const fetcher = vi.fn(async () => Response.json(body, { status: status as number })); vi.stubGlobal('fetch', fetcher);
+    expect(await dataCardApi.updateOwnedCardMetadata(target, metadataDraft, guard)).toMatchObject({ success: false, uncertain: true }); expect(fetcher).toHaveBeenCalledOnce();
+  });
+  test.each([400, 401, 403, 404, 405, 413, 429])('known refusal %s retains input without legacy fallback', async (status) => {
+    const fetcher = vi.fn(async () => Response.json({}, { status })); vi.stubGlobal('fetch', fetcher);
+    expect(await dataCardApi.updateOwnedCardMetadata(target, metadataDraft, guard)).toMatchObject({ success: false }); expect(fetcher).toHaveBeenCalledOnce(); expect(metadataDraft.name).toBe('新名称');
+  });
+  test('pre-dispatch owner mismatch sends nothing; transport failure is unknown; late owner change cannot acknowledge', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('offline')); vi.stubGlobal('fetch', fetcher);
+    expect(await dataCardApi.updateOwnedCardMetadata(target, metadataDraft, { ...guard, isCurrent: () => false })).toMatchObject({ conflict: true }); expect(fetcher).not.toHaveBeenCalled();
+    expect(await dataCardApi.updateOwnedCardMetadata(target, metadataDraft, guard)).toMatchObject({ uncertain: true }); expect(fetcher).toHaveBeenCalledOnce();
+    fetcher.mockImplementation(async () => { vi.spyOn(authStorage, 'getAuth').mockResolvedValue({ ...auth, userId: 8 }); return Response.json(metadataAck); });
+    expect(await dataCardApi.updateOwnedCardMetadata(target, metadataDraft, guard)).toMatchObject({ uncertain: true }); expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});

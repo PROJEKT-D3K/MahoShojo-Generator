@@ -2,11 +2,11 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ state: {} as any, epoch: 0, busy: (() => false) as () => boolean }));
+const mocks = vi.hoisted(() => ({ state: {} as any, epoch: 0, metadata: null as any, busy: (() => false) as () => boolean }));
 vi.mock('../src/features/account/use-desktop-cloud-session', () => ({ useDesktopCloudSession: () => ({ state: mocks.state, store: { getSnapshot: () => mocks.state, getCredentialEpoch: () => mocks.epoch } }) }));
 vi.mock('../src/app/useLeaveGuard', () => ({ useLeaveGuard: (busy: () => boolean) => { mocks.busy = busy; return { ready: true, message: null }; } }));
 vi.mock('../src/platform/card-library-host', () => ({ useDesktopCardLibraryHost: () => ({}) }));
-vi.mock('../src/features/cloud-save/owned-cards-modal', () => ({ DesktopOwnedCardsModal: ({ isOpen, onClose, selectedType, onReplaceCard }: any) => isOpen ? <div data-testid="own-cloud-library" data-type={selectedType} data-tab="my" data-tabs="my"><button onClick={onClose}>关闭卡库</button>{onReplaceCard && <button onClick={() => void onReplaceCard({ id: 'target', type: selectedType, name: '目标' }).catch(() => {} )}>选择目标</button>}</div> : null }));
+vi.mock('../src/features/cloud-save/owned-cards-modal', () => ({ DesktopOwnedCardsModal: ({ isOpen, onClose, selectedType, onReplaceCard, metadataEditing }: any) => { mocks.metadata = metadataEditing; return isOpen ? <div data-testid="own-cloud-library" data-type={selectedType} data-tab="my" data-tabs="my"><button onClick={onClose}>关闭卡库</button>{onReplaceCard && <button onClick={() => void onReplaceCard({ id: 'target', type: selectedType, name: '目标' }).catch(() => {} )}>选择目标</button>}</div> : null; } }));
 import { PrivateResultSave } from '../src/features/cloud-save/private-result-save';
 let root: Root; let container: HTMLDivElement;
 const invoke = vi.fn(); const onBusyChange = vi.fn();
@@ -168,4 +168,11 @@ describe.each([undefined, 'generation-result'] as const)('private result cloud-s
     expect(document.body.textContent).not.toContain('云端数据卡已替换'); expect(document.querySelector('[role=dialog]')).toBeNull(); expect(replacements()).toHaveLength(1);
   });
 
+  it('元信息编辑在途复用同一个页面离开守卫并同步上报busy', async () => {
+  await render(); expect(mocks.metadata).not.toBeNull();
+  await act(async () => mocks.metadata.onBusyChange(true)); expect(mocks.busy()).toBe(true); expect(onBusyChange).toHaveBeenLastCalledWith(true);
+  expect(button('保存到云端').disabled).toBe(true); expect(button('替换已有').disabled).toBe(true);
+  expect(mocks.metadata.isBlocked()).toBe(false);
+  await act(async () => mocks.metadata.onBusyChange(false)); expect(mocks.busy()).toBe(false); expect(onBusyChange).toHaveBeenLastCalledWith(false);
+});
 });

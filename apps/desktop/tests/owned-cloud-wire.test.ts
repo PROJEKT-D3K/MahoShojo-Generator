@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from 'vitest';
 import type { DesktopCardLibraryRequest } from '@mahoshojo/contracts/desktop-cloud';
 import type { OwnedDataCardReplacementTarget } from '@mahoshojo/contracts/data-cards';
 import { requestCardLibraryRoute } from '../src/platform/card-library-bridge';
-import { createCloudCard, readCloudReplaceTarget, replaceCloudCard } from '../src/platform/private-cloud-save';
+import { createCloudCard, readCloudReplaceTarget, replaceCloudCard, updateCloudCardMetadata } from '../src/platform/private-cloud-save';
 const fixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-cloud.json', import.meta.url), 'utf8')).cardLibrary as {
   ownedRequests: { valid: DesktopCardLibraryRequest[]; invalid: DesktopCardLibraryRequest[] };
   ownedResponses: { valid: Wire[]; invalid: Wire[] };
@@ -16,8 +16,10 @@ const consume = async (wire: Wire) => {
   let result;
   if (request.routeId === 'data-cards.create') result = await createCloudCard(invoke, request.expectedUserId!, { ...body, isPublic: body.isPublic === true || body.isPublic === 1 ? 1 : 0 } as never);
   else if (request.routeId === 'data-cards.replace-target.query') result = await readCloudReplaceTarget(invoke, request.expectedUserId!, request.query!.id);
+  else if (request.routeId === 'data-cards.metadata') result = await updateCloudCardMetadata(invoke, request.expectedUserId!, { id: body.id, type: 'character', version: body.expectedVersion, name: 'target', description: null, isPublic: 0, reviewStatus: 'pending', hasPendingUpdate: false }, { name: body.name, description: body.description, isPublic: body.isPublic });
   else result = await replaceCloudCard(invoke, request.expectedUserId!, { id: body.id, type: body.type, version: body.expectedVersion, name: 'target', description: null, isPublic: 0, reviewStatus: 'pending', hasPendingUpdate: false } as OwnedDataCardReplacementTarget, body.data);
   expect(invoke).toHaveBeenCalledOnce();
+  expect(invoke).toHaveBeenCalledWith('cloud_card_library_request', { request: expect.objectContaining({ routeId: request.routeId, expectedUserId: request.expectedUserId }) });
   return result;
 };
 describe('owned cloud fixture through actual renderer bridge and adapters', () => {
@@ -30,6 +32,10 @@ describe('owned cloud fixture through actual renderer bridge and adapters', () =
   });
   test('fixture contains bidirectional owned request/response cases', () => {
     for (const group of [fixture.ownedRequests, fixture.ownedResponses]) { expect(group.valid.length).toBeGreaterThan(0); expect(group.invalid.length).toBeGreaterThan(0); }
+    for (const group of ['valid', 'invalid'] as const) {
+      expect(fixture.ownedRequests[group].some(request => request.routeId === 'data-cards.metadata')).toBe(true);
+      expect(fixture.ownedResponses[group].some(wire => wire.request.routeId === 'data-cards.metadata')).toBe(true);
+    }
   });
   test.each(fixture.ownedResponses?.valid ?? [])('owned acknowledgement accepted %j', async (wire) => {
     const result = await consume(wire); expect(['saved', 'ready']).toContain(result.kind);

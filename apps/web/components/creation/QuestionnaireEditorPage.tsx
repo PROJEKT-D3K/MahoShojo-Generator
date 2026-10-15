@@ -52,7 +52,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
   const [recycleBinCards, setRecycleBinCards] = useState<any[]>([]);
   const [userCapacity, setUserCapacity] = useState<number | null>(null);
   const [userUsedSlots, setUserUsedSlots] = useState(0);
-  const [editingCard, setEditingCard] = useState<any | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const cardsPerPage = 12;
 
@@ -272,36 +271,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
     }
   };
 
-  const handleUpdateQuestionnaireCard = async (id: string, name: string, description: string, isPublic?: number) => {
-    const textToCheck = `${name} ${description}`;
-    const sensitiveWordResult = await quickCheck(textToCheck);
-    if (sensitiveWordResult.hasSensitiveWords) {
-      router.push('/arrested');
-      return;
-    }
-
-    if (editingCard?.id === id && editingCard?.isLegacyQuestionnaire) {
-      const repairResult = await dataCardApi.repairQuestionnaireType(id);
-      if (!repairResult.success) {
-        setEditorError(repairResult.error || '恢复问卷数据卡类型失败');
-        return;
-      }
-    }
-
-    const result = await dataCardApi.updateCard(id, name, description, isPublic);
-    if (result.success) {
-      setEditingCard(null);
-      loadUserQuestionnaireCards();
-      flashMessage('✅ 问卷信息已更新');
-    } else {
-      if (result.error === 'SENSITIVE_WORD_DETECTED' || (result as any).redirect === '/arrested') {
-        router.push('/arrested');
-        return;
-      }
-      setEditorError(result.error || '更新失败');
-    }
-  };
-
   const handleReplaceQuestionnaireCard = async (card: any) => {
     if (!window.confirm(`确认用当前编辑内容替换「${card.name}」吗？`)) return;
     const textToCheck = `${card.name} ${card.description} ${JSON.stringify(questionnaireData)}`;
@@ -518,20 +487,19 @@ export const QuestionnaireEditorPage: React.FC = () => {
         onClose={() => {
           importIntent.current += 1;
           setShowDataCardsModal(false);
-          setEditingCard(null);
         }}
         dataCards={[]}
         summaryOwnerId={user?.id}
+        onMetadataSaved={() => void loadUserQuestionnaireCards()}
         refreshKey={cardsRefresh}
-        editingCard={editingCard}
+
         currentPage={currentPage}
         cardsPerPage={cardsPerPage}
         onPageChange={setCurrentPage}
-        onEditCard={setEditingCard}
-        onUpdateCard={handleUpdateQuestionnaireCard}
+
         onDeleteCard={handleDeleteQuestionnaireCard}
         onLoadCard={handleLoadQuestionnaireCard}
-        onCancelEdit={() => setEditingCard(null)}
+
         onReplaceCard={handleReplaceQuestionnaireCard}
         userCapacity={userCapacity ?? undefined}
         userUsedSlots={userUsedSlots}

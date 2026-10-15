@@ -71,6 +71,7 @@ function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, 
   const [isPublic, setPublic] = useState<0 | 1>(0);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [metadataBusy, setMetadataBusy] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [uncertain, setUncertain] = useState<'create' | 'replace' | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -170,17 +171,17 @@ function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, 
       {data != null && <CloudCardActionButtons
         onSave={showSave} onReplace={showReplace}
         saveLabel={created ? '已保存到云端' : '保存到云端'}
-        saveDisabled={!guard.ready || disabled || saving || preparing || created}
-        replaceDisabled={!guard.ready || disabled || saving || preparing}
+        saveDisabled={!guard.ready || disabled || saving || metadataBusy || preparing || created}
+        replaceDisabled={!guard.ready || disabled || saving || metadataBusy || preparing}
       />}
-      {showManageButton && <button disabled={saving || preparing} onClick={() => { if (available()) { setLibraryPurpose('manage'); setLibraryOpen(true); } }}>我的云端卡</button>}
+      {showManageButton && <button disabled={saving || metadataBusy || preparing} onClick={() => { if (available()) { setLibraryPurpose('manage'); setLibraryOpen(true); } }}>我的云端卡</button>}
       <CloudCardActionFeedback>{feedback}</CloudCardActionFeedback>
     </div> : <>
       {data != null && <>
-        <button className={className} disabled={!guard.ready || disabled || saving || preparing || created} onClick={showSave}>{created ? '已保存到云端' : '保存到云端'}</button>
-        <button className={className} disabled={!guard.ready || disabled || saving || preparing} onClick={showReplace}>替换已有</button>
+        <button className={className} disabled={!guard.ready || disabled || saving || metadataBusy || preparing || created} onClick={showSave}>{created ? '已保存到云端' : '保存到云端'}</button>
+        <button className={className} disabled={!guard.ready || disabled || saving || metadataBusy || preparing} onClick={showReplace}>替换已有</button>
       </>}
-      {showManageButton && <button disabled={saving || preparing} onClick={() => { if (available()) { setLibraryPurpose('manage'); setLibraryOpen(true); } }}>我的云端卡</button>}
+      {showManageButton && <button disabled={saving || metadataBusy || preparing} onClick={() => { if (available()) { setLibraryPurpose('manage'); setLibraryOpen(true); } }}>我的云端卡</button>}
       {feedback}
     </>}
     <SaveCardModal isOpen={saveOpen} onClose={() => { if (!pending.current) { capacityEpoch.current++; setSaveOpen(false); } }} onSave={() => void save(false)}
@@ -190,6 +191,8 @@ function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, 
     <ReplaceCardModal isOpen={replaceOpen} target={target ? { ...target, reviewStatus: target.reviewStatus ?? undefined } : null} onClose={() => { if (!pending.current) setReplaceOpen(false); }} onConfirm={() => void save(true)}
       error={error} isSaving={saving} submitDisabled={disabled || Boolean(uncertain) || conflict} supplementaryContent={uncertaintyControls} />
     {userId !== null && <DesktopOwnedCardsModal isOpen={libraryOpen || manageOpen === true} onClose={closeLibrary} expectedUserId={userId} selectedType={libraryPurpose === 'manage' ? undefined : cardType}
+      metadataEditing={{ isBlocked: () => !guard.ready || disabled || Boolean(isBlocked?.()) || saving || preparingRef.current,
+        onBusyChange: (value) => { pending.current = value; setMetadataBusy(value); busyChanged.current?.(value); } }}
       invokeFn={invokeFn} isBusy={saving} refreshToken={refresh} titleOverride={libraryPurpose === 'check' ? '检查我的云端卡' : libraryPurpose === 'replace' ? '选择要替换的数据卡' : undefined}
       onReplaceCard={libraryPurpose !== 'check' && !uncertain && data != null ? chooseTarget : undefined}
       onSelectCard={libraryPurpose === 'manage' && onSelectCard ? async (card) => { if (owns() && !pending.current) { await onSelectCard(card); if (owns()) closeLibrary(); } } : undefined} />}
