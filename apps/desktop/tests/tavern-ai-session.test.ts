@@ -1,7 +1,10 @@
 import { tavernModelResult } from './tavern-character-fixtures';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
-import { DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE } from '@mahoshojo/domain/tavern-card';
+import { DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE, readTavernLocalDocument, validateTavernRaw } from '@mahoshojo/domain/tavern-card';
+import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
+import { CANCEL_DIRECT_AI_COMMAND, STREAM_DIRECT_AI_COMMAND } from '../src/platform/direct-ai-bridge';
 import { TavernAiSession, TAVERN_AI_DRAFT_KEY } from '../src/features/tavern/session';
 import type { TavernAiTemplate, TavernGenerationInput, TavernGenerationIntent } from '../src/features/tavern/generation';
 import { DesktopGenerationSession, type GenerationExecutor } from '../src/features/generation/session';
@@ -99,4 +102,119 @@ it.each(['magical-girl', 'canshou'] as const)('restores and saves %s as an unsig
   expect(putIfAbsent.mock.calls[0]![0]).toMatchObject({ cardType: 'character', title: template === 'magical-girl' ? '星花' : '雾兽', provenance: { kind: 'unsigned' } });
   expect(putIfAbsent.mock.calls[0]![0].data).not.toHaveProperty('signature');
   expect(putIfAbsent.mock.calls[0]![0].data).not.toHaveProperty('isPreset');
+});
+
+
+// Keep the executor and session real; only replace the Native channel and invocation boundary.
+function nativeStream() {
+  let request!: AiExecutionRequest; let send!: (event: AiStreamEvent) => void; let finish!: () => void;
+  const done = new Promise<void>(resolve => { finish = resolve; });
+  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+    if (command === CANCEL_DIRECT_AI_COMMAND) { finish(); return; }
+    expect(command).toBe(STREAM_DIRECT_AI_COMMAND);
+    request = args!.request as AiExecutionRequest;
+    send = (args!.onEvent as { onmessage: typeof send }).onmessage;
+    await done;
+  });
+  let sequence = 0;
+  const identity = () => ({ requestId: request.requestId, contractVersion: 1 as const, mode: request.mode });
+  const emit = (event: Record<string, unknown>) => send({ ...identity(), sequence: sequence++, ...event } as AiStreamEvent);
+  return { invoke, emit, finish, identity, options: { invoke, profileId: 'profile', createChannel: () => ({}) } };
+}
+
+describe('Tavern Markdown owns real generation and recovery', () => {
+  const streamIntent = { mode: 'direct-local' as const, generationMode: 'stream' as const };
+  const markdown = '# 完整结果\n名字：角色名\n情景名：情景名\n\n正文';
+  it('shows accepted body while busy, ignores draft edits and duplicate generation, and never saves a late card after cancel', async () => {
+    const disk = storage(); const native = nativeStream(); const putIfAbsent = vi.fn();
+    const session = new TavernAiSession({ storage: disk, repository: { putIfAbsent } as unknown as CardRepository, requestId: () => 'tavern-cancel' });
+    session.updateDraft({ language: input.language, generationMode: 'stream', input });
+    const pending = session.generate(native.options, input, streamIntent);
+    native.emit({ type: 'started' }); native.emit({ type: 'text-delta', delta: '# 已收到正文' });
+    native.emit({ type: 'reasoning-delta', delta: '不能进入正文' });
+    await vi.waitFor(() => expect(session.getSnapshot().rawText).toBe('# 已收到正文'));
+    expect(session.getSnapshot()).toMatchObject({ phase: 'generating', activeGenerationMode: 'stream', card: null });
+    await session.generate(native.options, { ...input, template: 'scenario' }, streamIntent);
+    session.updateDraft({ language: 'changed', generationMode: 'non-stream', input: null }); session.clearOutput();
+    expect(session.getSnapshot().draft).toMatchObject({ language: input.language, generationMode: 'stream', input });
+    expect(native.invoke).toHaveBeenCalledOnce();
+    session.cancel();
+    native.emit({ type: 'result', result: { ...native.identity(), status: 'completed', finishReason: 'stop', output: { text: markdown } } });
+    native.finish(); await pending;
+    expect(session.getSnapshot()).toMatchObject({ phase: 'cancelled', card: null, rawText: '# 已收到正文' });
+    expect(await session.saveResult()).toBe(false); expect(putIfAbsent).not.toHaveBeenCalled();
+    expect(native.invoke).toHaveBeenCalledWith(CANCEL_DIRECT_AI_COMMAND, { requestId: 'tavern-cancel' });
+    expect(native.invoke).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(disk.getItem(TAVERN_AI_DRAFT_KEY)!).output).toMatchObject({ phase: 'cancelled', rawText: '# 已收到正文', card: null });
+    session.dispose();
+  });
+  it.each(['EOF', 'identity'] as const)('retains accepted body after %s in a recoverable failed draft without dispatch on restore', async failure => {
+    const disk = storage(); const native = nativeStream();
+    const session = new TavernAiSession({ storage: disk, repository });
+    session.updateDraft({ language: input.language, generationMode: 'stream', input });
+    const pending = session.generate(native.options, input, streamIntent);
+    native.emit({ type: 'started' }); native.emit({ type: 'text-delta', delta: '# 保留的残稿' });
+    if (failure === 'identity') native.emit({ type: 'text-delta', requestId: 'foreign-request', delta: '禁止混入' });
+    native.finish(); await pending;
+    expect(session.getSnapshot()).toMatchObject({ phase: 'failed', card: null, rawText: '# 保留的残稿' });
+    session.dispose();
+    const restored = new TavernAiSession({ storage: disk, repository }); restored.restoreDraft(false);
+    expect(restored.getSnapshot()).toMatchObject({ draft: { generationMode: 'stream', input }, phase: 'failed', card: null, rawText: '# 保留的残稿', activeGenerationMode: null });
+    expect(native.invoke).toHaveBeenCalledOnce(); restored.dispose();
+  });
+  it.each(['magical-girl', 'scenario'] as const)('restores old JSON and new Markdown %s drafts by actual result kind with intact metadata and original', async template => {
+    for (const generationMode of ['non-stream', 'stream'] as const) {
+      const disk = storage(); const native = nativeStream(); const selected = { ...input, template };
+      const putIfAbsent = vi.fn<CardRepository['putIfAbsent']>().mockResolvedValue({ written: true });
+      const repo = { putIfAbsent } as unknown as CardRepository;
+      const session = new TavernAiSession({ storage: disk, repository: repo });
+      session.updateDraft({ language: input.language, generationMode, input: selected });
+      const pending = session.generate(native.options, selected, { ...streamIntent, generationMode });
+      const text = generationMode === 'stream' ? markdown : JSON.stringify(tavernModelResult(template));
+      native.emit({ type: 'started' }); native.emit({ type: 'text-delta', delta: text });
+      native.emit({ type: 'result', result: { ...native.identity(), status: 'completed', finishReason: 'stop', output: { text } } });
+      native.finish(); await pending;
+      expect(session.getSnapshot().phase).toBe('completed');
+      const stored = JSON.parse(disk.getItem(TAVERN_AI_DRAFT_KEY)!);
+      if (generationMode === 'non-stream') delete stored.generationMode;
+      const appFields = template === 'scenario' || generationMode === 'stream'
+        ? { metadata: { created_at: '2026-01-01T00:00:00Z' } } : { current_state: { summary: '保留状态', fields: [] } };
+      Object.assign(stored.output.card, appFields);
+      stored.output.card._tavern.importLabel = '保留的导入信息';
+      stored.output.card._custom = { retained: ['中文', 1] };
+      stored.output.card.signature = 'forged'; stored.output.card.isPreset = true;
+      disk.setItem(TAVERN_AI_DRAFT_KEY, JSON.stringify(stored)); session.dispose();
+      const restored = new TavernAiSession({ storage: disk, repository: repo });
+      expect(restored.getSnapshot().pendingRestore).toBe(true); restored.restoreDraft(false);
+      const cardKind = generationMode === 'non-stream' ? template : template === 'scenario' ? 'general-scenario' : 'general';
+      expect(restored.getSnapshot()).toMatchObject({ resultRestored: true, activeGenerationMode: null, cardKind, rawText: text,
+        draft: { generationMode, input: selected }, card: { ...appFields, _custom: { retained: ['中文', 1] }, _tavern: { raw: input.raw, importLabel: '保留的导入信息' } } });
+      expect(restored.resultSignatureKind()).toBe('unsigned'); expect(restored.getSnapshot().card).not.toHaveProperty('signature');
+      expect(restored.getSnapshot().card).not.toHaveProperty('isPreset');
+      expect(restored.resultCardType()).toBe(template === 'scenario' ? 'scenario' : 'character');
+      expect(await restored.saveResult()).toBe(true);
+      expect(putIfAbsent.mock.calls[0]![0]).toMatchObject({ cardType: template === 'scenario' ? 'scenario' : 'character', data: restored.getSnapshot().card, provenance: { kind: 'unsigned', execution: 'direct-local' } });
+      expect(native.invoke).toHaveBeenCalledOnce(); restored.dispose();
+    }
+  });
+  it.each(['oversize', 'write failure'] as const)('keeps a completed Markdown result and exportable original in memory on draft %s', async failure => {
+    const disk = storage();
+    const failingDisk = failure === 'write failure' ? { ...disk, setItem: () => { throw new Error('disk full'); } } : disk;
+    // The original is valid alone; persisting it in both the input and completed card exceeds the draft budget.
+    const raw = { ...(input.raw as object), extensions: { source: failure === 'oversize' ? 'x'.repeat(2_200_000) : '保留未知字段' } };
+    const selected = { ...input, raw, template: 'scenario' as const }; const native = nativeStream();
+    const session = new TavernAiSession({ storage: failingDisk, repository });
+    session.updateDraft({ language: input.language, generationMode: 'stream', input: selected });
+    const pending = session.generate(native.options, selected, streamIntent);
+    native.emit({ type: 'started' }); native.emit({ type: 'text-delta', delta: markdown });
+    native.emit({ type: 'result', result: { ...native.identity(), status: 'completed', finishReason: 'stop', output: { text: markdown } } });
+    native.finish(); await pending;
+    const state = session.getSnapshot();
+    expect(state).toMatchObject({ phase: 'completed', draftSaved: false, cardKind: 'general-scenario', rawText: markdown, card: { content: markdown, _tavern: { raw } } });
+    expect(state.draftError).toContain('草稿写入失败'); expect(session.hasUnsavedDraft()).toBe(true); expect(session.hasUnsavedResult()).toBe(true);
+    const original = validateTavernRaw((state.card!._tavern as { raw: unknown }).raw);
+    const exported = new TextEncoder().encode(JSON.stringify(original));
+    expect(readTavernLocalDocument(exported, 'json').candidates[0].parsed).toEqual(raw);
+    expect(native.invoke).toHaveBeenCalledOnce(); session.dispose();
+  });
 });

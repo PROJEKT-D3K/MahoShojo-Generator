@@ -2,6 +2,7 @@ import { DesktopHostedTavernBodySchema } from '@mahoshojo/contracts/desktop-clou
 import { parseDataCardByTemplate } from '@mahoshojo/domain/data-card-schemas';
 import type { JsonValue } from '@mahoshojo/contracts/json-value';
 import {
+  buildTavernStreamPrompt, TAVERN_STREAM_TEMPERATURE,
   createTavernMagicalGirlGenerationConfig, createTavernCanshouGenerationConfig,
   projectTavernMagicalGirlResult, projectTavernCanshouResult,
   createTavernGeneralGenerationConfig, createTavernGeneralScenarioGenerationConfig, createTavernScenarioGenerationConfig,
@@ -9,7 +10,7 @@ import {
 } from '@mahoshojo/ai-core/tavern-generation';
 import {
   applyTavernPlaceholderReplacement, buildTavernAiAttachment, normalizeTavernCard,
-  resolveTavernCharReplacement, validateTavernRaw, type TavernPlaceholderPreference,
+  projectTavernStreamMarkdown, resolveTavernCharReplacement, validateTavernRaw, type TavernPlaceholderPreference,
 } from '@mahoshojo/domain/tavern-card';
 import { executeDirectGeneration, executeDesktopHostedJsonGeneration, GenerationTransportError, type DesktopDirectGenerationFamily, type DesktopHostedJsonGenerationFamily, type DesktopHostedJsonExecutionOptions, type DesktopGenerationIntent } from '../generation/executor';
 
@@ -38,7 +39,10 @@ function projectFreshCard(template: TavernAiTemplate, value: unknown) {
     default: return projectTavernGeneralResult(createTavernGeneralGenerationConfig().schema.parse(value));
   }
 }
-export type TavernGenerationIntent = DesktopGenerationIntent & { mode: 'direct-local' | 'direct-remote' | 'hosted-json'; generationMode: 'non-stream' };
+export type TavernGenerationIntent = Omit<DesktopGenerationIntent, 'mode' | 'generationMode'> & (
+  | { mode: 'direct-local' | 'direct-remote'; generationMode: 'stream' | 'non-stream' }
+  | { mode: 'hosted-json'; generationMode: 'non-stream' }
+);
 export interface TavernGenerationInput {
   raw: unknown;
   template: TavernAiTemplate;
@@ -79,6 +83,20 @@ const FAMILY: DesktopDirectGenerationFamily<TavernGenerationInput, TavernGenerat
   createDirectConfig: (_intent, input) => {
     const config = createDesktopTavernGenerationConfig(input.template);
     return { ...config, promptBuilder: (frozen) => config.promptBuilder(prepareTavernGenerationInput(frozen).promptInput) };
+  },
+  createDirectStreamConfig: () => ({
+    systemPrompt: '',
+    temperature: TAVERN_STREAM_TEMPERATURE,
+    promptBuilder: input => buildTavernStreamPrompt(
+      { ...prepareTavernGenerationInput(input).promptInput, template: input.template },
+      { getRandomFlowers, lore: CANSHOU_LORE },
+    ),
+  }),
+  buildStreamCard: (markdown, input) => {
+    const sourceName = prepareTavernGenerationInput(input).promptInput.sourceName;
+    const { card } = projectTavernStreamMarkdown({ template: input.template, markdown, sourceName });
+    const cardKind = card.templateId === '通用情景' ? 'general-scenario' : 'general';
+    return { card: validateTavernGeneratedCard(cardKind, { ...card, _tavern: { raw: input.raw } }), cardKind };
   },
   buildStructuredCard: (value, input) => ({
     card: validateTavernGeneratedCard(input.template, { ...projectFreshCard(input.template, value), _tavern: { raw: input.raw } }),

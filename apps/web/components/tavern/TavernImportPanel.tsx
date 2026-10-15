@@ -1,6 +1,6 @@
 import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
-import { TavernConversionControls, TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
+import { TavernConversionControls, describeTavernGenerationMode, TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
 import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard, buildTavernCanshouCard, buildTavernMagicalGirlCard, projectTavernStreamMarkdown } from '@mahoshojo/domain/tavern-card';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
@@ -902,13 +902,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                 onLanguageExpandedChange={setShowLanguageSection}
                 generationMode={generationMode}
                 onGenerationModeChange={(mode) => { setGenerationMode(mode); resetGeneratedPreview(); }}
-                generationModeDescription={generationMode === 'stream'
-                  ? (isScenarioTemplate
-                    ? '提示：流式生成会实时输出 Markdown，并生成【通用情景卡】。'
-                    : '提示：流式生成会实时输出 Markdown，并生成【通用角色卡】；若需要结构化的魔法少女/残兽字段与 userAnswers，请切换为非流式。')
-                  : (isScenarioTemplate
-                    ? '提示：非流式生成会返回结构化情景 JSON（包含 elements 等字段），更适合进阶玩法。'
-                    : '提示：非流式生成会返回结构化数据卡（魔法少女/残兽会同时生成 userAnswers），适合后续升华/导出酒馆卡。')}
+                generationModeDescription={describeTavernGenerationMode(state.targetTemplate, generationMode)}
                 provider={<AiProviderSelector onConfigChange={handleAiProviderConfigChange} />}
                 providerFootnote={<>可选：使用自有 API Key 冷却统一为 3 秒；使用官方 Key 冷却为 {Math.ceil(OFFICIAL_KEY_MAX_AI_COOLDOWN_MS / 1000)} 秒。API Key 仅存储于浏览器本地（localStorage），不会上传到服务器。</>}
               />

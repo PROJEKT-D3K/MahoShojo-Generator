@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExtern
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter } from '@tanstack/react-router';
 import { isTavernMagicalGirlProjection, buildTavernScenarioFragment, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, convertTavernToMagicalGirlCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
-import { isTavernGeneralCharacter, isTavernGeneralScenario, getTavernMagicalGirlPreview, TavernConversionControls, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
+import { isTavernGeneralCharacter, isTavernGeneralScenario, getTavernMagicalGirlPreview, TavernConversionControls, describeTavernGenerationMode, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
 import { GeneralScenarioCard } from '@mahoshojo/ui-web/scenario';
 import { MagicalGirlCard, resolveMagicalGirlGradient, type CanshouDetails, CanshouCard, GeneralCharacterCard } from '@mahoshojo/ui-web/character-card';
 import { ProductFooter } from '@mahoshojo/ui-web/shell';
@@ -19,6 +19,7 @@ import { useDesktopAiConfig } from '../features/ai-config/use-desktop-ai-config'
 import { resolveDesktopAiTarget } from '../features/ai-config/desktop-ai-config';
 import { useCooldown } from '@mahoshojo/ui-web/cooldown';
 import { useDesktopCloudSession } from '../features/account/use-desktop-cloud-session';
+import { GenerationMarkdownPreview } from './generation-markdown-preview';
 import { QuestionnaireDraftPanel } from './questionnaire-draft-panel';
 
 const SYSTEM_COOLDOWN_MS = 120_000;
@@ -40,6 +41,9 @@ function TavernPage({ session }: { session: TavernAiSession }) {
   const [languages, setLanguages] = useState<{ code: string; name: string }[]>([]);
   const requestLock = useRef(false);
   const generating = ai.phase === 'generating' || aiState.generationActive;
+  const generationMode = ai.draft.generationMode ?? 'non-stream';
+  const hostedStreamUnavailable = generationMode === 'stream' && target.location === 'server';
+  const streamUnavailableReason = '酒馆服务器目前仅支持非流式 JSON；流式转换请选择客户端执行。';
 
   const router = useRouter();
   const idPrefix = useId();
@@ -129,7 +133,7 @@ function TavernPage({ session }: { session: TavernAiSession }) {
     catch (cause) { return { aiInput, aiInputError: cause instanceof Error ? cause.message : 'AI 输入无效', warnings: [] }; }
   }, [candidate, template, ai.draft.language, preference, target.location]);
   const unavailable = target.unavailableReason;
-  const generateDisabled = blocked || serverCooldown || accountBusy || !placeholderHydrated || !aiInput || !!aiInputError || !!unavailable || (target.location === 'client' && !target.mode) || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
+  const generateDisabled = blocked || hostedStreamUnavailable || serverCooldown || accountBusy || !placeholderHydrated || !aiInput || !!aiInputError || !!unavailable || (target.location === 'client' && !target.mode) || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
   const generate = () => {
     if (generateDisabled || requestLock.current || session.isBusy() || !aiInput) return;
     if ((session.hasUnsavedResult() || ai.rawText) && !window.confirm('重新转换会替换当前 AI 结果与原始输出，且可能产生新的模型费用。确认继续？')) return;
@@ -137,16 +141,18 @@ function TavernPage({ session }: { session: TavernAiSession }) {
     const account = cloudStore.getSnapshot();
     const owner = { userId: account.account?.userId ?? null, epoch: cloudStore.getCredentialEpoch(), verification: account.verification, authFlow: account.authFlow };
     const frozen = JSON.parse(JSON.stringify(aiInput)) as TavernGenerationInput;
+    const frozenGenerationMode = generationMode;
     requestLock.current = true; setError('');
-    session.updateDraft({ language: frozen.language, input: frozen });
+    session.updateDraft({ language: frozen.language, input: frozen, generationMode: frozenGenerationMode });
     void aiStore.withPreparedGeneration(async prepared => {
       if (!prepared.providerTarget || prepared.unavailableReason || (prepared.location === 'client' && !prepared.mode)) throw new Error('请选择可用的转换通道。');
       const hosted = prepared.location === 'server';
+      if (hosted && frozenGenerationMode === 'stream') throw new Error(streamUnavailableReason);
       const current = cloudStore.getSnapshot();
       if (hosted && ((current.account?.userId ?? null) !== owner.userId || cloudStore.getCredentialEpoch() !== owner.epoch || current.verification !== owner.verification || current.authFlow !== owner.authFlow || current.authFlow.kind !== 'idle')) throw new Error('准备期间账号状态已变化，输入已保留，请重新确认转换。');
       await session.generate({ invoke, profileId: prepared.profile?.id ?? '', providerTarget: prepared.providerTarget,
         ...(hosted ? { onHostedDispatchSettled: (retryAfterSeconds?: number) => startCooldown(retryAfterSeconds === undefined ? cooldownMs : retryAfterSeconds * 1000) } : {}) }, frozen,
-        { mode: hosted ? 'hosted-json' : prepared.mode!, generationMode: 'non-stream', modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides }, true);
+        { ...(hosted ? { mode: 'hosted-json' as const, generationMode: 'non-stream' as const } : { mode: prepared.mode!, generationMode: frozenGenerationMode }), modelId: prepared.modelId ?? undefined, overrides: prepared.generationOverrides }, true);
     }).catch(cause => setError(cause instanceof Error ? cause.message : 'AI 配置准备失败'))
       .finally(() => { requestLock.current = false; });
   };
@@ -166,24 +172,33 @@ function TavernPage({ session }: { session: TavernAiSession }) {
           <TavernPlaceholderFields preference={preference} name={normalized.name} onChange={(next) => { if (confirmChange()) setPreference(next); }} disabled={blocked || !placeholderHydrated} />
           <TavernConversionControls mode={mode} onModeChange={next => { if (next === 'rules' && template === 'scenario') return; if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={blocked}
             rulesDisabledReason={template === 'scenario' ? '结构化情景目前仅支持 AI 深度转换，尚未提供规则映射。' : undefined}
-            aiDescription="裁剪后的设定将通过所选客户端或服务器通道发送；结果通过共源 schema 校验，原件单独保留。"
+            aiDescription="裁剪后的设定将通过所选客户端或服务器通道发送；完成结果通过共源 schema 校验，原件单独保留。"
             language={ai.draft.language} languages={languages.length ? languages : [{ code: ai.draft.language, name: ai.draft.language }]}
             onLanguageChange={language => { if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, language }); }}
             languageExpanded={languageExpanded} onLanguageExpandedChange={setLanguageExpanded}
-            generationMode="non-stream" onGenerationModeChange={() => undefined}
-            generationModeDisabledReasons={{ stream: '酒馆 AI 当前仅支持非流式转换。' }}
-            generationModeDescription="非流式生成返回所选模板的完整 JSON；转换结果未签名。"
-            provider={<DesktopAiProviderPanel generationMode="non-stream" showConnectionTest={false} onDirtyChange={setProviderDirty}
+            generationMode={generationMode} onGenerationModeChange={next => { if (next === 'stream' && target.location === 'server') return; if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, generationMode: next }); }}
+            generationModeDisabledReasons={target.location === 'server' ? { stream: streamUnavailableReason } : undefined}
+            generationModeDescription={describeTavernGenerationMode(template, generationMode)}
+            provider={<DesktopAiProviderPanel generationMode={generationMode} serverUnavailableReason={generationMode === 'stream' ? streamUnavailableReason : undefined} showConnectionTest={false} onDirtyChange={setProviderDirty}
               copy={{ serverOutput: { stream: '', nonStream: '非流式 JSON' }, emptyProfilesHint: '请选择生成通道。', serverFootnote: '服务器仅接收裁剪后的设定；原件和占位符偏好保留本机。', payloadNoun: '裁剪后的酒馆设定' }} />}
             providerFootnote="API Key 使用本机安全存储。失败或取消后不会自动重发，请确认费用与原始输出后再手动重试。" />
           {mode === 'ai' ? <div className="mt-4 space-y-2">
             {unavailable ? <p role="status">{unavailable}</p> : null}
+            {hostedStreamUnavailable ? <p role="status">{streamUnavailableReason}</p> : null}
             {aiInputError ? <p role="alert">{aiInputError}</p> : null}
             {warnings.map(warning => <p className="text-xs text-amber-700" key={warning}>{warning}</p>)}
             <button type="button" className="generate-button" disabled={generateDisabled} onClick={generate}>{generating ? '转换中…' : serverCooldown ? `冷却中 (${remainingTime}s)` : '开始转换'}</button>
             {ai.phase === 'generating' || aiStore.isPreparingGeneration() ? <button type="button" onClick={() => { aiStore.cancelPreparingGeneration(); session.cancel(); }}>取消转换</button> : null}
             {ai.message ? <p role={ai.phase === 'failed' ? 'alert' : 'status'}>{ai.message}</p> : null}
+            <GenerationMarkdownPreview active={ai.phase === 'generating' && ai.activeGenerationMode === 'stream'} text={ai.rawText} />
             {ai.rawText ? <details open={ai.phase !== 'completed'}><summary>AI 原始输出</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words">{ai.rawText}</pre></details> : null}
+            {ai.rawText && ai.phase !== 'completed' && ai.phase !== 'generating' ? <div className="space-y-2">
+              <p className="text-xs text-amber-700">未完成正文仅供保留，不是完成卡，不能保存到卡库。</p>
+              <button type="button" disabled={blocked} onClick={() => {
+                try { exportTavernFile({ name: 'tavern-unfinished.txt', bytes: new TextEncoder().encode(ai.rawText), mimeType: 'text/plain;charset=utf-8' }); }
+                catch (cause) { setError(cause instanceof Error ? cause.message : '未完成正文导出失败'); }
+              }}>导出未完成正文（文本）</button>
+            </div> : null}
           </div> : null}
           {conversion.error ? <p role="alert" className="text-sm text-red-700">{conversion.error}</p> : null}
           {projection ? <><TavernLocalProjection conversionMode={mode} disabled={blocked || !placeholderHydrated} data={projection} exportFile={exportTavernFile} saveCard={async (data) => {

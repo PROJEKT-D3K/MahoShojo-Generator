@@ -3,7 +3,10 @@ import { tavernModelResult } from './tavern-character-fixtures';
 import magicalQuestionnaire from '../../../content/questionnaires/presets/magical-girl-default.json';
 import canshouQuestionnaire from '../../../content/questionnaires/presets/canshou-default.json';
 import { buildStructuredJsonInstructionFromZodSchema } from '@mahoshojo/ai-core/structured-json';
-import { DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE } from '@mahoshojo/domain/tavern-card';
+import { DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE, projectTavernStreamMarkdown } from '@mahoshojo/domain/tavern-card';
+import { buildTavernStreamPrompt, TAVERN_STREAM_TEMPERATURE } from '@mahoshojo/ai-core/tavern-generation';
+import { getRandomFlowers } from '@mahoshojo/domain/flowers';
+import { CANSHOU_LORE } from '@mahoshojo/domain/canshou-lore';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { createDesktopTavernGenerationConfig, executeTavernGeneration, prepareTavernGenerationInput, validateTavernGeneratedCard, type TavernGenerationInput, type TavernGenerationIntent } from '../src/features/tavern/generation';
@@ -12,7 +15,8 @@ import { STREAM_DIRECT_AI_COMMAND, STREAM_TARGET_AI_COMMAND } from '../src/platf
 const scenario = { title: '情景', scenario_type: '互动', description: '简介', elements: { scene: {}, events: '事件', atmosphere: '轻松', development: [] } };
 const input: TavernGenerationInput = { raw: { name: 'Alice', description: '{{user}} 对 {{char}} 说话', extensions: { script: '{{user}} 原件' } }, template: 'general', language: '日本語', preference: { ...DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE, userReplacement: '旅人' } };
 const intent: TavernGenerationIntent = { requestId: 'tavern-1', mode: 'direct-remote', generationMode: 'non-stream', modelId: 'test-model' };
-function harness(text: string) {
+type StreamIdentity = Pick<AiExecutionRequest, 'requestId' | 'contractVersion' | 'mode'>;
+function harness(text: string, tail?: (identity: StreamIdentity, emit: (event: AiStreamEvent) => void) => void | Promise<void>) {
   let request!: AiExecutionRequest;
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
     if (command !== STREAM_DIRECT_AI_COMMAND && command !== STREAM_TARGET_AI_COMMAND) throw new Error(command);
@@ -20,8 +24,9 @@ function harness(text: string) {
     const channel = args!.onEvent as { onmessage(event: AiStreamEvent): void };
     const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
     channel.onmessage({ type: 'started', ...identity, sequence: 0 });
-    channel.onmessage({ type: 'text-delta', ...identity, sequence: 1, delta: text });
-    channel.onmessage({ type: 'result', ...identity, sequence: 2, result: { ...identity, status: 'completed', finishReason: 'stop', output: { text } } });
+    if (text) channel.onmessage({ type: 'text-delta', ...identity, sequence: 1, delta: text });
+    if (tail) await tail(identity, event => channel.onmessage(event));
+    else channel.onmessage({ type: 'result', ...identity, sequence: text ? 2 : 1, result: { ...identity, status: 'completed', finishReason: 'stop', output: { text } } });
   });
   return { invoke, options: { invoke, profileId: 'profile', createChannel: () => ({}) }, request: () => request };
 }
@@ -63,16 +68,120 @@ describe('Tavern Direct uses the shared Web generation core', () => {
     expect(await executeTavernGeneration(native.options, { ...input, template: 'scenario' }, intent, new AbortController().signal)).toMatchObject({ status: 'invalid-output', rawText: text });
     expect(native.invoke).toHaveBeenCalledOnce();
   });
-  it('rejects direct system and stream rather than inventing a fallback', async () => {
+  it('rejects direct system rather than inventing a fallback', async () => {
     const native = harness('{}'); const signal = new AbortController().signal;
     expect(await executeTavernGeneration({ ...native.options, providerTarget: { kind: 'system' } }, input, intent, signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
-    expect(await executeTavernGeneration(native.options, input, { ...intent, generationMode: 'stream' } as unknown as TavernGenerationIntent, signal)).toMatchObject({ status: 'failed', code: 'invalid-request' });
     expect(native.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('Tavern Direct Markdown generation', () => {
+  const streamIntent: TavernGenerationIntent = { requestId: 'tavern-stream', mode: 'direct-local', generationMode: 'stream', modelId: 'test-model' };
+  const markdown = '# 整理后的标题\n名字：字段角色名\n情景名：字段情景名\n\n完整正文 {{user}}';
+  it.each(['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou'] as const)('uses the shared %s prompt and projector in both Direct modes with a frozen original', async template => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      for (const mode of ['direct-local', 'direct-remote'] as const) {
+        const original = structuredClone({ ...input, template });
+        const frozen = structuredClone(original);
+        const prepared = prepareTavernGenerationInput(frozen);
+        let finish!: () => void;
+        const native = harness(markdown, async (identity, emit) => {
+          await new Promise<void>(resolve => { finish = resolve; });
+          emit({ type: 'result', ...identity, sequence: 2, result: { ...identity, status: 'completed', finishReason: 'stop', output: { text: markdown } } });
+        });
+        const pending = executeTavernGeneration(native.options, original, { ...streamIntent, mode }, new AbortController().signal);
+        (original.raw as { description: string; extensions: { script: string } }).description = 'changed';
+        (original.raw as { extensions: { script: string } }).extensions.script = 'changed';
+        original.preference.userReplacement = 'changed'; original.template = 'general';
+        finish();
+        const outcome = await pending;
+        expect(native.request()).toMatchObject({ mode, modelId: 'test-model', responseFormat: 'text', temperature: TAVERN_STREAM_TEMPERATURE });
+        expect(native.request().messages).toEqual([{ role: 'user', content: buildTavernStreamPrompt({ ...prepared.promptInput, template }, { getRandomFlowers, lore: CANSHOU_LORE }) }]);
+        expect(native.request().messages[0].content).toContain('旅人 对 Alice 说话');
+        const cardKind = template === 'scenario' || template === 'general-scenario' ? 'general-scenario' : 'general';
+        expect(outcome).toMatchObject({ status: 'completed', cardKind, rawText: markdown, card: { ...projectTavernStreamMarkdown({ template, markdown, sourceName: prepared.promptInput.sourceName }).card, _tavern: { raw: frozen.raw } } });
+        if (outcome.status !== 'completed') throw new Error('expected completed');
+        expect(outcome.result).not.toHaveProperty('usage');
+        expect(outcome.card).not.toHaveProperty('signature'); expect(outcome.card).not.toHaveProperty('isPreset');
+        expect(native.invoke).toHaveBeenCalledOnce();
+      }
+    } finally { random.mockRestore(); }
+  });
+  it('publishes accepted body before completion without mixing reasoning, and forwards generation overrides', async () => {
+    let finish!: () => void;
+    const partial = vi.fn();
+    const native = harness('# 部分正文\n', async (identity, emit) => {
+      emit({ type: 'reasoning-delta', ...identity, sequence: 2, delta: '推理不是正文' });
+      await new Promise<void>(resolve => { finish = resolve; });
+      emit({ type: 'text-delta', ...identity, sequence: 3, delta: '后半段' });
+      emit({ type: 'result', ...identity, sequence: 4, result: { ...identity, status: 'completed', finishReason: 'stop', output: { text: '# 部分正文\n后半段', reasoning: '推理不是正文' }, usage: { outputTokens: 8, reasoningTokens: 3 } } });
+    });
+    let settled = false;
+    const pending = executeTavernGeneration(native.options, input, { ...streamIntent, overrides: { temperature: 0.3, maxOutputTokens: 1234 } }, new AbortController().signal, partial).finally(() => { settled = true; });
+    await vi.waitFor(() => expect(partial).toHaveBeenCalledWith('# 部分正文\n'));
+    expect(settled).toBe(false);
+    expect(native.request()).toMatchObject({ temperature: 0.3, maxOutputTokens: 1234 });
+    finish();
+    expect(await pending).toMatchObject({ status: 'completed', rawText: '# 部分正文\n后半段', reasoning: { text: '推理不是正文' }, result: { usage: { outputTokens: 8 } } });
+    expect(partial.mock.calls).toEqual([['# 部分正文\n'], ['# 部分正文\n后半段']]);
+    expect(native.invoke).toHaveBeenCalledOnce();
+  });
+  it.each(['length', 'content-filter', 'tool-calls', 'other'] as const)('keeps %s output as raw text, never a card', async finishReason => {
+    const native = harness(markdown, (identity, emit) => emit({ type: 'result', ...identity, sequence: 2, result: { ...identity, status: 'completed', finishReason, output: { text: markdown } } }));
+    const outcome = await executeTavernGeneration(native.options, input, streamIntent, new AbortController().signal);
+    expect(outcome).toMatchObject({ status: 'invalid-output', rawText: markdown }); expect(outcome).not.toHaveProperty('card');
+    expect(native.invoke).toHaveBeenCalledOnce();
+  });
+  it.each(['{}', '{ \n }', '[]', '[ ]', 'null', 'undefined', '\uFEFF{}'])('rejects a stop terminal containing only %j', async text => {
+    const native = harness(text);
+    expect(await executeTavernGeneration(native.options, input, streamIntent, new AbortController().signal)).toMatchObject({ status: 'invalid-output', rawText: text });
+    expect(native.invoke).toHaveBeenCalledOnce();
+  });
+  it.each(['', '  \n'])('rejects a blank terminal %j at the protocol boundary and retains accepted deltas', async text => {
+    const native = harness(text);
+    await expect(executeTavernGeneration(native.options, input, streamIntent, new AbortController().signal)).rejects.toMatchObject({ name: 'GenerationTransportError', rawText: text, cause: { code: 'invalid-event' } });
+    expect(native.invoke).toHaveBeenCalledOnce();
+  });
+  it.each(['stop', 'length'] as const)('cannot overwrite accepted body with an empty %s terminal text', async finishReason => {
+    const native = harness(markdown, (identity, emit) => emit({ type: 'result', ...identity, sequence: 2, result: { ...identity, status: 'completed', finishReason, output: { text: '' } } }));
+    await expect(executeTavernGeneration(native.options, input, streamIntent, new AbortController().signal)).rejects.toMatchObject({ name: 'GenerationTransportError', rawText: markdown, cause: { code: 'invalid-event' } });
+    expect(native.invoke).toHaveBeenCalledOnce();
+  });
+  it.each(['failed', 'cancelled'] as const)('retains accepted body on a %s terminal without creating a card', async status => {
+    const native = harness(markdown, (identity, emit) => emit({ type: 'result', ...identity, sequence: 2, result: status === 'failed'
+      ? { ...identity, status, error: { code: 'rate-limited', message: '稍后重试', retryAfterMs: 1500 } }
+      : { ...identity, status, reason: 'user' } }));
+    const outcome = await executeTavernGeneration(native.options, input, streamIntent, new AbortController().signal);
+    expect(outcome).toMatchObject({ status, rawText: markdown }); expect(outcome).not.toHaveProperty('card');
+    if (status === 'failed') expect(outcome).toMatchObject({ code: 'rate-limited', retryAfterSeconds: 2 });
+    expect(native.invoke).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ['EOF', 'missing-terminal'], ['source failure', 'source-failed'],
+    ['sequence', 'sequence-mismatch'], ['identity', 'identity-mismatch'], ['invalid event', 'invalid-event'],
+  ] as const)('keeps only accepted body after %s, without retry or fallback', async (failure, code) => {
+    const partial = vi.fn();
+    const native = harness(markdown, (identity, emit) => {
+      if (failure === 'source failure') throw new Error('offline');
+      if (failure !== 'EOF') emit({ type: 'text-delta', ...identity, sequence: failure === 'sequence' ? 8 : 2,
+        requestId: failure === 'identity' ? 'another-request' : identity.requestId,
+        delta: failure === 'invalid event' ? 42 : '未被接受的正文',
+      } as AiStreamEvent);
+    });
+    await expect(executeTavernGeneration(native.options, input, streamIntent, new AbortController().signal, partial)).rejects.toMatchObject({ name: 'GenerationTransportError', rawText: markdown, cause: { code } });
+    expect(partial.mock.calls).toEqual([[markdown]]); expect(native.invoke).toHaveBeenCalledOnce();
   });
 });
 
 describe('Tavern JSON-only Hosted generation', () => {
   const hosted = { requestId: 'tavern-hosted', mode: 'hosted-json' as const, generationMode: 'non-stream' as const, modelId: 'default' };
+  it.each(['hosted-json', 'hosted-stream'] as const)('rejects a forged %s stream intent before Native dispatch', async mode => {
+    const invoke = vi.fn(); const notify = vi.fn();
+    const outcome = await executeTavernGeneration({ invoke, profileId: '', onHostedDispatchSettled: notify }, input, { ...hosted, mode, generationMode: 'stream' } as unknown as TavernGenerationIntent, new AbortController().signal);
+    expect(outcome).toMatchObject({ status: 'failed', code: 'invalid-request' });
+    expect(invoke).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
   it.each(['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou'] as const)('projects unsigned %s and restores only the frozen local original', async template => {
     let finish!: (value: unknown) => void;
     const invoke = vi.fn(() => new Promise(resolve => { finish = resolve; })); const notify = vi.fn();

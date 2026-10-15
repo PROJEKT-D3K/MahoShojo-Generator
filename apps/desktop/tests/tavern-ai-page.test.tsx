@@ -8,9 +8,11 @@ import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../s
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
 import { listDesktopPresetEntries } from '../src/features/ai-config/desktop-ai-config';
 import { TAVERN_AI_DRAFT_KEY } from '../src/features/tavern/session';
+import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import type { TavernGenerationInput } from '../src/features/tavern/generation';
 import { convertTavernToMagicalGirlCard, readTavernLocalDocument } from '@mahoshojo/domain/tavern-card';
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), execute: vi.fn(), export: vi.fn(), save: vi.fn(), guard: vi.fn(), account: { userId: null as number | null, epoch: 0 } }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), execute: vi.fn(), export: vi.fn(), save: vi.fn(), put: vi.fn(), guard: vi.fn(), account: { userId: null as number | null, epoch: 0 } }));
 vi.mock('../src/features/account/use-desktop-cloud-session', () => {
   const authFlow = { kind: 'idle' };
   const getSnapshot = () => ({ bootstrapped: true, account: mocks.account.userId === null ? null : { userId: mocks.account.userId }, verification: mocks.account.userId === null ? 'signed-out' : 'verified', authFlow });
@@ -22,7 +24,7 @@ vi.mock('../src/app/useLeaveGuard', () => ({ useLeaveGuard: (...args: unknown[])
 vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openFixed: vi.fn() }) }));
 vi.mock('../src/features/tavern/generation', async original => ({ ...await original<object>(), executeTavernGeneration: mocks.execute }));
 vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileIds: async () => ['local'], getProviderProfile: async () => ({ id: 'local', name: '本地模型', adapter: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', modelId: 'model' }) }));
-vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: class {} }));
+vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: class { putIfAbsent = mocks.put; } }));
 vi.mock('../src/features/tavern/host', () => ({ saveDesktopTavernCard: mocks.save, exportTavernFile: mocks.export, getDesktopTavernBase: vi.fn() }));
 vi.mock('@mahoshojo/ui-web/shell', () => ({ ProductFooter: () => null }));
 vi.mock('@mahoshojo/ui-web/character-card', () => ({ resolveMagicalGirlGradient: () => 'pink', MagicalGirlCard: ({ magicalGirl }: { magicalGirl: { appearance: { overallLook: string } } }) => <pre data-result="magical-girl">{magicalGirl.appearance.overallLook}</pre>, CanshouCard: ({ canshou }: { canshou: { appearance: string } }) => <pre data-result="canshou">{canshou.appearance}</pre>, GeneralCharacterCard: ({ general }: { general: { content: string } }) => <pre data-result="character">{general.content}</pre> }));
@@ -31,6 +33,8 @@ let root: Root; let host: HTMLDivElement;
 const raw = { name: 'Alice', description: '{{user}} 对 {{char}} 说话', unknown: { keep: true } };
 const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 const button = (text: string) => [...host.querySelectorAll('button')].find(item => item.textContent?.includes(text))!;
+const modeButton = (text: string) => [...host.querySelectorAll('button')].find(item => item.textContent === text)!;
+const selectGenerationMode = async (text: string) => { await act(async () => modeButton(text).click()); await settle(); };
 const click = async (text: string) => { await act(async () => button(text).click()); await settle(); };
 async function upload(value = raw) {
   const bytes = new TextEncoder().encode(JSON.stringify(value)); const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -44,7 +48,7 @@ const complete = (input: TavernGenerationInput) => ({ status: 'completed', mode:
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.account = { userId: null, epoch: 0 };
-  vi.clearAllMocks(); mocks.invoke.mockReset(); mocks.invoke.mockResolvedValue(true); mocks.execute.mockReset(); mocks.execute.mockImplementation(async (_options, input) => complete(input));
+  vi.clearAllMocks(); mocks.put.mockReset(); mocks.invoke.mockReset(); mocks.invoke.mockResolvedValue(true); mocks.execute.mockReset(); mocks.execute.mockImplementation(async (_options, input) => complete(input));
   localStorage.clear(); localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'client', clientConnectionId: 'local' }, hiddenPresetIds: [] })); resetDesktopAiConfigStoreForTests();
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [{ code: 'zh-CN', name: '简体中文' }] })));
   vi.spyOn(window, 'confirm').mockReturnValue(false);
@@ -238,5 +242,140 @@ describe('Desktop Tavern character mode selection', () => {
     await act(async () => host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')!.click());
     expect(host.querySelector('[data-result="canshou"]')).not.toBeNull();
     expect(mocks.execute).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Desktop Tavern Direct streaming journey', () => {
+  async function nativeStream() {
+    const actual = await vi.importActual<typeof import('../src/features/tavern/generation')>('../src/features/tavern/generation');
+    mocks.execute.mockImplementation((options, input, intent, signal, onPartialText) => actual.executeTavernGeneration({ ...options, createChannel: () => ({}) }, input, intent, signal, onPartialText));
+    let request!: AiExecutionRequest;
+    let channel!: { onmessage(event: AiStreamEvent): void };
+    let finish!: () => void;
+    let sequence = 0;
+    const text = '# 星光\n名字：星光\n\n已收到的正文';
+    mocks.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command !== 'stream_target_ai') return true;
+      request = args!.request as AiExecutionRequest;
+      channel = args!.onEvent as typeof channel;
+      const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
+      channel.onmessage({ ...identity, type: 'started', sequence: sequence++ });
+      channel.onmessage({ ...identity, type: 'reasoning-delta', sequence: sequence++, delta: '独立思考内容' });
+      channel.onmessage({ ...identity, type: 'text-delta', sequence: sequence++, delta: text });
+      await new Promise<void>(resolve => { finish = resolve; });
+    });
+    return {
+      text, request: () => request,
+      finish: async (terminal: 'stop' | 'length' | 'eof') => act(async () => {
+        if (terminal !== 'eof') {
+          const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
+          channel.onmessage({ ...identity, type: 'result', sequence: sequence++, result: { ...identity, status: 'completed', finishReason: terminal, output: { text, reasoning: '独立思考内容' } } });
+        }
+        finish();
+      }),
+    };
+  }
+
+  it.each(['general', 'general-scenario', 'scenario', 'magical-girl', 'canshou'] as const)('streams %s through the real executor, then restores its actual general kind without dispatch', async kind => {
+    const native = await nativeStream();
+    await mount(); await upload(); await template(kind); if (kind !== 'scenario' && kind !== 'magical-girl') await chooseAi();
+    await selectGenerationMode('流式');
+    const expectedKind = kind === 'scenario' || kind === 'general-scenario' ? 'general-scenario' : 'general';
+    expect(host.textContent).toContain(expectedKind === 'general' ? '生成【通用角色卡】' : '生成【通用情景卡】');
+    await act(async () => { button('开始转换').click(); button('开始转换').click(); }); await settle();
+    expect(mocks.execute).toHaveBeenCalledOnce();
+    expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ generationMode: 'stream', mode: 'direct-local', modelId: 'model' });
+    expect(host.querySelector('[aria-label="流式正文预览"]')?.textContent).toContain('已收到的正文');
+    expect(host.querySelector('[aria-label="流式正文预览"]')?.textContent).not.toContain('独立思考内容');
+    expect(host.querySelector('[data-result]')).toBeNull();
+    expect(modeButton('非流式').disabled).toBe(true);
+    expect(modeButton('客户端').disabled).toBe(true); expect(modeButton('服务器').disabled).toBe(true);
+    expect(native.request().messages).toHaveLength(1);
+    await native.finish('stop'); await settle();
+    expect(host.querySelector('[aria-label="流式正文预览"]')).toBeNull();
+    expect(host.querySelector('[data-result]')?.textContent).toBe(native.text);
+    await click('下载通用卡 JSON');
+    const exported = JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes));
+    expect(exported).toMatchObject({ templateId: expectedKind === 'general' ? '通用角色' : '通用情景', content: native.text, _tavern: { raw } });
+    expect(exported).not.toHaveProperty('userAnswers'); expect(exported).not.toHaveProperty('elements'); expect(exported).not.toHaveProperty('signature');
+    const stored = JSON.parse(localStorage.getItem(TAVERN_AI_DRAFT_KEY)!);
+    expect(stored).toMatchObject({ generationMode: 'stream', input: { template: kind }, output: { cardKind: expectedKind, phase: 'completed' } });
+    await act(async () => root.unmount()); root = createRoot(host); await mount();
+    expect(modeButton('流式').getAttribute('aria-pressed')).toBe('true');
+    expect(host.querySelector('[data-result]')?.textContent).toBe(native.text); expect(mocks.execute).toHaveBeenCalledOnce();
+    await click('导出原件 JSON'); expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[1]![0].bytes))).toEqual(raw);
+  });
+
+  it.each(['length', 'eof', 'cancel'] as const)('exports %s accepted text and the original separately without offering a result card', async failure => {
+    const native = await nativeStream(); await mount(); await upload(); await chooseAi(); await selectGenerationMode('流式'); await click('开始转换');
+    if (failure === 'cancel') await click('取消转换');
+    await native.finish(failure === 'cancel' ? 'stop' : failure); await settle();
+    expect(host.querySelector('[data-result]')).toBeNull(); expect(host.textContent).not.toContain('生成完成');
+    expect(host.textContent).toContain('不是完成卡');
+    expect([...host.querySelectorAll('button')].some(item => item.textContent?.includes('保存通用卡'))).toBe(false);
+    await click('导出未完成正文（文本）');
+    expect(mocks.export.mock.calls[0]![0]).toMatchObject({ name: 'tavern-unfinished.txt', mimeType: 'text/plain;charset=utf-8' });
+    expect(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes)).toBe(native.text);
+    await click('导出原件 JSON'); expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[1]![0].bytes))).toEqual(raw);
+    await selectGenerationMode('非流式');
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('原始输出'));
+    expect(modeButton('流式').getAttribute('aria-pressed')).toBe('true');
+    await act(async () => root.unmount()); root = createRoot(host); await mount();
+    expect(host.textContent).toContain('不是完成卡'); expect(mocks.execute).toHaveBeenCalledOnce();
+    await click('导出未完成正文（文本）'); expect(new TextDecoder().decode(mocks.export.mock.calls[2]![0].bytes)).toBe(native.text);
+    vi.mocked(window.confirm).mockReturnValue(true); await selectGenerationMode('非流式');
+    expect(host.textContent).not.toContain('AI 原始输出'); expect(modeButton('非流式').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('preserves a stream choice across an unavailable Hosted target and requires an explicit non-stream change', async () => {
+    await mount(); await upload(); await chooseAi(); await selectGenerationMode('流式');
+    expect(modeButton('服务器').disabled).toBe(true);
+    const store = getDesktopAiConfigStore();
+    await act(async () => store.selectExecutionLocation('server')); await settle();
+    expect(modeButton('流式').getAttribute('aria-pressed')).toBe('true'); expect(modeButton('流式').disabled).toBe(true);
+    expect(host.textContent).toContain('酒馆服务器目前仅支持非流式 JSON'); expect(button('开始转换').disabled).toBe(true);
+    await click('开始转换'); expect(mocks.execute).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)!).selection.executionPreference).toBe('server');
+    await selectGenerationMode('非流式'); await click('开始转换');
+    expect(mocks.execute).toHaveBeenCalledOnce(); expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'hosted-json', generationMode: 'non-stream' });
+  });
+
+  it('cancels stream credential preparation before dispatch and keeps frozen draft input/mode', async () => {
+    await mount(); await upload(); await chooseAi(); await selectGenerationMode('流式');
+    const store = getDesktopAiConfigStore(); const entry = listDesktopPresetEntries(new Set()).find(item => item.directCapableModels.length)!;
+    await act(async () => { store.selectProviderTarget({ kind: 'preset', providerId: entry.preset.id }); store.selectPresetModel(entry.preset.id, entry.directCapableModels[0]!.value); }); await settle();
+    let finish!: (value: boolean) => void;
+    mocks.invoke.mockImplementation(async (command: string) => command === 'has_provider_secret' ? new Promise<boolean>(resolve => { finish = resolve; }) : true);
+    await click('开始转换'); expect(store.isPreparingGeneration()).toBe(true);
+    expect(modeButton('非流式').disabled).toBe(true); expect(host.querySelector<HTMLSelectElement>('select')?.disabled).toBe(true);
+    await click('取消转换'); await act(async () => finish(true)); await settle();
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(TAVERN_AI_DRAFT_KEY)!)).toMatchObject({ generationMode: 'stream', input: { raw, template: 'general', language: 'zh-CN' } });
+  });
+
+  it('retries saving a completed general scenario without replaying generation or losing its original', async () => {
+    const { webcrypto } = await import('node:crypto'); vi.stubGlobal('crypto', webcrypto);
+    const native = await nativeStream(); await mount(); await upload(); await template('scenario'); await selectGenerationMode('流式');
+    await click('开始转换'); await native.finish('stop'); await settle();
+    mocks.put.mockRejectedValueOnce(new Error('disk full')).mockResolvedValue({ written: true });
+    await click('保存通用卡到本地库');
+    expect(host.textContent).toContain('保存到本地卡库失败'); expect(host.querySelector('[data-result]')?.textContent).toBe(native.text);
+    await click('导出原件 JSON'); expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes))).toEqual(raw);
+    await click('保存通用卡到本地库');
+    expect(host.textContent).toContain('已保存到本地卡库（未签名 AI 转换）');
+    expect(mocks.put).toHaveBeenCalledTimes(2); expect(mocks.execute).toHaveBeenCalledOnce();
+    expect(mocks.put.mock.calls[1]![0]).toMatchObject({ cardType: 'scenario', data: { templateId: '通用情景', content: native.text, _tavern: { raw } }, provenance: { kind: 'unsigned', execution: 'direct-local' } });
+  });
+
+  it('keeps unfinished text exportable after draft writes fail', async () => {
+    const native = await nativeStream(); await mount(); await upload(); await chooseAi(); await selectGenerationMode('流式');
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) { if (key === TAVERN_AI_DRAFT_KEY) throw new Error('full'); setItem.call(this, key, value); });
+    await click('开始转换'); await native.finish('eof'); await settle();
+    expect(host.textContent).toContain('当前内容仅保留在此页面');
+    await click('导出未完成正文（文本）'); expect(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes)).toBe(native.text);
+    await click('导出原件 JSON'); expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[1]![0].bytes))).toEqual(raw);
+    expect(mocks.execute).toHaveBeenCalledOnce();
   });
 });

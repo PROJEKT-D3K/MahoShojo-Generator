@@ -1,7 +1,18 @@
 import { useId, type ReactNode } from 'react';
+import type { DataCardTemplate } from '@mahoshojo/domain/data-cards';
 import { GenerationModeSwitcher, type GenerationMode } from '../details-controls/GenerationModeSwitcher';
 
 export type TavernConversionMode = 'rules' | 'ai';
+
+/** Shared output semantics; completion and partial-save policy remain host-owned. */
+export function describeTavernGenerationMode(template: DataCardTemplate, mode: GenerationMode): string {
+  if (mode === 'stream') return template === 'scenario' || template === 'general-scenario'
+    ? '提示：流式生成会实时输出 Markdown，并生成【通用情景卡】。'
+    : '提示：流式生成会实时输出 Markdown，并生成【通用角色卡】；若需要结构化的魔法少女/残兽字段与 userAnswers，请切换为非流式。';
+  if (template === 'scenario') return '提示：非流式生成会返回结构化情景 JSON（包含 elements 等字段），更适合进阶玩法。';
+  if (template === 'general-scenario') return '提示：非流式生成会返回通用情景 JSON（标题与正文）。';
+  return '提示：非流式生成会返回结构化数据卡（魔法少女/残兽会同时生成 userAnswers），适合后续升华/导出酒馆卡。';
+}
 
 export interface TavernConversionControlsProps {
   mode: TavernConversionMode;

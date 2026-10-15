@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TavernConversionControls, type TavernConversionControlsProps } from '../src/tavern';
+import { describeTavernGenerationMode, TavernConversionControls, type TavernConversionControlsProps } from '../src/tavern';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -62,5 +62,21 @@ describe('shared Tavern conversion controls', () => {
     act(() => button('流式').click()); expect(input.onGenerationModeChange).not.toHaveBeenCalled();
     act(() => root.render(<TavernConversionControls {...input} languageExpanded={false} />));
     expect(container.querySelector('select')).toBeNull(); expect(container.textContent).toContain('当前：zh-CN');
+  });
+});
+
+
+describe('shared Tavern output descriptions', () => {
+  it.each(['general', 'magical-girl', 'canshou'] as const)('describes %s streaming as a general character', template => {
+    expect(describeTavernGenerationMode(template, 'stream')).toContain('【通用角色卡】');
+    expect(describeTavernGenerationMode(template, 'stream')).toContain('userAnswers');
+  });
+  it.each(['scenario', 'general-scenario'] as const)('describes %s streaming as a general scenario', template => {
+    expect(describeTavernGenerationMode(template, 'stream')).toContain('【通用情景卡】');
+  });
+  it('does not claim the general scenario JSON has structured elements', () => {
+    expect(describeTavernGenerationMode('scenario', 'non-stream')).toContain('elements');
+    expect(describeTavernGenerationMode('general-scenario', 'non-stream')).not.toContain('elements');
+    expect(describeTavernGenerationMode('general-scenario', 'non-stream')).toContain('通用情景');
   });
 });
