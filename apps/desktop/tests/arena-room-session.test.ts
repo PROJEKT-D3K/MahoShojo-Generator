@@ -201,6 +201,20 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     expect(h.session.getSnapshot().notice).toContain('原配置请求已获确认');
   });
 
+  it('explains an old producer refusal without retrying or retaining a false unknown write', async () => {
+    const h = await harness(); await joinRoom(h, host);
+    const original = h.session.getSnapshot().session!;
+    const request = h.plan('config'); const publishing = h.session.publishConfig(original, original.snapshot.sharedConfig,
+      h.session.confirmationOwner()!, () => true);
+    await request.entered.promise; request.accept(); await publishing;
+    await h.receive(DesktopRoomEventSchema.parse({ kind: 'request-error', operation: 'config', requestId: request.requestId,
+      error: { code: 'service-rejected', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applied', serverCode: 'ROOM_DESKTOP_OPERATION_UNSUPPORTED' } }));
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot()).toMatchObject({ error: '服务器不支持此桌面操作，请更新服务端后再明确重试。', unknown: null, configTracking: null });
+    expect(h.requests.map(value => value.kind)).toEqual(['join', 'config']);
+    expect(h.session.getSnapshot().session).toBe(original);
+  });
+
   it('keeps the original target after unknown and GET, without retrying the config write', async () => {
     const h = await harness(); await joinRoom(h, host);
     const original = h.session.getSnapshot().session!;

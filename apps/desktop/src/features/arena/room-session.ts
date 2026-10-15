@@ -49,6 +49,7 @@ export const describeDesktopRoomError = (error: ArenaRoomBridgeError): string =>
   if (error.code === 'backpressure') return '房间消费容量已用尽。请关闭并重新打开应用窗口；刷新页面不会清除未确认的投递。';
   if (error.code === 'busy') return '上一项房间操作尚未结束，请稍后明确重试。';
   if (error.code === 'scope-changed') return '房间、账号或页面已变化，旧操作不再应用。';
+  if (error.serverCode === 'ROOM_DESKTOP_OPERATION_UNSUPPORTED') return '服务器不支持此桌面操作，请更新服务端后再明确重试。';
   if (error.serverCode === 'ROOM_NOT_FOUND') return '房间已结束或当前不可找到。';
   if (error.serverCode === 'ROOM_FORBIDDEN') return '当前账号不再具有此房间的访问资格。';
   if (error.code === 'presence-unsupported' || error.code === 'invalid-response') return '服务器尚未支持受检房间协议，或回执无法验证。';
