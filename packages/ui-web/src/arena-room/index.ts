@@ -14,3 +14,20 @@ export type { ArenaConfigDiffEntry, ArenaRoomConfigReferenceRequest } from './co
 export { arenaBattleModeCopy, arenaStoryLengthCopy, arenaStoryLengthValueCopy } from './config-value-copy';
 
 export { RoomConfigPublishStatus } from './RoomConfigPublishStatus';
+
+export {
+  ArenaProposalChangeDescription,
+  ArenaProposalSelectionDetails,
+  arenaProposalChangeSummary,
+  arenaProposalChangeProposedSummary,
+  arenaProposalExpectedBaseSummary,
+  arenaProposalValueSummary,
+  changeRefTitle,
+} from './proposal-presentation';
+export type {
+  ArenaProposalChangeDescriptionProps,
+  ArenaProposalSelectionDetailsProps,
+  ArenaProposalChangeLabels,
+} from './proposal-presentation';
+
+export { RoomProposalReadOnlyList } from './RoomProposalReadOnlyList';

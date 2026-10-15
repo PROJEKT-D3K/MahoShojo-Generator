@@ -15,7 +15,7 @@ import {
   type DesktopRoomAttachResponse, type DesktopRoomBatch, type DesktopRoomHttpAction,
   type DesktopRoomSubscribeRequest,
 } from '@mahoshojo/contracts/desktop-room-ipc';
-import type { ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
+import { PROPOSAL_VERSION, type ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
 import { createDesktopRouter } from '../src/app/router';
 import { ADVANCED_ARENA_DRAFT_KEY, ARENA_DRAFT_KEY, createInitialArenaDraft, type ArenaDraft } from '../src/features/arena/session';
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
@@ -340,6 +340,26 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     expect(editor.querySelector('input[name="arena_story_guidance"]')!.matches(':disabled')).toBe(true);
     await change('#room-host-draft-arena-story-guidance', 'must remain blocked');
     expect(ordinarySnapshot().advanced).toBe(after.advanced); expect(port.actions.map(value => value.action.kind)).toEqual(['create', 'config']); assertNoExecution();
+  });
+
+  it('shows only received proposal snapshots and removes them on account retirement without writes', async () => {
+    seedOrdinary(); await mount(); await click('恢复草稿'); const before = ordinarySnapshot(); await open();
+    const create = await startAction('创建多人房间', 'create'); const authority = await confirmMembership(create, 'host');
+    await publishOnline(authority);
+    const event = structuredClone(ipcFixture.pulls[12]!.batch.event) as { kind: 'socket'; message: { controlSeq: number; payload: ArenaRoomSessionResponse['snapshot'] } };
+    event.message.controlSeq += 1; event.message.payload.controlSeq = event.message.controlSeq;
+    event.message.payload.proposals = [{ proposalVersion: PROPOSAL_VERSION, proposalId: 'received-proposal', roomId: authority.roomId,
+      authorUserId: authority.self.userId, baseRevision: event.message.payload.revision, status: 'submitted', createdAt: '2026-10-15T12:00:00Z',
+      changes: [{ changeId: 'guidance', type: 'setUserGuidance', expectedBase: { kind: 'value', value: event.message.payload.sharedConfig.userGuidance }, value: '只读提案目标' }] }];
+    await port.deliver(event);
+    const view = () => container.querySelector('[aria-label="房间提案只读预览"]');
+    expect(view()?.textContent).toContain('只读提案目标'); expect(view()?.textContent).toContain(`修订 ${event.message.payload.revision}`);
+    expect(view()?.querySelector('button, input, select, textarea')).toBeNull();
+    await port.deliver({ kind: 'status', state: 'resync-required' });
+    expect(view()?.textContent).toContain('最后已收到的房间快照（当前未同步）'); expect(view()?.textContent).toContain('received-proposal');
+    expect(ordinarySnapshot()).toEqual(before); expect(port.actions.map(value => value.action.kind)).toEqual(['create']); assertNoExecution();
+    await act(async () => { await getDesktopCloudSessionStore().signOut(); });
+    expect(view()).toBeNull(); expect(container.textContent).not.toContain('只读提案目标');
   });
 
   it('creates as host, waits for HTTP ACK before subscribe and for snapshot plus presence before online, then closes explicitly', async () => {

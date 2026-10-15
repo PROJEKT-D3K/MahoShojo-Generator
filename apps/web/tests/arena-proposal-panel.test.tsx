@@ -16,10 +16,11 @@ import type {
 } from '@/lib/arena-room/controller';
 import type { ArenaRoomProposalWorkspace } from '@/components/arena/multiplayer/useArenaRoom';
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const sharedConfig = {
   battleMode: 'classic' as const,
+  reportFormat: 'markdown' as const,
   combatants: [{
     key: 'data-card:character-1',
     ref: { id: 'character-1', kind: 'character' as const, versionToken: 'v1' },
@@ -94,6 +95,11 @@ const stateFor = (
   unknownOperation: null,
   proposalOperation: null,
   proposalResultUnknown: false,
+  configPublishPending: false, configPublishResultUnknown: false,
+  managementOperation: null, managementResultUnknown: false,
+  generation: { mirror: null, phase: 'idle', status: null, authoritativeMarkdown: '', markdown: '', storyCursor: null,
+    gap: null, finalAuthoritative: false, generationRecordId: null, errorCode: null, recoveryCode: null,
+    pendingRequestId: null, startResultUnknown: false, result: null },
   session: {
     protocolVersion: 1,
     roomId: 'room-1',
@@ -385,6 +391,22 @@ describe('Arena Proposal panel real React interactions', () => {
 });
 
 describe('arena proposal change value presentation', () => {
+  it('shared host description preserves Web language names and technical details', async () => {
+    const languageProposal: ArenaProposal = {
+      ...proposal,
+      changes: [{
+        changeId: 'language', type: 'setSelectedLanguage', value: 'zh-TW',
+        expectedBase: { kind: 'value', value: 'zh-CN' },
+      }],
+    };
+    await act(async () => root.render(
+      <ArenaProposalPanel state={stateFor(host, [languageProposal])} controller={createController()} workspace={createWorkspace()} />,
+    ));
+    expect(container.querySelector('fieldset')?.textContent).toContain('语言改为 繁體中文');
+    expect(container.querySelector('input[type="checkbox"]')?.getAttribute('aria-label')).toBe('接受变更：语言改为 繁體中文');
+    expect(container.querySelector('details')?.textContent).toContain('提案基准：zh-CN');
+  });
+
   it('内部枚举值必须经 registry 转译，不进入一级文案', () => {
     expect(arenaProposalChangeProposedSummary({
       changeId: 'mode',
