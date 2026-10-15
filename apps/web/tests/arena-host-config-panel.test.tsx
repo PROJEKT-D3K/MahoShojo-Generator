@@ -27,3 +27,64 @@ it('uses the shared difference view while keeping publish and sync explicit host
   await act(async () => button('收起差异').click()); expect(container.textContent).not.toContain('与房间当前设置相比，本地修改了');
   await act(async () => button('更新房间配置').click()); expect(publishLocal).toHaveBeenCalledTimes(1);
 });
+
+it('unknown 使用共享核对与二次结束确认，普通卸载不结束跟踪', async () => {
+  const checkConfigPublish = vi.fn(), endConfigPublishTracking = vi.fn(), readConfigAfterEnd = vi.fn();
+  const controller = { checkConfigPublish, endConfigPublishTracking, readConfigAfterEnd } as unknown as import('@/lib/arena-room/controller').ArenaRoomController;
+  const reconciliation = { state: { kind: 'idle' }, publishLocal: vi.fn(), syncRoom: vi.fn() } as unknown as ArenaRoomHostReconciliation;
+  const state = { session: fixture.operations.create.success.result, configPublishPending: false, configPublishResultUnknown: true,
+    configTracking: { id: 'old-post', phase: 'unknown', target: null, observation: 'target-matches', checking: false } } as unknown as ArenaRoomControllerState;
+  const button = (label: string) => [...container.querySelectorAll('button')].find(item => item.textContent === label)!;
+  await act(async () => root.render(<ArenaHostConfigPanel controller={controller} controllerState={state} reconciliation={reconciliation} />));
+  expect(container.textContent).toContain('原请求结果仍无法确认');
+  expect(button('更新房间配置').disabled).toBe(true);
+  await act(async () => button('核对当前房间').click());
+  expect(checkConfigPublish).toHaveBeenCalledOnce();
+  expect(reconciliation.syncRoom).not.toHaveBeenCalled();
+  await act(async () => button('结束本次跟踪').click());
+  expect(endConfigPublishTracking).not.toHaveBeenCalled();
+  await act(async () => root.render(null));
+  expect(endConfigPublishTracking).not.toHaveBeenCalled();
+  await act(async () => root.render(<ArenaHostConfigPanel controller={controller} controllerState={state} reconciliation={reconciliation} />));
+  await act(async () => button('结束本次跟踪').click());
+  await act(async () => button('确认结束跟踪').click());
+  expect(endConfigPublishTracking).toHaveBeenCalledWith('old-post');
+  const ended = { ...state, configPublishResultUnknown: false, configTracking: { ...state.configTracking!, phase: 'ended-needs-read' as const } };
+  await act(async () => root.render(<ArenaHostConfigPanel controller={controller} controllerState={ended} reconciliation={reconciliation} />));
+  expect(button('更新房间配置').disabled).toBe(true);
+  await act(async () => button('重新读取房间').click());
+  expect(readConfigAfterEnd).toHaveBeenCalledWith('old-post');
+  expect(reconciliation.publishLocal).not.toHaveBeenCalled();
+});
+
+it.each(['missing-session', 'member', 'revoked-host'] as const)('%s 仍显示旧跟踪，核对/结束/新读不提供发布权限', async (scope) => {
+  const original = fixture.operations.create.success.result;
+  const session = scope === 'missing-session' ? null : { ...original, self: { ...original.self,
+    role: scope === 'member' ? 'member' : 'host', membershipState: scope === 'revoked-host' ? 'revoked' : 'active' } };
+  const checkConfigPublish = vi.fn(), endConfigPublishTracking = vi.fn(), readConfigAfterEnd = vi.fn();
+  const controller = { checkConfigPublish, endConfigPublishTracking, readConfigAfterEnd } as unknown as import('@/lib/arena-room/controller').ArenaRoomController;
+  const reconciliation = { state: { kind: 'idle' }, publishLocal: vi.fn(), syncRoom: vi.fn() } as unknown as ArenaRoomHostReconciliation;
+  const state = { session, configPublishPending: false, configPublishResultUnknown: true,
+    configTracking: { id: 'original-scope', phase: 'unknown', target: null,
+      observation: scope === 'missing-session' ? 'authority-unavailable' : 'scope-changed', checking: false } } as unknown as ArenaRoomControllerState;
+  const button = (label: string) => [...container.querySelectorAll('button')].find(item => item.textContent === label)!;
+  await act(async () => root.render(<ArenaHostConfigPanel controller={controller} controllerState={state} reconciliation={reconciliation} />));
+  expect(container.querySelector('[aria-label="配置发布跟踪"]')).not.toBeNull();
+  expect(button('更新房间配置')).toBeUndefined();
+  expect(button('同步房间配置')).toBeUndefined();
+  await act(async () => button('核对当前房间').click());
+  await act(async () => button('结束本次跟踪').click());
+  await act(async () => button('确认结束跟踪').click());
+  expect(checkConfigPublish).toHaveBeenCalledOnce();
+  expect(endConfigPublishTracking).toHaveBeenCalledWith('original-scope');
+  const ended = { ...state, configPublishResultUnknown: false,
+    configTracking: { ...state.configTracking!, phase: 'ended-needs-read' as const } };
+  await act(async () => root.render(<ArenaHostConfigPanel controller={controller} controllerState={ended} reconciliation={reconciliation} />));
+  await act(async () => button('重新读取房间').click());
+  expect(readConfigAfterEnd).toHaveBeenCalledWith('original-scope');
+  await act(async () => root.render(<ArenaHostConfigPanel controller={controller} controllerState={{ ...ended, configTracking: null }} reconciliation={reconciliation} />));
+  expect(container.querySelector('[aria-label="配置发布跟踪"]')).toBeNull();
+  expect(container.textContent).toBe('');
+  expect(reconciliation.publishLocal).not.toHaveBeenCalled();
+  expect(reconciliation.syncRoom).not.toHaveBeenCalled();
+});

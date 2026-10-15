@@ -1,19 +1,22 @@
-import { ArenaRoomSessionResponseSchema, jsonUtf8ByteLength, type ArenaRoomCreateRequest, type ArenaRoomSessionResponse, type ArenaRoomSharedConfig, type RoomDirectoryEntry, type RoomDirectoryVisibility, type RoomPresenceSnapshot, type RoomServerTransportMessage } from '@mahoshojo/contracts/arena-room';
+import { observeArenaRoomConfigPublish, type ArenaRoomConfigPublishTarget, type ArenaRoomConfigPublishObservation } from '@mahoshojo/multiplayer-core';
+import { ArenaRoomPublishConfigRequestSchema, ArenaRoomSessionResponseSchema, jsonUtf8ByteLength, type ArenaRoomCreateRequest, type ArenaRoomSessionResponse, type ArenaRoomSharedConfig, type RoomDirectoryEntry, type RoomDirectoryVisibility, type RoomPresenceSnapshot, type RoomServerTransportMessage } from '@mahoshojo/contracts/arena-room';
 import { DESKTOP_ROOM_IPC_LIMITS, type DesktopRoomBatch, type DesktopRoomHttpAction, type DesktopRoomHttpOperation } from '@mahoshojo/contracts/desktop-room-ipc';
 import { ArenaRoomBridgeError, createArenaRoomBridge, type ArenaRoomAcceptance, type ArenaRoomChannel } from '../../platform/arena-room-bridge';
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import type { DesktopCloudSessionStore } from '../account/cloud-session-store';
 
 export type RoomUnknownIntent = { operation: 'create' | 'join' | 'leave' | 'close' | 'config'; roomId: string | null; intentId: string | null };
+export type DesktopConfigTracking = { id: string; roomId: string; phase: 'publishing' | 'unknown' | 'ended-needs-read'; target: ArenaRoomConfigPublishTarget | null; observation: ArenaRoomConfigPublishObservation };
 export interface DesktopRoomState {
   opened: boolean; busy: boolean; constrained: boolean;
   phase: 'detached' | 'attaching' | 'ready' | 'connecting' | 'online' | 'offline' | 'reconnecting' | 'closed' | 'unavailable';
   session: ArenaRoomSessionResponse | null; presence: RoomPresenceSnapshot | null; snapshotReceived: boolean;
   rooms: readonly RoomDirectoryEntry[]; nextCursor: string | null;
+  configTracking: DesktopConfigTracking | null;
   unknown: RoomUnknownIntent | null; error: string | null; notice: string | null;
   sourceIssues: readonly string[];
 }
-const initial = (): DesktopRoomState => ({ opened: false, busy: false, constrained: false, phase: 'detached', session: null, presence: null, snapshotReceived: false, rooms: [], nextCursor: null, unknown: null, error: null, notice: null, sourceIssues: [] });
+const initial = (): DesktopRoomState => ({ opened: false, busy: false, constrained: false, phase: 'detached', session: null, presence: null, snapshotReceived: false, rooms: [], nextCursor: null, unknown: null, error: null, notice: null, sourceIssues: [], configTracking: null });
 const staleView: DesktopRoomState = { ...initial(), error: '账号或页面身份已变化，请重新打开多人房间。' };
 export interface DesktopRoomDeps {
   invoke: InvokeFn;
@@ -57,6 +60,7 @@ export const describeDesktopRoomError = (error: ArenaRoomBridgeError): string =>
 export class DesktopArenaRoomSession {
   private state = initial(); private readonly listeners = new Set<() => void>();
   private owner: Owner | null = null; private flight: Flight | null = null;
+  private configSequence = 0;
   private disposed = false; private unsubscribe: (() => void) | null = null;
   private readonly bridge: ReturnType<typeof createArenaRoomBridge>;
   constructor(private readonly deps: DesktopRoomDeps) {
@@ -67,7 +71,13 @@ export class DesktopArenaRoomSession {
   activate = () => { this.disposed = false; this.unsubscribe ??= this.deps.account.subscribe(() => { if (this.owner && !this.current()) this.invalidate(); }); };
   getSnapshot = (): DesktopRoomState => this.owner && !this.current() ? staleView : this.state;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
-  private publish(patch: Partial<DesktopRoomState>) { this.state = { ...this.state, ...patch }; this.listeners.forEach(listener => listener()); }
+  private publish(patch: Partial<DesktopRoomState>) {
+    this.state = { ...this.state, ...patch };
+    const tracking = this.state.configTracking;
+    if ('session' in patch && tracking?.phase === 'unknown') this.state = { ...this.state,
+      configTracking: { ...tracking, observation: observeArenaRoomConfigPublish(tracking.target, this.state.session, true) } };
+    this.listeners.forEach(listener => listener());
+  }
   private current(owner = this.owner): boolean {
     if (!owner || owner !== this.owner || this.disposed) return false;
     try { const account = this.deps.account.getSnapshot();
@@ -80,7 +90,7 @@ export class DesktopArenaRoomSession {
   confirmationOwner = (): symbol | null => this.current() ? this.owner!.token : null;
   isBusy = () => this.current() && this.state.busy;
   isConstrained = () => this.current() && this.state.constrained;
-  needsLeaveConfirmation = () => this.current() && (this.state.busy || this.state.session !== null || this.state.unknown !== null);
+  needsLeaveConfirmation = () => this.current() && (this.state.busy || this.state.session !== null || this.state.unknown !== null || this.state.configTracking !== null);
   async open(): Promise<symbol | null> {
     if (this.disposed) return null;
     if (this.owner && !this.current()) this.invalidate();
@@ -89,6 +99,7 @@ export class DesktopArenaRoomSession {
     const account = this.deps.account.getSnapshot(); let nonce: string | undefined; try { nonce = this.deps.documentNonce(); } catch { nonce = undefined; }
     if (!account.account || account.verification !== 'verified' || account.authFlow.kind !== 'idle') { this.publish({ opened: true, error: '请先验证并登录账号，再打开多人房间。' }); return null; }
     if (!nonce) { this.publish({ opened: true, error: '当前窗口无法验证房间页面身份，请重新打开应用窗口。' }); return null; }
+    const previousTracking = this.current() ? this.state.configTracking : null;
     const previousSession = this.current() ? this.state.session : null;
     const owner = { userId: account.account.userId, epoch: this.deps.account.getCredentialEpoch(), nonce, token: Symbol() };
     this.owner = owner; this.flight = null; this.publish({ ...initial(), opened: true, busy: true, phase: 'attaching' });
@@ -96,13 +107,17 @@ export class DesktopArenaRoomSession {
       const attached = await this.bridge.attach({ documentNonce: nonce, attachIntent: nextAttachIntent(nonce), expectedUserId: owner.userId });
       if (!this.current(owner)) return null;
       const unknown = attached.pendingIntent;
-      this.publish({ busy: false, phase: previousSession ? 'offline' : 'ready', session: previousSession, unknown, constrained: !!unknown || !!previousSession, notice: unknown ? '发现本机尚未确认的原操作，请明确核对；不会自动再次创建。' : null });
+      const configTracking: DesktopConfigTracking | null = unknown?.operation === 'config' && unknown.roomId
+        ? { id: unknown.intentId, roomId: unknown.roomId, phase: 'unknown', target: null, observation: 'target-unavailable' }
+        : previousTracking?.phase === 'ended-needs-read' ? previousTracking : null;
+      this.publish({ busy: false, phase: previousSession ? 'offline' : 'ready', session: previousSession, unknown, configTracking,
+        constrained: !!unknown || !!previousSession || !!configTracking, notice: unknown ? '发现本机尚未确认的原操作，请明确核对；不会自动重发。' : null });
       return owner.token;
     } catch (cause) { if (this.current(owner)) this.failed(cause instanceof ArenaRoomBridgeError ? cause : new ArenaRoomBridgeError('internal-error')); }
     return null;
   }
   async create(details: { title: string; visibility: RoomDirectoryVisibility; displayName: string }, prepare: () => Promise<DesktopRoomSource>, sourceCurrent: () => boolean): Promise<void> {
-    if (!this.current() || this.state.busy || this.state.session || this.state.unknown || this.deps.canStart?.() === false) return;
+    if (!this.current() || this.state.busy || this.state.session || this.state.unknown || this.state.configTracking || this.deps.canStart?.() === false) return;
     const owner = this.owner; this.publish({ busy: true, constrained: true, error: null, sourceIssues: [] });
     try {
       const source = await prepare();
@@ -113,9 +128,58 @@ export class DesktopArenaRoomSession {
       this.publish({ busy: false }); await this.dispatch({ kind: 'create', request });
     } catch { if (this.current(owner)) this.publish({ busy: false, constrained: false, error: '读取当前可共享设定失败，原草稿仍保留。' }); }
   }
+  async publishConfig(session: ArenaRoomSessionResponse, sharedConfig: ArenaRoomSharedConfig, identity: symbol, sourceCurrent: () => boolean): Promise<void> {
+    if (!this.current() || this.confirmationOwner() !== identity || this.state.session !== session || this.state.busy
+      || this.state.unknown || this.state.configTracking || this.deps.canStart?.() === false || !sourceCurrent()
+      || session.self.role !== 'host' || session.self.membershipState !== 'active') return;
+    const request = ArenaRoomPublishConfigRequestSchema.safeParse({ expectedRoomEpoch: session.roomEpoch,
+      expectedRevision: session.snapshot.revision, expectedControlSeq: session.snapshot.controlSeq, sharedConfig });
+    if (!request.success) { this.publish({ error: '当前设置不能完整共享，请重新比较。' }); return; }
+    const target: ArenaRoomConfigPublishTarget = { roomId: session.roomId, selfUserId: session.self.userId, request: structuredClone(request.data) };
+    this.publish({ configTracking: { id: `local-config-${++this.configSequence}`, roomId: session.roomId, phase: 'publishing', target, observation: 'unobserved' } });
+    await this.dispatch({ kind: 'config', roomId: session.roomId, request: target.request });
+  }
+  async checkConfigPublish(): Promise<void> {
+    const tracking = this.state.configTracking;
+    if (!tracking || tracking.phase !== 'unknown' || this.state.busy || !this.current()) return;
+    const owner = this.owner, pendingId = this.state.unknown?.intentId;
+    if (this.state.phase === 'unavailable') {
+      const token = await this.open();
+      if (!token || this.confirmationOwner() !== token || !this.current() || this.owner?.userId !== owner?.userId
+        || this.owner?.epoch !== owner?.epoch || this.owner?.nonce !== owner?.nonce
+        || (this.state.configTracking && (this.state.configTracking.roomId !== tracking.roomId
+          || (pendingId && this.state.configTracking.id !== pendingId)))) return;
+    }
+    await this.dispatch({ kind: 'session', roomId: tracking.roomId });
+  }
+  async endConfigTracking(id: string): Promise<void> {
+    const tracking = this.state.configTracking, pending = this.state.unknown, owner = this.owner;
+    if (!this.current() || this.state.busy || tracking?.phase !== 'unknown' || tracking.id !== id
+      || pending?.operation !== 'config' || pending.intentId !== id) return;
+    this.flight = null;
+    this.publish({ busy: true, session: null, presence: null, snapshotReceived: false });
+    try {
+      await this.bridge.endConfigTracking(id);
+      if (!this.current(owner) || this.state.configTracking?.id !== id) return;
+      this.publish({ busy: false, unknown: null, session: null, phase: 'ready', constrained: true,
+        configTracking: { ...tracking, phase: 'ended-needs-read', target: null, observation: 'unobserved' },
+        notice: '已结束本机跟踪；服务器请求不会因此取消。', error: null });
+    } catch {
+      if (this.current(owner) && this.state.configTracking?.id === id) this.publish({ busy: false, phase: 'unavailable',
+        error: '结束跟踪的回执无法确认，请重新核对本机跟踪与当前房间。' });
+    }
+  }
+  async readConfigAfterEnd(): Promise<void> {
+    const tracking = this.state.configTracking, owner = this.owner;
+    if (!this.current() || this.state.busy || tracking?.phase !== 'ended-needs-read') return;
+    const token = await this.open();
+    if (!token || !this.current() || this.state.configTracking !== tracking || this.owner?.userId !== owner?.userId
+      || this.owner?.epoch !== owner?.epoch || this.owner?.nonce !== owner?.nonce) return;
+    await this.dispatch({ kind: 'session', roomId: tracking.roomId });
+  }
   discover = (more = false) => this.dispatch({ kind: 'discover', query: { limit: 50, ...(more && this.state.nextCursor ? { cursor: this.state.nextCursor } : {}) } });
   join = (roomId: string, displayName: string) => {
-    if (this.state.session || this.state.unknown || this.deps.canStart?.() === false || !/^[\w-]{1,128}$/u.test(roomId.trim())) return Promise.resolve();
+    if (this.state.session || this.state.unknown || this.state.configTracking || this.deps.canStart?.() === false || !/^[\w-]{1,128}$/u.test(roomId.trim())) return Promise.resolve();
     return this.dispatch({ kind: 'join', roomId: roomId.trim(), request: { displayName } });
   };
   leave = () => { const s = this.state.session; return s && s.self.role === 'member' ? this.dispatch({ kind: 'leave', roomId: s.roomId, expectedRoomEpoch: s.roomEpoch }) : Promise.resolve(); };
@@ -140,6 +204,7 @@ export class DesktopArenaRoomSession {
   };
   private async dispatch(action: DesktopRoomHttpAction): Promise<void> {
     if (!this.current() || this.state.busy || this.flight) return;
+    if (this.state.configTracking?.phase === 'ended-needs-read' && action.kind !== 'session') return;
     if (this.state.unknown && !['session', 'resume-create'].includes(action.kind)) return;
     if (this.state.unknown?.operation === 'create' && action.kind !== 'resume-create') return;
     const owner = this.owner;
@@ -177,11 +242,12 @@ export class DesktopArenaRoomSession {
           else {
             const result = event.response.result;
             flight.subscribe = true;
-            this.publish({ session: result, presence: null, snapshotReceived: false, rooms: [], nextCursor: null, notice: event.operation === 'session' ? '已核对服务器当前成员资格。' : '成员资格已确认，正在建立在线连接。' });
+            this.publish({ session: result, presence: null, snapshotReceived: false, rooms: [], nextCursor: null, notice: event.operation === 'config' ? '原配置请求已获确认，正在建立在线连接。' : event.operation === 'session' ? '已读取服务器当前房间状态。' : '成员资格已确认，正在建立在线连接。' });
           }
         }
       }
     } else if (event.kind === 'mutation-unknown') {
+      if (event.operation === 'config' && event.roomId) this.publish({ configTracking: { id: event.intentId, roomId: event.roomId, phase: 'unknown', target: this.state.configTracking?.target ?? null, observation: this.state.configTracking?.observation ?? 'target-unavailable' } });
       this.publish({ unknown: event, constrained: true, notice: '操作结果尚未确认，请明确核对原意图。' });
     } else if (event.kind === 'status') {
       if (event.state === 'closed') this.publish({ session: null, presence: null, snapshotReceived: false, constrained: !!this.flight || !!this.state.unknown, phase: 'closed', notice: '房间或当前成员资格已结束。' });
@@ -203,7 +269,8 @@ export class DesktopArenaRoomSession {
     const settled = flight.settlesUnknown || flight.result === 'success' && flight.operation !== 'discover'
       && (flight.operation !== 'session' || (this.state.unknown?.operation !== 'create' && this.state.unknown?.operation !== 'config'));
     if (settled) this.publish({ unknown: null });
-    this.publish({ busy: false, constrained: this.state.session !== null || this.state.unknown !== null });
+    if (flight.result === 'success' && (flight.operation === 'config' || (flight.operation === 'session' && this.state.configTracking?.phase === 'ended-needs-read'))) this.publish({ configTracking: null });
+    this.publish({ busy: false, constrained: this.state.session !== null || this.state.unknown !== null || this.state.configTracking !== null });
     if (flight.subscribe && this.state.session) void this.startSubscription();
   }
   private async startSubscription() {
@@ -216,6 +283,8 @@ export class DesktopArenaRoomSession {
     const unknown = flight && isMutation(flight.action) && error.outcome === 'unknown' ? this.state.unknown ?? unknownFor(flight.action) : this.state.unknown;
     const ended = flight?.operation === 'session' && ['ROOM_NOT_FOUND', 'ROOM_FORBIDDEN'].includes(error.serverCode ?? '');
     if (flight && error.outcome === 'not-applied') flight.knownNotApplied = true;
+    if (flight?.operation === 'config' && this.state.configTracking) this.publish({ configTracking: error.outcome === 'not-applied' ? null : { ...this.state.configTracking, phase: 'unknown' } });
+    if (flight?.operation === 'session' && this.state.configTracking?.phase === 'unknown') this.publish({ configTracking: { ...this.state.configTracking, observation: 'authority-unavailable' } });
     if (ended && flight && this.state.unknown?.operation !== 'create' && this.state.unknown?.operation !== 'config') flight.settlesUnknown = true;
     this.publish({ error: describeDesktopRoomError(error), unknown,
       ...(ended ? { session: null, presence: null, snapshotReceived: false, phase: 'closed' as const } : {}) });
@@ -227,7 +296,7 @@ export class DesktopArenaRoomSession {
     const incompleteMutation = flight && isMutation(flight.action) && !flight.acknowledged
       && !flight.knownNotApplied && error.outcome !== 'not-applied';
     this.applyFailure(incompleteMutation ? new ArenaRoomBridgeError(error.code, 'unknown', error.serverCode) : error, flight); this.flight = null;
-    this.publish({ busy: false, constrained: this.state.session !== null || this.state.unknown !== null, presence: null, snapshotReceived: false, phase: 'unavailable' });
+    this.publish({ busy: false, constrained: this.state.session !== null || this.state.unknown !== null || this.state.configTracking !== null, presence: null, snapshotReceived: false, phase: 'unavailable' });
   }
   private checkedSession(session: ArenaRoomSessionResponse): ArenaRoomSessionResponse {
     if (jsonUtf8ByteLength(session) > DESKTOP_ROOM_IPC_LIMITS.batchBytes) throw new ArenaRoomBridgeError('backpressure');

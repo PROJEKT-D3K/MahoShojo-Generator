@@ -1,3 +1,4 @@
+import { observeArenaRoomConfigPublish, type ArenaRoomConfigPublishTarget, type ArenaRoomConfigPublishObservation } from '@mahoshojo/multiplayer-core';
 import {
   ARENA_ROOM_PRESENCE_WEBSOCKET_PROTOCOL,
   ArenaRoomPublishConfigRequestSchema,
@@ -47,6 +48,14 @@ export type ArenaRoomControllerPhase =
   | 'unknown'
   | 'unauthenticated';
 
+export type ArenaRoomConfigTracking = Readonly<{
+  id: string;
+  phase: 'unknown' | 'ended-needs-read';
+  target: ArenaRoomConfigPublishTarget | null;
+  observation: ArenaRoomConfigPublishObservation;
+  checking: boolean;
+}>;
+
 export type ArenaRoomControllerState = {
   readonly phase: ArenaRoomControllerPhase;
   readonly rooms: readonly RoomDirectoryEntry[];
@@ -62,6 +71,9 @@ export type ArenaRoomControllerState = {
   readonly proposalResultUnknown: boolean;
   readonly configPublishPending: boolean;
   readonly configPublishResultUnknown: boolean;
+  readonly configTracking?: ArenaRoomConfigTracking | null;
+  /** Retain the local draft across panel remounts after ending an uncertain publish. */
+  readonly configDraftPreserved?: boolean;
   readonly managementOperation: ArenaRoomManagementOperation;
   readonly managementResultUnknown: boolean;
   readonly generation: ArenaRoomGenerationControllerView;
@@ -174,6 +186,10 @@ export type ArenaRoomController = {
   publishConfig(request: ArenaRoomPublishConfigRequest): Promise<ArenaRoomConfigPublishResult>;
   /** 只读核对服务器权威，不重放配置发布；显式同步再决定如何处理本地草稿。 */
   refreshSession(): Promise<ArenaRoomSessionResponse>;
+  checkConfigPublish(): Promise<void>;
+  endConfigPublishTracking(id: string): void;
+  readConfigAfterEnd(id: string): Promise<void>;
+  acknowledgeConfigDraftSync(authority: ArenaRoomSessionResponse): void;
   startGeneration(request: ArenaRoomGenerationStartRequest): Promise<void>;
   retryGenerationStart(): Promise<void>;
   /** 仅重新读取当前 generation，不创建新的 generation intent。 */
@@ -214,6 +230,8 @@ const READY_STATE: ArenaRoomControllerState = Object.freeze({
   proposalResultUnknown: false,
   configPublishPending: false,
   configPublishResultUnknown: false,
+  configTracking: null,
+  configDraftPreserved: false,
   managementOperation: null,
   managementResultUnknown: false,
   generation: EMPTY_GENERATION_VIEW,
@@ -509,6 +527,9 @@ const reduceGenerationControl = (
   };
 };
 
+// Local tracking IDs also distinguish controller instances across account remounts.
+let configTrackingScopeSequence = 0;
+
 export const createArenaRoomController = (
   options: ArenaRoomControllerOptions,
 ): ArenaRoomController => {
@@ -552,6 +573,7 @@ export const createArenaRoomController = (
   let pendingGenerationStartRequest: ArenaRoomGenerationStartRequest | null = null;
   let generationFence = 0;
   let unknownProposalMutation: UnknownProposalMutation | null = null;
+  const configTrackingScope = ++configTrackingScopeSequence;
   let configPublishOperation = 0;
   let configPublishPending = false;
   let sessionRefreshOperation = 0;
@@ -588,6 +610,13 @@ export const createArenaRoomController = (
   const publish = (patch: Partial<ArenaRoomControllerState>): void => {
     if (!isActive()) return;
     const next = { ...state, ...patch };
+    // Authority is an observation, never a receipt for an earlier POST.
+    if (patch.session && next.configTracking && !('configTracking' in patch)) {
+      next.configTracking = {
+        ...next.configTracking,
+        observation: observeArenaRoomConfigPublish(next.configTracking.target, patch.session, true),
+      };
+    }
     if (next.phase !== 'connected' || !next.session
       || next.session.roomId !== state.session?.roomId
       || next.session.roomEpoch !== state.session?.roomEpoch
@@ -1229,22 +1258,12 @@ export const createArenaRoomController = (
         return;
       }
       const epochChanged = current.roomEpoch !== event.roomEpoch;
-      const configReconciled = !epochChanged
-        && state.configPublishResultUnknown
-        && configPublishIntent?.roomId === event.roomId
-        && configPublishIntent.request.expectedRoomEpoch === event.roomEpoch
-        && (
-          event.payload.revision === configPublishIntent.request.expectedRevision
-          || event.payload.revision === configPublishIntent.request.expectedRevision + 1
-        )
-        && areArenaRoomSharedConfigsSemanticallyEqual(
-          event.payload.sharedConfig,
-          configPublishIntent.request.sharedConfig,
-        );
       if (epochChanged) {
-        invalidateConfigPublish();
+        // Epoch changes invalidate the old callback, but do not prove its outcome.
+        configPublishOperation += 1;
+        configPublishPending = false;
         invalidateManagementMutation();
-      } else if (configReconciled) configPublishIntent = null;
+      }
       unknownProposalMutation = null;
       advanceGenerationFence();
       publish({
@@ -1259,14 +1278,9 @@ export const createArenaRoomController = (
         ...(epochChanged ? { notice: '房间已由服务器恢复，需要重新同步' } : {}),
         proposalOperation: null,
         proposalResultUnknown: false,
-        ...(configReconciled ? {
+        ...(epochChanged ? {
+          ...(state.configTracking ? { configTracking: { ...state.configTracking, checking: false, observation: 'scope-changed' as const } } : {}),
           configPublishPending: false,
-          configPublishResultUnknown: false,
-          notice: '房间配置已更新',
-          error: null,
-        } : epochChanged ? {
-          configPublishPending: false,
-          configPublishResultUnknown: false,
           managementOperation: null,
           managementResultUnknown: false,
         } : {}),
@@ -1304,15 +1318,6 @@ export const createArenaRoomController = (
     }
 
     if (event.type === 'room.config.updated') {
-      const configReconciled = state.configPublishResultUnknown
-        && configPublishIntent?.roomId === event.roomId
-        && configPublishIntent.request.expectedRoomEpoch === event.roomEpoch
-        && event.payload.revision === configPublishIntent.request.expectedRevision + 1
-        && areArenaRoomSharedConfigsSemanticallyEqual(
-          event.payload.sharedConfig,
-          configPublishIntent.request.sharedConfig,
-        );
-      if (configReconciled) configPublishIntent = null;
       publish({
         session: {
           ...current,
@@ -1323,12 +1328,6 @@ export const createArenaRoomController = (
             sharedConfig: event.payload.sharedConfig,
           },
         },
-        ...(configReconciled ? {
-          configPublishPending: false,
-          configPublishResultUnknown: false,
-          notice: '房间配置已更新',
-          error: null,
-        } : {}),
       });
       return;
     }
@@ -1563,8 +1562,6 @@ export const createArenaRoomController = (
       error: null,
     });
     try {
-      const pendingConfigIntent = configPublishIntent;
-      const hadConfigUnknown = state.configPublishResultUnknown;
       const authoritative = await options.client.getSession(current.roomId);
       if (
         !isActive()
@@ -1572,28 +1569,27 @@ export const createArenaRoomController = (
         || authoritative.roomId !== current.roomId
         || authoritative.self.userId !== current.self.userId
       ) return;
-      const configConfirmed = hadConfigUnknown
-        && pendingConfigIntent?.roomId === authoritative.roomId
-        && pendingConfigIntent.selfUserId === authoritative.self.userId
-        && authoritative.self.role === 'host'
-        && authoritative.self.membershipState === 'active'
-        && pendingConfigIntent.request.expectedRoomEpoch === authoritative.roomEpoch
-        && (
-          authoritative.snapshot.revision === pendingConfigIntent.request.expectedRevision
-          || authoritative.snapshot.revision === pendingConfigIntent.request.expectedRevision + 1
-        )
-        && areArenaRoomSharedConfigsSemanticallyEqual(
-          authoritative.snapshot.sharedConfig,
-          pendingConfigIntent.request.sharedConfig,
-        );
+      const latest = state.session;
+      if (!latest || latest.roomId !== current.roomId || latest.self.userId !== current.self.userId) return;
+      if (latest.roomEpoch !== current.roomEpoch && authoritative.roomEpoch !== latest.roomEpoch) {
+        await connectSession(latest, true, generation);
+        return;
+      }
+      if (authoritative.roomEpoch === latest.roomEpoch && (
+        authoritative.snapshot.revision < latest.snapshot.revision
+        || authoritative.snapshot.controlSeq < latest.snapshot.controlSeq
+        || (authoritative.snapshot.revision === latest.snapshot.revision
+          && !areArenaRoomSharedConfigsExactlyEqual(authoritative.snapshot.sharedConfig, latest.snapshot.sharedConfig))
+      )) {
+        await connectSession(latest, true, generation);
+        return;
+      }
       controlCursor = {
         roomEpoch: authoritative.roomEpoch,
         controlSeq: authoritative.snapshot.controlSeq,
       };
       reconnectAttempts = 0;
       unknownProposalMutation = null;
-      configPublishIntent = null;
-      configPublishPending = false;
       advanceGenerationFence();
       publish({
         session: authoritative,
@@ -1603,13 +1599,7 @@ export const createArenaRoomController = (
         ),
         proposalOperation: null,
         proposalResultUnknown: false,
-        configPublishPending: false,
-        configPublishResultUnknown: false,
-        notice: hadConfigUnknown
-          ? configConfirmed
-            ? '已确认配置同步完成，正在重新连接…'
-            : '已核对房间状态；先前的配置同步未生效，请重新确认'
-          : '已核对房间状态，正在重新连接…',
+        notice: '已核对当前房间状态，正在重新连接…',
         error: null,
       });
       if (authoritative.snapshot.activeGeneration) void requestGenerationRecovery('baseline');
@@ -1763,10 +1753,10 @@ export const createArenaRoomController = (
     const current = state.session;
     if (!current) return superseded();
     if (configPublishPending) return reject('ROOM_CONFLICT', '房间配置正在发布，请等待本次发布完成。');
-    if (state.configPublishResultUnknown) {
+    if (state.configPublishResultUnknown || state.configTracking) {
       return {
         kind: 'unknown',
-        error: new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', null, '先前的配置发布结果未知，请先同步房间权威状态。'),
+        error: new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', null, '请先明确结束旧配置跟踪，再重新读取并比较房间配置。'),
       };
     }
     if (current.self.role !== 'host' || current.self.membershipState !== 'active') {
@@ -1824,6 +1814,9 @@ export const createArenaRoomController = (
         publish({
           configPublishPending: false,
           configPublishResultUnknown: true,
+          configDraftPreserved: true,
+          configTracking: { id: `${configTrackingScope}:${operation}`, phase: 'unknown', target: configPublishIntent,
+            observation: 'unobserved', checking: false },
           notice: error.message,
           error: null,
         });
@@ -1855,6 +1848,7 @@ export const createArenaRoomController = (
       }
       publish({
         session: confirmed,
+        configDraftPreserved: false,
         configPublishPending: false,
         configPublishResultUnknown: false,
         notice: '房间配置已更新',
@@ -1874,6 +1868,9 @@ export const createArenaRoomController = (
         publish({
           configPublishPending: false,
           configPublishResultUnknown: true,
+          configDraftPreserved: true,
+          configTracking: { id: `${configTrackingScope}:${operation}`, phase: 'unknown', target: configPublishIntent,
+            observation: 'unobserved', checking: false },
           notice: error.message,
           error: null,
         });
@@ -2154,14 +2151,11 @@ export const createArenaRoomController = (
     }
     const generationChanged = epochChanged
       || JSON.stringify(confirmed.snapshot.activeGeneration) !== JSON.stringify(latest.snapshot.activeGeneration);
-    invalidateConfigPublish();
     controlCursor = { roomEpoch: confirmed.roomEpoch, controlSeq: confirmed.snapshot.controlSeq };
     if (generationChanged) advanceGenerationFence();
     publish({
       session: confirmed,
       ...(generationChanged ? { generation: generationViewForSnapshot(confirmed.snapshot.activeGeneration, epochChanged) } : {}),
-      configPublishPending: false,
-      configPublishResultUnknown: false,
       notice: '已读取最新房间配置',
       error: null,
     });
@@ -2172,6 +2166,50 @@ export const createArenaRoomController = (
       void connectSession(confirmed, true, generation);
     }
     return confirmed;
+  };
+
+  const checkConfigPublish = async (): Promise<void> => {
+    const tracking = state.configTracking;
+    if (!isActive() || !tracking || tracking.phase !== 'unknown' || tracking.checking) return;
+    const operation = configPublishOperation;
+    const isCurrentCheck = () => isActive() && operation === configPublishOperation
+      && state.configTracking?.id === tracking.id && state.configTracking.phase === 'unknown';
+    publish({ configTracking: { ...tracking, checking: true } });
+    try {
+      await refreshSession();
+    } catch (error) {
+      if (isCurrentCheck()) publish({ error: safeErrorMessage(error) });
+    } finally {
+      if (isCurrentCheck()) {
+        publish({ configTracking: { ...state.configTracking!, checking: false } });
+      }
+    }
+  };
+
+  const endConfigPublishTracking = (id: string): void => {
+    const tracking = state.configTracking;
+    if (!isActive() || !tracking || tracking.id !== id || tracking.phase !== 'unknown') return;
+    invalidateConfigPublish();
+    sessionRefreshOperation += 1;
+    publish({ configPublishPending: false, configPublishResultUnknown: false,
+      configTracking: { ...tracking, phase: 'ended-needs-read', checking: false },
+      notice: '已结束旧请求跟踪；这不会撤销服务器请求。请重新读取当前配置再比较。', error: null });
+  };
+
+  const readConfigAfterEnd = async (id: string): Promise<void> => {
+    const tracking = state.configTracking;
+    if (!isActive() || !tracking || tracking.id !== id || tracking.phase !== 'ended-needs-read' || tracking.checking) return;
+    const operation = configPublishOperation;
+    publish({ configTracking: { ...tracking, checking: true } });
+    try {
+      await refreshSession();
+      if (!isActive() || operation !== configPublishOperation || state.configTracking?.id !== id) return;
+      publish({ configTracking: null, notice: '已读取当前房间配置；本地草稿保留，请比较后再显式发布。' });
+    } catch (error) {
+      if (isActive() && operation === configPublishOperation && state.configTracking?.id === id) {
+        publish({ configTracking: { ...state.configTracking, checking: false }, error: safeErrorMessage(error) });
+      }
+    }
   };
 
   /**
@@ -2968,6 +3006,19 @@ export const createArenaRoomController = (
     },
 
     refreshSession,
+    checkConfigPublish,
+    endConfigPublishTracking,
+    readConfigAfterEnd,
+    acknowledgeConfigDraftSync(authority) {
+      const current = state.session;
+      if (!isActive() || !current || configPublishPending || state.configPublishResultUnknown || state.configTracking
+        || authority.roomId !== current.roomId || authority.roomEpoch !== current.roomEpoch
+        || authority.self.userId !== current.self.userId || current.self.role !== 'host'
+        || current.self.membershipState !== 'active'
+        || authority.snapshot.revision !== current.snapshot.revision
+        || !areArenaRoomSharedConfigsExactlyEqual(authority.snapshot.sharedConfig, current.snapshot.sharedConfig)) return;
+      publish({ configDraftPreserved: false });
+    },
 
     async startGeneration(request) {
       await runGenerationStart(request);

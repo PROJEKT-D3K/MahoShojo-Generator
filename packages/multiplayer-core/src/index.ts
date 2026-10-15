@@ -17,3 +17,5 @@ export * from './source-projection';
 export * from './selection';
 export * from './state-machine';
 export * from './state-machine-model';
+
+export * from './config-publish-observation';

@@ -12,3 +12,5 @@ export { RoomConfigDiffView } from './RoomConfigDiffView';
 export { buildArenaRoomConfigDiffEntries, collectArenaRoomConfigDiffReferenceRequests } from './config-diff';
 export type { ArenaConfigDiffEntry, ArenaRoomConfigReferenceRequest } from './config-diff';
 export { arenaBattleModeCopy, arenaStoryLengthCopy, arenaStoryLengthValueCopy } from './config-value-copy';
+
+export { RoomConfigPublishStatus } from './RoomConfigPublishStatus';

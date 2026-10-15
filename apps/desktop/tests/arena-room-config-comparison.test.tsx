@@ -18,7 +18,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   draft = createInitialArenaDraft(); currentDraft = draft; session = structuredClone(fixture.operations.create.success.result) as ArenaRoomSessionResponse; identity = Symbol('owner');
-  owner = { confirmationOwner: () => identity, getSnapshot: () => ({ session }) } as unknown as DesktopArenaRoomSession;
+  owner = { confirmationOwner: () => identity, getSnapshot: () => ({ session }), publishConfig: vi.fn() } as unknown as DesktopArenaRoomSession;
   mocks.prepare.mockReset();
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
@@ -50,4 +50,27 @@ it('discards an in-flight projection after unmount without displaying it in a ne
   await render(); await click(); await act(async () => root.render(null));
   await act(async () => finish({ ok: true, sharedConfig: session.snapshot.sharedConfig }));
   await render(); expect(container.textContent).not.toContain('当前可共享设置一致');
+});
+
+const clickNamed = async (label: string) => { const button = [...container.querySelectorAll('button')].find(value => value.textContent === label); expect(button).toBeTruthy(); await act(async () => button!.click()); };
+it('requires comparison and explicit confirmation before publishing the frozen projection', async () => {
+  const config = { ...session.snapshot.sharedConfig!, userGuidance: 'compared target' };
+  mocks.prepare.mockResolvedValue({ ok: true, sharedConfig: config });
+  await render(); await click(); expect(owner.publishConfig).not.toHaveBeenCalled();
+  await clickNamed('发布已比较的设置'); expect(owner.publishConfig).not.toHaveBeenCalled();
+  await clickNamed('返回比较'); expect(owner.publishConfig).not.toHaveBeenCalled();
+  await clickNamed('发布已比较的设置'); await clickNamed('确认发布房间配置');
+  expect(owner.publishConfig).toHaveBeenCalledWith(session, config, identity, expect.any(Function));
+  const current = vi.mocked(owner.publishConfig).mock.calls[0]![3]; expect(current()).toBe(true);
+  currentDraft = { ...draft }; expect(current()).toBe(false);
+  expect(mocks.prepare).toHaveBeenCalledOnce();
+});
+it.each(['draft', 'room', 'credential'] as const)('invalidates a pending publish confirmation after %s changes', async change => {
+  mocks.prepare.mockResolvedValue({ ok: true, sharedConfig: session.snapshot.sharedConfig });
+  await render(); await click(); await clickNamed('发布已比较的设置');
+  if (change === 'draft') currentDraft = draft = { ...draft };
+  if (change === 'room') session = { ...session, snapshot: { ...session.snapshot, revision: session.snapshot.revision + 1 } };
+  if (change === 'credential') identity = Symbol('new owner');
+  await render(); expect(container.querySelector('[aria-label="确认发布房间配置"]')).toBeNull();
+  expect(owner.publishConfig).not.toHaveBeenCalled();
 });

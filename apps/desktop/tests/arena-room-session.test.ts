@@ -26,9 +26,9 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 const success = (operation: DesktopRoomHttpOperation, requestId: string, result?: unknown): DesktopRoomEvent => {
-  const event = events.find(value => value.kind === 'http-result' && value.operation === operation && 'result' in value.response);
+  const event = events.find(value => value.kind === 'http-result' && value.operation === (operation === 'config' ? 'session' : operation) && 'result' in value.response);
   if (!event || event.kind !== 'http-result') throw new Error(`Missing canonical ${operation} success`);
-  return DesktopRoomEventSchema.parse({ ...event, requestId, response: { ...event.response, ...(result === undefined ? {} : { result }) } });
+  return DesktopRoomEventSchema.parse({ ...event, operation, requestId, response: { ...event.response, ...(result === undefined ? {} : { result }) } });
 };
 const socket = (type: string): DesktopRoomEvent => {
   const event = events.find(value => value.kind === 'socket' && value.message.type === type);
@@ -65,6 +65,7 @@ async function harness() {
   let sequence = 0;
   let requestCount = 0;
   let pendingIntent: DesktopRoomAttachResponse['pendingIntent'] = null;
+  let endFails = false;
   const attachGates: Array<{
     entered: ReturnType<typeof deferred<DesktopRoomAttachResponse>>;
     response: ReturnType<typeof deferred<unknown>>;
@@ -115,7 +116,11 @@ async function harness() {
       delivery.ackEntered.resolve();
       return delivery.ack.promise;
     }
-    if (request.kind === 'end-config-tracking') throw new Error('Unexpected local config tracking action');
+    if (request.kind === 'end-config-tracking') {
+      if (endFails) throw new Error('Lost end receipt');
+      if (pendingIntent?.intentId !== request.intentId) throw new Error('Wrong config token');
+      pendingIntent = null; return { kind: 'config-tracking-ended', intentId: request.intentId, ended: true };
+    }
     requests.push(request);
     const plan = plans.shift();
     if (!plan || request.kind !== plan.kind) throw new Error(`Unexpected HTTP action: ${request.kind}`);
@@ -158,6 +163,7 @@ async function harness() {
     setNonce: (value: string | undefined) => { nonce = value; },
     throwNonce: () => { nonceThrows = true; },
     setCanStart: (value: boolean) => { canStart = value; },
+    setEndFails: () => { endFails = true; },
     setPending: (value: DesktopRoomAttachResponse['pendingIntent']) => { pendingIntent = value; },
   };
 }
@@ -175,6 +181,78 @@ async function joinRoom(h: Harness, result = member) {
 }
 
 describe('Desktop Arena Room session through the real Native bridge', () => {
+  it('publishes only an explicitly compared current host projection with exact CAS scope', async () => {
+    const h = await harness(); await joinRoom(h, host);
+    const original = h.session.getSnapshot().session!;
+    const target = { ...original.snapshot.sharedConfig!, userGuidance: 'confirmed target' };
+    await h.session.publishConfig(original, target, Symbol('stale'), () => true);
+    await h.session.publishConfig(original, target, h.session.confirmationOwner()!, () => false);
+    expect(h.requests.map(value => value.kind)).toEqual(['join']);
+    const request = h.plan('config');
+    const publishing = h.session.publishConfig(original, target, h.session.confirmationOwner()!, () => true);
+    expect(await request.entered.promise).toEqual({ kind: 'config', roomId: host.roomId, request: {
+      expectedRoomEpoch: host.roomEpoch, expectedRevision: host.snapshot.revision, expectedControlSeq: host.snapshot.controlSeq, sharedConfig: target,
+    } });
+    target.userGuidance = 'later draft';
+    expect(h.session.getSnapshot().configTracking?.target?.request.sharedConfig.userGuidance).toBe('confirmed target');
+    request.accept(); await publishing;
+    await h.receive(success('config', request.requestId, original)); await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().configTracking).toBeNull();
+    expect(h.session.getSnapshot().notice).toContain('原配置请求已获确认');
+  });
+
+  it('keeps the original target after unknown and GET, without retrying the config write', async () => {
+    const h = await harness(); await joinRoom(h, host);
+    const original = h.session.getSnapshot().session!;
+    const target = { ...original.snapshot.sharedConfig!, userGuidance: 'original target' };
+    const request = h.plan('config'); const publishing = h.session.publishConfig(original, target, h.session.confirmationOwner()!, () => true);
+    await request.entered.promise; request.accept(); await publishing;
+    await h.receive(DesktopRoomEventSchema.parse({ kind: 'mutation-unknown', operation: 'config', roomId: host.roomId, intentId: 'config-original' }));
+    await h.receive(DesktopRoomEventSchema.parse({ kind: 'request-error', operation: 'config', requestId: request.requestId,
+      error: { code: 'network-error', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'unknown' } }));
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().configTracking).toMatchObject({ id: 'config-original', phase: 'unknown', target: { request: { sharedConfig: target } } });
+    const check = h.plan('session'); const checking = h.session.checkConfigPublish(); await check.entered.promise; check.accept(); await checking;
+    const current = { ...host, snapshot: { ...host.snapshot, revision: host.snapshot.revision + 3, sharedConfig: target } };
+    await h.receive(success('session', check.requestId, current)); await whenState(h.session, state => !state.busy && state.phase === 'connecting');
+    expect(h.session.getSnapshot().configTracking?.observation).toBe('target-matches');
+    expect(h.session.getSnapshot().unknown?.intentId).toBe('config-original');
+    await h.session.publishConfig(h.session.getSnapshot().session!, target, h.session.confirmationOwner()!, () => true);
+    expect(h.requests.map(value => value.kind)).toEqual(['join', 'config', 'session']);
+    h.session.detach();
+    expect(h.invoke.mock.calls.some(([, args]) => (args?.request as { request?: {kind: string} })?.request?.kind === 'end-config-tracking')).toBe(false);
+  });
+
+  it('does not let recovery of an old unknown target dispatch a GET for a newly attached intent', async () => {
+    const h = await harness(); h.setPending({ operation: 'config', roomId: host.roomId, intentId: 'config-A' }); await h.session.open();
+    h.setEndFails(); await h.session.endConfigTracking('config-A');
+    expect(h.session.getSnapshot().phase).toBe('unavailable');
+    h.setPending({ operation: 'config', roomId: host.roomId, intentId: 'config-B' });
+    await h.session.checkConfigPublish();
+    expect(h.session.getSnapshot().configTracking?.id).toBe('config-B');
+    expect(h.requests).toEqual([]);
+  });
+
+  it('restored unknown only observes current state, explicitly ends exact token, then requires a new read', async () => {
+    const h = await harness(); const pending = { operation: 'config' as const, roomId: host.roomId, intentId: 'config-A' };
+    h.setPending(pending); await h.session.open();
+    expect(h.session.getSnapshot().configTracking).toMatchObject({ id: 'config-A', target: null, observation: 'target-unavailable' });
+    await h.session.endConfigTracking('old-token');
+    expect(h.invoke.mock.calls.some(([, args]) => (args?.request as {request?: {kind: string}})?.request?.kind === 'end-config-tracking')).toBe(false);
+    const check = h.plan('session'); const checking = h.session.checkConfigPublish(); await check.entered.promise; check.accept(); await checking;
+    await h.receive(success('session', check.requestId, host)); await whenState(h.session, state => !state.busy && state.phase === 'connecting');
+    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().configTracking?.observation).toBe('target-unavailable');
+    await h.session.endConfigTracking('config-A');
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: null, session: null, configTracking: { phase: 'ended-needs-read' } });
+    await h.session.create(details, source, () => true); await h.session.join(host.roomId, 'host'); await h.session.discover();
+    expect(h.requests.map(value => value.kind)).toEqual(['session']);
+    const read = h.plan('session'); const reading = h.session.readConfigAfterEnd(); await read.entered.promise; read.accept(); await reading;
+    await h.receive(success('session', read.requestId, host)); await whenState(h.session, state => !state.busy && state.phase === 'connecting');
+    expect(h.session.getSnapshot().configTracking).toBeNull(); expect(h.session.getSnapshot().session).toEqual(host);
+    expect(h.requests.map(value => value.kind)).toEqual(['session', 'session']);
+  });
+
   it.each(['create', 'join'] as const)('keeps early %s availability behind accepted and exact ACK before subscribing, then permits the role-appropriate exit', async kind => {
     const h = await harness(); await h.session.open();
     const request = h.plan(kind);

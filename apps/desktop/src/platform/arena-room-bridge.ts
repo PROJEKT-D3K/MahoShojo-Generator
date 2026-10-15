@@ -3,7 +3,7 @@ import {
   DESKTOP_ROOM_ERROR_MESSAGE, DESKTOP_ROOM_IPC_COMMANDS, DESKTOP_ROOM_IPC_LIMITS,
   DesktopRoomAckResponseSchema, DesktopRoomActionSchema, DesktopRoomAcceptedResponseSchema,
   DesktopRoomAttachRequestSchema, DesktopRoomAttachResponseSchema,
-  DesktopRoomDetachResponseSchema, DesktopRoomErrorSchema, DesktopRoomNotificationSchema,
+  DesktopRoomDetachResponseSchema, DesktopRoomConfigTrackingEndedSchema, DesktopRoomErrorSchema, DesktopRoomNotificationSchema,
   DesktopRoomPullResponseSchema, DesktopRoomRequestSchema,
   DesktopRoomSubscribeRequestSchema, DesktopRoomSubscribeResponseSchema,
   parseDesktopRoomBatch,
@@ -115,7 +115,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       if (!DesktopRoomDetachResponseSchema.safeParse(response).success) throw new ArenaRoomBridgeError('invalid-response');
     } catch { /* Retirement is local and synchronous even if Native has already revoked this handle. */ }
   };
-  const retire = () => {
+  const retire = (detachNative = true) => {
     const previous = scope;
     generation += 1;
     const retiredGeneration = generation;
@@ -127,7 +127,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
         if (notification.type === 'revoked') revoke(previous, notification);
       }
       previous.deferredNotifications.clear();
-      if (previous.handle) void detachHandle(previous.handle);
+      if (detachNative && previous.handle) void detachHandle(previous.handle);
     }
     return retiredGeneration;
   };
@@ -303,7 +303,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
     async request(raw: DesktopRoomHttpAction) {
       const candidate = scope;
       const action = DesktopRoomActionSchema.safeParse(raw);
-      if (!action.success || action.data.kind === 'ack' || action.data.kind === 'pull') throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
+      if (!action.success || action.data.kind === 'ack' || action.data.kind === 'pull' || action.data.kind === 'end-config-tracking') throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
       if (!candidate?.handle || !candidate.subscriptionId || !current(candidate)) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
       const delivery = candidate.delivery;
       const outcome = action.data.kind === 'discover' || action.data.kind === 'session' ? 'not-applicable' : 'unknown';
@@ -327,6 +327,30 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       }
       if (!result.success || result.data.handle !== candidate.handle || result.data.subscriptionId !== candidate.subscriptionId) throw new ArenaRoomBridgeError('invalid-response', outcome);
       return result.data;
+    },
+    async endConfigTracking(intentId: string) {
+      const candidate = scope;
+      if (!candidate?.handle || !current(candidate)) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
+      const payload = DesktopRoomRequestSchema.safeParse({ handle: candidate.handle, request: { kind: 'end-config-tracking', intentId } });
+      if (!payload.success) throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
+      // Fence old delivery synchronously, but do not detach the Native handle before
+      // its explicit end command. New attach/account/document intents supersede it.
+      const endedGeneration = retire(false);
+      const valid = () => generation === endedGeneration && scope === undefined && callerCurrent() && sameDocument(candidate);
+      try {
+        const raw = await nativeInvoke(DESKTOP_ROOM_IPC_COMMANDS.request, { request: payload.data }, valid);
+        if (!valid()) throw new ArenaRoomBridgeError('scope-changed');
+        const ended = DesktopRoomConfigTrackingEndedSchema.safeParse(raw);
+        if (!ended.success || ended.data.intentId !== intentId) throw invalid();
+        return ended.data;
+      } catch (cause) {
+        if (!valid()) throw new ArenaRoomBridgeError('scope-changed');
+        throw normalizeArenaRoomFailure(cause);
+      } finally {
+        // Exact old handle cleanup is safe after success, failure or a newer attach.
+        // A lost end response is never reported as a successful acknowledgement.
+        void detachHandle(candidate.handle);
+      }
     },
     async subscribe(roomId: string, expectedRoomEpoch: string) {
       // Even an explicitly rejected new intent supersedes a retired request's diagnostic.

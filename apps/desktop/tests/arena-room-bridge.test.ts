@@ -36,7 +36,8 @@ function harness(accept?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance
       if (command === DESKTOP_ROOM_IPC_COMMANDS.detach) return fixture.detach;
       if (command === DESKTOP_ROOM_IPC_COMMANDS.subscribe) return { handle: fixture.attach.handle, subscriptionId };
       if (command !== DESKTOP_ROOM_IPC_COMMANDS.request) throw new Error('unexpected command');
-      const request = args!.request as { handle: string; request: { kind: string; subscriptionId?: string; batchId?: string; sequence?: number } };
+      const request = args!.request as { handle: string; request: { kind: string; subscriptionId?: string; batchId?: string; sequence?: number; intentId?: string } };
+      if (request.request.kind === 'end-config-tracking') return { kind: 'config-tracking-ended', intentId: request.request.intentId, ended: true };
       if (request.request.kind === 'pull') return { kind: 'batch', batch };
       if (request.request.kind === 'ack') return { kind: 'acknowledged', handle: request.handle,
         subscriptionId: request.request.subscriptionId, batchId: request.request.batchId, sequence: request.request.sequence, accepted: true };
@@ -394,6 +395,155 @@ describe('Native Room bounded pull/accept/ack bridge', () => {
     expect(results.some((error) => error instanceof ArenaRoomBridgeError && error.code === 'busy')).toBe(true);
     expect(h.actions()).toEqual(['session']);
     expect(h.invoke.mock.calls.at(-1)![0]).toBe(DESKTOP_ROOM_IPC_COMMANDS.detach);
+  });
+});
+
+describe('explicit Native config tracking end boundary', () => {
+  const intentId = 'config-intent:7';
+  const receipt = { kind: 'config-tracking-ended', intentId, ended: true };
+  const supersessions = ['attach', 'detach', 'subscribe', 'account', 'changed-document', 'missing-document', 'unreadable-document'] as const;
+  const detachCalls = (h: ReturnType<typeof harness>) => h.invoke.mock.calls.filter(([command]) => command === DESKTOP_ROOM_IPC_COMMANDS.detach);
+
+  it('accepts only the exact local end receipt, then cleans up the old handle without implicitly reattaching', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    expect(await h.bridge.endConfigTracking(intentId)).toEqual(receipt); await tick();
+    expect(h.invoke.mock.calls.slice(1)).toEqual([
+      [DESKTOP_ROOM_IPC_COMMANDS.request, { request: { handle: fixture.attach.handle, request: { kind: 'end-config-tracking', intentId } } }],
+      [DESKTOP_ROOM_IPC_COMMANDS.detach, { request: { handle: fixture.attach.handle } }],
+    ]);
+    await expect(h.bridge.request({ kind: 'session', roomId: 'room' })).rejects.toMatchObject({ code: 'scope-changed', outcome: 'not-applied' });
+    await expect(h.bridge.endConfigTracking(intentId)).rejects.toMatchObject({ code: 'scope-changed', outcome: 'not-applied' });
+    expect(h.actions()).toEqual(['end-config-tracking']); expect(h.errors).toEqual([]);
+  });
+
+  it.each(['', '.leading-dot', 'space token', '配置', 'x'.repeat(129)])('rejects malformed intent token %s without retiring a valid delivery scope', async (token) => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    await expect(h.bridge.endConfigTracking(token)).rejects.toMatchObject({ code: 'invalid-request', outcome: 'not-applied' });
+    expect(h.invoke).toHaveBeenCalledTimes(1); expect(h.actions()).toEqual([]);
+    h.notify(); await tick(); expect(h.accepted).toHaveLength(1); expect(h.actions()).toEqual(['pull', 'ack']);
+    expect(detachCalls(h)).toEqual([]);
+  });
+
+  it.each([
+    ['unrelated acceptance', fixture.accepted],
+    ['wrong intent', { ...receipt, intentId: 'another-config-intent' }],
+    ['missing intent', { kind: receipt.kind, ended: true }],
+    ['unconfirmed end', { ...receipt, ended: false }],
+    ['coerced end', { ...receipt, ended: 'true' }],
+    ['foreign handle field', { ...receipt, handle: fixture.attach.handle }],
+    ['unexpected body', { ...receipt, body: 'secret-canary' }],
+  ])('rejects %s instead of claiming a successful end', async (_label, response) => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    h.invoke.mockResolvedValueOnce(response);
+    const result = await h.bridge.endConfigTracking(intentId).catch((error: unknown) => error); await tick();
+    expect(result).toMatchObject({ code: 'invalid-response', outcome: 'not-applicable', message: DESKTOP_ROOM_ERROR_MESSAGE });
+    expect(JSON.stringify(result)).not.toContain('secret-canary'); expect(h.actions()).toEqual(['end-config-tracking']);
+    expect(detachCalls(h)).toEqual([[DESKTOP_ROOM_IPC_COMMANDS.detach, { request: { handle: fixture.attach.handle } }]]);
+    expect(h.invoke.mock.calls.filter(([command]) => command === DESKTOP_ROOM_IPC_COMMANDS.attach)).toHaveLength(1);
+  });
+
+  it('retires a stuck old delivery synchronously but never detaches Native ahead of the explicit end receipt', async () => {
+    const acceptance = deferred<boolean>(), ended = deferred<unknown>(); let oldContext: ArenaRoomAcceptance | undefined;
+    const acknowledged = vi.fn();
+    const h = harness((_batch, context) => { oldContext = context; return acceptance.promise; }, acknowledged);
+    h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start(); h.notify(); await tick();
+    const original = h.invoke.getMockImplementation()!;
+    h.invoke.mockImplementation((command, args) => command === DESKTOP_ROOM_IPC_COMMANDS.request
+      && (args!.request as { request: { kind: string } }).request.kind === 'end-config-tracking'
+      ? ended.promise : original(command, args));
+    const ending = h.bridge.endConfigTracking(intentId);
+    expect(oldContext!.signal.aborted).toBe(true); expect(oldContext!.isCurrent()).toBe(false);
+    h.notify(1); await tick(); expect(h.actions()).toEqual(['pull', 'end-config-tracking']); expect(detachCalls(h)).toEqual([]);
+    acceptance.resolve(true); await tick(); expect(h.actions()).toEqual(['pull', 'end-config-tracking']); expect(detachCalls(h)).toEqual([]);
+    ended.resolve(receipt); expect(await ending).toEqual(receipt); await tick();
+    expect(h.actions()).toEqual(['pull', 'end-config-tracking', 'ack']);
+    expect(h.invoke.mock.calls).toContainEqual([DESKTOP_ROOM_IPC_COMMANDS.request, { request: {
+      handle: fixture.attach.handle, request: { kind: 'ack', subscriptionId: fixture.attach.subscriptionId, batchId: 'batch-0', sequence: 0 },
+    } }]);
+    expect(detachCalls(h)).toHaveLength(1); expect(acknowledged).not.toHaveBeenCalled(); expect(h.errors).toEqual([]);
+    h.notify(2); await tick(); expect(h.actions()).toEqual(['pull', 'end-config-tracking', 'ack']);
+  });
+
+  it.each(supersessions)('never dispatches an end queued behind another invoke after %s supersedes it', async (reason) => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const blocked = deferred<unknown>(); h.invoke.mockImplementationOnce(() => blocked.promise);
+    const previous = h.bridge.request({ kind: 'session', roomId: 'room' }).catch((error: unknown) => error); await tick();
+    const ending = h.bridge.endConfigTracking(intentId).catch((error: unknown) => error);
+    let replacement: Promise<unknown> | undefined;
+    if (reason === 'attach') {
+      const original = h.invoke.getMockImplementation()!;
+      h.invoke.mockImplementation((command, args) => command === DESKTOP_ROOM_IPC_COMMANDS.attach
+        ? Promise.resolve({ ...fixture.attach, handle: 'replacement-handle' }) : original(command, args));
+      replacement = h.start();
+    } else if (reason === 'detach') h.bridge.detach();
+    else if (reason === 'subscribe') replacement = h.bridge.subscribe(fixture.subscribeRequest.roomId, fixture.subscribeRequest.expectedRoomEpoch).catch((error: unknown) => error);
+    else if (reason === 'account') h.setCurrent(false);
+    else if (reason === 'changed-document') h.setDocumentNonce('b'.repeat(64));
+    else if (reason === 'missing-document') h.setDocumentNonce(undefined);
+    else h.setDocumentReadFails();
+    blocked.resolve(fixture.accepted);
+    expect(await previous).toMatchObject({ code: 'scope-changed' });
+    expect(await ending).toMatchObject({ code: 'scope-changed', outcome: 'not-applicable' });
+    if (replacement) {
+      const result = await replacement;
+      if (reason === 'attach') expect(result).toMatchObject({ handle: 'replacement-handle' });
+    }
+    await tick(); expect(h.actions()).toEqual(['session']); expect(h.errors).toEqual([]);
+    expect(detachCalls(h)).toEqual([[DESKTOP_ROOM_IPC_COMMANDS.detach, { request: { handle: fixture.attach.handle } }]]);
+  });
+
+  it.each(supersessions)('never accepts a late exact end receipt after %s supersedes it', async (reason) => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const ended = deferred<unknown>(); h.invoke.mockImplementationOnce(() => ended.promise);
+    const ending = h.bridge.endConfigTracking(intentId).catch((error: unknown) => error); await tick();
+    expect(h.actions()).toEqual(['end-config-tracking']); expect(detachCalls(h)).toEqual([]);
+    let replacement: Promise<unknown> | undefined;
+    if (reason === 'attach') {
+      const original = h.invoke.getMockImplementation()!;
+      h.invoke.mockImplementation((command, args) => command === DESKTOP_ROOM_IPC_COMMANDS.attach
+        ? Promise.resolve({ ...fixture.attach, handle: 'replacement-handle' }) : original(command, args));
+      replacement = h.start();
+    } else if (reason === 'detach') h.bridge.detach();
+    else if (reason === 'subscribe') replacement = h.bridge.subscribe(fixture.subscribeRequest.roomId, fixture.subscribeRequest.expectedRoomEpoch).catch((error: unknown) => error);
+    else if (reason === 'account') h.setCurrent(false);
+    else if (reason === 'changed-document') h.setDocumentNonce('b'.repeat(64));
+    else if (reason === 'missing-document') h.setDocumentNonce(undefined);
+    else h.setDocumentReadFails();
+    ended.resolve(receipt); expect(await ending).toMatchObject({ code: 'scope-changed', outcome: 'not-applicable' });
+    if (replacement) {
+      const result = await replacement;
+      if (reason === 'attach') expect(result).toMatchObject({ handle: 'replacement-handle' });
+    }
+    await tick(); expect(h.actions()).toEqual(['end-config-tracking']); expect(h.errors).toEqual([]);
+    expect(detachCalls(h)).toEqual([[DESKTOP_ROOM_IPC_COMMANDS.detach, { request: { handle: fixture.attach.handle } }]]);
+  });
+
+  it('does not retry or report success when the end response is lost, and leaves no usable old scope', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    h.invoke.mockRejectedValueOnce(new Error('secret-lost-reply'));
+    const result = await h.bridge.endConfigTracking(intentId).catch((error: unknown) => error); await tick();
+    expect(result).toMatchObject({ code: 'internal-error', outcome: 'not-applicable', message: DESKTOP_ROOM_ERROR_MESSAGE });
+    expect(JSON.stringify(result)).not.toContain('secret-lost-reply');
+    await expect(h.bridge.endConfigTracking(intentId)).rejects.toMatchObject({ code: 'scope-changed', outcome: 'not-applied' });
+    h.notify(); await tick(); expect(h.accepted).toEqual([]); expect(h.actions()).toEqual(['end-config-tracking']);
+    expect(detachCalls(h)).toHaveLength(1);
+    expect(h.invoke.mock.calls.filter(([command]) => command === DESKTOP_ROOM_IPC_COMMANDS.attach)).toHaveLength(1);
+  });
+
+  it('does not let a generic request bypass end retirement or receipt validation', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    await expect(h.bridge.request({ kind: 'end-config-tracking', intentId } as never)).rejects.toMatchObject({ code: 'invalid-request', outcome: 'not-applied' });
+    expect(h.actions()).toEqual([]); expect(detachCalls(h)).toEqual([]);
+    h.notify(); await tick(); expect(h.accepted).toHaveLength(1); expect(h.actions()).toEqual(['pull', 'ack']);
+  });
+
+  it('never interprets an ordinary detach as explicitly ending config tracking', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    h.bridge.detach(); h.bridge.detach(); await tick();
+    expect(h.actions()).toEqual([]);
+    expect(detachCalls(h)).toEqual([[DESKTOP_ROOM_IPC_COMMANDS.detach, { request: { handle: fixture.attach.handle } }]]);
+    await expect(h.bridge.endConfigTracking(intentId)).rejects.toMatchObject({ code: 'scope-changed', outcome: 'not-applied' });
+    expect(h.actions()).toEqual([]);
   });
 });
 

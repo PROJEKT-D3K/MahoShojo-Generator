@@ -183,7 +183,9 @@ const publishConfig = vi.fn(
 const refreshSession = vi.fn((): Promise<ArenaRoomSessionResponse> =>
   Promise.resolve(currentState.session!),
 );
+const acknowledgeConfigDraftSync = vi.fn();
 const controller = {
+  acknowledgeConfigDraftSync,
   getSnapshot: () => currentState,
   publishConfig,
   refreshSession,
@@ -1015,4 +1017,100 @@ it('身份围栏在物化 await 后阻止旧房间写回 BattleStore', async () 
   await act(async () => { release(); await pending; });
   expect(write).not.toHaveBeenCalled();
   expect(workspace.capturePublished).not.toHaveBeenCalled();
+});
+
+it.each(['unknown', 'ended-needs-read'] as const)('%s 保留草稿，阻断自动物化和 syncRoom；fresh read 后只比较', async (phase) => {
+  const initial = stateAt(1, config('classic'));
+  const workspace = {
+    settledAuthority: vi.fn(() => authorityOf(initial)),
+    compare: vi.fn(() => ({ kind: 'clean' as const, start: bundle(config('classic')) })),
+    startFromRoom: vi.fn(() => bundle(config('classic'))),
+    capturePublished: vi.fn(), retainFor: vi.fn(), clear: vi.fn(),
+  } satisfies ArenaRoomHostWorkspace;
+  mocks.buildBundle.mockResolvedValue(bundle(config('daily')));
+  await renderState(initial, workspace);
+  const observed = { ...stateAt(2, config('daily')), configPublishResultUnknown: phase === 'unknown',
+    configTracking: { id: 'original-post', phase, target: null, observation: 'target-unavailable' as const, checking: false } };
+  await renderState(observed, workspace);
+  await act(async () => { await latest!.syncRoom(); await latest!.publishLocal(); });
+  expect(refreshSession).not.toHaveBeenCalled();
+  expect(publishConfig).not.toHaveBeenCalled();
+  expect(mocks.applyAuthority).not.toHaveBeenCalled();
+  expect(workspace.capturePublished).not.toHaveBeenCalled();
+  await renderState({ ...observed, configPublishResultUnknown: false, configTracking: null }, workspace);
+  await flush();
+  expect(mocks.applyAuthority).not.toHaveBeenCalled();
+  expect(workspace.capturePublished).not.toHaveBeenCalled();
+  expect(latest?.state).toMatchObject({ kind: 'conflicted', revision: 2 });
+});
+
+it('核对 unknown 在途时阻止先前 syncRoom 的异步 commit', async () => {
+  const initial = stateAt(1, config('classic'));
+  const workspace = {
+    settledAuthority: vi.fn(() => authorityOf(initial)),
+    compare: vi.fn(() => ({ kind: 'clean' as const, start: bundle(config('classic')) })),
+    startFromRoom: vi.fn(() => bundle(config('classic'))),
+    capturePublished: vi.fn(), retainFor: vi.fn(), clear: vi.fn(),
+  } satisfies ArenaRoomHostWorkspace;
+  mocks.buildBundle.mockResolvedValue(bundle(config('classic')));
+  let release!: () => void;
+  const commit = vi.fn();
+  mocks.applyAuthority.mockImplementation(async (_config, options) => {
+    await new Promise<void>(resolve => { release = resolve; });
+    if (options.commitIf?.()) commit();
+    else throw new ArenaRoomReconciliationAbortError('配置跟踪仍未结束');
+  });
+  await renderState(initial, workspace);
+  let syncing!: Promise<void>;
+  await act(async () => { syncing = latest!.syncRoom(); await Promise.resolve(); });
+  expect(mocks.applyAuthority).toHaveBeenCalledOnce();
+  await renderState({ ...initial, configPublishResultUnknown: true,
+    configTracking: { id: 'pending', phase: 'unknown', target: null, observation: 'unobserved', checking: false } }, workspace);
+  await act(async () => { release(); await syncing; });
+  expect(commit).not.toHaveBeenCalled();
+  expect(workspace.capturePublished).not.toHaveBeenCalled();
+});
+
+it('结束并 fresh read 后重新挂载也只比较保留草稿，不借 needsOnlineRefresh 物化', async () => {
+  const state = { ...stateAt(2, config('daily')), configDraftPreserved: true };
+  const workspace = {
+    settledAuthority: vi.fn(() => authorityOf(stateAt(1, config('classic')))),
+    needsOnlineRefresh: vi.fn(() => true),
+    compare: vi.fn(() => ({ kind: 'clean' as const, start: bundle(config('classic')) })),
+    startFromRoom: vi.fn(() => bundle(config('classic'))),
+    capturePublished: vi.fn(), retainFor: vi.fn(), clear: vi.fn(),
+  } satisfies ArenaRoomHostWorkspace;
+  mocks.buildBundle.mockResolvedValue(bundle(config('classic')));
+  await renderState(state, workspace);
+  await flush();
+  expect(mocks.applyAuthority).not.toHaveBeenCalled();
+  expect(workspace.capturePublished).not.toHaveBeenCalled();
+  expect(latest?.state).toMatchObject({ kind: 'conflicted', revision: 2, localConfig: config('classic') });
+  mocks.buildBundle.mockResolvedValue(bundle(config('daily')));
+  await act(async () => { await latest!.syncRoom(); });
+  expect(mocks.applyAuthority).toHaveBeenCalledOnce();
+  expect(acknowledgeConfigDraftSync).toHaveBeenCalledWith(state.session);
+  expect(latest?.state).toMatchObject({ kind: 'synced', revision: 2 });
+});
+
+it.each([false, true])('旧房 unknown 后 reset→新房不会遗留草稿保护（合批=%s）', async (batchedReset) => {
+  const initial = stateAt(1, config('classic'));
+  const nextRoom = { ...stateAt(1, config('daily')), configDraftPreserved: false };
+  nextRoom.session = { ...nextRoom.session!, roomId: 'room-2', snapshot: { ...nextRoom.session!.snapshot, roomId: 'room-2' } };
+  const workspace = {
+    settledAuthority: vi.fn(() => null), needsOnlineRefresh: vi.fn(() => true),
+    compare: vi.fn(() => ({ kind: 'clean' as const, start: bundle(config('classic')) })),
+    startFromRoom: vi.fn(() => bundle(config('daily'))),
+    capturePublished: vi.fn(), retainFor: vi.fn(), clear: vi.fn(),
+  } satisfies ArenaRoomHostWorkspace;
+  mocks.buildBundle.mockResolvedValue(bundle(config('daily')));
+  await renderState({ ...initial, configDraftPreserved: true, configPublishResultUnknown: true,
+    configTracking: { id: 'old-room', phase: 'unknown', target: null, observation: 'unobserved', checking: false } }, workspace);
+  if (!batchedReset) await renderState({ ...initial, session: null, configTracking: null,
+    configDraftPreserved: false, configPublishResultUnknown: false }, workspace);
+  await renderState(nextRoom, workspace);
+  await flush();
+  expect(mocks.applyAuthority).toHaveBeenCalledOnce();
+  expect(workspace.capturePublished).toHaveBeenCalledOnce();
+  expect(latest?.state).toMatchObject({ kind: 'synced', revision: 1 });
 });

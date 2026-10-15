@@ -444,3 +444,18 @@ describe('Arena multiplayer panel accessibility/permissions', () => {
     expect(joinUnknown).toContain('重新确认加入结果');
   });
 });
+
+it.each(['missing-session', 'member', 'revoked-host'] as const)('%s 的配置跟踪入口独立于 session/host Drawer', (scope) => {
+  const trackingSession = scope === 'missing-session' ? null : { ...session, self: { ...session.self,
+    role: scope === 'member' ? 'member' as const : 'host' as const,
+    membershipState: scope === 'revoked-host' ? 'revoked' as const : 'active' as const } };
+  const html = render({ ...readyState, session: trackingSession, configPublishResultUnknown: true,
+    configTracking: { id: 'original-scope', phase: 'unknown', target: null, observation: 'scope-changed', checking: false } },
+  { hostConfigContent: <div aria-label="配置发布跟踪">保留原配置跟踪控件</div> });
+  expect(html).toContain('data-arena-config-tracking-independent="true"');
+  expect(html).toContain('保留原配置跟踪控件');
+  const cleared = render({ ...readyState, session: trackingSession, configTracking: null },
+    { hostConfigContent: <div aria-label="配置发布跟踪">保留原配置跟踪控件</div> });
+  expect(cleared).not.toContain('data-arena-config-tracking-independent');
+  expect(cleared).not.toContain('保留原配置跟踪控件');
+});

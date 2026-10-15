@@ -99,6 +99,10 @@ class RoomNativeFixture {
       this.order.push(`acknowledged:${action.batchId}`);
       return { kind: 'acknowledged', handle: envelope.handle, subscriptionId: action.subscriptionId, batchId: action.batchId, sequence: action.sequence, accepted: true };
     }
+    if (action.kind === 'end-config-tracking') {
+      expect(this.pendingIntent?.intentId).toBe(action.intentId); this.pendingIntent = null;
+      this.order.push('end-config-tracking'); return { kind: 'config-tracking-ended', intentId: action.intentId, ended: true };
+    }
     const operation = { action, handle: this.handle, subscriptionId: this.subscriptionId, requestId: `page-request-${this.actions.length}` };
     this.actions.push(operation); this.order.push(`request:${action.kind}`);
     if (this.expectedAction) {
@@ -444,6 +448,23 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     expect(creating.action).toEqual(original);
     await confirmMembership(resumed, 'host');
     expect(room().querySelector('[aria-label="核对未知房间操作"]')).toBeNull(); assertNoExecution();
+  });
+
+  it('renders restored config tracking without a room snapshot and ends only through explicit confirmation', async () => {
+    port.pendingIntent = { operation: 'config', intentId: 'original-config-intent', roomId: serviceFixture.operations.session.success.result.roomId };
+    await mount(); await open();
+    expect(room().textContent).toContain('原目标已不可恢复');
+    expect(button('发布已比较的设置', room())).toBeUndefined();
+    await click('结束本次跟踪', room()); expect(port.order).not.toContain('end-config-tracking');
+    await click('继续跟踪', room()); expect(port.order).not.toContain('end-config-tracking');
+    await click('结束本次跟踪', room()); await click('确认结束跟踪', room());
+    expect(port.order.filter(value => value === 'end-config-tracking')).toHaveLength(1);
+    expect(room().textContent).toContain('不会撤销服务器请求');
+    expect(button('重新读取房间', room())).toBeDefined();
+    expect(button('创建多人房间', room())).toBeUndefined(); expect(port.actions).toEqual([]);
+    const read = await startAction('重新读取房间', 'session'); await confirmMembership(read, 'host');
+    expect(room().querySelector('[aria-label="配置发布跟踪"]')).toBeNull();
+    expect(button('比较本地与房间设置', room())).toBeDefined(); assertNoExecution();
   });
 
   it.each(['join', 'leave', 'close'] as const)('reconciles an unknown %s only with a scoped session read', async operation => {

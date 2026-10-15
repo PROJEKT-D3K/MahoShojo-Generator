@@ -143,6 +143,11 @@ const currentAuthority = (
   arenaRoomHostWorkspaceAuthorityFromSession(controller.getSnapshot().session)
 );
 
+const configPublishBlocksDraft = (controller: ArenaRoomController): boolean => {
+  const snapshot = controller.getSnapshot();
+  return snapshot.configPublishPending || snapshot.configPublishResultUnknown || Boolean(snapshot.configTracking);
+};
+
 const reconciliationErrorState = (
   error: unknown,
   fallback: string,
@@ -184,14 +189,17 @@ export const useArenaRoomHostReconciliation = ({
   const actionLockRef = useRef(false);
   const refreshedAuthorityKeyRef = useRef<string | null>(null);
   const operationGenerationRef = useRef(0);
+  // Observing an unresolved request must never install its authority over the draft.
+  // Keep this guard after the explicit fresh read, until a deliberate publish/sync.
+  const preserveDraftRef = useRef(Boolean(controllerState.configDraftPreserved));
 
   const installAuthority = useCallback(async (
     authority: ArenaRoomHostWorkspaceAuthority,
     action: 'auto' | 'sync-room',
     operationGeneration: number,
     expectedSourceRefs?: readonly unknown[],
-  ): Promise<void> => {
-    if (!identity.isCurrent()) return;
+  ): Promise<boolean> => {
+    if (!identity.isCurrent() || configPublishBlocksDraft(controller)) return false;
     setState({ kind: 'synchronizing', action });
     const battleStateAtStart = useBattleStore.getState();
     const sourceRefsAtStart = captureBundleSourceRefs(battleStateAtStart);
@@ -201,7 +209,7 @@ export const useArenaRoomHostReconciliation = ({
     const currentBundle = await buildArenaRoomHostWorkspaceBundleFromBattleState(
       battleStateAtStart,
     );
-    if (!identity.isCurrent()) return;
+    if (!identity.isCurrent() || configPublishBlocksDraft(controller)) return false;
     const roomStart = hostWorkspace.startFromRoom(authority);
     await applyArenaRoomAuthorityToBattleStore(authority.sharedConfig, {
       currentBundle,
@@ -210,22 +218,23 @@ export const useArenaRoomHostReconciliation = ({
       verifyOrigin: verifyArenaContentOrigin,
       commitIf: () => (
         identity.isCurrent()
+        && !configPublishBlocksDraft(controller)
         && operationGenerationRef.current === operationGeneration
         && sameBundleSourceRefs(sourceRefsAtStart, captureBundleSourceRefs(useBattleStore.getState()))
         && isSameAuthorityRevision(currentAuthority(controller), authority)
       ),
     });
     if (
-      (!identity.isCurrent() || operationGenerationRef.current !== operationGeneration)
+      (!identity.isCurrent() || configPublishBlocksDraft(controller) || operationGenerationRef.current !== operationGeneration)
       || !isSameAuthorityRevision(currentAuthority(controller), authority)
-    ) return;
+    ) return false;
     const synchronizedState = useBattleStore.getState();
     const synchronizedRefs = captureBundleSourceRefs(synchronizedState);
     const synchronizedBundle = await buildArenaRoomHostWorkspaceBundleFromBattleState(
       synchronizedState,
     );
     if (
-      (!identity.isCurrent() || operationGenerationRef.current !== operationGeneration)
+      (!identity.isCurrent() || configPublishBlocksDraft(controller) || operationGenerationRef.current !== operationGeneration)
       || !sameBundleSourceRefs(synchronizedRefs, captureBundleSourceRefs(useBattleStore.getState()))
       || !isSameAuthorityRevision(currentAuthority(controller), authority)
     ) {
@@ -248,11 +257,37 @@ export const useArenaRoomHostReconciliation = ({
         ? '房间配置已更新，并同步到 Arena 编辑区'
         : '已放弃本地冲突修改并同步当前房间配置',
     });
+    return true;
   }, [controller, hostWorkspace, identity, setState]);
 
   const runAutoReconcile = useCallback((): void => {
     if (!identity.isCurrent() || actionLockRef.current) return;
+    // Read live controller state: an old effect must not clear a new request's guard.
+    const live = controller.getSnapshot();
+    if (live.configDraftPreserved === false && !live.configTracking && !live.configPublishResultUnknown) {
+      preserveDraftRef.current = false;
+    }
+    if (configPublishBlocksDraft(controller)) { preserveDraftRef.current = true; return; }
     const authority = currentAuthority(controller);
+    if (preserveDraftRef.current && authority) {
+      const operation = ++operationGenerationRef.current;
+      const sourceRefs = captureBundleSourceRefs(useBattleStore.getState());
+      void buildArenaRoomHostWorkspaceBundleFromBattleState(useBattleStore.getState()).then((bundle) => {
+        if (!identity.isCurrent() || operation !== operationGenerationRef.current
+          || configPublishBlocksDraft(controller)
+          || !isSameAuthorityRevision(currentAuthority(controller), authority)
+          || !sameBundleSourceRefs(sourceRefs, captureBundleSourceRefs(useBattleStore.getState()))) return;
+        const comparison = hostWorkspace.compare(authority, bundle);
+        setState({ kind: 'conflicted', revision: authority.revision,
+          reasons: comparison.kind === 'dirty' ? comparison.reasons : [],
+          roomConfig: authority.sharedConfig, localConfig: bundle.sharedConfig });
+      }).catch((error) => {
+        if (identity.isCurrent() && operation === operationGenerationRef.current) {
+          setState(reconciliationErrorState(error, '比较保留的本地草稿失败'));
+        }
+      });
+      return;
+    }
     if (!authority) {
       operationGenerationRef.current += 1;
       observedAuthorityRef.current = null;
@@ -361,6 +396,7 @@ export const useArenaRoomHostReconciliation = ({
 
   const publishLocal = useCallback(async (): Promise<void> => {
     if (!identity.isCurrent() || actionLockRef.current) return;
+    if (configPublishBlocksDraft(controller)) { preserveDraftRef.current = true; return; }
     const authority = currentAuthority(controller);
     if (!authority) return;
     const operationGeneration = ++operationGenerationRef.current;
@@ -418,6 +454,7 @@ export const useArenaRoomHostReconciliation = ({
     } finally {
       if (identity.isCurrent()) actionLockRef.current = false;
       if (publishConfirmed && identity.isCurrent()) {
+        preserveDraftRef.current = false;
         // 仅确认成功后才对账；明确拒绝与结果未知都不能借旧缓存自动物化。
         runAutoReconcile();
       }
@@ -426,6 +463,7 @@ export const useArenaRoomHostReconciliation = ({
 
   const syncRoom = useCallback(async (): Promise<void> => {
     if (!identity.isCurrent() || actionLockRef.current) return;
+    if (configPublishBlocksDraft(controller)) { preserveDraftRef.current = true; return; }
     const initialAuthority = currentAuthority(controller);
     if (!initialAuthority) return;
     const operationGeneration = ++operationGenerationRef.current;
@@ -451,7 +489,11 @@ export const useArenaRoomHostReconciliation = ({
       ) {
         throw new ArenaRoomReconciliationAbortError('读取到的房间身份或版本已变化，请重新确认房间状态');
       }
-      await installAuthority(refreshedAuthority, 'sync-room', operationGeneration, expectedSourceRefs);
+      if (configPublishBlocksDraft(controller)) return;
+      if (await installAuthority(refreshedAuthority, 'sync-room', operationGeneration, expectedSourceRefs)) {
+        controller.acknowledgeConfigDraftSync?.(refreshedSession);
+        preserveDraftRef.current = false;
+      }
     } catch (error) {
       if ((!identity.isCurrent() || operationGenerationRef.current !== operationGeneration)) return;
       setState(reconciliationErrorState(error, '同步房间配置失败'));
@@ -466,6 +508,7 @@ export const useArenaRoomHostReconciliation = ({
     inFlightKeyRef.current = null;
     refreshedAuthorityKeyRef.current = null;
     actionLockRef.current = false;
+    preserveDraftRef.current = Boolean(controller.getSnapshot().configDraftPreserved);
     setState({ kind: 'idle' });
     return () => { operationGenerationRef.current += 1; };
   }, [controller, identity, setState]);
@@ -479,8 +522,15 @@ export const useArenaRoomHostReconciliation = ({
   }, [controllerState.session]);
 
   useEffect(() => {
+    if (controllerState.configPublishResultUnknown || controllerState.configTracking) {
+      preserveDraftRef.current = true;
+      operationGenerationRef.current += 1;
+      inFlightKeyRef.current = null;
+      setState({ kind: 'idle' });
+      return;
+    }
     runAutoReconcile();
-  }, [authorityKey, runAutoReconcile]);
+  }, [authorityKey, controllerState.configPublishResultUnknown, controllerState.configTracking, runAutoReconcile, setState]);
 
   return {
     state: stored.identity === identity && identity.isCurrent() ? stored.state : { kind: 'idle' },

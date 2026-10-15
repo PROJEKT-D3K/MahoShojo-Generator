@@ -1199,7 +1199,7 @@ describe('Arena Room browser controller', () => {
     });
   });
 
-  it.each(['http', 'event', 'snapshot', 'reconnect'] as const)('latest publish 通过 %s 确认正常升级后的意图', async (transport) => {
+  it.each(['http', 'event', 'snapshot', 'reconnect'] as const)('latest publish 的 %s 只由原 HTTP 回执确认，其余路径只观察目标', async (transport) => {
     const { client, controller, sockets } = createHarness();
     const config = (versionToken: string) => ({
       ...sharedConfig,
@@ -1222,10 +1222,10 @@ describe('Arena Room browser controller', () => {
     } else if (transport === 'reconnect') {
       vi.mocked(client.getSession).mockResolvedValueOnce(published);
       controller.reconnect();
-      await vi.waitFor(() => expect(controller.getSnapshot().configPublishResultUnknown).toBe(false));
+      await vi.waitFor(() => expect(controller.getSnapshot().session?.snapshot.revision).toBe(1));
     }
     expect(controller.getSnapshot()).toMatchObject({
-      configPublishPending: false, configPublishResultUnknown: false, error: null,
+      configPublishPending: false, configPublishResultUnknown: transport !== 'http', error: null,
       session: { snapshot: { revision: 1, sharedConfig: config('v2') } },
     });
   });
@@ -1276,13 +1276,13 @@ describe('Arena Room browser controller', () => {
       payload: { revision: 1, sharedConfig: desired },
     }));
     expect(controller.getSnapshot()).toMatchObject({
-      configPublishResultUnknown: false,
-      notice: '房间配置已更新',
+      configPublishResultUnknown: true,
+      configTracking: { phase: 'unknown', observation: 'target-matches' },
       session: { snapshot: { revision: 1, sharedConfig: desired } },
     });
   });
 
-  it('幂等 config publish 响应丢失且无事件时主动拉取权威 session 解锁', async () => {
+  it('幂等 config publish 响应丢失且无事件时只读核对保留 unknown', async () => {
     const { client, controller, sockets } = createHarness();
     vi.mocked(client.publishConfig).mockRejectedValueOnce(new ArenaRoomClientError(
       'ROOM_RESULT_UNKNOWN',
@@ -1308,7 +1308,7 @@ describe('Arena Room browser controller', () => {
     await vi.waitFor(() => expect(client.getSession).toHaveBeenCalledWith('room-1'));
     await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({
       configPublishPending: false,
-      configPublishResultUnknown: false,
+      configPublishResultUnknown: true,
       session: { roomEpoch: 'epoch-1', snapshot: { revision: 0, sharedConfig } },
     }));
     expect(client.issueTicket).toHaveBeenCalledTimes(2);
@@ -3944,14 +3944,15 @@ describe('房间配置发布拒绝与权威恢复', () => {
     controller.dispose();
   });
 
-  it('未知结果经只读 session 核对解锁，不重放原发布请求', async () => {
+  it('未知结果经只读 session 核对仍未知，不重放原发布请求', async () => {
     const { controller, client } = await openHostRoom();
     const error = new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '结果未知');
     vi.mocked(client.publishConfig).mockRejectedValueOnce(error);
     expect(await controller.publishConfig(publishRequest)).toEqual({ kind: 'unknown', error });
     expect(controller.getSnapshot().configPublishResultUnknown).toBe(true);
     await controller.refreshSession();
-    expect(controller.getSnapshot()).toMatchObject({ configPublishResultUnknown: false, configPublishPending: false });
+    // GET 描述当前配置，不能裁定先前 POST 的结果。
+    expect(controller.getSnapshot()).toMatchObject({ configPublishResultUnknown: true, configPublishPending: false });
     expect(client.publishConfig).toHaveBeenCalledOnce();
     controller.dispose();
   });
@@ -4052,10 +4053,248 @@ describe('房间配置发布拒绝与权威恢复', () => {
     expect(client.issueTicket).toHaveBeenLastCalledWith('room-1', expect.objectContaining({ reconnect: { control: { roomEpoch: 'epoch-2', controlSeq: 0 } } }));
     controller.dispose();
   });
+  it('结束跟踪必须匹配原 ID，普通 GET 不开写门，专用 fresh read 后才允许显式新发布', async () => {
+    const { controller, client } = await openHostRoom();
+    vi.mocked(client.publishConfig).mockRejectedValueOnce(new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '未知'));
+    await controller.publishConfig(publishRequest);
+    const id = controller.getSnapshot().configTracking!.id;
+    controller.endConfigPublishTracking('stale-id');
+    expect(controller.getSnapshot().configTracking).toMatchObject({ id, phase: 'unknown' });
+    await controller.checkConfigPublish();
+    expect(controller.getSnapshot().configTracking).toMatchObject({ id, phase: 'unknown', observation: 'target-differs', checking: false });
+    controller.endConfigPublishTracking(id);
+    expect(controller.getSnapshot().configTracking).toMatchObject({ id, phase: 'ended-needs-read' });
+    await controller.refreshSession();
+    expect(await controller.publishConfig(publishRequest)).toMatchObject({ kind: 'unknown' });
+    expect(client.publishConfig).toHaveBeenCalledOnce();
+    await controller.readConfigAfterEnd('stale-id');
+    expect(controller.getSnapshot().configTracking?.phase).toBe('ended-needs-read');
+    await controller.readConfigAfterEnd(id);
+    expect(controller.getSnapshot().configTracking).toBeNull();
+    expect(client.publishConfig).toHaveBeenCalledOnce();
+    vi.mocked(client.publishConfig).mockResolvedValueOnce({ ...session, snapshot: { ...snapshot, revision: 1, controlSeq: 1, sharedConfig: publishRequest.sharedConfig } });
+    expect(await controller.publishConfig(publishRequest)).toMatchObject({ kind: 'confirmed' });
+    controller.dispose();
+  });
+
+  it('结束前的在途核对不能替代结束后 fresh read，旧 ID 不能结束新跟踪', async () => {
+    const { controller, client } = await openHostRoom();
+    vi.mocked(client.publishConfig).mockRejectedValue(new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '未知'));
+    await controller.publishConfig(publishRequest);
+    const oldId = controller.getSnapshot().configTracking!.id;
+    let resolve!: (value: typeof session) => void;
+    vi.mocked(client.getSession).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const checking = controller.checkConfigPublish();
+    controller.endConfigPublishTracking(oldId);
+    resolve(session);
+    await checking;
+    expect(controller.getSnapshot().configTracking).toMatchObject({ id: oldId, phase: 'ended-needs-read' });
+    await controller.readConfigAfterEnd(oldId);
+    await controller.publishConfig(publishRequest);
+    const newId = controller.getSnapshot().configTracking!.id;
+    expect(newId).not.toBe(oldId);
+    controller.endConfigPublishTracking(oldId);
+    expect(controller.getSnapshot().configTracking).toMatchObject({ id: newId, phase: 'unknown' });
+    controller.dispose();
+  });
+
+  it('旧目标迟到的 WSS 只观察当前配置，不清新跟踪或冒认新请求成功', async () => {
+    const { controller, client, sockets } = await openHostRoom();
+    vi.mocked(client.publishConfig).mockRejectedValue(new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '未知'));
+    await controller.publishConfig(publishRequest);
+    const oldId = controller.getSnapshot().configTracking!.id;
+    controller.endConfigPublishTracking(oldId);
+    await controller.readConfigAfterEnd(oldId);
+    const nextRequest = { ...publishRequest, sharedConfig: { ...publishRequest.sharedConfig, userGuidance: '新的显式目标' } };
+    await controller.publishConfig(nextRequest);
+    const newId = controller.getSnapshot().configTracking!.id;
+    sockets[0]!.message(JSON.stringify({ protocolVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1',
+      controlSeq: 1, timestamp: '2026-10-15T18:00:00.000Z', type: 'room.config.updated',
+      payload: { revision: 1, sharedConfig: publishRequest.sharedConfig } }));
+    expect(controller.getSnapshot()).toMatchObject({ configPublishResultUnknown: true,
+      configTracking: { id: newId, phase: 'unknown', observation: 'target-differs', target: { request: nextRequest } } });
+    expect(client.publishConfig).toHaveBeenCalledTimes(2);
+    controller.dispose();
+  });
+
+  it('旧 check 结算不能清除结束后 fresh read 的 busy 或挂旧错误', async () => {
+    const { controller, client } = await openHostRoom();
+    vi.mocked(client.publishConfig).mockRejectedValueOnce(new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '未知'));
+    await controller.publishConfig(publishRequest);
+    const id = controller.getSnapshot().configTracking!.id;
+    let finishCheck!: (value: typeof session) => void;
+    let finishRead!: (value: typeof session) => void;
+    vi.mocked(client.getSession)
+      .mockImplementationOnce(() => new Promise(resolve => { finishCheck = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    const checking = controller.checkConfigPublish();
+    controller.endConfigPublishTracking(id);
+    const reading = controller.readConfigAfterEnd(id);
+    finishCheck(session);
+    await checking;
+    expect(controller.getSnapshot()).toMatchObject({ error: null,
+      configTracking: { id, phase: 'ended-needs-read', checking: true } });
+    finishRead(session);
+    await reading;
+    expect(controller.getSnapshot().configTracking).toBeNull();
+    controller.dispose();
+  });
+
+  it('保留草稿标志不由 GET 清除，只接受匹配权威的显式同步完成', async () => {
+    const { controller, client } = await openHostRoom();
+    vi.mocked(client.publishConfig).mockRejectedValueOnce(new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '未知'));
+    await controller.publishConfig(publishRequest);
+    controller.acknowledgeConfigDraftSync(session);
+    expect(controller.getSnapshot().configDraftPreserved).toBe(true);
+    const id = controller.getSnapshot().configTracking!.id;
+    controller.endConfigPublishTracking(id);
+    await controller.readConfigAfterEnd(id);
+    await controller.refreshSession();
+    expect(controller.getSnapshot().configDraftPreserved).toBe(true);
+    controller.acknowledgeConfigDraftSync({ ...session, roomEpoch: 'stale-epoch' });
+    expect(controller.getSnapshot().configDraftPreserved).toBe(true);
+    controller.acknowledgeConfigDraftSync(session);
+    expect(controller.getSnapshot().configDraftPreserved).toBe(false);
+    controller.dispose();
+  });
+
+  it('结束后的 fresh read 身份失效不得恢复写门或认领旧目标', async () => {
+    let current = true;
+    const { controller, client } = createHarness({ identity: { epoch: 1, isCurrent: () => current } });
+    await controller.join('room-1', '房主');
+    vi.mocked(client.publishConfig).mockRejectedValueOnce(new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '未知'));
+    await controller.publishConfig(publishRequest);
+    const id = controller.getSnapshot().configTracking!.id;
+    controller.endConfigPublishTracking(id);
+    let resolve!: (value: typeof session) => void;
+    vi.mocked(client.getSession).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const reading = controller.readConfigAfterEnd(id);
+    current = false;
+    resolve(session);
+    await reading;
+    expect(controller.getSnapshot()).toMatchObject({ session: null, configTracking: null });
+    controller.dispose();
+  });
 });
 
 
+describe('配置 unknown 的只读观察边界', () => {
+  const paths = ['room.snapshot', 'room.config.updated', 'reconcileUnknownMutations', 'refreshSession'] as const;
+  const observations = ['same-target', 'different-target', 'original-revision'] as const;
+  const desired = { ...sharedConfig, userGuidance: '待确认的发布目标' };
+  const request = {
+    expectedRoomEpoch: 'epoch-1', expectedRevision: 0, expectedControlSeq: 0,
+    sharedConfig: desired,
+  };
+  const openRoom = async () => {
+    const harness = createHarness();
+    await harness.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+    harness.sockets[0]!.open();
+    return harness;
+  };
+  const observe = async (
+    harness: ReturnType<typeof createHarness>,
+    path: typeof paths[number],
+    authoritative: typeof session,
+  ) => {
+    if (path === 'refreshSession') {
+      vi.mocked(harness.client.getSession).mockResolvedValueOnce(authoritative);
+      await harness.controller.refreshSession();
+    } else if (path === 'reconcileUnknownMutations') {
+      vi.mocked(harness.client.getSession).mockResolvedValueOnce(authoritative);
+      harness.controller.reconnect();
+      await vi.waitFor(() => expect(harness.client.issueTicket).toHaveBeenCalledTimes(2));
+    } else {
+      harness.sockets[0]!.message(JSON.stringify({
+        protocolVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1',
+        controlSeq: authoritative.snapshot.controlSeq, timestamp: '2026-10-15T18:00:00.000Z',
+        type: path,
+        payload: path === 'room.snapshot' ? authoritative.snapshot : {
+          revision: authoritative.snapshot.revision, sharedConfig: authoritative.snapshot.sharedConfig,
+        },
+      }));
+    }
+  };
+
+  it.each(paths.flatMap((path) => observations
+    // config.updated 表示新配置 revision；原 revision 的合法观察走 snapshot 或 GET。
+    .filter((observation) => path !== 'room.config.updated' || observation !== 'original-revision')
+    .map((observation) => ({ path, observation }))))(
+    '$path 观察 $observation 只更新房间状态，不能裁定原 POST', async ({ path, observation }) => {
+      const harness = await openRoom();
+      const { controller, client } = harness;
+      const error = new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '发布结果仍未知，请勿重复提交');
+      vi.mocked(client.publishConfig).mockRejectedValueOnce(error);
+      try {
+        expect(await controller.publishConfig(request)).toEqual({ kind: 'unknown', error });
+        expect(controller.getSnapshot().configPublishResultUnknown).toBe(true);
+        const authoritative = { ...session, snapshot: {
+          ...snapshot,
+          revision: observation === 'original-revision' ? 0 : 1,
+          controlSeq: 1,
+          sharedConfig: observation === 'same-target' ? desired
+            : observation === 'different-target' ? { ...sharedConfig, userGuidance: '另一发布者的当前配置' } : sharedConfig,
+        } };
+        const notices: Array<string | null> = [];
+        const unsubscribe = controller.subscribe(() => notices.push(controller.getSnapshot().notice));
+        await observe(harness, path, authoritative);
+        unsubscribe();
+        expect(controller.getSnapshot().session?.snapshot).toEqual(authoritative.snapshot);
+        expect(client.publishConfig).toHaveBeenCalledOnce();
+        expect.soft(controller.getSnapshot()).toMatchObject({ configPublishPending: false, configPublishResultUnknown: true });
+        expect.soft(notices.filter((notice) => /已确认配置同步完成|配置同步未生效|房间配置已更新/u.test(notice ?? ''))).toEqual([]);
+      } finally {
+        controller.dispose();
+      }
+    },
+  );
+
+  it.each(['room.snapshot', 'room.config.updated', 'refreshSession'] as const)(
+    '%s 无 unknown 时仍正常同步权威配置', async (path) => {
+      const harness = await openRoom();
+      try {
+        const authoritative = { ...session, snapshot: { ...snapshot, revision: 1, controlSeq: 1, sharedConfig: desired } };
+        await observe(harness, path, authoritative);
+        expect(harness.controller.getSnapshot()).toMatchObject({
+          session: authoritative, configPublishPending: false, configPublishResultUnknown: false,
+        });
+        expect(harness.client.publishConfig).not.toHaveBeenCalled();
+      } finally {
+        harness.controller.dispose();
+      }
+    },
+  );
+});
+
 describe('Arena Room identity invalidation', () => {
+  it.each(['logout', 'account-switch'] as const)('%s 后旧配置目标和跟踪对新身份不可见', async (change) => {
+    const key = authIdentity.AUTH_STORAGE_KEY;
+    const previous = localStorage.getItem(key);
+    localStorage.setItem(key, 'tracking-owner-a');
+    const first = createHarness({ identity: authIdentity.captureAuthIdentity() });
+    try {
+      await first.controller.join('room-1', '房主');
+      vi.mocked(first.client.publishConfig).mockRejectedValueOnce(new ArenaRoomClientError('ROOM_RESULT_UNKNOWN', 503, '未知'));
+      await first.controller.publishConfig({ expectedRoomEpoch: 'epoch-1', expectedRevision: 0, expectedControlSeq: 0,
+        sharedConfig: { ...sharedConfig, userGuidance: '账号 A 原目标，不得泄漏给新身份' } });
+      expect(first.controller.getSnapshot().configTracking?.target).not.toBeNull();
+      if (change === 'logout') localStorage.removeItem(key);
+      else localStorage.setItem(key, 'tracking-owner-b');
+      expect(first.controller.getSnapshot()).toMatchObject({ session: null, configTracking: null,
+        configPublishResultUnknown: false, configDraftPreserved: false });
+      await first.controller.checkConfigPublish();
+      expect(first.client.getSession).not.toHaveBeenCalled();
+      const next = createHarness({ identity: authIdentity.captureAuthIdentity() });
+      expect(next.controller.getSnapshot()).toMatchObject({ session: null, configTracking: null,
+        configPublishResultUnknown: false, configDraftPreserved: false });
+      next.controller.dispose();
+    } finally {
+      first.controller.dispose();
+      if (previous === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, previous);
+    }
+  });
+
   it('只读 snapshot 不持有身份订阅，真正激活后 dispose 释放监听器', () => {
     const actualSubscribe = authIdentity.subscribeAuthIdentity;
     const unsubscribed = vi.fn();

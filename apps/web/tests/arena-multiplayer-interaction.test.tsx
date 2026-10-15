@@ -797,9 +797,14 @@ describe('Arena multiplayer panel real React interactions', () => {
     await act(async () => button('查看差异').click());
     expect(document.body.querySelectorAll('[role="dialog"][aria-modal="true"]')).toHaveLength(1);
     expect(document.body.textContent).toContain('与房间当前设置相比，本地修改了');
-    expect(document.body.querySelector('[aria-labelledby="arena-host-config-diff-heading"] details')).not.toBeNull();
+    // 共享视图用 useId 避免多个实例重复 ID；按可访问标题定位同一差异区。
+    const diffSection = () => [...document.body.querySelectorAll('section[aria-labelledby]')].find(section => (
+      document.getElementById(section.getAttribute('aria-labelledby')!)?.textContent?.trim()
+        === '与房间当前设置相比，本地修改了'
+    ));
+    expect(diffSection()?.querySelector('details')).toBeTruthy();
     await act(async () => button('收起差异').click());
-    expect(document.body.querySelector('[aria-labelledby="arena-host-config-diff-heading"]')).toBeNull();
+    expect(diffSection()).toBeUndefined();
     await act(async () => button('同步房间配置').click());
     await act(async () => button('保留本地修改并重新发布').click());
     expect(mocks.syncRoom).toHaveBeenCalledOnce();

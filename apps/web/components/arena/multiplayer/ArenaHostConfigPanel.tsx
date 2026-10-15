@@ -1,11 +1,11 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { RoomConfigDiffView } from '@mahoshojo/ui-web/arena-room';
+import { RoomConfigDiffView, RoomConfigPublishStatus } from '@mahoshojo/ui-web/arena-room';
 
 import type { ArenaRoomSharedConfig } from '@mahoshojo/contracts/arena-room';
 
-import type { ArenaRoomControllerState } from '@/lib/arena-room/controller';
+import type { ArenaRoomController, ArenaRoomControllerState } from '@/lib/arena-room/controller';
 import {
   resolveArenaRoomReferenceName,
   useArenaRoomReferenceNames,
@@ -48,18 +48,37 @@ const ConfigDiffSection = ({
 
 export function ArenaHostConfigPanel({
   controllerState,
+  controller,
   reconciliation,
 }: {
+  readonly controller?: ArenaRoomController;
   readonly controllerState: ArenaRoomControllerState;
   readonly reconciliation: ArenaRoomHostReconciliation;
 }) {
   const [diffOpen, setDiffOpen] = useState(false);
   const session = controllerState.session;
-  if (!session || session.self.role !== 'host') return null;
+  const tracking = controllerState.configTracking;
+  const trackingContent = tracking && controller ? (
+    <RoomConfigPublishStatus
+      phase={tracking.phase}
+      observation={tracking.observation}
+      trackingId={tracking.id}
+      targetConfig={tracking.target?.request.sharedConfig}
+      authoritySession={session}
+      busy={tracking.checking}
+      canEnd={!controllerState.configPublishPending}
+      onCheck={() => { void controller.checkConfigPublish(); }}
+      onEnd={() => controller.endConfigPublishTracking(tracking.id)}
+      onRead={() => { void controller.readConfigAfterEnd(tracking.id); }}
+    />
+  ) : null;
+  // Tracking describes an earlier request, not current permission to publish.
+  if (!session || session.self.role !== 'host' || session.self.membershipState !== 'active') return trackingContent;
   const status = reconciliation.state;
   const busy = status.kind === 'synchronizing'
     || controllerState.configPublishPending
-    || controllerState.configPublishResultUnknown;
+    || controllerState.configPublishResultUnknown
+    || Boolean(controllerState.configTracking);
 
   return (
     <section aria-labelledby="arena-host-config-heading" className="rounded-xl border border-fuchsia-200 bg-white/70 p-3 dark:border-fuchsia-900 dark:bg-gray-900/60">
@@ -82,7 +101,9 @@ export function ArenaHostConfigPanel({
         </button>
       </div>
 
-      {status.kind === 'synced' ? (
+      {trackingContent}
+
+      {!controllerState.configTracking && (status.kind === 'synced' ? (
         <div className="mt-3">
           <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">
             {status.message}
@@ -121,11 +142,13 @@ export function ArenaHostConfigPanel({
         </div>
       ) : status.kind === 'synchronizing' && status.action !== 'publish' ? (
         <p role="status" className="mt-3 text-sm text-gray-700 dark:text-gray-300">正在同步当前房间设置…</p>
-      ) : null}
+      ) : null)}
 
-      {status.kind === 'conflicted' ? (
+      {!controllerState.configTracking && status.kind === 'conflicted' ? (
         <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-          <p className="font-medium">房间设置已更新，而本地还有未发布的修改。</p>
+          <p className="font-medium">{controllerState.configDraftPreserved
+            ? '请比较当前房间设置与保留的本地草稿，再选择下一步。'
+            : '房间设置已更新，而本地还有未发布的修改。'}</p>
           <ul className="mt-2 list-disc pl-5 text-xs">
             {status.reasons.map((reason) => <li key={reason}>{arenaRoomDirtyReasonCopy[reason]}</li>)}
           </ul>

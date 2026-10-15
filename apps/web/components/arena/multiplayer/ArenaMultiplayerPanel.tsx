@@ -489,7 +489,7 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
   const pendingProposalCount = session?.self.role === 'host'
     ? session.snapshot.proposals.length
     : 0;
-  const hostConfigNeedsAttention = state.configPublishResultUnknown
+  const hostConfigNeedsAttention = Boolean(state.configTracking) || state.configPublishResultUnknown
     || props.hostConfigStatus === 'attention';
   const hostConfigSynchronizing = state.configPublishPending
     || props.hostConfigStatus === 'synchronizing';
@@ -585,6 +585,12 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
               </ul>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {state.configTracking && (session?.self.role !== 'host' || session.self.membershipState !== 'active') ? (
+        <div className="mt-3" data-arena-config-tracking-independent="true">
+          {props.hostConfigContent}
         </div>
       ) : null}
 
@@ -973,6 +979,7 @@ function ArenaMultiplayerPanelRuntime({
       hostConfigContent={(
         <ArenaHostConfigPanel
           controllerState={viewState}
+          controller={controller}
           reconciliation={hostReconciliation}
         />
       )}

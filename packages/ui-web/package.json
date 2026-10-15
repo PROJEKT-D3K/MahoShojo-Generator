@@ -241,6 +241,7 @@
     "@mahoshojo/contracts": "workspace:*",
     "@mahoshojo/domain": "workspace:*",
     "@mahoshojo/local-library": "workspace:*",
+    "@mahoshojo/multiplayer-core": "workspace:*",
     "@zumer/snapdom": "^1.9.7",
     "clsx": "^2.1.1",
     "katex": "^0.16.27",

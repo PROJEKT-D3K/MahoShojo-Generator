@@ -27,9 +27,9 @@ const CATEGORY_ORDER: readonly ArenaConfigDiffEntry['category'][] = [
   '其他',
 ];
 
-export function RoomConfigDiffView({ roomConfig, localConfig, revision, entries, emptyMessage }: {
+export function RoomConfigDiffView({ roomConfig, localConfig, revision, entries, emptyMessage, heading = '与房间当前设置相比，本地修改了', localLabel = '本地编辑草稿' }: {
   roomConfig: ArenaRoomSharedConfig; localConfig: ArenaRoomSharedConfig | null; revision: number;
-  entries: readonly ArenaConfigDiffEntry[]; emptyMessage: string;
+  entries: readonly ArenaConfigDiffEntry[]; emptyMessage: string; heading?: string; localLabel?: string;
 }) {
   const headingId = useId();
   const grouped = CATEGORY_ORDER
@@ -44,7 +44,7 @@ export function RoomConfigDiffView({ roomConfig, localConfig, revision, entries,
       <div className="flex items-center justify-between gap-3 border-b pb-3 dark:border-gray-800">
         <div>
           <h3 id={headingId} className="font-semibold text-gray-950 dark:text-gray-100">
-            与房间当前设置相比，本地修改了
+            {heading}
           </h3>
           <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
             仅展示可共享的设置，不包含房主本地正文。
@@ -80,7 +80,7 @@ export function RoomConfigDiffView({ roomConfig, localConfig, revision, entries,
             <pre className="mt-1 overflow-auto rounded-lg bg-gray-950 p-3 text-xs text-gray-100">{JSON.stringify(roomConfig, null, 2)}</pre>
           </div>
           <div>
-            <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-400">本地编辑草稿</h4>
+            <h4 className="text-xs font-semibold text-gray-600 dark:text-gray-400">{localLabel}</h4>
             <pre className="mt-1 overflow-auto rounded-lg bg-gray-950 p-3 text-xs text-gray-100">{localConfig ? JSON.stringify(localConfig, null, 2) : '当前本地草稿无法转换为可共享配置'}</pre>
           </div>
         </div>
