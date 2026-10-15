@@ -209,15 +209,16 @@ describe.skipIf(!process.env.MAHO_TAVERN_HOSTED_STREAM_BINARY)('Tavern Hosted ow
       ];
       for (const [index, scenario] of cases.entries()) {
         let reply: Reply | undefined; let invokeCount = 0; const cooldown: (number | undefined)[] = [];
-        const channel: HostedAiChannel = {};
         const invoke: InvokeFn = async (command, args) => {
           expect(command).toBe('stream_hosted_ai'); invokeCount++;
+          const channel = args?.onEvent as HostedAiChannel;
+          expect(channel.onmessage).toBeTypeOf('function');
           reply = await pipe.request(args?.request, scenario.response);
           for (const event of reply.events) channel.onmessage?.(event);
           if (reply.error) throw reply.error;
         };
         const raw = { name: '原件', description: '保留原始设定', custom: { keep: true } };
-        const outcome = await executeTavernGeneration({ invoke, profileId: '', providerTarget: { kind: 'system' }, createChannel: () => channel, onHostedDispatchSettled: seconds => { cooldown.push(seconds); } },
+        const outcome = await executeTavernGeneration({ invoke, profileId: '', providerTarget: { kind: 'system' }, createChannel: () => ({}), onHostedDispatchSettled: seconds => { cooldown.push(seconds); } },
           { raw, template: 'scenario', language: 'zh-CN', preference: DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE },
           { requestId: `owner-pipe-${index}`, mode: 'hosted-stream', generationMode: 'stream' }, new AbortController().signal);
         expect(outcome).toMatchObject({ status: scenario.status, rawText: scenario.raw }); expect(invokeCount).toBe(1);

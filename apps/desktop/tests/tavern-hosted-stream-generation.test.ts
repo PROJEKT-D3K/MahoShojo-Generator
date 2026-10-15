@@ -5,7 +5,7 @@ import * as safety from '@mahoshojo/domain/sensitive-word-filter';
 import * as shield from '@mahoshojo/domain/shield-word-filter';
 import type { HostedGenerationEvent } from '@mahoshojo/contracts/desktop-cloud';
 import { executeTavernGeneration, type TavernGenerationInput, type TavernGenerationIntent } from '../src/features/tavern/generation';
-import { CANCEL_HOSTED_AI_COMMAND, STREAM_HOSTED_AI_COMMAND, type HostedAiChannel } from '../src/platform/cloud-bridge';
+import { CANCEL_HOSTED_AI_COMMAND, STREAM_HOSTED_AI_COMMAND, type HostedAiChannel, type InvokeFn } from '../src/platform/cloud-bridge';
 
 const input: TavernGenerationInput = { raw: { name: 'Alice', description: '{{user}} 原件', custom: { keep: true } }, template: 'general', language: 'zh-CN', preference: { ...DEFAULT_TAVERN_PLACEHOLDER_PREFERENCE } };
 const intent: TavernGenerationIntent = { requestId: 'tavern-hosted', mode: 'hosted-stream', generationMode: 'stream', modelId: 'test-model' };
@@ -15,15 +15,16 @@ const failure = (code: string, retryAfterSeconds?: number) => ({ event: 'error',
 function deferred<T = void>() { let resolve!: (value: T) => void; let reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function harness(run: (emit: (event: unknown) => void) => Promise<void> | void = emit => { emit(text('# 标题\n完整正文')); emit(done()); }) {
   const started = deferred();
-  const channel: HostedAiChannel = {};
-  const invoke = vi.fn(async (command: string) => {
+  const invoke = vi.fn<InvokeFn>(async (command, args) => {
     if (command === CANCEL_HOSTED_AI_COMMAND) return false;
     expect(command).toBe(STREAM_HOSTED_AI_COMMAND);
+    const channel = args?.onEvent as HostedAiChannel;
+    expect(channel.onmessage).toBeTypeOf('function');
     started.resolve();
     await run(event => channel.onmessage?.(event as HostedGenerationEvent));
   });
   const cooldown = vi.fn();
-  return { invoke, started: started.promise, options: { invoke, profileId: '', providerTarget: { kind: 'system' as const }, createChannel: () => channel, onHostedDispatchSettled: cooldown }, cooldown };
+  return { invoke, started: started.promise, options: { invoke, profileId: '', providerTarget: { kind: 'system' as const }, createChannel: () => ({}), onHostedDispatchSettled: cooldown }, cooldown };
 }
 afterEach(() => vi.restoreAllMocks());
 
@@ -110,7 +111,7 @@ describe('Tavern Hosted completion owner', () => {
     const gate = deferred(); const cancelReply = deferred<boolean>(); let emit!: (event: unknown) => void;
     const native = harness(async send => { emit = send; await gate.promise; });
     const base = native.invoke.getMockImplementation()!;
-    native.invoke.mockImplementation((command: string, ...args: unknown[]) => command === CANCEL_HOSTED_AI_COMMAND ? cancelReply.promise : base(command, ...args));
+    native.invoke.mockImplementation((command, args) => command === CANCEL_HOSTED_AI_COMMAND ? cancelReply.promise : base(command, args));
     const controller = new AbortController(); const pending = executeTavernGeneration(native.options, input, intent, controller.signal);
     await native.started; controller.abort();
     expect(native.invoke.mock.calls.filter(([command]) => command === CANCEL_HOSTED_AI_COMMAND)).toHaveLength(1);
