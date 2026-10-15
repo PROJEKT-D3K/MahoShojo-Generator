@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter } from '@tanstack/react-router';
-import { isTavernMagicalGirlProjection, buildTavernScenarioFragment, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
+import { isTavernMagicalGirlProjection, buildTavernScenarioFragment, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, convertTavernToMagicalGirlCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
 import { isTavernGeneralCharacter, isTavernGeneralScenario, getTavernMagicalGirlPreview, TavernConversionControls, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
 import { GeneralScenarioCard } from '@mahoshojo/ui-web/scenario';
 import { MagicalGirlCard, resolveMagicalGirlGradient, type CanshouDetails, CanshouCard, GeneralCharacterCard } from '@mahoshojo/ui-web/character-card';
@@ -112,7 +112,7 @@ function TavernPage({ session }: { session: TavernAiSession }) {
   const candidate = result?.candidates[index];
   const normalized = useMemo(() => candidate ? normalizeTavernCard(candidate).normalized : null, [candidate]);
   const conversion = useMemo(() => {
-    try { return { projection: candidate && template !== 'scenario' && template !== 'magical-girl' ? (template === 'canshou' ? convertTavernToCanshouCard(candidate, preference) : template === 'general-scenario' ? convertTavernToGeneralScenarioCard(candidate, preference) : convertTavernToGeneralCard(candidate, preference)) : null, error: null }; }
+    try { return { projection: candidate && template !== 'scenario' ? (template === 'magical-girl' ? convertTavernToMagicalGirlCard(candidate, preference) : template === 'canshou' ? convertTavernToCanshouCard(candidate, preference) : template === 'general-scenario' ? convertTavernToGeneralScenarioCard(candidate, preference) : convertTavernToGeneralCard(candidate, preference)) : null, error: null }; }
     catch (cause) { return { projection: null, error: cause instanceof Error ? cause.message : '转换失败，原件仍保留。' }; }
   }, [candidate, preference, template]);
   const aiCard = useMemo(() => ai.card ? validateTavernGeneratedCard(ai.cardKind, ai.card) : null, [ai.card, ai.cardKind]);
@@ -164,8 +164,8 @@ function TavernPage({ session }: { session: TavernAiSession }) {
           <TavernTemplateSelector value={template} templates={TAVERN_LOCAL_IMPORT_TEMPLATES} disabled={blocked}
             onChange={(next) => { if (confirmChange()) { sourceSelection.begin(); setTemplate(next); if (next === 'scenario' || next === 'magical-girl') setMode('ai'); } }} />
           <TavernPlaceholderFields preference={preference} name={normalized.name} onChange={(next) => { if (confirmChange()) setPreference(next); }} disabled={blocked || !placeholderHydrated} />
-          <TavernConversionControls mode={mode} onModeChange={next => { if (next === 'rules' && (template === 'scenario' || template === 'magical-girl')) return; if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={blocked}
-            rulesDisabledReason={template === 'magical-girl' ? '魔法少女在此入口仅支持 AI 深度转换；Web 的规则映射尚未接入本地。' : template === 'scenario' ? '结构化情景目前仅支持 AI 深度转换，尚未提供规则映射。' : undefined}
+          <TavernConversionControls mode={mode} onModeChange={next => { if (next === 'rules' && template === 'scenario') return; if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={blocked}
+            rulesDisabledReason={template === 'scenario' ? '结构化情景目前仅支持 AI 深度转换，尚未提供规则映射。' : undefined}
             aiDescription="裁剪后的设定将通过所选客户端或服务器通道发送；结果通过共源 schema 校验，原件单独保留。"
             language={ai.draft.language} languages={languages.length ? languages : [{ code: ai.draft.language, name: ai.draft.language }]}
             onLanguageChange={language => { if (confirmChange()) session.updateDraft({ ...session.getSnapshot().draft, language }); }}

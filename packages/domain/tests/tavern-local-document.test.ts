@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { zlibSync } from 'fflate';
 import { createBlankDataCard } from '../src/sublimation';
 import { parseDataCardByTemplate } from '../src/data-card-schemas';
-import { convertTavernToCanshouCard, buildTavernCanshouCard, TAVERN_CANSHOU_TEMPLATE_ID, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, buildTavernGeneralScenarioCard, normalizeTavernCard, decodeBase64ToBytes, getPlaceholderPngBytes, MAX_TAVERN_FILE_BYTES, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_PNG_TEXT_BYTES, encodeBytesToBase64, replacePngTextChunks, parsePngChunkRanges, readTavernLocalDocument, writeTavernCardToPngBytes, crc32Concat, extractPngTextChunks } from '../src/tavern-card';
+import { buildTavernMagicalGirlCard, convertTavernToMagicalGirlCard, convertTavernToCanshouCard, buildTavernCanshouCard, TAVERN_CANSHOU_TEMPLATE_ID, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, buildTavernGeneralScenarioCard, normalizeTavernCard, decodeBase64ToBytes, getPlaceholderPngBytes, MAX_TAVERN_FILE_BYTES, MAX_TAVERN_TEXT_BYTES, MAX_TAVERN_PNG_TEXT_BYTES, encodeBytesToBase64, replacePngTextChunks, parsePngChunkRanges, readTavernLocalDocument, writeTavernCardToPngBytes, crc32Concat, extractPngTextChunks } from '../src/tavern-card';
 const encoder = new TextEncoder();
 const card = { spec: 'chara_card_v3', spec_version: '3.0', data: { name: '测试', description: '角色', extensions: { custom: { deep: [1, '未知'] } }, character_book: { entries: [{ content: '设定' }] } }, signature: 'not-verified' };
 function withCompressedChunk(text: string, kind: 'zTXt' | 'iTXt', keyword = 'ccv3') {
@@ -16,6 +16,44 @@ function withCompressedChunk(text: string, kind: 'zTXt' | 'iTXt', keyword = 'ccv
   const out = new Uint8Array(base.length + chunk.length); out.set(base.subarray(0, iend.start)); out.set(chunk, iend.start); out.set(base.subarray(iend.start), iend.start + chunk.length); return out;
 }
 describe('Tavern local journey', () => {
+  it('preserves the exact Web magical-girl body while leaving inferred abilities and answers blank', () => {
+    const base = parseDataCardByTemplate('magical-girl', createBlankDataCard('magical-girl'));
+    const body = buildTavernMagicalGirlCard({ name: '星花', description: ' 外观 ', personality: ' 性格 ', scenario: ' 场景 ', firstMes: ' 开场 ', mesExample: ' 样例 ', tags: ['不映射标签'] });
+    expect(body).toEqual({
+      ...base,
+      codename: '星花',
+      appearance: { ...base.appearance, overallLook: ' 外观 ' },
+      analysis: { ...base.analysis, personalityAnalysis: ' 性格 ', predictionBasis: '【场景】\n 场景 \n\n【开场白】\n 开场 \n\n【对话样例】\n 样例 ' },
+      userAnswers: [],
+    });
+    expect(body.magicConstruct).toEqual(base.magicConstruct);
+    expect(body.wonderlandRule).toEqual(base.wonderlandRule);
+    expect(body.blooming).toEqual(base.blooming);
+    expect(buildTavernMagicalGirlCard({ name: '空白' })).toEqual({ ...base, codename: '空白', userAnswers: [] });
+    expect(buildTavernMagicalGirlCard({ name: '空白', description: '', personality: '', scenario: '', firstMes: '', mesExample: '' })).toEqual({ ...base, codename: '空白', userAnswers: [] });
+    expect(buildTavernMagicalGirlCard({ name: '空白', scenario: ' ' }).analysis.predictionBasis).toBe('【场景】\n ');
+  });
+  it('maps magical-girl placeholders once, keeps first message unlike Canshou, and round-trips only the inert original', () => {
+    const raw = { ...card, data: { ...card.data, name: '{{char}} 星花', description: '{{char}} 与 {{user}} 外观', personality: '性格', scenario: '场景', first_mes: '{{user}} 开场', mes_example: '样例', tags: ['不映射标签'], system_prompt: '不执行系统提示', extensions: { script: 'globalThis.__tavernExecuted = true' } } };
+    const candidate = readTavernLocalDocument(encoder.encode(JSON.stringify(raw)), 'json').candidates[0];
+    const preference = { enabled: true, userReplacement: '访客', charReplacementMode: 'custom' as const, customCharReplacement: '{{user}}' };
+    const projection = convertTavernToMagicalGirlCard(candidate, preference);
+    expect(projection.codename).toBe('{{user}} 星花');
+    expect(projection.appearance.overallLook).toBe('{{user}} 与 访客 外观');
+    expect(projection.analysis.predictionBasis).toBe('【场景】\n场景\n\n【开场白】\n访客 开场\n\n【对话样例】\n样例');
+    expect(convertTavernToCanshouCard(candidate, preference).researcherNotes).not.toContain('开场');
+    const { _tavern, ...body } = projection;
+    expect(_tavern.raw).toEqual(raw);
+    expect(candidate.parsed).toEqual(raw);
+    expect(body).not.toHaveProperty('signature');
+    expect(JSON.stringify(body)).not.toMatch(/不映射|不执行|__tavernExecuted|not-verified|设定/);
+    expect(globalThis).not.toHaveProperty('__tavernExecuted');
+    const edited = { ...projection, codename: '编辑代号' };
+    const reopened = readTavernLocalDocument(encoder.encode(JSON.stringify(edited)), 'json');
+    expect(reopened.warnings.join('')).toContain('不会合并');
+    expect(readTavernLocalDocument(writeTavernCardToPngBytes(getPlaceholderPngBytes(), reopened.candidates[0].parsed), 'png').candidates[0].parsed).toEqual(raw);
+    expect(() => readTavernLocalDocument(encoder.encode(JSON.stringify(body)), 'json')).toThrow();
+  });
   it('checks final retained compressed text plus new chunks, without silently deleting ancillary data', () => {
     const base = withCompressedChunk('a'.repeat(MAX_TAVERN_PNG_TEXT_BYTES - 100), 'zTXt', 'Comment');
     const original = base.slice();

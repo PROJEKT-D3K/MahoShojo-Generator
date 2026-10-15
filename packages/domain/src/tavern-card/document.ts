@@ -1,13 +1,14 @@
 import { SafeJsonValueSchema, type JsonValue } from '@mahoshojo/contracts/json-value';
-import { MagicalGirlSchema, ScenarioSchema, type ScenarioData } from '../data-card-schemas';
+import { MagicalGirlSchema, ScenarioSchema, parseDataCardByTemplate, type ScenarioData } from '../data-card-schemas';
 import { GENERAL_CHARACTER_TEMPLATE_ID, GENERAL_SCENARIO_TEMPLATE_ID } from '../data-cards';
+import { createBlankDataCard } from '../sublimation';
 import { buildTavernCanshouCard, TAVERN_CANSHOU_TEMPLATE_ID } from './canshou';
 import { buildGeneralMarkdown, buildTavernGeneralScenarioCard } from './general';
 import { MAX_TAVERN_FILE_BYTES, MAX_TAVERN_TEXT_BYTES } from './limits';
 import { isLikelyTavernCard, normalizeTavernCard } from './normalize';
 import { parseTavernCardFromPngBytes } from './parse';
 import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, type TavernPlaceholderPreference } from './placeholders';
-import type { TavernCardCandidate, TavernParseResult } from './types';
+import type { TavernCardCandidate, TavernCardNormalized, TavernParseResult } from './types';
 
 export interface TavernLocalDocument {
   parsed?: TavernParseResult;
@@ -101,4 +102,30 @@ export function convertTavernToGeneralScenarioCard(candidate: TavernCardCandidat
 export function convertTavernToCanshouCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
   const { raw, normalized } = prepareProjection(candidate, preference);
   return { ...buildTavernCanshouCard(normalized), _tavern: { raw } };
+}
+
+/** Preserve the Web rule mapping without inferring abilities or executing Tavern extensions. */
+export function buildTavernMagicalGirlCard(normalized: TavernCardNormalized) {
+  const base = parseDataCardByTemplate('magical-girl', createBlankDataCard('magical-girl'));
+  return {
+    ...base,
+    codename: normalized.name,
+    appearance: { ...base.appearance, overallLook: normalized.description ?? base.appearance?.overallLook ?? '' },
+    analysis: {
+      ...base.analysis,
+      personalityAnalysis: normalized.personality ?? base.analysis?.personalityAnalysis ?? '',
+      predictionBasis: [
+        base.analysis?.predictionBasis,
+        normalized.scenario ? `【场景】\n${normalized.scenario}` : '',
+        normalized.firstMes ? `【开场白】\n${normalized.firstMes}` : '',
+        normalized.mesExample ? `【对话样例】\n${normalized.mesExample}` : '',
+      ].filter((value) => value?.trim()).join('\n\n'),
+    },
+    userAnswers: [],
+  };
+}
+
+export function convertTavernToMagicalGirlCard(candidate: TavernCardCandidate, preference?: TavernPlaceholderPreference) {
+  const { raw, normalized } = prepareProjection(candidate, preference);
+  return { ...buildTavernMagicalGirlCard(normalized), _tavern: { raw } };
 }

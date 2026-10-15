@@ -1,7 +1,7 @@
 import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
 import { TavernConversionControls, TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
-import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard, buildTavernCanshouCard } from '@mahoshojo/domain/tavern-card';
+import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard, buildTavernCanshouCard, buildTavernMagicalGirlCard } from '@mahoshojo/domain/tavern-card';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -663,26 +663,8 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
     }
 
     if (state.targetTemplate === 'magical-girl') {
-      const base = createBlankDataCard('magical-girl') as MagicalGirlData;
       const output: WithTavern<MagicalGirlData> = {
-        ...base,
-        codename: normalizedForConvert.name,
-        appearance: {
-          ...(base.appearance ?? {}),
-          overallLook: normalizedForConvert.description ?? base.appearance?.overallLook ?? '',
-        },
-        analysis: {
-          ...(base.analysis ?? {}),
-          personalityAnalysis: normalizedForConvert.personality ?? base.analysis?.personalityAnalysis ?? '',
-          predictionBasis: [
-            base.analysis?.predictionBasis ? String(base.analysis.predictionBasis) : '',
-            normalizedForConvert.scenario ? `【场景】\n${normalizedForConvert.scenario}` : '',
-            normalizedForConvert.firstMes ? `【开场白】\n${normalizedForConvert.firstMes}` : '',
-            normalizedForConvert.mesExample ? `【对话样例】\n${normalizedForConvert.mesExample}` : '',
-          ]
-            .filter((part) => part.trim())
-            .join('\n\n'),
-        },
+        ...buildTavernMagicalGirlCard(normalizedForConvert),
         _tavern: tavernPayload,
       };
       return output;
@@ -1054,7 +1036,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                   />
                 )}
 
-                {outputDataCard && state.convertMode === 'rules' && (state.targetTemplate === 'general' || state.targetTemplate === 'general-scenario' || state.targetTemplate === 'canshou') ? (
+                {outputDataCard && state.convertMode === 'rules' && (state.targetTemplate === 'general' || state.targetTemplate === 'general-scenario' || state.targetTemplate === 'canshou' || state.targetTemplate === 'magical-girl') ? (
                   <TavernLocalProjection data={outputDataCard as TavernProjection} hideExport disabled={state.step === 'parsing' || state.step === 'converting'}
                     exportFile={({ name, bytes, mimeType }) => { downloadBlob(new Blob([new Uint8Array(bytes)], { type: mimeType }), name); }}
                     saveCard={(data) => saveImportedUnsignedCard(getLocalCardRepository(), data, getTavernProjectionTitle(data), getTavernProjectionCardType(data))} />

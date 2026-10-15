@@ -9,6 +9,7 @@ import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop
 import { listDesktopPresetEntries } from '../src/features/ai-config/desktop-ai-config';
 import { TAVERN_AI_DRAFT_KEY } from '../src/features/tavern/session';
 import type { TavernGenerationInput } from '../src/features/tavern/generation';
+import { convertTavernToMagicalGirlCard, readTavernLocalDocument } from '@mahoshojo/domain/tavern-card';
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), execute: vi.fn(), export: vi.fn(), save: vi.fn(), guard: vi.fn(), account: { userId: null as number | null, epoch: 0 } }));
 vi.mock('../src/features/account/use-desktop-cloud-session', () => {
   const authFlow = { kind: 'idle' };
@@ -158,8 +159,8 @@ describe('Desktop Tavern actual Direct journey', () => {
     await click('开始转换'); expect(store.isPreparingGeneration()).toBe(true); await click('取消转换');
     await act(async () => finish(true)); await settle(); expect(mocks.execute).not.toHaveBeenCalled();
   });
-  it.each(['rules'])('protects unsaved connection edits when switching to %s', async () => {
-    await mount(); await upload(); await chooseAi(); await click('更新凭据');
+  it.each(['general', 'magical-girl'])('protects unsaved connection edits when switching %s to rules', async kind => {
+    await mount(); await upload(); await template(kind); if (kind !== 'magical-girl') await chooseAi(); await click('更新凭据');
     const name = [...host.querySelectorAll('label')].find(label => label.textContent?.includes('显示名'))!.querySelector('input')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, '未保存连接'); name.dispatchEvent(new Event('input', { bubbles: true })); });
     const change = async () => act(async () => host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')!.click());
@@ -183,14 +184,54 @@ describe('Desktop Tavern actual Direct journey', () => {
 
 
 describe('Desktop Tavern character mode selection', () => {
-  it('keeps Canshou rules and AI available, but magical-girl rules explicitly unavailable', async () => {
+  it('exports and saves the shared magical-girl rules locally without AI, then restores the untouched original', async () => {
+    const preference = { enabled: true, userReplacement: '访客', charReplacementMode: 'custom' as const, customCharReplacement: '{{user}}' };
+    localStorage.setItem('mahoshojo.tavern.import.placeholder.v1', JSON.stringify(preference));
+    const original = { ...raw, name: '{{char}} 星花', personality: '性格', scenario: '场景', first_mes: '{{user}} 开场', mes_example: '样例', tags: ['不映射标签'], signature: '不信任签名' };
+    await mount(); await upload(original); await template('magical-girl');
+    const rules = host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')!;
+    expect(rules.disabled).toBe(false); expect(rules.checked).toBe(false);
+    await act(async () => rules.click());
+    expect(host.querySelector('[data-result="magical-girl"]')?.textContent).toBe('访客 对 {{user}} 说话');
+    expect(host.textContent).toContain('魔法少女（保守规则映射）');
+    expect(host.textContent).toContain('标签不进入魔法少女正文');
+    expect(host.textContent).not.toContain('正文仅映射描述、性格、场景、开场白、对话样例与标签');
+    await click('下载魔法少女卡 JSON');
+    const exported = JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[0]![0].bytes));
+    const candidate = readTavernLocalDocument(new TextEncoder().encode(JSON.stringify(original)), 'json').candidates[0];
+    expect(exported).toEqual(convertTavernToMagicalGirlCard(candidate, preference));
+    expect(exported.analysis.predictionBasis).toContain('【开场白】\n访客 开场');
+    expect(exported).not.toHaveProperty('signature');
+    mocks.save.mockResolvedValue('saved'); await click('保存魔法少女卡到本地库');
+    expect(mocks.save).toHaveBeenCalledExactlyOnceWith(expect.anything(), exported);
+    expect(host.textContent).toContain('已保存到本地卡库（未签名导入）');
+    await upload(exported); await click('导出原件 JSON');
+    expect(JSON.parse(new TextDecoder().decode(mocks.export.mock.calls[1]![0].bytes))).toEqual(original);
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls.every(([url]) => url === '/languages.json')).toBe(true);
+  });
+  it('requires confirmation before replacing an unsaved magical-girl AI result with rules', async () => {
+    await mount(); await upload(); await template('magical-girl'); await click('开始转换');
+    const rules = host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')!;
+    await act(async () => rules.click());
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('清除当前 AI 结果'));
+    expect(rules.checked).toBe(false);
+    expect(host.querySelector('[data-result="magical-girl"]')?.textContent).toBe('AI 整理正文');
+    vi.mocked(window.confirm).mockReturnValue(true); await act(async () => rules.click());
+    expect(rules.checked).toBe(true);
+    expect(host.querySelector('[data-result="magical-girl"]')?.textContent).not.toContain('AI 整理正文');
+    expect(JSON.parse(localStorage.getItem(TAVERN_AI_DRAFT_KEY)!).output.card).toBeNull();
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+  });
+  it('keeps character rules available while magical-girl selection still defaults to AI', async () => {
     await mount(); await upload(); await template('canshou');
     expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')?.disabled).toBe(false);
     expect(host.querySelector('[data-result="canshou"]')).not.toBeNull();
     await chooseAi(); expect(button('开始转换').disabled).toBe(false);
     await template('magical-girl');
-    expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')?.disabled).toBe(true);
-    expect(host.textContent).toContain('Web 的规则映射尚未接入本地');
+    expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]')?.disabled).toBe(false);
+    expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]:checked')?.parentElement?.textContent).toContain('AI 深度转换');
+    expect(host.querySelector('[data-result]')).toBeNull();
     expect(mocks.execute).not.toHaveBeenCalled();
     await template('canshou');
     expect(host.querySelector<HTMLInputElement>('input[name="tavern-convert-mode"]:checked')?.parentElement?.textContent).toContain('AI 深度转换');
