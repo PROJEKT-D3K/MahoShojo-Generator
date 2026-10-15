@@ -13,6 +13,38 @@ const request = (url: string, token = fixture.token) => fixture.worker.fetch(new
 test('合成SQL分隔器保留literal内分号与转义引号', () => {
   expect(splitFixtureSql("-- comment;\n SELECT 'a;b','it''s'; SELECT 2; ")).toEqual(["SELECT 'a;b','it''s'", 'SELECT 2']);
 });
+test.each(['', 'TEMP ', 'TEMPORARY '])('SQL分隔器保留%s触发器内多条语句与CASE END', temporary => {
+  const trigger = `CREATE ${temporary}TRIGGER "end;trigger" AFTER UPDATE ON cards BEGIN
+    UPDATE cards SET name = CASE WHEN name = 'END;' THEN 'it''s;done' ELSE 'next' END;
+    INSERT INTO audit VALUES (';END;', "a"";b");
+  END`;
+  expect(splitFixtureSql(`${trigger}; SELECT 2;`)).toEqual([trigger, 'SELECT 2']);
+  expect(splitFixtureSql(trigger)).toEqual([trigger]);
+});
+test('SQL分隔器忽略注释内分号和关键字，保留标识符与普通事务', () => {
+  expect(splitFixtureSql(`/* CREATE TRIGGER; */ SELECT/* ; END; */[a;b],\`c;d\`, "e"";f"; -- END;
+    BEGIN; SELECT 1; COMMIT;`)).toEqual(['SELECT [a;b],`c;d`, "e"";f"', 'BEGIN', 'SELECT 1', 'COMMIT']);
+  expect(splitFixtureSql('CREATE/*x*/TRIGGER t AFTER UPDATE ON x BEGIN SELECT 1; /* ; */END/* ; */; SELECT 2;'))
+    .toEqual(['CREATE TRIGGER t AFTER UPDATE ON x BEGIN SELECT 1;  END ', 'SELECT 2'].map(sql => sql.trim()));
+});
+test.each(["SELECT 'open", 'SELECT [open', '/* open', 'CREATE TRIGGER t AFTER UPDATE ON x BEGIN SELECT 1;'])('SQL分隔器拒绝不完整输入：%s', sql => {
+  expect(() => splitFixtureSql(sql)).toThrow('Unterminated fixture SQL');
+});
+test('真实D1 fixture安装回收站触发器，重复删除生成新代际且恢复保留代际', async () => {
+  const db = fixture.db;
+  const generation = () => db.prepare("SELECT recycle_generation FROM data_cards WHERE id='fixture-card-2'").first<{recycle_generation: string}>();
+  expect(await db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='data_cards_recycle_generation'").first())
+    .toEqual({name: 'data_cards_recycle_generation'});
+  try {
+    await db.prepare("UPDATE data_cards SET deleted_at='2026-08-01' WHERE id='fixture-card-2'").run();
+    const first = (await generation())!.recycle_generation;
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+    await db.prepare("UPDATE data_cards SET deleted_at=NULL WHERE id='fixture-card-2'").run();
+    expect((await generation())!.recycle_generation).toBe(first);
+    await db.prepare("UPDATE data_cards SET deleted_at='2026-08-02' WHERE id='fixture-card-2'").run();
+    expect((await generation())!.recycle_generation).not.toBe(first);
+  } finally { await db.prepare("UPDATE data_cards SET deleted_at=NULL WHERE id='fixture-card-2'").run(); }
+});
 test('真实本地D1初始化可重入，session与业务读取使用真实JWT及principal', async () => {
   await initializeLocalFixture(fixture.db, repositoryRoot);
   expect((await request('/api/admin/session', '')).status).toBe(401);

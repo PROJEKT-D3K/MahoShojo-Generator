@@ -44,19 +44,41 @@ export const syntheticReviewFetch: typeof fetch = async (input, init) => {
     usage: {prompt_tokens: 100, completion_tokens: 25, total_tokens: 125}});
 };
 export function splitFixtureSql(source: string): string[] {
-  const statements: string[] = []; let statement = ''; let quote = ''; let lineComment = false;
+  const statements: string[] = []; let statement = ''; let quote = ''; let lineComment = false; let blockComment = false;
+  let prefix: string[] = []; let trigger = false; let lastToken = ''; let triggerEnd = false;
+  const token = (value: string) => {
+    // SQLite trigger bodies end with ; END; (CASE ... END is not a statement boundary).
+    triggerEnd = trigger && lastToken === ';' && value === 'END';
+    if (!trigger && prefix.length < 3) {
+      prefix.push(value);
+      trigger = /^CREATE (TEMP |TEMPORARY )?TRIGGER$/.test(prefix.join(' '));
+    }
+    lastToken = value;
+  };
   for (let i = 0; i < source.length; i++) {
     const char = source[i];
     if (lineComment) { if (char === '\n') { lineComment = false; statement += '\n'; } continue; }
-    if (!quote && char === '-' && source[i + 1] === '-') { lineComment = true; i++; continue; }
+    if (blockComment) { if (char === '*' && source[i + 1] === '/') { blockComment = false; i++; } continue; }
     if (quote) {
       statement += char;
-      if (char === quote) { if (source[i + 1] === quote) statement += source[++i]; else quote = ''; }
-    } else if (["'", '"', '`'].includes(char)) { quote = char; statement += char; }
-    else if (char === ';') { if (statement.trim()) statements.push(statement.trim()); statement = ''; }
-    else statement += char;
+      if (char === quote) { if (quote !== ']' && source[i + 1] === quote) statement += source[++i]; else quote = ''; }
+    } else if (char === '-' && source[i + 1] === '-') { lineComment = true; statement += ' '; i++; }
+    else if (char === '/' && source[i + 1] === '*') { blockComment = true; statement += ' '; i++; }
+    else if (["'", '"', '`', '['].includes(char)) { quote = char === '[' ? ']' : char; statement += char; token('quoted'); }
+    else if (/[a-zA-Z_]/.test(char)) {
+      let word = char;
+      while (i + 1 < source.length && /[a-zA-Z0-9_$]/.test(source[i + 1])) word += source[++i];
+      statement += word; token(word.toUpperCase());
+    } else if (char === ';') {
+      if (!trigger || triggerEnd) {
+        if (statement.trim()) statements.push(statement.trim());
+        statement = ''; prefix = []; trigger = false; lastToken = ''; triggerEnd = false;
+      } else { statement += char; token(';'); }
+    } else { statement += char; if (!/\s/.test(char)) token(char); }
   }
   if (quote) throw new Error('Unterminated fixture SQL literal');
+  if (blockComment) throw new Error('Unterminated fixture SQL comment');
+  if (trigger && !triggerEnd) throw new Error('Unterminated fixture SQL trigger');
   if (statement.trim()) statements.push(statement.trim());
   return statements;
 }
