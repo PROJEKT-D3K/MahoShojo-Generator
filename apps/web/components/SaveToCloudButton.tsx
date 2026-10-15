@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import SaveCardModal from './CharManager/SaveCardModal';
 import DataCardsModal from './CharManager/DataCardsModal';
@@ -21,6 +21,7 @@ interface SaveToCloudButtonProps {
   className?: string;
   style?: React.CSSProperties;
   presentation?: 'generation-result';
+  operationGuard?: { isBlocked: () => boolean; onBusyChange: (busy: boolean) => void };
 }
 
 // 检测是否为情景文件
@@ -44,6 +45,7 @@ export default function SaveToCloudButton({
   className = "generate-button",
   style = {},
   presentation,
+  operationGuard,
 }: SaveToCloudButtonProps) {
   const router = useRouter();
   const { isAuthenticated, user, authSource } = useAuth();
@@ -72,6 +74,21 @@ export default function SaveToCloudButton({
   const [uncertain, setUncertain] = useState(false);
   const [checkedOwnCards, setCheckedOwnCards] = useState(false);
   const busy = useRef(false);
+  const guardRef = useRef(operationGuard); guardRef.current = operationGuard;
+  const releaseGuard = useRef<(() => void) | null>(null);
+  const busyTicket = useRef<object | null>(null);
+  const setOperationBusy = useCallback((value: boolean): (() => void) | undefined => {
+    if (busy.current === value) return;
+    busy.current = value;
+    if (value) {
+      const ticket = {}; busyTicket.current = ticket;
+      const guard = guardRef.current; releaseGuard.current = guard ? () => guard.onBusyChange(false) : null; guard?.onBusyChange(true);
+      return () => { if (busyTicket.current === ticket) setOperationBusy(false); };
+    }
+    busyTicket.current = null;
+    const release = releaseGuard.current; releaseGuard.current = null; release?.();
+  }, []);
+  const isOperationBlocked = () => busy.current || Boolean(guardRef.current?.isBlocked());
   const operation = useRef(0);
   const capacityOperation = useRef(0);
   const mounted = useRef(true);
@@ -88,7 +105,7 @@ export default function SaveToCloudButton({
   useEffect(() => {
     operation.current += 1;
     capacityOperation.current += 1;
-    busy.current = false;
+    if (!guardRef.current) setOperationBusy(false);
     draftContext.current = null;
     uncertainRef.current = false;
     setPreparedData(null);
@@ -104,10 +121,10 @@ export default function SaveToCloudButton({
     setReplacementTarget(null); setReplacementOpen(false); setReplacementError(null);
     setReplacementUncertain(false); setReplacementConflict(false);
     replacementUnknown.current = false; replacementSelection.current = null;
-  }, [context]);
+  }, [context, setOperationBusy]);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; operation.current += 1; };
+    return () => { mounted.current = false; operation.current += 1; const release = releaseGuard.current; releaseGuard.current = null; release?.(); };
   }, []);
 
   const navigateToArrested = () => router.push('/arrested');
@@ -127,8 +144,8 @@ export default function SaveToCloudButton({
   };
 
   const resolveData = async (): Promise<any | null> => {
-    if (busy.current) return null;
-    busy.current = true;
+    if (isOperationBlocked()) return null;
+    const releaseOperation = setOperationBusy(true);
     const token = ++operation.current;
     const ownerContext = context;
     setIsPreparing(true);
@@ -146,15 +163,13 @@ export default function SaveToCloudButton({
       if (!mounted.current || token !== operation.current || ownerContext !== latestContext.current) return null;
       throw error;
     } finally {
-      if (token === operation.current && mounted.current) {
-        busy.current = false;
-        setIsPreparing(false);
-      }
+      releaseOperation?.();
+      if (token === operation.current && mounted.current) setIsPreparing(false);
     }
   };
 
   const handleSaveClick = async () => {
-    if (busy.current) return;
+    if (isOperationBlocked()) return;
     if (replacementUnknown.current) { setReplacementOpen(true); return; }
     if (!isAuthenticated) {
       alert('请先登录后再保存到云端');
@@ -190,10 +205,10 @@ export default function SaveToCloudButton({
   };
 
   const handleReplaceFromDataCards = async (card: any) => {
-    if (busy.current || uncertainRef.current || replacementUnknown.current || !isAuthenticated || !user?.id || draftContext.current !== context || !preparedData) return;
+    if (isOperationBlocked() || uncertainRef.current || replacementUnknown.current || !isAuthenticated || !user?.id || draftContext.current !== context || !preparedData) return;
     const type = cardType ?? (isScenarioData(preparedData) ? 'scenario' : 'character');
     if (card.type !== type) { alert('请选择与当前内容类型相同的数据卡'); return; }
-    busy.current = true; setIsPreparing(true);
+    const releaseOperation = setOperationBusy(true); setIsPreparing(true);
     const token = ++operation.current;
     const ownerContext = context;
     const isCurrent = () => mounted.current && token === operation.current && ownerContext === latestContext.current;
@@ -207,13 +222,13 @@ export default function SaveToCloudButton({
       setReplacementTarget(result.target); setReplacementConflict(false); setReplacementError(null);
       setShowDataCardsForReplace(false); setReplacementOpen(true);
     } catch (error) { if (isCurrent()) alert(error instanceof Error ? error.message : '读取替换目标失败'); }
-    finally { if (isCurrent()) { busy.current = false; setIsPreparing(false); } }
+    finally { releaseOperation?.(); if (isCurrent()) setIsPreparing(false); }
   };
 
   const handleConfirmReplacement = async () => {
     const selection = replacementSelection.current;
-    if (busy.current || uncertainRef.current || replacementUnknown.current || replacementConflict || !replacementOpen || !replacementTarget || !selection || selection.context !== context || !user?.id) return;
-    busy.current = true; setIsSaving(true); setReplacementError(null);
+    if (isOperationBlocked() || uncertainRef.current || replacementUnknown.current || replacementConflict || !replacementOpen || !replacementTarget || !selection || selection.context !== context || !user?.id) return;
+    const releaseOperation = setOperationBusy(true); setIsSaving(true); setReplacementError(null);
     const token = ++operation.current;
     const ownerContext = context;
     const isCurrent = () => mounted.current && token === operation.current && ownerContext === latestContext.current;
@@ -240,7 +255,7 @@ export default function SaveToCloudButton({
       if (!isCurrent()) return;
       if (sent) { replacementUnknown.current = true; setReplacementUncertain(true); setCheckedOwnCards(false); setReplacementError('替换结果不确定，请检查我的云端卡及待审版本；不会自动重发。'); }
       else setReplacementError(error instanceof Error ? error.message : '准备替换失败，输入已保留');
-    } finally { if (isCurrent()) { busy.current = false; setIsSaving(false); } }
+    } finally { releaseOperation?.(); if (isCurrent()) setIsSaving(false); }
   };
 
   const handleDeleteCard = async (id: string) => {
@@ -258,7 +273,7 @@ export default function SaveToCloudButton({
   };
 
   const handleSave = async () => {
-    if (busy.current || uncertainRef.current || replacementUnknown.current || draftContext.current !== context) return;
+    if (isOperationBlocked() || uncertainRef.current || replacementUnknown.current || draftContext.current !== context) return;
     if (!cardName.trim() || cardName.length > 20 || cardDescription.length > 300) {
       setSaveError(!cardName.trim() ? '请输入数据卡名称' : '名称最多 20 字符，描述最多 300 字符');
       return;
@@ -267,7 +282,7 @@ export default function SaveToCloudButton({
       setSaveError('登录状态或保存数据已改变，请重新打开保存窗口。');
       return;
     }
-    busy.current = true;
+    const releaseOperation = setOperationBusy(true);
     const token = ++operation.current;
     const ownerContext = context;
     const isCurrent = () => mounted.current && token === operation.current && ownerContext === latestContext.current;
@@ -334,7 +349,8 @@ export default function SaveToCloudButton({
         setSaveError(error instanceof Error ? error.message : '准备保存失败，输入已保留。');
       }
     } finally {
-      if (isCurrent()) { busy.current = false; setIsSaving(false); }
+      releaseOperation?.();
+      if (isCurrent()) setIsSaving(false);
     }
   };
 
@@ -342,7 +358,7 @@ export default function SaveToCloudButton({
   const canOperate = Boolean(data || getData);
 
   const handleReplaceClick = () => {
-    if (busy.current) return;
+    if (isOperationBlocked()) return;
     if (uncertainRef.current) { setShowSaveModal(true); return; }
     if (replacementUnknown.current) { setReplacementOpen(true); return; }
     if (!isAuthenticated) {
@@ -378,14 +394,14 @@ export default function SaveToCloudButton({
         onSave={() => void handleSaveClick()}
         onReplace={handleReplaceClick}
         saveLabel={isPreparing ? '准备中...' : buttonText}
-        saveDisabled={!canOperate || isPreparing || isSaving}
-        replaceDisabled={!canOperate || isPreparing || isSaving}
+        saveDisabled={!canOperate || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
+        replaceDisabled={!canOperate || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
       /> : <>
         <button
           onClick={() => void handleSaveClick()}
           className={className}
           style={style}
-          disabled={!canOperate || isPreparing || isSaving} // 如果没有数据且无法动态准备，则禁用
+          disabled={!canOperate || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())} // 如果没有数据且无法动态准备，则禁用
         >
           {isPreparing ? '准备中...' : buttonText}
         </button>
@@ -393,7 +409,7 @@ export default function SaveToCloudButton({
           onClick={handleReplaceClick}
           className={`${className} ml-2`}
           style={{ ...style, backgroundColor: '#f59e0b', backgroundImage: 'linear-gradient(to right, #f59e0b, #f97316)' }}
-          disabled={!canOperate || isPreparing || isSaving}
+          disabled={!canOperate || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
         >
           替换已有
         </button>
@@ -445,11 +461,12 @@ export default function SaveToCloudButton({
         busy={isSaving}
         onClose={() => {
           if (isSaving) return;
-          operation.current++; busy.current = false; setIsPreparing(false);
+          operation.current++; setOperationBusy(false); setIsPreparing(false);
           setShowDataCardsForReplace(false);
         }}
         dataCards={[]}
         summaryOwnerId={user?.id}
+        metadataGuard={operationGuard ? { isBlocked: isOperationBlocked, onBusyChange: setOperationBusy } : undefined}
         onMetadataSaved={() => void loadUserDataCards()}
         refreshKey={cardsRefresh}
 

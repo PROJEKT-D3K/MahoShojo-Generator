@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { isHotCard } from '@mahoshojo/domain/data-card-size';
 import { ONLINE_DATA_CARD_TYPES, type OnlineDataCardType } from '@mahoshojo/contracts/data-cards';
-import { DataCardsModal, type OwnedCardMetadataPort, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
+import { RecycleBinModal, DataCardsModal, type OwnedCardMetadataPort, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
 import { createDesktopCardLibraryOnlinePort, useDesktopCardLibraryHost } from '../../platform/card-library-host';
 import { readCloudReplaceTarget, updateCloudCardMetadata, readPrivateCloudCapacity } from '../../platform/private-cloud-save';
+import { createDesktopRecycleBinPort } from '../../platform/cloud-recycle';
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import { useDesktopCloudSession } from '../account/use-desktop-cloud-session';
 
@@ -68,6 +69,10 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
     DetailsModal: libraryHost.slots.CardDetailsModal,
   }), [libraryHost.platform, libraryHost.slots.CardDetailsModal, online]);
   const [page, setPage] = useState(1);
+  const [recycleOpen, setRecycleOpen] = useState(false);
+  const currentHost = useRef(isCurrent); currentHost.current = isCurrent;
+  const recyclePort = useMemo(() => createDesktopRecycleBinPort(invokeFn, expectedUserId, () => currentHost.current()), [invokeFn, expectedUserId]);
+  useEffect(() => { if (!isOpen) setRecycleOpen(false); }, [isOpen]);
   const [capacity, setCapacity] = useState<{ capacity: number; usedSlots: number } | null>(null);
   useEffect(() => {
     if (!isOpen) return;
@@ -87,11 +92,16 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
   } : undefined, [expectedUserId, invokeFn, Boolean(metadataEditing)]);
   const allowedTypes = useMemo(() => selectedType ? [selectedType] : ['character', 'scenario'] as OnlineDataCardType[], [selectedType]);
   const defaultFilters = useMemo(() => selectedType ? { type: selectedType } : {}, [selectedType]);
-  return <DataCardsModal host={host} isOpen={isOpen} onClose={onClose} summaryOwnerId={expectedUserId} dataCards={[]}
+  return <><DataCardsModal host={host} isOpen={isOpen && !recycleOpen} onClose={onClose} summaryOwnerId={expectedUserId} dataCards={[]}
     metadataEditor={metadataEditor} currentPage={page} onPageChange={setPage} cardsPerPage={12} refreshKey={refreshToken} busy={isBusy}
     allowedTypes={allowedTypes} defaultFilters={defaultFilters}
     title={titleOverride} userCapacity={capacity?.capacity} userUsedSlots={capacity?.usedSlots} capacityKnown={capacity !== null}
     onLoadCard={onSelectCard ? async (card) => { if (isCurrent()) await onSelectCard(ownedCard(card)); } : undefined}
     onReplaceCard={onReplaceCard ? async (card) => { if (isCurrent()) await onReplaceCard(ownedCard(card)); } : undefined}
-    allowHistoryReplace={true} />;
+    onOpenRecycleBin={() => setRecycleOpen(true)} recycleLabel="云端回收站" recycleCount={null}
+    allowHistoryReplace={true} />
+    <RecycleBinModal isOpen={isOpen && recycleOpen} onClose={() => setRecycleOpen(false)} port={recyclePort}
+      limit={host.recycleLimit} type={selectedType} refreshKey={refreshToken} busy={isBusy} operationGuard={metadataEditing}
+      DetailsModal={host.DetailsModal} />
+  </>;
 }

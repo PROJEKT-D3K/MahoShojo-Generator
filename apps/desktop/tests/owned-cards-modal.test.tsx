@@ -68,3 +68,22 @@ it('Desktop真实管理入口使用共源元信息owner与Native固定route，un
   invoke.mockResolvedValueOnce({ status: 200, body: { success: true, id: 'owned', ownerUserId: 7, accountFenceVersion: 1, metadataVersion: 1 } } as never);
   await act(async () => button('保存').click()); expect(document.body.textContent).toContain('数据卡信息已更新'); expect(mocks.fetch).toHaveBeenCalledTimes(2);
 });
+
+it('真实云端管理入口进入共源回收站，列表与详情固定读取；不混入本地回收站或未交付写按钮', async () => {
+  mocks.details = true;
+  const summary = { id: 'deleted', type: 'character', name: '已删云端卡', description: '', is_public: 1, review_status: 'approved', created_at: null, updated_at: null, deleted_at: 'now', usage_count: 0, like_count: 0, isLegacyQuestionnaire: false };
+  const invoke = vi.fn(async (_command: string, { request }: any) => {
+    if (request.routeId === 'data-cards.recycle.query') return { status: 200, body: { success: true, accountFenceVersion: 1, ownerUserId: 7, cards: [summary], total: 1, filteredCount: 1, nextOffset: null } };
+    if (request.routeId === 'data-cards.recycle-detail.query') return { status: 200, body: { success: true, accountFenceVersion: 1, ownerUserId: 7, card: { ...summary, data: '{"templateId":"通用角色","name":"墓碑","content":"云端墓碑正文"}' } } };
+    throw new Error('非预期路由');
+  });
+  const busy = vi.fn();
+  await act(async () => root.render(<DesktopOwnedCardsModal isOpen expectedUserId={7} onClose={() => {}} invokeFn={invoke} metadataEditing={{ isBlocked: () => false, onBusyChange: busy }} />));
+  await act(async () => button('云端回收站').click()); expect(document.body.textContent).toContain('已删云端卡'); expect(document.body.textContent).not.toContain('云端墓碑正文');
+  expect(button('恢复')).toBeUndefined(); expect(button('彻底删除')).toBeUndefined();
+  await act(async () => button('查看详情').click()); expect(document.body.textContent).toContain('云端墓碑正文'); expect(button('下载 JSON')).toBeDefined();
+  expect(invoke.mock.calls.map(([, { request }]) => request.routeId)).toEqual(['data-cards.recycle.query', 'data-cards.recycle-detail.query']);
+  expect(busy.mock.calls.map(([value]) => value)).toEqual([true, false, true, false]);
+  mocks.epoch++; await act(async () => root.render(<DesktopOwnedCardsModal isOpen expectedUserId={7} onClose={() => {}} invokeFn={invoke} />));
+  expect(document.body.textContent).not.toContain('云端墓碑正文'); expect(button('云端回收站')).toBeDefined();
+});

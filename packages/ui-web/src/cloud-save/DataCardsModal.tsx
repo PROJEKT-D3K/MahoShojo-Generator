@@ -41,7 +41,8 @@ export interface DataCardsModalProps {
   capacityKnown?: boolean;
   userUsedSlots?: number;
   onOpenRecycleBin?: () => void;
-  recycleCount?: number;
+  recycleCount?: number | null;
+  recycleLabel?: string;
   recycleLimit?: number;
   title?: string;
   emptyText?: string;
@@ -230,7 +231,8 @@ function DataCardsModalScope({
   capacityKnown = true,
   userUsedSlots = 0,
   onOpenRecycleBin,
-  recycleCount = 0,
+  recycleCount = null,
+  recycleLabel = '回收站',
   recycleLimit = host.recycleLimit,
   title = '我的数据卡',
   emptyText = '暂无数据卡',
@@ -589,7 +591,7 @@ function DataCardsModalScope({
               disabled={busy}
               className="px-3 py-1.5 text-xs bg-gray-100 text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-200 transition-colors"
             >
-              回收站 {recycleCount}/{recycleLimit}
+              {recycleLabel}{recycleCount === null ? '' : ` ${recycleCount}/${recycleLimit}`}
             </button>
           )}
         </div>

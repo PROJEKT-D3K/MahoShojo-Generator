@@ -129,3 +129,44 @@ export type OwnedDataCardMetadataRequest = z.infer<typeof OwnedDataCardMetadataR
 export const OwnedDataCardMetadataAcknowledgementSchema = OwnedDataCardCreateAcknowledgementSchema.extend({
   metadataVersion: z.literal(1),
 }).strict();
+
+// 回收站只读协议：列表不携带正文，详情只读取当前账号的单个墓碑。
+export const OwnedRecycleBinQuerySchema = z.object({
+  expectedUserId: DataCardExpectedOwnerSchema,
+  limit: z.number().int().min(1).max(24).default(12),
+  offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 24).default(0),
+  type: OnlineDataCardTypeSchema.optional(),
+}).strict();
+export type OwnedRecycleBinQuery = z.infer<typeof OwnedRecycleBinQuerySchema>;
+export const OwnedRecycleBinDetailQuerySchema = z.object({
+  expectedUserId: DataCardExpectedOwnerSchema,
+  id: z.string().trim().min(1).max(200),
+}).strict();
+export const OWNED_RECYCLE_DETAIL_MAX_BYTES = 1024 * 1024;
+export const OwnedRecycleBinCardSummarySchema = z.object({
+  id: z.string().trim().min(1).max(200),
+  type: OnlineDataCardTypeSchema,
+  name: z.string(), description: z.string().nullable(),
+  is_public: OnlineDataCardVisibilitySchema,
+  review_status: DataCardReviewStatusSchema.nullable(),
+  created_at: z.string().nullable(), updated_at: z.string().nullable(),
+  deleted_at: z.string().min(1),
+  isLegacyQuestionnaire: z.boolean(),
+  usage_count: z.number().int().nonnegative(), like_count: z.number().int().nonnegative(),
+}).strict();
+export type OwnedRecycleBinCardSummary = z.infer<typeof OwnedRecycleBinCardSummarySchema>;
+export const OwnedRecycleBinCardDetailSchema = OwnedRecycleBinCardSummarySchema.extend({
+  data: z.string().max(OWNED_RECYCLE_DETAIL_MAX_BYTES).refine((value) => new TextEncoder().encode(value).byteLength <= OWNED_RECYCLE_DETAIL_MAX_BYTES, '数据卡正文超过 1 MiB'),
+}).strict();
+export type OwnedRecycleBinCardDetail = z.infer<typeof OwnedRecycleBinCardDetailSchema>;
+export const OwnedRecycleBinPageSchema = z.object({
+  success: z.literal(true), accountFenceVersion: z.literal(1), ownerUserId: DataCardExpectedOwnerSchema,
+  cards: z.array(OwnedRecycleBinCardSummarySchema).max(24),
+  total: z.number().int().nonnegative(), filteredCount: z.number().int().nonnegative(),
+  nextOffset: z.number().int().nonnegative().nullable(),
+}).strict();
+export type OwnedRecycleBinPage = z.infer<typeof OwnedRecycleBinPageSchema>;
+export const OwnedRecycleBinDetailResponseSchema = z.object({
+  success: z.literal(true), accountFenceVersion: z.literal(1), ownerUserId: DataCardExpectedOwnerSchema,
+  card: OwnedRecycleBinCardDetailSchema,
+}).strict();

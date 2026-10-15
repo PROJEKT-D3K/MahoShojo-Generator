@@ -91,3 +91,22 @@ describe.each([undefined, 'generation-result'] as const)('Web result actual owne
   });
 
 });
+
+
+test('来源变化保留已派发替换的page guard，旧ticket终态才释放', async () => {
+  let blocked = false;
+  const changes = vi.fn((value: boolean) => { blocked = value; });
+  const operationGuard = { isBlocked: () => blocked, onBusyChange: changes };
+  const renderGuarded = (value: unknown) => act(async () => {
+    root.render(<SaveToCloudButton data={value} operationGuard={operationGuard} />);
+    await flush();
+  });
+  await renderGuarded(data); await choose();
+  const pending = deferred(); fetcher.mockReturnValueOnce(pending.promise); await click('确认替换');
+  expect(writes()).toHaveLength(1); expect(blocked).toBe(true);
+  await renderGuarded({ name: '新结果' }); expect(blocked).toBe(true);
+  expect(button('替换已有').disabled).toBe(true); await click('替换已有'); expect(writes()).toHaveLength(1);
+  await act(async () => { pending.resolve(Response.json(ack)); await flush(); });
+  expect(blocked).toBe(false); expect(window.alert).not.toHaveBeenCalled(); expect(button('确认替换')).toBeUndefined();
+  expect(changes.mock.calls.map(([value]) => value)).toEqual([true, false, true, false, true, false]);
+});

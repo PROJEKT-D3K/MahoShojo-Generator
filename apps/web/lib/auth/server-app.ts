@@ -2,8 +2,9 @@ import { getUserByEmail, getUserById, getUserByUsername } from '@/lib/database/u
 import { getBetterAuthInstance } from '@/lib/auth/better-auth-app';
 import { ensureAuthUserLink, getLinkedBusinessUserByAuthUserId } from '@/lib/auth/user-auth-linking';
 import { getDrizzleDbFromRuntime } from '@/lib/db/drizzle';
-import { getBusinessUserByEmail, getBusinessUserByUsername } from '@/lib/db/repositories/business-users';
-import { getLegacyBearerAuthUser, type AuthUserContext, type AuthenticatedUser } from '@/lib/auth/server';
+import { getBusinessUserByEmail, getBusinessUserById, getBusinessUserByUsername } from '@/lib/db/repositories/business-users';
+import { AuthAccountUnavailableError, getLegacyBearerAuthUser, type AuthReadOptions, type AuthUserContext, type AuthenticatedUser } from '@/lib/auth/server';
+import { getUserAuthLinkByAuthUserId } from '@/lib/db/repositories/user-auth-links';
 import { isBearerOnlyHonoAuthMode } from '@/lib/auth/hono-auth-mode';
 
 type BetterAuthSession = {
@@ -111,11 +112,20 @@ const normalizeSessionName = (session: BetterAuthSession): string | null => {
   return session.user.name.trim();
 };
 
-const getSessionAuthUserFromDrizzle = async (session: BetterAuthSession): Promise<AuthenticatedUser | null> => {
+const getSessionAuthUserFromDrizzle = async (session: BetterAuthSession, options: AuthReadOptions = {}): Promise<AuthenticatedUser | null> => {
   const db = getDrizzleDbFromRuntime();
-  if (!db) return null;
+  if (!db) {
+    if (options.strict) throw new Error('Authentication storage unavailable');
+    return null;
+  }
 
   const authUserId = normalizeSessionAuthUserId(session);
+  if (options.strict) {
+    const link = authUserId ? await getUserAuthLinkByAuthUserId(db, authUserId) : null;
+    const linked = link ? toAuthenticatedUser(await getBusinessUserById(db, link.businessUserId)) : null;
+    if (!linked) throw new AuthAccountUnavailableError();
+    return linked;
+  }
   if (authUserId) {
     const linked = toAuthenticatedUser(await getLinkedBusinessUserByAuthUserId(authUserId));
     if (linked) return linked;
@@ -166,9 +176,21 @@ const getSessionAuthUserFromLegacyRead = async (session: BetterAuthSession): Pro
   return null;
 };
 
-export const getSessionAuthUserForApp = async (req: Request): Promise<AuthenticatedUser | null> => {
+export const getSessionAuthUserForApp = async (req: Request, options: AuthReadOptions = {}): Promise<AuthenticatedUser | null> => {
   const auth = getBetterAuthInstance();
-  if (!auth) return null;
+  if (!auth) {
+    if (options.strict) throw new Error('Session authentication unavailable');
+    return null;
+  }
+
+  // 直接核验会话存储，不读 cookie cache、不续期；库仍可清理已过期会话。
+  // 不做 legacy 回退或账号关联自愈写入。
+  if (options.strict) {
+    const session = await auth.api.getSession({
+      headers: req.headers, query: { disableCookieCache: true, disableRefresh: true },
+    }) as BetterAuthSession | null;
+    return session ? getSessionAuthUserFromDrizzle(session, options) : null;
+  }
 
   try {
     const session = (await auth.api.getSession({

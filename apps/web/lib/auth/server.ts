@@ -18,8 +18,15 @@ export type AuthUserContext = {
   source: AuthUserSource;
 };
 
+export type AuthReadOptions = { strict?: boolean };
+
+export class AuthAccountUnavailableError extends Error {
+  constructor() { super('Session account mapping unavailable'); this.name = 'AuthAccountUnavailableError'; }
+}
+
 type AuthServerDeps = {
-  getSessionAuthUserImpl: (req: Request) => Promise<unknown>;
+  getSessionAuthUserImpl: (req: Request, options?: AuthReadOptions) => Promise<unknown>;
+  getUserByAuthKeyStrictImpl: (authKey: string) => Promise<unknown>;
   getUserByAuthKeyImpl: typeof getUserByAuthKey;
   hasBetterAuthSessionCookieImpl: typeof hasBetterAuthSessionCookie;
 };
@@ -29,13 +36,22 @@ export type RequireAuthUserResult = { user: AuthenticatedUser; source: AuthUserS
 export type AuthServerApi = {
   getLegacyBearerAuthUser: (req: Request) => Promise<AuthenticatedUser | null>;
   getAuthUser: (req: Request) => Promise<AuthUserContext | null>;
-  requireAuthUser: (req: Request) => Promise<RequireAuthUserResult>;
+  requireAuthUser: (req: Request, options?: AuthReadOptions) => Promise<RequireAuthUserResult>;
 };
 
 const defaultAuthServerDeps: AuthServerDeps = {
-  getSessionAuthUserImpl: async (req) => {
+  getSessionAuthUserImpl: async (req, options) => {
     const { getSessionAuthUserForApp } = await import('@/lib/auth/server-app');
-    return getSessionAuthUserForApp(req);
+    return getSessionAuthUserForApp(req, options);
+  },
+  getUserByAuthKeyStrictImpl: async (authKey) => {
+    const [{ getDrizzleDbFromRuntime }, { getBusinessUserByAuthKey }] = await Promise.all([
+      import('@/lib/db/drizzle'), import('@/lib/db/repositories/business-users'),
+    ]);
+    const db = getDrizzleDbFromRuntime();
+    if (!db) throw new Error('Authentication storage unavailable');
+    const user = await getBusinessUserByAuthKey(db, authKey);
+    return user ? { ...user, is_banned: user.isBanned, is_admin: user.isAdmin, is_review_exempt: user.isReviewExempt } : null;
   },
   getUserByAuthKeyImpl: getUserByAuthKey,
   hasBetterAuthSessionCookieImpl: hasBetterAuthSessionCookie,
@@ -125,8 +141,9 @@ const toAuthenticatedUser = (raw: unknown): AuthenticatedUser | null => {
   return user;
 };
 
-const getSessionAuthUser = async (req: Request, deps: AuthServerDeps): Promise<AuthenticatedUser | null> => {
+const getSessionAuthUser = async (req: Request, deps: AuthServerDeps, options: AuthReadOptions = {}): Promise<AuthenticatedUser | null> => {
   if (!deps.hasBetterAuthSessionCookieImpl(req)) return null;
+  if (options.strict) return toAuthenticatedUser(await deps.getSessionAuthUserImpl(req, options));
 
   try {
     return toAuthenticatedUser(await deps.getSessionAuthUserImpl(req));
@@ -151,24 +168,27 @@ const isBannedUser = (user: AuthenticatedUser): boolean =>
 const getLegacyBearerAuthUserWithDeps = async (
   req: Request,
   deps: AuthServerDeps,
+  options: AuthReadOptions = {},
 ): Promise<AuthenticatedUser | null> => {
   const authKey = getBearerAuthKey(req);
   if (!authKey) return null;
-  return toAuthenticatedUser(await deps.getUserByAuthKeyImpl(authKey));
+  return toAuthenticatedUser(await (options.strict ? deps.getUserByAuthKeyStrictImpl(authKey) : deps.getUserByAuthKeyImpl(authKey)));
 };
 
-const getAuthUserWithDeps = async (req: Request, deps: AuthServerDeps): Promise<AuthUserContext | null> => {
+const getAuthUserWithDeps = async (req: Request, deps: AuthServerDeps, options: AuthReadOptions = {}): Promise<AuthUserContext | null> => {
   if (isBearerOnlyHonoAuthMode()) {
-    const bearerUser = await getLegacyBearerAuthUserWithDeps(req, deps);
+    const bearerUser = await getLegacyBearerAuthUserWithDeps(req, deps, options);
     return bearerUser ? { user: bearerUser, source: 'legacy-bearer' } : null;
   }
 
-  const sessionUser = await getSessionAuthUser(req, deps);
+  const sessionUser = await getSessionAuthUser(req, deps, options);
   if (sessionUser) {
     return { user: sessionUser, source: 'better-auth-session' };
   }
 
-  const legacyUser = await getLegacyBearerAuthUserWithDeps(req, deps);
+  // 严格读取不允许失效的 cookie 改用另一份 Bearer 身份。
+  if (options.strict && deps.hasBetterAuthSessionCookieImpl(req)) return null;
+  const legacyUser = await getLegacyBearerAuthUserWithDeps(req, deps, options);
   if (legacyUser) {
     return { user: legacyUser, source: 'legacy-bearer' };
   }
@@ -176,8 +196,8 @@ const getAuthUserWithDeps = async (req: Request, deps: AuthServerDeps): Promise<
   return null;
 };
 
-const requireAuthUserWithDeps = async (req: Request, deps: AuthServerDeps): Promise<RequireAuthUserResult> => {
-  const context = await getAuthUserWithDeps(req, deps);
+const requireAuthUserWithDeps = async (req: Request, deps: AuthServerDeps, options: AuthReadOptions = {}): Promise<RequireAuthUserResult> => {
+  const context = await getAuthUserWithDeps(req, deps, options);
   if (!context) {
     return { response: json({ error: '未授权' }, 401) };
   }
@@ -198,7 +218,7 @@ export const createAuthServer = (overrides: Partial<AuthServerDeps> = {}): AuthS
   return {
     getLegacyBearerAuthUser: (req) => getLegacyBearerAuthUserWithDeps(req, deps),
     getAuthUser: (req) => getAuthUserWithDeps(req, deps),
-    requireAuthUser: (req) => requireAuthUserWithDeps(req, deps),
+    requireAuthUser: (req, options) => requireAuthUserWithDeps(req, deps, options),
   };
 };
 
@@ -209,5 +229,5 @@ export const getLegacyBearerAuthUser = async (req: Request): Promise<Authenticat
 
 export const getAuthUser = async (req: Request): Promise<AuthUserContext | null> => defaultAuthServer.getAuthUser(req);
 
-export const requireAuthUser = async (req: Request): Promise<RequireAuthUserResult> =>
-  defaultAuthServer.requireAuthUser(req);
+export const requireAuthUser = async (req: Request, options?: AuthReadOptions): Promise<RequireAuthUserResult> =>
+  defaultAuthServer.requireAuthUser(req, options);

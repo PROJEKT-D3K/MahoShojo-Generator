@@ -2919,8 +2919,11 @@ pub async fn hosted_ai_request(
  * URL、header 或凭据字段的通道。
  */
 
-/// 卡库响应正文上限：列表页与单卡正文都远小于它，超限视为异常流量。
+/// 卡库响应正文上限；仅所属回收站单卡详情另有转义预算。
 const CARD_LIBRARY_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// 1 MiB 正文在 JSON string 内最坏可膨胀六倍，仅固定详情允许此传输预算。
+const RECYCLE_DETAIL_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const RECYCLE_CARD_DATA_MAX_BYTES: usize = 1024 * 1024;
 /// 请求 body 传输上限：服务端的产品级正文限制是 `MAX_DATA_CARD_BYTES`（1 MiB，
 /// 权威校验在服务端）。这里是 transport 上限——JSON 包装（type/name/description/
 /// isPublic + 转义开销）叠在 1 MiB 正文之上，取 ~2 MiB 既不放行明显畸形载荷，
@@ -2989,6 +2992,18 @@ const CARD_LIBRARY_ROUTES: &[CloudRoute] = &[
         id: "data-cards.metadata",
         method: reqwest::Method::PUT,
         path: "/api/data-cards/metadata-owned",
+        auth: CloudRouteAuth::Required,
+    },
+    CloudRoute {
+        id: "data-cards.recycle.query",
+        method: reqwest::Method::GET,
+        path: "/api/data-cards/recycle-owned",
+        auth: CloudRouteAuth::Required,
+    },
+    CloudRoute {
+        id: "data-cards.recycle-detail.query",
+        method: reqwest::Method::GET,
+        path: "/api/data-cards/recycle-owned/detail",
         auth: CloudRouteAuth::Required,
     },
     CloudRoute {
@@ -3100,8 +3115,16 @@ pub struct CloudRouteRequest {
     pub expected_user_id: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_cloud_query")]
     pub query: Option<std::collections::BTreeMap<String, String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present_body")]
     pub body: Option<serde_json::Value>,
+}
+
+fn deserialize_present_body<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // 显式 null 也是携带请求体；GET 的禁 body 边界不能被 Option 吞掉。
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 fn deserialize_cloud_query<'de, D>(
@@ -3175,6 +3198,8 @@ enum OwnedCardOperation {
     ReplacementTarget,
     Replace,
     Metadata,
+    RecyclePage,
+    RecycleDetail,
 }
 
 fn owned_card_operation(route_id: &str) -> Option<OwnedCardOperation> {
@@ -3183,6 +3208,8 @@ fn owned_card_operation(route_id: &str) -> Option<OwnedCardOperation> {
         "data-cards.replace-target.query" => Some(OwnedCardOperation::ReplacementTarget),
         "data-cards.replace" => Some(OwnedCardOperation::Replace),
         "data-cards.metadata" => Some(OwnedCardOperation::Metadata),
+        "data-cards.recycle.query" => Some(OwnedCardOperation::RecyclePage),
+        "data-cards.recycle-detail.query" => Some(OwnedCardOperation::RecycleDetail),
         _ => None,
     }
 }
@@ -3231,6 +3258,12 @@ fn prepare_owned_card_request(
 ) -> Result<(), CloudError> {
     if request.expected_user_id != Some(owner) || owner == 0 || owner > MAX_SAFE_USER_ID {
         return Err(invalid_request("云端写入必须冻结有效的所属账号"));
+    }
+    if matches!(
+        operation,
+        OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail
+    ) {
+        return prepare_recycle_request(request, operation, owner);
     }
     if operation == OwnedCardOperation::ReplacementTarget {
         if request.body.is_some() {
@@ -3312,9 +3345,7 @@ fn prepare_owned_card_request(
             || !body
                 .get("name")
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|name| {
-                    (1..=20).contains(&trim_card_id(name).encode_utf16().count())
-                })
+                .is_some_and(|name| (1..=20).contains(&trim_card_id(name).encode_utf16().count()))
             || body
                 .get("description")
                 .and_then(serde_json::Value::as_str)
@@ -3324,7 +3355,9 @@ fn prepare_owned_card_request(
                 .and_then(serde_json::Value::as_f64)
                 .is_some_and(|visibility| [-1.0, 0.0, 1.0].contains(&visibility))
         {
-            return Err(invalid_request("元数据编辑只允许目标 ID、版本、名称、描述和可见性"));
+            return Err(invalid_request(
+                "元数据编辑只允许目标 ID、版本、名称、描述和可见性",
+            ));
         }
         for field in ["id", "name"] {
             let value = trim_card_id(body[field].as_str().expect("validated string")).to_owned();
@@ -3333,6 +3366,188 @@ fn prepare_owned_card_request(
     }
     body.insert("expectedUserId".into(), serde_json::Value::from(owner));
     Ok(())
+}
+
+/// 数字只接受 canonical 十进制，不接受指数、正号、空白或前导零。
+fn canonical_recycle_number(value: &str, min: u64, max: u64) -> bool {
+    value
+        .parse::<u64>()
+        .is_ok_and(|number| number >= min && number <= max && number.to_string() == value)
+}
+
+fn prepare_recycle_request(
+    request: &mut CloudRouteRequest,
+    operation: OwnedCardOperation,
+    owner: u64,
+) -> Result<(), CloudError> {
+    if request.body.is_some() {
+        return Err(invalid_request("回收站读取不允许携带请求体"));
+    }
+    let query = request.query.get_or_insert_with(Default::default);
+    let detail = operation == OwnedCardOperation::RecycleDetail;
+    if query.keys().any(|key| {
+        key != "expectedUserId"
+            && if detail {
+                key != "id"
+            } else {
+                !matches!(key.as_str(), "limit" | "offset" | "type")
+            }
+    }) || query
+        .get("expectedUserId")
+        .is_some_and(|value| value != &owner.to_string())
+    {
+        return Err(invalid_request("回收站查询包含不允许的字段或账号"));
+    }
+    if detail {
+        let id = query
+            .get("id")
+            .ok_or_else(|| invalid_request("缺少回收站数据卡 ID"))?;
+        if !valid_card_id(&serde_json::Value::String(id.clone())) {
+            return Err(invalid_request("回收站数据卡 ID 无效"));
+        }
+        query.insert("id".into(), trim_card_id(id).to_owned());
+    } else {
+        let limit = query.entry("limit".into()).or_insert_with(|| "12".into());
+        if !canonical_recycle_number(limit, 1, 24) {
+            return Err(invalid_request("回收站分页大小无效"));
+        }
+        let offset = query.entry("offset".into()).or_insert_with(|| "0".into());
+        if !canonical_recycle_number(offset, 0, MAX_SAFE_USER_ID - 24)
+            || query
+                .get("type")
+                .is_some_and(|kind| !valid_card_type(&serde_json::Value::String(kind.clone())))
+        {
+            return Err(invalid_request("回收站分页偏移或类型无效"));
+        }
+    }
+    query.insert("expectedUserId".into(), owner.to_string());
+    Ok(())
+}
+
+fn nonnegative_safe_integer(value: &serde_json::Value) -> bool {
+    value.as_f64().is_some_and(|number| {
+        number >= 0.0 && number <= MAX_SAFE_USER_ID as f64 && number.fract() == 0.0
+    })
+}
+
+fn valid_recycle_card(card: &serde_json::Value, detail: bool) -> bool {
+    let Some(object) = card.as_object() else {
+        return false;
+    };
+    object.keys().all(|key| {
+        matches!(
+            key.as_str(),
+            "id" | "type"
+                | "name"
+                | "description"
+                | "is_public"
+                | "review_status"
+                | "created_at"
+                | "updated_at"
+                | "deleted_at"
+                | "usage_count"
+                | "like_count"
+                | "isLegacyQuestionnaire"
+        ) || (detail && key == "data")
+    }) && valid_card_id(&card["id"])
+        && valid_card_type(&card["type"])
+        && card["isLegacyQuestionnaire"]
+            .as_bool()
+            .is_some_and(|legacy| !legacy || card["type"] == "character")
+        && card["name"].is_string()
+        && ["description", "created_at", "updated_at"]
+            .iter()
+            .all(|key| {
+                card.get(*key)
+                    .is_some_and(|value| value.is_null() || value.is_string())
+            })
+        && card["is_public"]
+            .as_f64()
+            .is_some_and(|value| [-1.0, 0.0, 1.0].contains(&value))
+        && card.get("review_status").is_some_and(|value| {
+            value.is_null() || matches!(value.as_str(), Some("pending" | "approved" | "rejected"))
+        })
+        && card["deleted_at"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+        && nonnegative_safe_integer(&card["usage_count"])
+        && nonnegative_safe_integer(&card["like_count"])
+        && (!detail
+            || card["data"]
+                .as_str()
+                .is_some_and(|data| data.len() <= RECYCLE_CARD_DATA_MAX_BYTES))
+}
+
+fn valid_recycle_response(
+    request: &CloudRouteRequest,
+    operation: OwnedCardOperation,
+    body: &serde_json::Value,
+) -> bool {
+    let Some(envelope) = body.as_object() else {
+        return false;
+    };
+    let Some(query) = request.query.as_ref() else {
+        return false;
+    };
+    let detail = operation == OwnedCardOperation::RecycleDetail;
+    if envelope.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "success" | "accountFenceVersion" | "ownerUserId"
+        ) && if detail {
+            key != "card"
+        } else {
+            !matches!(
+                key.as_str(),
+                "cards" | "total" | "filteredCount" | "nextOffset"
+            )
+        }
+    }) {
+        return false;
+    }
+    if detail {
+        return valid_recycle_card(&body["card"], true)
+            && body["card"]["id"].as_str().map(trim_card_id)
+                == query.get("id").map(String::as_str);
+    }
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(12);
+    let Some(cards) = body["cards"].as_array() else {
+        return false;
+    };
+    let offset = query
+        .get("offset")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    cards.len() <= limit
+        && cards.iter().all(|card| {
+            valid_recycle_card(card, false)
+                && query.get("type").is_none_or(|kind| {
+                    card["type"].as_str() == Some(kind.as_str())
+                        || (kind == "questionnaire"
+                            && card["type"] == "character"
+                            && card["isLegacyQuestionnaire"] == true)
+                })
+        })
+        && nonnegative_safe_integer(&body["total"])
+        && nonnegative_safe_integer(&body["filteredCount"])
+        && body["filteredCount"].as_f64().is_some_and(|count| {
+            count >= cards.len() as f64
+                && body["total"].as_f64().is_some_and(|total| count <= total)
+        })
+        && body.get("nextOffset").is_some_and(|value| {
+            value.is_null()
+                || (nonnegative_safe_integer(value)
+                    && value.as_f64().is_some_and(|next| {
+                        next == (offset + cards.len() as u64) as f64
+                            && next > offset as f64
+                            && body["filteredCount"]
+                                .as_f64()
+                                .is_some_and(|count| next < count)
+                    }))
+        })
 }
 
 /// 只把符合已冻结安全协议的成功响应交给 renderer。非 2xx 保留原状态，
@@ -3360,6 +3575,9 @@ fn validate_owned_card_response(
         && expected_owner.is_some()
         && body["ownerUserId"].as_f64() == expected_owner.map(|owner| owner as f64);
     let payload_valid = match operation {
+        OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail => {
+            valid_recycle_response(request, operation, body)
+        }
         OwnedCardOperation::Create => valid_card_id(&body["id"]),
         OwnedCardOperation::Replace => {
             valid_card_id(&body["id"])
@@ -3377,11 +3595,14 @@ fn validate_owned_card_response(
                 body.keys().all(|key| {
                     matches!(
                         key.as_str(),
-                        "success" | "id" | "accountFenceVersion" | "ownerUserId" | "metadataVersion"
+                        "success"
+                            | "id"
+                            | "accountFenceVersion"
+                            | "ownerUserId"
+                            | "metadataVersion"
                     )
                 })
-            })
-                && valid_card_id(&body["id"])
+            }) && valid_card_id(&body["id"])
                 && body["id"].as_str().map(trim_card_id)
                     == request
                         .body
@@ -3524,10 +3745,16 @@ async fn dispatch_cloud_route(
         url.query_pairs_mut().extend_pairs(query.iter());
     }
 
-    // 所属卡写入不自动重放；连 reqwest 默认协议级 NACK 重试也禁用。
+    // 所属卡写入及回收站读取不自动重放；连 reqwest 默认协议级 NACK 重试也禁用。
     let mutation_http = if matches!(
         owned_operation,
-        Some(OwnedCardOperation::Create | OwnedCardOperation::Replace | OwnedCardOperation::Metadata)
+        Some(
+            OwnedCardOperation::Create
+                | OwnedCardOperation::Replace
+                | OwnedCardOperation::Metadata
+                | OwnedCardOperation::RecyclePage
+                | OwnedCardOperation::RecycleDetail
+        )
     ) {
         Some(
             cloud_client_builder()
@@ -3621,6 +3848,27 @@ async fn dispatch_cloud_route(
     };
     if let Some(operation) = owned_operation {
         validate_owned_card_response(&request, operation, status, &body)?;
+        if (200..300).contains(&status)
+            && matches!(
+                operation,
+                OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail
+            )
+        {
+            let _guard = account_session_gate()?;
+            let current = env
+                .secrets
+                .resolve(ACCOUNT_SESSION_REF)
+                .map_err(|error| CloudError::from_secret_store(&error))?;
+            if snapshot.as_ref().is_none_or(|snapshot| {
+                env.state.account_epoch.load(Ordering::SeqCst) != snapshot.epoch
+                    || current.as_deref() != Some(snapshot.raw.as_str())
+            }) {
+                return Err(CloudError::new(
+                    CloudErrorCode::NotAuthenticated,
+                    "账号会话已改变，请重新读取回收站",
+                ));
+            }
+        }
     }
     let cache = if observes_public {
         Some(match (observe_ticket, observe_handle) {
@@ -3684,6 +3932,11 @@ pub async fn cloud_card_library_request(
     cache: &crate::public_cache::PublicReadCache,
     request: CloudRouteRequest,
 ) -> Result<CloudRouteResponse, CloudError> {
+    let response_max_bytes = if request.route_id == "data-cards.recycle-detail.query" {
+        RECYCLE_DETAIL_RESPONSE_MAX_BYTES
+    } else {
+        CARD_LIBRARY_RESPONSE_MAX_BYTES
+    };
     dispatch_cloud_route(
         &CloudDispatchEnv {
             state,
@@ -3693,7 +3946,7 @@ pub async fn cloud_card_library_request(
         },
         request,
         "数据卡请求",
-        CARD_LIBRARY_RESPONSE_MAX_BYTES,
+        response_max_bytes,
         CARD_LIBRARY_BODY_MAX_BYTES,
     )
     .await
@@ -7243,7 +7496,10 @@ mod tests {
         CloudRouteRequest {
             expected_user_id: operation.map(|_| 7),
             route_id: route_id.to_string(),
-            query: if operation == Some(OwnedCardOperation::ReplacementTarget) {
+            query: if matches!(
+                operation,
+                Some(OwnedCardOperation::ReplacementTarget | OwnedCardOperation::RecycleDetail)
+            ) {
                 Some(std::collections::BTreeMap::from([(
                     "id".into(),
                     "owned-card".into(),
@@ -7331,6 +7587,271 @@ mod tests {
     }
 
     #[test]
+    fn card_library_recycle_request_golden_is_strict_and_never_dispatches_invalid_input() {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("recycle-request-fixture");
+            store_session(&secrets, &stored_test_session()).unwrap();
+            for wire in fixture["cardLibrary"]["recycleRequests"]["valid"]
+                .as_array()
+                .unwrap()
+            {
+                let mut request: CloudRouteRequest = serde_json::from_value(wire.clone()).unwrap();
+                let operation = owned_card_operation(&request.route_id).unwrap();
+                prepare_owned_card_request(&mut request, operation, 7).unwrap();
+                let query = request.query.unwrap();
+                assert_eq!(query["expectedUserId"], "7");
+                assert!(request.body.is_none());
+                if operation == OwnedCardOperation::RecycleDetail {
+                    assert_eq!(query["id"], "owned-card");
+                    assert_eq!(query.len(), 2);
+                } else {
+                    assert!(canonical_recycle_number(&query["limit"], 1, 24));
+                    assert!(canonical_recycle_number(
+                        &query["offset"],
+                        0,
+                        MAX_SAFE_USER_ID - 24
+                    ));
+                }
+            }
+            for wire in fixture["cardLibrary"]["recycleRequests"]["invalid"]
+                .as_array()
+                .unwrap()
+            {
+                if let Ok(request) = serde_json::from_value::<CloudRouteRequest>(wire.clone()) {
+                    let error = cloud_card_library_request(&state, &secrets, cache.get(), request)
+                        .await
+                        .unwrap_err();
+                    assert_eq!(error.code, CloudErrorCode::InvalidRequest, "{wire}");
+                }
+            }
+            for route in [
+                "data-cards.recycle.query",
+                "data-cards.recycle-detail.query",
+            ] {
+                let mut wrong_owner = card_request(route);
+                wrong_owner.expected_user_id = Some(8);
+                assert_eq!(
+                    cloud_card_library_request(&state, &secrets, cache.get(), wrong_owner)
+                        .await
+                        .unwrap_err()
+                        .code,
+                    CloudErrorCode::NotAuthenticated
+                );
+            }
+            for route in [
+                "data-cards.recycle.restore",
+                "data-cards.recycle.delete",
+                "data-cards.recycle.purge",
+            ] {
+                assert_eq!(
+                    cloud_card_library_request(&state, &secrets, cache.get(), card_request(route))
+                        .await
+                        .unwrap_err()
+                        .code,
+                    CloudErrorCode::InvalidRequest
+                );
+            }
+            assert_eq!(server.card_request_count.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn card_library_recycle_response_golden_checks_owner_tombstone_projection_and_id() {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("recycle-response-fixture");
+            cache.enable_capture();
+            store_session(&secrets, &stored_test_session()).unwrap();
+            let mut count = 0;
+            for category in ["valid", "invalid"] {
+                for wire in fixture["cardLibrary"]["recycleResponses"][category]
+                    .as_array()
+                    .unwrap()
+                {
+                    let request: CloudRouteRequest =
+                        serde_json::from_value(wire["request"].clone()).unwrap();
+                    let route = lookup_cloud_route(CARD_LIBRARY_ROUTES, &request.route_id).unwrap();
+                    *server.card_response_override.lock().unwrap() = Some((
+                        wire["status"].as_u64().unwrap() as u16,
+                        wire["body"].to_string(),
+                    ));
+                    let result =
+                        cloud_card_library_request(&state, &secrets, cache.get(), request).await;
+                    if category == "valid" {
+                        let response = result.unwrap();
+                        assert_eq!(response.body, wire["body"]);
+                        assert!(response.cache.is_none());
+                        let serialized = serde_json::to_string(&response).unwrap();
+                        assert!(!serialized.contains("session_token"));
+                    } else {
+                        assert_eq!(
+                            result.unwrap_err().code,
+                            CloudErrorCode::InvalidResponse,
+                            "{wire}"
+                        );
+                    }
+                    let (target, head, body) =
+                        server.last_card_request.lock().unwrap().clone().unwrap();
+                    assert!(head.starts_with(&format!("GET {}?", route.path)));
+                    assert!(head.contains("better-auth.session_token=native.tok"));
+                    assert!(body.is_none());
+                    let url = url::Url::parse(&format!("http://localhost{target}")).unwrap();
+                    let query: std::collections::BTreeMap<_, _> =
+                        url.query_pairs().into_owned().collect();
+                    assert_eq!(query["expectedUserId"], "7");
+                    count += 1;
+                    assert_eq!(server.card_request_count.load(Ordering::SeqCst), count);
+                }
+            }
+            assert_eq!(cache.get().stats().unwrap().summary_count, 0);
+        });
+    }
+
+    #[test]
+    fn card_library_recycle_only_detail_has_bounded_escaping_budget() {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("recycle-response-budget");
+            store_session(&secrets, &stored_test_session()).unwrap();
+            let mut detail = fixture["cardLibrary"]["recycleResponses"]["valid"][1]["body"].clone();
+            detail["card"]["data"] = serde_json::json!("\0".repeat(RECYCLE_CARD_DATA_MAX_BYTES));
+            let wire = detail.to_string();
+            assert!(wire.len() > CARD_LIBRARY_RESPONSE_MAX_BYTES);
+            assert!(wire.len() < RECYCLE_DETAIL_RESPONSE_MAX_BYTES);
+            *server.card_response_override.lock().unwrap() = Some((200, wire));
+            let response = cloud_card_library_request(
+                &state,
+                &secrets,
+                cache.get(),
+                card_request("data-cards.recycle-detail.query"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                response.body["card"]["data"].as_str().unwrap().len(),
+                RECYCLE_CARD_DATA_MAX_BYTES
+            );
+            for data in [
+                "x".repeat(RECYCLE_CARD_DATA_MAX_BYTES + 1),
+                "字".repeat(350000),
+            ] {
+                detail["card"]["data"] = serde_json::json!(data);
+                *server.card_response_override.lock().unwrap() = Some((200, detail.to_string()));
+                assert_eq!(
+                    cloud_card_library_request(
+                        &state,
+                        &secrets,
+                        cache.get(),
+                        card_request("data-cards.recycle-detail.query")
+                    )
+                    .await
+                    .unwrap_err()
+                    .code,
+                    CloudErrorCode::InvalidResponse
+                );
+            }
+            detail["card"]["data"] = serde_json::json!("{}");
+            detail["card"]["name"] =
+                serde_json::json!("x".repeat(RECYCLE_DETAIL_RESPONSE_MAX_BYTES));
+            *server.card_response_override.lock().unwrap() = Some((200, detail.to_string()));
+            assert_eq!(
+                cloud_card_library_request(
+                    &state,
+                    &secrets,
+                    cache.get(),
+                    card_request("data-cards.recycle-detail.query")
+                )
+                .await
+                .unwrap_err()
+                .code,
+                CloudErrorCode::InvalidResponse
+            );
+            let mut page = fixture["cardLibrary"]["recycleResponses"]["valid"][0]["body"].clone();
+            page["cards"][0]["name"] =
+                serde_json::json!("x".repeat(CARD_LIBRARY_RESPONSE_MAX_BYTES));
+            *server.card_response_override.lock().unwrap() = Some((200, page.to_string()));
+            assert_eq!(
+                cloud_card_library_request(
+                    &state,
+                    &secrets,
+                    cache.get(),
+                    card_request("data-cards.recycle.query")
+                )
+                .await
+                .unwrap_err()
+                .code,
+                CloudErrorCode::InvalidResponse
+            );
+            assert_eq!(server.card_request_count.load(Ordering::SeqCst), 5);
+        });
+    }
+
+    #[test]
+    fn card_library_recycle_rejects_late_success_after_same_byte_relogin_or_owner_change() {
+        rt().block_on(async {
+            for route in [
+                "data-cards.recycle.query",
+                "data-cards.recycle-detail.query",
+            ] {
+                for owner in [7, 8] {
+                    let fixture = owned_fixture();
+                    let server = spawn_mock_server();
+                    let state = CloudState::with_origin(&server.origin);
+                    let secrets = MemorySecrets::new();
+                    let cache = TestCache::new("recycle-late-success");
+                    store_session(&secrets, &stored_test_session()).unwrap();
+                    let index = usize::from(route == "data-cards.recycle-detail.query");
+                    *server.card_response_override.lock().unwrap() = Some((
+                        200,
+                        fixture["cardLibrary"]["recycleResponses"]["valid"][index]["body"]
+                            .to_string(),
+                    ));
+                    let (release, wait) = std::sync::mpsc::channel();
+                    *server.card_reply_gate.lock().unwrap() = Some(wait);
+                    let change = async {
+                        tokio::time::timeout(Duration::from_secs(3), async {
+                            while server.last_card_request.lock().unwrap().is_none() {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                        })
+                        .await
+                        .unwrap();
+                        let mut session = stored_test_session();
+                        session.account.user_id = owner;
+                        store_login_session(&state, &secrets, &session).unwrap();
+                        release.send(()).unwrap();
+                    };
+                    let (result, ()) = tokio::join!(
+                        cloud_card_library_request(
+                            &state,
+                            &secrets,
+                            cache.get(),
+                            card_request(route)
+                        ),
+                        change
+                    );
+                    assert_eq!(result.unwrap_err().code, CloudErrorCode::NotAuthenticated);
+                    assert_eq!(
+                        load_session(&secrets).unwrap().unwrap().account.user_id,
+                        owner
+                    );
+                    assert_eq!(server.card_request_count.load(Ordering::SeqCst), 1);
+                }
+            }
+        });
+    }
+
+    #[test]
     fn card_library_owned_requests_match_shared_fixture_and_send_no_invalid_requests() {
         rt().block_on(async {
             let fixture = owned_fixture();
@@ -7352,7 +7873,10 @@ mod tests {
                     assert_eq!(request.body.as_ref().unwrap()["expectedUserId"], 7);
                     if operation == OwnedCardOperation::Metadata {
                         let body = request.body.as_ref().unwrap();
-                        assert_eq!(body["name"], trim_card_id(wire["body"]["name"].as_str().unwrap()));
+                        assert_eq!(
+                            body["name"],
+                            trim_card_id(wire["body"]["name"].as_str().unwrap())
+                        );
                         assert_eq!(body["description"], wire["body"]["description"]);
                         assert_eq!(body["isPublic"], wire["body"]["isPublic"]);
                         assert_eq!(body.as_object().unwrap().len(), 6);
@@ -7476,6 +8000,8 @@ mod tests {
                 "data-cards.replace",
                 "data-cards.metadata",
                 "data-cards.replace-target.query",
+                "data-cards.recycle.query",
+                "data-cards.recycle-detail.query",
             ] {
                 for status in [307, 308, 400, 401, 403, 404, 405, 409, 413, 429, 500, 503] {
                     *server.card_response_override.lock().unwrap() =
@@ -7665,7 +8191,11 @@ mod tests {
             store_session(&secrets, &stored_test_session()).unwrap();
             *server.card_response_override.lock().unwrap() =
                 Some((409, r#"{"error":"TARGET_CHANGED"}"#.into()));
-            for route in ["data-cards.replace-target.query", "data-cards.replace", "data-cards.metadata"] {
+            for route in [
+                "data-cards.replace-target.query",
+                "data-cards.replace",
+                "data-cards.metadata",
+            ] {
                 for (raw, expected) in [
                     ("\u{feff} owned-card \u{feff}", "owned-card"),
                     ("\u{0085}owned-card\u{0085}", "\u{0085}owned-card\u{0085}"),
@@ -7838,7 +8368,7 @@ mod tests {
     #[test]
     fn card_library_owned_truncated_responses_are_network_errors_without_replay() {
         rt().block_on(async {
-          for route in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.replace-target.query"] {
+          for route in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.replace-target.query", "data-cards.recycle.query", "data-cards.recycle-detail.query"] {
             for status in [200, 500] {
             use std::io::{Read, Write};
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -7887,6 +8417,8 @@ mod tests {
                     ("data-cards.replace", Some(7)),
                     ("data-cards.metadata", Some(7)),
                     ("data-cards.replace-target.query", Some(7)),
+                    ("data-cards.recycle.query", Some(7)),
+                    ("data-cards.recycle-detail.query", Some(7)),
                     ("user-capacity.query", Some(7)),
                 ] {
                     let server = spawn_mock_server();
@@ -7909,7 +8441,7 @@ mod tests {
                         let mut next = stored_test_session();
                         next.account.user_id = next_owner;
                         next.cookie = "better-auth.session_token=account-B".into();
-                        store_session(&secrets, &next).unwrap();
+                        store_login_session(&state, &secrets, &next).unwrap();
                         release.send(()).unwrap();
                     };
                     let mut request = card_request(route);

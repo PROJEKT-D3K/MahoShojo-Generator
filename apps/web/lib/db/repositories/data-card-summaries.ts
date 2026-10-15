@@ -18,7 +18,7 @@ const roleType = sql<string | null>`CASE
   ELSE 'general' END`;
 const nativeAllowed = sql<boolean>`(${fieldType('nativeAllowed')} = 'true' OR (${fieldType('nativeAllowed')} IS NULL AND ${fieldType('native_allowed')} = 'true'))`;
 // 旧误标问卷保留发现入口；真正恢复类型仍由现有修复接口执行完整 schema 验证。
-const legacyQuestionnaire = sql<boolean>`(${dataCards.type} = 'character'
+export const legacyQuestionnaire = sql<boolean>`(${dataCards.type} = 'character'
   AND ${field('kind')} IN ('magical-girl', 'canshou') AND ${fieldType('title')} = 'text'
   AND ${fieldType('questions')} = 'array'
   AND (json_array_length(${payload}, '$.questions') > 0 OR length(trim(${field('loreMarkdown')})) > 0))`;

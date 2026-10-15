@@ -306,7 +306,6 @@ export const CharacterManagerPage: React.FC = () => {
     const cloudOperationBusyRef = useRef(false);
     const [userUsedSlots, setUserUsedSlots] = useState(0);
   const [showDataCardsModal, setShowDataCardsModal] = useState(false);
-  const [recycleBinCards, setRecycleBinCards] = useState<any[]>([]);
   const [showRecycleBinModal, setShowRecycleBinModal] = useState(false);
   const [showHistoryCardEditor, setShowHistoryCardEditor] = useState(false);
   const [historyCardDraft, setHistoryCardDraft] = useState<NarrativeHistoryDataCardV1 | null>(null);
@@ -387,7 +386,6 @@ export const CharacterManagerPage: React.FC = () => {
                     setUserUsedSlots(capacityInfo.usedSlots);
                 }
             }),
-            dataCardApi.getRecycleBin().then((cards) => { if (accountScopeRef.current === requestedScope) setRecycleBinCards(cards); }),
         ]);
     }, [isAuthenticated, accountScope]);
 
@@ -395,7 +393,6 @@ export const CharacterManagerPage: React.FC = () => {
         if (isAuthenticated) {
             loadUserDataCards();
         } else {
-            setRecycleBinCards([]);
             setShowDataCardsModal(false);
             setShowRecycleBinModal(false);
         }
@@ -620,6 +617,7 @@ export const CharacterManagerPage: React.FC = () => {
         usedSlots: capacityKnown ? userUsedSlots : undefined,
         userCapacity: capacityKnown ? userCapacity : undefined,
         onBusyChange: (busy) => { cloudOperationBusyRef.current = busy; },
+        isBlocked: () => cloudOperationBusyRef.current,
         onSensitive: () => router.push('/arrested'),
         onInspectCards: () => setShowDataCardsModal(true),
         onSuccess: (text) => {
@@ -630,7 +628,7 @@ export const CharacterManagerPage: React.FC = () => {
     });
     // 账号变更不将旧的资料编辑/选择/专用云端目标带到新账号；编辑器正文保留。
     useEffect(() => {
-        setShowDataCardsModal(false); setCurrentPage(1); setRecycleBinCards([]); setUserBadges([]);
+        setShowDataCardsModal(false); setCurrentPage(1); setUserBadges([]);
         setShowRecycleBinModal(false); setShowQuestionnaireCompatModal(false);
         setQuestionnaireCompatTargetCard(null); setHistoryCardTarget(null); setShowHistoryCardEditor(false);
     }, [user?.id, authSource]);
@@ -2151,7 +2149,6 @@ export const CharacterManagerPage: React.FC = () => {
                 setShowDataCardsModal(false);
                 setShowRecycleBinModal(true);
             }}
-                recycleCount={recycleBinCards.length}
                 recycleLimit={config.RECYCLE_BIN_LIMIT}
             />
 
@@ -2187,7 +2184,9 @@ export const CharacterManagerPage: React.FC = () => {
             < RecycleBinModal
                 isOpen={showRecycleBinModal}
                 onClose={() => setShowRecycleBinModal(false)}
-                recycleCards={recycleBinCards}
+                refreshKey={cardsRefresh}
+                busy={cloudWrite.busy}
+                operationGuard={{ isBlocked: () => cloudOperationBusyRef.current || cloudWrite.busy, onBusyChange: (value) => { cloudOperationBusyRef.current = value; } }}
                 onRestore={handleRestoreRecycleCard}
                 onDelete={handleDeleteRecycleCard}
                 limit={config.RECYCLE_BIN_LIMIT}

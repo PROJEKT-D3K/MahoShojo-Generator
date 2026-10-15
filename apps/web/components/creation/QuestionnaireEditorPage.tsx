@@ -23,7 +23,7 @@ import { quickCheck } from '@/lib/sensitive-word-filter';
 import { config } from '@/lib/config';
 import { getDataCardVisibilityValue } from '@/lib/data-card-status';
 import { useDataCardSummaryPage } from '@/lib/use-data-card-summary-page';
-import { normalizeQuestionnaireDataCard } from '@/lib/questionnaire-data-card';
+import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
 import { exceedsUtf8ByteLimit } from '@/lib/data-card-size';
 
 export const QuestionnaireEditorPage: React.FC = () => {
@@ -49,18 +49,21 @@ export const QuestionnaireEditorPage: React.FC = () => {
   const [showDataCardsModal, setShowDataCardsModal] = useState(false);
   const [showRecycleBinModal, setShowRecycleBinModal] = useState(false);
   const [cardsRefresh, setCardsRefresh] = useState(0);
-  const [recycleBinCards, setRecycleBinCards] = useState<any[]>([]);
+  const cloudOperationBusy = useRef(false);
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const cloudOperationGuard = useMemo(() => ({ isBlocked: () => cloudOperationBusy.current,
+    onBusyChange: (value: boolean) => { cloudOperationBusy.current = value; setCloudBusy(value); } }), []);
+  useUnsavedPageGuard(() => cloudOperationBusy.current, '正在处理云端数据卡，请等待响应后再离开', () => false);
+  const runCloudOperation = async (handler: () => Promise<void>) => {
+    if (cloudOperationBusy.current) return;
+    cloudOperationGuard.onBusyChange(true);
+    try { await handler(); } finally { cloudOperationGuard.onBusyChange(false); }
+  };
   const [userCapacity, setUserCapacity] = useState<number | null>(null);
   const [userUsedSlots, setUserUsedSlots] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const cardsPerPage = 12;
 
-  const questionnaireRecycleCards = useMemo(
-    () => recycleBinCards
-      .map((card) => normalizeQuestionnaireDataCard(card))
-      .filter((card): card is NonNullable<typeof card> => card !== null),
-    [recycleBinCards]
-  );
   const questionnaireSummary = useDataCardSummaryPage('my', user?.id ?? null, isAuthenticated, {
     limit: 1, types: ['questionnaire'], includeLegacyQuestionnaires: true,
   });
@@ -78,11 +81,7 @@ export const QuestionnaireEditorPage: React.FC = () => {
     try {
       setCardsRefresh((value) => value + 1);
       refreshQuestionnaireSummary();
-      const [capacityInfo, recycleCards] = await Promise.all([
-        dataCardApi.getUserCapacity(),
-        dataCardApi.getRecycleBin(),
-      ]);
-      setRecycleBinCards(recycleCards);
+      const capacityInfo = await dataCardApi.getUserCapacity();
       if (capacityInfo !== null) {
         setUserCapacity(capacityInfo.capacity);
         setUserUsedSlots(capacityInfo.usedSlots);
@@ -96,7 +95,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
     if (isAuthenticated) {
       loadUserQuestionnaireCards();
     } else {
-      setRecycleBinCards([]);
       setUserCapacity(null);
       setUserUsedSlots(0);
       setShowDataCardsModal(false);
@@ -464,6 +462,7 @@ export const QuestionnaireEditorPage: React.FC = () => {
             <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
               <SaveToCloudButton
                 data={questionnaireData}
+                operationGuard={cloudOperationGuard}
                 getData={async () => {
                   if (jsonError) throw new Error(jsonError);
                   return questionnaireData;
@@ -490,6 +489,8 @@ export const QuestionnaireEditorPage: React.FC = () => {
         }}
         dataCards={[]}
         summaryOwnerId={user?.id}
+        busy={cloudBusy}
+        metadataGuard={cloudOperationGuard}
         onMetadataSaved={() => void loadUserQuestionnaireCards()}
         refreshKey={cardsRefresh}
 
@@ -497,10 +498,10 @@ export const QuestionnaireEditorPage: React.FC = () => {
         cardsPerPage={cardsPerPage}
         onPageChange={setCurrentPage}
 
-        onDeleteCard={handleDeleteQuestionnaireCard}
-        onLoadCard={handleLoadQuestionnaireCard}
+        onDeleteCard={(id) => runCloudOperation(() => handleDeleteQuestionnaireCard(id))}
+        onLoadCard={(card) => runCloudOperation(() => handleLoadQuestionnaireCard(card))}
 
-        onReplaceCard={handleReplaceQuestionnaireCard}
+        onReplaceCard={(card) => runCloudOperation(() => handleReplaceQuestionnaireCard(card))}
         userCapacity={userCapacity ?? undefined}
         userUsedSlots={userUsedSlots}
         onOpenRecycleBin={() => {
@@ -508,7 +509,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
           setShowDataCardsModal(false);
           setShowRecycleBinModal(true);
         }}
-        recycleCount={questionnaireRecycleCards.length}
         title="我的问卷库"
         emptyText="暂无问卷数据卡"
         defaultFilters={defaultModalFilters}
@@ -519,7 +519,9 @@ export const QuestionnaireEditorPage: React.FC = () => {
       <RecycleBinModal
         isOpen={showRecycleBinModal}
         onClose={() => setShowRecycleBinModal(false)}
-        recycleCards={questionnaireRecycleCards}
+        type="questionnaire"
+        refreshKey={cardsRefresh}
+        operationGuard={cloudOperationGuard}
         onRestore={handleRestoreQuestionnaireCard}
         onDelete={handleDeleteRecycleQuestionnaireCard}
         limit={config.RECYCLE_BIN_LIMIT}

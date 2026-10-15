@@ -1,7 +1,7 @@
 import { z } from './zod';
 
 import { SafeJsonValueSchema } from './json-value';
-import { OwnedDataCardMetadataRequestSchema, OwnedDataCardReplaceRequestSchema } from './data-cards';
+import { OwnedDataCardMetadataRequestSchema, OwnedDataCardReplaceRequestSchema, OwnedRecycleBinQuerySchema, OwnedRecycleBinDetailQuerySchema } from './data-cards';
 import { ProviderModelIdSchema, ProviderPresetIdSchema } from './provider-target';
 
 /**
@@ -650,6 +650,8 @@ export const DesktopCardLibraryRouteIdSchema = z.enum([
   'data-cards.replace-target.query',
   'data-cards.replace',
   'data-cards.metadata',
+  'data-cards.recycle.query',
+  'data-cards.recycle-detail.query',
   'user-capacity.query',
   'favorites.query',
   'favorites.add',
@@ -678,6 +680,20 @@ export const DesktopCardLibraryRequestSchema = z.object({
   query: z.record(z.string().max(64), z.string().max(1024)).optional(),
   body: SafeJsonValueSchema.optional(),
 }).strict().superRefine((request, context) => {
+  const recycle = ['data-cards.recycle.query', 'data-cards.recycle-detail.query'].includes(request.routeId);
+  if (recycle) {
+    const query = request.query ?? {};
+    const invalidNumber = (value: string | undefined) => value !== undefined && !/^(0|[1-9]\d*)$/.test(value);
+    const parsed = request.routeId === 'data-cards.recycle.query'
+      ? OwnedRecycleBinQuerySchema.safeParse({ ...query, expectedUserId: request.expectedUserId,
+        ...(query.limit !== undefined ? { limit: Number(query.limit) } : {}), ...(query.offset !== undefined ? { offset: Number(query.offset) } : {}) })
+      : OwnedRecycleBinDetailQuerySchema.safeParse({ ...query, expectedUserId: request.expectedUserId });
+    if (request.body !== undefined || !parsed.success || invalidNumber(query.limit) || invalidNumber(query.offset) ||
+      (query.expectedUserId !== undefined && query.expectedUserId !== String(request.expectedUserId))) {
+      context.addIssue({ code: 'custom', message: '回收站读取只允许冻结账号及固定查询字段' });
+    }
+    return;
+  }
   const owned = ['data-cards.create', 'data-cards.replace-target.query', 'data-cards.replace', 'data-cards.metadata'].includes(request.routeId);
   if (!owned) return;
   const reject = (message: string) => context.addIssue({ code: 'custom', message });

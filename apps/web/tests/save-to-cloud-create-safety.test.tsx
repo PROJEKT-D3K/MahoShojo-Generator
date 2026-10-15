@@ -130,4 +130,29 @@ describe.each([undefined, 'generation-result'] as const)('Web explicit create li
     await act(async () => create.resolve({ success: true, id: 'old-created' }));
     expect(window.alert).not.toHaveBeenCalled(); expect(mocks.modal.isOpen).toBe(false);
   });
+
+  it('页级回收站/元信息读取guard同步阻断新建准备与既有表单提交', async () => {
+  let blocked = true;
+  const changes = vi.fn((value: boolean) => { blocked = value; });
+  const getData = vi.fn(async () => ({ name: '原件' }));
+  await render({ data: { name: 'result' }, getData, operationGuard: { isBlocked: () => blocked, onBusyChange: changes } });
+  await open(); expect(getData).not.toHaveBeenCalled(); expect(mocks.create).not.toHaveBeenCalled();
+  blocked = false; await render({ data: { name: 'result' }, getData, operationGuard: { isBlocked: () => blocked, onBusyChange: changes } });
+  await open(); expect(getData).toHaveBeenCalledOnce();
+  blocked = true; await act(async () => { void mocks.modal.onSave(); }); expect(mocks.create).not.toHaveBeenCalled();
+  blocked = false; await act(async () => { void mocks.modal.onSave(); }); expect(mocks.create).toHaveBeenCalledOnce();
+  expect(changes.mock.calls.map(([value]) => value)).toEqual([true, false, true, false]);
+});
+
+it('已派发新建后来源变化不释放page guard，旧ticket终态才释放且不认领旧回执', async () => {
+  const pending = deferred<{ success: boolean; id: string }>(); mocks.create.mockReturnValue(pending.promise);
+  let blocked = false; const changes = vi.fn((value: boolean) => { blocked = value; });
+  const operationGuard = { isBlocked: () => blocked, onBusyChange: changes };
+  await render({ data: { name: 'old' }, operationGuard }); await open(); await act(async () => { void mocks.modal.onSave(); });
+  expect(mocks.create).toHaveBeenCalledOnce(); expect(blocked).toBe(true);
+  await render({ data: { name: 'new' }, operationGuard }); expect(blocked).toBe(true); await open(); expect(mocks.create).toHaveBeenCalledOnce();
+  await act(async () => pending.resolve({ success: true, id: 'old-card' })); expect(blocked).toBe(false); expect(mocks.modal.isOpen).toBe(false);
+  expect(changes.mock.calls.map(([value]) => value)).toEqual([true, false, true, false]);
+});
+
 });

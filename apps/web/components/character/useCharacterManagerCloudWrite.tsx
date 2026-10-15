@@ -17,6 +17,7 @@ type Input = {
   usedSlots?: number;
   userCapacity?: number;
   onBusyChange?: (busy: boolean) => void;
+  isBlocked?: () => boolean;
 };
 type Operation = { scope: string; writing: boolean };
 type ReplacementDraft = {
@@ -63,7 +64,7 @@ export function useCharacterManagerCloudWrite(input: Input) {
   }, []);
 
   const begin = (selectionOnly = false): Operation | null => {
-    if (operation.current || !input.isAuthenticated || input.userId === null || input.data === null) return null;
+    if (operation.current || input.isBlocked?.() || !input.isAuthenticated || input.userId === null || input.data === null) return null;
     const op = { scope, writing: false }; operation.current = op; setBusy(true); input.onBusyChange?.(!selectionOnly); return op;
   };
   const finish = (op: Operation) => {
@@ -84,7 +85,7 @@ export function useCharacterManagerCloudWrite(input: Input) {
     return true;
   };
   const openSave = () => {
-    if (operation.current || !input.isAuthenticated || input.userId === null || input.data === null) return;
+    if (operation.current || input.isBlocked?.() || !input.isAuthenticated || input.userId === null || input.data === null) return;
     if (formScope !== scope) {
       const row = input.data as Record<string, unknown>;
       const name = input.cardType === 'scenario' ? row.title ?? row.name : row.codename ?? row.name;

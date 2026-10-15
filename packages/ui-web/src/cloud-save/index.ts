@@ -11,3 +11,5 @@ export { CloudCardActionButtons, CloudCardActionFeedback, type CloudCardActionBu
 
 export { METADATA_UNCERTAIN_MESSAGE, useOwnedCardMetadataEditor } from './owned-card-metadata';
 export type { OwnedCardMetadataPort, OwnedCardMetadataDraft, OwnedCardMetadataRead, OwnedCardMetadataOutcome } from './owned-card-metadata';
+export { RecycleBinModal } from './RecycleBinModal';
+export type { RecycleBinModalProps, OwnedRecycleBinReadPort } from './RecycleBinModal';
