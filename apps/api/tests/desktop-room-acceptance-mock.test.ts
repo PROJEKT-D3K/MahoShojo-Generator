@@ -14,7 +14,8 @@ import { ARENA_ROOM_PRESENCE_WEBSOCKET_PROTOCOL, type RoomServerTransportMessage
 import { DESKTOP_ROOM_SESSION_OPERATIONS, DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, parseDesktopRoomSessionResponse, type DesktopRoomSessionOperation } from '@mahoshojo/contracts/desktop-room-session';
 import { DesktopAuthExchangeResponseSchema } from '@mahoshojo/contracts/desktop-cloud';
 import { MessageSummarySchema } from '@mahoshojo/contracts/messages';
-import { ROOM_ACCEPTANCE_HOST, ROOM_ACCEPTANCE_OPERATIONS, selfCheckRoomAcceptanceMock, startRoomAcceptanceMock, type RoomAcceptancePki, type RoomAcceptanceRuntime } from '../scripts/desktop-room-acceptance-mock';
+import { ROOM_ACCEPTANCE_HOST, ROOM_ACCEPTANCE_OPERATIONS, ROOM_ACCEPTANCE_PUBLIC_CHARACTER, selfCheckRoomAcceptanceMock, startRoomAcceptanceMock, type RoomAcceptancePki, type RoomAcceptanceRuntime } from '../scripts/desktop-room-acceptance-mock';
+import { ARENA_ROOM_GENERATION_PRESET_REFS } from '../src/arena-room/room-generation-preset-registry';
 import { createArenaRoomState } from './arena-room-fixtures';
 import { monitorMock } from '../../../scripts/desktop-room-acceptance.mjs';
 
@@ -69,9 +70,9 @@ const headers = (userId: number, cookie: string) => ({
 });
 const sharedConfig = { ...createArenaRoomState().snapshot.sharedConfig, combatants: [] };
 const creation = (id = 'acceptance-test-create') => ({ creationRequestId: id, displayName: 'Synthetic Host', directory: { title: 'Synthetic Room', visibility: 'public' }, sharedConfig });
-const room = async (runtime: RoomAcceptanceRuntime, operation: DesktopRoomSessionOperation, cookie: string, userId: number, body?: unknown, roomId = '', mode: 'new' | 'resume-only' = 'new') => {
+const room = async (runtime: RoomAcceptanceRuntime, operation: DesktopRoomSessionOperation, cookie: string, userId: number, body?: unknown, roomId = '', mode: 'new' | 'resume-only' = 'new', proposalId = '') => {
   const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
-  const response = await request(runtime, definition.path.replace(':roomId', roomId), {
+  const response = await request(runtime, definition.path.replace(':roomId', encodeURIComponent(roomId)).replace(':proposalId', encodeURIComponent(proposalId)), {
     method: definition.method, headers: { ...headers(userId, cookie), origin: runtime.roomOrigin },
     ...(definition.method === 'POST' ? { body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: userId, ...(operation === 'create' ? { createMode: mode } : {}) }, request: body } } : {}),
   });
@@ -81,6 +82,15 @@ const room = async (runtime: RoomAcceptanceRuntime, operation: DesktopRoomSessio
 const success = async (value: ReturnType<typeof room>) => {
   const response = await value; expect(response.status).toBeGreaterThanOrEqual(200); expect(response.status).toBeLessThan(300);
   const parsed = JSON.parse(response.text); expect(parsed).toHaveProperty('result'); return parsed.result;
+};
+const joinedRoom = async () => {
+  const runtime = await start(); const h = await login(runtime, 101); const m = await login(runtime, 202);
+  const host = await success(room(runtime, 'create', h, 101, creation()));
+  const member = await success(room(runtime, 'join', m, 202, { displayName: 'Synthetic Member' }, host.roomId));
+  const snapshot = (await success(room(runtime, 'session', h, 101, undefined, host.roomId))).snapshot;
+  const proposal = { proposalId: 'member-proposal', expectedRoomEpoch: host.roomEpoch, baseRevision: snapshot.revision,
+    changes: [{ type: 'setUserGuidance', changeId: 'guidance', value: 'PROPOSAL-PRIVATE-CANARY', expectedBase: { kind: 'value', value: '' } }] };
+  return { runtime, h, m, host, member, snapshot, proposal };
 };
 const open = (runtime: RoomAcceptanceRuntime, ticket: string, origin = runtime.roomOrigin) => {
   const socket = new WebSocket(`wss://${ROOM_ACCEPTANCE_HOST}:${runtime.roomAddress.port}/api/arena/rooms/v1/ws?ticket=${encodeURIComponent(ticket)}`,
@@ -111,13 +121,14 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     });
     const monitor = monitorMock(child, true, { readinessTimeoutMs: 10_000 });
     try {
-      expect(await monitor.ready).toMatchObject({ event: 'self-check', roomOrigin: 'https://room.acceptance.invalid:34443', authOrigin: 'http://127.0.0.1:34080', selfCheck: { roomWss: true } });
+      expect(await monitor.ready).toMatchObject({ event: 'self-check', roomOrigin: 'https://room.acceptance.invalid:34443', authOrigin: 'http://127.0.0.1:34080',
+        selfCheck: { roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true } });
       expect(await monitor.exit).toEqual({ code: 0, signal: null });
     } finally { await monitor.close(); await rm(stateRoot, { recursive: true, force: true }); }
   });
   it('same-listener self-check validates auth and TLS and clears only its synthetic state', async () => {
     const runtime = await start();
-    expect(await selfCheckRoomAcceptanceMock(runtime, pki)).toEqual({ tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true });
+    expect(await selfCheckRoomAcceptanceMock(runtime, pki)).toEqual({ tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true });
     expect(runtime.observations()).toMatchObject({ rooms: 0, receipts: 0, actors: 0, authSessions: 0, trace: [] });
     await expect(selfCheckRoomAcceptanceMock(runtime, pki)).rejects.toThrow('ACCEPTANCE_SELFCHECK_NOT_PRISTINE');
     const cookie = await login(runtime, 101); await success(room(runtime, 'create', cookie, 101, creation()));
@@ -267,6 +278,15 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     });
     expect(replayStatus).toBe(401);
     expect((await success(room(runtime, 'session', memberCookie, 202, undefined, host.roomId))).self.userId).toBe(member.self.userId);
+    const proposal = { proposalId: 'all-operations-withdraw', expectedRoomEpoch: host.roomEpoch, baseRevision: published.snapshot.revision,
+      changes: [{ type: 'setUserGuidance', changeId: 'guidance', value: '提案建议', expectedBase: { kind: 'value', value: target.userGuidance } }] };
+    await success(room(runtime, 'proposalSubmit', memberCookie, 202, proposal, host.roomId));
+    await expect.poll(() => h.messages.some(message => message.type === 'proposal.submitted' && message.payload.proposal.proposalId === proposal.proposalId)).toBe(true);
+    await expect.poll(() => reconnected.messages.some(message => message.type === 'proposal.submitted' && message.payload.proposal.proposalId === proposal.proposalId)).toBe(true);
+    await success(room(runtime, 'proposalWithdraw', memberCookie, 202, { expectedRoomEpoch: host.roomEpoch }, host.roomId, 'new', proposal.proposalId));
+    await expect.poll(() => h.messages.some(message => message.type === 'proposal.resolved' && message.payload.proposalId === proposal.proposalId && message.payload.status === 'withdrawn')).toBe(true);
+    await success(room(runtime, 'proposalSubmit', memberCookie, 202, { ...proposal, proposalId: 'all-operations-resolve' }, host.roomId));
+    await success(room(runtime, 'proposalResolve', hostCookie, 101, { expectedRoomEpoch: host.roomEpoch, resolution: 'reject' }, host.roomId, 'new', 'all-operations-resolve'));
     expect(await success(room(runtime, 'leave', memberCookie, 202, { expectedRoomEpoch: host.roomEpoch }, host.roomId))).toMatchObject({ outcome: 'left' });
     expect((await room(runtime, 'session', memberCookie, 202, undefined, host.roomId)).status).toBe(404);
     expect(await success(room(runtime, 'close', hostCookie, 101, { expectedRoomEpoch: host.roomEpoch }, host.roomId))).toMatchObject({ outcome: 'closed' });
@@ -348,6 +368,164 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
       .toEqual([{ kind: 'room-http', operation: 'config', status: 200, dropped: true }]);
   });
 
+  it('uses real proposal role/epoch/idempotency authority, summary mutations and full resolve snapshots', async () => {
+    const { runtime, h, m, host, member, snapshot, proposal } = await joinedRoom();
+    expect((await room(runtime, 'proposalSubmit', h, 101, proposal, host.roomId)).status).toBe(403);
+    expect((await room(runtime, 'proposalSubmit', m, 202, { ...proposal, expectedRoomEpoch: 'stale-epoch' }, host.roomId)).status).toBe(409);
+    const wrongOwner = await room(runtime, 'proposalSubmit', m, 101, proposal, host.roomId);
+    expect(wrongOwner.parsed).toMatchObject({ desktopRoom: { viewerUserId: null }, error: { code: 'ROOM_DESKTOP_OWNER_MISMATCH', outcome: 'not-applied' } });
+    expect((await success(room(runtime, 'session', h, 101, undefined, host.roomId))).snapshot).toEqual(snapshot);
+    const submitted = await success(room(runtime, 'proposalSubmit', m, 202, proposal, host.roomId));
+    expect(submitted).toMatchObject({ proposalId: proposal.proposalId, status: 'submitted', result: 'applied', revision: snapshot.revision, controlSeq: snapshot.controlSeq + 1 });
+    expect(submitted).not.toHaveProperty('snapshot'); expect(submitted).not.toHaveProperty('sharedConfig');
+    const replay = await success(room(runtime, 'proposalSubmit', m, 202, proposal, host.roomId));
+    expect(replay).toEqual({ ...submitted, result: 'idempotent' });
+    expect((await room(runtime, 'proposalSubmit', m, 202, { ...proposal, changes: [{ ...proposal.changes[0], value: 'Different intent' }] }, host.roomId)).status).toBe(409);
+    const memberView = await success(room(runtime, 'session', m, 202, undefined, host.roomId));
+    expect(memberView.snapshot.proposals).toHaveLength(1);
+    expect(memberView.snapshot.proposals[0]).toMatchObject({ proposalId: proposal.proposalId, authorUserId: member.self.userId, changes: proposal.changes });
+    const resolve = { expectedRoomEpoch: host.roomEpoch, resolution: 'accept-selected', selectedChangeIds: ['guidance'] };
+    expect((await room(runtime, 'proposalResolve', m, 202, resolve, host.roomId, 'new', proposal.proposalId)).status).toBe(403);
+    expect((await room(runtime, 'proposalWithdraw', h, 101, { expectedRoomEpoch: host.roomEpoch }, host.roomId, 'new', proposal.proposalId)).status).toBe(403);
+    expect((await room(runtime, 'proposalWithdraw', m, 202, { expectedRoomEpoch: 'stale-epoch' }, host.roomId, 'new', proposal.proposalId)).status).toBe(409);
+    expect((await room(runtime, 'proposalResolve', h, 101, { ...resolve, expectedRoomEpoch: 'stale-epoch' }, host.roomId, 'new', proposal.proposalId)).status).toBe(409);
+    const resolved = await success(room(runtime, 'proposalResolve', h, 101, resolve, host.roomId, 'new', proposal.proposalId));
+    const observed = await success(room(runtime, 'session', h, 101, undefined, host.roomId));
+    expect(resolved).toMatchObject({ status: 'accepted', revision: snapshot.revision + 1, snapshot: observed.snapshot, sharedConfig: observed.snapshot.sharedConfig });
+    expect(resolved.snapshot.proposals).toEqual([]);
+    expect(resolved.snapshot.members).toHaveLength(2);
+    expect(resolved.snapshot.sharedConfig.userGuidance).toBe('PROPOSAL-PRIVATE-CANARY');
+    expect((await room(runtime, 'proposalSubmit', m, 202, proposal, host.roomId)).status).toBe(409);
+    expect(JSON.stringify(runtime.observations())).not.toContain('PROPOSAL-PRIVATE-CANARY');
+    expect(JSON.stringify(runtime.observations())).not.toContain(m);
+  });
+
+  it('drops each successful proposal receipt after real commit and readback never replays a POST', async () => {
+    const { runtime, h, m, host, snapshot, proposal } = await joinedRoom();
+    runtime.armFault('proposalSubmit');
+    expect((await room(runtime, 'proposalSubmit', h, 101, proposal, host.roomId)).status).toBe(403);
+    await expect(room(runtime, 'proposalSubmit', m, 202, proposal, host.roomId)).rejects.toMatchObject({ code: 'ECONNRESET' });
+    const submitted = await success(room(runtime, 'session', m, 202, undefined, host.roomId));
+    expect(submitted.snapshot).toMatchObject({ revision: snapshot.revision, controlSeq: snapshot.controlSeq + 1, proposals: [{ proposalId: proposal.proposalId }] });
+    expect(submitted).not.toHaveProperty('receipt'); expect(submitted).not.toHaveProperty('operationId');
+    runtime.armFault('proposalWithdraw');
+    expect((await room(runtime, 'proposalWithdraw', h, 101, { expectedRoomEpoch: host.roomEpoch }, host.roomId, 'new', proposal.proposalId)).status).toBe(403);
+    await expect(room(runtime, 'proposalWithdraw', m, 202, { expectedRoomEpoch: host.roomEpoch }, host.roomId, 'new', proposal.proposalId)).rejects.toMatchObject({ code: 'ECONNRESET' });
+    const withdrawn = await success(room(runtime, 'session', m, 202, undefined, host.roomId));
+    expect(withdrawn.snapshot.proposals).toEqual([]);
+    expect(withdrawn.snapshot.revision).toBe(snapshot.revision);
+    expect(withdrawn.snapshot.controlSeq).toBe(submitted.snapshot.controlSeq + 1);
+    const next = { ...proposal, proposalId: 'resolve-receipt-loss' };
+    await success(room(runtime, 'proposalSubmit', m, 202, next, host.roomId));
+    const intent = { expectedRoomEpoch: host.roomEpoch, resolution: 'accept-selected', selectedChangeIds: ['guidance'] };
+    runtime.armFault('proposalResolve');
+    expect((await room(runtime, 'proposalResolve', m, 202, intent, host.roomId, 'new', next.proposalId)).status).toBe(403);
+    await expect(room(runtime, 'proposalResolve', h, 101, intent, host.roomId, 'new', next.proposalId)).rejects.toMatchObject({ code: 'ECONNRESET' });
+    const resolved = await success(room(runtime, 'session', h, 101, undefined, host.roomId));
+    expect(resolved.snapshot).toMatchObject({ revision: snapshot.revision + 1, proposals: [], sharedConfig: { userGuidance: proposal.changes[0]!.value } });
+    await success(room(runtime, 'session', m, 202, undefined, host.roomId));
+    expect(runtime.observations().trace.filter(entry => entry.kind === 'room-http' && entry.operation.startsWith('proposal'))).toEqual([
+      { kind: 'room-http', operation: 'proposalSubmit', status: 403, dropped: false },
+      { kind: 'room-http', operation: 'proposalSubmit', status: 200, dropped: true },
+      { kind: 'room-http', operation: 'proposalWithdraw', status: 403, dropped: false },
+      { kind: 'room-http', operation: 'proposalWithdraw', status: 200, dropped: true },
+      { kind: 'room-http', operation: 'proposalSubmit', status: 200, dropped: false },
+      { kind: 'room-http', operation: 'proposalResolve', status: 403, dropped: false },
+      { kind: 'room-http', operation: 'proposalResolve', status: 200, dropped: true },
+    ]);
+  });
+
+  it.each(['proposalSubmit', 'proposalWithdraw', 'proposalResolve'] as const)('rejects one %s before business and does not consume unsupported fault for invalid protocol or owner', async (operation) => {
+    const { runtime, h, m, host, proposal } = await joinedRoom();
+    if (operation !== 'proposalSubmit') await success(room(runtime, 'proposalSubmit', m, 202, proposal, host.roomId));
+    const before = await success(room(runtime, 'session', h, 101, undefined, host.roomId));
+    const userId = operation === 'proposalResolve' ? 101 : 202; const cookie = userId === 101 ? h : m;
+    const body = operation === 'proposalSubmit' ? proposal : operation === 'proposalWithdraw'
+      ? { expectedRoomEpoch: host.roomEpoch } : { expectedRoomEpoch: host.roomEpoch, resolution: 'reject' };
+    const endpoint = DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', host.roomId).replace(':proposalId', proposal.proposalId);
+    runtime.armFault('proposal-unsupported');
+    expect((await request(runtime, endpoint, { body: {}, headers: { ...headers(userId, cookie), 'x-mahoshojo-desktop-room-protocol': 'invalid' } })).status).toBe(404);
+    for (const owner of ['invalid', 'v1:0202', 'v1:9007199254740992']) {
+      const malformed = await request(runtime, endpoint, { body: {}, headers: { ...headers(userId, cookie), 'x-mahoshojo-room-expected-user-id': owner } });
+      expect(malformed.status).toBe(400);
+      expect(JSON.parse(malformed.text).error.code).toBe('ROOM_DESKTOP_PROTOCOL_INVALID');
+    }
+    const rejected = await room(runtime, operation, cookie, userId, body, host.roomId, 'new', proposal.proposalId);
+    expect(rejected.status).toBe(400);
+    expect(rejected.parsed).toMatchObject({ desktopRoom: { viewerUserId: null }, error: { code: 'ROOM_DESKTOP_OPERATION_UNSUPPORTED', outcome: 'not-applied' } });
+    expect((await success(room(runtime, 'session', h, 101, undefined, host.roomId))).snapshot).toEqual(before.snapshot);
+    const applied = await success(room(runtime, operation, cookie, userId, body, host.roomId, 'new', proposal.proposalId));
+    expect(applied.status).toBe(operation === 'proposalSubmit' ? 'submitted' : operation === 'proposalWithdraw' ? 'withdrawn' : 'rejected');
+  });
+
+  it('accepts canonical encoded Unicode proposal IDs and refuses encoded path injection without mutations', async () => {
+    const { runtime, h, m, host, proposal } = await joinedRoom();
+    const unicode = { ...proposal, proposalId: '提案 ?#:+&=!' };
+    await success(room(runtime, 'proposalSubmit', m, 202, unicode, host.roomId));
+    const before = await success(room(runtime, 'session', h, 101, undefined, host.roomId));
+    for (const encoded of ['%2Fother', '%5Cother', '%252Fother', '%252e%252e', '%20trimmed%20', '%ED%A0%80', '%E0%A4%A', 'one/two']) {
+      const endpoint = `/api/arena/rooms/v1/${host.roomId}/proposals/${encoded}/withdraw`;
+      expect((await request(runtime, endpoint, { headers: headers(202, m), body: {} })).status).toBe(404);
+    }
+    for (const unsafe of ['../resolve', 'a/b', 'a\\b', '%2Fhidden', '..', '.']) {
+      expect((await room(runtime, 'proposalSubmit', m, 202, { ...proposal, proposalId: unsafe }, host.roomId)).status).toBe(400);
+    }
+    expect((await success(room(runtime, 'session', h, 101, undefined, host.roomId))).snapshot).toEqual(before.snapshot);
+    const withdrawn = await success(room(runtime, 'proposalWithdraw', m, 202, { expectedRoomEpoch: host.roomEpoch }, host.roomId, 'new', unicode.proposalId));
+    expect(withdrawn.status).toBe('withdrawn'); expect(withdrawn).not.toHaveProperty('snapshot');
+  });
+
+  it('serves only fixed random/fresh public character reads and verifies real references without token CAS', async () => {
+    const { runtime, h, m, host, proposal } = await joinedRoom();
+    const random = await request(runtime, '/api/random-public-card?type=character', { auth: true });
+    const fresh = await request(runtime, `/api/public-data-cards?id=${ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id}`, { auth: true });
+    expect(random.status).toBe(200); expect(fresh.status).toBe(200);
+    expect(JSON.parse(random.text)).toEqual(JSON.parse(fresh.text));
+    expect(JSON.parse(fresh.text)).toEqual({ success: true, card: ROOM_ACCEPTANCE_PUBLIC_CHARACTER });
+    expect(ROOM_ACCEPTANCE_PUBLIC_CHARACTER).toMatchObject({ type: 'character', is_public: 1, review_status: 'approved', deleted_at: null });
+    expect(runtime.observations().trace.filter(entry => entry.kind === 'public-card')).toEqual([
+      { kind: 'public-card', operation: 'random', status: 200 }, { kind: 'public-card', operation: 'read', status: 200 },
+    ]);
+    for (const endpoint of ['/api/random-public-card', '/api/random-public-card?type=scenario', '/api/random-public-card?type=character&type=character',
+      '/api/random-public-card?type=character&url=https://example.com', '/api/public-data-cards', '/api/public-data-cards?id=unknown',
+      `/api/public-data-cards?id=${ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id}&id=${ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id}`, '/api/public-data-cards?url=https://example.com']) {
+      expect((await request(runtime, endpoint, { auth: true })).status).toBe(404);
+    }
+    for (const endpoint of ['/api/random-public-card?type=character', `/api/public-data-cards?id=${ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id}`]) {
+      expect((await request(runtime, endpoint, { auth: true, body: {} })).status).toBe(404);
+      expect((await request(runtime, endpoint, { auth: true, method: 'HEAD' })).status).toBe(404);
+      expect((await request(runtime, endpoint)).status).toBe(404);
+    }
+    const change = { changeId: 'character', type: 'addCombatant', ref: { id: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id, kind: 'character', versionToken: 'earlier-observation' }, expectedBase: { kind: 'absent' } };
+    const before = await success(room(runtime, 'session', h, 101, undefined, host.roomId));
+    for (const changes of [[{ ...change, ref: { ...change.ref, id: 'unknown-card' } }],
+      [{ type: 'setScenario', changeId: 'scenario', ref: { ...change.ref, kind: 'scenario' }, expectedBase: { kind: 'ref', ref: null } }]]) {
+      const rejected = await room(runtime, 'proposalSubmit', m, 202, { ...proposal, changes }, host.roomId);
+      expect(rejected.status).toBe(409);
+      expect(rejected.parsed).toMatchObject({ error: { code: 'ROOM_CONFLICT', message: expect.stringContaining('数据卡不可用于当前房间') } });
+    }
+    expect((await success(room(runtime, 'session', h, 101, undefined, host.roomId))).snapshot).toEqual(before.snapshot);
+    await success(room(runtime, 'proposalSubmit', m, 202, { ...proposal, changes: [change] }, host.roomId));
+    const resolved = await success(room(runtime, 'proposalResolve', h, 101, { expectedRoomEpoch: host.roomEpoch,
+      resolution: 'accept-selected', selectedChangeIds: ['character'] }, host.roomId, 'new', proposal.proposalId));
+    expect(resolved.sharedConfig.combatants).toEqual([{ key: `data-card:${change.ref.id}`, ref: change.ref }]);
+    expect(JSON.stringify(runtime.observations())).not.toContain('earlier-observation');
+    expect(JSON.stringify(runtime.observations())).not.toContain(ROOM_ACCEPTANCE_PUBLIC_CHARACTER.data);
+  });
+
+  it('uses the released preset resolver and exact content digest for submit and host resolve', async () => {
+    const { runtime, h, m, host, proposal } = await joinedRoom();
+    const ref = ARENA_ROOM_GENERATION_PRESET_REFS.find(entry => entry.kind === 'character')!;
+    const change = { changeId: 'preset', type: 'addCombatant', key: `preset:${ref.id}`, ref, expectedBase: { kind: 'absent' } };
+    const stale = await room(runtime, 'proposalSubmit', m, 202, { ...proposal, changes: [{ ...change, ref: { ...ref, versionToken: 'sha256:wrong' } }] }, host.roomId);
+    expect(stale.status).toBe(409);
+    expect(stale.parsed).toMatchObject({ error: { code: 'ROOM_CONFLICT', message: expect.stringContaining('数据卡已更新') } });
+    await success(room(runtime, 'proposalSubmit', m, 202, { ...proposal, changes: [change] }, host.roomId));
+    const resolved = await success(room(runtime, 'proposalResolve', h, 101, { expectedRoomEpoch: host.roomEpoch,
+      resolution: 'accept-selected', selectedChangeIds: ['preset'] }, host.roomId, 'new', proposal.proposalId));
+    expect(resolved.sharedConfig.combatants).toEqual([{ key: change.key, ref }]);
+  });
+
   it('drops only successful committed create and resume-only recovers the original committed in-memory receipt', async () => {
     const runtime = await start(); const cookie = await login(runtime, 101);
     expect((await room(runtime, 'create', cookie, 101, creation('unknown-original'), '', 'resume-only')).status).toBe(409);
@@ -380,9 +558,10 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     expect(runtime.observations().trace.flatMap((entry) => entry.kind === 'room-http' && entry.dropped ? [entry.operation] : [])).toEqual(['join', 'leave', 'close']);
   });
 
-  it('refuses default/unnegotiated/generation/proposal paths and unknown controls with bounded safe trace', async () => {
+  it('refuses default/unnegotiated/generation/kick paths and unknown controls with bounded safe trace', async () => {
     const runtime = await start(); const cookie = await login(runtime, 101);
-    for (const path of ['/api/arena/generate-stream', '/api/arena/rooms/v1/room-1/generations', '/api/arena/rooms/v1/room-1/proposals', '/api/arena/rooms/v1/room-1/members/member-1/kick', '/api/arena/rooms/v1/room-1/unknown']) {
+    expect(ROOM_ACCEPTANCE_OPERATIONS).toEqual(['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
+    for (const path of ['/api/arena/generate-stream', '/api/arena/rooms/v1/room-1/generations', '/api/arena/rooms/v1/room-1/generations/generation-1/cancel', '/api/arena/rooms/v1/room-1/members/member-1/kick', '/api/arena/rooms/v1/room-1/unknown']) {
       expect((await request(runtime, path, { body: {}, headers: headers(101, cookie) })).status).toBe(404);
     }
     expect((await request(runtime, '/api/arena/rooms/v1/room-1/config', { headers: headers(101, cookie) })).status).toBe(404);

@@ -419,7 +419,7 @@ class SyntheticChild extends EventEmitter {
   line(value: unknown) { this.stdout.write(JSON.stringify(value) + '\n'); }
   finish(code = 0) { this.exitCode = code; this.emit('exit', code, null); }
 }
-const selfCheckSummary = { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true };
+const selfCheckSummary = { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true };
 const readyMessage = () => ({ event: 'ready', roomOrigin: ENDPOINTS.room, authOrigin: ENDPOINTS.auth, roomAddress: { host: '127.0.0.1', port: ENDPOINTS.roomPort }, selfCheck: { ...selfCheckSummary } });
 const observations = (id: unknown) => ({ id, event: 'observations', rooms: 1, receipts: 1, actors: 1, activeConnections: 0, authSessions: 2, trace: [{ kind: 'room-http', operation: 'create', status: 200, dropped: false }] });
 
@@ -435,6 +435,44 @@ describe('Room acceptance owned mock supervision without spawning processes', ()
     child.line(value); await expect(reading).resolves.toEqual(value);
     expect(child.kill).not.toHaveBeenCalled();
     } finally { child.finish(); await mock.exit; await mock.close(); }
+  });
+
+  it.each(['proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported'])('supervises only the explicit %s proposal fault', async operation => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    try {
+      const armed = mock.command('arm-fault', operation);
+      child.line({ id: 1, event: 'armed', operation }); await armed;
+      const reading = mock.command('observe');
+      const value = { ...observations(2), trace: [{ kind: 'room-http', operation: operation === 'proposal-unsupported' ? 'proposalSubmit' : operation,
+        status: operation === 'proposal-unsupported' ? 400 : 200, dropped: operation !== 'proposal-unsupported' }] };
+      child.line(value); await expect(reading).resolves.toEqual(value);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally { child.finish(); await mock.exit; await mock.close(); }
+  });
+
+  it('accepts only bounded public random/read observations without identity or body data', async () => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    const pending = mock.command('observe');
+    const value = { ...observations(1), trace: [{ kind: 'public-card', operation: 'random', status: 200 }, { kind: 'public-card', operation: 'read', status: 200 }] };
+    child.line(value); await expect(pending).resolves.toEqual(value);
+    child.finish(); await mock.exit; await mock.close();
+  });
+
+  it.each([
+    { kind: 'room-http', operation: 'generationStart', status: 200, dropped: false },
+    { kind: 'room-http', operation: 'kick', status: 200, dropped: false },
+    { kind: 'public-card', operation: 'list', status: 200 },
+    { kind: 'public-card', operation: 'read', status: 200, body: 'private-canary' },
+    { kind: 'public-card', operation: 'read', status: 600 },
+  ])('refuses an unapproved or expanded observation %#', async trace => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    const pending = mock.command('observe');
+    child.line({ ...observations(1), trace: [trace] });
+    await expect(pending).rejects.toThrow('invalid mock response');
+    expect(child.kill).toHaveBeenCalled(); await mock.exit; await mock.close();
   });
 
   it('waits for validated readiness and correlates one bounded command at a time', async () => {
@@ -613,6 +651,17 @@ describe('Room acceptance two-application lifecycle without a GUI', () => {
     fixture.inputStream.write('fault config\nfault config-unsupported\n');
     await vi.waitFor(() => expect(fixture.mock.command).toHaveBeenCalledWith('arm-fault', 'config-unsupported'));
     expect(fixture.mock.command).toHaveBeenCalledWith('arm-fault', 'config');
+    fixture.inputStream.write('stop\n'); await running;
+  });
+
+  it('forwards exactly the fixed proposal faults and rejects unapproved generation controls', async () => {
+    const fixture = applicationPairFixture(); const running = runApplicationPair(fixture.manifest, fixture.mock, fixture as unknown as Parameters<typeof runApplicationPair>[2]);
+    fixture.ready.resolve(readyMessage()); await fixture.started.promise;
+    fixture.inputStream.write('fault proposalSubmit\nfault proposalWithdraw\nfault proposalResolve\nfault proposal-unsupported\nfault generationStart\n');
+    await vi.waitFor(() => expect(fixture.report).toHaveBeenCalledWith('Unknown command'));
+    expect(fixture.mock.command.mock.calls).toEqual([
+      ['arm-fault', 'proposalSubmit'], ['arm-fault', 'proposalWithdraw'], ['arm-fault', 'proposalResolve'], ['arm-fault', 'proposal-unsupported'],
+    ]);
     fixture.inputStream.write('stop\n'); await running;
   });
 

@@ -17,6 +17,7 @@ import {
 import {
   DESKTOP_ROOM_SESSION_OPERATIONS, DESKTOP_ROOM_SESSION_PROTOCOL_VERSION,
   DesktopRoomSessionExpectedUserIdHeaderSchema, DesktopRoomSessionErrorResponseSchema, parseDesktopRoomSessionResponse,
+  DesktopRoomSessionRoomIdSchema, DesktopRoomSessionProposalIdSchema,
   type DesktopRoomSessionOperation,
 } from '@mahoshojo/contracts/desktop-room-session';
 import {
@@ -30,6 +31,9 @@ import {
 import { createRoomActorRegistry, type RoomActorCheckpointStore } from '../src/arena-room/room-actor-registry';
 import { createArenaRoomMembershipService } from '../src/arena-room/room-membership-service';
 import { createArenaRoomConfigService } from '../src/arena-room/room-config-service';
+import { createArenaRoomProposalService } from '../src/arena-room/room-proposal-service';
+import { createArenaDataCardRefVerifier, type ArenaDataCardRefVerifierD1Client } from '../src/arena-room/arena-data-card-ref-verifier';
+import { createArenaRoomGenerationPresetResolver } from '../src/arena-room/room-generation-preset-registry';
 import { createArenaRoomDirectoryService } from '../src/arena-room/room-directory-service';
 import { createStoredRoomDirectoryRecord, serializeStoredRoomDirectoryRecord, type StoredRoomDirectoryRecord } from '../src/arena-room/room-directory-record';
 import type { RedisRoomDirectoryCandidate, RedisRoomDirectoryStore } from '../src/arena-room/redis-room-directory-store';
@@ -42,10 +46,16 @@ import { createRoomRequestDispatcher, createRoomWebSocketApp, createRoomWebSocke
 import type { HonoAppVariables } from '../src/middleware/request-metadata';
 
 // This Native acceptance harness only exposes capabilities already implemented by its consumer.
-export const ROOM_ACCEPTANCE_OPERATIONS = ['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config'] as const satisfies readonly DesktopRoomSessionOperation[];
+export const ROOM_ACCEPTANCE_OPERATIONS = ['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve'] as const satisfies readonly DesktopRoomSessionOperation[];
 export const ROOM_ACCEPTANCE_HOST = 'room.acceptance.invalid';
 export const ROOM_ACCEPTANCE_PORT = 34443;
 export const ROOM_ACCEPTANCE_AUTH_PORT = 34080;
+export const ROOM_ACCEPTANCE_PUBLIC_CHARACTER = Object.freeze({
+  id: 'acceptance-public-character-1', type: 'character', name: 'Synthetic public character',
+  description: 'Local acceptance fixture only', author: 'Synthetic fixture', user_id: 101,
+  is_public: 1, review_status: 'approved', deleted_at: null, updated_at: '2026-01-01T00:00:00.000Z',
+  data: JSON.stringify({ name: 'Synthetic public character', description: 'A synthetic character for local Room acceptance.' }),
+});
 const CAPACITY = 64;
 const TRACE_CAPACITY = 256;
 const COOKIE = 'better-auth.session_token';
@@ -55,10 +65,13 @@ const digest = (value: string) => createHash('sha256').update(value).digest('bas
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const unavailable = (): never => { throw new Error('ACCEPTANCE_UNSUPPORTED'); };
 export type RoomAcceptancePki = { ca: string; cert: string; key: string };
-export type RoomAcceptanceFault = 'create' | 'join' | 'leave' | 'close' | 'config' | 'config-unsupported';
-const faults: readonly string[] = ['create', 'join', 'leave', 'close', 'config', 'config-unsupported'];
+export type RoomAcceptanceFault = 'create' | 'join' | 'leave' | 'close' | 'config' | 'config-unsupported'
+  | 'proposalSubmit' | 'proposalWithdraw' | 'proposalResolve' | 'proposal-unsupported';
+const faults: readonly string[] = ['create', 'join', 'leave', 'close', 'config', 'config-unsupported',
+  'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported'];
 export type RoomAcceptanceObservation =
   | { kind: 'room-http'; operation: DesktopRoomSessionOperation; status: number; dropped: boolean }
+  | { kind: 'public-card'; operation: 'random' | 'read'; status: number }
   | { kind: 'ws'; outcome: 'accepted' | 'rejected' }
   | { kind: 'refused' };
 export type RoomAcceptanceRuntime = {
@@ -143,12 +156,32 @@ class MemoryRoomStore implements RoomActorCheckpointStore, Pick<RedisRoomStore, 
   };
 }
 
+// Only the production verifier sees this bounded metadata port. It cannot query a database or URL.
+const syntheticCardMetadata: ArenaDataCardRefVerifierD1Client = {
+  prepare: () => ({
+    bind: (...params) => ({
+      bind: () => unavailable(),
+      all: async ({ retry }) => {
+        if (retry !== 'safe-read' || params.length !== 1 || typeof params[0] !== 'string') return unavailable();
+        return { success: true, results: params[0] === ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id
+          ? [{ id: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id, user_id: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.user_id,
+            type: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.type, is_public: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.is_public,
+            review_status: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.review_status, updated_at: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.updated_at,
+            deleted_at: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.deleted_at }] : [] };
+      },
+    }),
+    all: async () => unavailable(),
+  }),
+};
+
 const roomServices = () => {
   const store = new MemoryRoomStore();
   const actors = createRoomActorRegistry({ store, maxActors: CAPACITY, maxFencedRooms: CAPACITY });
   actors.startIdleSweeper();
-  // No content resolver or generation capability is installed in this local scope.
-  const memberships = createArenaRoomMembershipService({ actors, creationReceipts: store });
+  // References use real authority checks; generation remains outside this local scope.
+  const references = createArenaDataCardRefVerifier({ getClient: () => syntheticCardMetadata });
+  const presets = createArenaRoomGenerationPresetResolver();
+  const memberships = createArenaRoomMembershipService({ actors, creationReceipts: store, references, presets });
   const directory = createArenaRoomDirectoryService({ authority: store, store: store.directoryStore });
   const usedTickets = new Map<string, number>();
   const tickets = createArenaRoomTicketCodec({ signatures: createArenaRoomTicketSignatureService({
@@ -163,16 +196,27 @@ const roomServices = () => {
       usedTickets.set(key, expiresAtMs); return { kind: 'consumed' };
     },
   } });
-  const configs = createArenaRoomConfigService({ memberships });
-  return { store, actors, memberships, directory, authority, configs };
+  const configs = createArenaRoomConfigService({ memberships, references, presets });
+  const proposals = createArenaRoomProposalService({ memberships, references, presets });
+  return { store, actors, memberships, directory, authority, configs, proposals };
 };
 
 const operationFor = (request: Request): DesktopRoomSessionOperation | null => {
-  const pathname = new URL(request.url).pathname;
+  const segments = new URL(request.url).pathname.split('/');
   for (const operation of ROOM_ACCEPTANCE_OPERATIONS) {
     const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
-    const pattern = new RegExp(`^${definition.path.replace(':roomId', '[A-Za-z0-9._:-]{1,256}')}$`, 'u');
-    if (request.method === definition.method && pattern.test(pathname)) return operation as DesktopRoomSessionOperation;
+    const expected = definition.path.split('/');
+    if (request.method !== definition.method || expected.length !== segments.length) continue;
+    const matches = expected.every((part, index) => {
+      const encoded = segments[index]!;
+      if (part !== ':roomId' && part !== ':proposalId') return part === encoded;
+      try {
+        const value = decodeURIComponent(encoded);
+        const schema = part === ':roomId' ? DesktopRoomSessionRoomIdSchema : DesktopRoomSessionProposalIdSchema;
+        return schema.safeParse(value).success && encodeURIComponent(value) === encoded;
+      } catch { return false; }
+    });
+    if (matches) return operation;
   }
   return null;
 };
@@ -221,7 +265,10 @@ export const startRoomAcceptanceMock = async (options: {
     }
     // Test service only: mirror the older adapter's pre-auth operation rejection.
     // Invalid owner headers retain the real adapter's protocol error and do not consume this fault.
-    if (armed === 'config-unsupported' && operationFor(context.req.raw) === 'config'
+    const operation = operationFor(context.req.raw);
+    if (((armed === 'config-unsupported' && operation === 'config')
+      || (armed === 'proposal-unsupported'
+        && (operation === 'proposalSubmit' || operation === 'proposalWithdraw' || operation === 'proposalResolve')))
       && DesktopRoomSessionExpectedUserIdHeaderSchema.safeParse(context.req.header('x-mahoshojo-room-expected-user-id')).success) {
       armed = null;
       return context.json(DesktopRoomSessionErrorResponseSchema.parse({
@@ -243,7 +290,7 @@ export const startRoomAcceptanceMock = async (options: {
     },
     directory: { discoverPublic: (input) => services.directory.discoverPublic(input) },
     websocketAuthority: { issue: (input) => services.authority.issue(input) },
-    proposals: { submit: async () => unavailable(), resolve: async () => unavailable(), withdraw: async () => unavailable() },
+    proposals: { submit: (input) => services.proposals.submit(input), resolve: (input) => services.proposals.resolve(input), withdraw: (input) => services.proposals.withdraw(input) },
     generations: { start: async () => unavailable(), read: async () => unavailable(), list: async () => unavailable(), readHistory: async () => unavailable(), cancel: async () => unavailable() },
     configs: { publish: (input) => services.configs.publish(input) },
     rateLimit: async () => ({ allowed: true, limit: 100, remaining: 99, retryAfterSeconds: 1 }),
@@ -327,6 +374,18 @@ export const startRoomAcceptanceMock = async (options: {
   auth.get('/api/me/profile', (context) => identity(context.req.raw)
     ? context.json({ success: true, profile: { signature: '', avatarDataUrl: null } })
     : context.json({ error: 'Unauthorized' }, 401));
+  for (const [endpoint, operation, key, expected] of [
+    ['/api/random-public-card', 'random', 'type', 'character'],
+    ['/api/public-data-cards', 'read', 'id', ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id],
+  ] as const) {
+    auth.get(endpoint, (context) => {
+      const query = new URL(context.req.url).searchParams;
+      const allowed = context.req.method === 'GET' && [...query.keys()].length === 1 && query.get(key) === expected;
+      observe({ kind: 'public-card', operation, status: allowed ? 200 : 404 });
+      return allowed ? context.json({ success: true, card: ROOM_ACCEPTANCE_PUBLIC_CHARACTER })
+        : context.json({ code: 'ACCEPTANCE_ROUTE_REFUSED' }, 404);
+    });
+  }
   auth.get('/announcements.json', (context) => context.json([]));
   auth.get('/api/messages/summary', (context) => context.json(MessageSummarySchema.parse({
     unreadTotal: 0, siteUnread: 0, directUnread: 0, latest: null, fetchedAt: new Date().toISOString(),
@@ -421,9 +480,9 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       return exchange.headers['set-cookie']![0]!.split(';')[0]!;
     };
     const hostCookie = await login(101); const memberCookie = await login(202);
-    const roomRequest = async (operation: DesktopRoomSessionOperation, userId: number, cookie: string, request?: unknown, roomId = '') => {
+    const roomRequest = async (operation: DesktopRoomSessionOperation, userId: number, cookie: string, request?: unknown, roomId = '', proposalId = '') => {
       const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
-      const response = await probe(runtime, pki, definition.path.replace(':roomId', roomId), {
+      const response = await probe(runtime, pki, definition.path.replace(':roomId', encodeURIComponent(roomId)).replace(':proposalId', encodeURIComponent(proposalId)), {
         headers: { cookie, origin: runtime.roomOrigin, 'x-mahoshojo-desktop-room-protocol': DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, 'x-mahoshojo-room-expected-user-id': `v1:${userId}` },
         ...(definition.method === 'POST' ? { body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: userId, ...(operation === 'create' ? { createMode: 'new' } : {}) }, request } } : {}),
       });
@@ -479,10 +538,57 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
         });
       });
     }
+    const random = await probe(runtime, pki, '/api/random-public-card?type=character', { auth: true });
+    const fresh = await probe(runtime, pki, `/api/public-data-cards?id=${ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id}`, { auth: true });
+    assert(random.status === 200 && fresh.status === 200 && same(JSON.parse(random.body), JSON.parse(fresh.body))
+      && same(JSON.parse(fresh.body), { success: true, card: ROOM_ACCEPTANCE_PUBLIC_CHARACTER }));
+    const beforeProposal = await roomRequest('session', 202, memberCookie, undefined, created.roomId);
+    const proposal = {
+      proposalId: 'self-check-提案', expectedRoomEpoch: created.roomEpoch, baseRevision: beforeProposal.snapshot.revision,
+      changes: [{ type: 'addCombatant', changeId: 'add-character',
+        ref: { id: ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id, kind: 'character', versionToken: 'older-observation-not-a-CAS-fence' },
+        expectedBase: { kind: 'absent' } }],
+    };
+    runtime.armFault('proposal-unsupported');
+    const unsupportedProposal = await probe(runtime, pki, DESKTOP_ROOM_SESSION_OPERATIONS.proposalSubmit.path.replace(':roomId', created.roomId), {
+      headers: { ...configHeaders, cookie: memberCookie, 'x-mahoshojo-room-expected-user-id': 'v1:202' },
+      body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: 202 }, request: proposal },
+    });
+    const unsupportedProposalBody = parseDesktopRoomSessionResponse('proposalSubmit', JSON.parse(unsupportedProposal.body), 202);
+    assert(unsupportedProposal.status === 400 && 'error' in unsupportedProposalBody
+      && unsupportedProposalBody.error.code === 'ROOM_DESKTOP_OPERATION_UNSUPPORTED'
+      && unsupportedProposalBody.error.outcome === 'not-applied'
+      && same((await roomRequest('session', 202, memberCookie, undefined, created.roomId)).snapshot, beforeProposal.snapshot));
+    runtime.armFault('proposalSubmit');
+    let proposalDropped = false;
+    try { await roomRequest('proposalSubmit', 202, memberCookie, proposal, created.roomId); }
+    catch { proposalDropped = true; }
+    const submitted = await roomRequest('session', 202, memberCookie, undefined, created.roomId);
+    assert(proposalDropped && submitted.snapshot.proposals.length === 1
+      && submitted.snapshot.proposals[0].proposalId === proposal.proposalId
+      && submitted.snapshot.revision === beforeProposal.snapshot.revision);
+    const withdrawn = await roomRequest('proposalWithdraw', 202, memberCookie,
+      { expectedRoomEpoch: created.roomEpoch }, created.roomId, proposal.proposalId);
+    assert(withdrawn.status === 'withdrawn' && !('snapshot' in withdrawn) && !('sharedConfig' in withdrawn));
+    const nextProposal = { ...proposal, proposalId: 'self-check-resolve' };
+    const submission = await roomRequest('proposalSubmit', 202, memberCookie, nextProposal, created.roomId);
+    assert(submission.status === 'submitted' && !('snapshot' in submission) && !('sharedConfig' in submission));
+    const resolved = await roomRequest('proposalResolve', 101, hostCookie,
+      { expectedRoomEpoch: created.roomEpoch, resolution: 'accept-selected', selectedChangeIds: ['add-character'] }, created.roomId, nextProposal.proposalId);
+    const afterResolve = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+    assert(resolved.status === 'accepted' && same(resolved.snapshot, afterResolve.snapshot)
+      && same(resolved.sharedConfig, afterResolve.snapshot.sharedConfig)
+      && resolved.snapshot.sharedConfig.combatants[0].ref.id === ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id);
+    assert(same(runtime.observations().trace.filter(entry => entry.kind === 'room-http' && entry.operation === 'proposalSubmit'), [
+      { kind: 'room-http', operation: 'proposalSubmit', status: 400, dropped: false },
+      { kind: 'room-http', operation: 'proposalSubmit', status: 200, dropped: true },
+      { kind: 'room-http', operation: 'proposalSubmit', status: 200, dropped: false },
+    ]));
     await roomRequest('leave', 202, memberCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     await roomRequest('close', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     assert((await roomRequest('discover', 101, hostCookie)).items.length === 0);
-    return { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true } as const;
+    return { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true,
+      roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true } as const;
   } finally {
     await Promise.all(openSockets.map((socket) => new Promise<void>((resolve) => {
       if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }

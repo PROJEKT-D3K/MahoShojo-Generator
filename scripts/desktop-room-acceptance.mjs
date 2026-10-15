@@ -15,6 +15,9 @@ export const ENDPOINTS = Object.freeze({ room: 'https://room.acceptance.invalid:
 const PKI_FILE = 'scripts/fixtures/desktop-room-acceptance-pki.json';
 const PRODUCTION_ID = 'me.colanns.mahoshojo.desktop';
 const PREFIX = PRODUCTION_ID + '.roomacceptance.';
+// Deliberate harness capabilities, never every operation added to the production registry.
+export const ROOM_ACCEPTANCE_FAULTS = Object.freeze(['create', 'join', 'leave', 'close', 'config', 'config-unsupported', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported']);
+const ROOM_OBSERVATION_OPERATIONS = Object.freeze(['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 const read = file => readFileSync(file, 'utf8');
 const hash = data => createHash('sha256').update(data).digest('hex');
 const fail = message => { throw new Error(message); };
@@ -245,7 +248,7 @@ function exactKeys(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 }
 function checkedSummary(value) {
-  const keys = ['tlsTrusted', 'tlsNoRootRejected', 'tlsWrongSanRejected', 'authPkceOneUse', 'roomHttp', 'roomWss'];
+  const keys = ['tlsTrusted', 'tlsNoRootRejected', 'tlsWrongSanRejected', 'authPkceOneUse', 'roomHttp', 'roomWss', 'roomProposals', 'proposalReceiptLoss', 'fixedPublicRefs'];
   if (!exactKeys(value, keys) || keys.some(key => value[key] !== true)) fail('invalid self-check result');
   return Object.fromEntries(keys.map(key => [key, true]));
 }
@@ -254,8 +257,9 @@ function checkedObservations(value) {
   if (value.event !== 'observations' || !exactKeys(value, keys) || !['rooms', 'receipts', 'actors', 'activeConnections', 'authSessions'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 256) || !Array.isArray(value.trace) || value.trace.length > 256) fail('invalid observations');
   for (const event of value.trace) {
     if (event.kind === 'refused' && exactKeys(event, ['kind'])) continue;
+    if (event.kind === 'public-card' && exactKeys(event, ['kind', 'operation', 'status']) && ['random', 'read'].includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599) continue;
     if (event.kind === 'ws' && exactKeys(event, ['kind', 'outcome']) && ['accepted', 'rejected'].includes(event.outcome)) continue;
-    if (event.kind === 'room-http' && exactKeys(event, ['kind', 'operation', 'status', 'dropped']) && ['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config'].includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599 && typeof event.dropped === 'boolean') continue;
+    if (event.kind === 'room-http' && exactKeys(event, ['kind', 'operation', 'status', 'dropped']) && ROOM_OBSERVATION_OPERATIONS.includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599 && typeof event.dropped === 'boolean') continue;
     fail('invalid observation event');
   }
   return value;
@@ -320,7 +324,7 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
   });
   const command = async (command, operation) => {
     if (stopped || aborted || !readySeen || pending.size) fail('mock unavailable or control already pending');
-    if (!['observe', 'stop', 'arm-fault'].includes(command) || (command === 'arm-fault' ? !['create', 'join', 'leave', 'close', 'config', 'config-unsupported'].includes(operation) : operation !== undefined)) fail('invalid control command');
+    if (!['observe', 'stop', 'arm-fault'].includes(command) || (command === 'arm-fault' ? !ROOM_ACCEPTANCE_FAULTS.includes(operation) : operation !== undefined)) fail('invalid control command');
     const id = ++nextId;
     return new Promise((resolve, reject) => {
       const entry = { command, operation, resolve, reject, timer: setTimeout(() => { pending.delete(id); reject(new Error('mock control timeout')); child.kill(); }, stopTimeoutMs) };
@@ -381,13 +385,13 @@ export async function runApplicationPair(manifest, mock, {
       children.push(child);
       exits.push(new Promise(resolve => { child.once('error', () => { stop(); resolve({ role: instance.role, code: null, signal: 'spawn-error' }); }); child.once('exit', (code, signal) => { if (code !== 0 || signal) stop(); resolve({ role: instance.role, code, signal }); }); }));
     }
-    report('Two isolated apps started. Commands: fault create|join|leave|close|config|config-unsupported, observe, stop. Use synthetic accounts 101 and 202.');
+    report(`Two isolated apps started. Commands: fault ${ROOM_ACCEPTANCE_FAULTS.join('|')}, observe, stop. Use synthetic accounts 101 and 202.`);
     let control = Promise.resolve();
     input.on('line', line => { control = control.then(async () => {
       if (line === 'stop') { requested(); return; }
       if (line === 'observe') { report(JSON.stringify(await mock.command('observe'))); return; }
-      const match = /^fault (create|join|leave|close|config|config-unsupported)$/.exec(line);
-      if (match) report(JSON.stringify(await mock.command('arm-fault', match[1])));
+      const operation = line.startsWith('fault ') ? line.slice('fault '.length) : null;
+      if (ROOM_ACCEPTANCE_FAULTS.includes(operation)) report(JSON.stringify(await mock.command('arm-fault', operation)));
       else report('Unknown command');
     }).catch(() => report('Mock control failed')); });
     const unexpectedMock = mock.exit.then(() => { backendEnded = true; for (const child of children) if (child.exitCode === null) child.kill(); });
