@@ -155,12 +155,44 @@ describe('five real routes prepare provider credentials before dispatch', () => 
     mocks.execute.mockResolvedValue({ status: 'completed', mode: 'direct-remote', card, cardKind: page === 'canshou' ? 'canshou' : 'magical-girl', rawText: JSON.stringify(card) });
     await click(generateLabel(page)); await finishSave();
     expect(container.textContent).toContain(title);
+    const draftKey = { details: DETAILS_DRAFT_KEY, canshou: CANSHOU_DRAFT_KEY, creator: CREATOR_DRAFT_KEY }[page];
+    const previousDraft = window.localStorage.getItem(draftKey);
+    expect(previousDraft).not.toBeNull();
+    const regenerateLabel = page === 'canshou' ? '不满意？再来一次' : '重新生成';
+    if (page === 'canshou') {
+      expect(button(regenerateLabel)?.closest('section')?.getAttribute('aria-label')).toBe('保存原始数据');
+      expect([...container.querySelectorAll('button')].filter((item) => item.textContent === regenerateLabel)).toHaveLength(1);
+    }
     await act(async () => store.setPresetKeyDraft('deepseek', 'replacement-test-key'));
-    await click('重新生成'); await click('确定重新生成');
-    expect(container.textContent).toContain(title);
-    await click('取消准备'); await finishSave();
+    await click(regenerateLabel);
+    expect(container.querySelector('dialog')?.open).toBe(true);
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'set_provider_secret')).toHaveLength(1);
+    await click('取消');
+    expect(store.isPreparingGeneration()).toBe(false);
+    expect(window.localStorage.getItem(draftKey)).toBe(previousDraft);
+    await click(regenerateLabel);
+    const confirm = button('确定重新生成')!;
+    await act(async () => { confirm.click(); confirm.click(); }); await settle();
+    expect(store.isPreparingGeneration()).toBe(true);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'set_provider_secret')).toHaveLength(2);
     expect(mocks.execute).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain(title);
+    expect(window.localStorage.getItem(draftKey)).toBe(previousDraft);
+    await click('取消准备');
+    expect(button('取消准备')).toBeUndefined();
+    expect(store.getSnapshot().generationActive).toBe(true);
+    await finishSave();
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot().generationActive).toBe(false);
+    expect(container.textContent).toContain(title);
+    expect(window.localStorage.getItem(draftKey)).toBe(previousDraft);
+    await click(regenerateLabel);
+    expect(container.querySelector('dialog')?.open).toBe(true);
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+    await click('确定重新生成');
+    expect(mocks.execute).toHaveBeenCalledTimes(2);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'set_provider_secret')).toHaveLength(2);
   });
 
   it('explicit preparation cancellation prevents dispatch after the late native success', async () => {

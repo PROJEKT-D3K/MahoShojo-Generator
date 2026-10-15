@@ -362,9 +362,10 @@ describe('desktop messages page', () => {
 
     const page = container.querySelector('[data-testid="page-me"]');
     expect(page).not.toBeNull();
-    // cached-first 身份投影：用户名与账号面板同一份事实源。
-    expect(page?.textContent).toContain('homura');
-    expect(page?.textContent).toContain('@homura');
-    expect(page?.querySelector('[data-testid="account-panel"]')).not.toBeNull();
+    // 共源资料头显示名称和账号 ID；会话面板使用同一份 cached-first 身份。
+    const profile = page?.querySelector('[aria-label="个人资料"]');
+    expect(profile?.textContent).toContain(ACCOUNT.displayName);
+    expect(profile?.textContent).toContain(`ID：${ACCOUNT.userId}`);
+    expect(page?.querySelector('[data-testid="account-panel"]')?.textContent).toContain(ACCOUNT.displayName);
   });
 });

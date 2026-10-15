@@ -70,12 +70,14 @@ describe('Desktop真实角色管理云写宿主与Native模拟边界', () => {
     expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('本地编辑稿'); expect(mock.invoke.mock.calls.some(([command]) => command === 'save_local_card')).toBe(false);
   });
   it('顶部我的数据卡打开Web同源管理，替换先读真实版本、取消零写，再确认回显待审', async () => {
-    await mount(); await click('我的数据卡'); await waitFor(() => !!button('替换')); expect(button('修改信息')).toBeUndefined(); expect(button('删除')).toBeUndefined();
+    await mount(); await click('我的数据卡'); await waitFor(() => !!button('替换'));
+    expect(button('修改信息')).toBeTruthy(); expect(button('修改信息').disabled).toBe(false); expect(button('删除')).toBeUndefined();
     expect(document.documentElement.style.overflow).toBe('hidden'); expect(document.querySelector('[role=dialog] [role=region]')?.getAttribute('tabindex')).toBe('0');
     await click('替换'); await waitFor(() => !!button('确认替换')); expect(requests('data-cards.replace-target.query')).toHaveLength(1); expect(requests('data-cards.replace')).toHaveLength(0); await click('取消');
     expect(document.documentElement.style.overflow).toBe('');
     await click('我的数据卡'); await waitFor(() => !!button('替换')); await click('替换'); await waitFor(() => !!button('确认替换')); await click('确认替换');
     expect(requests('data-cards.replace')).toHaveLength(1); expect(requests('data-cards.replace')[0][1].request).toMatchObject({ expectedUserId: 7, body: { id: target.id, expectedVersion: target.version, data: sample } });
+    expect(requests('data-cards.metadata')).toHaveLength(0);
     expect(document.body.textContent).toContain('更新已提交审核'); expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('本地编辑稿');
   });
   it('载入云端其他数据保留未保存确认，取消保稿；确认后管理关闭且本地保存/复制入口仍在', async () => {
