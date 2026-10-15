@@ -4,7 +4,7 @@ import { ArenaRoomBridgeError, createArenaRoomBridge, type ArenaRoomAcceptance, 
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import type { DesktopCloudSessionStore } from '../account/cloud-session-store';
 
-export type RoomUnknownIntent = { operation: 'create' | 'join' | 'leave' | 'close'; roomId: string | null; intentId: string | null };
+export type RoomUnknownIntent = { operation: 'create' | 'join' | 'leave' | 'close' | 'config'; roomId: string | null; intentId: string | null };
 export interface DesktopRoomState {
   opened: boolean; busy: boolean; constrained: boolean;
   phase: 'detached' | 'attaching' | 'ready' | 'connecting' | 'online' | 'offline' | 'reconnecting' | 'closed' | 'unavailable';
@@ -37,7 +37,7 @@ export const readDesktopRoomDocumentNonce = (): string | undefined => {
 const isMutation = (action: DesktopRoomHttpAction) => action.kind !== 'discover' && action.kind !== 'session';
 const unknownFor = (action: DesktopRoomHttpAction): RoomUnknownIntent | null => {
   if (action.kind === 'create' || action.kind === 'resume-create') return { operation: 'create', roomId: null, intentId: action.kind === 'resume-create' ? action.intentId : null };
-  if (action.kind === 'join' || action.kind === 'leave' || action.kind === 'close') return { operation: action.kind, roomId: action.roomId, intentId: null };
+  if (action.kind === 'join' || action.kind === 'leave' || action.kind === 'close' || action.kind === 'config') return { operation: action.kind, roomId: action.roomId, intentId: null };
   return null;
 };
 export const describeDesktopRoomError = (error: ArenaRoomBridgeError): string => {
@@ -201,7 +201,7 @@ export class DesktopArenaRoomSession {
     if (this.flight !== flight || !flight.accepted || !flight.acknowledged || !this.current()) return;
     this.flight = null;
     const settled = flight.settlesUnknown || flight.result === 'success' && flight.operation !== 'discover'
-      && (flight.operation !== 'session' || this.state.unknown?.operation !== 'create');
+      && (flight.operation !== 'session' || (this.state.unknown?.operation !== 'create' && this.state.unknown?.operation !== 'config'));
     if (settled) this.publish({ unknown: null });
     this.publish({ busy: false, constrained: this.state.session !== null || this.state.unknown !== null });
     if (flight.subscribe && this.state.session) void this.startSubscription();
@@ -216,7 +216,7 @@ export class DesktopArenaRoomSession {
     const unknown = flight && isMutation(flight.action) && error.outcome === 'unknown' ? this.state.unknown ?? unknownFor(flight.action) : this.state.unknown;
     const ended = flight?.operation === 'session' && ['ROOM_NOT_FOUND', 'ROOM_FORBIDDEN'].includes(error.serverCode ?? '');
     if (flight && error.outcome === 'not-applied') flight.knownNotApplied = true;
-    if (ended && flight && this.state.unknown?.operation !== 'create') flight.settlesUnknown = true;
+    if (ended && flight && this.state.unknown?.operation !== 'create' && this.state.unknown?.operation !== 'config') flight.settlesUnknown = true;
     this.publish({ error: describeDesktopRoomError(error), unknown,
       ...(ended ? { session: null, presence: null, snapshotReceived: false, phase: 'closed' as const } : {}) });
   }

@@ -6,7 +6,7 @@ import service from '../fixtures/desktop-room-session.json';
 import {
   DESKTOP_ROOM_ERROR_MESSAGE, DESKTOP_ROOM_IPC_COMMANDS, DESKTOP_ROOM_IPC_LIMITS,
   DesktopRoomAckResponseSchema, DesktopRoomAcceptedResponseSchema, DesktopRoomAttachRequestSchema,
-  DesktopRoomAttachResponseSchema, DesktopRoomBatchSchema, DesktopRoomContractError,
+  DesktopRoomAttachResponseSchema, DesktopRoomBatchSchema, DesktopRoomContractError, DesktopRoomConfigTrackingEndedSchema,
   DesktopRoomDetachRequestSchema, DesktopRoomDetachResponseSchema, DesktopRoomErrorSchema,
   DesktopRoomNotificationSchema, DesktopRoomRevokedNotificationSchema, DesktopRoomPullResponseSchema, DesktopRoomRequestSchema,
   DesktopRoomSubscribeRequestSchema, DesktopRoomSubscribeResponseSchema, parseDesktopRoomBatch,
@@ -29,6 +29,22 @@ const directoryPull = (bytes: number) => {
   entry.createdAt = '2026-10-12T00:00:00.0Z';
   entry.createdAt = `2026-10-12T00:00:00.${'0'.repeat(bytes - jsonUtf8ByteLength(pull) + 1)}Z`;
   return pull;
+};
+
+const configRequest = () => {
+  const session = service.operations.session.success.result;
+  return {
+    handle: fixture.attach.handle,
+    request: {
+      kind: 'config', roomId: session.roomId,
+      request: {
+        expectedRoomEpoch: session.roomEpoch,
+        expectedRevision: session.snapshot.revision,
+        expectedControlSeq: session.snapshot.controlSeq,
+        sharedConfig: structuredClone(session.snapshot.sharedConfig),
+      },
+    },
+  };
 };
 
 // This fixture is a shared contract corpus, not a claim of Native producer execution.
@@ -81,6 +97,7 @@ describe('closed Native Room IPC', () => {
       expect(batch).toEqual(response.batch);
       if (batch.event.kind !== 'http-result') continue;
       const operation = batch.event.operation;
+      if (operation === 'config') throw new Error('legacy fixture has no config operation');
       expect(DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].parse(batch.event.response)).toEqual(batch.event.response);
       expect(batch.event.response).toEqual('result' in batch.event.response ? service.operations[operation].success : service.operations[operation].error);
     }
@@ -93,6 +110,104 @@ describe('closed Native Room IPC', () => {
     expect(schema.parse(valid)).toBe(valid);
     expect(schema.safeParse(`${valid}\n`).success).toBe(false);
   });
+  it('accepts config only with the complete CAS DTO and closed nested shared config', () => {
+    const config = configRequest();
+    expect(DesktopRoomRequestSchema.parse(config)).toEqual(config);
+    for (const field of ['expectedRoomEpoch', 'expectedRevision', 'expectedControlSeq', 'sharedConfig']) {
+      const missing = structuredClone(config) as unknown as { request: { request: Record<string, unknown> } };
+      delete missing.request.request[field];
+      expect(DesktopRoomRequestSchema.safeParse(missing).success).toBe(false);
+    }
+    for (const field of ['expectedRevision', 'expectedControlSeq']) {
+      for (const value of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '7', null]) {
+        expect(DesktopRoomRequestSchema.safeParse(patch(config, ['request', 'request', field], value)).success).toBe(false);
+      }
+    }
+    for (const path of [[], ['request'], ['request', 'request'], ['request', 'request', 'sharedConfig'],
+      ['request', 'request', 'sharedConfig', 'historySettings'], ['request', 'request', 'sharedConfig', 'combatants', '0'],
+      ['request', 'request', 'sharedConfig', 'combatants', '0', 'ref']]) {
+      expect(DesktopRoomRequestSchema.safeParse(patch(config, [...path, 'injected'], true)).success).toBe(false);
+    }
+    for (const field of ['roomId', 'expectedRoomEpoch']) {
+      const path = field === 'roomId' ? ['request', field] : ['request', 'request', field];
+      expect(DesktopRoomRequestSchema.safeParse(patch(config, path, '')).success).toBe(false);
+    }
+  });
+  it('caps the original config body at 64 KiB before trimming nested display names', () => {
+    const config = configRequest();
+    const body = config.request.request;
+    body.sharedConfig.teams[0].displayName += ' '.repeat(65_536 - jsonUtf8ByteLength(body));
+    expect(jsonUtf8ByteLength(body)).toBe(65_536);
+    expect(DesktopRoomRequestSchema.safeParse(config).success).toBe(true);
+    body.sharedConfig.teams[0].displayName += ' ';
+    expect(jsonUtf8ByteLength(body)).toBe(65_537);
+    expect(DesktopRoomRequestSchema.safeParse(config).success).toBe(false);
+    for (const character of ['\u2000', '\t']) {
+      const encoded = configRequest();
+      const displayName = encoded.request.request.sharedConfig.teams[0].displayName;
+      const remaining = 65_536 - jsonUtf8ByteLength(encoded.request.request);
+      const cost = jsonUtf8ByteLength(character) - 2;
+      encoded.request.request.sharedConfig.teams[0].displayName = displayName
+        + character.repeat(Math.floor(remaining / cost)) + ' '.repeat(remaining % cost);
+      expect(jsonUtf8ByteLength(encoded.request.request)).toBe(65_536);
+      expect(DesktopRoomRequestSchema.safeParse(encoded).success).toBe(true);
+      encoded.request.request.sharedConfig.teams[0].displayName += character;
+      expect(DesktopRoomRequestSchema.safeParse(encoded).success).toBe(false);
+    }
+  });
+  it('delivers config as a full owner-checked session response rather than a partial write receipt', () => {
+    const pull = patch(fixture.pulls[6], ['batch', 'event', 'operation'], 'config') as typeof fixture.pulls[6];
+    expect(DesktopRoomPullResponseSchema.parse(pull)).toEqual(pull);
+    expect(parseDesktopRoomBatch(pull.batch, fixture.expectedUserId)).toEqual(pull.batch);
+    expect(() => parseDesktopRoomBatch(pull.batch, fixture.expectedUserId + 1)).toThrow(DesktopRoomContractError);
+    for (const result of [{ applied: true }, { snapshot: service.operations.session.success.result.snapshot }]) {
+      expect(DesktopRoomPullResponseSchema.safeParse(patch(pull, ['batch', 'event', 'response', 'result'], result)).success).toBe(false);
+    }
+    for (const path of [['batch', 'event', 'response'], ['batch', 'event', 'response', 'result'],
+      ['batch', 'event', 'response', 'result', 'self'], ['batch', 'event', 'response', 'result', 'snapshot'],
+      ['batch', 'event', 'response', 'result', 'snapshot', 'sharedConfig']]) {
+      expect(DesktopRoomPullResponseSchema.safeParse(patch(pull, [...path, 'injected'], true)).success).toBe(false);
+    }
+    const failure = patch(fixture.pulls[3], ['batch', 'event', 'operation'], 'config');
+    expect(DesktopRoomPullResponseSchema.safeParse(failure).success).toBe(true);
+  });
+  it('correlates unknown config mutations and revocation with their scoped intent and closed outcomes', () => {
+    const event = { kind: 'mutation-unknown', intentId: 'config-intent-1', operation: 'config', roomId: fixture.subscribeRequest.roomId };
+    const batch = { ...fixture.pulls[17].batch, event };
+    expect(DesktopRoomBatchSchema.parse(batch)).toEqual(batch);
+    const attach = { ...fixture.attach, pendingIntent: { intentId: event.intentId, operation: event.operation, roomId: event.roomId } };
+    expect(DesktopRoomAttachResponseSchema.parse(attach)).toEqual(attach);
+    for (const invalid of [{ roomId: null }, { operation: 'end-config-tracking' }, { operation: 'ticket' }, { injected: true }]) {
+      expect(DesktopRoomBatchSchema.safeParse({ ...batch, event: { ...event, ...invalid } }).success).toBe(false);
+      expect(DesktopRoomAttachResponseSchema.safeParse({ ...attach, pendingIntent: { ...attach.pendingIntent, ...invalid } }).success).toBe(false);
+    }
+    const failure = patch(fixture.pulls[18], ['batch', 'event', 'operation'], 'config');
+    expect(DesktopRoomPullResponseSchema.safeParse(failure).success).toBe(true);
+    expect(DesktopRoomPullResponseSchema.safeParse(patch(failure, ['batch', 'event', 'error', 'outcome'], 'not-applicable')).success).toBe(false);
+    const revoked = { ...fixture.revokedNotifications[0], operation: 'config' };
+    expect(DesktopRoomNotificationSchema.safeParse(revoked).success).toBe(true);
+    expect(DesktopRoomNotificationSchema.safeParse(patch(revoked, ['error', 'outcome'], 'not-applicable')).success).toBe(false);
+  });
+  it('ends only local config tracking using a closed token request and small affirmative response', () => {
+    const request = { handle: fixture.attach.handle, request: { kind: 'end-config-tracking', intentId: 'config-intent-1' } };
+    const ended = { kind: 'config-tracking-ended', intentId: request.request.intentId, ended: true };
+    expect(DesktopRoomRequestSchema.parse(request)).toEqual(request);
+    expect(DesktopRoomConfigTrackingEndedSchema.parse(ended)).toEqual(ended);
+    expect(jsonUtf8ByteLength(ended)).toBeLessThanOrEqual(DESKTOP_ROOM_IPC_LIMITS.smallResponseBytes);
+    for (const intentId of [undefined, null, '', 'invalid token', 'x'.repeat(129), 'x'.repeat(DESKTOP_ROOM_IPC_LIMITS.smallResponseBytes)]) {
+      expect(DesktopRoomRequestSchema.safeParse(patch(request, ['request', 'intentId'], intentId)).success).toBe(false);
+      expect(DesktopRoomConfigTrackingEndedSchema.safeParse({ ...ended, intentId }).success).toBe(false);
+    }
+    for (const key of ['roomId', 'request', 'expectedRoomEpoch', 'cancel', 'applied', 'response']) {
+      expect(DesktopRoomRequestSchema.safeParse(patch(request, ['request', key], true)).success).toBe(false);
+      expect(DesktopRoomConfigTrackingEndedSchema.safeParse({ ...ended, [key]: true }).success).toBe(false);
+    }
+    for (const value of [false, undefined, 'true', 1]) {
+      expect(DesktopRoomConfigTrackingEndedSchema.safeParse({ ...ended, ended: value }).success).toBe(false);
+    }
+    expect(DesktopRoomAcceptedResponseSchema.safeParse(ended).success).toBe(false);
+    expect(DesktopRoomConfigTrackingEndedSchema.safeParse(fixture.accepted).success).toBe(false);
+  });
   it('requires closed object-only messages and rejects caller-selected transport or credentials', () => {
     const schemas = [DesktopRoomAttachRequestSchema, DesktopRoomRequestSchema, DesktopRoomSubscribeRequestSchema,
       DesktopRoomDetachRequestSchema, DesktopRoomBatchSchema, DesktopRoomNotificationSchema, DesktopRoomPullResponseSchema];
@@ -104,7 +219,7 @@ describe('closed Native Room IPC', () => {
       expect(DesktopRoomRequestSchema.safeParse({ ...fixture.requests[0], [key]: 'secret-canary' }).success).toBe(false);
       expect(DesktopRoomRequestSchema.safeParse(patch(fixture.requests[0], ['request', key], 'secret-canary')).success).toBe(false);
     }
-    for (const kind of ['ticket', 'config', 'proposals', 'generations', 'kick', 'fetch']) {
+    for (const kind of ['ticket', 'proposals', 'generations', 'kick', 'fetch']) {
       expect(DesktopRoomRequestSchema.safeParse({ handle: fixture.attach.handle, request: { kind } }).success).toBe(false);
     }
   });

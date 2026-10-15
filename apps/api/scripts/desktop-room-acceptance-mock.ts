@@ -28,6 +28,7 @@ import {
 } from '@mahoshojo/multiplayer-core';
 import { createRoomActorRegistry, type RoomActorCheckpointStore } from '../src/arena-room/room-actor-registry';
 import { createArenaRoomMembershipService } from '../src/arena-room/room-membership-service';
+import { createArenaRoomConfigService } from '../src/arena-room/room-config-service';
 import { createArenaRoomDirectoryService } from '../src/arena-room/room-directory-service';
 import { createStoredRoomDirectoryRecord, serializeStoredRoomDirectoryRecord, type StoredRoomDirectoryRecord } from '../src/arena-room/room-directory-record';
 import type { RedisRoomDirectoryCandidate, RedisRoomDirectoryStore } from '../src/arena-room/redis-room-directory-store';
@@ -51,8 +52,8 @@ const digest = (value: string) => createHash('sha256').update(value).digest('bas
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const unavailable = (): never => { throw new Error('ACCEPTANCE_UNSUPPORTED'); };
 export type RoomAcceptancePki = { ca: string; cert: string; key: string };
-export type RoomAcceptanceFault = 'create' | 'join' | 'leave' | 'close';
-const faults: readonly string[] = ['create', 'join', 'leave', 'close'];
+export type RoomAcceptanceFault = 'create' | 'join' | 'leave' | 'close' | 'config';
+const faults: readonly string[] = ['create', 'join', 'leave', 'close', 'config'];
 export type RoomAcceptanceObservation =
   | { kind: 'room-http'; operation: DesktopRoomSessionOperation; status: number; dropped: boolean }
   | { kind: 'ws'; outcome: 'accepted' | 'rejected' }
@@ -159,7 +160,8 @@ const roomServices = () => {
       usedTickets.set(key, expiresAtMs); return { kind: 'consumed' };
     },
   } });
-  return { store, actors, memberships, directory, authority };
+  const configs = createArenaRoomConfigService({ memberships });
+  return { store, actors, memberships, directory, authority, configs };
 };
 
 const operationFor = (request: Request): DesktopRoomSessionOperation | null => {
@@ -229,7 +231,7 @@ export const startRoomAcceptanceMock = async (options: {
     websocketAuthority: { issue: (input) => services.authority.issue(input) },
     proposals: { submit: async () => unavailable(), resolve: async () => unavailable(), withdraw: async () => unavailable() },
     generations: { start: async () => unavailable(), read: async () => unavailable(), list: async () => unavailable(), readHistory: async () => unavailable(), cancel: async () => unavailable() },
-    configs: { publish: async () => unavailable() },
+    configs: { publish: (input) => services.configs.publish(input) },
     rateLimit: async () => ({ allowed: true, limit: 100, remaining: 99, retryAfterSeconds: 1 }),
   }, { isAllowedOrigin: (origin) => origin === roomOrigin });
   let gateway: RoomWebSocketGateway | undefined;

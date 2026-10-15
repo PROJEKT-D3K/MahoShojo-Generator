@@ -12,6 +12,7 @@ import {
   ArenaRoomEpochMutationRequestSchema,
   ArenaRoomJoinRequestSchema,
   ArenaRoomLeaveResponseSchema,
+  ArenaRoomPublishConfigRequestSchema,
   ArenaRoomSessionResponseSchema,
   ArenaRoomTicketRequestSchema,
   ArenaRoomTicketResponseSchema,
@@ -39,11 +40,12 @@ export const DESKTOP_ROOM_SESSION_OPERATIONS = Object.freeze({
   ticket: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.ticket },
   leave: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.leave },
   close: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.close },
+  config: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.config },
 } as const);
 export const DesktopRoomSessionOperationSchema = z.enum([
-  'discover', 'create', 'join', 'session', 'ticket', 'leave', 'close',
+  'discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config',
 ]);
-export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'ticket', 'leave', 'close']);
+export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'ticket', 'leave', 'close', 'config']);
 export type DesktopRoomSessionOperation = z.infer<typeof DesktopRoomSessionOperationSchema>;
 export type DesktopRoomSessionPostOperation = z.infer<typeof DesktopRoomSessionPostOperationSchema>;
 
@@ -110,12 +112,14 @@ export const DesktopRoomSessionJoinRequestSchema = postRequest(ArenaRoomJoinRequ
 export const DesktopRoomSessionTicketRequestSchema = postRequest(ArenaRoomTicketRequestSchema);
 export const DesktopRoomSessionLeaveRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);
 export const DesktopRoomSessionCloseRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);
+export const DesktopRoomSessionConfigRequestSchema = postRequest(ArenaRoomPublishConfigRequestSchema);
 export const DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS = Object.freeze({
   create: DesktopRoomSessionCreateRequestSchema,
   join: DesktopRoomSessionJoinRequestSchema,
   ticket: DesktopRoomSessionTicketRequestSchema,
   leave: DesktopRoomSessionLeaveRequestSchema,
   close: DesktopRoomSessionCloseRequestSchema,
+  config: DesktopRoomSessionConfigRequestSchema,
 });
 export type DesktopRoomSessionRequest<Operation extends DesktopRoomSessionPostOperation = DesktopRoomSessionPostOperation> =
   z.infer<(typeof DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS)[Operation]>;
@@ -136,6 +140,7 @@ const desktopTicketResult = z.custom<z.input<typeof ArenaRoomTicketResponseSchem
 export const DesktopRoomSessionTicketSuccessSchema = successResponse(desktopTicketResult);
 export const DesktopRoomSessionLeaveSuccessSchema = successResponse(ArenaRoomLeaveResponseSchema);
 export const DesktopRoomSessionCloseSuccessSchema = successResponse(ArenaRoomLeaveResponseSchema);
+export const DesktopRoomSessionConfigSuccessSchema = successResponse(ArenaRoomSessionResponseSchema);
 export const DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS = Object.freeze({
   discover: DesktopRoomSessionDiscoverSuccessSchema,
   create: DesktopRoomSessionCreateSuccessSchema,
@@ -144,6 +149,7 @@ export const DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS = Object.freeze({
   ticket: DesktopRoomSessionTicketSuccessSchema,
   leave: DesktopRoomSessionLeaveSuccessSchema,
   close: DesktopRoomSessionCloseSuccessSchema,
+  config: DesktopRoomSessionConfigSuccessSchema,
 });
 export type DesktopRoomSessionSuccess<Operation extends DesktopRoomSessionOperation = DesktopRoomSessionOperation> =
   z.infer<(typeof DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS)[Operation]>;
@@ -216,6 +222,7 @@ export const DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS = Object.freeze({
   ticket: z.union([DesktopRoomSessionTicketSuccessSchema, postErrorResponse]),
   leave: z.union([DesktopRoomSessionLeaveSuccessSchema, postErrorResponse]),
   close: z.union([DesktopRoomSessionCloseSuccessSchema, postErrorResponse]),
+  config: z.union([DesktopRoomSessionConfigSuccessSchema, postErrorResponse]),
 });
 export type DesktopRoomSessionResponse<Operation extends DesktopRoomSessionOperation = DesktopRoomSessionOperation> =
   z.infer<(typeof DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS)[Operation]>;

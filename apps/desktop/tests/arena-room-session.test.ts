@@ -115,6 +115,7 @@ async function harness() {
       delivery.ackEntered.resolve();
       return delivery.ack.promise;
     }
+    if (request.kind === 'end-config-tracking') throw new Error('Unexpected local config tracking action');
     requests.push(request);
     const plan = plans.shift();
     if (!plan || request.kind !== plan.kind) throw new Error(`Unexpected HTTP action: ${request.kind}`);
@@ -217,6 +218,24 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     delivery.acknowledge(patch); await unavailable;
     expect(h.subscriptions()).toHaveLength(0);
     expect(h.session.getSnapshot()).toMatchObject({ busy: false, presence: null, snapshotReceived: false });
+  });
+
+  it.each(['current', 'ROOM_NOT_FOUND', 'ROOM_FORBIDDEN'] as const)('retains restored config unknown after current-state read: %s', async outcome => {
+    const h = await harness();
+    const pending = { operation: 'config' as const, roomId: host.roomId, intentId: 'original-config-intent' };
+    h.setPending(pending); await h.session.open();
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: pending, session: null, constrained: true });
+    const request = h.plan('session'); const checking = h.session.reconcile();
+    expect(await request.entered.promise).toEqual({ kind: 'session', roomId: host.roomId });
+    request.accept(); await checking;
+    if (outcome === 'current') await h.receive(success('session', request.requestId, host));
+    else await h.receive(DesktopRoomEventSchema.parse({ kind: 'request-error', operation: 'session', requestId: request.requestId,
+      error: { code: 'service-rejected', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applicable', serverCode: outcome } }));
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: pending, constrained: true });
+    expect(h.session.getSnapshot().unknown).toEqual(pending); // No original target is reconstructed from a draft or GET.
+    await h.session.create(details, source, () => true); await h.session.join(host.roomId, '成员'); await h.session.close();
+    expect(h.requests.map(value => value.kind)).toEqual(['session']);
   });
 
   it('requires explicit reopen and resume-create for an unknown create without allocating a replacement creation ID', async () => {

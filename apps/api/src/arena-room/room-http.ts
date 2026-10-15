@@ -728,7 +728,7 @@ const desktopRoomSession = createDesktopRoomSessionAdapter({
   isBodyTooLarge: (error) => error instanceof ArenaRoomRequestError && error.kind === 'too-large',
 });
 
-const readSessionRequestBody = (context: ArenaRoomHttpContext): Promise<unknown> => {
+const readOperationBody = (context: ArenaRoomHttpContext): Promise<unknown> => {
   const prepared = desktopRoomSession.requestBody(context);
   return prepared ? Promise.resolve(prepared.value) : readBoundedBody(context.req.raw);
 };
@@ -935,7 +935,7 @@ export const registerArenaRoomHttpRoutes = (
     try {
       const request = parseRequest(
         ArenaRoomCreateRequestSchema,
-        await readSessionRequestBody(context),
+        await readOperationBody(context),
         'config',
       );
       desktopRoomSession.enterBusiness(context);
@@ -982,7 +982,7 @@ export const registerArenaRoomHttpRoutes = (
     try {
       const request = parseRequest(
         ArenaRoomJoinRequestSchema,
-        await readSessionRequestBody(context),
+        await readOperationBody(context),
       );
       desktopRoomSession.enterBusiness(context);
       const session = await dependencies.memberships.join({
@@ -1058,9 +1058,10 @@ export const registerArenaRoomHttpRoutes = (
     try {
       const request = parseRequest(
         ArenaRoomPublishConfigRequestSchema,
-        await readBoundedBody(context.req.raw),
+        await readOperationBody(context),
         'config',
       );
+      desktopRoomSession.enterBusiness(context);
       const session = await dependencies.configs.publish({
         roomId,
         accountUserId: authorization.accountUserId,
@@ -1086,7 +1087,7 @@ export const registerArenaRoomHttpRoutes = (
     try {
       const request = parseRequest(
         ArenaRoomTicketRequestSchema,
-        await readSessionRequestBody(context),
+        await readOperationBody(context),
       );
       desktopRoomSession.enterBusiness(context);
       const ticket = await dependencies.websocketAuthority.issue({
@@ -1367,7 +1368,7 @@ export const registerArenaRoomHttpRoutes = (
       try {
         const request = parseRequest(
           ArenaRoomEpochMutationRequestSchema,
-          await readSessionRequestBody(context),
+          await readOperationBody(context),
         );
         desktopRoomSession.enterBusiness(context);
         const result = await dependencies.memberships[input.operation]({

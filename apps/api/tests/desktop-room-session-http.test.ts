@@ -12,6 +12,7 @@ import {
 } from '@mahoshojo/contracts/desktop-room-session';
 import {
   ArenaRoomCreateRequestSchema,
+  ArenaRoomPublishConfigRequestSchema,
   ArenaRoomSessionResponseSchema,
   RoomDirectoryPageSchema,
   RoomEventSchema,
@@ -21,6 +22,7 @@ import type { HonoServerConfig } from '#/config';
 import type { RedisService } from '#/redis/runtime';
 import type { ArenaRoomHttpDependencies } from '#/arena-room/room-http';
 import { ArenaRoomMembershipError } from '#/arena-room/room-membership-service';
+import { ArenaRoomConfigError } from '#/arena-room/room-config-service';
 import { createArenaRoomState } from './arena-room-fixtures';
 
 const config: HonoServerConfig = {
@@ -41,6 +43,31 @@ const createBody = {
   creationRequestId: 'desktop-create-original-1', displayName: 'Host',
   directory: { title: 'Room', visibility: 'unlisted' as const }, sharedConfig: snapshot.sharedConfig,
 };
+const configBody = {
+  expectedRoomEpoch: snapshot.roomEpoch,
+  expectedRevision: snapshot.revision,
+  expectedControlSeq: snapshot.controlSeq,
+  sharedConfig: snapshot.sharedConfig,
+};
+const fixtureSession = fixture.operations.session.success.result;
+const operationFixtures = {
+  ...fixture.operations,
+  config: {
+    method: 'POST',
+    path: DESKTOP_ROOM_SESSION_OPERATIONS.config.path.replace(':roomId', fixtureSession.roomId),
+    request: {
+      desktopRoom: fixture.operations.join.request.desktopRoom,
+      request: {
+        expectedRoomEpoch: fixtureSession.roomEpoch,
+        expectedRevision: fixtureSession.snapshot.revision,
+        expectedControlSeq: fixtureSession.snapshot.controlSeq,
+        sharedConfig: fixtureSession.snapshot.sharedConfig,
+      },
+    },
+    success: fixture.operations.session.success,
+    error: fixture.operations.join.error,
+  },
+};
 const headers = {
   origin: 'http://localhost:3000', cookie: 'better-auth.session_token=synthetic-room-session',
   'content-type': 'application/json',
@@ -57,6 +84,7 @@ const inputFor = (operation: DesktopRoomSessionOperation) => {
   if (operation === 'create') return wrap(createBody, 'new');
   if (operation === 'join') return wrap({ displayName: 'Member' });
   if (operation === 'ticket') return wrap({});
+  if (operation === 'config') return wrap(configBody);
   if (operation === 'leave' || operation === 'close') return wrap({ expectedRoomEpoch: snapshot.roomEpoch });
   return undefined;
 };
@@ -87,7 +115,7 @@ const depsFor = (): ArenaRoomHttpDependencies => ({
     readHistory: vi.fn(async () => { throw new Error('unexpected generation'); }),
     cancel: vi.fn(async () => { throw new Error('unexpected generation'); }),
   },
-  configs: { publish: vi.fn(async () => { throw new Error('unexpected config'); }) },
+  configs: { publish: vi.fn(async () => session) },
   rateLimit: vi.fn(async () => allow()),
 });
 const appFor = (deps: ArenaRoomHttpDependencies) => createHonoApp(config, redis(), undefined, { arenaRoom: deps });
@@ -106,12 +134,12 @@ const requestFor = (operation: DesktopRoomSessionOperation) => ({
 
 describe('Desktop opt-in through the existing Room HTTP producer', () => {
   it.each(operations)('%s shared fixture equals actual handler JSON serialization', async (operation) => {
-    const sample = fixture.operations[operation];
+    const sample = operationFixtures[operation];
     const result = ArenaRoomSessionResponseSchema.parse(fixture.operations.session.success.result);
     const current = { roomId: result.roomId, roomEpoch: result.roomEpoch, member: result.self, snapshot: result.snapshot };
     const deps = depsFor();
     vi.mocked(deps.resolveAuthentication).mockResolvedValue({ status: 'authenticated', userId: fixture.expectedUserId });
-    for (const port of [deps.memberships.create, deps.memberships.join, deps.memberships.getSession]) {
+    for (const port of [deps.memberships.create, deps.memberships.join, deps.memberships.getSession, deps.configs.publish]) {
       vi.mocked(port).mockResolvedValue(current);
     }
     vi.mocked(deps.memberships.close).mockResolvedValue(current);
@@ -130,11 +158,12 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     if (output) {
       mkdirSync(output, { recursive: true });
       writeFileSync(path.join(output, `${operation}.response.json`), text);
+      if (sample.request !== null) writeFileSync(path.join(output, `${operation}.request.json`), JSON.stringify(sample.request));
     }
   });
 
   it.each(operations)('%s shared error fixture equals the actual paired rate-limit serializer', async (operation) => {
-    const sample = fixture.operations[operation];
+    const sample = operationFixtures[operation];
     const deps = depsFor();
     vi.mocked(deps.resolveAuthentication).mockResolvedValue({ status: 'authenticated', userId: fixture.expectedUserId });
     vi.mocked(deps.rateLimit).mockResolvedValue({ ...allow(), allowed: false, remaining: 0, retryAfterSeconds: 3 });
@@ -181,7 +210,8 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     expect(body.desktopRoom).toEqual({ version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, viewerUserId: 101 });
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(deps.resolveAuthentication).toHaveBeenCalledOnce();
-    expect(deps.rateLimit).toHaveBeenCalledWith(expect.objectContaining({ operation, accountUserId: 101 }));
+    expect(deps.rateLimit).toHaveBeenCalledWith(expect.objectContaining({ operation: operation === 'config' ? 'configPublish' : operation, accountUserId: 101 }));
+    if (operation === 'config') expect(deps.configs.publish).toHaveBeenCalledWith({ roomId: snapshot.roomId, accountUserId: 101, request: configBody });
     if (operation === 'create') {
       expect(deps.memberships.create).toHaveBeenCalledWith({ accountUserId: 101, requireExistingCreationReceipt: false, ...createBody });
     }
@@ -206,7 +236,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
   });
 
   it.each([
-    'config', 'proposals', 'proposals/proposal-1/resolve', 'proposals/proposal-1/withdraw',
+    'proposals', 'proposals/proposal-1/resolve', 'proposals/proposal-1/withdraw',
     'members/member-1/kick', 'generations', 'generations/generation-1/cancel',
   ])('unsupported POST %s rejects any negotiation marker instead of legacy fallback', async (suffix) => {
     for (const markers of [headers, { ...headers, 'x-mahoshojo-desktop-room-protocol': '' }, { ...headers, 'x-mahoshojo-room-expected-user-id': '' }]) {
@@ -259,6 +289,61 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     expect(DesktopRoomSessionErrorResponseSchema.parse(await response.json()).error.outcome).toBe('not-applied');
     assertNoBusiness(deps);
     expect(deps.resolveAuthentication).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...configBody, expectedRoomEpoch: '' },
+    { ...configBody, expectedRevision: -1 },
+    { ...configBody, expectedControlSeq: Number.MAX_SAFE_INTEGER + 1 },
+    { ...configBody, sharedConfig: { ...configBody.sharedConfig, providerApiKey: 'secret-canary' } },
+    { ...configBody, url: 'https://untrusted.invalid', headers: {} },
+    { expectedRoomEpoch: snapshot.roomEpoch, sharedConfig: snapshot.sharedConfig },
+  ])('invalid config DTO is not applied before authentication, rate limiting or publish', async (request) => {
+    const deps = depsFor();
+    const response = await appFor(deps).request(pathFor('config'), { method: 'POST', headers, body: JSON.stringify(wrap(request)) });
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).not.toContain('secret-canary');
+    expect(DesktopRoomSessionErrorResponseSchema.parse(JSON.parse(text))).toMatchObject({
+      desktopRoom: { viewerUserId: null }, error: { code: 'ROOM_DESKTOP_PROTOCOL_INVALID', outcome: 'not-applied' },
+    });
+    expect(deps.resolveAuthentication).not.toHaveBeenCalled();
+    expect(deps.rateLimit).not.toHaveBeenCalled();
+    assertNoBusiness(deps);
+  });
+
+  it.each([
+    ['ROOM_EPOCH_STALE', 409], ['ROOM_REVISION_STALE', 409], ['ROOM_TRANSITION_DENIED', 409],
+    ['ROOM_PERMISSION_DENIED', 403], ['ROOM_REFERENCE_DENIED', 409], ['ROOM_REFERENCE_STALE', 409],
+    ['ROOM_CONFIG_FRAME_TOO_LARGE', 413], ['ROOM_OPERATION_UNKNOWN', 503], ['ROOM_REFERENCE_UNAVAILABLE', 503],
+  ] as const)('config service %s remains conservatively unknown after publish entry', async (code, status) => {
+    const deps = depsFor();
+    vi.mocked(deps.configs.publish).mockRejectedValue(new ArenaRoomConfigError(code));
+    const response = await appFor(deps).request(pathFor('config'), requestFor('config'));
+    expect(response.status).toBe(status);
+    expect(DesktopRoomSessionErrorResponseSchema.parse(await response.json())).toMatchObject({
+      desktopRoom: { viewerUserId: 101 }, error: { outcome: 'unknown' },
+    });
+    expect(deps.configs.publish).toHaveBeenCalledOnce();
+    expect(deps.memberships.getSession).not.toHaveBeenCalled();
+  });
+
+  it('a malformed config service response cannot prove a not-applied result or leak private failures', async () => {
+    const deps = depsFor();
+    vi.mocked(deps.configs.publish).mockResolvedValue({
+      ...session, snapshot: { ...snapshot, controlSeq: Number.MAX_SAFE_INTEGER + 1 },
+    });
+    const response = await appFor(deps).request(pathFor('config'), requestFor('config'));
+    // The original session serializer rejects the unsafe counter before the adapter sees a body.
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: 'ROOM_UNAVAILABLE', outcome: 'unknown' } });
+    vi.mocked(deps.configs.publish).mockRejectedValue(new Error('SYNTHETIC_CONFIG_SECRET'));
+    const failed = await appFor(deps).request(pathFor('config'), requestFor('config'));
+    const text = await failed.text();
+    expect(text).not.toContain('SYNTHETIC_CONFIG_SECRET');
+    expect(failed.status).toBe(503);
+    expect(DesktopRoomSessionErrorResponseSchema.parse(JSON.parse(text)).error.outcome).toBe('unknown');
+    expect(deps.configs.publish).toHaveBeenCalledTimes(2);
   });
 
   it('resume-only goes straight to the existing receipt-required service without falling back to creation budget', async () => {
@@ -342,18 +427,18 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     else expect(body).toHaveProperty('protocolVersion', 1);
   });
 
-  it('unmarked POST with Native body does not silently unwrap on the Web path', async () => {
+  it.each(['create', 'config'] as const)('unmarked %s with Native body does not silently unwrap on the Web path', async (operation) => {
     const deps = depsFor(); const h = new Headers(headers);
     h.delete('x-mahoshojo-desktop-room-protocol'); h.delete('x-mahoshojo-room-expected-user-id');
-    const response = await appFor(deps).request(pathFor('create'), { ...requestFor('create'), headers: h });
+    const response = await appFor(deps).request(pathFor(operation), { ...requestFor(operation), headers: h });
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: 'ROOM_REQUEST_INVALID' });
     assertNoBusiness(deps);
   });
 });
 
-const maximumCreate = () => {
-  const body = structuredClone(createBody); body.sharedConfig.materials = [];
+const maximumRequest = (operation: 'create' | 'config') => {
+  const body = structuredClone(operation === 'create' ? createBody : configBody); body.sharedConfig.materials = [];
   for (let index = 0; index < 256; index += 1) {
     body.sharedConfig.materials.push({ key: `host-local:request-${index}`, displayName: '\0'.repeat(200), source: 'host-local', type: 'material' });
     if (bytes(body) > 65_536) { body.sharedConfig.materials.pop(); break; }
@@ -363,35 +448,35 @@ const maximumCreate = () => {
   while (bytes(body) + 6 <= 65_536 && padding.displayName.length < 200) padding.displayName += '\0';
   while (bytes(body) < 65_536 && padding.key.length < 256) padding.key += 'x';
   expect(bytes(body)).toBe(65_536);
-  expect(ArenaRoomCreateRequestSchema.safeParse(body).success).toBe(true);
+  expect((operation === 'create' ? ArenaRoomCreateRequestSchema : ArenaRoomPublishConfigRequestSchema).safeParse(body).success).toBe(true);
   return body;
 };
 
 describe('Desktop raw budgets on the actual producer', () => {
-  it('accepts exactly64KiB inner/exactly65KiB raw outer, rejects each one-byte overflow before business', async () => {
-    const request = maximumCreate();
-    const envelope = wrap(request, 'new'); const compact = JSON.stringify(envelope);
+  it.each(['create', 'config'] as const)('%s accepts exactly64KiB inner/exactly65KiB raw outer and rejects each one-byte overflow before business', async (operation) => {
+    const request = maximumRequest(operation);
+    const envelope = wrap(request, operation === 'create' ? 'new' : undefined); const compact = JSON.stringify(envelope);
     const raw = compact + ' '.repeat(DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes - Buffer.byteLength(compact));
     expect(Buffer.byteLength(raw)).toBe(DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes);
     const accepted = depsFor();
-    expect((await appFor(accepted).request(pathFor('create'), { method: 'POST', headers, body: raw })).status).toBe(201);
-    expect(accepted.memberships.create).toHaveBeenCalledOnce();
+    expect((await appFor(accepted).request(pathFor(operation), { method: 'POST', headers, body: raw })).status).toBe(operation === 'create' ? 201 : 200);
+    expect(operation === 'create' ? accepted.memberships.create : accepted.configs.publish).toHaveBeenCalledOnce();
     const oversizedOuter = depsFor();
-    const outer = await appFor(oversizedOuter).request(pathFor('create'), { method: 'POST', headers, body: raw + ' ' });
+    const outer = await appFor(oversizedOuter).request(pathFor(operation), { method: 'POST', headers, body: raw + ' ' });
     expect(outer.status).toBe(413); assertNoBusiness(oversizedOuter);
     const last = request.sharedConfig.materials.at(-1)!;
     last.key += 'x';
     expect(bytes(request)).toBe(65_537);
-    expect(ArenaRoomCreateRequestSchema.safeParse(request).success).toBe(true);
+    expect((operation === 'create' ? ArenaRoomCreateRequestSchema : ArenaRoomPublishConfigRequestSchema).safeParse(request).success).toBe(true);
     const oversizedInner = depsFor();
-    const inner = await appFor(oversizedInner).request(pathFor('create'), { method: 'POST', headers, body: JSON.stringify(envelope) });
+    const inner = await appFor(oversizedInner).request(pathFor(operation), { method: 'POST', headers, body: JSON.stringify(envelope) });
     expect(inner.status).toBe(413); assertNoBusiness(oversizedInner);
   });
 
-  it('unmarked Web still rejects raw64KiB +1 rather than inheriting the envelope allowance', async () => {
+  it.each(['create', 'config'] as const)('unmarked Web %s still rejects raw64KiB +1 rather than inheriting the envelope allowance', async (operation) => {
     const h = new Headers(headers); h.delete('x-mahoshojo-desktop-room-protocol'); h.delete('x-mahoshojo-room-expected-user-id');
     const deps = depsFor();
-    const response = await appFor(deps).request(pathFor('create'), { method: 'POST', headers: h, body: JSON.stringify(maximumCreate()) + ' ' });
+    const response = await appFor(deps).request(pathFor(operation), { method: 'POST', headers: h, body: JSON.stringify(maximumRequest(operation)) + ' ' });
     expect(response.status).toBe(413); assertNoBusiness(deps);
   });
 
@@ -445,6 +530,31 @@ describe('Desktop raw budgets on the actual producer', () => {
     expect(unknown.status).toBe(502);
     expect(mutated.memberships.join).toHaveBeenCalledOnce();
     expect(await unknown.json()).toMatchObject({ desktopRoom: { viewerUserId: 101 }, error: { code: 'ROOM_DESKTOP_RESPONSE_TOO_LARGE', outcome: 'unknown' } });
+  });
+
+  it('config accepts an exact256KiB complete response and marks one-byte overflow unknown after one publish', async () => {
+    const result = ArenaRoomSessionResponseSchema.parse(fixture.operations.session.success.result);
+    const member = result.snapshot.members[1]!;
+    member.joinedAt = '2026-08-28T00:00:00.0Z';
+    const envelope = { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, viewerUserId: 101 }, result };
+    member.joinedAt = `2026-08-28T00:00:00.${'0'.repeat(DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes - bytes(envelope) + 1)}Z`;
+    expect(bytes(envelope)).toBe(262_144);
+    const deps = depsFor();
+    vi.mocked(deps.configs.publish).mockResolvedValue({ roomId: result.roomId, roomEpoch: result.roomEpoch, member: result.self, snapshot: result.snapshot });
+    const accepted = await appFor(deps).request(pathFor('config'), requestFor('config'));
+    expect(accepted.status).toBe(200);
+    const text = await accepted.text();
+    expect(Buffer.byteLength(text)).toBe(262_144);
+    expect(parseDesktopRoomSessionResponse('config', JSON.parse(text), 101)).toEqual(envelope);
+    expect(deps.configs.publish).toHaveBeenCalledOnce();
+
+    member.joinedAt = member.joinedAt.replace(/Z$/u, '0Z');
+    expect(bytes(envelope)).toBe(262_145);
+    expect(ArenaRoomSessionResponseSchema.safeParse(result).success).toBe(true);
+    const refused = await appFor(deps).request(pathFor('config'), requestFor('config'));
+    expect(refused.status).toBe(502);
+    expect(await refused.json()).toMatchObject({ error: { code: 'ROOM_DESKTOP_RESPONSE_TOO_LARGE', outcome: 'unknown' } });
+    expect(deps.configs.publish).toHaveBeenCalledTimes(2);
   });
 
   it('complete control frame remains bounded independently of duplicated self and response wrapper', async () => {

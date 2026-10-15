@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -127,11 +128,37 @@ enum IntentPhase {
     Unknown,
 }
 
+// Only authority coordinates and a fixed digest survive a config receipt loss.
+// The requested configuration remains in the in-flight HTTP task, never this slot.
+struct ConfigBasis {
+    room_epoch: String,
+    revision: u64,
+    control_seq: u64,
+    digest: Option<[u8; 32]>,
+}
+impl ConfigBasis {
+    fn from_authority(authority: &Authority) -> Self {
+        Self {
+            room_epoch: authority.room_epoch.clone(),
+            revision: authority.revision,
+            control_seq: authority.control_seq,
+            digest: authority.config_digest,
+        }
+    }
+    fn accepts(&self, authority: &Authority) -> bool {
+        authority.room_epoch == self.room_epoch
+            && authority.revision >= self.revision
+            && authority.control_seq >= self.control_seq
+            && (authority.revision != self.revision || authority.config_digest == self.digest)
+    }
+}
+
 struct PendingIntent {
     id: String,
     operation: Operation,
     room_id: Option<String>,
     frozen_request: Value,
+    config_basis: Option<ConfigBasis>,
     account: Arc<AccountAccess>,
     phase: IntentPhase,
     receipt: Option<IntentReceipt>,
@@ -565,6 +592,26 @@ impl RoomInstance {
                     "subscriptionId":subscription_id,"batchId":batch_id,"sequence":sequence,"accepted":accepted}),
                 ))
             }
+            Action::EndConfigTracking { intent_id } => {
+                let mut inner = lock(&self.inner);
+                let context = self.scope_for(&inner, document, &input.handle)?;
+                let pending = inner.pending.as_ref().ok_or_else(stale)?;
+                if pending.id != intent_id
+                    || pending.operation != Operation::Config
+                    || pending.account.user_id != context.account.user_id
+                    || pending.account.epoch != context.account.epoch
+                    || !pending.account.is_current()?
+                {
+                    return Err(stale());
+                }
+                // Retire this local scope before dropping the token. A dispatched server
+                // write may still finish, but no old callback can install or deliver it.
+                Self::retire_locked(&mut inner);
+                inner.pending = None;
+                Ok(EngineReply::Small(
+                    json!({"kind":"config-tracking-ended","intentId":intent_id,"ended":true}),
+                ))
+            }
             action => self.start_http(document, input.handle, action),
         }
     }
@@ -632,6 +679,12 @@ impl RoomInstance {
                 request,
                 resume_only: false,
             },
+            Action::Config { room_id, request } => HttpRequest {
+                operation: Operation::Config,
+                room_id: Some(room_id),
+                request,
+                resume_only: false,
+            },
             Action::Session { room_id } => HttpRequest {
                 operation: Operation::Session,
                 room_id: Some(room_id),
@@ -656,14 +709,17 @@ impl RoomInstance {
                 request: json!({"expectedRoomEpoch":expected_room_epoch}),
                 resume_only: false,
             },
-            Action::Pull { .. } | Action::Ack { .. } => {
+            Action::Pull { .. } | Action::Ack { .. } | Action::EndConfigTracking { .. } => {
                 return Err(RoomError::new("invalid-request", "not-applied"))
             }
         };
         if request.operation.is_post() && inner.pending.is_some() && resume_id.is_none() {
             return Err(busy());
         }
-        if matches!(request.operation, Operation::Leave | Operation::Close) {
+        if matches!(
+            request.operation,
+            Operation::Leave | Operation::Close | Operation::Config
+        ) {
             let session = inner
                 .scope
                 .as_ref()
@@ -672,7 +728,12 @@ impl RoomInstance {
             if request.room_id.as_deref() != Some(session.room_id.as_str())
                 || request.request["expectedRoomEpoch"].as_str()
                     != Some(session.room_epoch.as_str())
-                || (request.operation == Operation::Close && session.self_role != "host")
+                || (matches!(request.operation, Operation::Close | Operation::Config)
+                    && session.self_role != "host")
+                || (request.operation == Operation::Config
+                    && (request.request["expectedRevision"].as_u64() != Some(session.revision)
+                        || request.request["expectedControlSeq"].as_u64()
+                            != Some(session.control_seq)))
             {
                 return Err(stale());
             }
@@ -701,11 +762,27 @@ impl RoomInstance {
         }
         let intent_id = if request.operation.is_post() {
             let id = new_intent_id.expect("mutation identifier prepared");
+            let config_basis = if request.operation == Operation::Config {
+                Some(ConfigBasis::from_authority(
+                    inner
+                        .scope
+                        .as_ref()
+                        .and_then(|scope| scope.session.as_ref())
+                        .ok_or_else(stale)?,
+                ))
+            } else {
+                None
+            };
             inner.pending = Some(PendingIntent {
                 id: id.clone(),
                 operation: request.operation,
                 room_id: request.room_id.clone(),
-                frozen_request: request.request.clone(),
+                frozen_request: if request.operation == Operation::Config {
+                    Value::Null
+                } else {
+                    request.request.clone()
+                },
+                config_basis,
                 account: context.account.clone(),
                 phase: IntentPhase::InFlight,
                 receipt: None,
@@ -928,7 +1005,7 @@ impl RoomInstance {
                 if (absence || outcome.is_ok())
                     && inner.pending.as_ref().is_some_and(|pending| {
                         pending.phase == IntentPhase::Unknown
-                            && pending.operation != Operation::Create
+                            && !matches!(pending.operation, Operation::Create | Operation::Config)
                             && pending.room_id == request.room_id
                             && pending.account.user_id == context.account.user_id
                             && pending.account.epoch == context.account.epoch
@@ -1137,7 +1214,7 @@ impl RoomInstance {
         self.current_locked(&inner, context)?;
         let result = &response["result"];
         match request.operation {
-            Operation::Create | Operation::Join | Operation::Session => {
+            Operation::Create | Operation::Join | Operation::Session | Operation::Config => {
                 let authority = Authority::from_session(result)?;
                 if request
                     .room_id
@@ -1152,6 +1229,75 @@ impl RoomInstance {
                             "not-applicable"
                         },
                     ));
+                }
+                if let Some(previous) = inner
+                    .scope
+                    .as_ref()
+                    .and_then(|scope| scope.session.as_ref())
+                {
+                    // Normal recovery may observe a new epoch. Within an epoch,
+                    // neither a GET nor a POST may replace newer authority.
+                    if previous.room_id == authority.room_id
+                        && previous.room_epoch == authority.room_epoch
+                        && !ConfigBasis::from_authority(previous).accepts(&authority)
+                    {
+                        return Err(RoomError::new(
+                            "invalid-response",
+                            if request.operation.is_post() {
+                                "unknown"
+                            } else {
+                                "not-applicable"
+                            },
+                        ));
+                    }
+                }
+                if request.operation == Operation::Session {
+                    if let Some(pending) = inner.pending.as_ref().filter(|pending| {
+                        pending.operation == Operation::Config && pending.room_id == request.room_id
+                    }) {
+                        if !pending
+                            .config_basis
+                            .as_ref()
+                            .is_some_and(|basis| basis.accepts(&authority))
+                        {
+                            return Err(RoomError::new("invalid-response", "not-applicable"));
+                        }
+                    }
+                }
+                if request.operation == Operation::Config {
+                    let previous = inner
+                        .scope
+                        .as_ref()
+                        .and_then(|scope| scope.session.as_ref())
+                        .ok_or_else(stale)?;
+                    let expected_revision = request.request["expectedRevision"]
+                        .as_u64()
+                        .ok_or_else(invalid)?;
+                    let expected_control = request.request["expectedControlSeq"]
+                        .as_u64()
+                        .ok_or_else(invalid)?;
+                    if authority.room_epoch
+                        != request.request["expectedRoomEpoch"]
+                            .as_str()
+                            .ok_or_else(invalid)?
+                        || authority.self_id != previous.self_id
+                        || authority.self_role != "host"
+                        || authority.revision < previous.revision
+                        || authority.control_seq < previous.control_seq
+                        || (authority.revision != expected_revision
+                            && Some(authority.revision) != expected_revision.checked_add(1))
+                        || authority.control_seq < expected_control
+                        || (authority.revision > expected_revision
+                            && authority.control_seq <= expected_control)
+                        || (authority.revision == previous.revision
+                            && authority.config_digest != previous.config_digest)
+                        || !config_intent_equal(
+                            &request.request["sharedConfig"],
+                            &result["snapshot"]["sharedConfig"],
+                        )
+                    {
+                        return Err(RoomError::new("invalid-response", "unknown"));
+                    }
                 }
                 inner.scope.as_mut().ok_or_else(stale)?.session = Some(authority);
             }
@@ -1467,6 +1613,8 @@ struct Authority {
     self_role: String,
     members: BTreeMap<String, (String, String)>,
     control_seq: u64,
+    revision: u64,
+    config_digest: Option<[u8; 32]>,
     snapshot_seen: bool,
     presence_seen: bool,
     online: BTreeSet<String>,
@@ -1492,6 +1640,8 @@ impl Authority {
             self_role,
             members: BTreeMap::new(),
             control_seq: 0,
+            revision: 0,
+            config_digest: None,
             snapshot_seen: false,
             presence_seen: false,
             online: BTreeSet::new(),
@@ -1528,6 +1678,15 @@ impl Authority {
         {
             return Err(stale());
         }
+        let revision = snapshot["revision"].as_u64().ok_or_else(invalid)?;
+        let digest = exact_config_digest(&snapshot["sharedConfig"]);
+        if revision < self.revision
+            || (revision == self.revision && self.config_digest.is_some_and(|old| old != digest))
+        {
+            return Err(stale());
+        }
+        self.revision = revision;
+        self.config_digest = Some(digest);
         self.members = members;
         self.control_seq = sequence;
         self.online.retain(|id| {
@@ -1637,8 +1796,17 @@ impl Authority {
                     ..SocketEffect::default()
                 });
             }
-            "room.config.updated"
-            | "proposal.submitted"
+            "room.config.updated" => {
+                let revision = message["payload"]["revision"]
+                    .as_u64()
+                    .ok_or_else(invalid)?;
+                if Some(revision) != self.revision.checked_add(1) {
+                    return Err(stale());
+                }
+                self.revision = revision;
+                self.config_digest = Some(exact_config_digest(&message["payload"]["sharedConfig"]));
+            }
+            "proposal.submitted"
             | "proposal.updated"
             | "proposal.resolved"
             | "generation.started"
@@ -1649,6 +1817,52 @@ impl Authority {
         self.control_seq = sequence;
         Ok(SocketEffect::default())
     }
+}
+
+// Exact authority identity retains observed versions; semantic intent below does not.
+// Sort objects recursively even if another crate enables serde_json preserve_order.
+fn exact_config_digest(value: &Value) -> [u8; 32] {
+    fn canonicalize(value: &mut Value) {
+        match value {
+            Value::Object(fields) => {
+                for child in fields.values_mut() {
+                    canonicalize(child);
+                }
+                fields.sort_keys();
+            }
+            Value::Array(items) => {
+                for item in items {
+                    canonicalize(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut canonical = value.clone();
+    canonicalize(&mut canonical);
+    Sha256::digest(serde_json::to_vec(&canonical).expect("validated JSON value")).into()
+}
+
+fn config_intent_equal(left: &Value, right: &Value) -> bool {
+    fn normalize(mut value: Value) -> Value {
+        fn entry(value: &mut Value) {
+            if let Some(id) = value["ref"]["id"].as_str() {
+                if value["key"].as_str() == Some(format!("data-card:{id}").as_str()) {
+                    value["ref"]["versionToken"] = json!("");
+                }
+            }
+        }
+        for field in ["combatants", "auxScenarios", "materials"] {
+            if let Some(entries) = value[field].as_array_mut() {
+                for item in entries {
+                    entry(item);
+                }
+            }
+        }
+        entry(&mut value["scenario"]);
+        value
+    }
+    normalize(left.clone()) == normalize(right.clone())
 }
 
 #[cfg(test)]
@@ -1816,6 +2030,16 @@ mod tests {
                 request: fixture(operation, "request")["request"].clone(),
             },
             Operation::Session => session_action(),
+            Operation::Config => {
+                let session = fixture(Operation::Create, "success")["result"].clone();
+                Action::Config {
+                    room_id: room().into(),
+                    request: json!({
+                        "expectedRoomEpoch":epoch(), "expectedRevision":session["snapshot"]["revision"],
+                        "expectedControlSeq":session["snapshot"]["controlSeq"], "sharedConfig":session["snapshot"]["sharedConfig"]
+                    }),
+                }
+            }
             Operation::Leave => Action::Leave {
                 room_id: room().into(),
                 expected_room_epoch: epoch().into(),
@@ -2030,6 +2254,415 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    fn seed_config_authority(instance: &RoomInstance) {
+        lock(&instance.inner).scope.as_mut().unwrap().session = Some(
+            Authority::from_session(&fixture(Operation::Session, "success")["result"]).unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn config_requires_native_host_and_all_cas_tokens_before_http() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let account = synthetic_account(1);
+        let instance = make_instance(listener.local_addr().unwrap(), None);
+        let attached = attach(instance.clone(), account.access, 1);
+        assert_eq!(
+            error_code(attached.request(http_action(Operation::Config))),
+            "scope-changed"
+        );
+        seed_config_authority(&instance);
+        for field in [
+            "expectedRoomEpoch",
+            "expectedRevision",
+            "expectedControlSeq",
+        ] {
+            let Action::Config {
+                room_id,
+                mut request,
+            } = http_action(Operation::Config)
+            else {
+                unreachable!()
+            };
+            request[field] = if field == "expectedRoomEpoch" {
+                json!("another-epoch")
+            } else {
+                json!(0)
+            };
+            assert_eq!(
+                error_code(attached.request(Action::Config { room_id, request })),
+                "scope-changed"
+            );
+        }
+        lock(&instance.inner)
+            .scope
+            .as_mut()
+            .unwrap()
+            .session
+            .as_mut()
+            .unwrap()
+            .self_role = "member".into();
+        assert_eq!(
+            error_code(attached.request(http_action(Operation::Config))),
+            "scope-changed"
+        );
+        assert!(lock(&instance.inner).pending.is_none());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), listener.accept())
+                .await
+                .is_err()
+        );
+        instance.destroyed();
+    }
+
+    #[tokio::test]
+    async fn config_original_success_requires_full_matching_receipt_and_exact_ack() {
+        for bad in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let raw = read_http(&mut stream).await;
+                assert!(String::from_utf8_lossy(&raw)
+                    .starts_with(&format!("POST /api/arena/rooms/v1/{}/config ", room())));
+                assert_eq!(request_body(&raw)["desktopRoom"]["expectedUserId"], 42);
+                let mut response = fixture(Operation::Session, "success");
+                if bad {
+                    response["result"]["snapshot"]["sharedConfig"]["userGuidance"] =
+                        json!("wrong target");
+                }
+                send_http(&mut stream, 200, &response).await;
+            });
+            let account = synthetic_account(1);
+            let instance = make_instance(address, None);
+            let mut attached = attach(instance.clone(), account.access, 1);
+            seed_config_authority(&instance);
+            attached.request(http_action(Operation::Config)).unwrap();
+            let batch = attached.batch().await;
+            assert_eq!(
+                batch["event"]["kind"],
+                if bad { "request-error" } else { "http-result" }
+            );
+            assert!(lock(&instance.inner).pending.is_some());
+            attached.ack(&batch).unwrap();
+            if bad {
+                assert_eq!(batch["event"]["error"]["outcome"], "unknown");
+                assert_eq!(attached.event().await["kind"], "mutation-unknown");
+                assert!(
+                    lock(&instance.inner).pending.as_ref().unwrap().phase == IntentPhase::Unknown
+                );
+            } else {
+                assert!(lock(&instance.inner).pending.is_none());
+            }
+            if !bad {
+                if let Some(path) = std::env::var_os("MAHO_ROOM_NATIVE_CONFIG_IPC_FIXTURE") {
+                    let output = json!({"expectedUserId":42,"attach":attached.attach_value,
+                        "notifications":attached.observed_notifications,"pulls":attached.observed_pulls});
+                    std::fs::write(path, serde_json::to_vec_pretty(&output).unwrap()).unwrap();
+                }
+            }
+            instance.destroyed();
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn config_unknown_get_never_confirms_or_replays_original_and_end_revokes_scope() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http(&mut stream).await;
+            drop(stream); // Request dispatched, original receipt is lost.
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let raw = read_http(&mut stream).await;
+            assert!(String::from_utf8_lossy(&raw).starts_with("GET "));
+            send_http(&mut stream, 200, &fixture(Operation::Session, "success")).await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                    .await
+                    .is_err()
+            );
+        });
+        let account = synthetic_account(1);
+        let instance = make_instance(address, None);
+        let mut attached = attach(instance.clone(), account.access, 1);
+        seed_config_authority(&instance);
+        attached.request(http_action(Operation::Config)).unwrap();
+        assert_eq!(attached.event().await["error"]["outcome"], "unknown");
+        assert_eq!(attached.event().await["kind"], "mutation-unknown");
+        wait_http_idle(&instance).await;
+        let id = lock(&instance.inner).pending.as_ref().unwrap().id.clone();
+        assert_eq!(
+            error_code(attached.request(Action::ResumeCreate {
+                intent_id: id.clone()
+            })),
+            "busy"
+        );
+        attached.request(session_action()).unwrap();
+        assert_eq!(attached.event().await["kind"], "http-result");
+        wait_http_idle(&instance).await;
+        assert_unknown(&instance, &id, &Value::Null);
+        assert_eq!(
+            error_code(attached.request(http_action(Operation::Config))),
+            "busy"
+        );
+        assert_eq!(
+            error_code(attached.request(Action::EndConfigTracking {
+                intent_id: "wrong-token".into()
+            })),
+            "scope-changed"
+        );
+        let EngineReply::Small(ended) = attached
+            .request(Action::EndConfigTracking {
+                intent_id: id.clone(),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            ended,
+            json!({"kind":"config-tracking-ended","intentId":id,"ended":true})
+        );
+        assert!(lock(&instance.inner).pending.is_none());
+        assert_eq!(
+            error_code(attached.request(session_action())),
+            "scope-changed"
+        );
+        instance.destroyed();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn config_end_during_dispatch_fences_late_receipt_and_new_document() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (seen_tx, seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http(&mut stream).await;
+            seen_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            send_http(&mut stream, 200, &fixture(Operation::Session, "success")).await;
+        });
+        let account = synthetic_account(1);
+        let instance = make_instance(address, None);
+        let attached = attach(instance.clone(), account.access.clone(), 1);
+        seed_config_authority(&instance);
+        attached.request(http_action(Operation::Config)).unwrap();
+        seen_rx.await.unwrap();
+        let id = lock(&instance.inner).pending.as_ref().unwrap().id.clone();
+        attached
+            .request(Action::EndConfigTracking { intent_id: id })
+            .unwrap();
+        let renewed = attach(instance.clone(), account.access, 2);
+        release_tx.send(()).unwrap();
+        wait_http_idle(&instance).await;
+        assert!(lock(&instance.inner)
+            .scope
+            .as_ref()
+            .unwrap()
+            .session
+            .is_none());
+        assert!(lock(&instance.inner).pending.is_none());
+        assert_eq!(
+            error_code(renewed.request(http_action(Operation::Config))),
+            "scope-changed"
+        );
+        instance.destroyed();
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn config_intent_ignores_only_online_card_versions() {
+        let original =
+            fixture(Operation::Session, "success")["result"]["snapshot"]["sharedConfig"].clone();
+        let mut changed = original.clone();
+        changed["combatants"][0]["ref"]["versionToken"] = json!("refreshed");
+        assert!(config_intent_equal(&original, &changed));
+        changed["combatants"][0]["key"] = json!("preset:character-001");
+        let mut preset = changed.clone();
+        preset["combatants"][0]["ref"]["versionToken"] = json!("other-version");
+        assert!(!config_intent_equal(&preset, &changed));
+        changed = original.clone();
+        changed["userGuidance"] = json!("different intent");
+        assert!(!config_intent_equal(&original, &changed));
+    }
+
+    #[test]
+    fn config_authority_digest_ignores_object_order_but_keeps_versions_and_array_order() {
+        let left: Value =
+            serde_json::from_str(r#"{"b":{"y":2,"x":1},"a":[{"n":1,"m":2},3]}"#).unwrap();
+        let right: Value =
+            serde_json::from_str(r#"{"a":[{"m":2,"n":1},3],"b":{"x":1,"y":2}}"#).unwrap();
+        assert_eq!(exact_config_digest(&left), exact_config_digest(&right));
+        let mut reordered = left.clone();
+        reordered["a"].as_array_mut().unwrap().reverse();
+        assert_ne!(exact_config_digest(&left), exact_config_digest(&reordered));
+        let session = fixture(Operation::Session, "success")["result"].clone();
+        let mut authority = Authority::from_session(&session).unwrap();
+        let mut refreshed = session["snapshot"].clone();
+        refreshed["sharedConfig"]["combatants"][0]["ref"]["versionToken"] =
+            json!("new-observation");
+        assert!(config_intent_equal(
+            &session["snapshot"]["sharedConfig"],
+            &refreshed["sharedConfig"]
+        ));
+        assert_eq!(
+            error_code(authority.replace_snapshot(&refreshed)),
+            "scope-changed"
+        );
+        refreshed["revision"] = json!(8);
+        authority.replace_snapshot(&refreshed).unwrap();
+        assert_eq!(authority.revision, 8);
+        assert_eq!(
+            authority.config_digest,
+            Some(exact_config_digest(&refreshed["sharedConfig"]))
+        );
+    }
+
+    #[tokio::test]
+    async fn config_original_response_rejects_regression_wrong_revision_and_same_revision_mutation()
+    {
+        let account = synthetic_account(1);
+        let instance = make_instance("127.0.0.1:1".parse().unwrap(), None);
+        let attached = attach(instance.clone(), account.access, 1);
+        seed_config_authority(&instance);
+        let context = instance
+            .scope_for(&lock(&instance.inner), attached.document, &attached.handle)
+            .unwrap();
+        let Action::Config { room_id, request } = http_action(Operation::Config) else {
+            unreachable!()
+        };
+        let input = HttpRequest {
+            operation: Operation::Config,
+            room_id: Some(room_id),
+            request,
+            resume_only: false,
+        };
+        for (field, wrong) in [
+            ("revision", json!(6)),
+            ("revision", json!(9)),
+            ("controlSeq", json!(23)),
+        ] {
+            let mut response = fixture(Operation::Session, "success");
+            response["result"]["snapshot"][field] = wrong;
+            assert!(instance.install_http(&context, &input, &response).is_err());
+        }
+        let mut response = fixture(Operation::Session, "success");
+        response["result"]["snapshot"]["sharedConfig"]["combatants"][0]["ref"]["versionToken"] =
+            json!("new-version");
+        assert!(instance.install_http(&context, &input, &response).is_err());
+        response["result"]["snapshot"]["revision"] = json!(8);
+        response["result"]["snapshot"]["controlSeq"] = json!(25);
+        instance.install_http(&context, &input, &response).unwrap();
+        assert_eq!(
+            lock(&instance.inner)
+                .scope
+                .as_ref()
+                .unwrap()
+                .session
+                .as_ref()
+                .unwrap()
+                .revision,
+            8
+        );
+        instance.destroyed();
+    }
+
+    #[tokio::test]
+    async fn config_unknown_get_checks_current_and_reload_basis_without_settling() {
+        for reload in [false, true] {
+            let account = synthetic_account(1);
+            let instance = make_instance("127.0.0.1:1".parse().unwrap(), None);
+            let mut attached = attach(instance.clone(), account.access.clone(), 1);
+            seed_config_authority(&instance);
+            {
+                let mut inner = lock(&instance.inner);
+                let basis = ConfigBasis::from_authority(
+                    inner.scope.as_ref().unwrap().session.as_ref().unwrap(),
+                );
+                inner.pending = Some(PendingIntent {
+                    id: "config-original".into(),
+                    operation: Operation::Config,
+                    room_id: Some(room().into()),
+                    frozen_request: Value::Null,
+                    config_basis: Some(basis),
+                    account: account.access.clone(),
+                    phase: IntentPhase::Unknown,
+                    receipt: None,
+                });
+            }
+            if reload {
+                attached = attach(instance.clone(), account.access, 2);
+            }
+            let context = instance
+                .scope_for(&lock(&instance.inner), attached.document, &attached.handle)
+                .unwrap();
+            let request = HttpRequest {
+                operation: Operation::Session,
+                room_id: Some(room().into()),
+                request: json!({}),
+                resume_only: false,
+            };
+            for case in ["revision", "controlSeq", "config", "epoch"] {
+                let mut response = fixture(Operation::Session, "success");
+                match case {
+                    "revision" => response["result"]["snapshot"]["revision"] = json!(6),
+                    "controlSeq" => response["result"]["snapshot"]["controlSeq"] = json!(23),
+                    "config" => {
+                        response["result"]["snapshot"]["sharedConfig"]["userGuidance"] =
+                            json!("different authority")
+                    }
+                    _ => {
+                        response["result"]["roomEpoch"] = json!("new-epoch");
+                        response["result"]["snapshot"]["roomEpoch"] = json!("new-epoch");
+                    }
+                }
+                assert!(
+                    instance
+                        .install_http(&context, &request, &response)
+                        .is_err(),
+                    "reload={reload}, case={case}"
+                );
+                assert_unknown(&instance, "config-original", &Value::Null);
+                assert_eq!(
+                    lock(&instance.inner)
+                        .scope
+                        .as_ref()
+                        .unwrap()
+                        .session
+                        .is_none(),
+                    reload
+                );
+            }
+            let mut newer = fixture(Operation::Session, "success");
+            newer["result"]["snapshot"]["revision"] = json!(10);
+            newer["result"]["snapshot"]["controlSeq"] = json!(30);
+            newer["result"]["snapshot"]["sharedConfig"]["userGuidance"] =
+                json!("current other target");
+            instance.install_http(&context, &request, &newer).unwrap();
+            assert_unknown(&instance, "config-original", &Value::Null);
+            // Current authority is now stronger than the retained original CAS basis.
+            assert!(instance
+                .install_http(&context, &request, &fixture(Operation::Session, "success"))
+                .is_err());
+            assert_eq!(
+                lock(&instance.inner)
+                    .scope
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .as_ref()
+                    .unwrap()
+                    .revision,
+                10
+            );
+            instance.destroyed();
+        }
     }
 
     #[test]
@@ -2779,6 +3412,7 @@ mod tests {
                 id: "old-intent".into(),
                 operation: Operation::Create,
                 room_id: None,
+                config_basis: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
                 phase: IntentPhase::Unknown,
@@ -2819,6 +3453,7 @@ mod tests {
                 id: "original-leave".into(),
                 operation: Operation::Leave,
                 room_id: Some(room().into()),
+                config_basis: None,
                 frozen_request: json!({"expectedRoomEpoch":epoch()}),
                 account: account.access,
                 phase: IntentPhase::Unknown,
@@ -3269,6 +3904,7 @@ mod tests {
                 id: "prior-create".into(),
                 operation: Operation::Create,
                 room_id: None,
+                config_basis: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
                 phase: IntentPhase::Unknown,
@@ -3379,6 +4015,7 @@ mod tests {
                 id: "prior-create".into(),
                 operation: Operation::Create,
                 room_id: None,
+                config_basis: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
                 phase: IntentPhase::Unknown,

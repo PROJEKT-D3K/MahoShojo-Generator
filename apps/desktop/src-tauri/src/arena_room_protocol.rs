@@ -153,6 +153,7 @@ pub(crate) enum Operation {
     Ticket,
     Leave,
     Close,
+    Config,
 }
 impl Operation {
     pub(crate) fn as_str(self) -> &'static str {
@@ -164,6 +165,7 @@ impl Operation {
             Self::Ticket => "ticket",
             Self::Leave => "leave",
             Self::Close => "close",
+            Self::Config => "config",
         }
     }
     pub(crate) fn is_post(self) -> bool {
@@ -212,6 +214,13 @@ pub(crate) enum Action {
     },
     Session {
         room_id: String,
+    },
+    Config {
+        room_id: String,
+        request: Value,
+    },
+    EndConfigTracking {
+        intent_id: String,
     },
     Leave {
         room_id: String,
@@ -1206,6 +1215,22 @@ fn original_request(operation: Operation, v: &mut Value) -> Check {
             closed(v, &["displayName"], &[])?;
             display_name(&mut v["displayName"])
         }
+        Operation::Config => {
+            closed(
+                v,
+                &[
+                    "expectedRoomEpoch",
+                    "expectedRevision",
+                    "expectedControlSeq",
+                    "sharedConfig",
+                ],
+                &[],
+            )?;
+            key(&mut v["expectedRoomEpoch"])?;
+            integer(&mut v["expectedRevision"], 0, MAX_SAFE_INTEGER)?;
+            integer(&mut v["expectedControlSeq"], 0, MAX_SAFE_INTEGER)?;
+            shared_config(&mut v["sharedConfig"])
+        }
         Operation::Ticket => {
             closed(v, &[], &["reconnect"])?;
             optional(v, "reconnect", reconnect)
@@ -1389,7 +1414,7 @@ pub(crate) fn validate_http_response(
         ensure(safe_u64(&value["desktopRoom"]["viewerUserId"])? == expected_user_id)?;
         match operation {
             Operation::Discover => directory_page(&mut value["result"]),
-            Operation::Create | Operation::Join | Operation::Session => {
+            Operation::Create | Operation::Join | Operation::Session | Operation::Config => {
                 session(&mut value["result"])
             }
             Operation::Ticket => ticket_result(&mut value["result"]),
@@ -1516,6 +1541,22 @@ pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {
                 Ok(Action::Join {
                     room_id: get(&v, "roomId")?,
                     request: v["request"].clone(),
+                })
+            }
+            "config" => {
+                closed(&v, &["kind", "roomId", "request"], &[])?;
+                key(&mut v["roomId"])?;
+                original_request(Operation::Config, &mut v["request"])?;
+                Ok(Action::Config {
+                    room_id: get(&v, "roomId")?,
+                    request: v["request"].clone(),
+                })
+            }
+            "end-config-tracking" => {
+                closed(&v, &["kind", "intentId"], &[])?;
+                id(&mut v["intentId"], 1)?;
+                Ok(Action::EndConfigTracking {
+                    intent_id: get(&v, "intentId")?,
                 })
             }
             "session" => {
@@ -1745,6 +1786,62 @@ mod tests {
             42,
         )
     }
+    #[test]
+    fn config_protocol_is_closed_bounded_and_matches_producer_wire() {
+        let session = fixture()["operations"]["session"]["success"].clone();
+        let snapshot = &session["result"]["snapshot"];
+        let original = json!({"expectedRoomEpoch":snapshot["roomEpoch"],"expectedRevision":snapshot["revision"],
+            "expectedControlSeq":snapshot["controlSeq"],"sharedConfig":snapshot["sharedConfig"]});
+        let input = json!({"handle":"native-handle","request":{"kind":"config","roomId":snapshot["roomId"],"request":original}});
+        assert!(matches!(
+            parse_request(&input).unwrap().action,
+            Action::Config { .. }
+        ));
+        for field in ["expectedRevision", "expectedControlSeq"] {
+            let mut bad = input.clone();
+            bad["request"]["request"][field] = json!(MAX_SAFE_INTEGER + 1);
+            assert!(parse_request(&bad).is_err());
+        }
+        let mut bad = input.clone();
+        bad["request"]["request"]["url"] = json!("https://not-allowed.invalid");
+        assert!(parse_request(&bad).is_err());
+        bad = input.clone();
+        bad["request"]["request"]["sharedConfig"]["userGuidance"] =
+            json!(" ".repeat(MAX_ORIGINAL_REQUEST_BYTES));
+        assert!(parse_request(&bad).is_err());
+        assert!(response(Operation::Config, &session).is_ok());
+        let mut bad_response = session.clone();
+        bad_response["desktopRoom"]["viewerUserId"] = json!(43);
+        assert!(response(Operation::Config, &bad_response).is_err());
+        assert!(matches!(parse_request(&json!({"handle":"native-handle","request":{"kind":"end-config-tracking","intentId":"intent-a"}})).unwrap().action, Action::EndConfigTracking { .. }));
+        assert!(parse_request(&json!({"handle":"native-handle","request":{"kind":"end-config-tracking","intentId":"intent-a","cancelServer":true}})).is_err());
+        if let Some(directory) = std::env::var_os("MAHO_ROOM_CONFIG_PRODUCER_DIR") {
+            let directory = std::path::PathBuf::from(directory);
+            let request: Value = serde_json::from_slice(
+                &std::fs::read(directory.join("config.request.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                validate_service_request(Operation::Config, &request, 42).unwrap()["request"],
+                original
+            );
+            validate_http_response(
+                Operation::Config,
+                200,
+                &std::fs::read(directory.join("config.response.json")).unwrap(),
+                42,
+            )
+            .unwrap();
+            validate_http_response(
+                Operation::Config,
+                429,
+                &std::fs::read(directory.join("config.error.json")).unwrap(),
+                42,
+            )
+            .unwrap();
+        }
+    }
+
     fn all_objects(value: &Value, path: String, output: &mut Vec<String>) {
         match value {
             Value::Object(o) => {

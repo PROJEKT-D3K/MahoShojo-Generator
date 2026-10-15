@@ -222,12 +222,21 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     ]);
   });
 
-  it('uses all seven HTTP operations, real WSS double presence, replay rejection and terminal readback', async () => {
+  it('uses all fixed HTTP operations, real WSS double presence, replay rejection and terminal readback', async () => {
     const runtime = await start(); const hostCookie = await login(runtime, 101); const memberCookie = await login(runtime, 202);
     const host = await success(room(runtime, 'create', hostCookie, 101, creation()));
     expect((await success(room(runtime, 'discover', hostCookie, 101))).items).toHaveLength(1);
     const member = await success(room(runtime, 'join', memberCookie, 202, { displayName: 'Synthetic Member' }, host.roomId));
     expect(member.self.userId).not.toBe(host.self.userId);
+    const current = await success(room(runtime, 'session', hostCookie, 101, undefined, host.roomId));
+    const target = { ...current.snapshot.sharedConfig, userGuidance: '显式发布配置' };
+    const published = await success(room(runtime, 'config', hostCookie, 101, {
+      expectedRoomEpoch: current.roomEpoch, expectedRevision: current.snapshot.revision,
+      expectedControlSeq: current.snapshot.controlSeq, sharedConfig: target,
+    }, host.roomId));
+    expect(published).toMatchObject({ roomId: host.roomId, roomEpoch: host.roomEpoch, self: host.self,
+      snapshot: { revision: current.snapshot.revision + 1, controlSeq: current.snapshot.controlSeq + 1, sharedConfig: target },
+    });
     const hostTicket = await success(room(runtime, 'ticket', hostCookie, 101, {}, host.roomId));
     const refusedStatus = await new Promise<number | undefined>((resolve, reject) => {
       const refused = open(runtime, hostTicket.ticket, runtime.authOrigin); void refused.connected.catch(reject);
@@ -266,6 +275,48 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     expect(new Set(runtime.observations().trace.filter((entry) => entry.kind === 'room-http').map((entry) => entry.operation))).toEqual(new Set(Object.keys(DESKTOP_ROOM_SESSION_OPERATIONS)));
   });
 
+  it('config keeps actual host, epoch, revision and controlSeq authority ahead of mutation', async () => {
+    const runtime = await start(); const hostCookie = await login(runtime, 101); const memberCookie = await login(runtime, 202);
+    const host = await success(room(runtime, 'create', hostCookie, 101, creation()));
+    await success(room(runtime, 'join', memberCookie, 202, { displayName: 'Synthetic Member' }, host.roomId));
+    const current = await success(room(runtime, 'session', hostCookie, 101, undefined, host.roomId));
+    const intent = { expectedRoomEpoch: current.roomEpoch, expectedRevision: current.snapshot.revision,
+      expectedControlSeq: current.snapshot.controlSeq, sharedConfig: { ...current.snapshot.sharedConfig, userGuidance: '不得越权写入' } };
+    for (const request of [
+      { ...intent, expectedRoomEpoch: 'stale-epoch' },
+      { ...intent, expectedRevision: current.snapshot.revision + 1 },
+      { ...intent, expectedControlSeq: current.snapshot.controlSeq + 1 },
+    ]) {
+      const refused = await room(runtime, 'config', hostCookie, 101, request, host.roomId);
+      expect(refused.status).toBe(409);
+      expect(refused.parsed).toMatchObject({ error: { code: 'ROOM_CONFLICT', outcome: 'unknown' } });
+    }
+    const nonHost = await room(runtime, 'config', memberCookie, 202, intent, host.roomId);
+    expect(nonHost.status).toBe(403);
+    expect(nonHost.parsed).toMatchObject({ error: { code: 'ROOM_FORBIDDEN', outcome: 'unknown' } });
+    const wrongOwner = await room(runtime, 'config', memberCookie, 101, intent, host.roomId);
+    expect(wrongOwner.status).toBe(409);
+    expect(wrongOwner.parsed).toMatchObject({ desktopRoom: { viewerUserId: null }, error: { code: 'ROOM_DESKTOP_OWNER_MISMATCH', outcome: 'not-applied' } });
+    const observed = await success(room(runtime, 'session', hostCookie, 101, undefined, host.roomId));
+    expect(observed.snapshot).toEqual(current.snapshot);
+  });
+
+  it('a lost config HTTP receipt leaves a committed state that later GET only observes without another POST', async () => {
+    const runtime = await start(); const cookie = await login(runtime, 101);
+    const host = await success(room(runtime, 'create', cookie, 101, creation()));
+    const target = { ...host.snapshot.sharedConfig, userGuidance: '已提交但原回执丢失' };
+    runtime.armFault('config');
+    await expect(room(runtime, 'config', cookie, 101, { expectedRoomEpoch: host.roomEpoch,
+      expectedRevision: host.snapshot.revision, expectedControlSeq: host.snapshot.controlSeq, sharedConfig: target,
+    }, host.roomId)).rejects.toMatchObject({ code: 'ECONNRESET' });
+    const observed = await success(room(runtime, 'session', cookie, 101, undefined, host.roomId));
+    expect(observed.snapshot).toMatchObject({ revision: host.snapshot.revision + 1, sharedConfig: target });
+    expect(observed).not.toHaveProperty('operationId');
+    expect(observed).not.toHaveProperty('receipt');
+    expect(runtime.observations().trace.filter((entry) => entry.kind === 'room-http' && entry.operation === 'config'))
+      .toEqual([{ kind: 'room-http', operation: 'config', status: 200, dropped: true }]);
+  });
+
   it('drops only successful committed create and resume-only recovers the original committed in-memory receipt', async () => {
     const runtime = await start(); const cookie = await login(runtime, 101);
     expect((await room(runtime, 'create', cookie, 101, creation('unknown-original'), '', 'resume-only')).status).toBe(409);
@@ -298,11 +349,12 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     expect(runtime.observations().trace.flatMap((entry) => entry.kind === 'room-http' && entry.dropped ? [entry.operation] : [])).toEqual(['join', 'leave', 'close']);
   });
 
-  it('refuses default/unnegotiated/generation/config/proposal paths and unknown controls with bounded safe trace', async () => {
+  it('refuses default/unnegotiated/generation/proposal paths and unknown controls with bounded safe trace', async () => {
     const runtime = await start(); const cookie = await login(runtime, 101);
-    for (const path of ['/api/arena/generate-stream', '/api/arena/rooms/v1/room-1/generations', '/api/arena/rooms/v1/room-1/config', '/api/arena/rooms/v1/room-1/proposals', '/api/arena/rooms/v1/room-1/members/member-1/kick', '/api/arena/rooms/v1/room-1/unknown']) {
+    for (const path of ['/api/arena/generate-stream', '/api/arena/rooms/v1/room-1/generations', '/api/arena/rooms/v1/room-1/proposals', '/api/arena/rooms/v1/room-1/members/member-1/kick', '/api/arena/rooms/v1/room-1/unknown']) {
       expect((await request(runtime, path, { body: {}, headers: headers(101, cookie) })).status).toBe(404);
     }
+    expect((await request(runtime, '/api/arena/rooms/v1/room-1/config', { headers: headers(101, cookie) })).status).toBe(404);
     expect((await request(runtime, '/api/arena/rooms/v1', { headers: { cookie } })).status).toBe(404);
     expect((await request(runtime, '/api/arena/rooms/v1', { auth: true, headers: headers(101, cookie) })).status).toBe(404);
     expect(() => runtime.armFault('ticket' as never)).toThrow('ACCEPTANCE_FAULT_INVALID');

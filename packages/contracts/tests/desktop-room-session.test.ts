@@ -28,12 +28,33 @@ import {
   ArenaRoomCreateRequestSchema,
   ArenaRoomEpochMutationRequestSchema,
   ArenaRoomJoinRequestSchema,
+  ArenaRoomPublishConfigRequestSchema,
   ArenaRoomSessionResponseSchema,
   ArenaRoomTicketRequestSchema,
   ArenaRoomTicketResponseSchema,
 } from '../src/room-http';
 import { jsonUtf8ByteLength } from '../src/wire-size';
 
+// Extend the old shared golden locally; existing Native consumers keep their seven-operation fixture.
+const sessionFixture = fixture.operations.session.success.result;
+const operationFixtures = {
+  ...fixture.operations,
+  config: {
+    method: 'POST',
+    path: ARENA_ROOM_HTTP_ROUTES.config.replace(':roomId', sessionFixture.roomId),
+    request: {
+      desktopRoom: fixture.operations.join.request.desktopRoom,
+      request: {
+        expectedRoomEpoch: sessionFixture.roomEpoch,
+        expectedRevision: sessionFixture.snapshot.revision,
+        expectedControlSeq: sessionFixture.snapshot.controlSeq,
+        sharedConfig: sessionFixture.snapshot.sharedConfig,
+      },
+    },
+    success: fixture.operations.session.success,
+    error: fixture.operations.join.error,
+  },
+};
 const owner = fixture.expectedUserId;
 const operations = DesktopRoomSessionOperationSchema.options;
 const postOperations = DesktopRoomSessionPostOperationSchema.options;
@@ -43,6 +64,7 @@ const originalRequestSchemas = {
   ticket: ArenaRoomTicketRequestSchema,
   leave: ArenaRoomEpochMutationRequestSchema,
   close: ArenaRoomEpochMutationRequestSchema,
+  config: ArenaRoomPublishConfigRequestSchema,
 };
 const objectAt = (root: unknown, path: string): Record<string, unknown> => path.split('/').filter(Boolean)
   .reduce<unknown>((value, key) => (value as Record<string, unknown>)[key], root) as Record<string, unknown>;
@@ -84,7 +106,7 @@ const expectCode = (run: () => unknown, code: string) => {
 };
 
 describe('Desktop Native Room session opt-in contract', () => {
-  it('pins the same seven routes, closed version and transport budgets', () => {
+  it('adds only fixed config to the original routes with unchanged version and transport budgets', () => {
     expect(DESKTOP_ROOM_SESSION_PROTOCOL_VERSION).toBe(fixture.protocolVersion);
     expect(DESKTOP_ROOM_SESSION_PROTOCOL_HEADER).toBe('x-mahoshojo-desktop-room-protocol');
     expect(DESKTOP_ROOM_SESSION_EXPECTED_USER_ID_HEADER).toBe('x-mahoshojo-room-expected-user-id');
@@ -92,16 +114,16 @@ describe('Desktop Native Room session opt-in contract', () => {
     expect(Object.keys(DESKTOP_ROOM_SESSION_OPERATIONS)).toEqual(operations);
     expect(DESKTOP_ROOM_SESSION_OPERATIONS.discover).toEqual({ method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.collection });
     expect(DESKTOP_ROOM_SESSION_OPERATIONS.create).toEqual({ method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.collection });
-    for (const operation of ['join', 'session', 'ticket', 'leave', 'close'] as const) {
+    for (const operation of ['join', 'session', 'ticket', 'leave', 'close', 'config'] as const) {
       expect(DESKTOP_ROOM_SESSION_OPERATIONS[operation].path).toBe(ARENA_ROOM_HTTP_ROUTES[operation]);
     }
-    for (const operation of ['config', 'proposals', 'generations', 'kick', 'ws', 'constructor']) {
+    for (const operation of ['proposals', 'generations', 'kick', 'ws', 'constructor']) {
       expect(DesktopRoomSessionOperationSchema.safeParse(operation).success).toBe(false);
     }
   });
 
   it.each(operations)('round-trips the shared %s serializer fixture through real schemas', (operation) => {
-    const sample = fixture.operations[operation];
+    const sample = operationFixtures[operation];
     expect(DESKTOP_ROOM_SESSION_OPERATIONS[operation].method).toBe(sample.method);
     expect(sample.path).toBe(DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', fixture.operations.session.success.result.roomId));
     for (const response of [sample.success, sample.error]) {
@@ -114,7 +136,7 @@ describe('Desktop Native Room session opt-in contract', () => {
   });
 
   it.each(postOperations)('keeps the original %s schema and rejects the new wire on every legacy POST', (operation) => {
-    const sample = fixture.operations[operation].request;
+    const sample = operationFixtures[operation].request;
     expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS[operation].parse(sample)).toEqual(sample);
     expect(parseDesktopRoomSessionRequest(operation, JSON.parse(JSON.stringify(sample)), owner)).toEqual(sample);
     expect(originalRequestSchemas[operation].parse(sample.request)).toEqual(sample.request);
@@ -131,8 +153,8 @@ describe('Desktop Native Room session opt-in contract', () => {
       expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS.create.safeParse(patch(fixture.operations.create.request, 'desktopRoom/createMode', value)).success).toBe(false);
     }
     expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS.create.safeParse(without(fixture.operations.create.request, 'desktopRoom', 'createMode')).success).toBe(false);
-    for (const operation of ['join', 'ticket', 'leave', 'close'] as const) {
-      expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS[operation].safeParse(patch(fixture.operations[operation].request, 'desktopRoom/createMode', 'new')).success).toBe(false);
+    for (const operation of ['join', 'ticket', 'leave', 'close', 'config'] as const) {
+      expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS[operation].safeParse(patch(operationFixtures[operation].request, 'desktopRoom/createMode', 'new')).success).toBe(false);
     }
   });
 
@@ -146,7 +168,7 @@ describe('Desktop Native Room session opt-in contract', () => {
 
   it('requires versioned, object-only, closed metadata and original DTOs', () => {
     for (const operation of postOperations) {
-      const sample = fixture.operations[operation].request;
+      const sample = operationFixtures[operation].request;
       const schema = DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS[operation];
       for (const path of ['', 'desktopRoom', 'request']) {
         expect(schema.safeParse(patch(sample, `${path}/extra`, 'secret-canary')).success).toBe(false);
@@ -161,7 +183,7 @@ describe('Desktop Native Room session opt-in contract', () => {
       for (const raw of [Object.values(sample), null, true, 42, 'body']) expect(schema.safeParse(raw).success).toBe(false);
     }
     for (const operation of operations) {
-      const sample = fixture.operations[operation].success;
+      const sample = operationFixtures[operation].success;
       const schema = DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS[operation];
       for (const path of ['', 'desktopRoom', 'result']) {
         expect(schema.safeParse(patch(sample, `${path}/extra`, 'secret-canary')).success).toBe(false);
@@ -203,7 +225,7 @@ describe('Desktop Native Room session opt-in contract', () => {
     expect(DesktopRoomSessionErrorResponseSchema.safeParse(patch(sample, 'error/retryAfterSeconds', 86_400)).success).toBe(true);
     expect(DesktopRoomSessionErrorResponseSchema.safeParse(patch(sample, 'error/message', '😀'.repeat(100))).success).toBe(true);
     for (const operation of operations) {
-      expect(DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].safeParse({ ...fixture.operations[operation].success, error: sample.error }).success).toBe(false);
+      expect(DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].safeParse({ ...operationFixtures[operation].success, error: sample.error }).success).toBe(false);
       const isGet = DESKTOP_ROOM_SESSION_OPERATIONS[operation].method === 'GET';
       for (const outcome of ['not-applied', 'unknown', 'not-applicable']) {
         expect(DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].safeParse(patch(sample, 'error/outcome', outcome)).success).toBe(isGet ? outcome === 'not-applicable' : outcome !== 'not-applicable');
@@ -239,6 +261,54 @@ describe('Desktop Native Room session opt-in contract', () => {
     const create = without(fixture.operations.create.request, 'request/sharedConfig', 'reportFormat');
     const original = ArenaRoomCreateRequestSchema.parse(objectAt(create, 'request'));
     expect(parseDesktopRoomSessionRequest('create', create, owner).request).toEqual(original);
+  });
+
+  it('keeps config intent closed, requires every CAS token and rejects unsafe counters', () => {
+    const sample = operationFixtures.config.request;
+    for (const key of ['expectedRoomEpoch', 'expectedRevision', 'expectedControlSeq', 'sharedConfig']) {
+      expect(DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS.config.safeParse(without(sample, 'request', key)).success).toBe(false);
+    }
+    for (const key of ['expectedRevision', 'expectedControlSeq']) {
+      for (const value of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1', null]) {
+        expectCode(() => parseDesktopRoomSessionRequest('config', patch(sample, `request/${key}`, value), owner), 'ROOM_DESKTOP_PROTOCOL_INVALID');
+      }
+    }
+    for (const key of ['url', 'headers', 'cookie', 'role', 'operationId']) {
+      expectCode(() => parseDesktopRoomSessionRequest('config', patch(sample, `request/${key}`, 'secret-canary'), owner), 'ROOM_DESKTOP_PROTOCOL_INVALID');
+    }
+    expectCode(() => parseDesktopRoomSessionRequest('config', sample, owner + 1), 'ROOM_DESKTOP_OWNER_MISMATCH');
+    expectCode(() => parseDesktopRoomSessionResponse('config', operationFixtures.config.success, owner + 1), 'ROOM_DESKTOP_OWNER_MISMATCH');
+  });
+
+  it('applies the unchanged 64 KiB inner and 256 KiB response bounds to config', () => {
+    const request = ArenaRoomPublishConfigRequestSchema.parse(operationFixtures.config.request.request);
+    request.sharedConfig.materials = [];
+    for (let index = 0; index < 256; index += 1) {
+      request.sharedConfig.materials.push({ key: `host-local:config-${index}`, displayName: '\0'.repeat(200), source: 'host-local', type: 'material' });
+      if (jsonUtf8ByteLength(request) > DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes) {
+        request.sharedConfig.materials.pop(); break;
+      }
+    }
+    const padding = { key: 'host-local:config-padding', displayName: 'x', source: 'host-local' as const, type: 'material' as const };
+    request.sharedConfig.materials.push(padding);
+    while (jsonUtf8ByteLength(request) + 6 <= 65_536 && padding.displayName.length < 200) padding.displayName += '\0';
+    while (jsonUtf8ByteLength(request) < 65_536 && padding.key.length < 256) padding.key += 'x';
+    const envelope = { ...operationFixtures.config.request, request };
+    expect(jsonUtf8ByteLength(request)).toBe(65_536);
+    expect(parseDesktopRoomSessionRequest('config', envelope, owner).request).toEqual(request);
+    padding.key += 'x';
+    expect(ArenaRoomPublishConfigRequestSchema.safeParse(request).success).toBe(true);
+    expectCode(() => parseDesktopRoomSessionRequest('config', envelope, owner), 'ROOM_PAYLOAD_TOO_LARGE');
+
+    const response = DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS.config.parse(operationFixtures.config.success);
+    const member = response.result.snapshot.members[1]!;
+    member.joinedAt = '2026-10-12T00:00:00.0Z';
+    member.joinedAt = `2026-10-12T00:00:00.${'0'.repeat(262_144 - jsonUtf8ByteLength(response) + 1)}Z`;
+    expect(jsonUtf8ByteLength(response)).toBe(262_144);
+    expect(parseDesktopRoomSessionResponse('config', response, owner)).toEqual(response);
+    member.joinedAt = member.joinedAt.replace(/Z$/u, '0Z');
+    expect(ArenaRoomSessionResponseSchema.safeParse(response.result).success).toBe(true);
+    expectCode(() => parseDesktopRoomSessionResponse('config', response, owner), 'ROOM_DESKTOP_RESPONSE_TOO_LARGE');
   });
 
   it('counts the entire compact outer envelope, not only the original DTO', () => {
@@ -300,6 +370,6 @@ describe('Desktop Native Room session opt-in contract', () => {
     }
     expectCode(() => parseDesktopRoomSessionRequest('join', {}, owner), 'ROOM_DESKTOP_PROTOCOL_INVALID');
     expectCode(() => parseDesktopRoomSessionResponse('ticket', fixture.operations.session.success, owner), 'ROOM_DESKTOP_RESPONSE_INVALID');
-    expectCode(() => parseDesktopRoomSessionResponse('config' as DesktopRoomSessionOperation, {}, owner), 'ROOM_DESKTOP_OPERATION_UNSUPPORTED');
+    expectCode(() => parseDesktopRoomSessionResponse('kick' as DesktopRoomSessionOperation, {}, owner), 'ROOM_DESKTOP_OPERATION_UNSUPPORTED');
   });
 });
