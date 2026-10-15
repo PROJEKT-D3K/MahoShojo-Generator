@@ -202,6 +202,24 @@ describe('Desktop Scenario route and session UI (native adapter mock)', () => {
     expect(mocks.scrollResult).toHaveBeenCalledTimes(1);
   });
 
+  it('groups structured saving before export and keeps exactly one native download', async () => {
+    window.localStorage.setItem(SCENARIO_DRAFT_KEY, JSON.stringify(storedDraft({ '故事发生的场景是怎样的？': '钟楼' })));
+    await mount(); await click('生成情景');
+    const actions = container.querySelector('[data-testid="scenario-result-actions"]')!;
+    expect([...actions.querySelectorAll('section')].map((section) => section.getAttribute('aria-label'))).toEqual(['保存数据卡', '保存原始数据']);
+    const saving = actions.querySelector('[aria-label="保存数据卡"]')!;
+    expect(saving.querySelector('[data-testid="cloud-card-action-buttons"]')).not.toBeNull();
+    expect(saving.textContent).toContain('保存到本地卡库');
+    const exports = actions.querySelector('[aria-label="保存原始数据"]')!;
+    expect([...exports.querySelectorAll('button')].filter((item) => item.textContent?.includes('下载'))).toHaveLength(1);
+    expect(exports.querySelector('textarea')).toBeNull();
+    expect(exports.querySelector('[title="按 UTF-8 字节估算，对照本地卡单条记录上限"]')).not.toBeNull();
+    expect(exports.textContent).toContain('4096.0KB');
+    await click('💾 下载设定文件');
+    expect(mocks.download).toHaveBeenCalledExactlyOnceWith('情景_雨后采访.json', JSON.stringify(scenarioCard, null, 2));
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+
   it('restores a general scenario onto one surface without changing Markdown or export bytes', async () => {
     const general = { templateId: '通用情景', title: '雨夜', content: '# 雨夜\n\n保留 Markdown 正文' };
     window.localStorage.setItem(SCENARIO_DRAFT_KEY, JSON.stringify({
@@ -212,6 +230,7 @@ describe('Desktop Scenario route and session UI (native adapter mock)', () => {
     const result = container.querySelector('[aria-label="生成结果"]')!;
     expect(result.classList.contains('card')).toBe(true);
     expect(result.querySelector('.card')).toBeNull();
+    expect(result.querySelector('[data-testid="scenario-result-actions"], [data-testid="cloud-card-action-buttons"], [data-testid="cloud-card-action-feedback"]')).toBeNull();
     expect(result.querySelector('h2')?.textContent).toBe('雨夜');
     expect(result.querySelectorAll('h2')[1]?.textContent).toBe('雨夜');
     expect(result.textContent).toContain('保留 Markdown 正文');
@@ -234,6 +253,7 @@ describe('Desktop Scenario route and session UI (native adapter mock)', () => {
     const payload = JSON.stringify(scenarioCard, null, 2);
     expect(text.value).toBe(payload);
     expect(text.readOnly).toBe(true);
+    expect(text.closest('.md\\:flex-row')).toBeNull();
     expect([...exports.querySelectorAll('button')].filter((item) => item.textContent?.includes('下载'))).toHaveLength(1);
     expect(exports.textContent).not.toContain('💾 下载设定文件');
     await click('下载 JSON 文件');
@@ -490,7 +510,7 @@ it('reports a failed Scenario clear persistence without losing the generated res
   const raw = JSON.stringify({ ...storedDraft({ '故事发生的场景是怎样的？': '旧回答' }), generalScenarioDraft: general, output: { mode: 'hosted-json', cardKind: 'scenario', card: { ...scenarioCard, metadata: { ...scenarioCard.metadata, signature: 'old-signed' } }, rawText: 'raw', phase: 'completed' } });
   window.localStorage.setItem(SCENARIO_DRAFT_KEY, raw); await mount();
   const original = Storage.prototype.setItem;
-  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) { if (key === SCENARIO_DRAFT_KEY) throw new Error('quota'); return original.call(this, key, value); });
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) { if (key === SCENARIO_DRAFT_KEY) throw new Error('quota'); return original.call(this, key, value); });
   vi.mocked(window.confirm).mockReturnValue(true); await click('清空本地草稿');
   expect(container.textContent).toContain('自动保存暂不可用');
   expect(container.textContent).toContain('草稿写入失败');

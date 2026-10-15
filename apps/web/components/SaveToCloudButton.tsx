@@ -4,7 +4,7 @@ import SaveCardModal from './CharManager/SaveCardModal';
 import DataCardsModal from './CharManager/DataCardsModal';
 import { useAuth } from '@/lib/useAuth';
 import { authStorage, dataCardApi, type AuthData } from '@/lib/auth';
-import { ReplaceCardModal } from '@mahoshojo/ui-web/cloud-save';
+import { CloudCardActionButtons, ReplaceCardModal } from '@mahoshojo/ui-web/cloud-save';
 import { quickCheck } from '@/lib/sensitive-word-filter';
 import type { OnlineDataCardType, OwnedDataCardReplacementTarget } from '@mahoshojo/contracts/data-cards';
 
@@ -20,6 +20,7 @@ interface SaveToCloudButtonProps {
   defaultIsPublic?: number;
   className?: string;
   style?: React.CSSProperties;
+  presentation?: 'generation-result';
 }
 
 // 检测是否为情景文件
@@ -41,7 +42,8 @@ export default function SaveToCloudButton({
   defaultDescription,
   defaultIsPublic = 0,
   className = "generate-button",
-  style = {}
+  style = {},
+  presentation,
 }: SaveToCloudButtonProps) {
   const router = useRouter();
   const { isAuthenticated, user, authSource } = useAuth();
@@ -361,54 +363,64 @@ export default function SaveToCloudButton({
   const effectiveData = draftContext.current === context ? preparedData : data;
   const canOperate = Boolean(data || getData);
 
+  const handleReplaceClick = () => {
+    if (busy.current) return;
+    if (uncertainRef.current) { setShowSaveModal(true); return; }
+    if (replacementUnknown.current) { setReplacementOpen(true); return; }
+    if (!isAuthenticated) {
+      alert('请先登录后再替换到云端');
+      return;
+    }
+    void (async () => {
+      const ownerContext = context;
+      const preparation = operation.current + 1;
+      let hadResolveError = false;
+      const resolvedData = await resolveData().catch((error) => {
+        hadResolveError = true;
+        console.error("准备替换数据失败:", error);
+        alert(error instanceof Error ? error.message : '准备替换数据失败。');
+        return null;
+      });
+      if (!mounted.current || ownerContext !== latestContext.current || preparation !== operation.current) return;
+      if (!resolvedData) {
+        if (!hadResolveError) {
+          alert('没有可替换的数据。');
+        }
+        return;
+      }
+      setShowDataCardsForReplace(true);
+      setReplaceEditingCard(null);
+      setReplaceCurrentPage(1);
+      void loadUserDataCards();
+    })();
+  };
+
   return (
     <>
-      <button
-        onClick={() => void handleSaveClick()}
-        className={className}
-        style={style}
-        disabled={!canOperate || isPreparing || isSaving} // 如果没有数据且无法动态准备，则禁用
-      >
-        {isPreparing ? '准备中...' : buttonText}
-      </button>
-      <button
-        onClick={() => {
-          if (busy.current) return;
-          if (uncertainRef.current) { setShowSaveModal(true); return; }
-          if (replacementUnknown.current) { setReplacementOpen(true); return; }
-          if (!isAuthenticated) {
-            alert('请先登录后再替换到云端');
-            return;
-          }
-          void (async () => {
-            const ownerContext = context;
-            const preparation = operation.current + 1;
-            let hadResolveError = false;
-            const resolvedData = await resolveData().catch((error) => {
-              hadResolveError = true;
-              console.error("准备替换数据失败:", error);
-              alert(error instanceof Error ? error.message : '准备替换数据失败。');
-              return null;
-            });
-            if (!mounted.current || ownerContext !== latestContext.current || preparation !== operation.current) return;
-            if (!resolvedData) {
-              if (!hadResolveError) {
-                alert('没有可替换的数据。');
-              }
-              return;
-            }
-            setShowDataCardsForReplace(true);
-            setReplaceEditingCard(null);
-            setReplaceCurrentPage(1);
-            void loadUserDataCards();
-          })();
-        }}
-        className={`${className} ml-2`}
-        style={{ ...style, backgroundColor: '#f59e0b', backgroundImage: 'linear-gradient(to right, #f59e0b, #f97316)' }}
-        disabled={!canOperate || isPreparing || isSaving}
-      >
-        替换已有
-      </button>
+      {presentation === 'generation-result' ? <CloudCardActionButtons
+        onSave={() => void handleSaveClick()}
+        onReplace={handleReplaceClick}
+        saveLabel={isPreparing ? '准备中...' : buttonText}
+        saveDisabled={!canOperate || isPreparing || isSaving}
+        replaceDisabled={!canOperate || isPreparing || isSaving}
+      /> : <>
+        <button
+          onClick={() => void handleSaveClick()}
+          className={className}
+          style={style}
+          disabled={!canOperate || isPreparing || isSaving} // 如果没有数据且无法动态准备，则禁用
+        >
+          {isPreparing ? '准备中...' : buttonText}
+        </button>
+        <button
+          onClick={handleReplaceClick}
+          className={`${className} ml-2`}
+          style={{ ...style, backgroundColor: '#f59e0b', backgroundImage: 'linear-gradient(to right, #f59e0b, #f97316)' }}
+          disabled={!canOperate || isPreparing || isSaving}
+        >
+          替换已有
+        </button>
+      </>}
 
       <SaveCardModal
         isOpen={showSaveModal}

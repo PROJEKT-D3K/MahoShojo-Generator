@@ -17,14 +17,13 @@ let root: Root; let container: HTMLDivElement;
 const data = { name: '当前结果', extra: { full: true } };
 const fetcher = vi.fn();
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-const render = (value: unknown = data) => act(async () => { root.render(<SaveToCloudButton data={value} />); await flush(); });
 const button = (label: string) => [...document.querySelectorAll('button')].find((item) => item.textContent === label)!;
 const click = (label: string) => act(async () => { expect(button(label), label).toBeTruthy(); button(label).click(); await flush(); });
 const choose = async () => { await click('替换已有'); await click('选择目标'); };
 const writes = () => fetcher.mock.calls.filter(([, init]) => init?.method === 'PUT');
 const deferred = () => { let resolve!: (response: Response) => void; const promise = new Promise<Response>((yes) => { resolve = yes; }); return { promise, resolve }; };
 beforeEach(() => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.user = { id: 7 }; mocks.check.mockReset().mockResolvedValue({ hasSensitiveWords: false });
   vi.spyOn(authStorage, 'getAuth').mockResolvedValue(auth); vi.spyOn(dataCardApi, 'getUserCapacity').mockResolvedValue({ capacity: 20, usedSlots: 2 });
   fetcher.mockReset().mockImplementation(async (_url, init) => Response.json(init?.method === 'PUT' ? ack : ready)); vi.stubGlobal('fetch', fetcher);
@@ -32,7 +31,8 @@ beforeEach(() => {
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
-describe('Web result actual owned API and shared confirmation', () => {
+describe.each([undefined, 'generation-result'] as const)('Web result actual owned API and shared confirmation (%s)', (presentation) => {
+  const render = (value: unknown = data) => act(async () => { root.render(<SaveToCloudButton presentation={presentation} data={value} />); await flush(); });
   test('selection previews owner/version then explicit confirm replaces frozen data', async () => {
     await render(); await choose(); expect(writes()).toHaveLength(0); expect(document.body.textContent).toContain('已有待审核版本');
     await click('确认替换'); expect(writes()).toHaveLength(1);
@@ -82,10 +82,10 @@ describe('Web result actual owned API and shared confirmation', () => {
   test.each(['source', 'account'])('late getData preparation gives no stale %s alert or picker', async (kind) => {
     let finish!: (data: unknown) => void;
     const getData = () => new Promise((resolve) => { finish = resolve; });
-    await act(async () => { root.render(<SaveToCloudButton data={data} getData={getData} />); await flush(); });
+    await act(async () => { root.render(<SaveToCloudButton presentation={presentation} data={data} getData={getData} />); await flush(); });
     await click('替换已有');
     if (kind === 'account') mocks.user = { id: 8 };
-    await act(async () => { root.render(<SaveToCloudButton data={kind === 'source' ? { name: '新结果' } : data} getData={getData} />); await flush(); });
+    await act(async () => { root.render(<SaveToCloudButton presentation={presentation} data={kind === 'source' ? { name: '新结果' } : data} getData={getData} />); await flush(); });
     await act(async () => { finish(data); await flush(); });
     expect(window.alert).not.toHaveBeenCalled(); expect(button('选择目标')).toBeUndefined(); expect(fetcher).not.toHaveBeenCalled();
   });

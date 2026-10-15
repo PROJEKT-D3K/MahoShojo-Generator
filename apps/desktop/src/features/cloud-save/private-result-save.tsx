@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { SaveCardModal, ReplaceCardModal } from '@mahoshojo/ui-web/cloud-save';
+import { CloudCardActionButtons, CloudCardActionFeedback, SaveCardModal, ReplaceCardModal } from '@mahoshojo/ui-web/cloud-save';
 import type { OnlineDataCardType, OwnedDataCardReplacementTarget } from '@mahoshojo/contracts/data-cards';
 import { useDesktopCloudSession } from '../account/use-desktop-cloud-session';
 import { createCloudCard, readPrivateCloudCapacity, readCloudReplaceTarget, replaceCloudCard } from '../../platform/private-cloud-save';
@@ -14,6 +14,7 @@ interface DesktopCloudCardActionsBaseProps {
   isBlocked?: () => boolean;
   disabled?: boolean;
   className?: string;
+  presentation?: 'generation-result';
   invokeFn?: InvokeFn;
   defaultName?: string;
   defaultDescription?: string;
@@ -54,7 +55,7 @@ function InternallyGuardedCloudCardActions(props: CloudCardScopeProps & { pendin
   const guard = useLeaveGuard(() => props.pending.current, '正在保存云端数据卡，请等待响应后再离开；本地结果保留。');
   return <DesktopCloudCardActionsView {...props} guard={guard} />;
 }
-function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, disabled = false, className, invokeFn = invoke, userId, isCurrent, canSave, onBusyChange,
+function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, disabled = false, className, presentation, invokeFn = invoke, userId, isCurrent, canSave, onBusyChange,
   defaultName, defaultDescription, manageOpen, onManageClose, onSelectCard, showManageButton = false, pending, guard }: CloudCardViewProps) {
   const [saveOpen, setSaveOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
@@ -159,15 +160,29 @@ function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, 
       }
     }}>{uncertain === 'create' ? '我已检查，仍要再次新建（可能重复）' : '我已检查，重新选择替换目标'}</button>
   </div> : conflict ? <button onClick={() => { if (!pending.current) { setTarget(null); setReplaceOpen(false); setLibraryPurpose('replace'); setLibraryOpen(true); } }}>重新选择替换目标</button> : undefined;
-  return <>
-    {data != null && <>
-      <button className={className} disabled={!guard.ready || disabled || saving || preparing || created} onClick={showSave}>{created ? '已保存到云端' : '保存到云端'}</button>
-      <button className={className} disabled={!guard.ready || disabled || saving || preparing} onClick={showReplace}>替换已有</button>
-    </>}
-    {showManageButton && <button disabled={saving || preparing} onClick={() => { if (available()) { setLibraryPurpose('manage'); setLibraryOpen(true); } }}>我的云端卡</button>}
+  const feedback = <>
     {status && <p role="status">{status}</p>}
     {guard.message && <p role="alert">{guard.message}</p>}
     {!saveOpen && !replaceOpen && error && <p role="alert">{error}</p>}
+  </>;
+  return <>
+    {presentation === 'generation-result' ? <div className="space-y-2">
+      {data != null && <CloudCardActionButtons
+        onSave={showSave} onReplace={showReplace}
+        saveLabel={created ? '已保存到云端' : '保存到云端'}
+        saveDisabled={!guard.ready || disabled || saving || preparing || created}
+        replaceDisabled={!guard.ready || disabled || saving || preparing}
+      />}
+      {showManageButton && <button disabled={saving || preparing} onClick={() => { if (available()) { setLibraryPurpose('manage'); setLibraryOpen(true); } }}>我的云端卡</button>}
+      <CloudCardActionFeedback>{feedback}</CloudCardActionFeedback>
+    </div> : <>
+      {data != null && <>
+        <button className={className} disabled={!guard.ready || disabled || saving || preparing || created} onClick={showSave}>{created ? '已保存到云端' : '保存到云端'}</button>
+        <button className={className} disabled={!guard.ready || disabled || saving || preparing} onClick={showReplace}>替换已有</button>
+      </>}
+      {showManageButton && <button disabled={saving || preparing} onClick={() => { if (available()) { setLibraryPurpose('manage'); setLibraryOpen(true); } }}>我的云端卡</button>}
+      {feedback}
+    </>}
     <SaveCardModal isOpen={saveOpen} onClose={() => { if (!pending.current) { capacityEpoch.current++; setSaveOpen(false); } }} onSave={() => void save(false)}
       name={name} description={description} isPublic={isPublic} onNameChange={setName} onDescriptionChange={setDescription} onPublicChange={(value) => setPublic(value === 1 ? 1 : 0)}
       error={error} isSaving={saving} submitDisabled={disabled || Boolean(uncertain) || created} data={frozenData.current}

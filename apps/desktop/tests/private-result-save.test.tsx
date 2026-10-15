@@ -12,7 +12,6 @@ let root: Root; let container: HTMLDivElement;
 const invoke = vi.fn(); const onBusyChange = vi.fn();
 const data = { name: '结果A', signature: 'original' };
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-const render = (value: unknown = data, cardType: 'character' | 'scenario' = 'character') => act(async () => { root.render(<PrivateResultSave data={value} cardType={cardType} invokeFn={invoke} onBusyChange={onBusyChange} />); await flush(); });
 const button = (text: string) => [...document.querySelectorAll('button')].find((node) => node.textContent === text)!;
 const click = (text: string) => act(async () => { button(text).click(); await flush(); });
 const deferred = () => { let resolve!: (v: unknown) => void; const promise = new Promise((yes) => { resolve = yes; }); return { promise, resolve }; };
@@ -26,7 +25,22 @@ beforeEach(() => {
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
 });
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); });
-describe('private result cloud-save UI', () => {
+describe.each([undefined, 'generation-result'] as const)('private result cloud-save UI (%s)', (presentation) => {
+  const render = (value: unknown = data, cardType: 'character' | 'scenario' = 'character') => act(async () => { root.render(<PrivateResultSave presentation={presentation} data={value} cardType={cardType} invokeFn={invoke} onBusyChange={onBusyChange} />); await flush(); });
+  it('keeps feedback outside the shared button row and modals outside its presentation', async () => {
+    await render();
+    const actions = container.querySelector('[data-testid="cloud-card-action-buttons"]');
+    expect(Boolean(actions)).toBe(presentation === 'generation-result');
+    await click('保存到云端');
+    expect(actions?.querySelector('[role="dialog"]')).toBeFalsy();
+    await click('保存');
+    if (presentation === 'generation-result') {
+      expect(actions?.children).toHaveLength(2);
+      expect(actions?.querySelector('[role="status"], [role="alert"]')).toBeNull();
+      const status = container.querySelector('[data-testid="cloud-card-action-feedback"] [role="status"]');
+      expect(status?.textContent).toContain('本地结果保持不变');
+    }
+  });
   it('opens actual shared private-only fields, sends nothing until explicit save', async () => {
     await render(); await click('保存到云端'); expect(document.querySelector<HTMLInputElement>('input[type=checkbox]')?.checked).toBe(false); expect(writes()).toHaveLength(0);
     await click('保存'); expect(writes()).toHaveLength(1); expect(writes()[0][1].request.body).toMatchObject({ name: '结果A', isPublic: 0, data });
@@ -57,7 +71,7 @@ describe('private result cloud-save UI', () => {
   });
   it('checks host busy synchronously again at submit instead of trusting rendered disabled', async () => {
     let blocked = false;
-    await act(async () => { root.render(<PrivateResultSave data={data} invokeFn={invoke} isBlocked={() => blocked} />); await flush(); });
+    await act(async () => { root.render(<PrivateResultSave presentation={presentation} data={data} invokeFn={invoke} isBlocked={() => blocked} />); await flush(); });
     await click('保存到云端'); blocked = true; await click('保存'); expect(writes()).toHaveLength(0);
     blocked = false; await click('保存'); expect(writes()).toHaveLength(1);
   });

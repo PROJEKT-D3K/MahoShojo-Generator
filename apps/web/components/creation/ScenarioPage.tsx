@@ -48,6 +48,7 @@ import {
   GeneralScenarioEditor,
   ScenarioResultSurface,
   ScenarioResultContent,
+  ScenarioResultActions,
   ScenarioTitleField,
   ScenarioQuestionFields,
   ScenarioBlankFields,
@@ -594,22 +595,20 @@ export const ScenarioPage: React.FC = () => {
               <ScenarioResultSurface label="结构化情景结果">
                 <h2 className="text-2xl font-bold text-center mb-4">{resultData.title}</h2>
                 <ScenarioResultContent data={resultData} />
-                <div className="flex flex-col md:flex-row justify-center gap-2 mt-6">
-                  <button onClick={() => downloadJson(resultData)} className={`${generationActionClassNames.secondary} flex-1`}>
-                    下载情景文件
-                  </button>
-                  <SaveToCloudButton
+                <ScenarioResultActions
+                  saveActions={<SaveToCloudButton data={resultData} buttonText="保存到云端" presentation="generation-result" />}
+                  exportActions={<>
+                    <button onClick={() => downloadJson(resultData)} className={`${generationActionClassNames.secondary} flex-1`}>
+                      下载情景文件
+                    </button>
+                    <button onClick={() => copyToClipboard(resultData)} className={`${generationActionClassNames.secondary} flex-1`}>
+                      复制到剪贴板
+                    </button>
+                  </>}
+                  sizeIndicator={<JsonSizeIndicator
                     data={resultData}
-                    buttonText="保存到云端"
-                    className={`${generationActionClassNames.primary} flex-1`}
-                  />
-                  <button onClick={() => copyToClipboard(resultData)} className={`${generationActionClassNames.secondary} flex-1`}>
-                    复制到剪贴板
-                  </button>
-                </div>
-                <JsonSizeIndicator
-                  data={resultData}
-                  warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。"
+                    warningText="⚠️ 接近云端数据卡大小上限，保存/替换可能失败，请先精简数据。"
+                  />}
                 />
               </ScenarioResultSurface>
             </>

@@ -13,7 +13,12 @@ vi.mock('@/components/ai/ProviderCooldownNotice', () => ({ ProviderCooldownNotic
 vi.mock('@/components/Footer', () => ({ default: () => null }));
 vi.mock('@/components/AiProviderSelector', () => ({ default: () => null }));
 vi.mock('@/components/ai/AiReasoningPanel', () => ({ default: () => null }));
-vi.mock('@/components/SaveToCloudButton', () => ({ default: ({ data, className, style }: { data: unknown; className?: string; style?: React.CSSProperties }) => <button className={className} style={style} onClick={() => mocks.save(data)}>保存到云端</button> }));
+vi.mock('@/components/SaveToCloudButton', async () => {
+  const { CloudCardActionButtons } = await import('@mahoshojo/ui-web/cloud-save');
+  return { default: ({ data, className, style, presentation }: { data: unknown; className?: string; style?: React.CSSProperties; presentation?: string }) => presentation === 'generation-result'
+    ? <CloudCardActionButtons onSave={() => mocks.save(data)} onReplace={vi.fn()} />
+    : <button className={className} style={style} onClick={() => mocks.save(data)}>保存到云端</button> };
+});
 vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: mocks.download }));
 
 import { ScenarioPage } from '@/components/creation/ScenarioPage';

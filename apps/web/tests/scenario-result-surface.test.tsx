@@ -13,7 +13,7 @@ vi.mock('@/components/ai/ProviderCooldownNotice', () => ({ ProviderCooldownNotic
 vi.mock('@/components/Footer', () => ({ default: () => null }));
 vi.mock('@/components/AiProviderSelector', () => ({ default: () => null }));
 vi.mock('@/components/ai/AiReasoningPanel', () => ({ default: () => null }));
-vi.mock('@/components/SaveToCloudButton', () => ({ default: ({ data }: { data: unknown }) => <button onClick={() => mocks.save(data)}>保存到云端</button> }));
+vi.mock('@/components/SaveToCloudButton', () => ({ default: ({ data, presentation }: { data: unknown; presentation?: string }) => <button data-cloud-presentation={presentation} onClick={() => mocks.save(data)}>保存到云端</button> }));
 vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: mocks.download }));
 
 import { ScenarioPage } from '@/components/creation/ScenarioPage';
@@ -44,6 +44,14 @@ it('keeps structured results and the general editor in separate shared surfaces 
   await act(async () => generate.click());
   const output = container.querySelector('[aria-label="结构化情景结果"]')!;
   expect(output.querySelector('h2')?.textContent).toBe(structured.title);
+  const actions = output.querySelector('[data-testid="scenario-result-actions"]')!;
+  expect([...actions.querySelectorAll('section')].map((section) => section.getAttribute('aria-label'))).toEqual(['保存数据卡', '保存原始数据']);
+  expect(actions.querySelector('[data-cloud-presentation="generation-result"]')).not.toBeNull();
+  expect(editor.querySelector('[data-testid="scenario-result-actions"], [data-cloud-presentation]')).toBeNull();
+  expect(actions.querySelector('[aria-label="保存数据卡"]')?.textContent).toContain('保存到云端');
+  expect(actions.querySelector('[aria-label="保存原始数据"]')?.textContent).toContain('下载情景文件');
+  expect(actions.querySelector('[aria-label="保存原始数据"]')?.textContent).toContain('1024.0KB');
+
   expect(output.querySelector('pre')?.textContent).toBe(JSON.stringify(structured, null, 2));
   expect(output.querySelector('details')).not.toBeNull();
   expect(output.querySelector('summary')?.textContent).toBe('完整 JSON（技术视图）');

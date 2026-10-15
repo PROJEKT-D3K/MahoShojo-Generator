@@ -16,11 +16,10 @@ vi.mock('@/lib/auth', () => ({ authStorage: { getAuth: mocks.getAuth }, dataCard
 vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: mocks.check }));
 vi.mock('@/components/CharManager/SaveCardModal', () => ({ default: (props: any) => { mocks.modal = props; return props.isOpen ? <div data-modal>{props.supplementaryContent}</div> : null; } }));
 vi.mock('@/components/CharManager/DataCardsModal', () => ({ default: () => null }));
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
 let root: Root;
 let container: HTMLDivElement;
-const render = async (props: any = {}) => act(async () => { root.render(<SaveToCloudButton data={{ name: 'result' }} {...props} />); });
 const open = async () => act(async () => { container.querySelector('button')!.click(); });
 const submit = async () => act(async () => { await mocks.modal.onSave(); });
 beforeEach(() => {
@@ -35,7 +34,22 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
-describe('Web explicit create lifecycle', () => {
+describe.each([undefined, 'generation-result'] as const)('Web explicit create lifecycle (%s)', (presentation) => {
+  const render = async (props: any = {}) => act(async () => { root.render(<SaveToCloudButton presentation={presentation} data={{ name: 'result' }} {...props} />); });
+  it('opts in to common button hierarchy without changing legacy consumers', async () => {
+    await render({ className: 'legacy-cloud-action', style: { color: 'purple' } });
+    const [save, replace] = [...container.querySelectorAll('button')];
+    if (presentation === 'generation-result') {
+      expect(container.querySelector('[data-testid="cloud-card-action-buttons"]')?.children).toHaveLength(2);
+      expect(save.classList.contains('ui-web-generation-action--primary')).toBe(true);
+      expect(replace.classList.contains('ui-web-generation-action--secondary')).toBe(true);
+      expect(replace.getAttribute('style')).toBeNull();
+    } else {
+      expect(container.querySelector('[data-testid="cloud-card-action-buttons"]')).toBeNull();
+      expect(save.className).toBe('legacy-cloud-action');
+      expect(replace.style.backgroundImage).toContain('linear-gradient');
+    }
+  });
   it('guards double open and late getData across source changes', async () => {
     const pending = deferred<any>(); const getData = vi.fn(() => pending.promise);
     await render({ getData });

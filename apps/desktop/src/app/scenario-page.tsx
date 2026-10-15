@@ -25,6 +25,7 @@ import {
   GeneralScenarioEditor,
   ScenarioResultSurface,
   ScenarioResultContent,
+  ScenarioResultActions,
   ScenarioTitleField,
   ScenarioQuestionFields,
   ScenarioBlankFields,
@@ -250,6 +251,27 @@ function ScenarioForm({ session }: { session: ScenarioSession }) {
       setEditorSaving(false);
     }
   };
+  const cloudSaveAction = resultCardType && <PrivateResultSave externalLeaveGuard={guard} data={card} cardType={resultCardType} onBusyChange={onCloudSavingChange} isBlocked={() => session.isBusy() || aiStore.isPreparingGeneration() || editorSavingRef.current} disabled={!guard.ready || busy} className={generationActionClassNames.primary} presentation={cardKind === 'scenario' ? 'generation-result' : undefined} />;
+  const localSaveAction = <button className={generationActionClassNames.primary} disabled={!guard.ready || busy || state.saveStatus === 'saved' || state.saveStatus === 'already-present'} onClick={() => { if (guard.ready) void session.saveResult(); }}>{state.saving ? '正在保存…' : '保存到本地卡库'}</button>;
+  const localSaveFeedback = <>
+    {state.saveStatus === 'saved' && <p role="status">已保存到本地卡库。</p>}
+    {state.saveStatus === 'already-present' && <p role="status">本地卡库已存在相同内容，原记录保持不变。</p>}
+    {state.saveError && <p role="alert">{state.saveError}</p>}
+  </>;
+  const jsonExportControl = <SaveJsonButton
+    data={card}
+    mode={jsonSaveMode}
+    recommendedMode={recommended.jsonSaveMode}
+    resolveFileName={() => resultJsonName}
+    downloadJson={downloadTextFile}
+  />;
+  const copyResultAction = <button className={actionClass} onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(card, null, 2)).then(() => setActionInfo('✅ 数据卡 JSON 已复制到剪贴板')).catch(() => setActionError('复制失败，请手动选择 JSON 内容后复制。')); }}>复制到剪贴板</button>;
+  const resultSizeIndicator = <JsonSizeIndicator
+    data={card}
+    maxBytes={MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES}
+    hintText="按 UTF-8 字节估算，对照本地卡单条记录上限"
+    warningText="⚠️ 接近本地卡单条上限（4 MiB），保存到本地卡库可能失败，请先精简数据。"
+  />;
   return (
     <ScenarioPageLayout
       onNavigate={(href) => navigateByProductHref(router, href)}
@@ -346,31 +368,29 @@ function ScenarioForm({ session }: { session: ScenarioSession }) {
                       <ScenarioResultContent data={card} />
                     </>
                   )}
-                  {resultCardType && <PrivateResultSave externalLeaveGuard={guard} data={card} cardType={resultCardType} onBusyChange={onCloudSavingChange} isBlocked={() => session.isBusy() || aiStore.isPreparingGeneration() || editorSavingRef.current} disabled={!guard.ready || busy} className={generationActionClassNames.primary} />}
-                  <button className={generationActionClassNames.primary} disabled={!guard.ready || busy || state.saveStatus === 'saved' || state.saveStatus === 'already-present'} onClick={() => { if (guard.ready) void session.saveResult(); }}>{state.saving ? '正在保存…' : '保存到本地卡库'}</button>
-                  {state.saveStatus === 'saved' && <p role="status">已保存到本地卡库。</p>}
-                  {state.saveStatus === 'already-present' && <p role="status">本地卡库已存在相同内容，原记录保持不变。</p>}
-                  {state.saveError && <p role="alert">{state.saveError}</p>}
+                  {cardKind === 'scenario' ? <ScenarioResultActions
+                    saveActions={<>{cloudSaveAction}{localSaveAction}</>}
+                    saveFeedback={localSaveFeedback}
+                    exportActions={<>
+                      {jsonSaveMode === 'download' ? jsonExportControl : <button className={actionClass} onClick={() => downloadTextFile(resultJsonName, JSON.stringify(card, null, 2))}>下载 JSON 文件</button>}
+                      {copyResultAction}
+                    </>}
+                    exportControl={jsonSaveMode === 'text' ? jsonExportControl : undefined}
+                    sizeIndicator={resultSizeIndicator}
+                  /> : <>
+                    {cloudSaveAction}
+                    {localSaveAction}
+                    {localSaveFeedback}
                   <section aria-label="保存原始数据" className="mt-3">
                     <h3 className="text-lg font-medium">保存数据卡</h3>
                     <div className="mt-3 flex flex-col gap-3">
-                      <SaveJsonButton
-                        data={card}
-                        mode={jsonSaveMode}
-                        recommendedMode={recommended.jsonSaveMode}
-                        resolveFileName={() => resultJsonName}
-                        downloadJson={downloadTextFile}
-                      />
+                      {jsonExportControl}
                       {jsonSaveMode === 'text' && <button className={actionClass} onClick={() => downloadTextFile(resultJsonName, JSON.stringify(card, null, 2))}>下载 JSON 文件</button>}
-                      <button className={actionClass} onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(card, null, 2)).then(() => setActionInfo('✅ 数据卡 JSON 已复制到剪贴板')).catch(() => setActionError('复制失败，请手动选择 JSON 内容后复制。')); }}>复制到剪贴板</button>
+                      {copyResultAction}
                     </div>
-                    <JsonSizeIndicator
-                      data={card}
-                      maxBytes={MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES}
-                      hintText="按 UTF-8 字节估算，对照本地卡单条记录上限"
-                      warningText="⚠️ 接近本地卡单条上限（4 MiB），保存到本地卡库可能失败，请先精简数据。"
-                    />
+                    {resultSizeIndicator}
                   </section>
+                  </>}
                 </div>
               </ScenarioResultSurface>}
             </div>

@@ -7,3 +7,4 @@ export type { DataCardsModalHost } from './host';
 export { default as EditCardForm } from './EditCardForm';
 export { ReplaceCardModal } from './ReplaceCardModal';
 export type { ReplaceCardModalProps, ReplaceCardModalTarget } from './ReplaceCardModal';
+export { CloudCardActionButtons, CloudCardActionFeedback, type CloudCardActionButtonsProps } from './CloudCardActionButtons';
