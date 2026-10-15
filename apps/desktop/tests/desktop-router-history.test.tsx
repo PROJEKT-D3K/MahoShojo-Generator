@@ -56,6 +56,7 @@ let root: Root;
 beforeEach(() => {
   // jsdom 没有布局或滚动实现；本文件只验证路由状态，滚动由真实 WebView 验收。
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+  HTMLElement.prototype.scrollTo = vi.fn();
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   window.location.hash = '';
   container = document.createElement('div');
@@ -166,6 +167,7 @@ describe('desktop router keeps the product path inside the hash', () => {
     expect(hrefs).toContain('#/settings');
     expect(hrefs).toContain('#/battle');
     expect(hrefs).toContain('#/magic-tea-party');
+    expect(hrefs).not.toContain('#/magic-tavern');
     // 首页保持 Web 目录：由 /battle 内的高级入口进入 /arena。
     expect(hrefs).not.toContain('#/arena');
     // 页脚站外链接经 onNavigateExternal 渲染为真实 <a href>（点击被拦截走
@@ -231,6 +233,57 @@ describe('desktop router keeps the product path inside the hash', () => {
       expect(frame?.classList.contains('magic-background-white'), `${to} 应有页面背景`).toBe(true);
       expect(frame?.querySelector('[data-testid="encyclopedia-page-card"]')).not.toBeNull();
     }
+  });
+});
+
+describe('legacy tea-party links under hash history', () => {
+  it.each(['/magic-tavern', '/magic-tavern/'])(
+    'replaces a cold %s deep link while preserving query and fragment',
+    async (path) => {
+      const query = 'session=%E6%98%9F%E8%A6%8B%F0%9F%98%80&mode=local&empty=';
+      const fragment = '%E7%AC%AC%E4%BA%8C%E7%AB%A0%F0%9F%98%80';
+      window.history.replaceState(null, '', `/#${path}?${query}#${fragment}`);
+      const historyLength = window.history.length;
+      const router = await mount();
+
+      expect(router.state.location.pathname).toBe('/magic-tea-party');
+      expect(router.state.location.search).toEqual({ session: '星見😀', mode: 'local', empty: '' });
+      expect(getRouteFragmentFromHashHistory(router.state.location.href)).toBe(fragment);
+      expect(window.location.hash).toBe(`#/magic-tea-party?${query}#${fragment}`);
+      expect(window.location.pathname).toBe('/');
+      expect(window.history.length).toBe(historyLength);
+      expect(container.textContent).toContain('本地文本茶会');
+    },
+  );
+
+  it('keeps repeated legacy visits canonical and skips the alias on back/forward', async () => {
+    const router = await mount();
+    const historyLength = window.history.length;
+    for (const session of ['第一场', '第二场']) {
+      await act(async () => {
+        await router.navigate({ to: '/magic-tavern', search: { session }, hash: '角色😀' });
+      });
+      await settle();
+      expect(router.state.location.pathname).toBe('/magic-tea-party');
+      expect(router.state.location.search).toEqual({ session });
+      expect(decodeURIComponent(getRouteFragmentFromHashHistory(router.state.location.href))).toBe('角色😀');
+    }
+    expect(window.history.length).toBe(historyLength + 2);
+
+    await act(async () => { await router.navigate({ to: '/settings' }); });
+    await settle();
+    window.history.back(); await settle();
+    expect(router.state.location.pathname).toBe('/magic-tea-party');
+    expect(router.state.location.search).toEqual({ session: '第二场' });
+    window.history.back(); await settle();
+    expect(router.state.location.pathname).toBe('/magic-tea-party');
+    expect(router.state.location.search).toEqual({ session: '第一场' });
+    window.history.back(); await settle();
+    expect(router.state.location.pathname).toBe('/');
+    window.history.forward(); await settle();
+    expect(router.state.location.pathname).toBe('/magic-tea-party');
+    expect(router.state.location.search).toEqual({ session: '第一场' });
+    expect(window.location.hash).not.toContain('/magic-tavern');
   });
 });
 

@@ -45,6 +45,11 @@ describe('desktop capability snapshot', () => {
     for (const href of DELIVERED_ROUTES) {
       expect(readCapability(snapshot, href), `${href} 应当可用`).toEqual({ kind: 'available' });
     }
+    const availableInternal = Object.entries(snapshot)
+      .filter(([href, availability]) => href.startsWith('/') && availability.kind === 'available')
+      .map(([href]) => href);
+    expect(availableInternal.sort()).toEqual([...DELIVERED_ROUTES].sort());
+    expect(readCapability(snapshot, '/magic-tavern')).toEqual({ kind: 'available' });
   });
 
   it('marks undelivered internal product pages as not implemented rather than unknown', () => {

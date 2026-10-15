@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { Outlet, createRootRoute, createRoute, lazyRouteComponent, useLocation, useRouter } from '@tanstack/react-router';
+import { Outlet, createRootRoute, createRoute, lazyRouteComponent, redirect, useLocation, useRouter } from '@tanstack/react-router';
 import { BookOpen, FolderOpen, Home, Settings } from 'lucide-react';
 import { readCapability } from '@mahoshojo/ui-web/capability';
 import {
@@ -24,7 +24,7 @@ import { useDesktopConfig } from '../features/config/use-desktop-config';
 import { usePublicCachePolicySync } from '../features/public-cache/use-public-cache-policy-sync';
 import { ExternalLinksProvider, useExternalLinks } from '../features/external-links/external-links-provider';
 import { buildCapabilitySnapshot } from './capabilities';
-import { navigateByProductHref, resolveInternalHrefForHashHistory } from './hash-history-fragment';
+import { getRouteFragmentFromHashHistory, navigateByProductHref, resolveInternalHrefForHashHistory } from './hash-history-fragment';
 
 /**
  * `parseSearch` 会把 JSON 可解析的查询值物化成 number/boolean（`?q=429` → `429`），
@@ -446,6 +446,19 @@ const questionnaireEditorRoute = createRoute({ getParentRoute: () => rootRoute, 
 const cardForgeRoute = createRoute({ getParentRoute: () => rootRoute, path: '/card-forge', component: lazyRouteComponent(() => import('./card-forge-page'), 'DesktopCardForge') });
 const partyRoute = createRoute({ getParentRoute: () => rootRoute, path: '/character-party', component: lazyRouteComponent(() => import('./party-page'), 'DesktopParty') });
 const teaRoute = createRoute({ getParentRoute: () => rootRoute, path: '/magic-tea-party', component: lazyRouteComponent(() => import('./magic-tea-party-page')) });
+// 旧茶会深链只做导航兼容：复用现有页面与离开守卫，不另建会话或历史条目。
+const legacyTeaRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/magic-tavern',
+  beforeLoad: ({ location }) => {
+    throw redirect({
+      to: '/magic-tea-party',
+      search: location.search,
+      hash: getRouteFragmentFromHashHistory(location.href),
+      replace: true,
+    });
+  },
+});
 const tavernRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tavern', component: lazyRouteComponent(() => import('./tavern-page'), 'DesktopTavern') });
 
 export const routeTree = rootRoute.addChildren([
@@ -461,6 +474,7 @@ export const routeTree = rootRoute.addChildren([
   rankingRoute,
   tavernRoute,
   teaRoute,
+  legacyTeaRoute,
   partyRoute,
   questionnaireEditorRoute, cardForgeRoute,
   creatorRoute,

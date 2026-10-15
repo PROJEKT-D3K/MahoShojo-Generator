@@ -10,6 +10,7 @@ import * as downloads from '../src/platform/download-text-file';
 import { createDesktopRouter } from '../src/app/router';
 import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
+import { resetDesktopAnnouncementsStoreForTests } from '../src/features/announcements/use-desktop-announcements';
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke, isTauri: () => true, Channel: class { onmessage?: (_event: unknown) => void; } }));
@@ -29,6 +30,7 @@ const change = async (selector: string, value: string) => {
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks(); localStorage.clear(); resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
+  resetDesktopAnnouncementsStoreForTests();
   vi.stubGlobal('crypto', webcrypto); native.listen.mockResolvedValue(vi.fn());
   document = null; revision = 1; messages = []; streams = 0;
   streamOutput = '{"type":"narration","text":"共源茶会正文😀"}\n';
@@ -77,12 +79,28 @@ beforeEach(() => {
   container = window.document.createElement('div'); window.document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-const mount = async () => {
-  window.location.hash = '#/magic-tea-party'; const router = createDesktopRouter(); await router.load();
+const mount = async (href = '#/magic-tea-party') => {
+  window.location.hash = href; const router = createDesktopRouter(); await router.load();
   await act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
   await act(async () => getDesktopAiConfigStore().refreshProfiles());
   return router;
 };
+it('opens a legacy deep link in the existing tea page without creating a session or changing provider state', async () => {
+  // 先完成既有配置归一化，再单独检查旧深链导航的副作用。
+  getDesktopAiConfigStore().init();
+  await getDesktopAiConfigStore().refreshProfiles();
+  const preference = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+  const router = await mount('#/magic-tavern?session=%E6%98%9F%E8%A6%8B#%E8%8C%B6%E4%BC%9A');
+  expect(router.state.location.pathname).toBe('/magic-tea-party');
+  expect(container.textContent).toContain('本地文本茶会');
+  expect(container.querySelector('[data-testid="page-tavern"]')).toBeNull();
+  expect(document).toBeNull(); expect(messages).toEqual([]); expect(streams).toBe(0);
+  expect(native.invoke.mock.calls.some(([command]) => command === 'mutate_magic_tea_party')).toBe(false);
+  expect(native.invoke.mock.calls.some(([command]) => command === 'open_external_url')).toBe(false);
+  expect(native.invoke.mock.calls.some(([command]) => /^(save|delete|set)_provider_/.test(command))).toBe(false);
+  expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(preference);
+  expect(vi.mocked(fetch).mock.calls).toEqual([['/announcements.json', { credentials: 'omit', redirect: 'error' }]]);
+});
 it('runs the delivered route with shared layout, real owner/IPC/Direct adapters and unchanged ordinary provider preference', async () => {
   await mount(); const preference = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
   expect(container.querySelector('.container')?.className).toBe('container !max-w-[1200px]');
@@ -208,15 +226,29 @@ it('keeps unsubmitted paste behind the leave guard and allows explicit local cle
   await act(async () => { await router.navigate({ to: '/settings' }); });
   expect(container.querySelector('[data-testid="page-settings"]')).toBeTruthy();
 });
-it('retains unsaved draft and blocks route departure until its explicit save', async () => {
+it.each(['/settings', '/magic-tavern'] as const)('retains unsaved draft and blocks %s departure until its explicit save', async (to) => {
   const router = await mount(); await click('新建会话');
   const composer = container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!;
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(composer, '未保存😀'); composer.dispatchEvent(new Event('input', { bubbles: true })); });
-  await act(async () => { void router.navigate({ to: '/settings' }); });
+  const sessionId = document?.id;
+  const preference = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+  const writesBeforeNavigation = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  await act(async () => { void router.navigate({ to }); });
   expect(container.textContent).toContain('茶会仍有生成');
+  expect(router.state.location.pathname).toBe('/magic-tea-party');
+  expect(window.location.hash).toBe('#/magic-tea-party');
+  expect(composer.value).toBe('未保存😀');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(writesBeforeNavigation);
   await click('保存会话草稿'); expect(document?.draft).toBe('未保存😀');
-  await act(async () => { await router.navigate({ to: '/settings' }); });
-  expect(container.querySelector('[data-testid="page-settings"]')).toBeTruthy();
+  await act(async () => { await router.navigate({ to }); });
+  if (to === '/settings') expect(container.querySelector('[data-testid="page-settings"]')).toBeTruthy();
+  else {
+    expect(router.state.location.pathname).toBe('/magic-tea-party');
+    expect(window.location.hash).toBe('#/magic-tea-party');
+    expect(container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!.value).toBe('未保存😀');
+  }
+  expect(document?.id).toBe(sessionId); expect(streams).toBe(0);
+  expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(preference);
 });
 
 it('runs the real page manual summary controls, preserves draft and persists full edited text before clearing', async () => {

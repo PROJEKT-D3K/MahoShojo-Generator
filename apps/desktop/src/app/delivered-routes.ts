@@ -33,6 +33,7 @@ export const DELIVERED_ROUTES: readonly string[] = [
   '/ranking',
   '/tavern',
   '/magic-tea-party',
+  '/magic-tavern',
   '/character-party',
   '/questionnaire-editor',
   '/card-forge',
