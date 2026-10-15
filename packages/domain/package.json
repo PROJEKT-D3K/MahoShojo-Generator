@@ -270,7 +270,9 @@
     "./arena-tier": "./src/arena-tier.ts",
     "./ranking-season-extrema": "./src/ranking-season-extrema.ts",
     "./name-generation": "./src/name-generation.ts",
-    "./narrative-drafts": "./src/narrative-drafts.ts"
+    "./narrative-drafts": "./src/narrative-drafts.ts",
+    "./sensitive-word-filter": "./src/sensitive-word-filter.ts",
+    "./word-filter-utils": "./src/word-filter-utils.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",
@@ -281,7 +283,8 @@
     "@mahoshojo/contracts": "workspace:*",
     "zod": "^4.1.13",
     "fflate": "^0.8.2",
-    "@noble/hashes": "2.3.0"
+    "@noble/hashes": "2.3.0",
+    "pinyin-pro": "^3.27.0"
   },
   "devDependencies": {
     "@types/node": "^20",

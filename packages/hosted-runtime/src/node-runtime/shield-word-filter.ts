@@ -7,7 +7,7 @@ import {
   foldFullwidthAscii,
   normalizeLatin,
   toSimplifiedChinese,
-} from './word-filter-utils';
+} from '@mahoshojo/domain/word-filter-utils';
 
 /**
  * 说明：
