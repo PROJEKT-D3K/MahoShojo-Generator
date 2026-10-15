@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { ARENA_ROOM_PRESET_CATALOG } from '@mahoshojo/multiplayer-core/preset-catalog';
+
 import {
   ARENA_ROOM_GENERATION_PRESET_REFS,
   ArenaRoomGenerationPresetResolverError,
@@ -7,6 +9,16 @@ import {
 } from '#/arena-room/room-generation-preset-registry';
 
 describe('Arena Room server-known preset registry', () => {
+  it('matches every shared catalog ref and metadata field to the server-owned exact resolver', async () => {
+    const resolver = createArenaRoomGenerationPresetResolver();
+    expect(ARENA_ROOM_PRESET_CATALOG.map(({ id, kind, versionToken }) => ({ id, kind, versionToken })))
+      .toEqual(ARENA_ROOM_GENERATION_PRESET_REFS);
+    for (const { id, kind, versionToken, displayName, sourceType } of ARENA_ROOM_PRESET_CATALOG) {
+      const ref = { id, kind, versionToken };
+      await expect(resolver.resolve({ ref })).resolves.toMatchObject({ ref, displayName, sourceType });
+    }
+  });
+
   it('以 filename/id + kind + canonical SHA-256 exact 解析角色与情景资产', async () => {
     const resolver = createArenaRoomGenerationPresetResolver();
     const characterRef = ARENA_ROOM_GENERATION_PRESET_REFS.find((entry) => (

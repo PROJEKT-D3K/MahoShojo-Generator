@@ -10,6 +10,7 @@ import { projectArenaRatingIdentity } from '../packages/hosted-runtime/src/arena
 const root = process.cwd();
 const generatorPath = resolve(root, 'scripts/generate-arena-room-preset-registry.mjs');
 const apiRegistryPath = resolve(root, 'apps/api/src/arena-room/generated/arena-room-preset-registry.ts');
+const sharedCatalogPath = resolve(root, 'packages/multiplayer-core/src/preset-catalog.ts');
 const webCatalogPath = resolve(root, 'apps/web/lib/arena-room/generated/arena-room-preset-catalog.ts');
 
 describe('Arena Room preset registry generation contract', () => {
@@ -63,7 +64,7 @@ describe('Arena Room preset registry generation contract', () => {
         : null;
       expect(entry.ratingIdentityDigest, `${entry.kind}:${entry.id}`).toBe(expectedDigest);
     }
-    const catalog = readFileSync(webCatalogPath, 'utf8');
+    const catalog = readFileSync(sharedCatalogPath, 'utf8');
     const catalogMatch = catalog.match(/export const ARENA_ROOM_PRESET_CATALOG = (\[[\s\S]*\]) as const satisfies/u);
     const metadata = JSON.parse(catalogMatch?.[1] ?? 'null') as Array<{ id: string; kind: string; versionToken: string }>;
     expect(metadata.map(({ id, kind, versionToken }) => ({ id, kind, versionToken })))
@@ -100,10 +101,11 @@ describe('Arena Room preset registry generation contract', () => {
     }
   });
 
-  it('generates a Web-safe metadata catalog from the same source and rejects duplicate identities', () => {
+  it('generates a shared client-safe metadata catalog from the same source and rejects duplicate identities', () => {
     expect(existsSync(generatorPath)).toBe(true);
     expect(existsSync(apiRegistryPath)).toBe(true);
-    expect(existsSync(webCatalogPath), '缺少 Web-safe preset metadata catalog').toBe(true);
+    expect(existsSync(sharedCatalogPath), '缺少共享 safe preset metadata catalog').toBe(true);
+    expect(readFileSync(webCatalogPath, 'utf8')).toContain("from '@mahoshojo/multiplayer-core/preset-catalog'");
 
     const generator = readFileSync(generatorPath, 'utf8');
     expect(generator).toContain('arena-room-preset-catalog.ts');
@@ -111,11 +113,11 @@ describe('Arena Room preset registry generation contract', () => {
     expect(generator).toContain('duplicate');
     expect(generator).toContain('process.argv.includes(\'--check\')');
 
-    const catalog = readFileSync(webCatalogPath, 'utf8');
+    const catalog = readFileSync(sharedCatalogPath, 'utf8');
     expect(catalog).not.toMatch(/^\s*payload\s*:/mu);
     expect(catalog).not.toContain('sourcePath');
     const match = catalog.match(/export const ARENA_ROOM_PRESET_CATALOG = (\[[\s\S]*\]) as const satisfies/u);
-    expect(match, 'Web catalog must expose a generated literal catalog').not.toBeNull();
+    expect(match, 'Shared catalog must expose a generated literal catalog').not.toBeNull();
     const entries = JSON.parse(match?.[1] ?? 'null') as Array<Record<string, unknown>>;
     expect(entries.length).toBeGreaterThan(0);
     const identities = entries.map((entry) => `${entry.kind}\u0000${entry.id}`);

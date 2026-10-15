@@ -8,6 +8,11 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./preset-catalog": {
+      "types": "./src/preset-catalog.ts",
+      "import": "./src/preset-catalog.ts",
+      "default": "./src/preset-catalog.ts"
     }
   },
   "scripts": {
