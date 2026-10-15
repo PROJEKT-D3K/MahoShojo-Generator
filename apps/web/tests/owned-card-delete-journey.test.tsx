@@ -84,3 +84,18 @@ it('同tick删除与元信息事件互斥，不读取替换预览或覆盖草稿
   expect(document.querySelector('[aria-label=名称]')).toBeNull();
   expect(document.querySelector<HTMLTextAreaElement>('[aria-label="本机编辑草稿"]')?.value).toBe('必须保留的生成结果');
 });
+it.each([undefined, 'questionnaire' as const])('真实Web回收站宿主一键恢复使用共享port并刷新：%s', async type => {
+  const summary = { id: old.id, type: 'questionnaire', name: old.name, description: null, is_public: 0, review_status: 'approved', created_at: null, updated_at: null, deleted_at: 'now', usage_count: 0, like_count: 0, isLegacyQuestionnaire: false };
+  const ordinary = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.startsWith('/api/data-cards/recycle-owned?')) return Promise.resolve(Response.json({ success: true, ownerUserId: 7, accountFenceVersion: 1, cards: [summary], total: 1, filteredCount: 1, nextOffset: null }));
+    if (url === '/api/data-cards/restore-owned') return Promise.resolve(Response.json({ success: true, ownerUserId: 7, accountFenceVersion: 1, restoreProtocolVersion: 1, operation: 'restore', id: old.id, version: old.version }));
+    return ordinary(url, init);
+  });
+  await act(async () => root.render(<RecycleBinModal isOpen onClose={() => {}} type={type} operationGuard={{ isBlocked: () => blocked, onBusyChange: value => { blocked = value; } }} onChanged={changed} />));
+  await act(async () => { button('恢复').click(); button('永久删除…').click(); button('恢复').click(); });
+  expect(writes()).toHaveLength(1); expect(writes()[0][0]).toBe('/api/data-cards/restore-owned');
+  expect(JSON.parse(writes()[0][1].body)).toEqual({ expectedUserId: 7, id: old.id, version: old.version });
+  expect(changed).toHaveBeenCalledOnce(); expect(document.body.textContent).toContain('数据卡已恢复');
+  expect(fetcher.mock.calls.some(([url]) => String(url).includes('/api/data-card-recycle'))).toBe(false);
+});

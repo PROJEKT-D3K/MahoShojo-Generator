@@ -11,7 +11,7 @@ import { restoreDataCardByIdAndUser } from '@/lib/db/repositories/data-cards-cor
 import { purgeOwnedCardsAtomically, readOwnedDeletionSnapshot } from '@/lib/db/repositories/data-card-owned-deletion';
 import { createDeletionFixtureDb, deletionFixture, recycleMigration } from './helpers/owned-deletion-fixture';
 
-test.each(['restore', 'confirmed-purge'] as const)('两个独立SQLite worker通过barrier争最后一槽/与B2删除竞争：%s', async (competitor) => {
+test.each(['restore', 'confirmed-purge', 'same-card', 'single-purge', 'continuation-purge'] as const)('两个独立SQLite worker通过barrier争最后一槽/与B2删除竞争：%s', async (competitor) => {
   const dir = mkdtempSync(join(tmpdir(), 'restore-quota-race-'));
   const file = join(dir, 'db.sqlite');
   const inspect = new Database(file);
@@ -53,15 +53,17 @@ test.each(['restore', 'confirmed-purge'] as const)('两个独立SQLite worker通
     raw: async () => (await execute(worker, text, params)).results.map(Object.values),
   }) }) } as never, { schema }));
   try {
-    const restoring = restoreDataCardByIdAndUser(connections[0], 'r1', 7, 20);
-    if (competitor === 'restore') {
-      const outcomes = Promise.all([restoring, restoreDataCardByIdAndUser(connections[1], 'r2', 7, 20)]);
+    const restoring = restoreDataCardByIdAndUser(connections[0], 'r1', 7, 20, snapshots[0]!);
+    if (competitor === 'restore' || competitor === 'same-card') {
+      const outcomes = Promise.all([restoring, restoreDataCardByIdAndUser(connections[1], competitor === 'same-card' ? 'r1' : 'r2', 7, 20, snapshots[competitor === 'same-card' ? 0 : 1]!)]);
       await Promise.race([bothReady, outcomes]); expect(readyCount).toBe(2);
       Atomics.store(barrier, 0, 1); Atomics.notify(barrier, 0);
-      expect((await outcomes).map((result) => result.status).sort()).toEqual(['quota_exceeded', 'restored']);
+      expect((await outcomes).map((result) => result.status).sort()).toEqual(competitor === 'same-card' ? ['not_found', 'restored'] : ['quota_exceeded', 'restored']);
       expect(inspect.prepare('SELECT COUNT(*) AS n FROM data_cards WHERE user_id=7 AND deleted_at IS NULL').get()).toEqual({ n: 2 });
     } else {
-      const outcomes = Promise.all([restoring, purgeOwnedCardsAtomically(connections[1], 7, snapshots.map((row) => row!), 'recycle')]);
+      const targets = competitor === 'single-purge' ? [snapshots[0]!] : snapshots.map(row => row!);
+      const continuation = competitor === 'continuation-purge' ? { target: (await readOwnedDeletionSnapshot(createDeletionFixtureDb(inspect), 7, 'a', 'active'))!, limit: 2 } : undefined;
+      const outcomes = Promise.all([restoring, purgeOwnedCardsAtomically(connections[1], 7, targets, 'recycle', continuation)]);
       await Promise.race([bothReady, outcomes]); expect(readyCount).toBe(2);
       Atomics.store(barrier, 0, 1); Atomics.notify(barrier, 0);
       const [restored, deleted] = await outcomes;
@@ -70,8 +72,8 @@ test.each(['restore', 'confirmed-purge'] as const)('两个独立SQLite worker通
         expect(inspect.prepare("SELECT id,deleted_at FROM data_cards WHERE id IN ('r1','r2') ORDER BY id").all())
           .toEqual([{ id: 'r1', deleted_at: null }, { id: 'r2', deleted_at: 'same-second' }]);
       } else {
-        expect(restored.status).toBe('not_found'); expect(deleted.sort()).toEqual(['r1', 'r2']);
-        expect(inspect.prepare("SELECT id FROM data_cards WHERE id IN ('r1','r2')").all()).toEqual([]);
+        expect(restored.status).toBe('not_found'); expect(deleted.sort()).toEqual(targets.map(row => row.id).sort());
+        expect(inspect.prepare("SELECT id FROM data_cards WHERE id IN ('r1','r2')").all()).toEqual(competitor === 'single-purge' ? [{ id: 'r2' }] : []);
       }
     }
     expect(inspect.prepare("SELECT data FROM data_cards WHERE id='a'").get()).toEqual({ data: '{"source":1}' });

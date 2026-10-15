@@ -218,3 +218,13 @@ export const OwnedRecycleBinPurgeAcknowledgementSchema = z.object({
   ...ownedDeletionFence, operation: z.literal('purge-recycle'),
   ids: z.array(z.string().min(1).max(200)).min(1).max(OWNED_DELETE_TARGET_LIMIT),
 }).strict().refine((response) => new Set(response.ids).size === response.ids.length, '删除回执不能重复');
+
+// 恢复接受当前墓碑快照；回执回显被接受的版本，不代表恢复后的版本。
+export const OwnedDataCardRestoreRequestSchema = OwnedDataCardDeletionReferenceSchema.extend({
+  expectedUserId: DataCardExpectedOwnerSchema,
+}).strict();
+export type OwnedDataCardRestoreRequest = z.infer<typeof OwnedDataCardRestoreRequestSchema>;
+export const OwnedDataCardRestoreAcknowledgementSchema = OwnedDataCardDeletionReferenceSchema.extend({
+  success: z.literal(true), accountFenceVersion: z.literal(1), restoreProtocolVersion: z.literal(1),
+  ownerUserId: DataCardExpectedOwnerSchema, operation: z.literal('restore'),
+}).strict();

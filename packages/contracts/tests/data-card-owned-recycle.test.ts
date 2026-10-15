@@ -9,7 +9,7 @@ describe('owned recycle bounded reads', () => {
     expect(OwnedRecycleBinQuerySchema.parse({ expectedUserId: 7 })).toEqual({ expectedUserId: 7, limit: 12, offset: 0 });
     expect(OwnedRecycleBinDetailQuerySchema.parse({ expectedUserId: 7, id: ' c ' }).id).toBe('c');
     for (const extra of [{ limit: 25 }, { offset: -1 }, { type: 'unknown' }, { data: '{}' }, { ownerUserId: 8 }]) expect(OwnedRecycleBinQuerySchema.safeParse({ expectedUserId: 7, ...extra }).success).toBe(false);
-    const routes = Object.entries(golden.cardLibrary.routes).filter(([id]) => id.includes('recycle')).map(([, route]) => route);
+    const routes = Object.entries(golden.cardLibrary.routes).filter(([id]) => id.includes('recycle') && id.endsWith('.query')).map(([, route]) => route);
     expect(routes).toHaveLength(2); expect(routes.every((route) => route.method === 'GET')).toBe(true);
   });
   it('IPC rejects missing identity, extra fields, noncanonical numbers and GET body', () => {

@@ -24,7 +24,7 @@ const scopeCondition = (scope: DeletionScope) => scope === 'active' ? sql`c.dele
 const maxBindingBytes = 2_000_000;
 const dialect = new SQLiteSyncDialect();
 
-function assertBounded(query: SQL): void {
+export function assertOwnedSnapshotQueryBounded(query: SQL): void {
   const compiled = dialect.sqlToQuery(query);
   if (compiled.params.length > 100) throw new RangeError('Deletion query exceeds D1 parameter limit');
   for (const value of compiled.params) {
@@ -34,14 +34,14 @@ function assertBounded(query: SQL): void {
   }
 }
 const all = async <T>(db: AppDrizzleDb, query: SQL): Promise<T[]> => {
-  assertBounded(query);
+  assertOwnedSnapshotQueryBounded(query);
   return db.all<T>(query);
 };
 
 type ReturningStatement = { bind(..._params: unknown[]): ReturningStatement; all(): Promise<unknown> };
 /** Drizzle's documented public $client preserves the statement receipt that db.all() discards. */
 async function returningIds(db: AppDrizzleDb, query: SQL): Promise<string[]> {
-  assertBounded(query);
+  assertOwnedSnapshotQueryBounded(query);
   const client = (db as AppDrizzleDb & { $client?: { prepare(_text: string): ReturningStatement } }).$client;
   if (!client || typeof client.prepare !== 'function') throw new Error('Strict D1 returning client unavailable');
   const compiled = dialect.sqlToQuery(query);
@@ -179,4 +179,15 @@ export async function purgeOwnedCardsAtomically(
       AND ${scope === 'active' ? sql`deleted_at IS NULL` : sql`deleted_at IS NOT NULL`}
     RETURNING id`);
   return deleted;
+}
+
+/** Shared full-snapshot SQL guard for restore and confirmed deletion; no client body bindings. */
+export function ownedRecycleSnapshotGuard(row: OwnedDeletionSnapshot, userId: number): SQL {
+  assertSnapshots([row], userId, 'recycle');
+  return sql`EXISTS (
+    WITH expected(id, metadata, data, pending_metadata, pending_data) AS (VALUES ${expectedValues([row])})
+    SELECT 1 FROM data_cards c JOIN expected e ON c.id = e.id
+    LEFT JOIN data_card_updates p ON p.data_card_id = c.id
+    WHERE c.user_id = ${userId} AND c.deleted_at IS NOT NULL AND ${matchExpected}
+  )`;
 }

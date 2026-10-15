@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { isHotCard } from '@mahoshojo/domain/data-card-size';
 import { ONLINE_DATA_CARD_TYPES, type OnlineDataCardType } from '@mahoshojo/contracts/data-cards';
-import { RecycleBinModal, DataCardsModal, type OwnedCardMetadataPort, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
+import { RecycleBinModal, DataCardsModal, getOwnedCardRestoreNotice, type OwnedCardRestoreNotice, type OwnedCardMetadataPort, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
 import { createDesktopCardLibraryOnlinePort, useDesktopCardLibraryHost } from '../../platform/card-library-host';
 import { readCloudReplaceTarget, updateCloudCardMetadata, readPrivateCloudCapacity } from '../../platform/private-cloud-save';
+import { createDesktopOwnedCardRestorePort } from '../../platform/cloud-restore';
 import { createDesktopOwnedCardDeletePort } from '../../platform/cloud-delete';
 import { createDesktopRecycleBinPort } from '../../platform/cloud-recycle';
 import type { InvokeFn } from '../../platform/cloud-bridge';
@@ -47,11 +48,11 @@ export function DesktopOwnedCardsModal(props: DesktopOwnedCardsModalProps) {
   const { state, store } = useDesktopCloudSession();
   const epoch = store.getCredentialEpoch();
   const owns = state.account?.userId === props.expectedUserId && state.verification === 'verified' && state.authFlow.kind === 'idle';
-  return <DesktopOwnedCardsModalScope key={`${props.expectedUserId}:${epoch}:${props.scopeKey ?? ''}`} {...props} isOpen={props.isOpen && owns}
+  return <DesktopOwnedCardsModalScope key={`${props.expectedUserId}:${epoch}:${props.scopeKey ?? ''}`} {...props} restoreNotice={getOwnedCardRestoreNotice(store, epoch, props.expectedUserId)} isOpen={props.isOpen && owns}
     isCurrent={() => store.getCredentialEpoch() === epoch && store.getSnapshot().account?.userId === props.expectedUserId && store.getSnapshot().verification === 'verified' && store.getSnapshot().authFlow.kind === 'idle'} />;
 }
 
-function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selectedType, onReplaceCard, onSelectCard, refreshToken = 0, isBusy = false, metadataEditing, titleOverride = '我的数据卡', invokeFn = invoke, isCurrent }: DesktopOwnedCardsModalProps & { isCurrent: () => boolean }) {
+function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selectedType, onReplaceCard, onSelectCard, refreshToken = 0, isBusy = false, metadataEditing, titleOverride = '我的数据卡', invokeFn = invoke, isCurrent, restoreNotice }: DesktopOwnedCardsModalProps & { isCurrent: () => boolean; restoreNotice: OwnedCardRestoreNotice }) {
   const libraryHost = useDesktopCardLibraryHost();
   const online = useMemo(() => createDesktopCardLibraryOnlinePort(invokeFn, expectedUserId), [expectedUserId, invokeFn]);
   const host = useMemo<DataCardsModalHost>(() => ({
@@ -97,6 +98,12 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
     onBusyChange: (value) => metadataHost.current.metadataEditing?.onBusyChange(value),
     onChanged: () => setDeleteRefresh(value => value + 1),
   }), [expectedUserId, invokeFn]);
+  const restorePort = useMemo(() => createDesktopOwnedCardRestorePort(invokeFn, expectedUserId, () => metadataHost.current.isCurrent(), {
+    notice: restoreNotice,
+    isBlocked: () => metadataHost.current.metadataEditing?.isBlocked() ?? false,
+    onBusyChange: (value) => metadataHost.current.metadataEditing?.onBusyChange(value),
+    onChanged: () => setDeleteRefresh(value => value + 1),
+  }), [expectedUserId, invokeFn, restoreNotice]);
   const allowedTypes = useMemo(() => selectedType ? [selectedType] : ['character', 'scenario'] as OnlineDataCardType[], [selectedType]);
   const defaultFilters = useMemo(() => selectedType ? { type: selectedType } : {}, [selectedType]);
   return <><DataCardsModal host={host} isOpen={isOpen && !recycleOpen} onClose={onClose} summaryOwnerId={expectedUserId} dataCards={[]}
@@ -107,7 +114,7 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
     onReplaceCard={onReplaceCard ? async (card) => { if (isCurrent()) await onReplaceCard(ownedCard(card)); } : undefined}
     onOpenRecycleBin={() => setRecycleOpen(true)} recycleLabel="云端回收站" recycleCount={null}
     allowHistoryReplace={true} />
-    <RecycleBinModal isOpen={isOpen && recycleOpen} onClose={() => setRecycleOpen(false)} port={recyclePort} deletePort={deletePort}
+    <RecycleBinModal isOpen={isOpen && recycleOpen} onClose={() => setRecycleOpen(false)} port={recyclePort} deletePort={deletePort} restorePort={restorePort}
       type={selectedType} refreshKey={refreshToken + deleteRefresh} busy={isBusy} operationGuard={metadataEditing}
       DetailsModal={host.DetailsModal} />
   </>;

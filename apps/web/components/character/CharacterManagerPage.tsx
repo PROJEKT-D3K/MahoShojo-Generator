@@ -283,7 +283,7 @@ const WEB_CHARACTER_MANAGER_CAPABILITIES: CharacterManagerCapabilities = {
 
 export const CharacterManagerPage: React.FC = () => {
     const router = useRouter();
-    const { user, loading: authLoading, isAuthenticated, authSource, register, login, logout } = useAuth();
+    const { user, identityEpoch, loading: authLoading, isAuthenticated, authSource, register, login, logout } = useAuth();
     const [pastedJson, setPastedJson] = useState('');
     const [characterData, setCharacterData] = useState<any | null>(null);
     const [originalData, setOriginalData] = useState<any | null>(null);
@@ -301,9 +301,10 @@ export const CharacterManagerPage: React.FC = () => {
     const [cardsRefresh, setCardsRefresh] = useState(0);
     const [userCapacity, setUserCapacity] = useState(config.DEFAULT_DATA_CARD_CAPACITY);
     const [capacityKnown, setCapacityKnown] = useState(false);
-    const accountScope = `${user?.id ?? ''}:${authSource ?? ''}`;
-    const accountScopeRef = useRef(accountScope); accountScopeRef.current = accountScope;
+    const accountScope = `${user?.id ?? ''}:${authSource ?? ''}:${identityEpoch}`;
+    const accountScopeRef = useRef(accountScope);
     const cloudOperationBusyRef = useRef(false);
+    if (accountScopeRef.current !== accountScope) { accountScopeRef.current = accountScope; cloudOperationBusyRef.current = false; }
     const [userUsedSlots, setUserUsedSlots] = useState(0);
   const [showDataCardsModal, setShowDataCardsModal] = useState(false);
   const [showRecycleBinModal, setShowRecycleBinModal] = useState(false);
@@ -616,7 +617,7 @@ export const CharacterManagerPage: React.FC = () => {
         prepareData: prepareFinalDataForUpload,
         usedSlots: capacityKnown ? userUsedSlots : undefined,
         userCapacity: capacityKnown ? userCapacity : undefined,
-        onBusyChange: (busy) => { cloudOperationBusyRef.current = busy; },
+        onBusyChange: (busy) => { if (accountScopeRef.current === accountScope) cloudOperationBusyRef.current = busy; },
         isBlocked: () => cloudOperationBusyRef.current,
         onSensitive: () => router.push('/arrested'),
         onInspectCards: () => setShowDataCardsModal(true),
@@ -708,18 +709,6 @@ export const CharacterManagerPage: React.FC = () => {
             // 成功消息现在由 processJsonData 内部处理，这里无需重复设置
         } catch {
             setMessage({ type: 'error', text: '加载数据卡失败' });
-        }
-    };
-
-    // 恢复回收站中的数据卡
-    const handleRestoreRecycleCard = async (id: string) => {
-        const result = await dataCardApi.restoreCard(id);
-        if (result.success) {
-            setMessage({ type: 'success', text: '数据卡已恢复' });
-            loadUserDataCards();
-            loadUserBadges();
-        } else {
-            setMessage({ type: 'error', text: result.error || '恢复失败' });
         }
     };
 
@@ -2100,7 +2089,7 @@ export const CharacterManagerPage: React.FC = () => {
                 summaryOwnerId={user?.id}
                 scopeKey={`${user?.id ?? ''}:${authSource ?? ''}`}
                 busy={cloudWrite.busy && !cloudWrite.replacementPreparing}
-                metadataGuard={{ onBusyChange: (value) => { cloudOperationBusyRef.current = value; }, isBlocked: () => cloudOperationBusyRef.current || cloudWrite.busy }}
+                metadataGuard={{ onBusyChange: (value) => { if (accountScopeRef.current === accountScope) cloudOperationBusyRef.current = value; }, isBlocked: () => cloudOperationBusyRef.current || cloudWrite.busy }}
                 onMetadataSaved={() => { void loadUserDataCards(); void loadUserBadges(); }}
                 refreshKey={cardsRefresh}
 
@@ -2157,8 +2146,7 @@ export const CharacterManagerPage: React.FC = () => {
                 onClose={() => setShowRecycleBinModal(false)}
                 refreshKey={cardsRefresh}
                 busy={cloudWrite.busy}
-                operationGuard={{ isBlocked: () => cloudOperationBusyRef.current || cloudWrite.busy, onBusyChange: (value) => { cloudOperationBusyRef.current = value; } }}
-                onRestore={handleRestoreRecycleCard}
+                operationGuard={{ isBlocked: () => cloudOperationBusyRef.current || cloudWrite.busy, onBusyChange: (value) => { if (accountScopeRef.current === accountScope) cloudOperationBusyRef.current = value; } }}
                 onChanged={() => { void loadUserDataCards(); void loadUserBadges(); }}
                 limit={config.RECYCLE_BIN_LIMIT}
             />

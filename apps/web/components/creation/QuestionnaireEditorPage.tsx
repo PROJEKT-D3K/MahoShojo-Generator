@@ -31,7 +31,7 @@ export const QuestionnaireEditorPage: React.FC = () => {
   const importIntent = useRef(0);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; importIntent.current += 1; }; }, []);
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, identityEpoch } = useAuth();
   const [extensions, setExtensions] = useState<Record<string, unknown>>({});
   const [kind, setKind] = useState<'magical-girl' | 'canshou'>('magical-girl');
   const [questionnaireId, setQuestionnaireId] = useState('magical-girl-custom');
@@ -49,10 +49,14 @@ export const QuestionnaireEditorPage: React.FC = () => {
   const [showDataCardsModal, setShowDataCardsModal] = useState(false);
   const [showRecycleBinModal, setShowRecycleBinModal] = useState(false);
   const [cardsRefresh, setCardsRefresh] = useState(0);
+  const cloudScope = `${user?.id ?? ''}:${identityEpoch}`;
+  const cloudScopeRef = useRef(cloudScope);
   const cloudOperationBusy = useRef(false);
-  const [cloudBusy, setCloudBusy] = useState(false);
-  const cloudOperationGuard = useMemo(() => ({ isBlocked: () => cloudOperationBusy.current,
-    onBusyChange: (value: boolean) => { cloudOperationBusy.current = value; setCloudBusy(value); } }), []);
+  if (cloudScopeRef.current !== cloudScope) { cloudScopeRef.current = cloudScope; cloudOperationBusy.current = false; }
+  const [cloudBusyState, setCloudBusy] = useState({ scope: cloudScope, busy: false });
+  const cloudBusy = cloudBusyState.scope === cloudScope && cloudBusyState.busy;
+  const cloudOperationGuard = useMemo(() => ({ isBlocked: () => cloudScopeRef.current !== cloudScope || cloudOperationBusy.current,
+    onBusyChange: (value: boolean) => { if (cloudScopeRef.current === cloudScope) { cloudOperationBusy.current = value; setCloudBusy({ scope: cloudScope, busy: value }); } } }), [cloudScope]);
   useUnsavedPageGuard(() => cloudOperationBusy.current, '正在处理云端数据卡，请等待响应后再离开', () => false);
   const runCloudOperation = async (handler: () => Promise<void>) => {
     if (cloudOperationBusy.current) return;
@@ -234,16 +238,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
       flashMessage(`✅ 已载入云端问卷：${card?.name || '未命名问卷'}`);
     } catch (error) {
       if (mounted.current && intent === importIntent.current) setEditorError(error instanceof Error ? error.message : '加载问卷数据卡失败');
-    }
-  };
-
-  const handleRestoreQuestionnaireCard = async (id: string) => {
-    const result = await dataCardApi.restoreCard(id);
-    if (result.success) {
-      flashMessage('✅ 问卷数据卡已恢复');
-      loadUserQuestionnaireCards();
-    } else {
-      setEditorError(result.error || '恢复失败');
     }
   };
 
@@ -499,7 +493,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
         type="questionnaire"
         refreshKey={cardsRefresh}
         operationGuard={cloudOperationGuard}
-        onRestore={handleRestoreQuestionnaireCard}
         onChanged={() => void loadUserQuestionnaireCards()}
         limit={config.RECYCLE_BIN_LIMIT}
       />

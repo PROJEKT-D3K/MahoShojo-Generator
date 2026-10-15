@@ -25,6 +25,7 @@ export const recycleMigration = readFileSync(new URL('../../../../drizzle/0019_d
 
 export function createDeletionFixtureDb(connection: InstanceType<typeof Database>, transform?: (sql: string, receipt: { success: true; results: unknown[]; meta: { changes: number } }) => unknown) {
   return drizzle({ prepare: (text: string) => ({ bind: (...params: unknown[]) => ({
+    raw: async () => connection.prepare(text).all(...params).map(row => Object.values(row as Record<string, unknown>)),
     all: async () => {
       const results = connection.prepare(text).all(...params);
       const { n } = connection.prepare('SELECT changes() AS n').get() as { n: number };

@@ -84,10 +84,31 @@ it('真实云端管理入口进入共源回收站，列表与详情固定读取�
   expect(document.body.textContent).toContain('满时会停止移入，不会自动清理已有卡片');
   expect(document.body.textContent).toContain('账号回收站：1 个');
   expect(document.body.textContent).not.toContain('1/5');
-  expect(button('恢复')).toBeUndefined(); expect(button('永久删除…')).toBeDefined();
+  expect(button('恢复')).toBeDefined(); expect(button('永久删除…')).toBeDefined();
   await act(async () => button('查看详情').click()); expect(document.body.textContent).toContain('云端墓碑正文'); expect(button('下载 JSON')).toBeDefined();
   expect(invoke.mock.calls.map(([, { request }]) => request.routeId)).toEqual(['data-cards.recycle.query', 'data-cards.recycle-detail.query']);
   expect(busy.mock.calls.map(([value]) => value)).toEqual([true, false, true, false]);
   mocks.epoch++; await act(async () => root.render(<DesktopOwnedCardsModal isOpen expectedUserId={7} onClose={() => {}} invokeFn={invoke} />));
   expect(document.body.textContent).not.toContain('云端墓碑正文'); expect(button('云端回收站')).toBeDefined();
+});
+
+
+it('Desktop恢复单击读取新墓碑再固定写入，成功刷新卡库与容量且与删除共用guard', async () => {
+  const summary = { id: 'deleted', type: 'character', name: '已删云端卡', description: '', is_public: 1, review_status: 'approved', created_at: null, updated_at: null, deleted_at: 'now', usage_count: 0, like_count: 0, isLegacyQuestionnaire: false };
+  const version = 'a'.repeat(64); let held = false;
+  const busy = vi.fn((value: boolean) => { held = value; });
+  const invoke = vi.fn(async (_command: string, { request }: any) => {
+    if (request.routeId === 'data-cards.recycle.query') return { status: 200, body: { success: true, accountFenceVersion: 1, ownerUserId: 7, cards: [summary], total: 1, filteredCount: 1, nextOffset: null } };
+    if (request.routeId === 'data-cards.delete-preview.query') return { status: 200, body: { success: true, accountFenceVersion: 1, deleteProtocolVersion: 1, ownerUserId: 7, operation: 'preview-recycle', targets: [{ id: summary.id, version, type: summary.type, name: summary.name, description: summary.description }], total: 1, recycleLimit: 5 } };
+    if (request.routeId === 'data-cards.restore') return { status: 200, body: { success: true, accountFenceVersion: 1, restoreProtocolVersion: 1, ownerUserId: 7, operation: 'restore', id: summary.id, version } };
+    throw new Error('非预期路由');
+  });
+  await act(async () => root.render(<DesktopOwnedCardsModal isOpen expectedUserId={7} onClose={() => {}} invokeFn={invoke} metadataEditing={{ isBlocked: () => held, onBusyChange: busy }} />));
+  await act(async () => button('云端回收站').click());
+  await act(async () => { button('恢复').click(); button('恢复').click(); });
+  expect(invoke.mock.calls.filter(([, { request }]) => request.routeId === 'data-cards.restore')).toHaveLength(1);
+  expect(invoke.mock.calls.find(([, { request }]) => request.routeId === 'data-cards.restore')?.[1]).toEqual({ request: { routeId: 'data-cards.restore', expectedUserId: 7, body: { expectedUserId: 7, id: summary.id, version } } });
+  expect(document.body.textContent).toContain('已恢复');
+  expect(mocks.capacity).toHaveBeenCalledTimes(2);
+  expect(held).toBe(false);
 });

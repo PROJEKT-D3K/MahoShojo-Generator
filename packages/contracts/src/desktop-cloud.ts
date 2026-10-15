@@ -1,3 +1,4 @@
+import { OwnedDataCardRestoreRequestSchema } from './data-cards';
 import { z } from './zod';
 
 import { SafeJsonValueSchema } from './json-value';
@@ -661,6 +662,7 @@ export const DesktopCardLibraryRouteIdSchema = z.enum([
   'data-cards.recycle.query',
   'data-cards.recycle-detail.query',
   'data-cards.delete-preview.query',
+  'data-cards.restore',
   'data-cards.soft-delete',
   'data-cards.purge-active',
   'data-cards.purge-recycle',
@@ -692,6 +694,15 @@ export const DesktopCardLibraryRequestSchema = z.object({
   query: z.record(z.string().max(64), z.string().max(1024)).optional(),
   body: SafeJsonValueSchema.optional(),
 }).strict().superRefine((request, context) => {
+  if (request.routeId === 'data-cards.restore') {
+    const body = request.body;
+    if (request.query !== undefined || !body || typeof body !== 'object' || Array.isArray(body)
+      || body.expectedUserId !== request.expectedUserId
+      || !OwnedDataCardRestoreRequestSchema.safeParse(body).success) {
+      context.addIssue({ code: 'custom', message: '恢复只允许冻结账号和单个墓碑快照' });
+    }
+    return;
+  }
   const deletion = ['data-cards.delete-preview.query', 'data-cards.soft-delete', 'data-cards.purge-active', 'data-cards.purge-recycle'].includes(request.routeId);
   if (deletion) {
     const reject = () => context.addIssue({ code: 'custom', message: '确认式删除只允许冻结账号和明确目标快照' });

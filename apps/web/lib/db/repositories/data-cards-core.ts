@@ -1,3 +1,4 @@
+import { ownedRecycleSnapshotGuard, assertOwnedSnapshotQueryBounded, readOwnedDeletionSnapshot, getOwnedDeletionVersion, type OwnedDeletionSnapshot } from './data-card-owned-deletion';
 import {
   and,
   count,
@@ -703,6 +704,7 @@ export const restoreDataCardByIdAndUser = async (
   cardId: string,
   userId: number,
   defaultCapacity: number,
+  snapshot?: OwnedDeletionSnapshot,
 ): Promise<RestoreDataCardResult> => {
   if (!Number.isSafeInteger(defaultCapacity) || defaultCapacity < 0) {
     throw new RangeError('默认数据卡容量必须是非负安全整数');
@@ -722,11 +724,14 @@ export const restoreDataCardByIdAndUser = async (
     ELSE ${defaultCapacity} END
     FROM users WHERE id = ${userId}
     UNION ALL SELECT ${defaultCapacity} LIMIT 1)`;
+  const snapshotGuard = snapshot ? ownedRecycleSnapshotGuard(snapshot, userId) : undefined;
+  if (snapshot && snapshot.id !== cardId) throw new Error('Restore snapshot identity mismatch');
+  if (snapshotGuard) assertOwnedSnapshotQueryBounded(snapshotGuard);
   // The admission decision and restore must share one database write snapshot.
   const query = db.update(dataCards)
     .set({ deletedAt: null, updatedAt: sql`CURRENT_TIMESTAMP` })
     .where(and(eq(dataCards.id, cardId), eq(dataCards.userId, userId), isNotNull(dataCards.deletedAt),
-      sql`${restoredSlots} <= ${capacity}`))
+      sql`${restoredSlots} <= ${capacity}`, snapshotGuard))
     .returning({ id: dataCards.id }).toSQL();
   type Statement = { bind(...params: unknown[]): Statement; all(): Promise<unknown> };
   const client = (db as AppDrizzleDb & { $client?: { prepare(text: string): Statement } }).$client;
@@ -743,6 +748,11 @@ export const restoreDataCardByIdAndUser = async (
   const [current] = await db.select({ deletedAt: dataCards.deletedAt, restoredSlots, capacity })
     .from(dataCards).where(and(eq(dataCards.id, cardId), eq(dataCards.userId, userId))).limit(1);
   if (!current || current.deletedAt === null) return { status: 'not_found' };
+  if (snapshot) {
+    const now = await readOwnedDeletionSnapshot(db, userId, cardId, 'recycle');
+    if (!now || (now.pending_user_id !== null && now.pending_user_id !== userId)
+      || await getOwnedDeletionVersion(now) !== await getOwnedDeletionVersion(snapshot)) return { status: 'conflict' };
+  }
   if (!Number.isSafeInteger(current.restoredSlots) || current.restoredSlots < 0
     || !Number.isSafeInteger(current.capacity) || current.capacity < 0) throw new Error('Invalid restore quota diagnosis');
   return { status: current.restoredSlots > current.capacity ? 'quota_exceeded' : 'conflict' };

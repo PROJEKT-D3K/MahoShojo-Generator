@@ -74,25 +74,36 @@ it('详情错误不回退列表正文；账号epoch改变时迟到详情丢弃',
   port.isCurrent = () => true; await render({ isOpen: false }); await render({ isOpen: true });
   port.readDetail = vi.fn(async () => { throw new Error('记录已恢复或不存在'); }); await click('查看详情'); expect(text()).toContain('记录已恢复或不存在'); expect(text()).not.toContain(detail.data);
 });
-it('写slots保持宿主行为，single-flight阻止并发/关闭/Esc，结束刷新摘要', async () => {
-  const pending = deferred<void>(); const restore = vi.fn(() => pending.promise); let blocked = false;
-  await render({ onRestore: restore, operationGuard: { isBlocked: () => blocked, onBusyChange: (value) => { blocked = value; } } });
-  await act(async () => { button('恢复').click(); button('恢复').click(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
-  expect(restore).toHaveBeenCalledOnce(); expect(blocked).toBe(true); expect(props.onClose).not.toHaveBeenCalled(); expect(button('查看详情').disabled).toBe(true);
-  await act(async () => pending.resolve()); expect(port.readPage).toHaveBeenCalledTimes(2); expect(blocked).toBe(false);
+const restoreTarget = { id: 'c', version: 'a'.repeat(64) };
+const restoreAck = { status: 200, body: { success: true, accountFenceVersion: 1, restoreProtocolVersion: 1, ownerUserId: 7, operation: 'restore', ...restoreTarget } };
+const restorePort = (write: NonNullable<RecycleBinModalProps['restorePort']>['write'], changes = vi.fn()) => ({ expectedUserId: 7, isCurrent: () => true, onBusyChange: changes,
+  preview: vi.fn(async () => ({ status: 200, body: { success: true, accountFenceVersion: 1, deleteProtocolVersion: 1, ownerUserId: 7, operation: 'preview-recycle', targets: [{ ...restoreTarget, type: 'character', name: '卡', description: null }], total: 1, recycleLimit: 10 } })), write, onChanged: vi.fn() });
+it('共享恢复single-flight，精确回执后刷新且onChanged一次', async () => {
+  const pending = deferred<typeof restoreAck>(); let blocked = false;
+  const changes = vi.fn((value: boolean) => { blocked = value; }); const restore = restorePort(vi.fn(() => pending.promise), changes);
+  await render({ restorePort: restore, operationGuard: { isBlocked: () => blocked, onBusyChange: changes } });
+  await act(async () => { button('恢复').click(); button('恢复').click(); });
+  expect(restore.write).toHaveBeenCalledOnce(); expect(blocked).toBe(true); expect(button('查看详情').disabled).toBe(true);
+  await act(async () => pending.resolve(restoreAck)); expect(port.readPage).toHaveBeenCalledTimes(2); expect(blocked).toBe(false); expect(restore.onChanged).toHaveBeenCalledOnce();
+});
+it('unknown只读核对不补成功，不重试；关闭不等待服务端回滚', async () => {
+  let blocked = false; const changes = vi.fn((value: boolean) => { blocked = value; });
+  const restore = restorePort(vi.fn(async () => { throw Error('network'); }), changes);
+  await render({ restorePort: restore, operationGuard: { isBlocked: () => blocked, onBusyChange: changes } }); await click('恢复');
+  expect(text()).toContain('恢复结果不确定'); expect(blocked).toBe(true); expect(button('恢复').disabled).toBe(true);
+  port.readPage = vi.fn(async () => ({ ...page, cards: [], total: 0, filteredCount: 0 })); await click('刷新核对当前回收站');
+  expect(text()).toContain('恢复结果不确定'); expect(text()).toContain('回收站为空'); expect(restore.write).toHaveBeenCalledOnce(); expect(restore.onChanged).not.toHaveBeenCalled();
 });
 it('外部busy与身份失效均阻断dispatch', async () => {
   await render({ operationGuard: { isBlocked: () => true, onBusyChange: vi.fn() } }); expect(port.readPage).not.toHaveBeenCalled(); expect(text()).toContain('其他云端操作');
   await render({ operationGuard: undefined }); port.isCurrent = () => false; await click('刷新'); expect(port.readPage).not.toHaveBeenCalled();
 });
 
-it('父层刷新不能取消在途Web写或释放其guard，写终态后才开始新摘要', async () => {
-  const pending = deferred<void>(); let blocked = false;
-  await render({ onRestore: () => pending.promise, operationGuard: { isBlocked: () => blocked, onBusyChange: (value) => { blocked = value; } } });
-  await click('恢复'); await render({ refreshKey: 1 });
-  expect(blocked).toBe(true); expect(port.readPage).toHaveBeenCalledTimes(1); expect(button('刷新').disabled).toBe(true);
-  await act(async () => pending.resolve());
-  expect(port.readPage).toHaveBeenCalledTimes(2); expect(blocked).toBe(false); expect(button('刷新').disabled).toBe(false);
+it('父层刷新不取消在途恢复，写终态后才开始新摘要', async () => {
+  const pending = deferred<typeof restoreAck>(); let blocked = false; const changes = vi.fn((value: boolean) => { blocked = value; });
+  await render({ restorePort: restorePort(() => pending.promise, changes), operationGuard: { isBlocked: () => blocked, onBusyChange: changes } });
+  await click('恢复'); await render({ refreshKey: 1 }); expect(blocked).toBe(true); expect(port.readPage).toHaveBeenCalledTimes(1);
+  await act(async () => pending.resolve(restoreAck)); expect(port.readPage).toHaveBeenCalledTimes(2); expect(blocked).toBe(false);
 });
 
 it('外部刷新撤销旧详情读取，迟到详情不能覆盖更新后的列表', async () => {
@@ -100,4 +111,20 @@ it('外部刷新撤销旧详情读取，迟到详情不能覆盖更新后的列�
   await render(); await click('查看详情'); const oldSignal = vi.mocked(port.readDetail).mock.calls[0]![1];
   await render({ refreshKey: 1 }); expect(oldSignal.aborted).toBe(true); expect(port.readPage).toHaveBeenCalledTimes(2);
   await act(async () => pending.resolve(detail)); expect(text()).not.toContain(detail.data); expect(button('刷新').disabled).toBe(false);
+});
+it('写中关闭再打开保留unknown提示，迟到回执不能刷新或认领成功', async () => {
+  const pending = deferred<typeof restoreAck>(); const restore = restorePort(() => pending.promise);
+  await render({ restorePort: restore }); await click('恢复');
+  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  expect(props.onClose).toHaveBeenCalledOnce(); await render({ isOpen: false }); await render({ isOpen: true });
+  expect(text()).toContain('恢复结果不确定'); await act(async () => pending.resolve(restoreAck));
+  expect(text()).not.toContain('数据卡已恢复'); expect(restore.onChanged).not.toHaveBeenCalled(); expect(button('恢复').disabled).toBe(true);
+});
+it('未提供宿主guard也阻止同tick恢复与删除并发', async () => {
+  const pending = deferred<typeof restoreAck>(); const restore = restorePort(() => pending.promise);
+  const deletion = { expectedUserId: 7, isCurrent: () => true, preview: vi.fn(async () => ({ status: 503, body: {} })), write: vi.fn(async () => ({ status: 503, body: {} })) };
+  await render({ restorePort: restore, deletePort: deletion });
+  await act(async () => { button('恢复').click(); button('永久删除…').click(); button('查看详情').click(); });
+  expect(deletion.preview).not.toHaveBeenCalled(); expect(port.readDetail).not.toHaveBeenCalled();
+  await act(async () => pending.resolve(restoreAck));
 });

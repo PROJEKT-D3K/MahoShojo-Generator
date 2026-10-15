@@ -3025,6 +3025,12 @@ const CARD_LIBRARY_ROUTES: &[CloudRoute] = &[
         auth: CloudRouteAuth::Required,
     },
     CloudRoute {
+        id: "data-cards.restore",
+        method: reqwest::Method::POST,
+        path: "/api/data-cards/restore-owned",
+        auth: CloudRouteAuth::Required,
+    },
+    CloudRoute {
         id: "data-cards.purge-recycle",
         method: reqwest::Method::POST,
         path: "/api/data-cards/purge-recycle-owned",
@@ -3228,6 +3234,7 @@ enum OwnedCardOperation {
     SoftDelete,
     PurgeActive,
     PurgeRecycle,
+    Restore,
 }
 
 fn owned_card_operation(route_id: &str) -> Option<OwnedCardOperation> {
@@ -3242,6 +3249,7 @@ fn owned_card_operation(route_id: &str) -> Option<OwnedCardOperation> {
         "data-cards.soft-delete" => Some(OwnedCardOperation::SoftDelete),
         "data-cards.purge-active" => Some(OwnedCardOperation::PurgeActive),
         "data-cards.purge-recycle" => Some(OwnedCardOperation::PurgeRecycle),
+        "data-cards.restore" => Some(OwnedCardOperation::Restore),
         _ => None,
     }
 }
@@ -3296,6 +3304,30 @@ fn prepare_owned_card_request(
         OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail
     ) {
         return prepare_recycle_request(request, operation, owner);
+    }
+    if operation == OwnedCardOperation::Restore {
+        if request.query.is_some() {
+            return Err(invalid_request("恢复不允许查询参数"));
+        }
+        let body = request
+            .body
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| invalid_request("恢复缺少 JSON 对象请求体"))?;
+        if body.len() != 3
+            || body
+                .keys()
+                .any(|key| !matches!(key.as_str(), "expectedUserId" | "id" | "version"))
+            || body
+                .get("expectedUserId")
+                .and_then(serde_json::Value::as_f64)
+                != Some(owner as f64)
+            || !body.get("id").is_some_and(valid_deletion_id)
+            || !body.get("version").is_some_and(valid_replacement_version)
+        {
+            return Err(invalid_request("恢复只接受冻结账号、明确 ID 和版本"));
+        }
+        return Ok(());
     }
     if is_deletion_operation(operation) {
         return prepare_deletion_request(request, operation, owner);
@@ -3833,6 +3865,29 @@ fn validate_owned_card_response(
         && expected_owner.is_some()
         && body["ownerUserId"].as_f64() == expected_owner.map(|owner| owner as f64);
     let payload_valid = match operation {
+        OwnedCardOperation::Restore => {
+            body.as_object().is_some_and(|envelope| {
+                envelope.len() == 7
+                    && envelope.keys().all(|key| {
+                        matches!(
+                            key.as_str(),
+                            "success"
+                                | "accountFenceVersion"
+                                | "restoreProtocolVersion"
+                                | "ownerUserId"
+                                | "operation"
+                                | "id"
+                                | "version"
+                        )
+                    })
+            }) && body["restoreProtocolVersion"].as_f64() == Some(1.0)
+                && body["operation"] == "restore"
+                && valid_deletion_id(&body["id"])
+                && valid_replacement_version(&body["version"])
+                && request.body.as_ref().is_some_and(|request_body| {
+                    body["id"] == request_body["id"] && body["version"] == request_body["version"]
+                })
+        }
         OwnedCardOperation::DeletePreview
         | OwnedCardOperation::SoftDelete
         | OwnedCardOperation::PurgeActive
@@ -4020,6 +4075,7 @@ async fn dispatch_cloud_route(
                 | OwnedCardOperation::SoftDelete
                 | OwnedCardOperation::PurgeActive
                 | OwnedCardOperation::PurgeRecycle
+                | OwnedCardOperation::Restore
         )
     ) {
         Some(
@@ -4118,7 +4174,9 @@ async fn dispatch_cloud_route(
             && (is_deletion_operation(operation)
                 || matches!(
                     operation,
-                    OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail
+                    OwnedCardOperation::RecyclePage
+                        | OwnedCardOperation::RecycleDetail
+                        | OwnedCardOperation::Restore
                 ))
         {
             let _guard = account_session_gate()?;
@@ -7780,6 +7838,9 @@ mod tests {
                 None
             },
             body: match operation {
+                Some(OwnedCardOperation::Restore) => Some(
+                    serde_json::json!({"expectedUserId":7,"id":"owned-card","version":"a".repeat(64)}),
+                ),
                 Some(OwnedCardOperation::SoftDelete | OwnedCardOperation::PurgeActive) => {
                     Some(serde_json::json!({"id":"owned-card","version":"a".repeat(64)}))
                 }
@@ -7865,6 +7926,36 @@ mod tests {
     }
 
     #[test]
+    fn card_library_restore_fixed_route_and_bounded_response() {
+        rt().block_on(async {
+            let route = lookup_cloud_route(CARD_LIBRARY_ROUTES, "data-cards.restore").unwrap();
+            assert_eq!(route.method, reqwest::Method::POST);
+            assert_eq!(route.path, "/api/data-cards/restore-owned");
+            assert_eq!(route.auth, CloudRouteAuth::Required);
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("restore-response-budget");
+            store_session(&secrets, &stored_test_session()).unwrap();
+            *server.card_response_override.lock().unwrap() = Some((
+                200,
+                serde_json::json!({"padding": "x".repeat(CARD_LIBRARY_RESPONSE_MAX_BYTES)})
+                    .to_string(),
+            ));
+            let error = cloud_card_library_request(
+                &state,
+                &secrets,
+                cache.get(),
+                card_request("data-cards.restore"),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, CloudErrorCode::InvalidResponse);
+            assert_eq!(server.card_request_count.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
     fn card_library_deletion_request_fixture_preserves_exact_targets_and_rejects_before_network() {
         rt().block_on(async {
             let fixture = owned_fixture();
@@ -7873,9 +7964,9 @@ mod tests {
             let secrets = MemorySecrets::new();
             let cache = TestCache::new("deletion-request-fixture");
             store_session(&secrets, &stored_test_session()).unwrap();
-            for wire in fixture["cardLibrary"]["deletionRequests"]["valid"]
-                .as_array()
-                .unwrap()
+            for wire in ["deletionRequests", "restoreRequests"]
+                .iter()
+                .flat_map(|suite| fixture["cardLibrary"][*suite]["valid"].as_array().unwrap())
             {
                 let mut request: CloudRouteRequest = serde_json::from_value(wire.clone()).unwrap();
                 let operation = owned_card_operation(&request.route_id).unwrap();
@@ -7895,9 +7986,13 @@ mod tests {
                     assert!(request.query.is_none());
                 }
             }
-            for wire in fixture["cardLibrary"]["deletionRequests"]["invalid"]
-                .as_array()
-                .unwrap()
+            for wire in ["deletionRequests", "restoreRequests"]
+                .iter()
+                .flat_map(|suite| {
+                    fixture["cardLibrary"][*suite]["invalid"]
+                        .as_array()
+                        .unwrap()
+                })
             {
                 if let Ok(request) = serde_json::from_value::<CloudRouteRequest>(wire.clone()) {
                     let error = cloud_card_library_request(&state, &secrets, cache.get(), request)
@@ -7922,9 +8017,9 @@ mod tests {
             store_session(&secrets, &stored_test_session()).unwrap();
             let mut count = 0;
             for category in ["valid", "invalid"] {
-                for wire in fixture["cardLibrary"]["deletionResponses"][category]
-                    .as_array()
-                    .unwrap()
+                for wire in ["deletionResponses", "restoreResponses"]
+                    .iter()
+                    .flat_map(|suite| fixture["cardLibrary"][*suite][category].as_array().unwrap())
                 {
                     let request: CloudRouteRequest =
                         serde_json::from_value(wire["request"].clone()).unwrap();
@@ -7978,11 +8073,15 @@ mod tests {
     {
         rt().block_on(async {
             let fixture = owned_fixture();
-            for wire in fixture["cardLibrary"]["deletionResponses"]["valid"]
-                .as_array()
-                .unwrap()
+            for wire in ["deletionResponses", "restoreResponses"]
                 .iter()
-                .take(8)
+                .flat_map(|suite| {
+                    fixture["cardLibrary"][*suite]["valid"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .take(8)
+                })
             {
                 for next_owner in [None, Some(7), Some(8)] {
                     let server = spawn_mock_server();
@@ -8448,6 +8547,7 @@ mod tests {
                 "data-cards.soft-delete",
                 "data-cards.purge-active",
                 "data-cards.purge-recycle",
+                "data-cards.restore",
                 "data-cards.replace-target.query",
                 "data-cards.recycle.query",
                 "data-cards.recycle-detail.query",
@@ -8485,7 +8585,7 @@ mod tests {
     #[test]
     fn card_library_owned_dropping_inflight_response_closes_socket_without_replay() {
         rt().block_on(async {
-            for route_id in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.soft-delete", "data-cards.purge-active", "data-cards.purge-recycle"] {
+            for route_id in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.soft-delete", "data-cards.purge-active", "data-cards.purge-recycle", "data-cards.restore"] {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let state = CloudState::with_origin(&format!("http://{}", listener.local_addr().unwrap()));
                 let secrets = MemorySecrets::new();
@@ -8602,6 +8702,7 @@ mod tests {
                 "data-cards.soft-delete",
                 "data-cards.purge-active",
                 "data-cards.purge-recycle",
+                "data-cards.restore",
                 "data-cards.replace-target.query",
             ] {
                 for status in [404, 405, 409, 500, 200, 201] {
@@ -8736,6 +8837,7 @@ mod tests {
                 "data-cards.soft-delete",
                 "data-cards.purge-active",
                 "data-cards.purge-recycle",
+                "data-cards.restore",
                 "user-capacity.query",
             ] {
                 for expected in [Some(7), Some(8)] {
@@ -8757,6 +8859,7 @@ mod tests {
                 "data-cards.soft-delete",
                 "data-cards.purge-active",
                 "data-cards.purge-recycle",
+                "data-cards.restore",
                 "user-capacity.query",
             ] {
                 let mut request = card_request(route);
@@ -8829,7 +8932,7 @@ mod tests {
     #[test]
     fn card_library_owned_truncated_responses_are_network_errors_without_replay() {
         rt().block_on(async {
-          for route in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.replace-target.query", "data-cards.recycle.query", "data-cards.recycle-detail.query", "data-cards.delete-preview.query", "data-cards.soft-delete", "data-cards.purge-active", "data-cards.purge-recycle"] {
+          for route in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.replace-target.query", "data-cards.recycle.query", "data-cards.recycle-detail.query", "data-cards.delete-preview.query", "data-cards.soft-delete", "data-cards.purge-active", "data-cards.purge-recycle", "data-cards.restore"] {
             for status in [200, 500] {
             use std::io::{Read, Write};
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -8884,6 +8987,7 @@ mod tests {
                     ("data-cards.soft-delete", Some(7)),
                     ("data-cards.purge-active", Some(7)),
                     ("data-cards.purge-recycle", Some(7)),
+                    ("data-cards.restore", Some(7)),
                     ("user-capacity.query", Some(7)),
                 ] {
                     let server = spawn_mock_server();

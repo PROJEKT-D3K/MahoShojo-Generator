@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from 'react';
 import type { OnlineDataCardType, OwnedRecycleBinCardDetail, OwnedRecycleBinPage } from '@mahoshojo/contracts/data-cards';
 import type { CardLibraryDetailsModalProps } from '../card-library/host';
 import { getDataCardStatus } from '../card-library/status';
 import { isQuestionnairePayload } from '@mahoshojo/domain/questionnaire-card';
 import { OwnedCardDeleteDialog, useOwnedCardDelete } from './OwnedCardDeleteDialog';
 import type { OwnedCardDeletePort } from './owned-card-delete';
+import { createOwnedCardRestoreController, type OwnedCardRestorePort } from './owned-card-restore';
 import { BaseModal } from '../modal/BaseModal';
 
 export interface OwnedRecycleBinReadPort {
@@ -23,7 +24,7 @@ export interface RecycleBinModalProps {
   busy?: boolean;
   operationGuard?: { isBlocked(): boolean; onBusyChange(busy: boolean): void };
   DetailsModal?: ComponentType<CardLibraryDetailsModalProps & { isOwner?: boolean }>;
-  onRestore?: (id: string) => void | Promise<void>;
+  restorePort?: OwnedCardRestorePort;
 }
 const labels: Record<OnlineDataCardType, string> = { character: '角色', scenario: '情景', history: '叙事历史', questionnaire: '问卷' };
 const reviewLabels = { pending: '待审核', approved: '已通过', rejected: '未通过' };
@@ -31,8 +32,12 @@ const formatTime = (value: string) => { const date = new Date(value); return Num
 
 /** 摘要、按需详情与代次由两端共用；认证、文件和既有 Web 写操作留在宿主。 */
 export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType, refreshKey = 0, busy = false,
-  operationGuard, DetailsModal, onRestore, deletePort }: RecycleBinModalProps) {
+  operationGuard, DetailsModal, restorePort, deletePort }: RecycleBinModalProps) {
   const deletion = useOwnedCardDelete(deletePort, isOpen);
+  const restoration = useMemo(() => restorePort ? createOwnedCardRestoreController(restorePort) : null, [restorePort]);
+  const restore = useSyncExternalStore(restoration?.subscribe ?? (() => () => {}), restoration?.getSnapshot ?? (() => null), restoration?.getSnapshot ?? (() => null));
+  useEffect(() => { if (!isOpen) restoration?.suspend(); else restoration?.activate(); }, [isOpen, restoration]);
+  useEffect(() => () => restoration?.suspend(), [restoration]);
   const [type, setType] = useState<OnlineDataCardType | undefined>(fixedType);
   const [offset, setOffset] = useState(0);
   const [refresh, setRefresh] = useState(0);
@@ -42,9 +47,10 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
   const [detailError, setDetailError] = useState<string | null>(null);
   const [selected, setSelected] = useState<OwnedRecycleBinCardDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
-  const [writing, setWriting] = useState(false);
-  const latest = useRef({ isOpen, port, operationGuard, busy, deleteController: deletion.controller });
-  latest.current = { isOpen, port, operationGuard, busy, deleteController: deletion.controller };
+  const writing = restore?.phase === 'reading' || restore?.phase === 'writing';
+  const uncertain = restore?.phase === 'unknown';
+  const latest = useRef({ isOpen, port, operationGuard, busy, deleteController: deletion.controller, restoreController: restoration });
+  latest.current = { isOpen, port, operationGuard, busy, deleteController: deletion.controller, restoreController: restoration };
   const operation = useRef<{ controller: AbortController; release?: () => void; write: boolean; port: OwnedRecycleBinReadPort } | null>(null);
   const invalidate = useCallback(() => {
     const old = operation.current;
@@ -54,7 +60,7 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
   }, []);
   const begin = (write = false) => {
     const current = latest.current;
-    if (!['idle', 'success', 'rejected'].includes(current.deleteController?.getSnapshot().phase ?? 'idle') || operation.current || !current.isOpen || !current.port.isCurrent() || current.busy || current.operationGuard?.isBlocked()) return null;
+    if (['reading', 'writing'].includes(current.restoreController?.getSnapshot().phase ?? 'idle') || !['idle', 'success', 'rejected'].includes(current.deleteController?.getSnapshot().phase ?? 'idle') || operation.current || !current.isOpen || !current.port.isCurrent() || current.busy || current.operationGuard?.isBlocked()) return null;
     const guard = current.operationGuard;
     const ticket = { controller: new AbortController(), port: current.port, release: guard ? () => guard.onBusyChange(false) : undefined, write };
     operation.current = ticket;
@@ -67,8 +73,8 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
     setOffset(0); setType(fixedType); setPage(null); setSelected(null); setDetailError(null);
   }, [isOpen, fixedType]);
   useEffect(() => {
-    if (!isOpen) { invalidate(); setLoading(false); setDetailLoading(null); setWriting(false); return; }
-    if (operation.current?.write) return;
+    if (!isOpen) { invalidate(); setLoading(false); setDetailLoading(null); return; }
+    if (operation.current?.write || ['reading', 'writing'].includes(restoration?.getSnapshot().phase ?? 'idle')) return;
     invalidate(); setDetailLoading(null);
     const ticket = begin();
     setPage(null); setSelected(null); setDetailError(null);
@@ -80,10 +86,11 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
       .finally(() => { if (current(ticket)) setLoading(false); finish(ticket); });
     return () => { if (operation.current === ticket) invalidate(); };
     // Host guards are read through latest; inline host objects must not restart requests.
-  }, [isOpen, offset, type, refresh, refreshKey, deletion.refresh, port, invalidate]);
+  }, [isOpen, offset, type, refresh, refreshKey, deletion.refresh, restore?.refresh, port, invalidate, restoration]);
   useEffect(() => invalidate, [invalidate]);
   const close = () => {
-    if (operation.current?.write || latest.current.busy || deletion.busy) return;
+    if (deletion.busy || (latest.current.busy && !writing && !uncertain)) return;
+    if (writing) restoration?.suspend(); else restoration?.dismiss();
     invalidate(); setSelected(null); onClose();
   };
   const detail = async (id: string) => {
@@ -93,13 +100,6 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
     catch (cause) { if (current(ticket)) setDetailError(cause instanceof Error ? cause.message : '读取详情失败，请重试'); }
     finally { if (current(ticket)) setDetailLoading(null); finish(ticket); }
   };
-  const action = async (id: string, handler: (id: string) => void | Promise<void>) => {
-    const ticket = begin(true); if (!ticket) return;
-    setWriting(true); setDetailError(null);
-    try { await handler(id); if (current(ticket)) { setSelected(null); setRefresh((value) => value + 1); } }
-    catch (cause) { if (current(ticket)) setDetailError(cause instanceof Error ? cause.message : '操作失败，请刷新后核对'); }
-    finally { if (current(ticket)) setWriting(false); finish(ticket); }
-  };
   const detailsCard = useMemo(() => {
     if (!selected) return null;
     let author = '我';
@@ -108,9 +108,9 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
       data: selected.data, isPublic: selected.is_public === 1, usageCount: selected.usage_count, likeCount: selected.like_count,
       author, createdAt: selected.created_at ?? undefined, updatedAt: selected.updated_at ?? undefined };
   }, [selected]);
-  const disabled = busy || loading || writing || detailLoading !== null || deletion.busy;
+  const disabled = busy || loading || writing || detailLoading !== null || deletion.busy || uncertain;
   return <>
-    <BaseModal isOpen={isOpen} title="云端回收站" onClose={close} closeOnBackdrop={!writing && !busy && !deletion.busy} description={
+    <BaseModal isOpen={isOpen} title="云端回收站" onClose={close} closeOnBackdrop={!deletion.busy && (!busy || writing || uncertain)} description={
       <span>{limit === undefined ? '账号所有类型共享回收站容量' : `账号所有类型共用 ${limit} 个回收站名额`}，满时会停止移入，不会自动清理已有卡片。</span>}>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <p className="text-sm text-gray-600">账号回收站：{page ? (limit === undefined ? `${page.total} 个` : `${page.total}/${limit}`) : '未知'}{type && page ? ` · 当前类型 ${page.filteredCount} 个` : ''}</p>
@@ -118,8 +118,14 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
           <option value="">全部类型</option>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>}
         <button type="button" disabled={disabled} className="rounded border border-gray-300 px-3 py-1 text-sm" onClick={() => setRefresh((value) => value + 1)}>刷新</button>
-        {deletion.controller && <button type="button" disabled={disabled || page?.total === 0} className="rounded border border-red-400 px-3 py-1 text-sm text-red-700" onClick={() => { if (!operation.current && !latest.current.busy) void deletion.controller?.beginRecycle(); }}>清空全部类型回收站…</button>}
+        {deletion.controller && <button type="button" disabled={disabled || page?.total === 0} className="rounded border border-red-400 px-3 py-1 text-sm text-red-700" onClick={() => { if (!operation.current && !latest.current.busy && !['reading', 'writing', 'unknown'].includes(restoration?.getSnapshot().phase ?? 'idle')) void deletion.controller?.beginRecycle(); }}>清空全部类型回收站…</button>}
       </div>
+      {restore?.message && <p role={restore.phase === 'success' ? 'status' : 'alert'} className="mb-3 rounded border p-3">{restore.message}</p>}
+      {writing && <p role="status">{restore?.phase === 'reading' ? '正在核对数据卡…' : '正在恢复，请等待结果…'}</p>}
+      {uncertain && <div className="mb-3 flex gap-3">
+        <button type="button" disabled={loading} onClick={() => { restoration?.check(); setRefresh(value => value + 1); }}>刷新核对当前回收站</button>
+        <button type="button" onClick={() => restoration?.dismiss()}>已核对，结束本次操作</button>
+      </div>}
       {loading && <p role="status" className="py-8 text-center text-gray-500">正在加载云端回收站…</p>}
       {error && <p role="alert" className="rounded bg-red-50 p-3 text-red-700">{error}</p>}
       {detailError && <p role="alert" className="mb-3 rounded bg-red-50 p-3 text-red-700">{detailError}</p>}
@@ -132,8 +138,8 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
         <p className="mt-3 min-h-[40px] text-sm text-gray-600 line-clamp-2">{card.description || '（无描述）'}</p>
         <div className="mt-auto flex flex-wrap justify-end gap-2 pt-4">
           {DetailsModal && <button type="button" disabled={disabled} className="rounded border border-gray-300 bg-white px-3 py-1 text-xs text-gray-700" onClick={() => void detail(card.id)}>查看详情</button>}
-          {onRestore && <button type="button" disabled={disabled} className="rounded bg-green-500 px-3 py-1 text-xs text-white" onClick={() => void action(card.id, onRestore)}>恢复</button>}
-          {deletion.controller && <button type="button" disabled={disabled} className="rounded bg-red-500 px-3 py-1 text-xs text-white" onClick={() => { if (!operation.current && !latest.current.busy) void deletion.controller?.beginRecycle(card.id); }}>永久删除…</button>}
+          {restoration && <button type="button" disabled={disabled} className="rounded bg-green-500 px-3 py-1 text-xs text-white" onClick={() => { if (!operation.current && !latest.current.busy && ['idle', 'success', 'rejected'].includes(deletion.controller?.getSnapshot().phase ?? 'idle')) void restoration.restore(card.id); }}>恢复</button>}
+          {deletion.controller && <button type="button" disabled={disabled} className="rounded bg-red-500 px-3 py-1 text-xs text-white" onClick={() => { if (!operation.current && !latest.current.busy && !['reading', 'writing', 'unknown'].includes(restoration?.getSnapshot().phase ?? 'idle')) void deletion.controller?.beginRecycle(card.id); }}>永久删除…</button>}
         </div>
       </div>)}</div>}
       {page && <div className="mt-4 flex items-center justify-center gap-3 text-sm"><button type="button" disabled={disabled || offset === 0} onClick={() => setOffset(Math.max(0, offset - 12))}>上一页</button><span>第 {Math.floor(offset / 12) + 1} 页</span><button type="button" disabled={disabled || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) setOffset(page.nextOffset); }}>下一页</button></div>}
