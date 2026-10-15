@@ -335,6 +335,8 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     // `./magic-tea-party` 是茶会受控视图与滚动 hook；Web 和 Desktop 宿主注入 IO/媒体。
     // `./arena-room` 包含交互视图与 hook，仅由 Web/ Desktop 的多人房间客户端面板消费。
     // `./cooldown` 持有 React hook 与浏览器存储同步，不供 Server Component 消费。
+    // `./me` 是零 hook 的受控呈现层；Web 由 'use client' 的 MePage/ProfileHeader 消费，
+    // Desktop 由客户端个人页消费，目前没有 RSC 消费者，因此保留在视图入口清单。
     expect(unlisted.sort()).toEqual([
       './ai-provider',
       './announcement',
@@ -367,6 +369,7 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
       './local-cards',
       './magic-tea-party',
       './markdown',
+      './me',
       './media',
       './messages',
       './modal',
