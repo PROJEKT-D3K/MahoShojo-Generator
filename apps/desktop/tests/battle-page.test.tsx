@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /** Real Desktop route/shared views/session/B1 adapter; simulated IPC and loopback fixture, not OS/Tauri acceptance. */
 import { TextEncoder as NodeTextEncoder } from 'node:util';
-import { act, StrictMode } from 'react';
+import { act as reactAct, StrictMode } from 'react';
+import { createReactActScope } from './helpers/react-act-scope';
 import { createRoot, type Root } from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
 import { createServer, type Server } from 'node:http';
@@ -34,6 +35,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, isTauri: () => tr
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: mocks.listen }) }));
 vi.mock('../src/platform/download-text-file', () => ({ downloadTextFile: mocks.download, downloadBinaryFile: mocks.downloadBinary }));
 vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileIds: async () => ['loopback'], getProviderProfile: mocks.profile }));
+let actScope: ReturnType<typeof createReactActScope>;
+const act = <T,>(callback: () => T | Promise<T>) => actScope.act(callback);
 let root: Root, container: HTMLDivElement, server: Server, endpoint: string;
 let activeCloseHandles = 0;
 let storyPort: StoryFixturePort, storyIpc: ReturnType<typeof storyFixtureInvoke>;
@@ -72,7 +75,8 @@ const change = async (selector: string, value: string) => {
   const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!; expect(input, selector).toBeTruthy();
   await act(async () => { Object.getOwnPropertyDescriptor(input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); });
 };
-const mount = async () => { const router = createDesktopRouter(); await router.load(); await act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
+const mount = async () => {
+  const scope = actScope; const router = createDesktopRouter(); await router.load(); await scope.act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
   await vi.waitFor(() => expect(container.textContent).toContain('生成战报')); await settle(); return router; };
 const uploadWebZip = async (file: File) => {
   const picker = document.querySelector<HTMLInputElement>('input[type="file"][accept*="zip"]')!; expect(picker).toBeTruthy(); Object.defineProperty(picker, 'files', { configurable: true, value: [file] });
@@ -86,7 +90,8 @@ const draft = (mode: ArenaDraft['battleMode'], output: ArenaDraft['generationMod
 const saveDraft = (value: ArenaDraft) => window.localStorage.setItem(ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: value }));
 const calls = () => mocks.invoke.mock.calls.filter(([cmd]) => ['stream_direct_ai', 'stream_target_ai', 'hosted_ai_request', 'stream_hosted_ai'].includes(cmd));
 const scopeClose = () => { const args = mocks.listen.mock.calls.at(-1)!; const event = { preventDefault: vi.fn() }; args[0](event); return event; };
-beforeEach(() => {
+beforeEach((context) => {
+  actScope = createReactActScope(context.signal);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks(); localStorage.clear(); storyBranch = null; storyPort = new StoryFixturePort(); storyIpc = storyFixtureInvoke(storyPort); received = []; docs = new Map(); hold = false; failSave = false; eof = false; release = undefined; activeCloseHandles = 0; markdownSuffix = ''; webTextOverride = null; packageDocs = new Map(); packageBytes = new Map();
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'client', clientConnectionId: 'loopback' }, hiddenPresetIds: [] }));
@@ -146,7 +151,12 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.open = true; }; HTMLDialogElement.prototype.close = function () { this.open = false; };
   window.location.hash = '#/battle'; container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
-afterEach(() => { act(() => root.unmount()); container.remove(); release?.(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(async () => {
+  release?.();
+  await actScope.drain();
+  await reactAct(async () => root.unmount());
+  container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
 
 describe('Desktop /battle journey against loopback fixture', () => {
   it.each(['battle', 'arena'])('/%s only reads anonymous seasons after opening configuration diagnostics', async (product) => {

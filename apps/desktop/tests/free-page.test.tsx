@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act, StrictMode } from 'react';
+import { act as reactAct, StrictMode } from 'react';
+import { createReactActScope } from './helpers/react-act-scope';
 import { createRoot, type Root } from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +26,8 @@ const completed: FreeGenerationOutcome = {
 import { createPagePreferencesAdapter, PagePreferencesCard } from '@mahoshojo/ui-web/settings';
 import { DESKTOP_FREE_PREFERENCES } from '../src/app/settings-page-preferences';
 
+let actScope: ReturnType<typeof createReactActScope>;
+const act = <T,>(callback: () => T | Promise<T>) => actScope.act(callback);
 let root: Root;
 let container: HTMLDivElement;
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
@@ -38,7 +41,8 @@ const storedDraft = (prompt: string) => ({
   selectedLanguage: 'zh-CN',
 });
 
-beforeEach(() => {
+beforeEach((context) => {
+  actScope = createReactActScope(context.signal);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks(); window.localStorage.clear();
   window.localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({
@@ -59,10 +63,15 @@ beforeEach(() => {
   window.location.hash = '#/free';
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
-afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(async () => {
+  await actScope.drain();
+  await reactAct(async () => root.unmount());
+  container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
 const mount = async () => {
+  const scope = actScope;
   const router = createDesktopRouter(); await router.load();
-  await act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
+  await scope.act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
   await settle(); return router;
 };
 
