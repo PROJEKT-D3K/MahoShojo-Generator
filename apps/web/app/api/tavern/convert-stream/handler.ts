@@ -1,4 +1,10 @@
 import { z } from 'zod/v3';
+import {
+  TAVERN_COMPLETION_HEADER,
+  TAVERN_COMPLETION_HEADER_VALUE,
+  TAVERN_COMPLETION_PROTOCOL,
+} from '@mahoshojo/contracts/tavern-completion';
+import { createTavernCompletionPayloadResolver } from '@/lib/tavern-card/stream-completion';
 import { UserGenerationOverridesSchema } from '@/lib/ai/generation-settings/schemas';
 import { NextRequest } from 'next/server';
 
@@ -71,14 +77,14 @@ const RequestBodySchema = z.object({
   customProvider: CustomProviderSchema.optional(),
 });
 
-async function handler(req: NextRequest): Promise<Response> {
+async function handler(req: NextRequest, completionEvidence = false): Promise<Response> {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
       headers: { 'Content-Type': 'application/json' },
     });
   }
-  const wantsClientSse = shouldUseClientSse(req);
+  const wantsClientSse = completionEvidence || shouldUseClientSse(req);
 
   try {
     const parsedBody = RequestBodySchema.safeParse(await req.json().catch(() => null));
@@ -185,11 +191,15 @@ async function handler(req: NextRequest): Promise<Response> {
         ...(reasoningBridge ? { onReasoningEvent: reasoningBridge.onReasoningEvent } : {}),
       }
     );
+    const resolveDonePayload = completionEvidence
+      ? createTavernCompletionPayloadResolver(streamResult.finishReasonPromise, req.signal)
+      : undefined;
     recordUserActivityFromRequest(req);
 
     if (wantsClientSse && reasoningBridge) {
       return reasoningBridge.toResponse(streamResult.response, {
         usagePromise: streamResult.usagePromise,
+        ...(resolveDonePayload ? { resolveDonePayload, signal: req.signal } : {}),
         aiModel: aiTelemetry.model ?? customModelOverride ?? null,
       });
     }
@@ -205,5 +215,23 @@ async function handler(req: NextRequest): Promise<Response> {
   }
 }
 
-export const appRouteHandler = handler;
+export const appRouteHandler = async (req: NextRequest): Promise<Response> => {
+  const version = req.headers.get(TAVERN_COMPLETION_HEADER);
+  if (version !== null && version !== TAVERN_COMPLETION_HEADER_VALUE) {
+    return Response.json({ error: '不支持的酒馆终态证据版本' }, {
+      status: 400, headers: { 'cache-control': 'no-store' },
+    });
+  }
+  const completionEvidence = version === TAVERN_COMPLETION_HEADER_VALUE;
+  if (req.method === 'GET' && completionEvidence) {
+    return Response.json({ protocol: TAVERN_COMPLETION_PROTOCOL, version: 1 }, {
+      headers: { 'cache-control': 'no-store', [TAVERN_COMPLETION_HEADER]: TAVERN_COMPLETION_HEADER_VALUE },
+    });
+  }
+  const response = await handler(req, completionEvidence);
+  if (!completionEvidence || req.method !== 'POST') return response;
+  const headers = new Headers(response.headers);
+  headers.set(TAVERN_COMPLETION_HEADER, TAVERN_COMPLETION_HEADER_VALUE);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+};
 export default appRouteHandler;

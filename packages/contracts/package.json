@@ -152,7 +152,8 @@
     "./fixtures/desktop-room-session.json": "./fixtures/desktop-room-session.json",
     "./desktop-room-ipc": "./src/desktop-room-ipc.ts",
     "./fixtures/desktop-room-ipc.json": "./fixtures/desktop-room-ipc.json",
-    "./fixtures/desktop-magic-tea-party.json": "./fixtures/desktop-magic-tea-party.json"
+    "./fixtures/desktop-magic-tea-party.json": "./fixtures/desktop-magic-tea-party.json",
+    "./tavern-completion": "./src/tavern-completion.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

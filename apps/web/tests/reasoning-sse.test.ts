@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import {
   createReasoningSseBridge,
@@ -160,5 +160,75 @@ describe('stream/reasoning-sse', () => {
     expect(serialized).toContain('HOSTED_GENERATION_FAILED');
     expect(serialized).toContain('服务器内部错误');
     expect(serialized).not.toContain('stream-secret-canary');
+  });
+});
+
+describe('optional reasoning bridge terminal extension', () => {
+  test('waits for body EOF and appends fields while preserving ok=true', async () => {
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const resolveDonePayload = vi.fn(async () => ({ fixture: { terminal: 'stop' }, ok: false }));
+    const response = createReasoningSseBridge().toResponse(new Response(new ReadableStream({
+      start(controller) { upstream = controller; controller.enqueue(new TextEncoder().encode('正文')); },
+    })), { resolveDonePayload });
+    const reader = response.body!.getReader();
+    let raw = new TextDecoder().decode((await reader.read()).value);
+    expect(resolveDonePayload).not.toHaveBeenCalled();
+    upstream.close();
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      raw += new TextDecoder().decode(next.value);
+    }
+    expect(resolveDonePayload).toHaveBeenCalledOnce();
+    expect(raw).toContain('event: done\ndata: {"fixture":{"terminal":"stop"},"ok":true}');
+  });
+
+  test('body errors never invoke the optional completion hook', async () => {
+    const resolveDonePayload = vi.fn(async () => ({ fixture: true }));
+    const response = createReasoningSseBridge().toResponse(new Response(new ReadableStream({
+      pull(controller) { controller.error(new Error('private-canary')); },
+    })), { resolveDonePayload });
+    const raw = await response.text();
+    expect(resolveDonePayload).not.toHaveBeenCalled();
+    expect(raw).toContain('event: error');
+    expect(raw).not.toContain('event: done');
+  });
+
+  test('a failing optional completion hook becomes a safe error, never done', async () => {
+    const response = createReasoningSseBridge().toResponse(new Response('正文'), {
+      resolveDonePayload: async () => { throw new Error('private-canary'); },
+    });
+    const raw = await response.text();
+    expect(raw).toContain('event: error');
+    expect(raw).not.toContain('private-canary');
+    expect(raw).not.toContain('event: done');
+  });
+
+  test('consumer cancellation during the optional hook discards its late completion', async () => {
+    let resolvePayload!: (value: Record<string, unknown>) => void;
+    let started!: () => void;
+    const hookStarted = new Promise<void>(resolve => { started = resolve; });
+    const response = createReasoningSseBridge().toResponse(new Response('正文'), {
+      resolveDonePayload: () => { started(); return new Promise(resolve => { resolvePayload = resolve; }); },
+    });
+    const reader = response.body!.getReader();
+    await hookStarted;
+    await reader.cancel('user-cancel');
+    resolvePayload({ fixture: true });
+    expect((await reader.read()).done).toBe(true);
+    await Promise.resolve();
+  });
+
+  test('an already aborted opt-in stream cancels upstream before emitting anything', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const cancel = vi.fn();
+    const resolveDonePayload = vi.fn(async () => ({ fixture: true }));
+    const response = createReasoningSseBridge().toResponse(new Response(new ReadableStream({ cancel })), {
+      signal: abort.signal, resolveDonePayload,
+    });
+    expect(await response.text()).toBe('');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(resolveDonePayload).not.toHaveBeenCalled();
   });
 });

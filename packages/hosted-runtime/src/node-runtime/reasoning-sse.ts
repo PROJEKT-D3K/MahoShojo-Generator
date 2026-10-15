@@ -52,6 +52,9 @@ export type ReasoningSseBridge = {
       usagePromise?: Promise<unknown>;
       aiModel?: string | null;
       headers?: RuntimeHeadersInit;
+      /** Optional protocol-specific fields; never makes generic done a completion proof. */
+      resolveDonePayload?: () => Promise<Record<string, unknown>>;
+      signal?: AbortSignal;
     }
   ) => Response;
 };
@@ -176,15 +179,30 @@ export const createReasoningSseBridge = (label?: string): ReasoningSseBridge => 
       },
     });
 
+    let onAbort: (() => void) | undefined;
+    const removeAbortListener = () => {
+      if (onAbort) options?.signal?.removeEventListener('abort', onAbort);
+    };
     const body = new ReadableStream<Uint8Array>({
       async start(controller) {
         const decoder = new TextDecoder();
         activeController = controller;
         streamClosed = false;
+        onAbort = () => {
+          if (streamClosed) return;
+          streamClosed = true;
+          activeController = null;
+          removeAbortListener();
+          void upstreamReader.cancel('aborted').catch(() => {});
+          controller.close();
+        };
+        options?.signal?.addEventListener('abort', onAbort, { once: true });
+        if (options?.signal?.aborted) { onAbort(); return; }
         try {
           flushQueuedEvents(controller);
           while (true) {
             const { done, value } = await readWithTimeout(upstreamReader);
+            if (streamClosed) return;
             if (done) break;
             if (!value) continue;
 
@@ -203,6 +221,7 @@ export const createReasoningSseBridge = (label?: string): ReasoningSseBridge => 
           enqueueReasoningDoneIfNeeded(controller);
 
           const usageRaw = await resolveUsageWithTimeout(options?.usagePromise);
+          if (streamClosed) return;
           const normalizedUsage = normalizeUsage(usageRaw);
           const aiModel = typeof options?.aiModel === 'string' ? options.aiModel.trim() : '';
           if (normalizedUsage || aiModel) {
@@ -215,11 +234,16 @@ export const createReasoningSseBridge = (label?: string): ReasoningSseBridge => 
             );
           }
 
-          controller.enqueue(encodeSseEvent('done', { ok: true }));
+          const donePayload = options?.resolveDonePayload
+            ? { ...await options.resolveDonePayload(), ok: true }
+            : { ok: true };
+          if (streamClosed) return;
+          controller.enqueue(encodeSseEvent('done', donePayload));
           streamClosed = true;
           activeController = null;
           controller.close();
         } catch (error) {
+          if (streamClosed) return;
           flushQueuedEvents(controller);
           enqueueReasoningDoneIfNeeded(controller);
           const projection = readSafePublicAiError(error);
@@ -240,9 +264,12 @@ export const createReasoningSseBridge = (label?: string): ReasoningSseBridge => 
           streamClosed = true;
           activeController = null;
           controller.close();
+        } finally {
+          removeAbortListener();
         }
       },
       cancel(reason) {
+        removeAbortListener();
         streamClosed = true;
         activeController = null;
         try {
