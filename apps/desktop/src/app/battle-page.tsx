@@ -46,6 +46,7 @@ import { downloadTextFile } from '../platform/download-text-file';
 import { navigateByProductHref, resolveInternalHrefForHashHistory } from './hash-history-fragment';
 import { useLeaveGuard } from './useLeaveGuard';
 import { DesktopArenaRoomSession, readDesktopRoomDocumentNonce } from '../features/arena/room-session';
+import { DesktopRoomMemberWorkspace } from '../features/arena/room-member-workspace';
 import { DesktopRoomStoryDraft } from '../features/arena/room-story-draft';
 import { DesktopArenaRoomPanel } from '../features/arena/room-panel';
 import { DesktopArenaStorySession, type PrepareStoryExecution } from '../features/arena/story-session';
@@ -94,6 +95,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const roomStartAllowed = useRef<() => boolean>(() => false);
   const roomOwner = useMemo(() => new DesktopArenaRoomSession({ invoke, account: cloudStore, documentNonce: readDesktopRoomDocumentNonce, canStart: () => product === 'arena' && roomStartAllowed.current() }), [cloudStore, product]);
   const roomState = useSyncExternalStore(roomOwner.subscribe, roomOwner.getSnapshot);
+  const memberWorkspaceSession = roomOwner.memberWorkspaceSession();
   useEffect(() => { roomOwner.activate(); return () => roomOwner.dispose(); }, [roomOwner]);
   const [strictRevision, setStrictRevision] = useState(0);
   const [strictCheck, setStrictCheck] = useState<DesktopStrictCheckSnapshot | null>(null);
@@ -158,7 +160,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     '窗口关闭保护初始化失败，生成、导入与保存暂不可用，请重新打开页面。',
     () => {
       if (storyOwner.getSnapshot().hosted?.busy && storyOwner.getSnapshot().hosted?.busy !== 'model' || storyOwner.getSnapshot().saving || storyOwner.getSnapshot().exporting || storyOwner.getSnapshot().phase === 'preparing' || diagnosisFlight.current || packageOwner.isBusy() || session.getSnapshot().saving || session.getSnapshot().importing || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current) return false;
-      const roomWarning = roomOwner.needsLeaveConfirmation() ? '多人房间只会断开本机连接，不代表退出、关闭或停止生成；未知操作仍可能已发生，建议先核对。' : '';
+      const roomWarning = roomOwner.needsLeaveConfirmation() ? '成员提案草稿将丢弃，普通 Arena 草稿、结果和模型保留。多人房间只会断开本机连接，不代表退出、关闭或停止生成；未知操作仍可能已发生，建议先核对。' : '';
       if (!window.confirm(roomWarning + (storyOwner.hosted?.hasCandidate() || session.getSnapshot().hosted || session.getSnapshot().generation?.intent.mode === 'hosted' ? '确认离开？只停止本机订阅，服务器可能继续生成；已封存原件可从原页面恢复，尚未封存的最新正文仅在当前窗口，请先导出。' : '确认离开？正在生成的请求会取消，未保存的输入或原文可能丢失。'))) return false;
       roomOwner.detach(); storyOwner.detach(); session.detach(); return true;
     },
@@ -184,7 +186,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   }, [historyOpen, historyRevision, repository, scope]);
   const reportError = (cause: unknown) => { setError(cause instanceof Error ? cause.message : '操作失败，原输入仍保留。'); };
   const performImport = async (load: Parameters<DesktopArenaSession['importInput']>[0]) => {
-    if (!guard.ready || diagnosisFlight.current || preparing.current || aiState.generationActive || packageOwner.isBusy()) throw new Error('请等待当前操作完成。');
+    if (roomOwner.isConstrained() || !guard.ready || diagnosisFlight.current || preparing.current || aiState.generationActive || packageOwner.isBusy()) throw new Error('请等待当前操作完成。');
     const epoch = ownerEpoch.current; setError(null); try { await session.importInput(load); } catch (cause) { if (epoch === ownerEpoch.current) reportError(cause); throw cause; }
   };
   const prepareStrict = async (season: PublicSeasonMeta) => {
@@ -533,6 +535,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   };
   return <>
     {product === 'arena' ? <AdvancedArenaPageView header={<AdvancedArenaHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} description="桌面高级单次 · 角色、主辅情景与故事设定" guideChildren={<p>配置输入后生成单次战报。此页使用独立本机草稿，支持客户端 Direct、官方服务器流式/非流式报告与 Web 源码生成/验证/导出；角色更新遵循服务器冻结权限；线性连续故事使用本机独立目录；隔离运行和插图尚未开放。<button className="footer-link" type="button" onClick={() => navigateByProductHref(router, '/battle')}>前往简洁版</button></p>} />} beforeWorkspace={<><DesktopArenaRoomPanel languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
+      {roomState.memberModel && memberWorkspaceSession ? <DesktopRoomMemberWorkspace owner={roomOwner} model={roomState.memberModel} session={memberWorkspaceSession} languages={languages} /> : null}
       {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained}><ArenaEditorWorkspaceLayout disabled={disabled} sections={buildArenaEditorSections([
         { kind: 'presetCharacters', description: '选择内置角色', defaultOpen: true, content: slots.presets },
         { kind: 'characterDatabase', title: '📚 角色库', description: '本地、公开或缓存副本', defaultOpen: true, content: slots.database },
@@ -549,11 +552,11 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
       showScenario={draft.battleMode === 'scenario'} hasScenario={!!draft.scenario.content} materialCount={draft.materials.length} referenceItemCount={referenceCount} maxReferenceItems={limits.maxReferenceItemsSanity}
       copy={{ databaseTitle: '📚 角色库', databaseDescription: '选择本地卡、在线公开卡或已缓存副本', modeDescription: '不同模式决定故事风格', storyOptionsDescription: '设置故事方向、历史读写和 AI 目标' }} slots={slots} />}
-    <CardLibraryModal host={libraryHost} isOpen={library !== null} onClose={() => setLibrary(null)} onSelectCard={chooseCard} selectedType={library === 'material' ? 'all' : library === 'auxScenario' ? 'scenario' : library ?? 'character'} allowedTypes={library === 'material' ? undefined : [library === 'auxScenario' ? 'scenario' : library ?? 'character']} initialTab="local" visibleTabs={['local', 'public']} allowDeckImport={false} titleOverride="选择本地或公开缓存副本" />
-    <NarrativeHistoryPicker isOpen={historyOpen} onClose={() => setHistoryOpen(false)} entries={historySource?.entries ?? []} lastUpdatedAt={historySource?.lastUpdatedAt ?? null} sort={historySort} onSort={setHistorySort}
+    <CardLibraryModal host={libraryHost} isOpen={library !== null && !roomState.constrained} onClose={() => setLibrary(null)} onSelectCard={chooseCard} selectedType={library === 'material' ? 'all' : library === 'auxScenario' ? 'scenario' : library ?? 'character'} allowedTypes={library === 'material' ? undefined : [library === 'auxScenario' ? 'scenario' : library ?? 'character']} initialTab="local" visibleTabs={['local', 'public']} allowDeckImport={false} titleOverride="选择本地或公开缓存副本" />
+    <NarrativeHistoryPicker isOpen={historyOpen && !roomState.constrained} onClose={() => setHistoryOpen(false)} entries={historySource?.entries ?? []} lastUpdatedAt={historySource?.lastUpdatedAt ?? null} sort={historySort} onSort={setHistorySort}
       readStatus={historySource?.status ?? 'loading'} formatDateTime={(value) => value} sourceHint={historySource?.message ?? '本地库只读引用，源记录保持不变。'}
       onConfirm={(entries) => { update({ historyReferences: entries }); setHistoryOpen(false); }} />
-    {historyOpen && historySource?.status === 'error' ? <button type="button" onClick={() => setHistoryRevision((value) => value + 1)}>重试读取历史</button> : null}
+    {historyOpen && !roomState.constrained && historySource?.status === 'error' ? <button type="button" onClick={() => setHistoryRevision((value) => value + 1)}>重试读取历史</button> : null}
   </>;
 }
 

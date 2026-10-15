@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { buttonClassName } from '../../card-library/Button';
 import type { ArenaMemberProposalRoom, ArenaMemberProposalWorkspaceActions } from './types';
 
-export const arenaMemberProposalBlocked = (room: ArenaMemberProposalRoom) => room.operation !== null || room.resultUnknown || room.tracking != null;
+export const arenaMemberProposalBlocked = (room: ArenaMemberProposalRoom) => room.operation !== null || room.resultUnknown || room.tracking != null || !!room.blockedReason;
 export const arenaMemberProposalScopeKey = (room: ArenaMemberProposalRoom) => JSON.stringify([
   room.session?.roomId, room.session?.roomEpoch, room.session?.self.userId,
   room.session?.self.role, room.session?.self.membershipState,
@@ -22,10 +22,11 @@ export function RoomMemberProposalStatus({ room, scopeIdentity, actions }: {
   scope.current = { token, room };
   const stillCurrent = () => mounted.current && scope.current.token === token;
   const session = room.session;
-  if (!session || session.self.role !== 'member' || session.self.membershipState !== 'active') return null;
+  if (!session || session.self.role !== 'member' || session.self.membershipState !== 'active') return room.blockedReason ? <p role="status" className="mt-3 text-sm">{room.blockedReason}</p> : null;
   const disabled = arenaMemberProposalBlocked(room);
   const proposals = session.snapshot.proposals.filter(proposal => proposal.authorUserId === session.self.userId && proposal.status === 'submitted');
   return <>
+    {room.blockedReason && !room.resultUnknown && room.tracking == null ? <p role="status" className="mt-3 text-sm">{room.blockedReason}</p> : null}
     {room.outcome ? <p role="status" className="mt-3 text-sm">{room.outcome}</p> : null}
     {room.resultUnknown || room.tracking != null ? <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
       <p>{room.tracking?.phase === 'ended-needs-read' ? '已结束本机跟踪，不取消服务器操作；请先重新读取房间状态。' : '上次提案请求结果未知，已冻结重复提交。'}</p>

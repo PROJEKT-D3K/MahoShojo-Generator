@@ -755,3 +755,197 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     assertNoExecution();
   });
 });
+
+const memberWorkspace = () => {
+  const node = container.querySelector<HTMLElement>('[aria-labelledby="arena-room-proposal-workspace-heading"]');
+  expect(node, 'the real shared full member workspace').not.toBeNull(); return node!;
+};
+const memberGuidance = () => {
+  const input = memberWorkspace().querySelector<HTMLInputElement>('input[name="arena_story_guidance"]');
+  expect(input).not.toBeNull(); return input!;
+};
+const editMemberGuidance = async (value: string) => {
+  const input = memberGuidance(); await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+};
+const beginMember = async () => {
+  seedOrdinary(); await mount(); await click('恢复草稿'); const ordinary = ordinarySnapshot(); await open();
+  await change('#arena-room-join-code', serviceFixture.operations.join.success.result.roomId);
+  const joining = await startAction('加入房间', 'join'); const session = await confirmMembership(joining, 'member');
+  return { session, ordinary };
+};
+const submitMemberPreview = async () => {
+  await click('预览提案', memberWorkspace());
+  const next = port.nextAction('proposal-submit'); let operation!: Operation;
+  await act(async () => { requiredButton('提交提案').click(); operation = await next; });
+  expect(operation.action.kind).toBe('proposal-submit'); return operation;
+};
+const memberSummary = (session: ArenaRoomSessionResponse, proposalId: string, status: 'submitted' | 'withdrawn') => ({
+  protocolVersion: 1, roomId: session.roomId, roomEpoch: session.roomEpoch,
+  controlSeq: session.snapshot.controlSeq + 100, revision: session.snapshot.revision + 100, proposalId, status, result: 'applied',
+});
+
+describe('Desktop member full shared editor journey', () => {
+  it('requires fresh authority, preserves ordinary state while editing, and restores it only after confirmed leave', async () => {
+    const { session, ordinary } = await beginMember();
+    expect(memberWorkspace().textContent).toContain('选择预设魔法少女');
+    expect(memberWorkspace().textContent).toContain('选择预设残兽');
+    expect(memberGuidance().matches(':disabled')).toBe(true);
+    expect(memberWorkspace().textContent).not.toContain('上次提案请求结果未知');
+    await publishOnline(session); expect(memberGuidance().matches(':disabled')).toBe(false);
+    // HTML text inputs normalize line breaks; the model retains the full protocol value.
+    expect(memberGuidance().value).toBe(session.snapshot.sharedConfig.userGuidance.replace(/[\r\n]/g, ''));
+    await editMemberGuidance('仅保存在成员稿中的修改');
+    expect(ordinarySnapshot()).toEqual(ordinary); expect(port.actions.map(item => item.action.kind)).toEqual(['join']);
+    assertConstrained(); assertNoExecution();
+    await click('离开房间', room()); expect(room().textContent).toContain('未提交成员草稿'); await click('取消', room());
+    expect(memberGuidance().value).toBe('仅保存在成员稿中的修改');
+    await click('离开房间', room()); const leaving = await startAction('确认离开房间', 'leave');
+    await port.deliver(responseEvent(leaving, serviceFixture.operations.leave.success.result));
+    expect(container.querySelector('[aria-labelledby="arena-room-proposal-workspace-heading"]')).toBeNull();
+    await click('断开本机房间连接', room()); expect(ordinarySnapshot()).toEqual(ordinary);
+    expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(reportText); assertNoExecution();
+  });
+
+  it('dispatches frozen submit and own-pending withdraw through fixed Native actions without summary cursor advancement', async () => {
+    const { session, ordinary } = await beginMember(); await publishOnline(session);
+    await editMemberGuidance('成员已确认的完整提案'); const submitting = await submitMemberPreview();
+    if (submitting.action.kind !== 'proposal-submit') throw new Error('Expected fixed submit action');
+    const intent = submitting.action.request;
+    expect(intent).toMatchObject({ expectedRoomEpoch: session.roomEpoch, baseRevision: session.snapshot.revision,
+      changes: [expect.objectContaining({ type: 'setUserGuidance', value: '成员已确认的完整提案' })] });
+    expect(intent.changes).toHaveLength(1);
+    await port.deliver(responseEvent(submitting, memberSummary(session, intent.proposalId, 'submitted')));
+    expect(room().textContent).toContain(`修订 ${session.snapshot.revision}`);
+    expect(memberGuidance().value).toBe('成员已确认的完整提案'); expect(memberGuidance().matches(':disabled')).toBe(true);
+    const fresh = structuredClone(session); fresh.snapshot.controlSeq += 1;
+    fresh.snapshot.proposals = [{ proposalVersion: PROPOSAL_VERSION, proposalId: intent.proposalId, roomId: session.roomId,
+      authorUserId: session.self.userId, baseRevision: intent.baseRevision, changes: intent.changes, status: 'submitted', createdAt: '2026-10-15T12:00:00Z' }];
+    await publishOnline(fresh);
+    const next = port.nextAction('proposal-withdraw'); let withdrawing!: Operation;
+    await act(async () => { requiredButton('撤回提案', memberWorkspace()).click(); withdrawing = await next; });
+    expect(withdrawing.action).toEqual({ kind: 'proposal-withdraw', roomId: session.roomId, proposalId: intent.proposalId, request: { expectedRoomEpoch: session.roomEpoch } });
+    await port.deliver(responseEvent(withdrawing, memberSummary(fresh, intent.proposalId, 'withdrawn')));
+    expect(room().textContent).toContain(`修订 ${session.snapshot.revision}`);
+    expect(port.actions.map(item => item.action.kind)).toEqual(['join', 'proposal-submit', 'proposal-withdraw']);
+    expect(ordinarySnapshot()).toEqual(ordinary); assertNoExecution();
+  });
+
+  it('keeps an unknown submit frozen through absent reads and releases only after the exact Native terminal ACK', async () => {
+    const { session, ordinary } = await beginMember(); await publishOnline(session);
+    await editMemberGuidance('未知请求仍保留的成员稿'); const submitting = await submitMemberPreview();
+    await port.deliver({ kind: 'mutation-unknown', operation: 'proposalSubmit', intentId: 'member-unknown', roomId: session.roomId });
+    await port.deliver({ kind: 'request-error', operation: 'proposalSubmit', requestId: submitting.requestId, error: ipcFixture.error });
+    expect(memberWorkspace().textContent).toContain('上次提案请求结果未知');
+    expect(memberGuidance().matches(':disabled')).toBe(true);
+    const readNext = port.nextAction('session'); let read!: Operation;
+    await act(async () => { requiredButton('重新连接并对账', memberWorkspace()).click(); read = await readNext; });
+    const absent = structuredClone(session); absent.snapshot.controlSeq += 1; absent.snapshot.proposals = [];
+    await port.deliver(responseEvent(read, absent));
+    expect(memberWorkspace().textContent).toContain('上次提案请求结果未知');
+    expect(port.actions.filter(item => item.action.kind === 'proposal-submit')).toHaveLength(1);
+    const subscriptionCount = port.subscriptions.length;
+    const evidence = await port.deliver({ kind: 'proposal-observation', intentId: 'member-unknown',
+      observation: { observation: 'terminal', linked: true, settle: true, outcome: 'scope-unverified', terminalStatus: 'partially_accepted' } }, { holdAck: true });
+    expect(memberWorkspace().textContent).toContain('上次提案请求结果未知');
+    expect(port.pendingIntent?.intentId).toBe('member-unknown'); expect(port.subscriptions).toHaveLength(subscriptionCount);
+    const subscribed = port.nextSubscription(); await act(async () => { evidence.ackGate.resolve(); await subscribed; });
+    expect(port.pendingIntent).toBeNull(); expect(memberWorkspace().textContent).toContain('具体接受范围尚无法确认');
+    expect(port.order.indexOf(`acknowledged:${evidence.batch.batchId}`)).toBeLessThan(port.order.lastIndexOf('subscribe'));
+    await publishOnline(absent);
+    expect(memberGuidance().value).toBe('未知请求仍保留的成员稿'); expect(memberGuidance().matches(':disabled')).toBe(false);
+    expect(port.actions.map(item => item.action.kind)).toEqual(['join', 'proposal-submit', 'session']);
+    expect(ordinarySnapshot()).toEqual(ordinary); assertNoExecution();
+  });
+
+
+  it('retains the detached dirty draft after explicit tracking end and fresh authority without resending', async () => {
+    const { session, ordinary } = await beginMember(); await publishOnline(session);
+    await editMemberGuidance('明确结束后仍可复制的草稿'); const submitting = await submitMemberPreview();
+    await port.deliver({ kind: 'mutation-unknown', operation: 'proposalSubmit', intentId: 'member-end', roomId: session.roomId });
+    await port.deliver({ kind: 'request-error', operation: 'proposalSubmit', requestId: submitting.requestId, error: ipcFixture.error });
+    await click('结束本机跟踪（不取消服务器操作）', memberWorkspace());
+    expect(port.order).not.toContain('end-proposal-tracking');
+    vi.mocked(window.confirm).mockReturnValue(true); await click('结束本机跟踪（不取消服务器操作）', memberWorkspace());
+    expect(port.order.filter(item => item === 'end-proposal-tracking')).toHaveLength(1);
+    expect(memberGuidance().value).toBe('明确结束后仍可复制的草稿'); expect(memberGuidance().matches(':disabled')).toBe(true);
+    const read = await startAction('读取最新房间后重新审阅', 'session');
+    const fresh = structuredClone(session); fresh.snapshot.controlSeq += 1; fresh.snapshot.revision += 1;
+    fresh.snapshot.sharedConfig.userGuidance = '服务器最新设置';
+    await confirmMembership(read, 'member', fresh); await publishOnline(fresh);
+    expect(memberGuidance().value).toBe('明确结束后仍可复制的草稿');
+    expect(memberWorkspace().textContent).toContain('房间设置已更新');
+    expect(port.actions.map(item => item.action.kind)).toEqual(['join', 'proposal-submit', 'session']);
+    expect(ordinarySnapshot()).toEqual(ordinary); assertNoExecution();
+  });
+
+  it.each([true, false])('uses the fixed random route and a fresh public read, available=%s', async available => {
+    const originalInvoke = mocks.invoke.getMockImplementation()!;
+    const card = { ...publicCard, id: 'random-member-character', name: '随机公开角色', review_status: 'approved', updated_at: 'observed-before-read' };
+    mocks.invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+      if (command === 'cloud_card_library_request') {
+        const request = args.request as { routeId: string; query?: Record<string, string> };
+        if (request.routeId === 'random-public-card.query') return { status: 200, body: { success: true, card } };
+        if (request.routeId === 'public-data-cards.query' && request.query?.id === card.id) return available
+          ? { status: 200, body: { success: true, card: { ...card, updated_at: 'latest-observed-token' } } }
+          : { status: 404, body: { success: false } };
+      }
+      return originalInvoke(command, args);
+    });
+    const { session, ordinary } = await beginMember(); await publishOnline(session);
+    await click('随机匹配角色', memberWorkspace());
+    await vi.waitFor(() => expect(memberWorkspace().textContent).toContain(available ? card.name : '该公开数据卡不存在或已撤回'));
+    const requests = mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_card_library_request').map(([, args]) => (args as { request: { routeId: string; query?: unknown } }).request);
+    expect(requests.filter(request => request.routeId === 'random-public-card.query')).toEqual([{ routeId: 'random-public-card.query', query: { type: 'character' } }]);
+    expect(requests.some(request => request.routeId === 'public-data-cards.query' && (request.query as { id?: string })?.id === card.id)).toBe(true);
+    if (available) {
+      const submitting = await submitMemberPreview();
+      expect(submitting.action).toMatchObject({ kind: 'proposal-submit', request: { changes: expect.arrayContaining([
+        expect.objectContaining({ type: 'addCombatant', ref: { id: card.id, kind: 'character', versionToken: 'latest-observed-token' } }),
+      ]) } });
+      expect(JSON.stringify(submitting.action)).not.toContain('不得随房间创建上传的私有正文');
+    } else expect(port.actions.map(item => item.action.kind)).toEqual(['join']);
+    expect(ordinarySnapshot()).toEqual(ordinary); assertNoExecution();
+  });
+
+
+  it('permanently retires a preview when freshness is lost, while retaining the dirty draft across the same snapshot', async () => {
+    const { session, ordinary } = await beginMember(); await publishOnline(session);
+    await editMemberGuidance('断线前的独立成员草稿'); await click('预览提案', memberWorkspace());
+    expect(requiredButton('提交提案').disabled).toBe(false);
+    await port.deliver({ kind: 'status', state: 'offline' });
+    await publishOnline(session);
+    expect(button('提交提案')).toBeUndefined();
+    expect(memberGuidance().value).toBe('断线前的独立成员草稿');
+    expect(port.actions.map(item => item.action.kind)).toEqual(['join']);
+    await click('预览提案', memberWorkspace()); expect(requiredButton('提交提案').disabled).toBe(false);
+    expect(ordinarySnapshot()).toEqual(ordinary); assertNoExecution();
+  });
+
+
+  it('drops a random source result dispatched before freshness loss even after the same snapshot returns', async () => {
+    const originalInvoke = mocks.invoke.getMockImplementation()!;
+    const pending = deferred<unknown>();
+    const card = { ...publicCard, id: 'late-random-member', name: '旧随机响应不得入稿', review_status: 'approved', updated_at: 'observed-token' };
+    mocks.invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+      if (command === 'cloud_card_library_request') {
+        const request = args.request as { routeId: string; query?: Record<string, string> };
+        if (request.routeId === 'random-public-card.query') return pending.promise;
+        if (request.routeId === 'public-data-cards.query' && request.query?.id === card.id) return { status: 200, body: { success: true, card } };
+      }
+      return originalInvoke(command, args);
+    });
+    const { session, ordinary } = await beginMember(); await publishOnline(session);
+    await click('随机匹配角色', memberWorkspace());
+    await port.deliver({ kind: 'status', state: 'offline' }); await publishOnline(session);
+    await act(async () => { pending.resolve({ status: 200, body: { success: true, card } }); });
+    await vi.waitFor(() => expect(button('随机匹配角色', memberWorkspace())).toBeDefined());
+    expect(memberWorkspace().textContent).not.toContain(card.name);
+    expect(requiredButton('预览提案', memberWorkspace()).disabled).toBe(true);
+    expect(port.actions.map(item => item.action.kind)).toEqual(['join']);
+    expect(ordinarySnapshot()).toEqual(ordinary); assertNoExecution();
+  });
+
+});

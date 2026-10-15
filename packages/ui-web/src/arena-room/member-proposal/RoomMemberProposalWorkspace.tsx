@@ -120,10 +120,10 @@ export function RoomMemberProposalWorkspace({ model, scopeIdentity, room, host, 
     catch { setLocalError(editorState.dirty ? '草稿包含暂不支持的变更，请检查后重试' : '草稿没有可提交的变更'); }
   };
   const performSync = () => {
-    if (!isCurrent() || !actions.sync || matchLock.current === scope) return;
+    if (!isCurrent() || !actions.sync || matchLock.current === scope || !!current.current.room.blockedReason) return;
     model.dismissPreview(); setPreviewState(null); setLocalError(null); setConfirmSync(null); actions.sync();
   };
-  const requestSync = () => { if (!isCurrent() || !actions.sync) return; if (editorState.dirty) setConfirmSync(scope); else performSync(); };
+  const requestSync = () => { if (!isCurrent() || !actions.sync || !!current.current.room.blockedReason) return; if (editorState.dirty) setConfirmSync(scope); else performSync(); };
   const submit = async () => {
     if (!preview || !canAct() || submitLock.current === scope) return;
     try {
@@ -145,7 +145,7 @@ export function RoomMemberProposalWorkspace({ model, scopeIdentity, room, host, 
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {actions.sync ? (
-            <button type="button" className={buttonClassName()} disabled={isMatching} onClick={requestSync}>同步配置</button>
+            <button type="button" className={buttonClassName()} disabled={isMatching || !!room.blockedReason} onClick={requestSync}>同步配置</button>
           ) : null}
           <button type="button" className={buttonClassName({ variant: 'primary' })} disabled={!editorState.dirty || disabled} onClick={buildPreview}>预览提案</button>
         </div>
@@ -295,7 +295,7 @@ export function RoomMemberProposalWorkspace({ model, scopeIdentity, room, host, 
             <button
               type="button"
               className="arena-cta-button arena-cta-button--sync"
-              disabled={isMatching}
+              disabled={isMatching || !!room.blockedReason}
               onClick={requestSync}
             >
               ↻‌ 同步配置

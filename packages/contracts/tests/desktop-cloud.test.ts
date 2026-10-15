@@ -74,6 +74,7 @@ type DesktopCloudFixture = {
   validAuthorizeQuery: Record<string, unknown>;
   invalidAuthorizeQueries: Record<string, unknown>[];
   cardLibrary: {
+    randomPublicRequests: { valid: unknown[]; invalid: unknown[] };
     validRequests: unknown[];
     invalidFenceRequests: unknown[];
     ownedRequests: { valid: unknown[]; invalid: unknown[] };
@@ -691,5 +692,13 @@ describe('confirmed deletion fixed-route request contract', () => {
     for (const route of ['data-cards.delete', 'data-cards.purge', 'data-cards.recycle.purge']) {
       expect(DesktopCardLibraryRouteIdSchema.safeParse(route).success).toBe(false);
     }
+  });
+});
+
+
+describe('随机公开角色固定路由', () => {
+  it('仅接收本旅程的固定 character 参数，不扩张通用请求能力', () => {
+    for (const value of fixture.cardLibrary.randomPublicRequests.valid) expect(DesktopCardLibraryRequestSchema.safeParse(value).success).toBe(true);
+    for (const value of fixture.cardLibrary.randomPublicRequests.invalid) expect(DesktopCardLibraryRequestSchema.safeParse(value).success).toBe(false);
   });
 });

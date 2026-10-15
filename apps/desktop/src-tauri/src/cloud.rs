@@ -3073,6 +3073,12 @@ const CARD_LIBRARY_ROUTES: &[CloudRoute] = &[
         auth: CloudRouteAuth::Optional,
     },
     CloudRoute {
+        id: "random-public-card.query",
+        method: reqwest::Method::GET,
+        path: "/api/random-public-card",
+        auth: CloudRouteAuth::Optional,
+    },
+    CloudRoute {
         id: "tags.query",
         method: reqwest::Method::GET,
         path: "/api/tags",
@@ -3988,6 +3994,16 @@ async fn dispatch_cloud_route(
     let route = lookup_cloud_route(env.routes, &request.route_id)
         .ok_or_else(|| invalid_request("未知的云端路由标识"))?;
 
+    if route.id == "random-public-card.query"
+        && (request.body.is_some()
+            || request.expected_user_id.is_some()
+            || request.query.as_ref().is_none_or(|query| {
+                query.len() != 1 || query.get("type").map(String::as_str) != Some("character")
+            }))
+    {
+        return Err(invalid_request("随机公开角色只允许固定 character 查询"));
+    }
+
     let owned_operation = owned_card_operation(route.id);
     if owned_operation.is_some() && request.expected_user_id.is_none() {
         return Err(invalid_request("云端所属卡操作必须提供 expectedUserId"));
@@ -4193,6 +4209,24 @@ async fn dispatch_cloud_route(
                     "账号会话已改变，请重新读取并确认所属卡操作",
                 ));
             }
+        }
+    }
+    if route.id == "random-public-card.query" && (200..300).contains(&status) {
+        let card = &body["card"];
+        let bounded_text = |value: &serde_json::Value| {
+            value.as_str().is_some_and(|text| {
+                !text.trim().is_empty() && text.trim().encode_utf16().count() <= 256
+            })
+        };
+        if body["success"] != true
+            || !bounded_text(&card["id"])
+            || card["type"] != "character"
+            || !(card["is_public"] == 1 || card["is_public"] == true)
+            || card["review_status"] != "approved"
+            || !card["deleted_at"].is_null()
+            || !bounded_text(&card["updated_at"])
+        {
+            return Err(CloudError::invalid_response("随机公开角色"));
         }
     }
     let cache = if observes_public {
@@ -9073,6 +9107,76 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.code, CloudErrorCode::InvalidRequest);
             assert!(server.last_card_request.lock().unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn card_library_random_public_route_rejects_extra_inputs_before_network() {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("random-invalid-inputs");
+            for wire in fixture["cardLibrary"]["randomPublicRequests"]["invalid"]
+                .as_array()
+                .unwrap()
+            {
+                let Ok(request) = serde_json::from_value::<CloudRouteRequest>(wire.clone()) else {
+                    continue;
+                };
+                let error = cloud_card_library_request(&state, &secrets, cache.get(), request)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, CloudErrorCode::InvalidRequest, "{wire}");
+            }
+            assert_eq!(server.card_request_count.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn card_library_random_public_fixed_route_is_anonymous_bounded_and_never_cached() {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("random-public-source");
+            cache.enable_capture();
+            let wire = &fixture["cardLibrary"]["randomPublicRequests"]["valid"][0];
+            let valid = serde_json::json!({"success":true,"card":{"id":"public-character","type":"character",
+                "is_public":1,"review_status":"approved","updated_at":"2026-10-15T00:00:00Z","data":"{}"}});
+            *server.card_response_override.lock().unwrap() = Some((200, valid.to_string()));
+            *server.card_extra_headers.lock().unwrap() = vec![("Cache-Control".into(), "public, max-age=60".into())];
+            for authenticated in [false, true] {
+                if authenticated { store_session(&secrets, &stored_test_session()).unwrap(); }
+                let response = cloud_card_library_request(&state, &secrets, cache.get(), serde_json::from_value(wire.clone()).unwrap()).await.unwrap();
+                assert_eq!(response.body, valid);
+                assert!(response.cache.is_none());
+                assert_eq!(cache.get().stats().unwrap().summary_count, 0);
+                let (target, head, body) = server.last_card_request.lock().unwrap().clone().unwrap();
+                assert_eq!(target, "/api/random-public-card?type=character");
+                assert!(head.starts_with("GET "));
+                assert_eq!(head.to_ascii_lowercase().contains("\r\ncookie:"), authenticated);
+                assert!(body.is_none());
+            }
+            for status in [404, 429, 503] {
+                *server.card_response_override.lock().unwrap() = Some((status, serde_json::json!({"success":false}).to_string()));
+                let response = cloud_card_library_request(&state, &secrets, cache.get(), serde_json::from_value(wire.clone()).unwrap()).await.unwrap();
+                assert_eq!(response.status, status);
+                assert!(response.cache.is_none());
+            }
+            for (key, value) in [("id", serde_json::json!("")), ("type", serde_json::json!("scenario")),
+                ("review_status", serde_json::json!("pending")), ("is_public", serde_json::json!(0)),
+                ("updated_at", serde_json::Value::Null), ("deleted_at", serde_json::json!("deleted"))] {
+                let mut body = valid.clone(); body["card"][key] = value;
+                *server.card_response_override.lock().unwrap() = Some((200, body.to_string()));
+                let error = cloud_card_library_request(&state, &secrets, cache.get(), serde_json::from_value(wire.clone()).unwrap()).await.unwrap_err();
+                assert_eq!(error.code, CloudErrorCode::InvalidResponse, "{key}");
+            }
+            *server.card_response_override.lock().unwrap() = Some((200, serde_json::json!({"padding":"x".repeat(CARD_LIBRARY_RESPONSE_MAX_BYTES)}).to_string()));
+            let error = cloud_card_library_request(&state, &secrets, cache.get(), serde_json::from_value(wire.clone()).unwrap()).await.unwrap_err();
+            assert_eq!(error.code, CloudErrorCode::InvalidResponse);
         });
     }
 

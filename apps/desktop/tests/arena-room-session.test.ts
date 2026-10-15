@@ -214,12 +214,250 @@ const resolved = (requestId: string, value: ArenaRoomSessionResponse, proposalId
 });
 
 describe('Desktop Arena Room session through the real Native bridge', () => {
+  it('owns an isolated member draft, follows clean revisions and retains dirty stale input until explicit sync', async () => {
+    const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
+    const model = h.session.getSnapshot().memberModel!;
+    expect(model.store.getState().editor.workingConfig).toEqual(member.snapshot.sharedConfig);
+    const clean = { ...member, snapshot: { ...member.snapshot, revision: member.snapshot.revision + 1, controlSeq: member.snapshot.controlSeq + 1,
+      sharedConfig: { ...member.snapshot.sharedConfig, userGuidance: 'new authority' } } };
+    await installOnlineSnapshot(h, clean);
+    expect(h.session.getSnapshot().memberModel).toBe(model);
+    expect(model.store.getState().editor).toMatchObject({ dirty: false, baselineRevision: clean.snapshot.revision, workingConfig: { userGuidance: 'new authority' } });
+    model.actions.setUserGuidance('member working');
+    const preview = model.preparePreview('frozen-member-preview');
+    const dirty = { ...clean, snapshot: { ...clean.snapshot, revision: clean.snapshot.revision + 1, controlSeq: clean.snapshot.controlSeq + 1,
+      sharedConfig: { ...clean.snapshot.sharedConfig, userGuidance: 'newer authority' } } };
+    await installOnlineSnapshot(h, dirty);
+    expect(model.isPreviewCurrent(preview)).toBe(false);
+    expect(model.store.getState().editor).toMatchObject({ dirty: true, stale: true, baselineRevision: clean.snapshot.revision, workingConfig: { userGuidance: 'member working' } });
+    const current = h.session.getSnapshot().session!;
+    h.session.syncMemberProposal(current, h.session.confirmationOwner()!);
+    expect(model.store.getState().editor).toMatchObject({ dirty: false, stale: false, workingConfig: { userGuidance: 'newer authority' } });
+  });
+
+  it.each(['offline', 'resync-status', 'resync-socket', 'control-gap', 'same-revision-conflict'] as const)(
+    'permanently expires member confirmation and source generation across %s with identical recovery', async loss => {
+      const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
+      const identity = h.session.confirmationOwner(), model = h.session.getSnapshot().memberModel!;
+      model.actions.setUserGuidance('retain the complete dirty draft');
+      const editor = model.store.getState().editor, generation = model.store.getState().generation;
+      const preview = model.preparePreview('before-freshness-loss');
+      const snapshot = socket('room.snapshot');
+      if (snapshot.kind !== 'socket' || snapshot.message.type !== 'room.snapshot') throw new Error('Missing snapshot');
+      const event = loss === 'offline' ? { kind: 'status', state: 'offline' }
+        : loss === 'resync-status' ? { kind: 'status', state: 'resync-required' }
+        : loss === 'resync-socket' ? { kind: 'socket', message: { protocolVersion: 1, type: 'room.resync.required', reason: 'replay-unavailable' } }
+        : loss === 'control-gap' ? { kind: 'socket', message: { ...snapshot.message, type: 'room.config.updated',
+          roomId: member.roomId, roomEpoch: member.roomEpoch, controlSeq: member.snapshot.controlSeq + 2,
+          payload: { revision: member.snapshot.revision + 1, sharedConfig: member.snapshot.sharedConfig } } }
+        : { kind: 'socket', message: { ...snapshot.message, roomId: member.roomId, roomEpoch: member.roomEpoch,
+          controlSeq: member.snapshot.controlSeq, payload: { ...member.snapshot,
+            sharedConfig: { ...member.snapshot.sharedConfig, userGuidance: 'inconsistent same revision' } } } };
+      await h.receive(DesktopRoomEventSchema.parse(event));
+      expect(h.session.getSnapshot().snapshotReceived).toBe(false);
+      expect(model.store.getState().editor).toEqual(editor);
+      expect(model.isPreviewCurrent(preview)).toBe(false);
+      expect(model.store.getState().generation).toBe(generation + 1);
+      // Repeated loss notifications must not continually rotate the source scope.
+      await h.receive(DesktopRoomEventSchema.parse(event));
+      expect(model.store.getState().generation).toBe(generation + 1);
+      await installOnlineSnapshot(h, member);
+      expect(h.session.confirmationOwner()).toBe(identity);
+      expect(h.session.getSnapshot().memberModel).toBe(model);
+      expect(model.store.getState().editor).toEqual(editor);
+      expect(model.isPreviewCurrent(preview)).toBe(false);
+      expect(() => model.takePreviewIntent(preview)).toThrow('提案预览已失效');
+      expect(model.store.getState().generation).toBe(generation + 1);
+      const renewed = model.preparePreview('after-freshness-recovery');
+      // A repeated online notification and identical authority are not a new loss boundary.
+      await installOnlineSnapshot(h, member);
+      expect(model.store.getState().generation).toBe(generation + 1);
+      expect(model.isPreviewCurrent(renewed)).toBe(true);
+      expect(model.takePreviewIntent(renewed).changes).toEqual(preview.intent!.changes);
+      expect(h.requests.map(value => value.kind)).toEqual(['join']);
+    });
+
+  it('expires member confirmation at a fresh read start, retaining dirty values through the new subscription', async () => {
+    const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
+    const identity = h.session.confirmationOwner(), model = h.session.getSnapshot().memberModel!;
+    model.actions.setUserGuidance('keep on explicit fresh read');
+    const editor = model.store.getState().editor, generation = model.store.getState().generation;
+    const preview = model.preparePreview('before-fresh-read');
+    const read = h.plan('session'), reading = h.session.reconnect(); await read.entered.promise;
+    expect(h.session.getSnapshot().snapshotReceived).toBe(false);
+    expect(model.isPreviewCurrent(preview)).toBe(false);
+    expect(model.store.getState().generation).toBe(generation + 1);
+    read.accept(); await reading;
+    await h.receive(success('session', read.requestId, member));
+    await whenState(h.session, state => !state.busy && state.phase === 'connecting');
+    await installOnlineSnapshot(h, member);
+    expect(h.session.confirmationOwner()).toBe(identity);
+    expect(h.session.getSnapshot().memberModel).toBe(model);
+    expect(model.store.getState().editor).toEqual(editor);
+    expect(model.store.getState().generation).toBe(generation + 1);
+    expect(model.isPreviewCurrent(preview)).toBe(false);
+    expect(model.isPreviewCurrent(model.preparePreview('after-fresh-read'))).toBe(true);
+  });
+
+  it('requires explicit replacement across room epochs and destroys the member model on owner loss', async () => {
+    const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
+    const model = h.session.getSnapshot().memberModel!;
+    model.actions.setUserGuidance('keep across epoch');
+    const next = { ...member, roomEpoch: 'next-epoch', snapshot: { ...member.snapshot, roomEpoch: 'next-epoch' } };
+    await installOnlineSnapshot(h, next);
+    expect(model.store.getState().editor).toMatchObject({ replacementRequired: true, workingConfig: { userGuidance: 'keep across epoch' } });
+    const current = h.session.getSnapshot().session!;
+    h.session.syncMemberProposal(current, h.session.confirmationOwner()!);
+    expect(model.store.getState().editor).toMatchObject({ replacementRequired: false, baselineEpoch: 'next-epoch' });
+    h.session.detach();
+    expect(model.store.getState().disposed).toBe(true);
+    expect(h.session.getSnapshot().memberModel).toBeNull();
+    expect(() => model.actions.setUserGuidance('late')).toThrow();
+  });
+
+  it('submits a frozen old-baseline member intent once and only settles its summary on exact ACK', async () => {
+    const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
+    const model = h.session.getSnapshot().memberModel!;
+    model.actions.setUserGuidance('member intent');
+    const newer = { ...member, snapshot: { ...member.snapshot, revision: member.snapshot.revision + 1, controlSeq: member.snapshot.controlSeq + 1,
+      sharedConfig: { ...member.snapshot.sharedConfig, selectedLanguage: 'en-US' } } };
+    await installOnlineSnapshot(h, newer);
+    const current = h.session.getSnapshot().session!, identity = h.session.confirmationOwner()!;
+    const preview = model.preparePreview('desktop-member-submit');
+    const intent = model.takePreviewIntent(preview);
+    expect(intent.baseRevision).toBe(member.snapshot.revision);
+    const request = h.plan('proposal-submit'); const submitting = h.session.submitProposal(current, intent, identity);
+    expect(await request.entered.promise).toEqual({ kind: 'proposal-submit', roomId: member.roomId, request: intent });
+    request.accept(); await submitting;
+    await h.session.submitProposal(current, intent, identity);
+    expect(h.requests.map(value => value.kind)).toEqual(['join', 'proposal-submit']);
+    const sourceGeneration = model.store.getState().generation;
+    const receipt = DesktopRoomEventSchema.parse({ kind: 'http-result', operation: 'proposalSubmit', requestId: request.requestId,
+      response: { ...proposalFixture.proposalSubmit.success, result: { ...proposalFixture.proposalSubmit.success.result, proposalId: intent.proposalId, revision: 999, controlSeq: 999 } } });
+    const delivery = h.emit(receipt); await delivery.ackEntered.promise;
+    expect(h.session.getSnapshot()).toMatchObject({ busy: true, snapshotReceived: false, proposalTracking: { phase: 'resolving', intent: { request: intent } } });
+    expect(h.session.getSnapshot().session).toBe(current);
+    expect(model.store.getState().generation).toBe(sourceGeneration + 1);
+    delivery.acknowledge(); await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().proposalTracking?.phase).toBe('settled');
+    expect(h.session.getSnapshot().session?.snapshot.controlSeq).toBe(current.snapshot.controlSeq);
+    expect(h.session.getSnapshot().memberModel).toBe(model);
+    expect(h.session.memberProposalBlockedReason()).toContain('完整房间快照');
+    expect(h.subscriptions()).toHaveLength(1);
+  });
+
+  it('keeps involuntary membership loss read-only until explicit discard, while account loss destroys the draft', async () => {
+    const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
+    const model = h.session.getSnapshot().memberModel!; model.actions.setUserGuidance('retain lost-membership input');
+    const preview = model.preparePreview('before-membership-loss');
+    await h.receive({ kind: 'status', state: 'closed' });
+    expect(h.session.getSnapshot()).toMatchObject({ session: null, memberModel: model, constrained: true });
+    expect(model.store.getState().disposed).toBe(false); expect(model.isPreviewCurrent(preview)).toBe(false);
+    expect(h.session.memberWorkspaceSession()?.roomId).toBe(member.roomId);
+    expect(h.session.memberProposalBlockedReason()).toContain('没有可写的成员资格');
+    await h.session.join(member.roomId, 'cannot replace retained draft');
+    expect(h.requests.map(value => value.kind)).toEqual(['join']);
+    await h.account.signOut();
+    expect(model.store.getState().disposed).toBe(true); expect(h.session.getSnapshot().memberModel).toBeNull();
+    expect(h.session.memberWorkspaceSession()).toBeNull();
+  });
+
+  it.each(['kick', 'close'] as const)('retains %s socket loss read-only and discards only on explicit detach', async loss => {
+    const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
+    const model = h.session.getSnapshot().memberModel!; model.actions.setUserGuidance('unsubmitted member input');
+    if (loss === 'kick') {
+      const snapshot = socket('room.snapshot');
+      if (snapshot.kind !== 'socket' || snapshot.message.type !== 'room.snapshot') throw new Error('Missing snapshot');
+      await h.receive(DesktopRoomEventSchema.parse({ kind: 'socket', message: { ...snapshot.message,
+        roomId: member.roomId, roomEpoch: member.roomEpoch, controlSeq: member.snapshot.controlSeq + 1,
+        payload: { ...member.snapshot, controlSeq: member.snapshot.controlSeq + 1, members: member.snapshot.members.filter(value => value.userId !== member.self.userId) } } }));
+    } else {
+      const previous = socket('room.snapshot'); if (previous.kind !== 'socket') throw new Error('Missing snapshot');
+      await h.receive(DesktopRoomEventSchema.parse({ kind: 'socket', message: { ...previous.message, type: 'room.closing', payload: {}, roomId: member.roomId, roomEpoch: member.roomEpoch, controlSeq: member.snapshot.controlSeq + 1 } }));
+    }
+    expect(h.session.getSnapshot()).toMatchObject({ session: null, snapshotReceived: false, memberModel: model, constrained: true });
+    expect(model.exportSharedConfig().userGuidance).toBe('unsubmitted member input');
+    expect(h.session.needsLeaveConfirmation()).toBe(true);
+    h.session.detach();
+    expect(model.store.getState().disposed).toBe(true);
+    expect(h.session.getSnapshot()).toMatchObject({ memberModel: null, session: null, constrained: false });
+    expect(h.session.memberWorkspaceSession()).toBeNull();
+  });
+
+  it('retains dirty values through Native owner renewal and explicit end, without reviving the old model', async () => {
+    const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
+    const original = h.session.getSnapshot().memberModel!;
+    original.actions.setUserGuidance('unsent draft survives');
+    const preview = original.preparePreview('desktop-member-unknown');
+    const intent = original.takePreviewIntent(preview), current = h.session.getSnapshot().session!;
+    const request = h.plan('proposal-submit'); const submitting = h.session.submitProposal(current, intent, h.session.confirmationOwner()!);
+    await request.entered.promise; request.accept(); await submitting;
+    const pending = { operation: 'proposalSubmit' as const, roomId: member.roomId, intentId: 'member-unknown' };
+    h.setPending(pending);
+    await h.receive({ kind: 'mutation-unknown', ...pending });
+    await h.receive({ kind: 'request-error', operation: 'proposalSubmit', requestId: request.requestId,
+      error: { code: 'network-error', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'unknown' } });
+    await whenState(h.session, state => !state.busy);
+    await h.session.open();
+    const recovered = h.session.getSnapshot().memberModel!;
+    expect(original.store.getState().disposed).toBe(true);
+    expect(original.isPreviewCurrent(preview)).toBe(false);
+    expect(recovered).not.toBe(original);
+    expect(recovered.store.getState().editor).toMatchObject({ dirty: true, baselineRevision: intent.baseRevision, workingConfig: { userGuidance: 'unsent draft survives' } });
+    expect(h.session.getSnapshot().proposalTracking?.intent).toMatchObject({ kind: 'proposal-submit', request: intent });
+    await h.session.endProposalTracking(pending.intentId);
+    expect(h.session.getSnapshot()).toMatchObject({ session: null, memberModel: recovered, proposalTracking: { phase: 'ended-needs-read' } });
+    expect(recovered.store.getState().disposed).toBe(false);
+    const read = h.plan('session'); const reading = h.session.readProposalAfterEnd(); await read.entered.promise; read.accept(); await reading;
+    const replacement = h.session.getSnapshot().memberModel!;
+    expect(replacement).not.toBe(recovered);
+    expect(recovered.store.getState().disposed).toBe(true);
+    const newer = { ...member, snapshot: { ...member.snapshot, controlSeq: member.snapshot.controlSeq + 1, revision: member.snapshot.revision + 1,
+      sharedConfig: { ...member.snapshot.sharedConfig, userGuidance: 'new authority' } } };
+    await h.receive(success('session', read.requestId, newer)); await whenState(h.session, state => !state.busy);
+    expect(replacement.store.getState().editor).toMatchObject({ dirty: true, stale: true, baselineRevision: intent.baseRevision, workingConfig: { userGuidance: 'unsent draft survives' } });
+    expect(h.session.getSnapshot().proposalTracking).toBeNull();
+    expect(h.requests.map(value => value.kind)).toEqual(['join', 'proposal-submit', 'session']);
+  });
+
+  it('allows only fresh active members to submit canonical IDs with a non-future baseline', async () => {
+    const h = await harness(); await joinRoom(h);
+    const model = h.session.getSnapshot().memberModel!; model.actions.setUserGuidance('member intent');
+    const intent = model.takePreviewIntent(model.preparePreview('desktop-member-submit'));
+    let current = h.session.getSnapshot().session!, identity = h.session.confirmationOwner()!;
+    await h.session.submitProposal(current, intent, identity);
+    await installOnlineSnapshot(h, member); current = h.session.getSnapshot().session!;
+    await h.session.submitProposal(current, { ...intent, baseRevision: current.snapshot.revision + 1 }, identity);
+    await h.session.submitProposal(current, { ...intent, proposalId: '../unsafe' }, identity);
+    await h.session.submitProposal(current, intent, Symbol('old owner'));
+    h.setCanStart(false); await h.session.submitProposal(current, intent, identity);
+    h.setCanStart(true); h.session.detach(); await h.session.submitProposal(current, intent, identity);
+    expect(h.requests.map(value => value.kind)).toEqual(['join']);
+  });
+
+  it('withdraws only the current member’s own exact pending proposal through Native', async () => {
+    const h = await harness();
+    const own = { ...member, snapshot: { ...member.snapshot, proposals: [proposal] } };
+    await joinRoom(h, own); await installOnlineSnapshot(h, own);
+    const current = h.session.getSnapshot().session!, identity = h.session.confirmationOwner()!;
+    await h.session.withdrawProposal(current, 'missing', identity);
+    const request = h.plan('proposal-withdraw'); const withdrawing = h.session.withdrawProposal(current, proposal.proposalId, identity);
+    expect(await request.entered.promise).toEqual({ kind: 'proposal-withdraw', roomId: current.roomId, proposalId: proposal.proposalId, request: { expectedRoomEpoch: current.roomEpoch } });
+    request.accept(); await withdrawing;
+    await h.session.withdrawProposal(current, proposal.proposalId, identity);
+    const receipt = DesktopRoomEventSchema.parse({ kind: 'http-result', operation: 'proposalWithdraw', requestId: request.requestId, response: proposalFixture.proposalWithdraw.success });
+    await h.receive(receipt); await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().proposalTracking).toMatchObject({ phase: 'settled', operation: 'proposalWithdraw' });
+    expect(h.session.getSnapshot().session).toBe(current);
+    expect(h.requests.map(value => value.kind)).toEqual(['join', 'proposal-withdraw']);
+  });
+
   it('resolves a current host proposal through the fixed bridge and settles only its exact ACK', async () => {
     const h = await harness(); const current = await joinProposalHost(h);
     const request = h.plan('proposal-resolve');
     const resolving = h.session.resolveProposal(current, proposal, rejectProposal(current), h.session.confirmationOwner()!);
     expect(await request.entered.promise).toEqual({ kind: 'proposal-resolve', roomId: current.roomId, proposalId: proposal.proposalId, request: rejectProposal(current) });
-    expect(h.session.getSnapshot().proposalTracking).toEqual({ id: null, roomId: current.roomId, proposalId: proposal.proposalId, operation: 'proposalResolve', phase: 'resolving', observation: null });
+    expect(h.session.getSnapshot().proposalTracking).toEqual({ id: null, roomId: current.roomId, proposalId: proposal.proposalId, operation: 'proposalResolve', phase: 'resolving', observation: null, intent: { kind: 'proposal-resolve', roomId: current.roomId, proposalId: proposal.proposalId, request: rejectProposal(current) } });
     request.accept(); await resolving;
     await h.session.resolveProposal(current, proposal, rejectProposal(current), h.session.confirmationOwner()!);
     expect(h.requests.map(value => value.kind)).toEqual(['join', 'proposal-resolve']);

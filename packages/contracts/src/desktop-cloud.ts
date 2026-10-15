@@ -674,6 +674,7 @@ export const DesktopCardLibraryRouteIdSchema = z.enum([
   'deck-cards.query',
   // 公开可读；有会话时 native 附带会话（个性化/审计由服务端决定）
   'public-data-cards.query',
+  'random-public-card.query',
   'tags.query',
   'data-card-stats.report',
   'data-card-meta-batch.query',
@@ -694,6 +695,13 @@ export const DesktopCardLibraryRequestSchema = z.object({
   query: z.record(z.string().max(64), z.string().max(1024)).optional(),
   body: SafeJsonValueSchema.optional(),
 }).strict().superRefine((request, context) => {
+  if (request.routeId === 'random-public-card.query') {
+    if (request.body !== undefined || request.expectedUserId !== undefined
+      || !z.object({ type: z.literal('character') }).strict().safeParse(request.query).success) {
+      context.addIssue({ code: 'custom', message: '随机公开角色只允许固定 character 查询' });
+    }
+    return;
+  }
   if (request.routeId === 'data-cards.restore') {
     const body = request.body;
     if (request.query !== undefined || !body || typeof body !== 'object' || Array.isArray(body)

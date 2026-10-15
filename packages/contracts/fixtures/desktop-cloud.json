@@ -104,6 +104,23 @@
     }
   },
   "cardLibrary": {
+    "randomPublicRequests": {
+      "valid": [{"routeId":"random-public-card.query","query":{"type":"character"}}],
+      "invalid": [
+        {"routeId":"random-public-card.query"},
+        {"routeId":"random-public-card.query","query":{}},
+        {"routeId":"random-public-card.query","query":{"type":"scenario"}},
+        {"routeId":"random-public-card.query","query":{"type":"character","offset":"0"}},
+        {"routeId":"random-public-card.query","query":{"type":"character","url":"https://example.com"}},
+        {"routeId":"random-public-card.query","query":{"type":"character"},"body":{}},
+        {"routeId":"random-public-card.query","query":{"type":"character"},"body":null},
+        {"routeId":"random-public-card.query","query":null},
+        {"routeId":"random-public-card.query","query":{"type":" character"}},
+        {"routeId":"random-public-card.query","query":{"type":"character"},"expectedUserId":7},
+        {"routeId":"random-public-card.query","query":{"type":"character"},"url":"https://example.com"},
+        {"routeId":"random-public-card.query","query":{"type":"character"},"method":"POST"}
+      ]
+    },
     "restoreRequests": {
       "valid": [
         {"routeId": "data-cards.restore","expectedUserId": 7,"body": {"expectedUserId": 7,"id": "owned-card","version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
@@ -561,6 +578,7 @@
       "decks.query": {"method": "GET", "path": "/api/decks", "auth": "required"},
       "deck-cards.query": {"method": "GET", "path": "/api/deck-cards", "auth": "required"},
       "public-data-cards.query": {"method": "GET", "path": "/api/public-data-cards", "auth": "optional"},
+      "random-public-card.query": {"method": "GET", "path": "/api/random-public-card", "auth": "optional"},
       "tags.query": {"method": "GET", "path": "/api/tags", "auth": "optional"},
       "data-card-stats.report": {"method": "POST", "path": "/api/data-card-stats", "auth": "optional"},
       "data-card-meta-batch.query": {"method": "POST", "path": "/api/data-card-meta-batch", "auth": "optional"},

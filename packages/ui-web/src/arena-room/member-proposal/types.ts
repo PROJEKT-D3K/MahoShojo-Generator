@@ -17,6 +17,8 @@ export type ArenaMemberProposalRoom = Readonly<{
   session: ArenaRoomSessionResponse | null;
   operation: 'submit' | 'withdraw' | 'resolve' | null;
   resultUnknown: boolean;
+  /** Host transport/capability gate. Omitted by hosts without a separate freshness contract. */
+  blockedReason?: string | null;
   tracking?: Readonly<{ id: string; phase: 'unknown' | 'ended-needs-read' }> | null;
   outcome?: string | null;
 }>;

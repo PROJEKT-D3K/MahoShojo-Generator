@@ -106,6 +106,18 @@ describe('controlled full member proposal workspace', () => {
     await render(props); expect(button('预览提案').disabled).toBe(false);
   });
 
+  it('retains a transport-blocked draft and disables writes without inventing an unknown request', async () => {
+    const { model, props, render } = fixture(); model.actions.setUserGuidance('offline retained draft'); await render();
+    await act(async () => button('预览提案').click()); const submit = button('提交提案');
+    await render({ ...props, room: { ...props.room, blockedReason: '等待当前连接的完整房间快照；提案草稿仍保留。' } });
+    expect(document.body.textContent).toContain('等待当前连接的完整房间快照');
+    expect(document.body.textContent).not.toContain('上次提案请求结果未知');
+    expect(button('预览提案').disabled).toBe(true); expect(button('同步配置').disabled).toBe(true);
+    await act(async () => submit.click()); expect(props.actions.submit).not.toHaveBeenCalled(); expect(props.actions.sync).not.toHaveBeenCalled();
+    expect(model.exportSharedConfig().userGuidance).toBe('offline retained draft');
+    await render(props); expect(button('预览提案').disabled).toBe(false);
+  });
+
   it('only offers withdrawal for the current member pending proposal and blocks it while unknown', async () => {
     const { model, props, render } = fixture(); model.actions.setUserGuidance('pending');
     const intent = model.preparePreview('mine').intent!;
