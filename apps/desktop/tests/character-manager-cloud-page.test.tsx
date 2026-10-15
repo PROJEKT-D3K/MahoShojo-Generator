@@ -71,7 +71,7 @@ describe('Desktop真实角色管理云写宿主与Native模拟边界', () => {
   });
   it('顶部我的数据卡打开Web同源管理，替换先读真实版本、取消零写，再确认回显待审', async () => {
     await mount(); await click('我的数据卡'); await waitFor(() => !!button('替换'));
-    expect(button('修改信息')).toBeTruthy(); expect(button('修改信息').disabled).toBe(false); expect(button('删除')).toBeUndefined();
+    expect(button('修改信息')).toBeTruthy(); expect(button('修改信息').disabled).toBe(false); expect(button('删除')).toBeTruthy(); expect(button('删除').disabled).toBe(false);
     expect(document.documentElement.style.overflow).toBe('hidden'); expect(document.querySelector('[role=dialog] [role=region]')?.getAttribute('tabindex')).toBe('0');
     await click('替换'); await waitFor(() => !!button('确认替换')); expect(requests('data-cards.replace-target.query')).toHaveLength(1); expect(requests('data-cards.replace')).toHaveLength(0); await click('取消');
     expect(document.documentElement.style.overflow).toBe('');

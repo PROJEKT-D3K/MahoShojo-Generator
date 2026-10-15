@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import SaveCardModal from './CharManager/SaveCardModal';
 import DataCardsModal from './CharManager/DataCardsModal';
+import RecycleBinModal from './CharManager/RecycleBinModal';
 import { useAuth } from '@/lib/useAuth';
 import { authStorage, dataCardApi, type AuthData } from '@/lib/auth';
+import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
 import { CloudCardActionButtons, ReplaceCardModal } from '@mahoshojo/ui-web/cloud-save';
 import { quickCheck } from '@/lib/sensitive-word-filter';
 import type { OnlineDataCardType, OwnedDataCardReplacementTarget } from '@mahoshojo/contracts/data-cards';
@@ -33,7 +35,15 @@ const isScenarioData = (data: any): boolean => {
   return Boolean(data && data.title && data.elements && (data.scenario_type || data.elements.events));
 };
 
-export default function SaveToCloudButton({
+export default function SaveToCloudButton(props: SaveToCloudButtonProps) {
+  return props.operationGuard ? <SaveToCloudButtonView {...props} /> : <InternallyGuardedSaveToCloudButton {...props} />;
+}
+function InternallyGuardedSaveToCloudButton(props: SaveToCloudButtonProps) {
+  const pending = useRef(false);
+  useUnsavedPageGuard(() => pending.current, '正在处理云端数据卡，请等待响应后再离开', () => false);
+  return <SaveToCloudButtonView {...props} operationGuard={{ isBlocked: () => pending.current, onBusyChange: (value) => { pending.current = value; } }} />;
+}
+function SaveToCloudButtonView({
   data,
   getData,
   sourceKey,
@@ -61,6 +71,7 @@ export default function SaveToCloudButton({
   const [userCapacity, setUserCapacity] = useState<number | undefined>(undefined);
   const [userUsedSlots, setUserUsedSlots] = useState<number | undefined>(undefined);
   const [showDataCardsForReplace, setShowDataCardsForReplace] = useState(false);
+  const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [replaceCurrentPage, setReplaceCurrentPage] = useState(1);
   const [replacementTarget, setReplacementTarget] = useState<OwnedDataCardReplacementTarget | null>(null);
   const [replacementOpen, setReplacementOpen] = useState(false);
@@ -117,7 +128,7 @@ export default function SaveToCloudButton({
     setCheckedOwnCards(false);
     setUserCapacity(undefined);
     setUserUsedSlots(undefined);
-    setShowDataCardsForReplace(false);
+    setShowDataCardsForReplace(false); setShowRecycleBin(false);
     setReplacementTarget(null); setReplacementOpen(false); setReplacementError(null);
     setReplacementUncertain(false); setReplacementConflict(false);
     replacementUnknown.current = false; replacementSelection.current = null;
@@ -256,20 +267,6 @@ export default function SaveToCloudButton({
       if (sent) { replacementUnknown.current = true; setReplacementUncertain(true); setCheckedOwnCards(false); setReplacementError('替换结果不确定，请检查我的云端卡及待审版本；不会自动重发。'); }
       else setReplacementError(error instanceof Error ? error.message : '准备替换失败，输入已保留');
     } finally { releaseOperation?.(); if (isCurrent()) setIsSaving(false); }
-  };
-
-  const handleDeleteCard = async (id: string) => {
-    if (!window.confirm('确认删除此数据卡？')) return;
-    try {
-      const result = await dataCardApi.deleteCard(id);
-      if (result.success) {
-        loadUserDataCards();
-      } else {
-        alert(result.error || '删除失败');
-      }
-    } catch (error) {
-      alert(error instanceof Error ? error.message : '删除失败');
-    }
   };
 
   const handleSave = async () => {
@@ -474,10 +471,10 @@ export default function SaveToCloudButton({
         cardsPerPage={8}
         onPageChange={setReplaceCurrentPage}
 
-        onDeleteCard={handleDeleteCard}
         onLoadCard={() => {}}
 
         onReplaceCard={handleReplaceFromDataCards}
+        onOpenRecycleBin={() => { setShowDataCardsForReplace(false); setShowRecycleBin(true); }}
         userCapacity={userCapacity}
         userUsedSlots={userUsedSlots}
         title="替换已有数据卡"
@@ -488,6 +485,8 @@ export default function SaveToCloudButton({
         allowHistoryReplace={cardType === 'history'}
         showHotHint={false}
       />
+      <RecycleBinModal isOpen={showRecycleBin} onClose={() => setShowRecycleBin(false)} refreshKey={cardsRefresh}
+        operationGuard={{ isBlocked: isOperationBlocked, onBusyChange: setOperationBusy }} onChanged={() => void loadUserDataCards()} />
     </>
   );
 }

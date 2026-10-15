@@ -1,7 +1,15 @@
 import { z } from './zod';
 
 import { SafeJsonValueSchema } from './json-value';
-import { OwnedDataCardMetadataRequestSchema, OwnedDataCardReplaceRequestSchema, OwnedRecycleBinQuerySchema, OwnedRecycleBinDetailQuerySchema } from './data-cards';
+import {
+  OwnedDataCardDeletionPreviewQuerySchema,
+  OwnedDataCardDeletionRequestSchema,
+  OwnedDataCardMetadataRequestSchema,
+  OwnedDataCardReplaceRequestSchema,
+  OwnedRecycleBinDetailQuerySchema,
+  OwnedRecycleBinPurgeRequestSchema,
+  OwnedRecycleBinQuerySchema,
+} from './data-cards';
 import { ProviderModelIdSchema, ProviderPresetIdSchema } from './provider-target';
 
 /**
@@ -652,6 +660,10 @@ export const DesktopCardLibraryRouteIdSchema = z.enum([
   'data-cards.metadata',
   'data-cards.recycle.query',
   'data-cards.recycle-detail.query',
+  'data-cards.delete-preview.query',
+  'data-cards.soft-delete',
+  'data-cards.purge-active',
+  'data-cards.purge-recycle',
   'user-capacity.query',
   'favorites.query',
   'favorites.add',
@@ -680,6 +692,23 @@ export const DesktopCardLibraryRequestSchema = z.object({
   query: z.record(z.string().max(64), z.string().max(1024)).optional(),
   body: SafeJsonValueSchema.optional(),
 }).strict().superRefine((request, context) => {
+  const deletion = ['data-cards.delete-preview.query', 'data-cards.soft-delete', 'data-cards.purge-active', 'data-cards.purge-recycle'].includes(request.routeId);
+  if (deletion) {
+    const reject = () => context.addIssue({ code: 'custom', message: '确认式删除只允许冻结账号和明确目标快照' });
+    if (request.routeId === 'data-cards.delete-preview.query') {
+      const query = request.query ?? {};
+      if (request.body !== undefined
+        || (query.expectedUserId !== undefined && query.expectedUserId !== String(request.expectedUserId))
+        || !OwnedDataCardDeletionPreviewQuerySchema.safeParse({ ...query, expectedUserId: request.expectedUserId }).success) reject();
+      return;
+    }
+    const body = request.body;
+    if (request.query !== undefined || !body || typeof body !== 'object' || Array.isArray(body)) { reject(); return; }
+    if (body.expectedUserId !== undefined && body.expectedUserId !== request.expectedUserId) { reject(); return; }
+    const schema = request.routeId === 'data-cards.purge-recycle' ? OwnedRecycleBinPurgeRequestSchema : OwnedDataCardDeletionRequestSchema;
+    if (!schema.safeParse({ ...body, expectedUserId: request.expectedUserId }).success) reject();
+    return;
+  }
   const recycle = ['data-cards.recycle.query', 'data-cards.recycle-detail.query'].includes(request.routeId);
   if (recycle) {
     const query = request.query ?? {};

@@ -20,15 +20,15 @@ vi.mock('@/lib/db/drizzle', () => ({ getDrizzleDbFromRuntime: () => runtime.db }
 vi.mock('@/lib/auth/server', () => ({ requireAuthUser: async () => ({ user: { id: 7 } }) }));
 import recycleHandler from '@/app/api/data-card-recycle/handler';
 
-let sqlite: Database;
+let sqlite: InstanceType<typeof Database>;
 let db: AppDrizzleDb;
 
-const readCards = (connection = sqlite) => connection.prepare(
+const readCards = (connection = sqlite): Array<{ id: string; user_id: number; deleted_at: string | null }> => connection.prepare(
   'SELECT id, user_id, deleted_at FROM data_cards ORDER BY id',
-).all();
+).all() as Array<{ id: string; user_id: number; deleted_at: string | null }>;
 
 const createD1Db = (
-  connection: Database,
+  connection: InstanceType<typeof Database>,
   queries: string[],
   beforeExecute?: () => Promise<void>,
 ) => drizzleD1({
@@ -87,23 +87,17 @@ describe('回收站永久删除边界', () => {
       .toEqual({ deleted_at: null });
   });
 
-  test.each(['active', 'other-active', 'other-deleted', 'missing'])('DELETE 接口拒绝非本人回收站目标 %s', async (id) => {
+  test.each(['oldest', 'active', 'other-active', 'other-deleted', 'missing', ''])('旧 DELETE 接口要求版本快照确认且零删除：%s', async (id) => {
     const before = readCards();
-    const response = await recycleHandler(new Request(`https://example.test/api/data-card-recycle?id=${id}`, {
-      method: 'DELETE',
-    }));
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: '数据卡不存在或无权访问' });
-    expect(readCards()).toEqual(before);
+    const request = () => new Request(`https://example.test/api/data-card-recycle?id=${id}`, { method: 'DELETE' });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await recycleHandler(request());
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: 'CONFIRMATION_REQUIRED', code: 'CONFIRMATION_REQUIRED' });
+      expect(readCards()).toEqual(before);
+    }
   });
 
-  test('DELETE 接口保留成功响应与重复删除的 404 形状', async () => {
-    const request = () => new Request('https://example.test/api/data-card-recycle?id=oldest', { method: 'DELETE' });
-    const response = await recycleHandler(request());
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ success: true, message: '数据卡已彻底删除' });
-    expect((await recycleHandler(request())).status).toBe(404);
-  });
 });
 
 describe('回收站原子裁剪', () => {

@@ -3,6 +3,8 @@ import type { OnlineDataCardType, OwnedRecycleBinCardDetail, OwnedRecycleBinPage
 import type { CardLibraryDetailsModalProps } from '../card-library/host';
 import { getDataCardStatus } from '../card-library/status';
 import { isQuestionnairePayload } from '@mahoshojo/domain/questionnaire-card';
+import { OwnedCardDeleteDialog, useOwnedCardDelete } from './OwnedCardDeleteDialog';
+import type { OwnedCardDeletePort } from './owned-card-delete';
 import { BaseModal } from '../modal/BaseModal';
 
 export interface OwnedRecycleBinReadPort {
@@ -14,6 +16,7 @@ export interface RecycleBinModalProps {
   isOpen: boolean;
   onClose(): void;
   port: OwnedRecycleBinReadPort;
+  deletePort?: OwnedCardDeletePort;
   limit?: number;
   type?: OnlineDataCardType;
   refreshKey?: number;
@@ -21,7 +24,6 @@ export interface RecycleBinModalProps {
   operationGuard?: { isBlocked(): boolean; onBusyChange(busy: boolean): void };
   DetailsModal?: ComponentType<CardLibraryDetailsModalProps & { isOwner?: boolean }>;
   onRestore?: (id: string) => void | Promise<void>;
-  onDelete?: (id: string) => void | Promise<void>;
 }
 const labels: Record<OnlineDataCardType, string> = { character: '角色', scenario: '情景', history: '叙事历史', questionnaire: '问卷' };
 const reviewLabels = { pending: '待审核', approved: '已通过', rejected: '未通过' };
@@ -29,7 +31,8 @@ const formatTime = (value: string) => { const date = new Date(value); return Num
 
 /** 摘要、按需详情与代次由两端共用；认证、文件和既有 Web 写操作留在宿主。 */
 export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType, refreshKey = 0, busy = false,
-  operationGuard, DetailsModal, onRestore, onDelete }: RecycleBinModalProps) {
+  operationGuard, DetailsModal, onRestore, deletePort }: RecycleBinModalProps) {
+  const deletion = useOwnedCardDelete(deletePort, isOpen);
   const [type, setType] = useState<OnlineDataCardType | undefined>(fixedType);
   const [offset, setOffset] = useState(0);
   const [refresh, setRefresh] = useState(0);
@@ -40,8 +43,8 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
   const [selected, setSelected] = useState<OwnedRecycleBinCardDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
-  const latest = useRef({ isOpen, port, operationGuard, busy });
-  latest.current = { isOpen, port, operationGuard, busy };
+  const latest = useRef({ isOpen, port, operationGuard, busy, deleteController: deletion.controller });
+  latest.current = { isOpen, port, operationGuard, busy, deleteController: deletion.controller };
   const operation = useRef<{ controller: AbortController; release?: () => void; write: boolean; port: OwnedRecycleBinReadPort } | null>(null);
   const invalidate = useCallback(() => {
     const old = operation.current;
@@ -51,7 +54,7 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
   }, []);
   const begin = (write = false) => {
     const current = latest.current;
-    if (operation.current || !current.isOpen || !current.port.isCurrent() || current.busy || current.operationGuard?.isBlocked()) return null;
+    if (!['idle', 'success', 'rejected'].includes(current.deleteController?.getSnapshot().phase ?? 'idle') || operation.current || !current.isOpen || !current.port.isCurrent() || current.busy || current.operationGuard?.isBlocked()) return null;
     const guard = current.operationGuard;
     const ticket = { controller: new AbortController(), port: current.port, release: guard ? () => guard.onBusyChange(false) : undefined, write };
     operation.current = ticket;
@@ -77,10 +80,10 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
       .finally(() => { if (current(ticket)) setLoading(false); finish(ticket); });
     return () => { if (operation.current === ticket) invalidate(); };
     // Host guards are read through latest; inline host objects must not restart requests.
-  }, [isOpen, offset, type, refresh, refreshKey, port, invalidate]);
+  }, [isOpen, offset, type, refresh, refreshKey, deletion.refresh, port, invalidate]);
   useEffect(() => invalidate, [invalidate]);
   const close = () => {
-    if (operation.current?.write || latest.current.busy) return;
+    if (operation.current?.write || latest.current.busy || deletion.busy) return;
     invalidate(); setSelected(null); onClose();
   };
   const detail = async (id: string) => {
@@ -105,9 +108,9 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
       data: selected.data, isPublic: selected.is_public === 1, usageCount: selected.usage_count, likeCount: selected.like_count,
       author, createdAt: selected.created_at ?? undefined, updatedAt: selected.updated_at ?? undefined };
   }, [selected]);
-  const disabled = busy || loading || writing || detailLoading !== null;
+  const disabled = busy || loading || writing || detailLoading !== null || deletion.busy;
   return <>
-    <BaseModal isOpen={isOpen} title="云端回收站" onClose={close} closeOnBackdrop={!writing && !busy} description={
+    <BaseModal isOpen={isOpen} title="云端回收站" onClose={close} closeOnBackdrop={!writing && !busy && !deletion.busy} description={
       <span>{limit === undefined ? '账号所有类型共享回收站容量' : `账号所有类型共用 ${limit} 个回收站名额`}，满时会停止移入，不会自动清理已有卡片。</span>}>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <p className="text-sm text-gray-600">账号回收站：{page ? (limit === undefined ? `${page.total} 个` : `${page.total}/${limit}`) : '未知'}{type && page ? ` · 当前类型 ${page.filteredCount} 个` : ''}</p>
@@ -115,6 +118,7 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
           <option value="">全部类型</option>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>}
         <button type="button" disabled={disabled} className="rounded border border-gray-300 px-3 py-1 text-sm" onClick={() => setRefresh((value) => value + 1)}>刷新</button>
+        {deletion.controller && <button type="button" disabled={disabled || page?.total === 0} className="rounded border border-red-400 px-3 py-1 text-sm text-red-700" onClick={() => { if (!operation.current && !latest.current.busy) void deletion.controller?.beginRecycle(); }}>清空全部类型回收站…</button>}
       </div>
       {loading && <p role="status" className="py-8 text-center text-gray-500">正在加载云端回收站…</p>}
       {error && <p role="alert" className="rounded bg-red-50 p-3 text-red-700">{error}</p>}
@@ -129,11 +133,12 @@ export function RecycleBinModal({ isOpen, onClose, port, limit, type: fixedType,
         <div className="mt-auto flex flex-wrap justify-end gap-2 pt-4">
           {DetailsModal && <button type="button" disabled={disabled} className="rounded border border-gray-300 bg-white px-3 py-1 text-xs text-gray-700" onClick={() => void detail(card.id)}>查看详情</button>}
           {onRestore && <button type="button" disabled={disabled} className="rounded bg-green-500 px-3 py-1 text-xs text-white" onClick={() => void action(card.id, onRestore)}>恢复</button>}
-          {onDelete && <button type="button" disabled={disabled} className="rounded bg-red-500 px-3 py-1 text-xs text-white" onClick={() => void action(card.id, onDelete)}>彻底删除</button>}
+          {deletion.controller && <button type="button" disabled={disabled} className="rounded bg-red-500 px-3 py-1 text-xs text-white" onClick={() => { if (!operation.current && !latest.current.busy) void deletion.controller?.beginRecycle(card.id); }}>永久删除…</button>}
         </div>
       </div>)}</div>}
       {page && <div className="mt-4 flex items-center justify-center gap-3 text-sm"><button type="button" disabled={disabled || offset === 0} onClick={() => setOffset(Math.max(0, offset - 12))}>上一页</button><span>第 {Math.floor(offset / 12) + 1} 页</span><button type="button" disabled={disabled || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) setOffset(page.nextOffset); }}>下一页</button></div>}
     </BaseModal>
+    <OwnedCardDeleteDialog controller={deletion.controller} />
     {isOpen && selected && detailsCard && DetailsModal && <DetailsModal isOpen onClose={() => setSelected(null)} source={{ kind: 'owned' }} isOwner card={detailsCard} />}
   </>;
 }

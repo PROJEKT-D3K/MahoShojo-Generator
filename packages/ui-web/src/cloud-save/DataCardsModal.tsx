@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DataCard from '../card-library/DataCard';
 import EditCardForm from './EditCardForm';
+import { OwnedCardDeleteDialog, useOwnedCardDelete } from './OwnedCardDeleteDialog';
+import type { OwnedCardDeletePort } from './owned-card-delete';
 import { useOwnedCardMetadataEditor, type OwnedCardMetadataPort } from './owned-card-metadata';
 import { inferDataCardTemplate as inferTemplate } from '@mahoshojo/domain/data-cards';
 import { useCardLibrarySummaryPage } from '../card-library/use-card-library-summary-page';
@@ -18,6 +20,7 @@ export interface DataCardsModalProps {
   scopeKey?: string | number;
   busy?: boolean;
   metadataEditor?: OwnedCardMetadataPort;
+  deletePort?: OwnedCardDeletePort;
   isOpen: boolean;
   onClose: () => void;
   dataCards: any[];
@@ -208,6 +211,7 @@ function DataCardsModalScope({
   host,
   busy: suppliedBusy = false,
   metadataEditor,
+  deletePort,
   isOpen,
   onClose,
   dataCards: suppliedCards,
@@ -244,8 +248,10 @@ function DataCardsModalScope({
   allowHistoryReplace = false,
 }: DataCardsModalProps) {
   const metadata = useOwnedCardMetadataEditor(metadataEditor, isOpen);
-  const busy = suppliedBusy || metadata.isBusy();
-  const close = () => { if (!suppliedBusy && !metadata.isBusy()) { metadata.cancel(); onClose(); } };
+  const deletion = useOwnedCardDelete(deletePort, isOpen);
+  const isDeleting = () => (deletion.controller?.getSnapshot().phase ?? 'idle') !== 'idle';
+  const busy = suppliedBusy || metadata.isBusy() || deletion.busy;
+  const close = () => { if (!suppliedBusy && !metadata.isBusy() && !isDeleting()) { metadata.cancel(); onClose(); } };
   const { dialogRef, initialFocusRef, titleId } = useBaseModalAccessibility({ isOpen, onClose: close });
   const [selectedCard, setSelectedCard] = useState<any | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -290,14 +296,14 @@ function DataCardsModalScope({
   const [actionError, setActionError] = useState<string | null>(null);
   const actionController = useRef<AbortController | null>(null);
   const { reload: reloadSummary } = page;
-  useEffect(() => { if (refreshKey || metadata.refresh) reloadSummary(); }, [refreshKey, metadata.refresh, reloadSummary]);
+  useEffect(() => { if (refreshKey || metadata.refresh || deletion.refresh) reloadSummary(); }, [refreshKey, metadata.refresh, deletion.refresh, reloadSummary]);
   useEffect(() => {
     if (!isOpen) { setSelectedCard(null); setShowDetailsModal(false); setActionError(null); }
     return () => { actionController.current?.abort(); actionController.current = null; };
   }, [isOpen]);
   const withCardAction = async (action: (signal: AbortSignal) => void | Promise<void>, failureMessage: string) => {
     // 重复点击不派生第二个动作；关闭或账号代际变化后不认领迟到的错误。
-    if (suppliedBusy || metadata.isBusy() || actionController.current !== null) return;
+    if (suppliedBusy || metadata.isBusy() || isDeleting() || actionController.current !== null) return;
     const controller = new AbortController();
     actionController.current = controller;
     setActionError(null);
@@ -591,7 +597,7 @@ function DataCardsModalScope({
           )}
           {onOpenRecycleBin && (
             <button
-              onClick={() => { if (!suppliedBusy && !metadata.isBusy()) onOpenRecycleBin(); }}
+              onClick={() => { if (!busy && !isDeleting()) onOpenRecycleBin(); }}
               disabled={busy}
               className="px-3 py-1.5 text-xs bg-gray-100 text-gray-700 rounded-lg border border-gray-200 hover:bg-gray-200 transition-colors"
             >
@@ -795,9 +801,9 @@ function DataCardsModalScope({
                             const dataToDownload = JSON.parse(card.data);
                             return host.downloadJson(`${card.name}.json`, JSON.stringify(dataToDownload, null, 2));
                           })}
-                          onEditInfo={metadataEditor ? () => { if (!suppliedBusy && actionController.current === null) void metadata.begin(card); } : onEditCard ? () => void withFullCard(card, onEditCard) : undefined}
+                          onEditInfo={metadataEditor ? () => { if (!busy && !isDeleting() && actionController.current === null) void metadata.begin(card); } : onEditCard ? () => void withFullCard(card, onEditCard) : undefined}
                           onEditData={!hideEditData && onLoadCard ? () => void withFullCard(card, onLoadCard) : undefined}
-                          onDelete={onDeleteCard ? () => void withCardAction(() => onDeleteCard(card.id), '删除失败') : undefined}
+                          onDelete={deletion.controller ? () => { if (!busy && !metadata.selection && actionController.current === null) void deletion.controller?.beginActive(card.id); } : onDeleteCard ? () => void withCardAction(() => onDeleteCard(card.id), '删除失败') : undefined}
                           onShare={onShareCard ? () => void withFullCard(card, onShareCard) : undefined}
                           onReplace={
                             onReplaceCard && (card.type !== 'history' || allowHistoryReplace)
@@ -838,6 +844,7 @@ function DataCardsModalScope({
         </div>
       </div>
 
+      <OwnedCardDeleteDialog controller={deletion.controller} onManageRecycle={onOpenRecycleBin} />
       {/* 详情模态框 */}
       {selectedCard && DataCardDetailsModal && (
         <DataCardDetailsModal

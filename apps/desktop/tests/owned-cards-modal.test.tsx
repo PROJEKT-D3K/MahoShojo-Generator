@@ -30,7 +30,7 @@ describe('Desktop 我的卡宿主回用共享管理模态框', () => {
   it('列表按expected owner读取，容量未知不伪装默认值，仅真实能力按钮可用', async () => {
     const select = vi.fn(); const replace = vi.fn(); await render(replace, select);
     expect(mocks.createPort.mock.calls[0][1]).toBe(7); expect(document.body.textContent).toContain('云端容量未知'); expect(document.body.textContent).not.toContain('0/20 槽');
-    expect(button('修改信息')).toBeUndefined(); expect(button('删除')).toBeUndefined(); expect(button('详情')).toBeUndefined();
+    expect(button('修改信息')).toBeUndefined(); expect(button('删除')).toBeDefined(); expect(button('详情')).toBeUndefined();
     await act(async () => { button('编辑档案').click(); }); expect(select).toHaveBeenCalledWith(expect.objectContaining({ id: 'owned', data: '{"name":"正文"}' }));
     await act(async () => { button('替换').click(); }); expect(replace).toHaveBeenCalledOnce();
   });
@@ -69,7 +69,7 @@ it('Desktop真实管理入口使用共源元信息owner与Native固定route，un
   await act(async () => button('保存').click()); expect(document.body.textContent).toContain('数据卡信息已更新'); expect(mocks.fetch).toHaveBeenCalledTimes(2);
 });
 
-it('真实云端管理入口进入共源回收站，列表与详情固定读取；不混入本地回收站或未交付写按钮', async () => {
+it('真实云端管理入口进入共源回收站，列表与详情固定读取；不混入本地回收站，永久删除需独立预览确认', async () => {
   mocks.details = true;
   const summary = { id: 'deleted', type: 'character', name: '已删云端卡', description: '', is_public: 1, review_status: 'approved', created_at: null, updated_at: null, deleted_at: 'now', usage_count: 0, like_count: 0, isLegacyQuestionnaire: false };
   const invoke = vi.fn(async (_command: string, { request }: any) => {
@@ -84,7 +84,7 @@ it('真实云端管理入口进入共源回收站，列表与详情固定读取�
   expect(document.body.textContent).toContain('满时会停止移入，不会自动清理已有卡片');
   expect(document.body.textContent).toContain('账号回收站：1 个');
   expect(document.body.textContent).not.toContain('1/5');
-  expect(button('恢复')).toBeUndefined(); expect(button('彻底删除')).toBeUndefined();
+  expect(button('恢复')).toBeUndefined(); expect(button('永久删除…')).toBeDefined();
   await act(async () => button('查看详情').click()); expect(document.body.textContent).toContain('云端墓碑正文'); expect(button('下载 JSON')).toBeDefined();
   expect(invoke.mock.calls.map(([, { request }]) => request.routeId)).toEqual(['data-cards.recycle.query', 'data-cards.recycle-detail.query']);
   expect(busy.mock.calls.map(([value]) => value)).toEqual([true, false, true, false]);

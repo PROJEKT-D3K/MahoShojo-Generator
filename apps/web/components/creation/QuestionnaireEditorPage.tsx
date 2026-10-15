@@ -237,19 +237,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
     }
   };
 
-  const handleDeleteQuestionnaireCard = async (id: string) => {
-    if (!window.confirm('确定要删除这个问卷数据卡吗？')) return;
-    const result = await dataCardApi.deleteCard(id);
-    if (result.success) {
-      flashMessage('✅ 问卷数据卡已移入回收站');
-      loadUserQuestionnaireCards();
-    } else {
-      const error = result.error || '删除失败';
-      setEditorError(error);
-      throw new Error(error);
-    }
-  };
-
   const handleRestoreQuestionnaireCard = async (id: string) => {
     const result = await dataCardApi.restoreCard(id);
     if (result.success) {
@@ -257,17 +244,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
       loadUserQuestionnaireCards();
     } else {
       setEditorError(result.error || '恢复失败');
-    }
-  };
-
-  const handleDeleteRecycleQuestionnaireCard = async (id: string) => {
-    if (!window.confirm('确定要彻底删除这个问卷数据卡吗？此操作无法撤销。')) return;
-    const result = await dataCardApi.deleteRecycleCard(id);
-    if (result.success) {
-      flashMessage('✅ 问卷数据卡已彻底删除');
-      loadUserQuestionnaireCards();
-    } else {
-      setEditorError(result.error || '删除失败');
     }
   };
 
@@ -500,7 +476,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
         cardsPerPage={cardsPerPage}
         onPageChange={setCurrentPage}
 
-        onDeleteCard={(id) => runCloudOperation(() => handleDeleteQuestionnaireCard(id))}
         onLoadCard={(card) => runCloudOperation(() => handleLoadQuestionnaireCard(card))}
 
         onReplaceCard={(card) => runCloudOperation(() => handleReplaceQuestionnaireCard(card))}
@@ -525,7 +500,7 @@ export const QuestionnaireEditorPage: React.FC = () => {
         refreshKey={cardsRefresh}
         operationGuard={cloudOperationGuard}
         onRestore={handleRestoreQuestionnaireCard}
-        onDelete={handleDeleteRecycleQuestionnaireCard}
+        onChanged={() => void loadUserQuestionnaireCards()}
         limit={config.RECYCLE_BIN_LIMIT}
       />
     </>

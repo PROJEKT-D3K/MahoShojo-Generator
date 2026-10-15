@@ -76,7 +76,7 @@ it('详情错误不回退列表正文；账号epoch改变时迟到详情丢弃',
 });
 it('写slots保持宿主行为，single-flight阻止并发/关闭/Esc，结束刷新摘要', async () => {
   const pending = deferred<void>(); const restore = vi.fn(() => pending.promise); let blocked = false;
-  await render({ onRestore: restore, onDelete: vi.fn(), operationGuard: { isBlocked: () => blocked, onBusyChange: (value) => { blocked = value; } } });
+  await render({ onRestore: restore, operationGuard: { isBlocked: () => blocked, onBusyChange: (value) => { blocked = value; } } });
   await act(async () => { button('恢复').click(); button('恢复').click(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   expect(restore).toHaveBeenCalledOnce(); expect(blocked).toBe(true); expect(props.onClose).not.toHaveBeenCalled(); expect(button('查看详情').disabled).toBe(true);
   await act(async () => pending.resolve()); expect(port.readPage).toHaveBeenCalledTimes(2); expect(blocked).toBe(false);

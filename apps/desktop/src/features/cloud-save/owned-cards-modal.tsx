@@ -5,6 +5,7 @@ import { ONLINE_DATA_CARD_TYPES, type OnlineDataCardType } from '@mahoshojo/cont
 import { RecycleBinModal, DataCardsModal, type OwnedCardMetadataPort, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
 import { createDesktopCardLibraryOnlinePort, useDesktopCardLibraryHost } from '../../platform/card-library-host';
 import { readCloudReplaceTarget, updateCloudCardMetadata, readPrivateCloudCapacity } from '../../platform/private-cloud-save';
+import { createDesktopOwnedCardDeletePort } from '../../platform/cloud-delete';
 import { createDesktopRecycleBinPort } from '../../platform/cloud-recycle';
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import { useDesktopCloudSession } from '../account/use-desktop-cloud-session';
@@ -68,6 +69,7 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
     },
     DetailsModal: libraryHost.slots.CardDetailsModal,
   }), [libraryHost.platform, libraryHost.slots.CardDetailsModal, online]);
+  const [deleteRefresh, setDeleteRefresh] = useState(0);
   const [page, setPage] = useState(1);
   const [recycleOpen, setRecycleOpen] = useState(false);
   const currentHost = useRef(isCurrent); currentHost.current = isCurrent;
@@ -80,7 +82,7 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
     setCapacity(null);
     void readPrivateCloudCapacity(invokeFn, expectedUserId).then((value) => { if (active) setCapacity(value); });
     return () => { active = false; };
-  }, [expectedUserId, invokeFn, isOpen, refreshToken]);
+  }, [expectedUserId, invokeFn, isOpen, refreshToken, deleteRefresh]);
   const metadataHost = useRef({ isCurrent, metadataEditing });
   metadataHost.current = { isCurrent, metadataEditing };
   const metadataEditor = useMemo<OwnedCardMetadataPort | undefined>(() => metadataEditing ? {
@@ -90,18 +92,23 @@ function DesktopOwnedCardsModalScope({ isOpen, onClose, expectedUserId, selected
     read: (id) => readCloudReplaceTarget(invokeFn, expectedUserId, id),
     write: (target, draft) => updateCloudCardMetadata(invokeFn, expectedUserId, target, draft),
   } : undefined, [expectedUserId, invokeFn, Boolean(metadataEditing)]);
+  const deletePort = useMemo(() => createDesktopOwnedCardDeletePort(invokeFn, expectedUserId, () => metadataHost.current.isCurrent(), {
+    isBlocked: () => metadataHost.current.metadataEditing?.isBlocked() ?? false,
+    onBusyChange: (value) => metadataHost.current.metadataEditing?.onBusyChange(value),
+    onChanged: () => setDeleteRefresh(value => value + 1),
+  }), [expectedUserId, invokeFn]);
   const allowedTypes = useMemo(() => selectedType ? [selectedType] : ['character', 'scenario'] as OnlineDataCardType[], [selectedType]);
   const defaultFilters = useMemo(() => selectedType ? { type: selectedType } : {}, [selectedType]);
   return <><DataCardsModal host={host} isOpen={isOpen && !recycleOpen} onClose={onClose} summaryOwnerId={expectedUserId} dataCards={[]}
-    metadataEditor={metadataEditor} currentPage={page} onPageChange={setPage} cardsPerPage={12} refreshKey={refreshToken} busy={isBusy}
+    metadataEditor={metadataEditor} deletePort={deletePort} currentPage={page} onPageChange={setPage} cardsPerPage={12} refreshKey={refreshToken + deleteRefresh} busy={isBusy}
     allowedTypes={allowedTypes} defaultFilters={defaultFilters}
     title={titleOverride} userCapacity={capacity?.capacity} userUsedSlots={capacity?.usedSlots} capacityKnown={capacity !== null}
     onLoadCard={onSelectCard ? async (card) => { if (isCurrent()) await onSelectCard(ownedCard(card)); } : undefined}
     onReplaceCard={onReplaceCard ? async (card) => { if (isCurrent()) await onReplaceCard(ownedCard(card)); } : undefined}
     onOpenRecycleBin={() => setRecycleOpen(true)} recycleLabel="云端回收站" recycleCount={null}
     allowHistoryReplace={true} />
-    <RecycleBinModal isOpen={isOpen && recycleOpen} onClose={() => setRecycleOpen(false)} port={recyclePort}
-      type={selectedType} refreshKey={refreshToken} busy={isBusy} operationGuard={metadataEditing}
+    <RecycleBinModal isOpen={isOpen && recycleOpen} onClose={() => setRecycleOpen(false)} port={recyclePort} deletePort={deletePort}
+      type={selectedType} refreshKey={refreshToken + deleteRefresh} busy={isBusy} operationGuard={metadataEditing}
       DetailsModal={host.DetailsModal} />
   </>;
 }

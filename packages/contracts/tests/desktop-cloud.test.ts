@@ -77,6 +77,7 @@ type DesktopCloudFixture = {
     validRequests: unknown[];
     invalidFenceRequests: unknown[];
     ownedRequests: { valid: unknown[]; invalid: unknown[] };
+    deletionRequests: { valid: unknown[]; invalid: unknown[] };
     routes: Record<string, { method: string; path: string; auth: string }>;
     publicReadCache: {
       sourceRouteId: string;
@@ -662,6 +663,33 @@ describe('card-library account-fenced wire contract', () => {
     }
     for (const wire of fixture.cardLibrary.ownedRequests.invalid) {
       expect(DesktopCardLibraryRequestSchema.safeParse(wire).success, JSON.stringify(wire)).toBe(false);
+    }
+  });
+});
+
+
+describe('confirmed deletion fixed-route request contract', () => {
+  it('accepts only complete frozen targets and bounded exact sets', () => {
+    for (const wire of fixture.cardLibrary.deletionRequests.valid) {
+      expect(DesktopCardLibraryRequestSchema.safeParse(wire).success, JSON.stringify(wire)).toBe(true);
+    }
+  });
+  it('rejects unknown fields, ambiguous sets, unsafe versions and owner mismatches', () => {
+    for (const wire of fixture.cardLibrary.deletionRequests.invalid) {
+      expect(DesktopCardLibraryRequestSchema.safeParse(wire).success, JSON.stringify(wire)).toBe(false);
+    }
+  });
+  it('pins preview and deletion to authenticated fixed routes', () => {
+    for (const [route, method, endpoint] of [
+      ['delete-preview.query', 'GET', 'delete-preview-owned'],
+      ['soft-delete', 'POST', 'soft-delete-owned'],
+      ['purge-active', 'POST', 'purge-active-owned'],
+      ['purge-recycle', 'POST', 'purge-recycle-owned'],
+    ]) {
+      expect(fixture.cardLibrary.routes[`data-cards.${route}`]).toEqual({ method, path: `/api/data-cards/${endpoint}`, auth: 'required' });
+    }
+    for (const route of ['data-cards.delete', 'data-cards.purge', 'data-cards.recycle.purge']) {
+      expect(DesktopCardLibraryRouteIdSchema.safeParse(route).success).toBe(false);
     }
   });
 });

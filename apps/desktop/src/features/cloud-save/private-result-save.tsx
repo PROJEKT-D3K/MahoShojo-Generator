@@ -191,7 +191,7 @@ function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, 
     <ReplaceCardModal isOpen={replaceOpen} target={target ? { ...target, reviewStatus: target.reviewStatus ?? undefined } : null} onClose={() => { if (!pending.current) setReplaceOpen(false); }} onConfirm={() => void save(true)}
       error={error} isSaving={saving} submitDisabled={disabled || Boolean(uncertain) || conflict} supplementaryContent={uncertaintyControls} />
     {userId !== null && <DesktopOwnedCardsModal isOpen={libraryOpen || manageOpen === true} onClose={closeLibrary} expectedUserId={userId} selectedType={libraryPurpose === 'manage' ? undefined : cardType}
-      metadataEditing={{ isBlocked: () => !guard.ready || disabled || Boolean(isBlocked?.()) || saving || preparingRef.current,
+      metadataEditing={{ isBlocked: () => !guard.ready || disabled || Boolean(isBlocked?.()) || pending.current || saving || preparingRef.current,
         onBusyChange: (value) => { pending.current = value; setMetadataBusy(value); busyChanged.current?.(value); } }}
       invokeFn={invokeFn} isBusy={saving} refreshToken={refresh} titleOverride={libraryPurpose === 'check' ? '检查我的云端卡' : libraryPurpose === 'replace' ? '选择要替换的数据卡' : undefined}
       onReplaceCard={libraryPurpose !== 'check' && !uncertain && data != null ? chooseTarget : undefined}

@@ -3007,6 +3007,30 @@ const CARD_LIBRARY_ROUTES: &[CloudRoute] = &[
         auth: CloudRouteAuth::Required,
     },
     CloudRoute {
+        id: "data-cards.delete-preview.query",
+        method: reqwest::Method::GET,
+        path: "/api/data-cards/delete-preview-owned",
+        auth: CloudRouteAuth::Required,
+    },
+    CloudRoute {
+        id: "data-cards.soft-delete",
+        method: reqwest::Method::POST,
+        path: "/api/data-cards/soft-delete-owned",
+        auth: CloudRouteAuth::Required,
+    },
+    CloudRoute {
+        id: "data-cards.purge-active",
+        method: reqwest::Method::POST,
+        path: "/api/data-cards/purge-active-owned",
+        auth: CloudRouteAuth::Required,
+    },
+    CloudRoute {
+        id: "data-cards.purge-recycle",
+        method: reqwest::Method::POST,
+        path: "/api/data-cards/purge-recycle-owned",
+        auth: CloudRouteAuth::Required,
+    },
+    CloudRoute {
         id: "favorites.query",
         method: reqwest::Method::GET,
         path: "/api/favorites",
@@ -3200,6 +3224,10 @@ enum OwnedCardOperation {
     Metadata,
     RecyclePage,
     RecycleDetail,
+    DeletePreview,
+    SoftDelete,
+    PurgeActive,
+    PurgeRecycle,
 }
 
 fn owned_card_operation(route_id: &str) -> Option<OwnedCardOperation> {
@@ -3210,6 +3238,10 @@ fn owned_card_operation(route_id: &str) -> Option<OwnedCardOperation> {
         "data-cards.metadata" => Some(OwnedCardOperation::Metadata),
         "data-cards.recycle.query" => Some(OwnedCardOperation::RecyclePage),
         "data-cards.recycle-detail.query" => Some(OwnedCardOperation::RecycleDetail),
+        "data-cards.delete-preview.query" => Some(OwnedCardOperation::DeletePreview),
+        "data-cards.soft-delete" => Some(OwnedCardOperation::SoftDelete),
+        "data-cards.purge-active" => Some(OwnedCardOperation::PurgeActive),
+        "data-cards.purge-recycle" => Some(OwnedCardOperation::PurgeRecycle),
         _ => None,
     }
 }
@@ -3264,6 +3296,9 @@ fn prepare_owned_card_request(
         OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail
     ) {
         return prepare_recycle_request(request, operation, owner);
+    }
+    if is_deletion_operation(operation) {
+        return prepare_deletion_request(request, operation, owner);
     }
     if operation == OwnedCardOperation::ReplacementTarget {
         if request.body.is_some() {
@@ -3366,6 +3401,229 @@ fn prepare_owned_card_request(
     }
     body.insert("expectedUserId".into(), serde_json::Value::from(owner));
     Ok(())
+}
+
+const OWNED_DELETE_TARGET_LIMIT: usize = 16;
+
+fn is_deletion_operation(operation: OwnedCardOperation) -> bool {
+    matches!(
+        operation,
+        OwnedCardOperation::DeletePreview
+            | OwnedCardOperation::SoftDelete
+            | OwnedCardOperation::PurgeActive
+            | OwnedCardOperation::PurgeRecycle
+    )
+}
+
+// 删除快照中的 ID 不做 trim：只能删除用户确认的原始标识。
+fn valid_deletion_id(value: &serde_json::Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|id| (1..=200).contains(&id.encode_utf16().count()))
+}
+
+fn valid_deletion_reference(value: &serde_json::Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object
+            .keys()
+            .all(|key| matches!(key.as_str(), "id" | "version"))
+    }) && valid_deletion_id(&value["id"])
+        && valid_replacement_version(&value["version"])
+}
+
+fn prepare_deletion_request(
+    request: &mut CloudRouteRequest,
+    operation: OwnedCardOperation,
+    owner: u64,
+) -> Result<(), CloudError> {
+    if operation == OwnedCardOperation::DeletePreview {
+        if request.body.is_some() {
+            return Err(invalid_request("删除预览不允许携带请求体"));
+        }
+        let query = request
+            .query
+            .as_mut()
+            .ok_or_else(|| invalid_request("删除预览缺少 scope"))?;
+        if query
+            .keys()
+            .any(|key| !matches!(key.as_str(), "id" | "scope" | "expectedUserId"))
+            || !matches!(
+                query.get("scope").map(String::as_str),
+                Some("active" | "recycle")
+            )
+            || (query.get("scope").is_some_and(|scope| scope == "active")
+                && !query.contains_key("id"))
+            || query
+                .get("id")
+                .is_some_and(|id| !valid_deletion_id(&serde_json::Value::String(id.clone())))
+            || query
+                .get("expectedUserId")
+                .is_some_and(|value| value != &owner.to_string())
+        {
+            return Err(invalid_request("删除预览只允许冻结账号、scope 和明确 ID"));
+        }
+        query.insert("expectedUserId".into(), owner.to_string());
+        return Ok(());
+    }
+    if request.query.is_some() {
+        return Err(invalid_request("确认式删除不允许查询参数"));
+    }
+    let body = request
+        .body
+        .as_mut()
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| invalid_request("确认式删除缺少 JSON 对象请求体"))?;
+    if body
+        .get("expectedUserId")
+        .is_some_and(|value| value.as_f64() != Some(owner as f64))
+    {
+        return Err(invalid_request("请求体所属账号与冻结账号不符"));
+    }
+    if operation == OwnedCardOperation::PurgeRecycle {
+        if body.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "expectedUserId" | "targets" | "continuationTarget"
+            )
+        }) || !body
+            .get("targets")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|targets| {
+                (1..=OWNED_DELETE_TARGET_LIMIT).contains(&targets.len())
+                    && targets.iter().all(valid_deletion_reference)
+                    && targets
+                        .iter()
+                        .filter_map(|target| target["id"].as_str())
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        == targets.len()
+            })
+            || body
+                .get("continuationTarget")
+                .is_some_and(|target| !valid_deletion_reference(target))
+        {
+            return Err(invalid_request("回收站永久删除只接受唯一、明确的目标快照"));
+        }
+    } else if body
+        .keys()
+        .any(|key| !matches!(key.as_str(), "expectedUserId" | "id" | "version"))
+        || !body.get("id").is_some_and(valid_deletion_id)
+        || !body.get("version").is_some_and(valid_replacement_version)
+    {
+        return Err(invalid_request("活动卡删除只接受明确的 ID 和版本"));
+    }
+    body.insert("expectedUserId".into(), serde_json::Value::from(owner));
+    Ok(())
+}
+
+fn valid_deletion_response(
+    request: &CloudRouteRequest,
+    operation: OwnedCardOperation,
+    body: &serde_json::Value,
+) -> bool {
+    let Some(envelope) = body.as_object() else {
+        return false;
+    };
+    if body["deleteProtocolVersion"].as_f64() != Some(1.0)
+        || envelope.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "success"
+                    | "accountFenceVersion"
+                    | "ownerUserId"
+                    | "deleteProtocolVersion"
+                    | "operation"
+            ) && match operation {
+                OwnedCardOperation::DeletePreview => {
+                    !matches!(key.as_str(), "targets" | "total" | "recycleLimit")
+                }
+                OwnedCardOperation::PurgeRecycle => key != "ids",
+                _ => key != "id",
+            }
+        })
+    {
+        return false;
+    }
+    if operation == OwnedCardOperation::DeletePreview {
+        let Some(query) = request.query.as_ref() else {
+            return false;
+        };
+        let expected_operation = match query.get("scope").map(String::as_str) {
+            Some("active") => "preview-active",
+            Some("recycle") => "preview-recycle",
+            _ => return false,
+        };
+        let Some(targets) = body["targets"].as_array() else {
+            return false;
+        };
+        return body["operation"] == expected_operation
+            && targets.len() <= OWNED_DELETE_TARGET_LIMIT
+            && body["total"].as_f64() == Some(targets.len() as f64)
+            && nonnegative_safe_integer(&body["recycleLimit"])
+            && targets.iter().all(|target| {
+                target.as_object().is_some_and(|object| {
+                    object.keys().all(|key| {
+                        matches!(
+                            key.as_str(),
+                            "id" | "version" | "type" | "name" | "description"
+                        )
+                    })
+                }) && valid_deletion_id(&target["id"])
+                    && valid_replacement_version(&target["version"])
+                    && valid_card_type(&target["type"])
+                    && target["name"].is_string()
+                    && target
+                        .get("description")
+                        .is_some_and(|value| value.is_null() || value.is_string())
+            })
+            && targets
+                .iter()
+                .filter_map(|target| target["id"].as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == targets.len()
+            && query.get("id").is_none_or(|id| {
+                targets.len() == 1 && targets[0]["id"].as_str() == Some(id.as_str())
+            })
+            && (expected_operation != "preview-active" || targets.len() == 1);
+    }
+    let Some(request_body) = request.body.as_ref() else {
+        return false;
+    };
+    if operation == OwnedCardOperation::PurgeRecycle {
+        let Some(ids) = body["ids"].as_array() else {
+            return false;
+        };
+        let Some(targets) = request_body["targets"].as_array() else {
+            return false;
+        };
+        return body["operation"] == "purge-recycle"
+            && (1..=OWNED_DELETE_TARGET_LIMIT).contains(&ids.len())
+            && ids.iter().all(valid_deletion_id)
+            && ids.len() == targets.len()
+            && ids
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<std::collections::BTreeSet<_>>()
+                == targets
+                    .iter()
+                    .filter_map(|target| target["id"].as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+            && ids
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == ids.len();
+    }
+    body["operation"]
+        == if operation == OwnedCardOperation::SoftDelete {
+            "soft-delete"
+        } else {
+            "purge-active"
+        }
+        && valid_deletion_id(&body["id"])
+        && body["id"] == request_body["id"]
 }
 
 /// 数字只接受 canonical 十进制，不接受指数、正号、空白或前导零。
@@ -3575,6 +3833,10 @@ fn validate_owned_card_response(
         && expected_owner.is_some()
         && body["ownerUserId"].as_f64() == expected_owner.map(|owner| owner as f64);
     let payload_valid = match operation {
+        OwnedCardOperation::DeletePreview
+        | OwnedCardOperation::SoftDelete
+        | OwnedCardOperation::PurgeActive
+        | OwnedCardOperation::PurgeRecycle => valid_deletion_response(request, operation, body),
         OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail => {
             valid_recycle_response(request, operation, body)
         }
@@ -3754,6 +4016,10 @@ async fn dispatch_cloud_route(
                 | OwnedCardOperation::Metadata
                 | OwnedCardOperation::RecyclePage
                 | OwnedCardOperation::RecycleDetail
+                | OwnedCardOperation::DeletePreview
+                | OwnedCardOperation::SoftDelete
+                | OwnedCardOperation::PurgeActive
+                | OwnedCardOperation::PurgeRecycle
         )
     ) {
         Some(
@@ -3849,10 +4115,11 @@ async fn dispatch_cloud_route(
     if let Some(operation) = owned_operation {
         validate_owned_card_response(&request, operation, status, &body)?;
         if (200..300).contains(&status)
-            && matches!(
-                operation,
-                OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail
-            )
+            && (is_deletion_operation(operation)
+                || matches!(
+                    operation,
+                    OwnedCardOperation::RecyclePage | OwnedCardOperation::RecycleDetail
+                ))
         {
             let _guard = account_session_gate()?;
             let current = env
@@ -3865,7 +4132,7 @@ async fn dispatch_cloud_route(
             }) {
                 return Err(CloudError::new(
                     CloudErrorCode::NotAuthenticated,
-                    "账号会话已改变，请重新读取回收站",
+                    "账号会话已改变，请重新读取并确认所属卡操作",
                 ));
             }
         }
@@ -7496,7 +7763,12 @@ mod tests {
         CloudRouteRequest {
             expected_user_id: operation.map(|_| 7),
             route_id: route_id.to_string(),
-            query: if matches!(
+            query: if operation == Some(OwnedCardOperation::DeletePreview) {
+                Some(std::collections::BTreeMap::from([
+                    ("scope".into(), "active".into()),
+                    ("id".into(), "owned-card".into()),
+                ]))
+            } else if matches!(
                 operation,
                 Some(OwnedCardOperation::ReplacementTarget | OwnedCardOperation::RecycleDetail)
             ) {
@@ -7508,6 +7780,12 @@ mod tests {
                 None
             },
             body: match operation {
+                Some(OwnedCardOperation::SoftDelete | OwnedCardOperation::PurgeActive) => {
+                    Some(serde_json::json!({"id":"owned-card","version":"a".repeat(64)}))
+                }
+                Some(OwnedCardOperation::PurgeRecycle) => Some(
+                    serde_json::json!({"targets":[{"id":"recycled-card","version":"a".repeat(64)}]}),
+                ),
                 Some(OwnedCardOperation::Create) => Some(
                     serde_json::json!({"type":"character","name":"draft","description":"","data":{},"isPublic":false}),
                 ),
@@ -7584,6 +7862,173 @@ mod tests {
             "../../../../packages/contracts/fixtures/desktop-cloud.json"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn card_library_deletion_request_fixture_preserves_exact_targets_and_rejects_before_network() {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("deletion-request-fixture");
+            store_session(&secrets, &stored_test_session()).unwrap();
+            for wire in fixture["cardLibrary"]["deletionRequests"]["valid"]
+                .as_array()
+                .unwrap()
+            {
+                let mut request: CloudRouteRequest = serde_json::from_value(wire.clone()).unwrap();
+                let operation = owned_card_operation(&request.route_id).unwrap();
+                prepare_owned_card_request(&mut request, operation, 7).unwrap();
+                if operation == OwnedCardOperation::DeletePreview {
+                    let mut expected = wire["query"].clone();
+                    expected["expectedUserId"] = serde_json::json!("7");
+                    assert_eq!(
+                        serde_json::to_value(request.query.unwrap()).unwrap(),
+                        expected
+                    );
+                    assert!(request.body.is_none());
+                } else {
+                    let mut expected = wire["body"].clone();
+                    expected["expectedUserId"] = serde_json::json!(7);
+                    assert_eq!(request.body.unwrap(), expected);
+                    assert!(request.query.is_none());
+                }
+            }
+            for wire in fixture["cardLibrary"]["deletionRequests"]["invalid"]
+                .as_array()
+                .unwrap()
+            {
+                if let Ok(request) = serde_json::from_value::<CloudRouteRequest>(wire.clone()) {
+                    let error = cloud_card_library_request(&state, &secrets, cache.get(), request)
+                        .await
+                        .unwrap_err();
+                    assert_eq!(error.code, CloudErrorCode::InvalidRequest, "{wire}");
+                }
+            }
+            assert_eq!(server.card_request_count.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn card_library_deletion_response_fixture_requires_exact_owner_operation_and_id_set() {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            let server = spawn_mock_server();
+            let state = CloudState::with_origin(&server.origin);
+            let secrets = MemorySecrets::new();
+            let cache = TestCache::new("deletion-response-fixture");
+            cache.enable_capture();
+            store_session(&secrets, &stored_test_session()).unwrap();
+            let mut count = 0;
+            for category in ["valid", "invalid"] {
+                for wire in fixture["cardLibrary"]["deletionResponses"][category]
+                    .as_array()
+                    .unwrap()
+                {
+                    let request: CloudRouteRequest =
+                        serde_json::from_value(wire["request"].clone()).unwrap();
+                    let route = lookup_cloud_route(CARD_LIBRARY_ROUTES, &request.route_id).unwrap();
+                    *server.card_response_override.lock().unwrap() = Some((
+                        wire["status"].as_u64().unwrap() as u16,
+                        wire["body"].to_string(),
+                    ));
+                    let result =
+                        cloud_card_library_request(&state, &secrets, cache.get(), request).await;
+                    if category == "valid" {
+                        let response = result.unwrap();
+                        assert_eq!(response.body, wire["body"]);
+                        assert!(response.cache.is_none());
+                    } else {
+                        assert_eq!(
+                            result.unwrap_err().code,
+                            CloudErrorCode::InvalidResponse,
+                            "{wire}"
+                        );
+                    }
+                    let (target, head, body) =
+                        server.last_card_request.lock().unwrap().clone().unwrap();
+                    assert!(head.starts_with(&format!("{} {}", route.method, route.path)));
+                    assert!(head.contains("better-auth.session_token=native.tok"));
+                    let url = url::Url::parse(&format!("http://localhost{target}")).unwrap();
+                    assert_eq!(url.path(), route.path);
+                    if route.method == reqwest::Method::GET {
+                        let query: std::collections::BTreeMap<_, _> =
+                            url.query_pairs().into_owned().collect();
+                        let mut expected = wire["request"]["query"].clone();
+                        expected["expectedUserId"] = serde_json::json!("7");
+                        assert_eq!(serde_json::to_value(query).unwrap(), expected);
+                        assert!(body.is_none());
+                    } else {
+                        assert_eq!(url.query(), None);
+                        let mut expected = wire["request"]["body"].clone();
+                        expected["expectedUserId"] = serde_json::json!(7);
+                        assert_eq!(body.unwrap(), expected);
+                    }
+                    count += 1;
+                    assert_eq!(server.card_request_count.load(Ordering::SeqCst), count);
+                }
+            }
+            assert_eq!(cache.get().stats().unwrap().summary_count, 0);
+        });
+    }
+
+    #[test]
+    fn card_library_deletion_late_success_is_rejected_after_logout_owner_change_or_same_byte_login()
+    {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            for wire in fixture["cardLibrary"]["deletionResponses"]["valid"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .take(8)
+            {
+                for next_owner in [None, Some(7), Some(8)] {
+                    let server = spawn_mock_server();
+                    let state = CloudState::with_origin(&server.origin);
+                    let secrets = MemorySecrets::new();
+                    let cache = TestCache::new("deletion-late-success");
+                    store_session(&secrets, &stored_test_session()).unwrap();
+                    *server.card_response_override.lock().unwrap() =
+                        Some((200, wire["body"].to_string()));
+                    let (release, wait) = std::sync::mpsc::channel();
+                    *server.card_reply_gate.lock().unwrap() = Some(wait);
+                    let change = async {
+                        tokio::time::timeout(Duration::from_secs(3), async {
+                            while server.last_card_request.lock().unwrap().is_none() {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                        })
+                        .await
+                        .unwrap();
+                        if let Some(owner) = next_owner {
+                            let mut session = stored_test_session();
+                            session.account.user_id = owner;
+                            store_login_session(&state, &secrets, &session).unwrap();
+                        } else {
+                            let _guard = account_session_gate().unwrap();
+                            state.account_epoch.fetch_add(1, Ordering::SeqCst);
+                            secrets.delete(ACCOUNT_SESSION_REF).unwrap();
+                        }
+                        release.send(()).unwrap();
+                    };
+                    let request = serde_json::from_value(wire["request"].clone()).unwrap();
+                    let (result, ()) = tokio::join!(
+                        cloud_card_library_request(&state, &secrets, cache.get(), request),
+                        change
+                    );
+                    assert_eq!(result.unwrap_err().code, CloudErrorCode::NotAuthenticated);
+                    assert_eq!(
+                        load_session(&secrets)
+                            .unwrap()
+                            .map(|session| session.account.user_id),
+                        next_owner
+                    );
+                    assert_eq!(server.card_request_count.load(Ordering::SeqCst), 1);
+                }
+            }
+        });
     }
 
     #[test]
@@ -7999,6 +8444,10 @@ mod tests {
                 "data-cards.create",
                 "data-cards.replace",
                 "data-cards.metadata",
+                "data-cards.delete-preview.query",
+                "data-cards.soft-delete",
+                "data-cards.purge-active",
+                "data-cards.purge-recycle",
                 "data-cards.replace-target.query",
                 "data-cards.recycle.query",
                 "data-cards.recycle-detail.query",
@@ -8036,7 +8485,7 @@ mod tests {
     #[test]
     fn card_library_owned_dropping_inflight_response_closes_socket_without_replay() {
         rt().block_on(async {
-            for route_id in ["data-cards.create", "data-cards.replace", "data-cards.metadata"] {
+            for route_id in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.soft-delete", "data-cards.purge-active", "data-cards.purge-recycle"] {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let state = CloudState::with_origin(&format!("http://{}", listener.local_addr().unwrap()));
                 let secrets = MemorySecrets::new();
@@ -8149,6 +8598,10 @@ mod tests {
                 "data-cards.create",
                 "data-cards.replace",
                 "data-cards.metadata",
+                "data-cards.delete-preview.query",
+                "data-cards.soft-delete",
+                "data-cards.purge-active",
+                "data-cards.purge-recycle",
                 "data-cards.replace-target.query",
             ] {
                 for status in [404, 405, 409, 500, 200, 201] {
@@ -8279,6 +8732,10 @@ mod tests {
                 "data-cards.replace-target.query",
                 "data-cards.replace",
                 "data-cards.metadata",
+                "data-cards.delete-preview.query",
+                "data-cards.soft-delete",
+                "data-cards.purge-active",
+                "data-cards.purge-recycle",
                 "user-capacity.query",
             ] {
                 for expected in [Some(7), Some(8)] {
@@ -8296,6 +8753,10 @@ mod tests {
                 "data-cards.replace-target.query",
                 "data-cards.replace",
                 "data-cards.metadata",
+                "data-cards.delete-preview.query",
+                "data-cards.soft-delete",
+                "data-cards.purge-active",
+                "data-cards.purge-recycle",
                 "user-capacity.query",
             ] {
                 let mut request = card_request(route);
@@ -8368,7 +8829,7 @@ mod tests {
     #[test]
     fn card_library_owned_truncated_responses_are_network_errors_without_replay() {
         rt().block_on(async {
-          for route in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.replace-target.query", "data-cards.recycle.query", "data-cards.recycle-detail.query"] {
+          for route in ["data-cards.create", "data-cards.replace", "data-cards.metadata", "data-cards.replace-target.query", "data-cards.recycle.query", "data-cards.recycle-detail.query", "data-cards.delete-preview.query", "data-cards.soft-delete", "data-cards.purge-active", "data-cards.purge-recycle"] {
             for status in [200, 500] {
             use std::io::{Read, Write};
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -8419,6 +8880,10 @@ mod tests {
                     ("data-cards.replace-target.query", Some(7)),
                     ("data-cards.recycle.query", Some(7)),
                     ("data-cards.recycle-detail.query", Some(7)),
+                    ("data-cards.delete-preview.query", Some(7)),
+                    ("data-cards.soft-delete", Some(7)),
+                    ("data-cards.purge-active", Some(7)),
+                    ("data-cards.purge-recycle", Some(7)),
                     ("user-capacity.query", Some(7)),
                 ] {
                     let server = spawn_mock_server();

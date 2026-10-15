@@ -1,10 +1,8 @@
-import { getRequestUrl } from '@/lib/request-url';
 import {
   getUserRecycleBinCards,
   getUserUsedSlots,
   getDataCardUpdate,
-  restoreDataCard,
-  permanentlyDeleteDataCards
+  restoreDataCard
 } from '@/lib/database/data-cards';
 import { getUserDataCardCapacity } from '@/lib/database/users';
 import { requireAuthUser } from '@/lib/auth/server';
@@ -80,28 +78,8 @@ async function handler(req: Request): Promise<Response> {
         });
       }
       case 'DELETE': {
-        const url = getRequestUrl(req);
-        const id = url.searchParams.get('id');
-
-        if (!id) {
-          return new Response(JSON.stringify({ error: '缺少数据卡ID' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        const deletedCount = await permanentlyDeleteDataCards([id], userId);
-
-        if (deletedCount === 0) {
-          return new Response(JSON.stringify({ error: '数据卡不存在或无权访问' }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        return new Response(JSON.stringify({ success: true, message: '数据卡已彻底删除' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
+        return new Response(JSON.stringify({ error: 'CONFIRMATION_REQUIRED', code: 'CONFIRMATION_REQUIRED' }), {
+          status: 409, headers: { 'Content-Type': 'application/json' },
         });
       }
       default:

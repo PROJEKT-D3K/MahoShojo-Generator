@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react';
 import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
 import { useAuth } from '@/lib/useAuth';
 import { captureAuthIdentity } from '@/lib/auth-identity';
+import { createWebOwnedCardDeletePort } from '@/lib/owned-card-delete';
 import { createWebOwnedCardMetadataPort } from '@/lib/owned-card-metadata';
 // 真实管理模态框已共源；Web 只装配网络、文件、详情与链接端口。
 import { DataCardsModal as SharedDataCardsModal, type DataCardsModalProps, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
@@ -41,7 +42,7 @@ const host: DataCardsModalHost = {
   },
 };
 
-type WebDataCardsModalProps = Omit<DataCardsModalProps, 'host' | 'metadataEditor'> & {
+type WebDataCardsModalProps = Omit<DataCardsModalProps, 'host' | 'metadataEditor' | 'deletePort'> & {
   metadataGuard?: { onBusyChange: (busy: boolean) => void; isBlocked?: () => boolean };
   onMetadataSaved?: () => void;
 };
@@ -63,9 +64,14 @@ function WebDataCardsModalView({ metadataGuard, onMetadataSaved, ownerId, identi
   const latest = useRef({ metadataGuard, onMetadataSaved, externalBusy: props.busy });
   latest.current = { metadataGuard, onMetadataSaved, externalBusy: props.busy };
   const metadataEditor = useMemo(() => ownerId === undefined ? undefined : createWebOwnedCardMetadataPort(ownerId, identity, {
-    isBlocked: () => Boolean(latest.current.externalBusy || latest.current.metadataGuard?.isBlocked?.()),
+    isBlocked: () => Boolean(pending.current || latest.current.externalBusy || latest.current.metadataGuard?.isBlocked?.()),
     onBusyChange: (value) => { pending.current = value; latest.current.metadataGuard?.onBusyChange(value); },
     onSaved: () => latest.current.onMetadataSaved?.(),
   }), [ownerId, identity, pending]);
-  return <SharedDataCardsModal {...props} host={host} metadataEditor={metadataEditor} />;
+  const deletePort = useMemo(() => ownerId === undefined ? undefined : createWebOwnedCardDeletePort(ownerId, identity, {
+    isBlocked: () => Boolean(pending.current || latest.current.externalBusy || latest.current.metadataGuard?.isBlocked?.()),
+    onBusyChange: (value) => { pending.current = value; latest.current.metadataGuard?.onBusyChange(value); },
+    onChanged: () => latest.current.onMetadataSaved?.(),
+  }), [ownerId, identity, pending]);
+  return <SharedDataCardsModal {...props} host={host} metadataEditor={metadataEditor} deletePort={deletePort} />;
 }

@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 it('真实Web回收站→现有详情仅两条owned GET，无metadata/rating/report副请求及标签写入口', async () => {
-  function Harness() { const [open, setOpen] = useState(false); return <><button onClick={() => setOpen(true)}>打开云端回收站</button><RecycleBinModal isOpen={open} onClose={() => setOpen(false)} limit={5} onRestore={vi.fn()} onDelete={vi.fn()} /></>; }
+  function Harness() { const [open, setOpen] = useState(false); return <><button onClick={() => setOpen(true)}>打开云端回收站</button><RecycleBinModal isOpen={open} onClose={() => setOpen(false)} limit={5} onRestore={vi.fn()} onChanged={vi.fn()} /></>; }
   await act(async () => root.render(<Harness />)); button('打开云端回收站').focus(); await act(async () => button('打开云端回收站').click());
   expect(fetcher).toHaveBeenCalledOnce(); expect(document.body.textContent).not.toContain('墓碑正文');
   const details = button('查看详情'); details.focus(); await act(async () => details.click());

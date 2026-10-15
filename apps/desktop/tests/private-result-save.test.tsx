@@ -172,7 +172,7 @@ describe.each([undefined, 'generation-result'] as const)('private result cloud-s
   await render(); expect(mocks.metadata).not.toBeNull();
   await act(async () => mocks.metadata.onBusyChange(true)); expect(mocks.busy()).toBe(true); expect(onBusyChange).toHaveBeenLastCalledWith(true);
   expect(button('保存到云端').disabled).toBe(true); expect(button('替换已有').disabled).toBe(true);
-  expect(mocks.metadata.isBlocked()).toBe(false);
-  await act(async () => mocks.metadata.onBusyChange(false)); expect(mocks.busy()).toBe(false); expect(onBusyChange).toHaveBeenLastCalledWith(false);
+  expect(mocks.metadata.isBlocked()).toBe(true);
+  await act(async () => mocks.metadata.onBusyChange(false)); expect(mocks.metadata.isBlocked()).toBe(false); expect(mocks.busy()).toBe(false); expect(onBusyChange).toHaveBeenLastCalledWith(false);
 });
 });

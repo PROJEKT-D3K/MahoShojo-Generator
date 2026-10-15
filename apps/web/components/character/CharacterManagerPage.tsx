@@ -711,22 +711,6 @@ export const CharacterManagerPage: React.FC = () => {
         }
     };
 
-    // 删除数据卡
-    const handleDeleteDataCard = async (id: string) => {
-        if (!window.confirm('确定要删除这个数据卡吗？')) return;
-
-        const result = await dataCardApi.deleteCard(id);
-        if (result.success) {
-            setMessage({ type: 'success', text: '数据卡已移入回收站' });
-            loadUserDataCards();
-            loadUserBadges();
-        } else {
-            const error = result.error || '删除失败';
-            setMessage({ type: 'error', text: error });
-            throw new Error(error);
-        }
-    };
-
     // 恢复回收站中的数据卡
     const handleRestoreRecycleCard = async (id: string) => {
         const result = await dataCardApi.restoreCard(id);
@@ -736,20 +720,6 @@ export const CharacterManagerPage: React.FC = () => {
             loadUserBadges();
         } else {
             setMessage({ type: 'error', text: result.error || '恢复失败' });
-        }
-    };
-
-    // 永久删除回收站中的数据卡
-    const handleDeleteRecycleCard = async (id: string) => {
-        if (!window.confirm('确定要彻底删除这个数据卡吗？此操作无法撤销。')) return;
-
-        const result = await dataCardApi.deleteRecycleCard(id);
-        if (result.success) {
-            setMessage({ type: 'success', text: '数据卡已彻底删除' });
-            loadUserDataCards();
-            loadUserBadges();
-        } else {
-            setMessage({ type: 'error', text: result.error || '删除失败' });
         }
     };
 
@@ -2130,7 +2100,7 @@ export const CharacterManagerPage: React.FC = () => {
                 summaryOwnerId={user?.id}
                 scopeKey={`${user?.id ?? ''}:${authSource ?? ''}`}
                 busy={cloudWrite.busy && !cloudWrite.replacementPreparing}
-                metadataGuard={{ onBusyChange: (value) => { cloudOperationBusyRef.current = value; }, isBlocked: () => cloudWrite.busy }}
+                metadataGuard={{ onBusyChange: (value) => { cloudOperationBusyRef.current = value; }, isBlocked: () => cloudOperationBusyRef.current || cloudWrite.busy }}
                 onMetadataSaved={() => { void loadUserDataCards(); void loadUserBadges(); }}
                 refreshKey={cardsRefresh}
 
@@ -2138,7 +2108,6 @@ export const CharacterManagerPage: React.FC = () => {
                 cardsPerPage={cardsPerPage}
                 onPageChange={setCurrentPage}
 
-                onDeleteCard={handleDeleteDataCard}
                 onLoadCard={handleLoadDataCard}
 
             onShareCard={handleShareDataCard}
@@ -2190,7 +2159,7 @@ export const CharacterManagerPage: React.FC = () => {
                 busy={cloudWrite.busy}
                 operationGuard={{ isBlocked: () => cloudOperationBusyRef.current || cloudWrite.busy, onBusyChange: (value) => { cloudOperationBusyRef.current = value; } }}
                 onRestore={handleRestoreRecycleCard}
-                onDelete={handleDeleteRecycleCard}
+                onChanged={() => { void loadUserDataCards(); void loadUserBadges(); }}
                 limit={config.RECYCLE_BIN_LIMIT}
             />
 

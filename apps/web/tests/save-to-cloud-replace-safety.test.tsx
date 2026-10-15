@@ -33,19 +33,17 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe.each([undefined, 'generation-result'] as const)('Web result actual owned API and shared confirmation (%s)', (presentation) => {
   const render = (value: unknown = data) => act(async () => { root.render(<SaveToCloudButton presentation={presentation} data={value} />); await flush(); });
-  test('替换列表中的普通删除保持409原文提示，不刷新或自动改成永久删除', async () => {
+  test('替换列表委托共源删除，并能直接整理回收站；不再派发旧DELETE', async () => {
     await render(); await click('替换已有');
-    const error = '回收站已满，所有类型的数据卡共享账号回收站容量。本次未删除该卡或其他卡片，请先到回收站恢复或彻底删除不需要的卡片后重试。';
-    const beforeCapacity = vi.mocked(dataCardApi.getUserCapacity).mock.calls.length;
-    const beforeRefresh = mocks.picker.refreshKey;
-    fetcher.mockResolvedValueOnce(Response.json({ code: 'RECYCLE_BIN_FULL', error }, { status: 409 }));
-    await act(async () => { await mocks.picker.onDeleteCard('target'); });
-    expect(window.alert).toHaveBeenCalledExactlyOnceWith(error);
+    expect(mocks.picker.onDeleteCard).toBeUndefined();
+    expect(mocks.picker.onOpenRecycleBin).toBeTypeOf('function');
+    fetcher.mockResolvedValueOnce(Response.json({ success: true, accountFenceVersion: 1, ownerUserId: 7, cards: [], total: 0, filteredCount: 0, nextOffset: null }));
+    await act(async () => { mocks.picker.onOpenRecycleBin(); await flush(); });
+    expect(document.body.textContent).toContain('回收站为空');
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0][0]).toBe('/api/data-cards?id=target');
-    expect(fetcher.mock.calls[0][1].method).toBe('DELETE');
-    expect(vi.mocked(dataCardApi.getUserCapacity).mock.calls.length).toBe(beforeCapacity);
-    expect(mocks.picker.refreshKey).toBe(beforeRefresh); expect(mocks.picker.isOpen).toBe(true);
+    expect(fetcher.mock.calls[0][0]).toContain('/api/data-cards/recycle-owned?');
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === 'DELETE' || init?.method === 'POST')).toBe(false);
+    expect(window.alert).not.toHaveBeenCalled();
   });
   test('selection previews owner/version then explicit confirm replaces frozen data', async () => {
     await render(); await choose(); expect(writes()).toHaveLength(0); expect(document.body.textContent).toContain('已有待审核版本');
