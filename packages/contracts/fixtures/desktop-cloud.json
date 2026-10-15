@@ -79,7 +79,8 @@
     "generate-free-stream",
     "generate-scenario-stream",
     "generate-creator-stream",
-    "generate-sublimation-stream"
+    "generate-sublimation-stream",
+    "tavern-convert-stream"
   ],
   "hostedJsonRouteIds": [
     "generate-magical-girl",
@@ -95,6 +96,7 @@
     "defaultMaxBytes": 262144,
     "routeMaxBytes": {
       "tavern-convert": 8388608,
+      "tavern-convert-stream": 8388608,
       "generate-free": 1048576,
       "generate-free-stream": 1048576,
       "generate-sublimation": 4194304,

@@ -17,7 +17,11 @@ import {
   DesktopHostedGenerateRequestSchema,
   DesktopHostedJsonRequestSchema,
   DesktopHostedJsonResponseSchema,
+  HostedGenerationEventNameSchema,
   HostedGenerationEventSchema,
+  DesktopTavernStreamMarkdownSchema,
+  DesktopTavernStreamErrorSchema,
+  classifyDesktopTavernStreamFailure,
 } from '@mahoshojo/contracts/desktop-cloud';
 import type {
   DesktopCloudCachedAccount,
@@ -38,7 +42,10 @@ import type {
   DesktopHostedJsonRequest,
   DesktopHostedJsonResponse,
   HostedGenerationEvent,
+  DesktopTavernStreamFailurePhase,
 } from '@mahoshojo/contracts/desktop-cloud';
+
+import { TavernCompletionDoneSchema } from '@mahoshojo/contracts/tavern-completion';
 
 import { DesktopBridgeError } from './desktop-bridge';
 
@@ -78,6 +85,18 @@ export class DesktopCloudError extends Error {
     this.name = 'DesktopCloudError';
     this.command = command;
     this.code = code;
+  }
+}
+
+/** Tavern 本地诊断；phase 不进入 IPC，也不改变其他 Hosted 路由的错误语义。 */
+export class DesktopTavernStreamError extends DesktopCloudError {
+  readonly phase: DesktopTavernStreamFailurePhase;
+
+  constructor(error: DesktopCloudError, phase: DesktopTavernStreamFailurePhase, cause?: unknown) {
+    super(error.command, error.code, error.message);
+    this.name = 'DesktopTavernStreamError';
+    this.phase = phase;
+    this.cause = cause;
   }
 }
 
@@ -315,13 +334,72 @@ export interface StreamHostedAiOptions {
   createChannel?: () => HostedAiChannel;
 }
 
+/** Tavern 独立事件门禁：首个终态锁定，invoke 完成自身不构成完成证据。 */
+const streamTavernHostedAi = (
+  invoke: InvokeFn,
+  request: DesktopHostedGenerateRequest,
+  onEvent: (event: HostedGenerationEvent) => void,
+  channel: HostedAiChannel,
+): Promise<void> => {
+  let observedEvent = false;
+  let terminal = false;
+  let settled = false;
+  let bridgeFailure: DesktopTavernStreamError | undefined;
+  const failBridge = (): DesktopTavernStreamError => {
+    bridgeFailure ??= new DesktopTavernStreamError(
+      new DesktopCloudError(STREAM_HOSTED_AI_COMMAND, 'bridge-invalid', 'native 酒馆生成流缺少合法终态或推送了契约外事件'),
+      classifyDesktopTavernStreamFailure({ source: 'bridge-invalid', observedEvent, code: 'bridge-invalid' }),
+    );
+    terminal = true;
+    onEvent({ event: 'error', data: { ok: false, error: bridgeFailure.message, code: 'bridge-invalid' } });
+    return bridgeFailure;
+  };
+  channel.onmessage = (raw) => {
+    if (terminal || settled) return;
+    observedEvent = true;
+    // 未知扩展事件不进入正文或 UI；但收到它仍是不可倒退的派发证据。
+    if (raw !== null && typeof raw === 'object' && typeof raw.event === 'string'
+      && !HostedGenerationEventNameSchema.safeParse(raw.event).success) return;
+    const parsed = HostedGenerationEventSchema.safeParse(raw);
+    if (!parsed.success) { failBridge(); return; }
+    const event = parsed.data;
+    const payloadValid = event.event === 'markdown'
+      ? DesktopTavernStreamMarkdownSchema.safeParse(event.data).success
+      : event.event === 'done'
+        ? TavernCompletionDoneSchema.safeParse(event.data).success
+        : event.event === 'error'
+          ? DesktopTavernStreamErrorSchema.safeParse(event.data).success
+          : true;
+    if (!payloadValid) { failBridge(); return; }
+    terminal = event.event === 'done' || event.event === 'error';
+    onEvent(event);
+  };
+  // 首次 invoke 必须立即提交，避免桥自身的 microtask 延迟让同一 turn 的取消先发送。
+  return (async () => {
+    try {
+      await invoke(STREAM_HOSTED_AI_COMMAND, { request, onEvent: channel });
+    } catch (cause: unknown) {
+      settled = true;
+      if (bridgeFailure) throw bridgeFailure;
+      const error = toCloudError(STREAM_HOSTED_AI_COMMAND, cause);
+      throw new DesktopTavernStreamError(error, classifyDesktopTavernStreamFailure({
+        source: 'invoke-rejection', observedEvent, code: error.code,
+      }), cause);
+    }
+    settled = true;
+    if (bridgeFailure) throw bridgeFailure;
+    if (!terminal) throw failBridge();
+  })();
+};
+
 /**
  * 打开一次 hosted 生成流（当前只开放系统默认通道）。
  *
  * renderer 只给「路由标识 + 非秘密业务载荷」：endpoint、会话 cookie 与凭据注入
  * 全部在 native 侧；服务器 BYOK 在 native Provider 绑定落地前没有 IPC 通道
  * （DESK-093）。事件经 `HostedGenerationEventSchema` 过滤——未知名/非法载荷的
- * 事件不进入 UI，统一投影为一个 bridge-invalid error 事件。
+ * 事件不进入 UI，统一投影为一个 bridge-invalid error 事件。Tavern 另外要求
+ * 严格正文/完成证据与唯一终态；未知扩展事件只在该路由忽略。
  */
 export const streamHostedAi = (
   invoke: InvokeFn,
@@ -329,8 +407,22 @@ export const streamHostedAi = (
   onEvent: (event: HostedGenerationEvent) => void,
   options?: StreamHostedAiOptions,
 ): Promise<void> => {
-  const parsedRequest = DesktopHostedGenerateRequestSchema.parse(request);
+  const validated = DesktopHostedGenerateRequestSchema.safeParse(request);
+  if (!validated.success) {
+    if (request?.routeId === 'tavern-convert-stream') {
+      return Promise.reject(new DesktopTavernStreamError(
+        new DesktopCloudError(STREAM_HOSTED_AI_COMMAND, 'invalid-request', '酒馆转换请求不符合 desktop-cloud 契约'),
+        classifyDesktopTavernStreamFailure({ source: 'local-validation', observedEvent: false }),
+        validated.error,
+      ));
+    }
+    throw validated.error;
+  }
+  const parsedRequest = validated.data;
   const channel = (options?.createChannel ?? (() => new Channel<HostedGenerationEvent>()))();
+  if (parsedRequest.routeId === 'tavern-convert-stream') {
+    return streamTavernHostedAi(invoke, parsedRequest, onEvent, channel);
+  }
   channel.onmessage = (raw) => {
     const parsed = HostedGenerationEventSchema.safeParse(raw);
     onEvent(

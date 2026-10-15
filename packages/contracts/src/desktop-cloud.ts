@@ -385,6 +385,39 @@ export const HostedGenerationEventSchema = z.object({
 }).strict();
 export type HostedGenerationEvent = z.infer<typeof HostedGenerationEventSchema>;
 
+/** Tavern 正文只来自独立 markdown 事件，不能从 reasoning/telemetry 推断。 */
+export const DesktopTavernStreamMarkdownSchema = z.object({ chunk: z.string() }).strict();
+
+/** Native 的封闭失败投影；rate-limited 是事件诊断，不是 CloudError 枚举。 */
+export const DesktopTavernStreamErrorSchema = z.object({
+  ok: z.literal(false),
+  error: z.string(),
+  code: z.string(),
+  retryAfterSeconds: z.number().int().positive().max(4_294_967_295).optional(),
+}).strict();
+
+export const DESKTOP_TAVERN_STREAM_PRE_DISPATCH_CODES = [
+  'invalid-request', 'protocol-mismatch', 'server-unavailable',
+  'storage-unavailable', 'cancelled-before-dispatch',
+] as const;
+export type DesktopTavernStreamFailurePhase = 'pre-dispatch' | 'possible-dispatch';
+
+/**
+ * 本地校验失败，或尚未收到任何事件的 invoke 白名单前导拒绝，能证明未派发。
+ * 同名上游错误、未知异常与 IPC 违例都不能授权重发；事件证据不可倒退。
+ */
+export const classifyDesktopTavernStreamFailure = (failure: {
+  source: 'local-validation' | 'invoke-rejection' | 'stream-event' | 'bridge-invalid';
+  observedEvent: boolean;
+  code?: unknown;
+}): DesktopTavernStreamFailurePhase => (
+  !failure.observedEvent
+  && (failure.source === 'local-validation' || (failure.source === 'invoke-rejection'
+    && DESKTOP_TAVERN_STREAM_PRE_DISPATCH_CODES.some(code => code === failure.code)))
+    ? 'pre-dispatch'
+    : 'possible-dispatch'
+);
+
 /** hosted 适配层允许选择的路由标识白名单（D5.0c 起，D5.1-G1 增残兽，D5.1-G2 增自由/情景，D5.1-G3 增创作工房，D5.1-G4 增升华）。 */
 export const HostedGenerationRouteIdSchema = z.enum([
   'generate-magical-girl-details-stream',
@@ -393,6 +426,7 @@ export const HostedGenerationRouteIdSchema = z.enum([
   'generate-scenario-stream',
   'generate-creator-stream',
   'generate-sublimation-stream',
+  'tavern-convert-stream',
 ]);
 export type HostedGenerationRouteId = z.infer<typeof HostedGenerationRouteIdSchema>;
 
@@ -472,6 +506,10 @@ export const DesktopHostedGenerateRequestSchema = z.object({
   presetConfig: DesktopHostedPresetConfigSchema.optional(),
 }).strict().refine((value) => !(value.systemConfig && value.presetConfig), {
   message: 'systemConfig 与 presetConfig 不可同时指定',
+}).superRefine((value, context) => {
+  if (value.routeId === 'tavern-convert-stream' && !DesktopHostedTavernBodySchema.safeParse(value.body).success) {
+    context.addIssue({ code: 'custom', path: ['body'], message: '酒馆转换请求字段或附件大小无效' });
+  }
 });
 export type DesktopHostedGenerateRequest = z.infer<typeof DesktopHostedGenerateRequestSchema>;
 
@@ -579,6 +617,7 @@ export const HOSTED_GENERATION_BODY_DEFAULT_MAX_BYTES = 256 * 1024;
 export const HOSTED_GENERATION_BODY_ROUTE_MAX_BYTES: Readonly<Record<string, number>> = {
   // 1 MiB 正文最坏 JSON 转义六倍，另留字段及 Native 配置注入余量。
   'tavern-convert': 8 * 1024 * 1024,
+  'tavern-convert-stream': 8 * 1024 * 1024,
   'generate-free': 1024 * 1024,
   'generate-free-stream': 1024 * 1024,
   'generate-sublimation': 4 * 1024 * 1024,

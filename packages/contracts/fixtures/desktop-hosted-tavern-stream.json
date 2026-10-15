@@ -1,0 +1,498 @@
+{
+  "routeId": "tavern-convert-stream",
+  "path": "/api/tavern/convert-stream?format=sse",
+  "bodyMaxBytes": 8388608,
+  "capability": {
+    "path": "/api/tavern/convert-stream",
+    "payload": {
+      "protocol": "tavern-completion",
+      "version": 1
+    },
+    "header": "x-mahoshojo-tavern-completion",
+    "value": "v1",
+    "invalidPayloads": [
+      {
+        "protocol": "magic-tea-party-completion",
+        "version": 1
+      },
+      {
+        "protocol": "tavern-completion",
+        "version": 2
+      },
+      {
+        "protocol": "tavern-completion",
+        "version": "1"
+      },
+      {
+        "protocol": "tavern-completion",
+        "version": 1,
+        "ready": true
+      }
+    ]
+  },
+  "preDispatchCodes": [
+    "invalid-request",
+    "protocol-mismatch",
+    "server-unavailable",
+    "storage-unavailable",
+    "cancelled-before-dispatch"
+  ],
+  "failureCases": [
+    {
+      "label": "invalid-request-before-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "invalid-request",
+      "phase": "pre-dispatch"
+    },
+    {
+      "label": "invalid-request-after-event",
+      "source": "invoke-rejection",
+      "observedEvent": true,
+      "code": "invalid-request",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "invalid-request-from-stream",
+      "source": "stream-event",
+      "observedEvent": false,
+      "code": "invalid-request",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "protocol-mismatch-before-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "protocol-mismatch",
+      "phase": "pre-dispatch"
+    },
+    {
+      "label": "protocol-mismatch-after-event",
+      "source": "invoke-rejection",
+      "observedEvent": true,
+      "code": "protocol-mismatch",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "protocol-mismatch-from-stream",
+      "source": "stream-event",
+      "observedEvent": false,
+      "code": "protocol-mismatch",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "server-unavailable-before-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "server-unavailable",
+      "phase": "pre-dispatch"
+    },
+    {
+      "label": "server-unavailable-after-event",
+      "source": "invoke-rejection",
+      "observedEvent": true,
+      "code": "server-unavailable",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "server-unavailable-from-stream",
+      "source": "stream-event",
+      "observedEvent": false,
+      "code": "server-unavailable",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "storage-unavailable-before-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "storage-unavailable",
+      "phase": "pre-dispatch"
+    },
+    {
+      "label": "storage-unavailable-after-event",
+      "source": "invoke-rejection",
+      "observedEvent": true,
+      "code": "storage-unavailable",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "storage-unavailable-from-stream",
+      "source": "stream-event",
+      "observedEvent": false,
+      "code": "storage-unavailable",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "cancelled-before-dispatch-before-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "cancelled-before-dispatch",
+      "phase": "pre-dispatch"
+    },
+    {
+      "label": "cancelled-before-dispatch-after-event",
+      "source": "invoke-rejection",
+      "observedEvent": true,
+      "code": "cancelled-before-dispatch",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "cancelled-before-dispatch-from-stream",
+      "source": "stream-event",
+      "observedEvent": false,
+      "code": "cancelled-before-dispatch",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "network-error-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "network-error",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "timeout-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "timeout",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "cancelled-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "cancelled",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "not-authenticated-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "not-authenticated",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "state-mismatch-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "state-mismatch",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "internal-error-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "internal-error",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "server-rejected-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "server-rejected",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "rate-limited-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "rate-limited",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "bridge-invalid-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "bridge-invalid",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "unknown-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": "unknown",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "None-without-events",
+      "source": "invoke-rejection",
+      "observedEvent": false,
+      "code": null,
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "bridge-invalid-without-events",
+      "source": "bridge-invalid",
+      "observedEvent": false,
+      "code": "invalid-request",
+      "phase": "possible-dispatch"
+    },
+    {
+      "label": "local-validation",
+      "source": "local-validation",
+      "observedEvent": false,
+      "phase": "pre-dispatch"
+    },
+    {
+      "label": "local-validation-cannot-erase-events",
+      "source": "local-validation",
+      "observedEvent": true,
+      "phase": "possible-dispatch"
+    }
+  ],
+  "validMarkdown": [
+    {
+      "chunk": ""
+    },
+    {
+      "chunk": "正文🌸"
+    }
+  ],
+  "invalidMarkdown": [
+    null,
+    [],
+    "正文",
+    {},
+    {
+      "chunk": null
+    },
+    {
+      "chunk": 12
+    },
+    {
+      "chunk": "正文",
+      "reasoning": "not body"
+    }
+  ],
+  "validDone": [
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "stop"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "length"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "content-filter"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "tool-calls"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "error"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "other"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "unknown"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": null
+      }
+    }
+  ],
+  "invalidDone": [
+    null,
+    [],
+    {
+      "ok": true
+    },
+    {
+      "ok": false,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "stop"
+      }
+    },
+    {
+      "ok": true,
+      "teaCompletion": {
+        "version": 1,
+        "finishReason": "stop"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 2,
+        "finishReason": "stop"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "stop",
+        "completed": true
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "stop"
+      },
+      "completed": true
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "STOP"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": "end_turn"
+      }
+    },
+    {
+      "ok": true,
+      "tavernCompletion": {
+        "version": 1,
+        "finishReason": 1
+      }
+    }
+  ],
+  "validErrors": [
+    {
+      "ok": false,
+      "error": "server rejected",
+      "code": "server-rejected"
+    },
+    {
+      "ok": false,
+      "error": "rate limited",
+      "code": "rate-limited",
+      "retryAfterSeconds": 7
+    },
+    {
+      "ok": false,
+      "error": "retry later",
+      "code": "rate-limited",
+      "retryAfterSeconds": 4294967295
+    }
+  ],
+  "invalidErrors": [
+    null,
+    [],
+    {
+      "ok": false,
+      "code": "network-error"
+    },
+    {
+      "ok": false,
+      "error": "failed"
+    },
+    {
+      "ok": true,
+      "error": "failed",
+      "code": "server-rejected"
+    },
+    {
+      "ok": false,
+      "error": 9,
+      "code": "server-rejected"
+    },
+    {
+      "ok": false,
+      "error": "failed",
+      "code": null
+    },
+    {
+      "ok": false,
+      "error": "failed",
+      "code": "server-rejected",
+      "headers": {}
+    },
+    {
+      "ok": false,
+      "error": "failed",
+      "code": "rate-limited",
+      "retryAfterSeconds": 0
+    },
+    {
+      "ok": false,
+      "error": "failed",
+      "code": "rate-limited",
+      "retryAfterSeconds": -1
+    },
+    {
+      "ok": false,
+      "error": "failed",
+      "code": "rate-limited",
+      "retryAfterSeconds": 0.5
+    },
+    {
+      "ok": false,
+      "error": "failed",
+      "code": "rate-limited",
+      "retryAfterSeconds": 4294967296
+    },
+    {
+      "ok": false,
+      "error": "failed",
+      "code": "rate-limited",
+      "retryAfterSeconds": "7"
+    },
+    {
+      "ok": false,
+      "error": "failed",
+      "code": "rate-limited",
+      "retryAfterSeconds": null
+    }
+  ],
+  "rateLimited": {
+    "status": 429,
+    "body": {
+      "error": "rate limited",
+      "retryAfterSeconds": 7
+    },
+    "retryAfterHeader": "11",
+    "expected": {
+      "ok": false,
+      "error": "rate limited",
+      "code": "rate-limited",
+      "retryAfterSeconds": 7
+    }
+  }
+}

@@ -20,6 +20,8 @@ pub(crate) mod battle_reports;
 pub(crate) mod public_ranking;
 #[path = "cloud/strict_preflight.rs"]
 pub(crate) mod strict_preflight;
+#[path = "cloud/tavern_stream.rs"]
+mod tavern_stream;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -89,6 +91,8 @@ const HOSTED_GENERATE_NAME_PATH: &str = "/api/generate-magical-girl";
 const HOSTED_ROUTE_NAME: &str = "generate-magical-girl";
 const HOSTED_TAVERN_CONVERT_PATH: &str = "/api/tavern/convert";
 const HOSTED_ROUTE_TAVERN: &str = "tavern-convert";
+const HOSTED_TAVERN_CONVERT_STREAM_PATH: &str = "/api/tavern/convert-stream";
+const HOSTED_ROUTE_TAVERN_STREAM: &str = "tavern-convert-stream";
 const HOSTED_GENERATE_DETAILS_PATH: &str = "/api/generate-magical-girl-details";
 const HOSTED_ROUTE_DETAILS: &str = "generate-magical-girl-details";
 const HOSTED_GENERATE_CANSHOU_STREAM_PATH: &str = "/api/generate-canshou-stream";
@@ -120,6 +124,7 @@ const HOSTED_STREAM_ROUTES: &[&str] = &[
     HOSTED_ROUTE_SCENARIO_STREAM,
     HOSTED_ROUTE_CREATOR_STREAM,
     HOSTED_ROUTE_SUBLIMATION_STREAM,
+    HOSTED_ROUTE_TAVERN_STREAM,
 ];
 /// hosted 非流式 JSON 生成命令开放的 routeId 集合。
 const HOSTED_JSON_ROUTES: &[&str] = &[
@@ -136,6 +141,7 @@ const HOSTED_JSON_ROUTES: &[&str] = &[
 /// routeId → 固定上游路径（仅流式生成；`?format=sse` 由调用方追加）。
 fn hosted_stream_path(route_id: &str) -> Option<&'static str> {
     match route_id {
+        HOSTED_ROUTE_TAVERN_STREAM => Some(HOSTED_TAVERN_CONVERT_STREAM_PATH),
         HOSTED_ROUTE_DETAILS_STREAM => Some(HOSTED_GENERATE_DETAILS_STREAM_PATH),
         HOSTED_ROUTE_CANSHOU_STREAM => Some(HOSTED_GENERATE_CANSHOU_STREAM_PATH),
         HOSTED_ROUTE_FREE_STREAM => Some(HOSTED_GENERATE_FREE_STREAM_PATH),
@@ -1821,7 +1827,7 @@ const HOSTED_BODY_TAVERN_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// 与 `fixtures/desktop-cloud.json` 的 `hostedBodyLimits` 同源。
 fn hosted_body_max_bytes(route_id: &str) -> usize {
     match route_id {
-        HOSTED_ROUTE_TAVERN => HOSTED_BODY_TAVERN_MAX_BYTES,
+        HOSTED_ROUTE_TAVERN | HOSTED_ROUTE_TAVERN_STREAM => HOSTED_BODY_TAVERN_MAX_BYTES,
         HOSTED_ROUTE_FREE | HOSTED_ROUTE_FREE_STREAM => HOSTED_BODY_FREE_MAX_BYTES,
         HOSTED_ROUTE_SUBLIMATION | HOSTED_ROUTE_SUBLIMATION_STREAM => {
             HOSTED_BODY_SUBLIMATION_MAX_BYTES
@@ -2221,7 +2227,10 @@ fn build_hosted_request_body(
         // 必须早于 inject_hosted_preset、load_session 与兼容探测，不能碰凭据后才拒绝。
         return build_hosted_name_body(request);
     }
-    let mut result = if request.route_id == HOSTED_ROUTE_TAVERN {
+    let mut result = if matches!(
+        request.route_id.as_str(),
+        HOSTED_ROUTE_TAVERN | HOSTED_ROUTE_TAVERN_STREAM
+    ) {
         let body = build_hosted_tavern_body(&request.body)?;
         // Invalid preset overrides must not trigger a secret read either.
         if let Some(config) = &request.preset_config {
@@ -2524,7 +2533,7 @@ async fn prepare_hosted_dispatch(
     let session = load_session_for(state, secrets).map_err(|error| {
         if matches!(
             request.route_id.as_str(),
-            HOSTED_ROUTE_NAME | HOSTED_ROUTE_TAVERN
+            HOSTED_ROUTE_NAME | HOSTED_ROUTE_TAVERN | HOSTED_ROUTE_TAVERN_STREAM
         ) && error.code == CloudErrorCode::InternalError
         {
             CloudError::new(
@@ -2540,7 +2549,7 @@ async fn prepare_hosted_dispatch(
         Err(error)
             if matches!(
                 request.route_id.as_str(),
-                HOSTED_ROUTE_NAME | HOSTED_ROUTE_TAVERN
+                HOSTED_ROUTE_NAME | HOSTED_ROUTE_TAVERN | HOSTED_ROUTE_TAVERN_STREAM
             ) && error.code == CloudErrorCode::InvalidResponse =>
         {
             return Err(CloudError::new(
@@ -2590,6 +2599,9 @@ pub async fn stream_hosted_ai(
     request: CloudHostedGenerateRequest,
     on_event: &dyn HostedEventSink,
 ) -> Result<(), CloudError> {
+    if request.route_id == HOSTED_ROUTE_TAVERN_STREAM {
+        return tavern_stream::stream(state, secrets, registry, request, on_event).await;
+    }
     // 首次 await 前占有请求身份，兼容探测期间重复点击也不能二次 dispatch。
     let token = registry
         .register(&request.request_id)
@@ -6013,8 +6025,8 @@ mod tests {
             let secrets = MemorySecrets::new();
             secrets.set(&crate::provider_target::preset_secret_ref("deepseek").unwrap(), "fake-only-key").unwrap();
             let registry = crate::ai::RequestRegistry::default();
-            // JSON-only 名字通道不能与流式表按位置配对；两张表各自完整遍历。
-            for (route, is_stream) in HOSTED_STREAM_ROUTES.iter().map(|route| (*route, true))
+            // Tavern v1 的额外握手在专用测试覆盖；其余路由保留原通用协议回归。
+            for (route, is_stream) in HOSTED_STREAM_ROUTES.iter().filter(|route| **route != HOSTED_ROUTE_TAVERN_STREAM).map(|route| (*route, true))
                 .chain(HOSTED_JSON_ROUTES.iter().map(|route| (*route, false))) {
                     let mut request = hosted_request();
                     request.route_id = route.into();
@@ -6790,6 +6802,11 @@ mod tests {
                 .await
                 .expect("compatible probe must let the request through");
         });
+    }
+
+    mod tavern_stream_tests {
+        use super::*;
+        include!("cloud_tavern_stream_tests.rs");
     }
 
     mod tavern_conversion {
