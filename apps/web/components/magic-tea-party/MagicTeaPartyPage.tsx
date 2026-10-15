@@ -1007,7 +1007,7 @@ export function MagicTeaPartyPage() {
         </>
       }
       footer={
-        <Footer className="footer mt-4" />
+        <Footer className="footer" />
       }
       modals={
         <MagicTeaPartyCardModals

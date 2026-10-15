@@ -68,6 +68,11 @@ export interface HomeAccountWelcomeLink {
   readonly label: string;
 }
 
+/** 已交付战报记录的宿主可复用此入口；是否展示仍由宿主决定。 */
+export const HOME_ACCOUNT_SECONDARY_LINKS: readonly HomeAccountWelcomeLink[] = [
+  { href: '/me', label: '个人页：战报记录（测试版）' },
+];
+
 export interface HomeAccountWelcomeProps {
   /**
    * 账号区状态机：宿主**已验证**才给 `'signed-in'`；`'anonymous'` 渲染为空而不是
@@ -119,7 +124,7 @@ export function HomeAccountWelcome({
             className="inline-flex items-center rounded-lg bg-pink-100 px-4 py-2 text-sm text-pink-700 transition-colors hover:bg-pink-200"
           >
             <span>欢迎回来，</span>
-            {name}
+            <div className="inline-flex font-semibold">{name}</div>
             <span className="ml-2">点击进入档案馆</span>
           </a>
           {secondaryLinks?.map((link) => (

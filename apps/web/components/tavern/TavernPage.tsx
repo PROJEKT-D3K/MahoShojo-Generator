@@ -60,7 +60,7 @@ export function TavernPage() {
 
               <TavernTabPanels idPrefix={idPrefix} tab={tab} importPanel={<TavernImportPanel onBusyChange={setImportBusy} />} exportPanel={<TavernExportPanel onBusyChange={setExportBusy} />} />
 
-              <Footer className="footer mt-8" />
+              <Footer className="footer" />
             </div>
           </div>
         </div>

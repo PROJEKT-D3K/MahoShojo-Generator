@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AVAILABLE, unavailable, type CapabilitySnapshot } from '../src/capability/index';
 import { encyclopediaEntries } from '../src/encyclopedia/index';
 import {
+  HOME_ACCOUNT_SECONDARY_LINKS,
   HOME_FEATURE_CATEGORIES,
   HOME_RECOMMENDED_ENTRIES,
   HomeEncyclopediaCard,
@@ -261,4 +262,23 @@ it.each(['/character-manager', '/me', '/encyclopedia', '/details'])('preserves n
   act(() => { link.dispatchEvent(ordinary); });
   expect(ordinary.defaultPrevented).toBe(true);
   expect(navigate).toHaveBeenCalledExactlyOnceWith(href);
+});
+
+describe('HomeAccountWelcome presentation', () => {
+  it.each([undefined, (href: string) => `#${href}`])('emphasizes the name and preserves host link resolution', (resolveInternalHref) => {
+    const navigate = vi.fn();
+    render(<HomeAccountWelcome state="signed-in" name="homura" primaryHref="/character-manager" secondaryLinks={HOME_ACCOUNT_SECONDARY_LINKS} onNavigate={navigate} resolveInternalHref={resolveInternalHref} />);
+    expect(container.querySelector('.font-semibold')?.textContent).toBe('homura');
+    const href = resolveInternalHref?.('/me') ?? '/me';
+    const link = container.querySelector<HTMLAnchorElement>(`a[href="${href}"]`)!;
+    expect(link.textContent).toBe('个人页：战报记录（测试版）');
+    act(() => link.click());
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/me');
+  });
+
+  it.each(['loading', 'anonymous'] as const)('does not expose signed-in links while %s', (state) => {
+    render(<HomeAccountWelcome state={state} name="homura" primaryHref="/character-manager" secondaryLinks={HOME_ACCOUNT_SECONDARY_LINKS} onNavigate={vi.fn()} />);
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toBe(state === 'loading' ? '加载中...' : '');
+  });
 });

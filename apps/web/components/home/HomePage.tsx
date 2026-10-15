@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 
 import {
   HOME_FEATURE_CATEGORIES,
+  HOME_ACCOUNT_SECONDARY_LINKS,
   HomeAccountWelcome,
   HomePageView,
   type HomeAssetSource,
@@ -48,14 +49,14 @@ export function HomePage() {
               name={
                 <UserWithTitle
                   username={user?.username || ''}
-                  usernameClassName="text-pink-700 font-semibold"
+                  usernameClassName="text-pink-700"
                   titleClassName="text-xs"
                   badges={userBadges}
                   showBadges={true}
                 />
               }
               primaryHref="/character-manager"
-              secondaryLinks={[{ href: '/me', label: '个人页：战报记录（测试版）' }]}
+              secondaryLinks={HOME_ACCOUNT_SECONDARY_LINKS}
               onNavigate={(href) => {
                 void router.push(href);
               }}

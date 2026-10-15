@@ -19,7 +19,6 @@ vi.mock('../src/app/useLeaveGuard', () => ({ useLeaveGuard: () => ({ ready: true
 vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openFixed: vi.fn() }) }));
 vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: class {} }));
 vi.mock('../src/features/tavern/host', () => ({ saveDesktopTavernCard: mocks.save, exportTavernFile: mocks.export, getDesktopTavernBase: vi.fn() }));
-vi.mock('@mahoshojo/ui-web/shell', () => ({ ProductFooter: () => null }));
 vi.mock('@mahoshojo/ui-web/character-card', () => ({ CanshouCard: ({ canshou }: { canshou: { name: string; appearance: string; coreEmotion: string; researcherNotes: string } }) => <pre data-canshou-name={canshou.name}>{canshou.appearance}|{canshou.coreEmotion}|{canshou.researcherNotes}</pre>, GeneralCharacterCard: ({ general }: { general: { name: string; content: string } }) => <pre data-projection-name={general.name}>{general.content}</pre> }));
 
 vi.mock('@mahoshojo/ui-web/scenario', () => ({ GeneralScenarioCard: ({ scenario }: { scenario: { title: string; content: string } }) => <pre data-scenario-title={scenario.title}>{scenario.content}</pre> }));
@@ -44,6 +43,7 @@ describe('Desktop Tavern real placeholder journey', () => {
   it('restores shared preferences and regenerates preview/export/save from the original', async () => {
     localStorage.setItem(key, JSON.stringify({ enabled: true, userReplacement: '旧用户', charReplacementMode: 'auto', customCharReplacement: '' }));
     act(() => root.render(<DesktopTavern />));
+    expect(container.querySelector('footer')?.className).toBe('footer');
     const raw = { name: 'Alice', description: '{{user}} 对 {{char}} 说话', extensions: { keep: '{{user}}' } };
     await upload(raw); expect(projected()).toContain('旧用户 对 Alice 说话');
     await edit('用户占位符替换文本', '新用户'); expect(projected()).toContain('新用户 对 Alice 说话'); expect(projected()).not.toContain('旧用户');

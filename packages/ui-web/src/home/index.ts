@@ -18,6 +18,7 @@
  * 打开动作由宿主能力决定，共源部分在中间。
  */
 export {
+  HOME_ACCOUNT_SECONDARY_LINKS,
   HomeAccountWelcome,
   HomeEncyclopediaCard,
   HomeFeatureGrid,

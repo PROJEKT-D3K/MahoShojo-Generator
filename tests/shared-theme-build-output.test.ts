@@ -214,6 +214,13 @@ describe('shared theme reaches the Web production stylesheet', () => {
     }
     expect(css).toContain('--battle-lite-panel-bg');
     expect(css).toContain('--battle-lite-hero-shadow');
+    const requireFromApp = createRequire(path.join(WEB_ROOT, 'package.json'));
+    const postcss = createRequire(requireFromApp.resolve('@tailwindcss/postcss'))('postcss') as typeof import('postcss');
+    const footerMargins: string[] = [];
+    postcss.parse(css).walkRules('.footer', (rule) => {
+      rule.walkDecls('margin-top', (decl) => { footerMargins.push(decl.value); });
+    });
+    expect(footerMargins).toEqual(['30px']);
   }, 60_000);
 });
 
@@ -278,5 +285,20 @@ describe('Tailwind stays a single per-app compilation', () => {
     expect(arenaCss).toMatch(/var\(--app-surface\)/);
     expect(arenaCss).toContain(":root[data-color-mode='dark'] .battle-lite-shell");
     expect(arenaCss).toContain('@media (prefers-color-scheme: dark)');
+  });
+});
+
+
+describe('product footer spacing has a single owner', () => {
+  it('uses the mature Web spacing in shared CSS without a host override', () => {
+    const shared = readFileSync(path.join(REPO_ROOT, 'packages/ui-web/src/product-shell.css'), 'utf8');
+    const footer = shared.match(/\.footer\s*\{([^}]+)\}/)?.[1];
+    expect(footer).toMatch(/margin-top:\s*30px;/);
+    for (const file of [WEB_GLOBALS_CSS, path.join(WEB_ROOT, 'styles', 'blue-theme.css'), path.join(REPO_ROOT, 'apps/desktop/src/styles/globals.css')]) {
+      const css = readFileSync(file, 'utf8');
+      for (const block of css.matchAll(/\.footer\s*\{([^}]+)\}/g)) {
+        expect(block[1], file).not.toMatch(/margin(?:-top)?\s*:/);
+      }
+    }
   });
 });

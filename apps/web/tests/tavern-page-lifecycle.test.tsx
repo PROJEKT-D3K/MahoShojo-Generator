@@ -31,7 +31,6 @@ vi.mock('@/components/tavern/TavernImportPanel', () => ({
 vi.mock('@/components/tavern/TavernExportPanel', () => ({
   TavernExportPanel: (props: { onBusyChange?: (busy: boolean) => void }) => <TestPanel kind="export" {...props} />,
 }));
-vi.mock('@/components/Footer', () => ({ default: () => <footer>测试页脚</footer> }));
 vi.mock('next/link', () => ({ default: ({ href, children, className }: { href: string; children: ReactNode; className?: string }) => <a href={href} className={className}>{children}</a> }));
 
 let root: Root;
@@ -77,6 +76,7 @@ afterEach(() => {
 describe('Web TavernPage 的真实共享 tab 生命周期接线', () => {
   it('初始只挂载导入，两个 tab 与 panel 都保持双向 ARIA 关联', () => {
     expect(lifecycle.mount.mock.calls).toEqual([['import']]);
+    expect(container.querySelector('footer')?.className).toBe('footer');
     expect(input('import')).not.toBeNull();
     expect(input('export')).toBeNull();
     expect(panel('export').childElementCount).toBe(0);

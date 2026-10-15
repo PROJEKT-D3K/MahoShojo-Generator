@@ -112,6 +112,7 @@ describe('Web Tea actual shared composition', () => {
       sendMessage: async () => true, continueGeneration: noop, generateChoices: noop, regenerateMessage: noop,
       deleteMessage: noop, compactMessageContent: noop, getMessageCharLimit: () => 8000, generateSummary: noop, clearSummary: noop });
     const markup = renderToStaticMarkup(<MagicTeaPartyPage />);
+    expect(markup.match(/<footer class="([^"]*)"/)?.[1]).toBe('footer');
     expect(markup).toContain('container !max-w-[1200px]'); expect(markup).toContain('lg:grid-cols-[320px_minmax(0,1fr)]');
     for (const text of ['会话列表', '会话设置', '星见澪', '窗外落雨', '喝杯茶吧', '继续生成', '生成选项', '发送', '合并输出计划', 'Token 预算提示', '长图宿主', '插画宿主', '选卡宿主']) expect(markup).toContain(text);
     expect(ports.push).not.toHaveBeenCalled();

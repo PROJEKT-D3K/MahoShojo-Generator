@@ -218,7 +218,7 @@ function TavernPage({ session }: { session: TavernAiSession }) {
       {session.isDraftBlocked() ? <button disabled={blocked} onClick={() => { if (window.confirm('确认清除损坏的 AI 草稿？请先导出需要保留的内容。')) session.discardDraft(); }}>清除损坏 AI 草稿</button> : null}
       {ai.resultRestored ? <p role="status">已恢复 AI 结果与酒馆 JSON 原件，不会重新发起请求。草稿不保存 PNG 底图；PNG 导出使用占位图。</p> : null}
       {guard.message ? <p role="alert" className="mt-3 text-sm text-red-700">{guard.message}</p> : null}
-      <ProductFooter className="footer mt-8" assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />
+      <ProductFooter className="footer" assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />
     </div>
   </div></div></div>;
 }

@@ -10,6 +10,7 @@ import {
   type ShellEscapeMenuEntry,
 } from '@mahoshojo/ui-web/shell';
 import {
+  HOME_ACCOUNT_SECONDARY_LINKS,
   HomeAccountWelcome,
   HomePageView,
   type HomeAssetSource,
@@ -284,6 +285,7 @@ const indexRoute = createRoute({
               state={welcome.state}
               name={welcome.name}
               primaryHref="/character-manager"
+              secondaryLinks={HOME_ACCOUNT_SECONDARY_LINKS}
               onNavigate={navigate}
               resolveInternalHref={resolveInternalHrefForHashHistory}
             />
