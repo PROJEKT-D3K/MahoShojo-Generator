@@ -1,6 +1,6 @@
 import { useRef, useState, useSyncExternalStore } from 'react';
 import {
-  BattleStoryActions, BattleStoryBranchChainButton, BattleStoryBranchChainModal, BattleStoryBranchAction, BattleStoryDeleteSessionControls, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
+  BattleStoryChapterPlanControl, BattleStoryActions, BattleStoryBranchChainButton, BattleStoryBranchChainModal, BattleStoryBranchAction, BattleStoryDeleteSessionControls, BattleStoryChapterDirectory, BattleStoryChapterReader, BattleStorySessionDirectory, BattleStoryContentPreview, BattleStoryPendingOutcome, formatBattleStoryDisplayTitle,
   type BattleStoryChapterReadViewState,
 } from '@mahoshojo/ui-web/arena-story-session';
 import { StreamingBattleReportCard, type StreamingBattleReportCardProps, type BattleReportHostPorts } from '@mahoshojo/ui-web/arena-report';
@@ -13,6 +13,7 @@ import {
   formatBattleStoryChapterProgress, isBattleStoryChapterPlanLimitReached, normalizeBattleStoryTotalChapters,
   resolveBattleStoryInitialChapterPlan, type BattleStoryChapterPlan, type BattleStoryDraftChapterPlanMode,
 } from '@mahoshojo/domain/arena-battle-story-session';
+import { readScenarioBattleStoryConfig } from '@mahoshojo/domain/scenario-battle-story';
 import type { ArenaDraft } from './session';
 import { DesktopArenaStorySession } from './story-session';
 import type { DesktopHostedStorySession, DesktopHostedStoryState } from './hosted-story-session';
@@ -195,18 +196,10 @@ export function DesktopArenaStoryControls(props: {
       <p className="mt-1 text-xs text-gray-500">Markdown 流式章节；确定性摘要不额外调用 AI。Direct 分支会保留到锚点为止的完整故事并生成下一章，源故事不变。{hostedOwner ? 'Hosted 分支和重写暂未开放。' : 'Hosted 和重写暂未开放。'}单次草稿、活动历史与原卡各自独立；退出账号不会隐藏本机故事。</p>
       <p className="mt-1 text-xs text-gray-500">当前连续请求沿用 Web 的种子字段：分队显示名称、活动历史及历史引用不会额外注入章节。读取／写入角色历战与当前状态按冻结设置生效。</p>
     </div>
-    <div className="grid gap-3 sm:grid-cols-2">
-      <label className="text-sm">新故事章节规划
-        <select aria-label="新故事章节规划" className="ml-2 rounded border p-2" value={planMode} disabled={busy || fixed} onChange={(event) => setPlanMode(event.target.value as BattleStoryDraftChapterPlanMode)}>
-          <option value="auto">沿用情景规划</option><option value="none">不限制</option><option value="custom">自定义</option>
-        </select>
-      </label>
-      {(planMode === 'custom' || fixed) && <label className="text-sm">计划总章节数
-        <input aria-label="计划总章节数" className="ml-2 w-24 rounded border p-2" type="number" min={1} max={20} value={fixed ? plan.totalChapters : planInput} disabled={busy || fixed} onChange={(event) => setPlanInput(event.target.value)} />
-      </label>}
-    </div>
-    <p className="text-xs text-gray-500">{plan ? `本次新故事计划 ${plan.totalChapters} 章${fixed ? '（情景固定）' : ''}。` : '未设置章节计划，可按需持续续写，没有 20 章总存储限制。'}</p>
-    {planError ? <p role="alert">自定义章节计划须为 1–20 的整数。</p> : null}
+    <BattleStoryChapterPlanControl mode={planMode} input={planInput} plan={plan}
+      scenarioPlan={draft.battleMode === 'scenario' ? readScenarioBattleStoryConfig(draft.scenario.content) : null}
+      locked={fixed} disabled={busy} error={planError ? '自定义章节计划须为 1–20 的整数。' : null}
+      onModeChange={setPlanMode} onInputChange={setPlanInput} />
     <label className="block text-sm">下一章故事引导（独立于单次草稿；首章使用当前页引导）
       <textarea aria-label="下一章故事引导" className="mt-1 block w-full rounded-lg border p-2" value={guidance} disabled={busy} onChange={(event) => setGuidance(event.target.value)} />
     </label>

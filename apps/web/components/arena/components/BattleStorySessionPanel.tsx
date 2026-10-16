@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import {
-  BattleStoryActions, BattleStoryBranchChainButton,
+  BattleStoryActions, BattleStoryBranchChainButton, BattleStoryChapterPlanControl,
   BattleStoryBranchAction,
   BattleStoryDeleteSessionControls,
   BattleStoryPendingOutcome,
@@ -20,7 +20,6 @@ import { createWebBattleReportPorts } from '@/components/shared/battle-report-po
 import { StreamStopButton } from '@/components/shared/StreamStopButton';
 import { StreamingBattleReportCard } from './DeferredArenaRenderers';
 import {
-  formatBattleStoryChapterPlanSource,
   formatBattleStoryChapterProgress,
 } from '@/lib/ai-session/battle-story/plan';
 import type {
@@ -29,7 +28,6 @@ import type {
   BattleStorySessionRecord,
 } from '@/lib/ai-session/battle-story/types';
 import { formatDateTime } from '@/lib/constants';
-import { SCENARIO_BATTLE_STORY_MAX_TOTAL_CHAPTERS } from '@mahoshojo/domain/scenario-battle-story';
 import { buildBattleStoryExportChapterMarkdown } from '@mahoshojo/domain/arena-story-export';
 
 import { BattleStoryBranchChainModal } from './BattleStoryBranchChainModal';
@@ -47,7 +45,6 @@ const actionLabelMap = {
   branch: '分支',
   rewrite: '重写',
 } as const;
-const CHAPTER_PLAN_QUICK_OPTIONS = [2, 3, 5, 8, 12] as const;
 
 const formatProviderSource = (session: BattleStorySessionRecord | null): string => {
   if (!session) return '—';
@@ -238,6 +235,7 @@ export function BattleStorySessionPanel(props: {
     draftChapterPlanInput,
     setDraftChapterPlanInput,
     draftChapterPlan,
+    draftChapterPlanInputError,
     scenarioChapterPlanConfig,
     activeChapterProgressText,
     activeChapterPlanSourceLabel,
@@ -272,11 +270,6 @@ export function BattleStorySessionPanel(props: {
     ? `已摘要到第 ${activeSession.summaryMeta.coveredUntilChapterIndex} 章`
     : '尚未生成章节摘要';
   const scenarioName = resolveBattleStoryScenarioName(activeSession);
-  const draftPlanSourceLabel = formatBattleStoryChapterPlanSource(draftChapterPlan);
-  const draftPlanProgressText = formatBattleStoryChapterProgress({
-    completedChapterCount: 0,
-    chapterPlan: draftChapterPlan,
-  });
   const selectedChapterSnapshot = resolveBattleStoryChapterCardSnapshot(selectedChapter);
   const streamMetaDebug = streamCardSnapshot?.streamUpdateMetaDebug ?? null;
   const selectedMetaDebug = selectedChapterSnapshot?.streamUpdateMetaDebug ?? null;
@@ -378,116 +371,11 @@ export function BattleStorySessionPanel(props: {
         headerClassName="mb-3"
       >
         <div className="space-y-5">
-          <section className="rounded-2xl border border-gray-200 bg-white p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-gray-800">新会话章节规划</div>
-                <div className="mt-1 text-xs text-gray-500">
-                  仅影响下一次“新建连续战报”，不会修改普通竞技场设置。
-                </div>
-              </div>
-              {draftChapterPlan ? (
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
-                  {draftPlanSourceLabel}｜{draftPlanProgressText}
-                </span>
-              ) : (
-                <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600">
-                  不限制
-                </span>
-              )}
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setDraftChapterPlanMode('auto')}
-                className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
-                  draftChapterPlanMode === 'auto'
-                    ? 'border-blue-300 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-                disabled={scenarioChapterPlanConfig?.planMode === 'fixed'}
-                title={
-                  scenarioChapterPlanConfig
-                    ? `沿用情景卡${scenarioChapterPlanConfig.planMode === 'fixed' ? '固定' : '建议'}章节数`
-                    : '未检测到情景卡章节规划时，此模式等同于不限制'
-                }
-              >
-                自动
-              </button>
-              <button
-                type="button"
-                onClick={() => setDraftChapterPlanMode('none')}
-                className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
-                  draftChapterPlanMode === 'none'
-                    ? 'border-gray-400 bg-gray-100 text-gray-800'
-                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-                disabled={scenarioChapterPlanConfig?.planMode === 'fixed'}
-                title="显式关闭章节上限，按开放式会话续写"
-              >
-                不限制
-              </button>
-              {CHAPTER_PLAN_QUICK_OPTIONS.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => {
-                    setDraftChapterPlanMode('custom');
-                    setDraftChapterPlanInput(String(option));
-                  }}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
-                    draftChapterPlanMode === 'custom' && draftChapterPlanInput === String(option)
-                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                      : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                  }`}
-                  disabled={scenarioChapterPlanConfig?.planMode === 'fixed'}
-                >
-                  {option} 章
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">自定义总章节数</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={SCENARIO_BATTLE_STORY_MAX_TOTAL_CHAPTERS}
-                  value={
-                    scenarioChapterPlanConfig?.planMode === 'fixed'
-                      ? String(scenarioChapterPlanConfig.totalChapters)
-                      : draftChapterPlanMode === 'custom'
-                        ? draftChapterPlanInput
-                        : ''
-                  }
-                  onChange={(event) => {
-                    setDraftChapterPlanMode('custom');
-                    setDraftChapterPlanInput(event.target.value);
-                  }}
-                  disabled={scenarioChapterPlanConfig?.planMode === 'fixed'}
-                  className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-gray-50 disabled:text-gray-500"
-                  placeholder={`1-${SCENARIO_BATTLE_STORY_MAX_TOTAL_CHAPTERS}`}
-                />
-              </div>
-              <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-600">
-                {scenarioChapterPlanConfig?.planMode === 'fixed' ? (
-                  <>当前主情景固定为 {scenarioChapterPlanConfig.totalChapters} 章，创建会话时会强制继承，用户不可改。</>
-                ) : draftChapterPlan ? (
-                  <>
-                    当前将以“{draftPlanSourceLabel ?? '章节规划'}”启动新会话，计划章节数为
-                    {` ${draftPlanProgressText}`}。
-                    {draftChapterPlan.locked ? ' 达到上限后只允许重写最后一章。' : ' 达到上限后将禁止继续续写和追加分支新章。'}
-                  </>
-                ) : scenarioChapterPlanConfig?.planMode === 'suggested' ? (
-                  <>当前主情景建议 {scenarioChapterPlanConfig.totalChapters} 章；可保持“自动”，也可切换为不限制或自定义数值。</>
-                ) : (
-                  <>未设置章节上限时，连续战报会按开放式会话运行，由你手动决定何时停止。</>
-                )}
-              </div>
-            </div>
-          </section>
+          <BattleStoryChapterPlanControl
+            mode={draftChapterPlanMode} input={draftChapterPlanInput} plan={draftChapterPlan}
+            scenarioPlan={scenarioChapterPlanConfig} locked={scenarioChapterPlanConfig?.planMode === 'fixed'}
+            error={draftChapterPlanInputError} onModeChange={setDraftChapterPlanMode} onInputChange={setDraftChapterPlanInput}
+          />
 
           <BattleStoryActions>
             <button

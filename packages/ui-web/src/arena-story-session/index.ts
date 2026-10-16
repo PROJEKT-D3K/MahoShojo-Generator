@@ -24,3 +24,6 @@ export { BattleStoryBranchAction } from './branch-action';
 export type { BattleStoryBranchActionProps } from './branch-action';
 export { BattleStoryBranchChainButton, BattleStoryBranchChainModal, projectBattleStoryBranchSession } from './branch-chain';
 export type { BattleStoryBranchChainModalProps, BattleStoryBranchSessionView } from './branch-chain';
+
+export { BattleStoryChapterPlanControl } from './chapter-plan-control';
+export type { BattleStoryChapterPlanControlProps } from './chapter-plan-control';

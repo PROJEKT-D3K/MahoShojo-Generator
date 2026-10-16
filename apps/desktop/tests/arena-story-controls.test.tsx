@@ -14,8 +14,8 @@ const button=(text:string)=>[...container.querySelectorAll('button')].find((node
 const click=async(text:string)=>{expect(button(text)).toBeTruthy();await act(async()=>{button(text).click();});};
 beforeEach(()=>{(globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;container=document.createElement('div');document.body.append(container);root=createRoot(container);HTMLElement.prototype.scrollIntoView=vi.fn();vi.spyOn(window,'scrollTo').mockImplementation(()=>{});vi.spyOn(window,'confirm').mockReturnValue(true);});
 afterEach(()=>{act(()=>root.unmount());owner?.dispose();container.remove();vi.restoreAllMocks();});
-const mount=async(options:{product?:'battle'|'arena';rawText?:string;beforeTerminal?:()=>Promise<void>;beforeEnd?:()=>Promise<void>;budget?:number;unknown?:boolean}={})=>{
- const port=new StoryFixturePort(),execution=storyExecution(options.rawText,options.beforeTerminal),draft=storyDraft(),download=vi.fn();let id=0;
+const mount=async(options:{draft?:ReturnType<typeof storyDraft>;product?:'battle'|'arena';rawText?:string;beforeTerminal?:()=>Promise<void>;beforeEnd?:()=>Promise<void>;budget?:number;unknown?:boolean}={})=>{
+ const port=new StoryFixturePort(),execution=storyExecution(options.rawText,options.beforeTerminal),draft=options.draft??storyDraft(),download=vi.fn();let id=0;
  port.hideReceipts=!!options.unknown;port.loseEndReply=!!options.unknown;port.beforeEnd=options.beforeEnd;
  let generation=Promise.resolve();
  owner=new DesktopArenaStorySession({port,id:()=>`ui-${++id}`,exportMarkdown:async()=>({absolutePath:'complete.md',byteLength:10}),...(options.budget===undefined?{}:{prepareCommit:(input)=>prepareStoryStorageCommit(input,options.budget)})});owner.setExecutionScope('A');
@@ -191,4 +191,60 @@ describe('controlled branch product actions', () => {
     expect(button('从第 1 章创建分支').disabled).toBe(true);
     expect('branch' in owner).toBe(false);
   });
+});
+
+
+const changePlanInput = async (value: string) => {
+ const field = container.querySelector<HTMLInputElement>('[aria-label="新会话章节规划"] input')!;
+ await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); });
+};
+describe('Desktop real story owner chapter-planning adapter', () => {
+ it.each(['battle', 'arena'] as const)('%s uses shared shortcuts and freezes only the explicit start plan', async product => {
+  const { execution, port, settleGeneration } = await mount({ product });
+  for (const count of [2, 3, 5, 8, 12]) { await click(`${count} 章`); expect(container.textContent).toContain(`用户设置｜0 / ${count}`); }
+  expect(execution.requests).toHaveLength(0); expect(port.begin).not.toHaveBeenCalled();
+  await click('5 章'); await click('新建连续战报'); await settleGeneration();
+  expect(owner.getSnapshot().active?.chapterPlan).toEqual({ totalChapters: 5, source: 'user', locked: false });
+  await click('8 章'); expect(owner.getSnapshot().active?.chapterPlan?.totalChapters).toBe(5);
+  expect(execution.requests).toHaveLength(1); expect(port.begin).toHaveBeenCalledOnce();
+ });
+ it.each(['battle', 'arena'] as const)('%s preserves fixed scenario precedence over shortcuts', async product => {
+  const draft = storyDraft(); draft.battleMode = 'scenario';
+  draft.scenario = { ...draft.scenario, content: { title: '固定情景', _battle_story: { total_chapters: 4, plan_mode: 'fixed' } } };
+  const { execution, settleGeneration } = await mount({ product, draft });
+  const panel = container.querySelector('[aria-label="新会话章节规划"]')!;
+  expect(panel.textContent).toContain('情景卡固定｜0 / 4');
+  for (const item of panel.querySelectorAll('button')) { expect(item.disabled).toBe(true); await act(async () => item.click()); }
+  expect(panel.querySelector('input')!.disabled).toBe(true); expect(panel.querySelector('input')!.value).toBe('4');
+  expect(execution.requests).toHaveLength(0); await click('新建连续战报'); await settleGeneration();
+  expect(owner.getSnapshot().active?.chapterPlan).toEqual({ totalChapters: 4, source: 'scenario', locked: true });
+ });
+ it('keeps suggested scenario, unlimited and manual input as next-story choices', async () => {
+  const draft = storyDraft(); draft.battleMode = 'scenario';
+  draft.scenario = { ...draft.scenario, content: { title: '建议情景', _battle_story: { total_chapters: 6, plan_mode: 'suggested' } } };
+  const { execution, port, settleGeneration } = await mount({ draft });
+  expect(container.textContent).toContain('情景卡建议｜0 / 6');
+  await click('不限制'); expect(container.querySelector('[aria-label="新会话章节规划"]')?.textContent).not.toContain('情景卡建议｜');
+  await changePlanInput('7'); expect(container.textContent).toContain('用户设置｜0 / 7');
+  await click('自动'); expect(container.textContent).toContain('情景卡建议｜0 / 6');
+  expect(execution.requests).toHaveLength(0); expect(port.begin).not.toHaveBeenCalled();
+  await click('新建连续战报'); await settleGeneration();
+  expect(owner.getSnapshot().active?.chapterPlan).toEqual({ totalChapters: 6, source: 'scenario', locked: false });
+ });
+ it.each(['', '0', '21', '1.5'])('invalid custom input %s keeps start disabled without model or storage writes', async value => {
+  const { execution, port } = await mount(); await click('5 章'); await changePlanInput(value);
+  expect(container.querySelector('[aria-label="新会话章节规划"] [role=alert]')?.textContent).toContain('1–20');
+  expect(button('新建连续战报').disabled).toBe(true); await click('新建连续战报');
+  expect(execution.requests).toHaveLength(0); expect(port.begin).not.toHaveBeenCalled();
+  await click('不限制'); expect(button('新建连续战报').disabled).toBe(false);
+ });
+ it('preserves the Desktop busy lock without changing the frozen plan', async () => {
+  const gate = deferred<void>(); const { execution, settleGeneration } = await mount({ beforeTerminal: () => gate.promise });
+  await click('5 章'); await click('新建连续战报');
+  const panel = container.querySelector('[aria-label="新会话章节规划"]')!;
+  expect([...panel.querySelectorAll('button')].every(item => item.disabled)).toBe(true);
+  expect(panel.querySelector('input')!.disabled).toBe(true); await click('8 章');
+  await act(async () => gate.resolve()); await settleGeneration();
+  expect(owner.getSnapshot().active?.chapterPlan?.totalChapters).toBe(5); expect(execution.requests).toHaveLength(1);
+ });
 });

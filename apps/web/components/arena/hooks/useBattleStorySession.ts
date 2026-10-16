@@ -2170,6 +2170,7 @@ export function useBattleStorySession() {
     draftChapterPlanInput,
     setDraftChapterPlanInput,
     draftChapterPlan,
+    draftChapterPlanInputError,
     scenarioChapterPlanConfig,
     activeChapterProgressText,
     activeChapterPlanSourceLabel,

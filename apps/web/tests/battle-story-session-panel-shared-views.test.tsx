@@ -45,6 +45,7 @@ beforeEach(() => {
     isReady: true, sessions: [session], activeSession: session, chapters, latestActiveChapter: chapters[1],
     selectedChapter: chapters[0], selectedChapterId: chapters[0]!.id, selectedChapterIsLatest: false,
     streamingMarkdown: '', isGenerating: false, isCooldown: false, canStartFromArena: true,
+    setDraftChapterPlanMode: vi.fn(), setDraftChapterPlanInput: vi.fn(),
     activeChapterProgressText: '2 章', draftChapterPlanMode: 'none', draftChapterPlanInput: '',
     setSelectedChapterId: vi.fn(), handleSelectSession: vi.fn(), handleBranchSelectedChapter: vi.fn(),
     handleRewriteSelectedChapter: vi.fn(), handleDeleteSelectedChapter: vi.fn(), handleStartSession: vi.fn(),
@@ -68,12 +69,12 @@ describe('Web panel consumes the shared controlled story views', () => {
     fixture.hook.sessions = [{ ...session, updatedAt: session.updatedAt + 10 }]; fixture.hook.chapters = [...chapters]; await render();
     expect(reader().getAttribute('data-story-chapter-id')).toBe('chapter-1');
     expect(fixture.hook.setSelectedChapterId).not.toHaveBeenCalled();
-    expect(container.querySelectorAll('[aria-pressed="true"]')).toHaveLength(2);
+    expect([...container.querySelectorAll('[aria-pressed="true"]')].filter(node => !node.closest('[aria-label="章节规划快捷选项"]'))).toHaveLength(2);
     const secondRow = [...container.querySelectorAll('button[aria-pressed]')].find((item) => item.textContent?.startsWith('第 2 章')) as HTMLButtonElement;
     await act(async () => secondRow.click());
     expect(fixture.hook.setSelectedChapterId).toHaveBeenCalledExactlyOnceWith('chapter-2');
     expect(reader().getAttribute('data-story-chapter-id')).toBe('chapter-1');
-    const sessionRow = container.querySelector('button[aria-pressed="true"]') as HTMLButtonElement;
+    const sessionRow = [...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed="true"]')].find(node => !node.closest('[aria-label="章节规划快捷选项"]'))!;
     await act(async () => sessionRow.click()); expect(fixture.hook.handleSelectSession).toHaveBeenCalledExactlyOnceWith('session-A');
   });
 
@@ -245,4 +246,39 @@ describe('Web panel consumes the shared controlled story views', () => {
     expect(chapters[0]!.markdown).toBe(markdown);
   });
 
+});
+
+
+describe('Web real story panel chapter-planning adapter', () => {
+  it('uses every shared shortcut without starting or modifying a story', async () => {
+    await render();
+    for (const count of [2, 3, 5, 8, 12]) {
+      await act(async () => button(`${count} 章`).click());
+      expect(fixture.hook.setDraftChapterPlanMode).toHaveBeenLastCalledWith('custom');
+      expect(fixture.hook.setDraftChapterPlanInput).toHaveBeenLastCalledWith(String(count));
+    }
+    await act(async () => { button('自动').click(); button('不限制').click(); });
+    expect(fixture.hook.setDraftChapterPlanMode).toHaveBeenLastCalledWith('none');
+    expect(fixture.hook.handleStartSession).not.toHaveBeenCalled(); expect(fixture.hook.handleContinueSession).not.toHaveBeenCalled();
+  });
+  it('keeps fixed scenarios locked and supplies the existing invalid-input error', async () => {
+    fixture.hook.scenarioChapterPlanConfig = { totalChapters: 5, planMode: 'fixed' };
+    fixture.hook.draftChapterPlan = { totalChapters: 5, source: 'scenario', locked: true }; await render();
+    const panel = () => container.querySelector('[aria-label="新会话章节规划"]')!;
+    expect(panel().textContent).toContain('情景卡固定｜0 / 5');
+    for (const item of panel().querySelectorAll('button')) { expect(item.disabled).toBe(true); await act(async () => item.click()); }
+    expect(panel().querySelector('input')!.disabled).toBe(true); expect(fixture.hook.setDraftChapterPlanMode).not.toHaveBeenCalled();
+    fixture.hook.scenarioChapterPlanConfig = null; fixture.hook.draftChapterPlan = null;
+    fixture.hook.draftChapterPlanMode = 'custom'; fixture.hook.draftChapterPlanInput = '21';
+    fixture.hook.draftChapterPlanInputError = '章节规划总数需为 1-20 的整数。';
+    fixture.hook.canStartFromArena = false; fixture.hook.startDisabledReason = fixture.hook.draftChapterPlanInputError; await render();
+    expect(panel().querySelector('[role=alert]')?.textContent).toBe(fixture.hook.draftChapterPlanInputError);
+    expect(button('新建连续战报').disabled).toBe(true);
+    await act(async () => button('新建连续战报').click()); expect(fixture.hook.handleStartSession).not.toHaveBeenCalled();
+  });
+  it('keeps Web next-story drafting available during an existing generation', async () => {
+    fixture.hook.isGenerating = true; await render(); await act(async () => button('8 章').click());
+    expect(fixture.hook.setDraftChapterPlanInput).toHaveBeenCalledExactlyOnceWith('8');
+    expect(fixture.hook.handleStartSession).not.toHaveBeenCalled();
+  });
 });
