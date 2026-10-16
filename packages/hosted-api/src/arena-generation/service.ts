@@ -1,7 +1,7 @@
+import { subscriptionToSseResponse } from './sse-response';
 import {
   compareGenerationSseIds,
   encodeGenerationSseEvent,
-  projectArenaGenerationEventForClient,
   resolveResumeCursor,
 } from './sse';
 import type { SafePublicAiErrorProjection } from '../regular-generation';
@@ -763,43 +763,6 @@ const withActorSubscriptionHeaders = (
       ...actor.responseHeaders,
     }),
   });
-};
-
-const subscriptionToSseResponse = (
-  subscription: ArenaGenerationSubscription,
-): Response => {
-  const reader = subscription.events.getReader();
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const next = await reader.read();
-        if (next.done) {
-          reader.releaseLock();
-          controller.close();
-          return;
-        }
-        controller.enqueue(encodeGenerationSseEvent(
-          projectArenaGenerationEventForClient(next.value),
-        ));
-      } catch (error) {
-        reader.releaseLock();
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader.cancel(reason);
-      } finally {
-        reader.releaseLock();
-      }
-    },
-  });
-  const headers = new Headers({
-    'Cache-Control': 'no-cache, no-transform',
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    ...subscription.headers,
-  });
-  return new Response(body, { status: 200, headers });
 };
 
 const isGenerationRequestId = (value: string): boolean => (

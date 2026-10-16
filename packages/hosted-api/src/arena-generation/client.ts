@@ -516,7 +516,8 @@ export const openArenaGenerationStreamClient = async (
                     catch { /* Observation must not change delivery or recovery semantics. */ }
                   }
                   controller.enqueue(encoder.encode(`${block}\n\n`));
-                  updateState(nextTerminal ?? 'generating');
+                  // Transport comments are not generation progress or persisted replay events.
+                  if (parsed) updateState(nextTerminal ?? 'generating');
                   if (nextTerminal) {
                     terminal = true;
                     break;
