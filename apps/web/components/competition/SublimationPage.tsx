@@ -28,7 +28,7 @@ import { GenerationModeSwitcher, type GenerationMode } from '@/components/shared
 import { TokenIndicator } from '@/components/shared/TokenIndicator';
 import { JsonSizeIndicator } from '@/components/shared/JsonSizeIndicator';
 import { StreamStopButton } from '@/components/shared/StreamStopButton';
-import { SublimationArenaHistoryStrategyFieldset, SublimationPageFrame, SublimationPageHeader, SublimationTargetField, SublimationGuidanceField, SublimationNarrativeField, SublimationPreserveFields, SublimationCurrentStateFieldset, SublimationLoreSelection, TARGET_TEMPLATE_OPTIONS, PRESERVABLE_FIELDS_CONFIG, getDefaultPreserveFields, getPersonalityPreset } from '@mahoshojo/ui-web/sublimation';
+import { SublimationArenaHistoryStrategyFieldset, SublimationPageFrame, SublimationPageHeader, SublimationSourceInput, SublimationTargetField, SublimationGuidanceField, SublimationNarrativeField, SublimationPreserveFields, SublimationCurrentStateFieldset, SublimationLoreSelection, TARGET_TEMPLATE_OPTIONS, PRESERVABLE_FIELDS_CONFIG, getDefaultPreserveFields, getPersonalityPreset } from '@mahoshojo/ui-web/sublimation';
 import { STREAM_ABORT_REASON_USER } from '@/lib/stream/abort';
 import { readSafeTextAndReasoningStreamFromResponse } from '@/lib/stream/read-safe-text-and-reasoning-stream';
 import { buildGeneralCharacterCardFromMarkdown } from '@/lib/stream/markdown-card';
@@ -1227,28 +1227,19 @@ export const SublimationPage: React.FC = () => {
                     <div className="card">
                         <SublimationPageHeader onNavigate={(href) => router.push(href)} />
 
-                        {/* 文件上传与粘贴区域 */}
-                        <div className="input-group">
-                            <label htmlFor="character-upload" className="input-label">上传设定文件</label>
-                            <input id="character-upload" type="file" accept=".json" onChange={handleFileChange} className="input-field file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100" />
-                            {fileName && (
+                        <SublimationSourceInput
+                            accept=".json"
+                            onFileChange={handleFileChange}
+                            loadedSource={fileName && (
                                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                                     <span className="text-gray-500">已加载角色: {fileName}</span>
                                     {sourceNativenessStatus && <NativenessBadge status={sourceNativenessStatus} />}
                                 </div>
                             )}
-                        </div>
-                        <div className="mb-6">
-                            <button onClick={() => setIsPasteAreaVisible(!isPasteAreaVisible)} className="text-purple-700 hover:underline cursor-pointer mb-2 font-semibold">
-                                {isPasteAreaVisible ? '▼ 折叠文本粘贴区域' : '▶ 展开文本粘贴区域 (手机端推荐)'}
-                            </button>
-                            {isPasteAreaVisible && (
-                                <div className="input-group mt-2">
-                                    <textarea value={pastedJson} onChange={(e) => setPastedJson(e.target.value)} placeholder="在此处粘贴一个设定文件(.json)内容" className="input-field resize-y h-32" />
-                                    <button onClick={handlePasteAndLoad} disabled={isGenerating} className="generate-button mt-2 mb-0" style={{ backgroundColor: '#8b5cf6', backgroundImage: 'linear-gradient(to right, #8b5cf6, #a78bfa)' }}>从文本加载设定</button>
-                                </div>
-                            )}
-                        </div>
+                            pasteOpen={isPasteAreaVisible} onPasteOpenChange={setIsPasteAreaVisible}
+                            pasteValue={pastedJson} onPasteValueChange={setPastedJson}
+                            onPasteLoad={handlePasteAndLoad} loadDisabled={isGenerating}
+                        />
 
                         {/* 数据库选择区域 */}
                         <div className="mb-6">

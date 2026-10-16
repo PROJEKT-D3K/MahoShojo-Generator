@@ -3,3 +3,4 @@ export * from './SublimationPageFrame';
 export * from './SublimationFields';
 export * from './SublimationArenaHistoryStrategyFieldset';
 export * from './SublimationLoreSelection';
+export * from './SublimationSourceInput';

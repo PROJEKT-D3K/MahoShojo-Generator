@@ -100,6 +100,35 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); release?.(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('Desktop Sublimation real page/session/executor with fake IPC (not native acceptance)', () => {
+  it('keeps pasted input across collapse and failed loads without replacing the saved source or generating', async () => {
+    writeDraft({ originalData: source });
+    await mount();
+    const savedBeforePaste = window.localStorage.getItem(SUBLIMATION_DRAFT_KEY);
+    const toggle = container.querySelector<HTMLButtonElement>('[aria-controls="sublimation-source-paste"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('#source-json')).toBeNull();
+    await act(async () => toggle!.click());
+    const pastedSource = { ...source, plugin: { untouched: true } };
+    const text = JSON.stringify(pastedSource);
+    await change('#source-json', text);
+    await act(async () => toggle!.click());
+    expect(container.querySelector('#source-json')).toBeNull();
+    await act(async () => toggle!.click());
+    expect(container.querySelector<HTMLTextAreaElement>('#source-json')!.value).toBe(text);
+    expect(window.localStorage.getItem(SUBLIMATION_DRAFT_KEY)).toBe(savedBeforePaste);
+    await click('从文本加载设定');
+    expect(stored().originalData).toEqual(pastedSource);
+    expect(container.querySelector<HTMLTextAreaElement>('#source-json')!.value).toBe(text);
+    await change('#source-json', '{invalid');
+    await click('从文本加载设定');
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(stored().originalData).toEqual(pastedSource);
+    expect(container.querySelector<HTMLTextAreaElement>('#source-json')!.value).toBe('{invalid');
+    expect(generationCalls()).toHaveLength(0);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'save_local_card')).toHaveLength(0);
+    expect(documents.get(sourceRecord.id)).toEqual(sourceRecord);
+  });
   it.each(['client', 'server'] as const)('%s restores visible supplemental Lore and clears it without dropping typed sources', async (location) => {
     preference(location);
     const typed = { source: 'upload', selectionId: 'kept-lore', questionnaire: { id: 'kept-lore', kind: 'magical-girl', title: '独立来源', questions: [], loreMarkdown: '仍保留的来源正文', nativeAllowed: false } };
@@ -124,6 +153,7 @@ describe('Desktop Sublimation real page/session/executor with fake IPC (not nati
   });
   it('loads JSON/history, generates, previews, saves a new card, exports and copies without touching the source', async () => {
     await mount(); expect(container.querySelector('[data-testid="page-sublimation"]')).toBeTruthy();
+    await click('▶ 展开文本粘贴区域 (手机端推荐)');
     await change('#source-json', JSON.stringify(source)); await click('从文本加载设定');
     await change('#sublimation-story-guidance', '接受伙伴帮助'); await change('#narrative-history', '手写经历');
     await click('从本地叙事历史选择'); await click('全选（筛选结果）');
@@ -182,6 +212,7 @@ describe('Desktop Sublimation real page/session/executor with fake IPC (not nati
   });
   it('accepts non-canonical JSON without stripping unknown source fields and resets preservation on cross-template selection', async () => {
     await mount(); const unknown = { arbitrary: { setting: '完整未知设定', nested: [1, 2] }, plugin: { untouched: true } };
+    await click('▶ 展开文本粘贴区域 (手机端推荐)');
     await change('#source-json', JSON.stringify(unknown)); await click('从文本加载设定');
     expect(stored().originalData).toEqual(unknown); expect(stored().targetTemplate).toBe('general'); expect(generationCalls()).toHaveLength(0);
     await click('▶ 高级选项：自定义升华范围'); await click('仅心灵成长'); expect(stored().fieldsToPreserve).toEqual(['name']);
@@ -192,10 +223,34 @@ describe('Desktop Sublimation real page/session/executor with fake IPC (not nati
     let finish!: (text: string) => void; const file = new File(['{}'], 'new.json', { type: 'application/json' });
     Object.defineProperty(file, 'text', { value: () => new Promise<string>((resolve) => { finish = resolve; }) });
     const input = container.querySelector<HTMLInputElement>('#character-upload')!; Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+    Object.defineProperty(input, 'value', { configurable: true, writable: true, value: 'selected-by-host' });
     await act(async () => input.dispatchEvent(new Event('change', { bubbles: true }))); await settle();
+    expect(input.value).toBe('');
     expect(button('开始升华').disabled).toBe(true); expect(button('清除草稿').disabled).toBe(true); expect(generationCalls()).toHaveLength(0);
+    const pasteToggle = container.querySelector<HTMLButtonElement>('[aria-controls="sublimation-source-paste"]')!;
+    expect(pasteToggle.matches(':disabled')).toBe(true);
+    await act(async () => pasteToggle.click());
+    expect(pasteToggle.getAttribute('aria-expanded')).toBe('false');
+    expect(input.matches(':disabled')).toBe(true);
     await act(async () => root.unmount()); root = createRoot(container); await act(async () => finish(JSON.stringify(generated))); await settle();
     expect(window.localStorage.getItem(SUBLIMATION_DRAFT_KEY)).toBe(before); expect(generationCalls()).toHaveLength(0);
+  });
+  it('keeps the existing source after a file read failure and re-enables the shared input controls', async () => {
+    writeDraft({ originalData: source }); await mount();
+    const file = new File(['{}'], 'unreadable.json', { type: 'application/json' });
+    Object.defineProperty(file, 'text', { value: () => Promise.reject(new Error('read failed')) });
+    const input = container.querySelector<HTMLInputElement>('#character-upload')!;
+    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+    await act(async () => input.dispatchEvent(new Event('change', { bubbles: true }))); await settle();
+    expect(container.textContent).toContain('读取文件失败，原有输入仍保留。');
+    expect(stored().originalData).toEqual(source);
+    expect(input.matches(':disabled')).toBe(false);
+    const toggle = container.querySelector<HTMLButtonElement>('[aria-controls="sublimation-source-paste"]')!;
+    expect(toggle.matches(':disabled')).toBe(false);
+    await act(async () => toggle.click());
+    expect(container.querySelector<HTMLTextAreaElement>('#source-json')?.value).toBe('');
+    expect(generationCalls()).toHaveLength(0);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'save_local_card')).toHaveLength(0);
   });
   it('keeps unsaved draft input and beforeunload protection on storage failure, then retries without regenerating', async () => {
     writeDraft({ originalData: source }); await mount(); const save = Storage.prototype.setItem;

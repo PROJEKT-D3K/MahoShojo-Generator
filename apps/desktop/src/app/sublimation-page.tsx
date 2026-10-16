@@ -12,7 +12,7 @@ import { NarrativeHistoryPicker } from '@mahoshojo/ui-web/narrative-history';
 import { MagicalGirlCard, CanshouCard, GeneralCharacterCard, resolveMagicalGirlGradient } from '@mahoshojo/ui-web/character-card';
 import { AiReasoningPanel, GenerationModeSwitcher, JsonSizeIndicator, SaveJsonButton, TokenIndicator, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
-import { SublimationPageFrame, SublimationPageHeader, SublimationTargetField, SublimationGuidanceField, SublimationNarrativeField, SublimationPreserveFields, SublimationCurrentStateFieldset, SublimationArenaHistoryStrategyFieldset, getDefaultPreserveFields, getPersonalityPreset } from '@mahoshojo/ui-web/sublimation';
+import { SublimationPageFrame, SublimationPageHeader, SublimationSourceInput, SublimationTargetField, SublimationGuidanceField, SublimationNarrativeField, SublimationPreserveFields, SublimationCurrentStateFieldset, SublimationArenaHistoryStrategyFieldset, getDefaultPreserveFields, getPersonalityPreset } from '@mahoshojo/ui-web/sublimation';
 import { ScenarioLanguageField } from '@mahoshojo/ui-web/scenario';
 import { BackHomeLink, ProductFooter } from '@mahoshojo/ui-web/shell';
 import { buildSafeFileName } from '@mahoshojo/ui-web/client';
@@ -52,6 +52,7 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
   const target = resolveDesktopAiTarget(aiState.selection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId);
   const [languages, setLanguages] = useState<{ code: string; name: string }[]>([]);
   const [paste, setPaste] = useState('');
+  const [pasteOpen, setPasteOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionInfo, setActionInfo] = useState<string | null>(null);
@@ -183,12 +184,13 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
       {guard.message && <p role="alert">{guard.message}</p>}
       <fieldset disabled={busy || blocked} className="min-w-0">
         <legend className="sr-only">升华素材与选项</legend>
-        <div className="input-group">
-          <label htmlFor="character-upload" className="input-label">上传设定文件</label>
-          <input id="character-upload" type="file" accept=".json,application/json" className="input-field" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file); }} />
-          {draft.originalData && <p className="mt-2 text-xs text-gray-500">已加载角色：{sourceName(draft.originalData)}（源卡保持不变）</p>}
-        </div>
-        <details className="mb-6"><summary className="text-purple-700">粘贴设定 JSON</summary><label className="sr-only" htmlFor="source-json">设定 JSON</label><textarea id="source-json" className="input-field h-32" value={paste} onChange={(event) => setPaste(event.target.value)} /><button className={actionClass} onClick={() => loadSource(paste)}>从文本加载设定</button></details>
+        <SublimationSourceInput
+          accept=".json,application/json"
+          onFileChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file); }}
+          loadedSource={draft.originalData && <p className="mt-2 text-xs text-gray-500">已加载角色：{sourceName(draft.originalData)}（源卡保持不变）</p>}
+          pasteOpen={pasteOpen} onPasteOpenChange={setPasteOpen} pasteValue={paste} onPasteValueChange={setPaste}
+          onPasteLoad={() => loadSource(paste)} loadDisabled={busy || blocked}
+        />
         <button className={`${actionClass} mb-6`} onClick={() => setLibraryOpen(true)}>从本地 / 公共卡库选择</button>
         <SublimationTargetField targetTemplate={draft.targetTemplate} sourceTemplateLabel={sourceTemplateLabel} hasCrossTemplateSelection={!!draft.originalData && sourceTemplate !== draft.targetTemplate} disabled={busy || !draft.originalData} onChange={(value) => updateDraft({ targetTemplate: value, fieldsToPreserve: sourceTemplate === value ? getDefaultPreserveFields(value) : [] })} />
         <DesktopSublimationLoreSelector supplementalLore={{ text: draft.loreText, onChange: (loreText) => updateDraft({ loreText }) }} selections={draft.selectedQuestionnaires ?? []} onChange={(selectedQuestionnaires) => updateDraft({ selectedQuestionnaires })} disabled={busy || blocked} onLoadingChange={(loading) => { loreLoadingRef.current = loading; setLoreLoading(loading); }} />

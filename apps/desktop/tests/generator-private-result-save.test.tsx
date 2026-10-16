@@ -179,6 +179,7 @@ describe('all actual generator hosts reuse the private completed-result save', (
     const data = resultData('general'); const key = 'mahoshojo.desktop.sublimation.draft.v1';
     window.localStorage.setItem(key, JSON.stringify({ version: 1, ...draftFor('sublimation', 'general', 'non-stream'), output: { phase: 'completed', mode: 'direct-local', cardKind: 'general', card: data, rawText: '' } }));
     await mount('sublimation');
+    await click('▶ 展开文本粘贴区域 (手机端推荐)');
     const text = container.querySelector<HTMLTextAreaElement>('#source-json')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(text, JSON.stringify({ templateId: '通用角色', name: '不应替换', content: '新素材' })); text.dispatchEvent(new Event('input', { bubbles: true })); });
     await click('保存到云端');
