@@ -15,14 +15,28 @@ import {
   type DesktopRoomAttachResponse, type DesktopRoomBatch, type DesktopRoomHttpAction,
   type DesktopRoomSubscribeRequest,
 } from '@mahoshojo/contracts/desktop-room-ipc';
-import { PROPOSAL_VERSION, type ArenaProposal, type ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
+import { MAX_ROOM_MEMBERS, PROPOSAL_VERSION, type ArenaProposal, type ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
 import { createDesktopRouter } from '../src/app/router';
+import { parseArenaRoomJoinCode } from '@mahoshojo/multiplayer-core/room-join-code';
+import { createRoomInviteScope } from '@mahoshojo/ui-web/arena-room';
+import { DESKTOP_PRODUCT_ORIGIN } from '../src/platform/product-origin';
+import type { DesktopArenaRoomSession } from '../src/features/arena/room-session';
 import { ADVANCED_ARENA_DRAFT_KEY, ARENA_DRAFT_KEY, createInitialArenaDraft, type ArenaDraft } from '../src/features/arena/session';
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
 import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { getDesktopCloudSessionStore, resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), owner: null as DesktopArenaRoomSession | null, roomRenders: [] as (string | null)[] }));
+// Observe the actual route-owned owner; render the original panel unchanged. No state or methods are replaced.
+vi.mock('../src/features/arena/room-panel', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/features/arena/room-panel')>();
+  const React = await import('react');
+  return { ...actual, DesktopArenaRoomPanel: (props: import('../src/features/arena/room-panel').DesktopArenaRoomPanelProps) => {
+    const state = React.useSyncExternalStore(props.owner.subscribe, props.owner.getSnapshot);
+    mocks.owner = props.owner; mocks.roomRenders.push(state.session?.roomId ?? null);
+    return React.createElement(actual.DesktopArenaRoomPanel, props);
+  } };
+});
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, isTauri: () => true, Channel: class { onmessage?: (value: unknown) => void; } }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: mocks.listen }) }));
 const deferred = <T,>() => {
@@ -140,6 +154,8 @@ class RoomNativeFixture {
 
 let root: Root, container: HTMLDivElement, port: RoomNativeFixture;
 let account: { userId: number; username: string } | null;
+let originalClipboard: PropertyDescriptor | undefined;
+let originalExecCommand: PropertyDescriptor | undefined;
 const reportText = '普通单次结果：甲与乙共同守护车站。';
 const profile = { version: 1, id: 'room-page-direct', name: '房间测试普通连接', adapter: 'openai-compatible', baseUrl: 'http://127.0.0.1:18080/v1', modelId: 'fixture-default-model', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' };
 const publicCard = { id: 'missing-version-card', name: '缺版本在线角色', type: 'character', is_public: 1, description: '缺少实际观察版本的公开卡', data: JSON.stringify({ templateId: '通用角色', name: '缺版本在线角色', content: '不得随房间创建上传的私有正文', _updatedAt: 'body-metadata-is-not-a-version' }) };
@@ -283,6 +299,9 @@ const loseProposalResult = async (resolving: Operation, session: ArenaRoomSessio
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  originalExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand');
+  mocks.owner = null; mocks.roomRenders = [];
   vi.clearAllMocks(); localStorage.clear(); resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
   vi.stubGlobal('crypto', webcrypto);
   Object.defineProperty(window, '__MAHOSHOJO_ROOM_DOCUMENT_V1__', { configurable: true, writable: true, value: ipcFixture.attachRequest.documentNonce });
@@ -325,6 +344,9 @@ afterEach(async () => {
   await act(async () => root.unmount()); container.remove();
   Reflect.deleteProperty(window, '__MAHOSHOJO_ROOM_DOCUMENT_V1__');
   vi.unstubAllGlobals(); vi.restoreAllMocks();
+  if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard); else Reflect.deleteProperty(navigator, 'clipboard');
+  if (originalExecCommand) Object.defineProperty(document, 'execCommand', originalExecCommand); else Reflect.deleteProperty(document, 'execCommand');
+  vi.useRealTimers();
 });
 
 describe('Desktop /arena Room journey through the real route and Native bridge', () => {
@@ -384,6 +406,149 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
       if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
       else Reflect.deleteProperty(navigator, 'clipboard');
     }
+  });
+
+  const enterInviteSession = async (role: 'host' | 'member' = 'host') => {
+    await mount(); await open();
+    const target = sessionFor(role);
+    target.snapshot.members.find(member => member.role === 'host')!.displayName = 'room id: other-room';
+    await change('#arena-room-title', '房间码：title-room');
+    await change('#arena-room-join-code', target.roomId);
+    const joining = await startAction('加入房间', 'join');
+    await confirmMembership(joining, role, target); await publishOnline(target);
+    return target;
+  };
+  const clipboardForInvite = (writeText: (text: string) => Promise<void>) => {
+    const clipboard = { writeText: vi.fn(writeText), readText: vi.fn() };
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: clipboard });
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => false) });
+    return clipboard;
+  };
+
+  it.each(['host', 'member'] as const)('%s explicitly shares canonical product invite with active members, no navigation or clipboard read', async role => {
+    const clipboard = clipboardForInvite(async () => {}), openWindow = vi.spyOn(window, 'open');
+    const session = await enterInviteSession(role);
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    const actionsBefore = port.actions.length, beforeLocation = window.location.href;
+    await click('分享房间', room());
+    expect(clipboard.writeText).toHaveBeenCalledTimes(1);
+    const text = clipboard.writeText.mock.calls[0]![0];
+    expect(text).toContain(`${DESKTOP_PRODUCT_ORIGIN}/arena`);
+    expect(text).not.toContain('api.mahoshojo'); expect(text).not.toContain('tauri://');
+    expect(text).toContain(`当前成员：2/${MAX_ROOM_MEMBERS} 人`); expect(text).not.toContain('当前在线');
+    expect(parseArenaRoomJoinCode(text)).toEqual({ ok: true, roomId: session.roomId });
+    expect(requiredButton('已复制邀请', room()).getAttribute('aria-label')).toBe('复制房间邀请文案');
+    expect(clipboard.readText).not.toHaveBeenCalled(); expect(openWindow).not.toHaveBeenCalled();
+    expect(window.location.href).toBe(beforeLocation); expect(port.actions).toHaveLength(actionsBefore);
+    expect(vi.mocked(fetch).mock.calls.every(([input]) => !String(input).startsWith(DESKTOP_PRODUCT_ORIGIN))).toBe(true);
+    assertNoExecution();
+  });
+
+  it('reports failed copy and lets the user retry without automatic clipboard reads or writes', async () => {
+    const clipboard = clipboardForInvite(async () => { throw new Error('clipboard denied'); });
+    await enterInviteSession(); await click('分享房间', room());
+    expect(button('复制失败，请重试', room())).toBeTruthy(); expect(clipboard.writeText).toHaveBeenCalledTimes(1);
+    expect(document.execCommand).toHaveBeenCalledExactlyOnceWith('copy');
+    clipboard.writeText.mockResolvedValueOnce(); await click('复制失败，请重试', room());
+    expect(button('已复制邀请', room())).toBeTruthy(); expect(clipboard.writeText).toHaveBeenCalledTimes(2);
+    expect(clipboard.readText).not.toHaveBeenCalled(); assertNoExecution();
+  });
+
+  it.each(['account-success', 'account-failure', 'document-success', 'document-failure', 'room-success', 'room-failure'] as const)('does not apply late clipboard feedback after %s retirement and reattachment', async scenario => {
+    const pending = deferred<void>();
+    const clipboard = clipboardForInvite(() => pending.promise.then(() => { if (scenario.endsWith('failure')) throw new Error('clipboard denied'); }));
+    const original = await enterInviteSession(); await click('分享房间', room());
+    expect(button('复制中…', room())).toBeTruthy();
+    if (scenario.startsWith('account')) {
+      await act(async () => { await getDesktopCloudSessionStore().signOut(); });
+      account = { userId: serviceFixture.expectedUserId, username: '普通账号' };
+      await act(async () => { await getDesktopCloudSessionStore().refresh(); });
+    } else if (scenario.startsWith('document')) {
+      Object.defineProperty(window, '__MAHOSHOJO_ROOM_DOCUMENT_V1__', { configurable: true, writable: true, value: 'b'.repeat(64) });
+      // Existing owner revalidates its immutable Document nonce on the next account notification.
+      await act(async () => { await getDesktopCloudSessionStore().refresh(); });
+    } else {
+      vi.mocked(window.confirm).mockReturnValueOnce(true); await click('断开本机房间连接', room());
+    }
+    await click('打开多人大厅', room()); await change('#arena-room-join-code', original.roomId);
+    const joining = await startAction('加入房间', 'join'); await confirmMembership(joining, 'host', original); await publishOnline(original);
+    expect(button('分享房间', room())).toBeTruthy();
+    await act(async () => pending.resolve());
+    expect(button('分享房间', room())).toBeTruthy();
+    expect(button('已复制邀请', room())).toBeUndefined(); expect(button('复制失败，请重试', room())).toBeUndefined();
+    expect(clipboard.writeText).toHaveBeenCalledTimes(1); expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(document.execCommand).not.toHaveBeenCalled(); assertNoExecution();
+  });
+
+  const leaveAndRejoinSameOwner = async (session: ArenaRoomSessionResponse) => {
+    const owner = mocks.owner!;
+    const identity = owner.confirmationOwner();
+    const renderedBefore = mocks.roomRenders.length;
+    const retirement = createRoomInviteScope({ readScope: () => {
+      const current = owner.getSnapshot().session;
+      return current ? JSON.stringify([current.roomId, current.roomEpoch, current.self.userId]) : null;
+    }, subscribe: owner.subscribe });
+    const oldScope = retirement.getSnapshot();
+    // No consumer reads the scope again until the full Native leave/rejoin completes.
+    const stopRetirement = retirement.subscribe(() => {});
+    const observed: (string | null)[] = [];
+    const unsubscribe = owner.subscribe(() => observed.push(owner.getSnapshot().session?.roomId ?? null));
+    const deliverInBatch = async (event: unknown) => {
+      const delivery = port.queue(event); port.notify(delivery); await delivery.ackStarted.promise;
+      // Native ACK completion releases the real owner flight before the next explicit intent.
+      await delivery.ackGate.promise;
+      if (owner.getSnapshot().busy) await new Promise<void>(resolve => {
+        const stop = owner.subscribe(() => { if (!owner.getSnapshot().busy) { stop(); resolve(); } });
+      });
+    };
+    await act(async () => {
+      const leaving = port.nextAction('leave'); await owner.leave();
+      await deliverInBatch(responseEvent(await leaving, serviceFixture.operations.leave.success.result));
+      expect(owner.getSnapshot().session).toBeNull();
+      const joining = port.nextAction('join'); await owner.join(session.roomId, '普通账号');
+      const subscription = port.nextSubscription();
+      await deliverInBatch(responseEvent(await joining, session)); await subscription;
+    });
+    unsubscribe(); stopRetirement();
+    expect(mocks.owner).toBe(owner); expect(owner.confirmationOwner()).toBe(identity);
+    expect(observed).toContain(null); expect(observed.at(-1)).toBe(session.roomId);
+    expect(retirement.getSnapshot()).not.toBe(oldScope);
+    // Real Native ACK awaits currently render null even inside one async act. This is
+    // same-owner lifecycle coverage, not proof of an unrendered production ABA batch.
+    expect(mocks.roomRenders.slice(renderedBefore)).toContain(null);
+  };
+
+  it.each([true, false])('same owner leave/rejoin retires late copy success=%s', async success => {
+    const pending = deferred<void>();
+    clipboardForInvite(() => pending.promise.then(() => { if (!success) throw new Error('old clipboard rejected'); }));
+    const original = await enterInviteSession('member'); await click('分享房间', room());
+    await leaveAndRejoinSameOwner(original);
+    await act(async () => pending.resolve());
+    expect(button('分享房间', room())).toBeTruthy();
+    expect(button('已复制邀请', room())).toBeUndefined(); expect(button('复制失败，请重试', room())).toBeUndefined();
+    expect(document.execCommand).not.toHaveBeenCalled();
+  });
+
+  it('same owner leave/rejoin timer cannot clear new copy feedback', async () => {
+    clipboardForInvite(async () => {});
+    const original = await enterInviteSession('member'); vi.useFakeTimers(); await click('分享房间', room());
+    await act(async () => vi.advanceTimersByTime(1_000));
+    await leaveAndRejoinSameOwner(original); expect(button('分享房间', room())).toBeTruthy();
+    await click('分享房间', room());
+    await act(async () => vi.advanceTimersByTime(1_000)); expect(button('已复制邀请', room())).toBeTruthy();
+    await act(async () => vi.advanceTimersByTime(1_000)); expect(button('分享房间', room())).toBeTruthy();
+  });
+
+  it('does not let a retired room copy timer clear the new owner feedback', async () => {
+    clipboardForInvite(async () => {});
+    const original = await enterInviteSession(); vi.useFakeTimers(); await click('分享房间', room());
+    await act(async () => vi.advanceTimersByTime(1_000));
+    vi.mocked(window.confirm).mockReturnValueOnce(true); await click('断开本机房间连接', room());
+    await click('打开多人大厅', room()); await change('#arena-room-join-code', original.roomId);
+    const joining = await startAction('加入房间', 'join'); await confirmMembership(joining, 'host', original); await publishOnline(original);
+    await click('分享房间', room());
+    await act(async () => vi.advanceTimersByTime(1_000)); expect(button('已复制邀请', room())).toBeTruthy();
+    await act(async () => vi.advanceTimersByTime(1_000)); expect(button('分享房间', room())).toBeTruthy();
   });
 
   it.each(['account', 'document'] as const)('keeps a parsed invite behind the %s fence before join', async retirement => {

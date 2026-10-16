@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import React, { act } from 'react';
+import React, { act, useLayoutEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ArenaRoomProposalSubmitRequest } from '@mahoshojo/contracts/arena-room';
+import { MAX_ROOM_MEMBERS, type ArenaRoomProposalSubmitRequest } from '@mahoshojo/contracts/arena-room';
 
 import {
   ArenaMultiplayerContextPanel,
@@ -17,6 +17,9 @@ import {
 } from '@/components/arena/multiplayer/useArenaRoom';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 import { authStorage } from '@/lib/auth';
+import type { ArenaRoomController } from '@/lib/arena-room/controller';
+import { beginAuthIdentityTransition } from '@/lib/auth-identity';
+import { createRoomInviteScope } from '@mahoshojo/ui-web/arena-room';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -118,6 +121,19 @@ class WiringSocket {
 let container: HTMLDivElement;
 let root: Root;
 let queryClient: QueryClient;
+let inviteController: ArenaRoomController;
+let renderedRoomIds: (string | null)[];
+let inviteClipboardDescriptor: PropertyDescriptor | undefined;
+let inviteExecCommandDescriptor: PropertyDescriptor | undefined;
+const InviteControllerProbe = () => {
+  const runtime = useArenaRoomContext();
+  useLayoutEffect(() => {
+    if (!runtime) return;
+    inviteController = runtime.controller;
+    renderedRoomIds.push(runtime.state.session?.roomId ?? null);
+  }, [runtime]);
+  return null;
+};
 
 const props = {
   enabled: true,
@@ -152,6 +168,7 @@ const productionTree = (panelProps: ArenaMultiplayerPanelProps) => (
   >
     <QueryClientProvider client={queryClient}>
       <ArenaMultiplayerContextPanel {...panelProps} />
+      <InviteControllerProbe />
       <ArenaEditorWorkspaceBoundary>
         <div data-arena-editor-placeholder="v1" />
       </ArenaEditorWorkspaceBoundary>
@@ -206,6 +223,10 @@ const setTextField = async (id: string, value: string): Promise<void> => {
 
 beforeEach(() => {
   WiringSocket.instances = [];
+  renderedRoomIds = [];
+  inviteClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  inviteExecCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand');
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => false) });
   vi.stubGlobal('WebSocket', WiringSocket);
   vi.spyOn(authStorage, 'getAuthHeader').mockResolvedValue('Bearer verified-key');
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -220,6 +241,8 @@ afterEach(async () => {
   container.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  if (inviteClipboardDescriptor) Object.defineProperty(navigator, 'clipboard', inviteClipboardDescriptor); else Reflect.deleteProperty(navigator, 'clipboard');
+  if (inviteExecCommandDescriptor) Object.defineProperty(document, 'execCommand', inviteExecCommandDescriptor); else Reflect.deleteProperty(document, 'execCommand');
 });
 
 describe('Arena multiplayer production client/hook wiring', () => {
@@ -406,10 +429,92 @@ describe('Arena multiplayer production client/hook wiring', () => {
       // homura.colanns.me），邀请链接必须指向用户正在浏览的 Web 站点。
       expect(text).toContain(`${window.location.origin}/arena`);
       expect(text).toContain('room-1');
+      expect(text).toContain(`当前成员：1/${MAX_ROOM_MEMBERS} 人`);
+      expect(text).not.toContain('当前在线');
       expect(text).not.toContain('127.0.0.1:8787');
     } finally {
       delete (globalThis.navigator as { clipboard?: unknown }).clipboard;
     }
+  });
+
+  const mountInviteRoom = async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async input => {
+      const url = String(input);
+      if (url.endsWith('/languages.json')) return Response.json([]);
+      if (requestPath(url) === '/api/auth/verify') return Response.json({ success: false });
+      if (requestPath(url) === '/api/arena/rooms/v1') return Response.json({ protocolVersion: 1, items: [], nextCursor: null });
+      if (url.endsWith('/join')) return Response.json(sessionFor('host'));
+      if (url.endsWith('/ticket')) return Response.json({ protocolVersion: 1, ticket: 'ticket-invite', expiresInSeconds: 45,
+        websocket: { path: '/api/arena/rooms/v1/ws', protocol: 'mahoshojo.arena-room.v1' } });
+      if (url.endsWith('/generations')) return Response.json({ protocolVersion: 1, roomId: 'room-1', roomEpoch: 'epoch-1', items: [] });
+      throw new Error(`unexpected Room request: ${url}`);
+    }));
+    await act(async () => root.render(productionTree(props)));
+    await enterJoinCode(); await act(async () => button('加入房间').click()); await flush();
+    await act(async () => WiringSocket.instances.at(-1)!.open());
+  };
+  const rejoinInviteRoom = async () => {
+    const controller = inviteController;
+    const rendersBefore = renderedRoomIds.length;
+    const observed: (string | null)[] = [];
+    const retirement = createRoomInviteScope({ readScope: () => {
+      const current = controller.getSnapshot().session;
+      return current ? JSON.stringify([current.roomId, current.roomEpoch, current.self.userId]) : null;
+    }, subscribe: controller.subscribe });
+    const oldScope = retirement.getSnapshot(), stopRetirement = retirement.subscribe(() => {});
+    const unsubscribe = controller.subscribe(() => observed.push(controller.getSnapshot().session?.roomId ?? null));
+    await act(async () => controller.reset()); await flush();
+    // The real view refreshes the directory after reset. Let that read settle before
+    // an explicit rejoin; racing it would invalidate the join's operation generation.
+    await enterJoinCode(); await act(async () => button('加入房间').click()); await flush();
+    await act(async () => WiringSocket.instances.at(-1)!.open());
+    unsubscribe(); stopRetirement();
+    expect(inviteController).toBe(controller);
+    expect(observed).toContain(null); expect(observed.at(-1)).toBe('room-1');
+    expect(retirement.getSnapshot()).not.toBe(oldScope);
+    expect(renderedRoomIds.slice(rendersBefore)).toContain(null);
+  };
+
+  it.each([true, false])('真实 controller 同实例重进同房后丢弃迟到复制结果 success=%s', async success => {
+    let resolve!: () => void, reject!: (error: Error) => void;
+    const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    const writeText = vi.fn(() => pending), readText = vi.fn();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText, readText } });
+    try {
+      await mountInviteRoom(); expect(writeText).not.toHaveBeenCalled();
+      await act(async () => button('分享房间').click());
+      expect(button('复制房间邀请文案').textContent).toBe('复制中…');
+      await rejoinInviteRoom();
+      await act(async () => { if (success) resolve(); else reject(new Error('clipboard failed')); });
+      expect(button('复制房间邀请文案').textContent).toBe('分享房间');
+      expect(writeText).toHaveBeenCalledTimes(1); expect(readText).not.toHaveBeenCalled();
+      expect(document.execCommand).not.toHaveBeenCalled();
+    } finally { Reflect.deleteProperty(navigator, 'clipboard'); }
+  });
+
+  it('真实 controller 房间换代后旧 timer 不清除新邀请反馈', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn(async () => {}) } });
+    try {
+      await mountInviteRoom(); vi.useFakeTimers();
+      await act(async () => button('分享房间').click());
+      await act(async () => vi.advanceTimersByTime(1_000));
+      await rejoinInviteRoom(); expect(button('复制房间邀请文案').textContent).toBe('分享房间');
+      await act(async () => button('分享房间').click());
+      await act(async () => vi.advanceTimersByTime(1_000)); expect(button('复制房间邀请文案').textContent).toBe('已复制邀请');
+      await act(async () => vi.advanceTimersByTime(1_000)); expect(button('复制房间邀请文案').textContent).toBe('分享房间');
+    } finally { Reflect.deleteProperty(navigator, 'clipboard'); }
+  });
+
+  it.each([true, false])('账号退役后迟到复制 success=%s 不显示旧身份反馈', async success => {
+    let resolve!: () => void, reject!: (error: Error) => void;
+    const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn(() => pending) } });
+    try {
+      await mountInviteRoom(); await act(async () => button('分享房间').click());
+      await act(async () => { beginAuthIdentityTransition(); });
+      await act(async () => { if (success) resolve(); else reject(new Error('clipboard failed')); });
+      expect(container.textContent).not.toContain('已复制邀请'); expect(container.textContent).not.toContain('复制失败，请重试');
+    } finally { Reflect.deleteProperty(navigator, 'clipboard'); }
   });
 
   it('真实 hook 对 1013 取 fresh ticket，对 membership revoke 显示 replacement 并可 reset', async () => {

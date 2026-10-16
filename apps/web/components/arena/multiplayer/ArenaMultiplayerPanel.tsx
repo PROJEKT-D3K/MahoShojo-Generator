@@ -1,12 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 
 import { ChevronDown } from 'lucide-react';
 
 import { MAX_ROOM_MEMBERS, type RoomDirectoryVisibility } from '@mahoshojo/contracts/arena-room';
-import { RoomLobbyContent, RoomMembersView, RoomExitActions, projectRoomMembers } from '@mahoshojo/ui-web/arena-room';
+import { RoomLobbyContent, RoomMembersView, RoomExitActions, RoomInviteShareButton, useRoomInviteCopy, createRoomInviteScope, projectRoomMembers } from '@mahoshojo/ui-web/arena-room';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { useEscapeLayer } from '@mahoshojo/ui-web/modal';
 
@@ -22,7 +22,7 @@ import {
   buildArenaRoomInviteText,
   parseArenaRoomJoinCode,
 } from '@/lib/arena-room/join-code';
-import { copyTextToClipboard } from '@/lib/clipboard';
+import { captureAuthIdentity, getAuthIdentitySnapshot, subscribeAuthIdentity } from '@/lib/auth-identity';
 import { ActionBar } from '@/components/shared/ui/ActionBar';
 import { Badge, CountBadge } from '@/components/shared/ui/Badge';
 import { Button, buttonClassName } from '@/components/shared/ui/Button';
@@ -62,6 +62,8 @@ export type ArenaMultiplayerResultProps = {
 
 export type ArenaMultiplayerPanelViewProps = {
   readonly state: ArenaRoomControllerState;
+  readonly getCurrentState?: () => ArenaRoomControllerState;
+  readonly subscribeState?: (listener: () => void) => () => void;
   readonly authLoading: boolean;
   readonly origin?: string;
   readonly actionPending?: boolean;
@@ -422,7 +424,6 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
   }, [props.hostPanelUi]);
   const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false);
   const [roomOpen, setRoomOpen] = useState(false);
-  const [copiedInvite, setCopiedInvite] = useState(false);
   const [kickConfirmation, setKickConfirmation] = useState<{
     readonly targetUserId: string;
     readonly displayName: string;
@@ -435,7 +436,6 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
   const kickTriggerRef = useRef<HTMLButtonElement | null>(null);
   const managementConfirmationActionRef = useRef<HTMLButtonElement>(null);
   const cancelGenerationTriggerRef = useRef<HTMLButtonElement>(null);
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const session = state.phase === 'closed' || state.phase === 'replacement'
     ? null
     : state.session;
@@ -458,16 +458,26 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
     setLobbyOpen(true);
     onDiscoverRef.current();
   }, [session, state.phase]);
-  useEffect(() => () => {
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-  }, []);
   useEffect(() => {
     if (kickConfirmation) kickConfirmationActionRef.current?.focus();
   }, [kickConfirmation]);
   useEffect(() => {
     if (managementConfirmation) managementConfirmationActionRef.current?.focus();
   }, [managementConfirmation]);
-  if (state.phase === 'disabled') return null;
+  const currentStateRef = useRef(state);
+  currentStateRef.current = state;
+  const authIdentity = useSyncExternalStore(subscribeAuthIdentity, getAuthIdentitySnapshot, getAuthIdentitySnapshot);
+  const { getCurrentState, subscribeState } = props;
+  const inviteRoomScope = useMemo(() => createRoomInviteScope({
+    readScope: () => {
+      const latest = getCurrentState?.() ?? currentStateRef.current;
+      const active = ['disabled', 'closed', 'replacement'].includes(latest.phase) ? null : latest.session;
+      return active ? JSON.stringify([active.roomId, active.roomEpoch, active.self.userId]) : null;
+    },
+    subscribe: subscribeState ?? (() => () => {}),
+  }), [getCurrentState, subscribeState]);
+  const inviteRoomToken = useSyncExternalStore(inviteRoomScope.subscribe, inviteRoomScope.getSnapshot, inviteRoomScope.getSnapshot);
+  const inviteScope = useMemo(() => ({ room: inviteRoomToken, identity: authIdentity }), [inviteRoomToken, authIdentity]);
 
   const busy = Boolean(props.actionPending)
     || (state.managementOperation !== null && state.managementOperation !== undefined)
@@ -494,23 +504,32 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
   const hostConfigSynchronizing = state.configPublishPending
     || props.hostConfigStatus === 'synchronizing';
 
-  const copyRoomInfo = async (): Promise<void> => {
-    if (!session) return;
-    // 邀请链接必须指向用户正在浏览的 Web 站点（production/preview/本地天然正确）；
-    // props.origin 是 Hono API origin，不能用于产品分享链接。
-    const text = buildArenaRoomInviteText(window.location.origin, session.roomId, {
-      roomTitle: directoryRoom?.title
-        ?? (session.self.role === 'host' ? props.roomTitle : undefined),
-      hostDisplayName: host?.displayName,
-      memberCount: activeMembers.length,
-      memberLimit: directoryRoom?.memberLimit ?? MAX_ROOM_MEMBERS,
-    });
-    const ok = await copyTextToClipboard(text);
-    if (!ok) return;
-    setCopiedInvite(true);
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-    copiedTimerRef.current = setTimeout(() => setCopiedInvite(false), 2_000);
-  };
+  const inviteCopy = useRoomInviteCopy({
+    scope: inviteScope,
+    prepare: () => {
+      if (!session) return null;
+      const identity = captureAuthIdentity();
+      if (identity !== authIdentity || inviteRoomScope.getSnapshot() !== inviteRoomToken) return null;
+      const isCurrent = () => {
+        const latest = getCurrentState?.() ?? currentStateRef.current;
+        return identity.isCurrent() && inviteRoomScope.getSnapshot() === inviteRoomToken
+          && !['disabled', 'closed', 'replacement'].includes(latest.phase)
+          && latest.session?.roomId === session.roomId && latest.session.roomEpoch === session.roomEpoch
+          && latest.session.self.userId === session.self.userId;
+      };
+      return {
+        // props.origin 是 Hono API origin；产品链接保留当前 production/preview/本地站点。
+        text: buildArenaRoomInviteText(window.location.origin, session.roomId, {
+          roomTitle: directoryRoom?.title ?? (session.self.role === 'host' ? props.roomTitle : undefined),
+          hostDisplayName: host?.displayName,
+          memberCount: activeMembers.length,
+          memberLimit: directoryRoom?.memberLimit ?? MAX_ROOM_MEMBERS,
+        }),
+        isCurrent,
+      };
+    },
+  });
+  if (state.phase === 'disabled') return null;
 
   return (
     <section
@@ -640,12 +659,7 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
             {/* 一级操作：窄屏是设计好的 2×2 网格（状态区占整行），≥sm 恢复单行不换行；
                 不依赖 flex-wrap 碰运气，也不在 320/375px 横向溢出。 */}
             <ActionBar className="w-full shrink-0 grid grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-nowrap">
-              <Button
-                aria-label="复制房间邀请文案"
-                onClick={() => { void copyRoomInfo(); }}
-              >
-                {copiedInvite ? '已复制邀请' : '分享房间'}
-              </Button>
+              <RoomInviteShareButton status={inviteCopy.status} onCopy={() => { void inviteCopy.copy(); }} />
               {session.self.role === 'host' ? (
                 <Button
                   className={hostConfigNeedsAttention
@@ -973,6 +987,8 @@ function ArenaMultiplayerPanelRuntime({
   return (
     <ArenaMultiplayerPanelView
       state={viewState}
+      getCurrentState={controller.getSnapshot}
+      subscribeState={controller.subscribe}
       authLoading={props.authLoading}
       origin={props.origin}
       actionPending={preparingCreate}

@@ -1,8 +1,9 @@
 // 自 `apps/web/lib/clipboard.ts` 上移：剪贴板写文本的 WebView 通用实现
 //（navigator.clipboard 优先，失败退回隐藏 textarea + execCommand）。
 
-export async function copyTextToClipboard(text: string): Promise<boolean> {
-  if (typeof window === 'undefined') return false;
+// 已派发给系统的 writeText 不能撤销；能力围栏阻止后续 fallback 再发起一次写入。
+export async function copyTextToClipboard(text: string, isCurrent: () => boolean = () => true): Promise<boolean> {
+  if (typeof window === 'undefined' || !isCurrent()) return false;
 
   try {
     if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -13,8 +14,10 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
     // ignore and fallback
   }
 
+  if (!isCurrent()) return false;
+  let textArea: HTMLTextAreaElement | null = null;
   try {
-    const textArea = document.createElement('textarea');
+    textArea = document.createElement('textarea');
     textArea.value = text;
     textArea.setAttribute('readonly', 'true');
     textArea.style.position = 'fixed';
@@ -23,10 +26,10 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
     textArea.style.opacity = '0';
     document.body.appendChild(textArea);
     textArea.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(textArea);
-    return ok;
+    return isCurrent() && document.execCommand('copy');
   } catch {
     return false;
+  } finally {
+    textArea?.remove();
   }
 }

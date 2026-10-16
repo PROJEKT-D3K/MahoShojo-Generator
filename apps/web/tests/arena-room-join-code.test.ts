@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildArenaRoomInviteText as buildSharedRoomInviteText } from '@mahoshojo/multiplayer-core/room-invite';
 import { parseArenaRoomJoinCode as parseSharedRoomJoinCode } from '@mahoshojo/multiplayer-core/room-join-code';
 
 import {
@@ -52,6 +53,9 @@ describe('parseArenaRoomJoinCode', () => {
 });
 
 describe('buildArenaRoomInviteText', () => {
+  it('旧 Web builder 直接回用共享原件', () => {
+    expect(buildArenaRoomInviteText).toBe(buildSharedRoomInviteText);
+  });
   it('邀请文案包含房间上下文、房间码、入口与用法，可被解析器还原', () => {
     const text = buildArenaRoomInviteText('https://mahoshojo.colanns.me/', UUID, {
       roomTitle: '废都茶会',
@@ -61,7 +65,7 @@ describe('buildArenaRoomInviteText', () => {
     });
     expect(text).toContain('房间：废都茶会');
     expect(text).toContain('房主：小银');
-    expect(text).toContain('当前在线：2/8 人');
+    expect(text).toContain('当前成员：2/8 人');
     expect(text).toContain(UUID);
     expect(text).toContain('https://mahoshojo.colanns.me/arena');
     expect(text).toContain('凭房间码加入');
@@ -78,7 +82,7 @@ describe('buildArenaRoomInviteText', () => {
     });
     expect(text).toContain('房间：夜战 测试房');
     expect(text).toContain('房主：房主 Alice');
-    expect(text).not.toContain('当前在线：');
+    expect(text).not.toContain('当前成员：');
     expect(parseArenaRoomJoinCode(text)).toEqual({ ok: true, roomId: UUID });
   });
 

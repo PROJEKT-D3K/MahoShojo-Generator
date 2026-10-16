@@ -1,9 +1,11 @@
 import { DesktopRoomProposalReview, DesktopRoomProposalStatus } from './room-proposal-review';
 import { DesktopRoomConfigComparison } from './room-config-comparison';
-import { useState, useSyncExternalStore } from 'react';
-import { RoomConfigPublishStatus, RoomProposalReadOnlyList, RoomLobbyContent, RoomMembersView, RoomExitActions, projectRoomMembers, type RoomExitConfirmation } from '@mahoshojo/ui-web/arena-room';
+import { useMemo, useState, useSyncExternalStore } from 'react';
+import { RoomConfigPublishStatus, RoomProposalReadOnlyList, RoomLobbyContent, RoomMembersView, RoomExitActions, RoomInviteShareButton, useRoomInviteCopy, createRoomInviteScope, projectRoomMembers, type RoomExitConfirmation } from '@mahoshojo/ui-web/arena-room';
 import { parseArenaRoomJoinCode } from '@mahoshojo/multiplayer-core/room-join-code';
-import type { RoomDirectoryVisibility } from '@mahoshojo/contracts/arena-room';
+import { MAX_ROOM_MEMBERS, type RoomDirectoryVisibility } from '@mahoshojo/contracts/arena-room';
+import { buildArenaRoomInviteText } from '@mahoshojo/multiplayer-core/room-invite';
+import { DESKTOP_PRODUCT_ORIGIN } from '../../platform/product-origin';
 import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
 import { prepareDesktopRoomSource } from './room-source';
 import type { ArenaDraft } from './session';
@@ -37,6 +39,37 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
   };
   const view = projectRoomMembers({ roomId: session?.roomId ?? null, roomEpoch: session?.roomEpoch ?? null, members: session?.snapshot.members ?? [], presence: state.presence,
     presenceEligible: state.phase === 'online' && state.snapshotReceived && !!state.presence?.onlineUserIds.includes(session?.self.userId ?? '') });
+  const inviteIdentity = owner.confirmationOwner();
+  const inviteRoomScope = useMemo(() => createRoomInviteScope({
+    readScope: () => {
+      const current = owner.getSnapshot();
+      const active = current.phase === 'closed' ? null : current.session;
+      return active ? JSON.stringify([active.roomId, active.roomEpoch, active.self.userId]) : null;
+    },
+    subscribe: owner.subscribe,
+  }), [owner]);
+  const inviteRoomToken = useSyncExternalStore(inviteRoomScope.subscribe, inviteRoomScope.getSnapshot);
+  const inviteScope = useMemo(() => ({ room: inviteRoomToken, identity: inviteIdentity }), [inviteRoomToken, inviteIdentity]);
+  const inviteCopy = useRoomInviteCopy({
+    scope: inviteScope,
+    prepare: () => {
+      const identity = owner.confirmationOwner();
+      const current = owner.getSnapshot();
+      const target = current.session;
+      if (!identity || identity !== inviteIdentity || !target || currentScope() !== scope || inviteRoomScope.getSnapshot() !== inviteRoomToken) return null;
+      const directoryRoom = current.rooms.find(room => room.roomId === target.roomId);
+      const members = target.snapshot.members.filter(member => member.membershipState === 'active');
+      return {
+        text: buildArenaRoomInviteText(DESKTOP_PRODUCT_ORIGIN, target.roomId, {
+          roomTitle: directoryRoom?.title ?? (target.self.role === 'host' ? title : undefined),
+          hostDisplayName: members.find(member => member.role === 'host')?.displayName,
+          memberCount: members.length,
+          memberLimit: directoryRoom?.memberLimit ?? MAX_ROOM_MEMBERS,
+        }),
+        isCurrent: () => owner.confirmationOwner() === identity && currentScope() === scope && inviteRoomScope.getSnapshot() === inviteRoomToken,
+      };
+    },
+  });
   const pending = state.unknown;
   const tracking = state.configTracking;
   const proposalTracking = state.proposalTracking;
@@ -66,6 +99,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
       {!state.memberModel || session?.self.role !== 'member' ? <DesktopRoomProposalStatus owner={owner} state={state} disabled={disabled} /> : null}
       {session ? <>
         <p>房间码：<span>{session.roomId}</span> · {session.self.role === 'host' ? '你是房主' : '你是成员'}</p>
+        <RoomInviteShareButton status={inviteCopy.status} disabled={disabled || !inviteIdentity} onCopy={() => { void inviteCopy.copy(); }} />
         <p>{view.summary}</p>
         <RoomMembersView view={view} selfUserId={session.self.userId} membershipHint="断网或关闭页面只会离线，成员席位仍保留；要退出请明确离开，房主则关闭房间。" />
         <section aria-label="房间权威设定摘要"><h3>服务器房间设定</h3><p>修订 {session.snapshot.revision} · {session.snapshot.sharedConfig.combatants.length} 位角色 · {session.snapshot.sharedConfig.auxScenarios.length} 个辅助情景 · {session.snapshot.sharedConfig.materials.length} 份素材</p><p>生成状态：{session.snapshot.activeGeneration?.state ?? '无活动生成'}。此页不读取或恢复故事正文。</p></section>

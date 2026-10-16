@@ -44,3 +44,10 @@ export * from './member-proposal/labels';
 export { RoomMemberProposalWorkspace } from './member-proposal/RoomMemberProposalWorkspace';
 export { RoomMemberProposalPreview } from './member-proposal/RoomMemberProposalPreview';
 export { RoomMemberProposalStatus } from './member-proposal/RoomMemberProposalStatus';
+
+export { RoomInviteShareButton } from './RoomInviteShareButton';
+export type { RoomInviteCopyStatus, RoomInviteShareButtonProps } from './RoomInviteShareButton';
+export { useRoomInviteCopy } from './useRoomInviteCopy';
+export type { RoomInviteCopyIntent, RoomInviteCopyOptions } from './useRoomInviteCopy';
+export { createRoomInviteScope } from './room-invite-scope';
+export type { RoomInviteScopeSource } from './room-invite-scope';
