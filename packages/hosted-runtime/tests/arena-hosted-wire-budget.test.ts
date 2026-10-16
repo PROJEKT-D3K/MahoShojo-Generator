@@ -13,7 +13,37 @@ import { createArenaStreamProjector } from '../src/arena-generation/stream-proje
 const fixture = JSON.parse(readFileSync(new URL('../../contracts/fixtures/desktop-arena-hosted.json', import.meta.url), 'utf8'));
 const ranking = JSON.parse(readFileSync(new URL('../../contracts/fixtures/arena-generation-ranking.json', import.meta.url), 'utf8'));
 const textDecoder = new TextDecoder();
+const eventBlocksFromWire = (wire: string): string[] => {
+  if (!wire.endsWith('\n\n')) throw new Error('incomplete SSE wire');
+  return wire.slice(0, -2).split('\n\n').flatMap((block) => {
+    const framed = `${block}\n\n`;
+    if (new TextEncoder().encode(framed).byteLength > DESKTOP_ARENA_HOSTED_LIMITS.eventWireBytes) {
+      throw new Error('SSE frame exceeds wire budget');
+    }
+    // Native removes transport comments before forwarding canonical event blocks to the strict parser.
+    return block.split('\n').every((line) => line.startsWith(':')) ? [] : [framed];
+  });
+};
+
 describe('Arena Hosted real producer/wire budget evidence', () => {
+  it('ignores only pure SSE comment frames while preserving original event bytes and order', () => {
+    const first = 'id: 1-0\nevent: markdown\ndata: {"chunk":"first"}\n\n';
+    const second = 'id: 2-0\nevent: markdown\ndata: {"chunk":"second"}\n\n';
+    const blocks = eventBlocksFromWire(`: keepalive\n\n${first}:\n: keepalive\n\n${second}: trailing comment\n\n`);
+    expect(blocks).toEqual([first, second]);
+    expect(blocks.map(parseDesktopArenaHostedSseBlock).map((event) => event.id)).toEqual(['1-0', '2-0']);
+  });
+  it.each([
+    ': comment\nunknown: field\n\n',
+    'id: 1-0\n\n',
+    'retry: 1000\n\n',
+    'id: 1-0\nevent: unknown\ndata: {}\n\n',
+    'event: markdown\ndata: {"chunk":"missing id"}\n\n',
+    'id: 1-0\nevent: markdown\ndata: {"chunk":"extra line"}\ndata: {}\n\n',
+    'id: 1-0\nevent: markdown\ndata: {"chunk":"truncated"}',
+  ])('does not discard or repair malformed event frames: %j', (wire) => {
+    expect(() => eventBlocksFromWire(wire).map(parseDesktopArenaHostedSseBlock)).toThrow();
+  });
   it('accepts real runtime ranking before done without generating or finalizing twice', async () => {
     const generate = vi.fn(async () => ({ body: new Response('# 合成战报\n\n完整正文').body!, telemetry: { model: 'synthetic-model' } }));
     const finalize = vi.fn(async () => ({ resultRef: null, ranking }));
@@ -31,7 +61,7 @@ describe('Arena Hosted real producer/wire budget evidence', () => {
     const wire = await response.text();
     // Optional small evidence file feeds the existing real Native loopback, never a live service.
     if (process.env.ARENA_NATIVE_RANKING_WIRE_INPUT) writeFileSync(process.env.ARENA_NATIVE_RANKING_WIRE_INPUT, wire);
-    const events = wire.split('\n\n').filter(Boolean).map(block => parseDesktopArenaHostedSseBlock(`${block}\n\n`));
+    const events = eventBlocksFromWire(wire).map(parseDesktopArenaHostedSseBlock);
     expect(events.slice(-3).map(event => event.event)).toEqual(['telemetry', 'ranking', 'done']);
     expect(events.at(-2)?.data).toEqual(ranking);
     expect(events.at(-1)).toMatchObject({ event: 'done', data: { status: 'completed', ok: true } });
@@ -72,7 +102,7 @@ describe('Arena Hosted real producer/wire budget evidence', () => {
     }));
     expect(response.status).toBe(200);
     const wire = await response.text();
-    const events = wire.split('\n\n').filter(Boolean).map((block) => parseDesktopArenaHostedSseBlock(block + '\n\n'));
+    const events = eventBlocksFromWire(wire).map(parseDesktopArenaHostedSseBlock);
     expect(events).toContainEqual(expect.objectContaining({ event: 'telemetry', data: { errorClass: 'TypeError' } }));
     expect(events.at(-1)).toMatchObject({ event: 'error', data: { status: 'failed', ok: false } });
     expect(wire).not.toContain('synthetic private message');
@@ -93,7 +123,8 @@ describe('Arena Hosted real producer/wire budget evidence', () => {
     });
     const response = await service.resume(new Request(`https://synthetic.test/api/arena/generations/${generationId}/stream`), { generationId });
     expect(response.status, response.status !== 200 ? await response.clone().text() : '').toBe(200);
-    const blocks = (await response.text()).split('\n\n').filter(Boolean).map((block) => block + '\n\n');
+    const wire = await response.text();
+    const blocks = eventBlocksFromWire(wire);
     const events = blocks.map(parseDesktopArenaHostedSseBlock);
     expect(events.map((event) => event.event)).toEqual(['snapshot', 'done']);
     const snapshot = events[0]!;
@@ -103,7 +134,7 @@ describe('Arena Hosted real producer/wire budget evidence', () => {
     expect(snapshot.data.telemetry).toEqual({ version: 1, aiModel: 'synthetic-model', usage: { completionTokens: 1 } });
     expect(new TextEncoder().encode(blocks[0]!).byteLength).toBeGreaterThan(6 * DESKTOP_ARENA_HOSTED_LIMITS.outputContentBytes);
     expect(new TextEncoder().encode(blocks[0]!).byteLength).toBeLessThanOrEqual(DESKTOP_ARENA_HOSTED_LIMITS.eventWireBytes);
-    expect(blocks.join('')).not.toContain('private-duplicate-reasoning');
+    expect(wire).not.toContain('private-duplicate-reasoning');
   });
   it('real control-tail projector preserves a near-source-limit meta and its raw summary within the independent wire budget', () => {
     const recipe = fixture.boundaryRecipes.meta;
