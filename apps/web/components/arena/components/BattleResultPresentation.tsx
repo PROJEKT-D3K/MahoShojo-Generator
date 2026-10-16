@@ -2,12 +2,12 @@
 
 import { useMemo, type ReactNode } from 'react';
 
-import BattleReportCard, {
-  type BattleReportIllustrationAsset,
-  type NewsReport,
+import type {
+  BattleReportIllustrationAsset,
+  NewsReport,
 } from '@/components/BattleReportCard';
 import { CollapsibleSection } from '@/components/shared/CollapsibleSection';
-import StreamingBattleReportCard from '@/components/stream/StreamingBattleReportCard';
+import { BattleReportCard, StreamingBattleReportCard } from './DeferredArenaRenderers';
 import { resolveAdjudicationOutcomeTone } from '@/lib/adjudicator/presentation';
 import { resolveBattleReportDisplayTitle } from '@/lib/arena/battle-report-display-title';
 import type { AIReasoningEnvelope } from '@/types/ai-reasoning';

@@ -14,11 +14,11 @@ import {
 } from '@mahoshojo/ui-web/arena-story-session';
 
 import { ProviderCooldownNotice } from '@/components/ai/ProviderCooldownNotice';
-import { MarkdownBlock } from '@/components/MarkdownBlock';
+import { MarkdownBlock } from './DeferredArenaRenderers';
 import { CollapsibleSection } from '@/components/shared/CollapsibleSection';
 import { createWebBattleReportPorts } from '@/components/shared/battle-report-ports';
 import { StreamStopButton } from '@/components/shared/StreamStopButton';
-import StreamingBattleReportCard from '@/components/stream/StreamingBattleReportCard';
+import { StreamingBattleReportCard } from './DeferredArenaRenderers';
 import {
   formatBattleStoryChapterPlanSource,
   formatBattleStoryChapterProgress,

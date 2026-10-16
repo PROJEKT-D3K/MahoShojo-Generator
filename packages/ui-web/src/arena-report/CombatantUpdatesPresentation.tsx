@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 
 
-import { CollapsibleSection } from '../creator';
+import { CollapsibleSection } from '../creator/CollapsibleSection';
 
 export type CombatantUpdatePresentationItem = {
   readonly key: string;

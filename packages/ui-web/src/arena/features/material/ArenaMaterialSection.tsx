@@ -3,7 +3,7 @@
 import { useRef, useState, type ChangeEvent } from 'react';
 
 import { useArenaInputLifecycle, type ArenaInputLifecyclePorts } from '../../input-lifecycle';
-import { DisclosureButton } from '../../../creator';
+import { DisclosureButton } from '../../../creator/CollapsibleSection';
 import { ArenaMaterialList } from '../../presentation/ArenaMaterialList';
 
 import type { ArenaMaterialSectionModel } from './material-contract';

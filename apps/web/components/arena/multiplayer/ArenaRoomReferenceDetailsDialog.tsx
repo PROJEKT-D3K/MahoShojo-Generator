@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import DataCardDetailsModal from '@/components/DataCardDetailsModal';
+import DataCardDetailsModal from '@/components/DeferredDataCardDetailsModal';
 import { OnlineDataCardTypeSchema, type OnlineDataCardType } from '@mahoshojo/contracts/data-cards';
 
 import { ARENA_ROOM_PRESET_CATALOG } from '@/lib/arena-room/generated/arena-room-preset-catalog';

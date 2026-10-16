@@ -55,6 +55,7 @@
       "import": "./src/encyclopedia/index.ts",
       "default": "./src/encyclopedia/index.ts"
     },
+    "./encyclopedia-links": "./src/encyclopedia/views/EncyclopediaLinks.tsx",
     "./encyclopedia-frame": {
       "types": "./src/encyclopedia/views/EncyclopediaPageFrame.tsx",
       "import": "./src/encyclopedia/views/EncyclopediaPageFrame.tsx",
@@ -110,6 +111,7 @@
       "import": "./src/character-card/index.ts",
       "default": "./src/character-card/index.ts"
     },
+    "./disclosure": "./src/creator/CollapsibleSection.tsx",
     "./creator-copy": {
       "types": "./src/creator/page-copy.ts",
       "import": "./src/creator/page-copy.ts",
@@ -218,6 +220,7 @@
     "./magic-tea-party": "./src/magic-tea-party/index.ts",
     "./arena.css": "./src/arena/styles.css",
     "./arena-report": "./src/arena-report/index.ts",
+    "./arena-report-views": "./src/arena-report/views.ts",
     "./arena-report-text": "./src/arena-report/text.ts",
     "./arena-story-session-read": "./src/arena-story-session-read/index.ts",
     "./arena-story-session": "./src/arena-story-session/index.ts",

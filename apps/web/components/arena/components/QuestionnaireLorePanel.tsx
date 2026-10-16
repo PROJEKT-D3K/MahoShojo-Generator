@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import BattleDataModal from '@/components/BattleDataModal';
-import DataCardDetailsModal from '@/components/DataCardDetailsModal';
+import DataCardDetailsModal from '@/components/DeferredDataCardDetailsModal';
 import { TokenIndicator } from '@/components/shared/TokenIndicator';
 import { QuestionnaireLorePanel as SharedQuestionnaireLorePanel } from '@mahoshojo/ui-web/arena';
 import { buildQuestionnaireSelectionLoreText } from '@mahoshojo/domain/questionnaire-selection';

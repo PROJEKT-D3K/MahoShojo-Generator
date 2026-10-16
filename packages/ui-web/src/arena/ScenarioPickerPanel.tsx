@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 
 import { useArenaInputLifecycle, type ArenaInputLifecyclePorts } from './input-lifecycle';
-import { DisclosureButton } from '../creator';
+import { DisclosureButton } from '../creator/CollapsibleSection';
 
 export type ScenarioPickerPanelProps = ArenaInputLifecyclePorts & {
   onOpenScenarioModal?: () => void;

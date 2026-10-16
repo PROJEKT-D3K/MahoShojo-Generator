@@ -6,7 +6,7 @@ import { createWebOwnedCardDeletePort } from '@/lib/owned-card-delete';
 import { createWebOwnedCardMetadataPort } from '@/lib/owned-card-metadata';
 // 真实管理模态框已共源；Web 只装配网络、文件、详情与链接端口。
 import { DataCardsModal as SharedDataCardsModal, type DataCardsModalProps, type DataCardsModalHost } from '@mahoshojo/ui-web/cloud-save';
-import DataCardDetailsModal from '../DataCardDetailsModal';
+import DataCardDetailsModal from '../DeferredDataCardDetailsModal';
 import { config } from '@/lib/config';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import { isHotCard } from '@/lib/constants';

@@ -3,7 +3,7 @@
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 
 import SaveToCloudButton from '@/components/SaveToCloudButton';
-import { NewsReport, type BattleReportIllustrationAsset } from '@/components/BattleReportCard';
+import type { NewsReport, BattleReportIllustrationAsset } from '@/components/BattleReportCard';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBattleStore } from '../stores/useBattleStore';
@@ -12,10 +12,10 @@ import { useCombatantRepair } from '../hooks/useCombatantRepair';
 import { getCombatantDisplayName } from '../utils/characterValidator';
 import { inferTemplate } from '@/lib/data-card-converter';
 import { BattleStoreState, CombatantData } from '../types';
-import { MarkdownBlock } from '@/components/MarkdownBlock';
+import { MarkdownBlock } from './DeferredArenaRenderers';
 import { CollapsibleSection } from '@/components/shared/CollapsibleSection';
 import { JsonSizeIndicator } from '@/components/shared/JsonSizeIndicator';
-import { BattleIllustrationPanel } from './BattleIllustrationPanel';
+import { BattleIllustrationPanel } from './DeferredArenaRenderers';
 import { BattleResultPresentation } from './BattleResultPresentation';
 import { CombatantUpdatesPresentation } from './CombatantUpdatesPresentation';
 import { resolveBattleReportCardManualWidthPx } from '../utils/battleReportCardWidth';

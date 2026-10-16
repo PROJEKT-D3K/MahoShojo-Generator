@@ -6,8 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ChevronDown, FileText, Maximize, Minimize, PanelsTopLeft } from 'lucide-react';
 import type { NewsReport } from '@/components/BattleReportCard';
 import { SegmentedControl, type SegmentedOption } from '@/components/shared/SegmentedControl';
-import { MarkdownBlock } from '@/components/MarkdownBlock';
-import { ArenaReportFormatSelectorView, ArenaWebNotes, ArenaWebSourceView, ArenaWebReportActions, ArenaWebReplayControlsView, WebReportConsentDialogView, type ArenaWebReportAction } from '@mahoshojo/ui-web/arena-report';
+import { MarkdownBlock } from './DeferredArenaRenderers';
+import { ArenaReportFormatSelectorView, ArenaWebNotes, ArenaWebSourceView, ArenaWebReportActions, ArenaWebReplayControlsView, WebReportConsentDialogView, type ArenaWebReportAction } from '@mahoshojo/ui-web/arena-report-views';
 import { resolveWebDisplayTitle } from '@/lib/arena/battle-report-display-title';
 import { normalizeArenaWebOutput } from '@/lib/arena/web-output';
 import { downloadBlob } from '@/lib/client/blobUrl';

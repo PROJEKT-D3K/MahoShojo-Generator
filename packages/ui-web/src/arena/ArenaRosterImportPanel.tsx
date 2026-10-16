@@ -1,7 +1,7 @@
 'use client';
 import { type ChangeEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useArenaInputLifecycle, type ArenaInputLifecyclePorts } from './input-lifecycle';
-import { DisclosureButton } from '../creator';
+import { DisclosureButton } from '../creator/CollapsibleSection';
 export type ArenaRosterImportPanelProps = Readonly<ArenaInputLifecyclePorts & {
   disabled?: boolean;
   limitReached?: boolean;

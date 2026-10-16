@@ -2,7 +2,6 @@
 
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/components/stream/StreamingBattleReportCard', () => ({
@@ -51,7 +50,8 @@ vi.mock('@/components/BattleReportCard', () => ({
   ),
 }));
 
-vi.mock('@mahoshojo/ui-web/creator', () => ({
+vi.mock('@mahoshojo/ui-web/disclosure', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mahoshojo/ui-web/disclosure')>(),
   CollapsibleSection: (props: { title: React.ReactNode; children: React.ReactNode }) => (
     <section>
       <h2>{props.title}</h2>
@@ -68,13 +68,24 @@ import { CombatantUpdatesPresentation } from '@/components/arena/components/Comb
 import { ArenaRoomGenerationResult } from '@/components/arena/multiplayer/ArenaMultiplayerPanel';
 import type { ArenaRoomControllerState } from '@/lib/arena-room/controller';
 
-const render = (props: BattleResultPresentationProps) => renderToStaticMarkup(
-  <BattleResultPresentation {...props} />,
-);
+const renderElement = async (element: React.ReactNode) => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(element));
+    await act(async () => { await vi.dynamicImportSettled(); });
+    return container.innerHTML;
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+};
+const render = (props: BattleResultPresentationProps) => renderElement(<BattleResultPresentation {...props} />);
 
 describe('BattleResultPresentation', () => {
-  it('把取消中的战报停止状态传递给主战报卡', () => {
-    const html = render({
+  it('把取消中的战报停止状态传递给主战报卡', async () => {
+    const html = await render({
       report: {
         format: 'stream-markdown',
         content: '# 正在停止',
@@ -90,8 +101,8 @@ describe('BattleResultPresentation', () => {
     expect(html).toContain('<button type="button" disabled="">正在停止…</button>');
   });
 
-  it('用主战报卡呈现流式战报与严格安全摘要', () => {
-    const html = render({
+  it('用主战报卡呈现流式战报与严格安全摘要', async () => {
+    const html = await render({
       report: {
         format: 'stream-markdown',
         content: '# 房间终局',
@@ -103,6 +114,8 @@ describe('BattleResultPresentation', () => {
       },
       adjudicationResults: [{
         description: '突围判定',
+        type: 'probability',
+        roll: 18,
         outcome: '成功',
         details: '掷骰 18',
         depth: 0,
@@ -129,8 +142,8 @@ describe('BattleResultPresentation', () => {
     expect(html).not.toContain('保存到云端');
   });
 
-  it('保留结构化战报卡适配入口', () => {
-    const html = render({
+  it('保留结构化战报卡适配入口', async () => {
+    const html = await render({
       report: {
         format: 'structured-report',
         mode: 'classic',
@@ -147,8 +160,8 @@ describe('BattleResultPresentation', () => {
     expect(html).toContain('结构化终局');
   });
 
-  it('共享角色变化 presentation 支持类型、Markdown、动作插槽和重复显示名', () => {
-    const html = renderToStaticMarkup(
+  it('共享角色变化 presentation 支持类型、Markdown、动作插槽和重复显示名', async () => {
+    const html = await renderElement(
       <CombatantUpdatesPresentation
         title="角色更新"
         items={[
@@ -179,8 +192,8 @@ describe('BattleResultPresentation', () => {
     expect(html).toContain('data-action-key="combatant-b"');
   });
 
-  it('name-only 的 Room-safe item 不渲染空更新卡，只显示明确空态', () => {
-    const html = render({
+  it('name-only 的 Room-safe item 不渲染空更新卡，只显示明确空态', async () => {
+    const html = await render({
       report: {
         format: 'stream-markdown',
         content: '# 房间终局',
@@ -212,6 +225,7 @@ describe('BattleResultPresentation', () => {
         onSaveImage={onSaveImage}
       />,
     ));
+    await act(async () => { await vi.dynamicImportSettled(); });
     const saveButton = [...container.querySelectorAll('button')]
       .find((candidate) => candidate.textContent === '保存战报图片');
     if (!(saveButton instanceof HTMLButtonElement)) throw new Error('保存图片按钮缺失');
@@ -223,7 +237,7 @@ describe('BattleResultPresentation', () => {
     container.remove();
   });
 
-  it('GMR-10P-G host/member 由同一权威终态得到完全一致的共享战报呈现', () => {
+  it('GMR-10P-G host/member 由同一权威终态得到完全一致的共享战报呈现', async () => {
     const stateFor = (role: 'host' | 'member'): ArenaRoomControllerState => ({
       phase: 'connected',
       rooms: [],
@@ -293,8 +307,8 @@ describe('BattleResultPresentation', () => {
       },
     });
 
-    const hostHtml = renderToStaticMarkup(<ArenaRoomGenerationResult state={stateFor('host')} />);
-    const memberHtml = renderToStaticMarkup(<ArenaRoomGenerationResult state={stateFor('member')} />);
+    const hostHtml = await renderElement(<ArenaRoomGenerationResult state={stateFor('host')} />);
+    const memberHtml = await renderElement(<ArenaRoomGenerationResult state={stateFor('member')} />);
 
     expect(memberHtml).toBe(hostHtml);
     expect(memberHtml).toContain('data-testid="streaming-report-card"');

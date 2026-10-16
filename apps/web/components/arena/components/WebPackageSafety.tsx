@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { WebPackageRef } from '@mahoshojo/contracts/web-package';
 import { resolveWebPackage } from '@mahoshojo/web-package';
 import { scanWebPackageBase, type WebPackageRiskProfile } from '@mahoshojo/web-package/security';
-import { WebPackageRiskSummary } from '@mahoshojo/ui-web/arena-report';
-export { WebPackageRiskSummary } from '@mahoshojo/ui-web/arena-report';
+import { WebPackageRiskSummary } from '@mahoshojo/ui-web/arena-report-views';
+export { WebPackageRiskSummary } from '@mahoshojo/ui-web/arena-report-views';
 import { BaseModal } from '@/components/shared/BaseModal';
 
 export function WebPackageBaseRisk({ packageRef }: { packageRef: WebPackageRef }) {

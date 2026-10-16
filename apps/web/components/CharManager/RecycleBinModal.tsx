@@ -5,7 +5,7 @@ import { useAuth } from '@/lib/useAuth';
 import { createWebOwnedCardRestorePort } from '@/lib/owned-card-restore';
 import { createWebOwnedCardDeletePort } from '@/lib/owned-card-delete';
 import { createWebRecycleBinPort } from '@/lib/owned-recycle-bin';
-import DataCardDetailsModal from '../DataCardDetailsModal';
+import DataCardDetailsModal from '../DeferredDataCardDetailsModal';
 
 type Props = Omit<RecycleBinModalProps, 'port' | 'DetailsModal' | 'deletePort' | 'restorePort'> & { onChanged?: () => void };
 const RecycledCardDetails: NonNullable<RecycleBinModalProps['DetailsModal']> = (props) =>

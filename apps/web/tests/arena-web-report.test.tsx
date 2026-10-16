@@ -406,6 +406,7 @@ describe('Web 战报的本地执行许可', () => {
         scenarioName: '场景.json', mode: 'daily', reporterInfo: { name: '记者甲', publication: '日报' },
         narrativeHistoryReadCount: 0, userGuidance: '引导内容', cardWidthPx: 900,
       }} />));
+      await act(async () => { await vi.dynamicImportSettled(); });
       const header = container.querySelector('[data-testid="arena-web-header"]')!;
       const frame = container.querySelector('iframe')!;
       const card = container.querySelector<HTMLElement>('.result-card')!;

@@ -5,7 +5,7 @@ import { useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useArenaInputLifecycle, type ArenaInputLifecyclePorts } from '../../input-lifecycle';
 import { ScenarioPickerPanel } from '../../ScenarioPickerPanel';
 import { ScenarioPresetGridPicker } from '../../ScenarioPresetGridPicker';
-import { CollapsibleSection, DisclosureButton } from '../../../creator';
+import { CollapsibleSection, DisclosureButton } from '../../../creator/CollapsibleSection';
 import { ArenaAuxScenarioList } from '../../presentation/ArenaScenarioList';
 import type { ScenarioPreset } from '@mahoshojo/domain/scenario-presets';
 

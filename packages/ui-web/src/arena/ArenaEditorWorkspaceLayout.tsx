@@ -1,6 +1,6 @@
 'use client';
 import type { ReactNode } from 'react';
-import { CollapsibleSection } from '../creator';
+import { CollapsibleSection } from '../creator/CollapsibleSection';
 
 export type ArenaEditorWorkspaceSection = {
   readonly kind: string;
