@@ -104,6 +104,33 @@ const fillCurrentAnswer = async (value: string) => {
 };
 
 describe('Desktop Details real route and session UI (native adapter mock)', () => {
+  it.each(['missing', 'rejected'] as const)('copies the actual generated JSON through fallback when clipboard is %s', async (kind) => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const originalExec = Object.getOwnPropertyDescriptor(document, 'execCommand');
+    const general = { templateId: '通用角色', name: '复制原件', content: '# 原始正文', extension: { keep: true } };
+    const writeText = vi.fn().mockRejectedValue(new Error('unavailable'));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: kind === 'missing' ? undefined : { writeText } });
+    let copied = '';
+    const fallback = vi.fn(() => { copied = [...document.querySelectorAll('textarea')].find((item) => item.style.position === 'fixed')?.value ?? ''; return true; });
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+    try {
+      mocks.execute.mockResolvedValue({ ...completed, card: general, cardKind: 'general' });
+      window.localStorage.setItem(DETAILS_DRAFT_KEY, JSON.stringify(draft()));
+      await mount(); await submitQuestionnaire();
+      const saveResultSection = container.querySelector('[aria-label="保存原始数据"]')!;
+      const copyResultButton = [...saveResultSection.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === '复制到剪贴板')!;
+      await act(async () => copyResultButton.click()); await settle();
+      expect(copied).toBe(JSON.stringify(general, null, 2));
+      expect(fallback).toHaveBeenCalledExactlyOnceWith('copy');
+      expect(container.textContent).toContain('JSON 已复制到剪贴板');
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(mocks.execute).toHaveBeenCalledTimes(1);
+    } finally {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard); else Reflect.deleteProperty(navigator, 'clipboard');
+      if (originalExec) Object.defineProperty(document, 'execCommand', originalExec); else Reflect.deleteProperty(document, 'execCommand');
+    }
+  });
+
   it('protects the actual result while explicit private cloud creation is in flight', async () => {
     const account = { userId: 7, username: 'mock-user' }; const expires = '2099-01-01T00:00:00.000Z';
     let finish!: (value: unknown) => void;

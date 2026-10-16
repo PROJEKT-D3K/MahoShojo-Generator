@@ -54,6 +54,7 @@ export {
   type AnswerReviewListVariant,
 } from './AnswerReviewList';
 export { useResultAutoScroll, useGeneratedResultAutoScroll } from './use-result-auto-scroll';
+export { ResultJsonCopyButton, type ResultJsonCopyButtonProps } from './ResultJsonCopyButton';
 export {
   CANSHOU_LORE_PANEL_APP_THEME,
   CANSHOU_LORE_PANEL_WEB_THEME,

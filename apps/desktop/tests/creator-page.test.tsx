@@ -163,6 +163,33 @@ const mount = async () => {
 };
 
 describe('Desktop /creator workbench (native adapter mock)', () => {
+  it.each(['missing', 'rejected'] as const)('copies the actual generated JSON through fallback when clipboard is %s', async (kind) => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const originalExec = Object.getOwnPropertyDescriptor(document, 'execCommand');
+    const general = { templateId: '通用角色', name: '复制原件', content: '# 原始正文', extension: { keep: true } };
+    const writeText = vi.fn().mockRejectedValue(new Error('unavailable'));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: kind === 'missing' ? undefined : { writeText } });
+    let copied = '';
+    const fallback = vi.fn(() => { copied = [...document.querySelectorAll('textarea')].find((item) => item.style.position === 'fixed')?.value ?? ''; return true; });
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+    try {
+      mocks.execute.mockResolvedValue(completed('direct-local', { card: general, cardKind: 'general' }));
+      window.localStorage.setItem(CREATOR_DRAFT_KEY, JSON.stringify(draft()));
+      await mount(); await click('生成数据卡');
+      const saveResultSection = container.querySelector('[aria-label="保存原始数据"]')!;
+      const copyResultButton = [...saveResultSection.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === '复制到剪贴板')!;
+      await act(async () => copyResultButton.click()); await settle();
+      expect(copied).toBe(JSON.stringify(general, null, 2));
+      expect(fallback).toHaveBeenCalledExactlyOnceWith('copy');
+      expect(container.textContent).toContain('JSON 已复制到剪贴板');
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(mocks.execute).toHaveBeenCalledTimes(1);
+    } finally {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard); else Reflect.deleteProperty(navigator, 'clipboard');
+      if (originalExec) Object.defineProperty(document, 'execCommand', originalExec); else Reflect.deleteProperty(document, 'execCommand');
+    }
+  });
+
   it.each(['completed', 'cancelled', 'non-stream'] as const)('renders only active stream Markdown, preserves raw output and handles %s', async (ending) => {
     const markdown = '# 流式标题\n\n**逐步正文**\n\n[外链](https://example.com/read)\n\n![外图](https://example.com/image.png)\n\n[设置](/settings) [相对路径](settings) [同页](#title) `/encyclopedia/foo`';
     const reasoning = '仅限思考面板的推理';

@@ -1,3 +1,4 @@
+import { ResultJsonCopyButton } from '@mahoshojo/ui-web/details-controls';
 import { buildCreatorInputEstimateText } from '@mahoshojo/domain/creator/input-estimate';
 import { PrivateResultSave } from '../features/cloud-save/private-result-save';
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
@@ -1268,7 +1269,7 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
               resolveFileName={(data) => resolveResultJsonFileName(data as Record<string, unknown>, state.cardKind ?? 'magical-girl')}
               downloadJson={downloadTextFile}
             />
-            <button className={actionClass} onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(resolvedResultPayload, null, 2)).then(() => setActionInfo('✅ 数据卡 JSON 已复制到剪贴板')).catch(() => setActionError('复制失败，请手动选择 JSON 内容后复制。')); }}>复制到剪贴板</button>
+            <ResultJsonCopyButton data={resolvedResultPayload} className={actionClass} onResult={(copied) => { if (copied) setActionInfo('✅ 数据卡 JSON 已复制到剪贴板'); else setActionError('复制失败，请手动选择 JSON 内容后复制。'); }} />
           </div>
           <JsonSizeIndicator
             data={resolvedResultPayload}

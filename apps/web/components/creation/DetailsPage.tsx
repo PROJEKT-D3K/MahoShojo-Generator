@@ -1,5 +1,7 @@
 'use client';
 
+import { ResultJsonCopyButton } from '@mahoshojo/ui-web/details-controls';
+
 import { ImagePreviewModal } from '@mahoshojo/ui-web/modal';
 
 import { BackHomeLink } from '@mahoshojo/ui-web/shell';
@@ -1468,18 +1470,6 @@ export const DetailsPage: React.FC = () => {
     downloadBlob(blob, `通用魔法少女角色_${sanitizedName}.json`);
   };
 
-  const copyStreamedGeneralCard = async (data: any) => {
-    if (!data) return;
-    try {
-      if (!navigator.clipboard) throw new Error('clipboard-not-available');
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
-      alert('✅ 通用角色卡 JSON 已复制到剪贴板');
-    } catch (err) {
-      console.error('复制 JSON 失败：', err);
-      alert('⚠️ 复制失败，请手动长按选择 JSON 内容后复制。');
-    }
-  };
-
   const handleStartQuestionnaire = () => {
     setShowIntroduction(false);
   };
@@ -1867,12 +1857,11 @@ export const DetailsPage: React.FC = () => {
                             style={{ marginLeft: 0 }}
                           />
                         </div>
-                        <button
-                          onClick={() => void copyStreamedGeneralCard(streamedGeneralCard)}
+                        <ResultJsonCopyButton
+                          data={streamedGeneralCard}
                           className={generationActionClassNames.secondary}
-                        >
-                          复制到剪贴板
-                        </button>
+                          onResult={(copied) => alert(copied ? '✅ 通用角色卡 JSON 已复制到剪贴板' : '⚠️ 复制失败，请手动长按选择 JSON 内容后复制。')}
+                        />
                       </div>
                       <JsonSizeIndicator
                         data={streamedGeneralCard}

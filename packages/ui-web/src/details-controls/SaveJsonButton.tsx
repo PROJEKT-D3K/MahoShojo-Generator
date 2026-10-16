@@ -1,7 +1,8 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 import { GenerationActionButton } from '../generation-actions';
 import { downloadBlob } from '../client/blob';
+import { useResultJsonCopy } from './use-result-json-copy';
 
 export type SaveJsonMode = 'download' | 'text';
 
@@ -31,27 +32,11 @@ export interface SaveJsonButtonProps<T> {
  * DetailsPage 口径，文件名与推荐按钮文案由宿主注入。
  */
 export function SaveJsonButton<T>({ data, mode, recommendedMode, resolveFileName, downloadLabel, downloadJson: downloadJsonFile = downloadJsonInBrowser }: SaveJsonButtonProps<T>) {
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const jsonPayload = useMemo(() => JSON.stringify(data, null, 2), [data]);
+  const { copyJson, copyStatus } = useResultJsonCopy(data, { enabled: mode === 'text', jsonPayload });
 
   const downloadJson = () => {
     downloadJsonFile(resolveFileName(data), jsonPayload);
-    setCopyStatus('idle');
-  };
-
-  const handleCopy = async () => {
-    try {
-      if (!navigator.clipboard) {
-        throw new Error('clipboard-not-available');
-      }
-      await navigator.clipboard.writeText(jsonPayload);
-      setCopyStatus('success');
-      setTimeout(() => setCopyStatus('idle'), 2000);
-    } catch (err) {
-      console.error('复制 JSON 失败：', err);
-      setCopyStatus('error');
-      setTimeout(() => setCopyStatus('idle'), 2500);
-    }
   };
 
   const statusMessage = copyStatus === 'success'
@@ -86,7 +71,7 @@ export function SaveJsonButton<T>({ data, mode, recommendedMode, resolveFileName
       </div>
       <div className="flex items-center justify-between mb-2 gap-2">
         <span className="text-xs text-gray-500 dark:text-gray-400">{statusMessage}</span>
-        <GenerationActionButton onClick={handleCopy}>
+        <GenerationActionButton onClick={() => void copyJson()}>
           复制 JSON
         </GenerationActionButton>
       </div>

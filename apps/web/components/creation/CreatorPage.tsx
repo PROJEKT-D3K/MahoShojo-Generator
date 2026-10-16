@@ -1,5 +1,7 @@
 'use client';
 
+import { ResultJsonCopyButton } from '@mahoshojo/ui-web/details-controls';
+
 import { buildCreatorInputEstimateText } from '@mahoshojo/domain/creator/input-estimate';
 
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
@@ -1956,18 +1958,6 @@ export const CreatorPage: React.FC = () => {
     downloadBlob(blob, `${filenamePrefix}_${sanitizedName}.json`);
   };
 
-  const copyStreamedGeneralCard = async (data: any) => {
-    if (!data) return;
-    try {
-      if (!navigator.clipboard) throw new Error('clipboard-not-available');
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
-      alert(`✅ ${data?.templateId === GENERAL_SCENARIO_TEMPLATE_ID ? '通用情景卡' : '通用角色卡'} JSON 已复制到剪贴板`);
-    } catch (err) {
-      console.error('复制 JSON 失败：', err);
-      alert('⚠️ 复制失败，请手动长按选择 JSON 内容后复制。');
-    }
-  };
-
   const handleStartQuestionnaire = () => {
     setShowIntroduction(false);
   };
@@ -2796,12 +2786,11 @@ export const CreatorPage: React.FC = () => {
                           buttonText="保存到云端"
                           className={`${generationActionClassNames.primary} flex-1`}
                         />
-                        <button
-                          onClick={() => void copyStreamedGeneralCard(streamedGeneralCard)}
+                        <ResultJsonCopyButton
+                          data={streamedGeneralCard}
                           className={`${generationActionClassNames.secondary} flex-1`}
-                        >
-                          复制到剪贴板
-                        </button>
+                          onResult={(copied) => alert(copied ? `✅ ${streamedGeneralCard.templateId === GENERAL_SCENARIO_TEMPLATE_ID ? '通用情景卡' : '通用角色卡'} JSON 已复制到剪贴板` : '⚠️ 复制失败，请手动长按选择 JSON 内容后复制。')}
+                        />
                       </div>
                       <JsonSizeIndicator
                         data={streamedGeneralCard}
