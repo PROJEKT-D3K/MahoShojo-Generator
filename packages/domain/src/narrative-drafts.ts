@@ -109,7 +109,52 @@ export const createNarrativeDraftCandidate = (input: NarrativeDraftCandidateInpu
   return parsed.success ? parsed.data : null;
 };
 
-export const canAutomaticallyRetainNarrativeDraft = (draft: NarrativeDraft): boolean => draft.completion.kind !== 'unconfirmed';
+/** Inspect a content envelope, never a transport terminal (whose failure may leave valid prose). */
+export const hasExplicitNarrativeDraftRejection = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const envelope = value as Record<string, unknown>;
+  const hasSignal = (key: string) => Object.prototype.hasOwnProperty.call(envelope, key) && envelope[key] !== undefined
+    && envelope[key] !== null && envelope[key] !== false && envelope[key] !== '';
+  const isOneOf = (value: unknown, choices: readonly string[]) => typeof value === 'string' && choices.includes(value);
+  return hasSignal('refusal') || hasSignal('error')
+    || isOneOf(envelope.type, ['error', 'refusal'])
+    || isOneOf(envelope.status, ['failed', 'refused'])
+    || [envelope.finishReason, envelope.finish_reason].some(reason =>
+      isOneOf(reason, ['content-filter', 'content_filter', 'content-filtered', 'refusal']));
+};
+
+export type NarrativeDraftRetention =
+  | { mode: 'automatic' }
+  | { mode: 'explicit-only'; reason: 'unconfirmed-completion' | 'suspected-non-narrative' };
+
+// These anchored response shapes are only a heuristic, not semantic validation.
+// Do not search inside prose, quotations or code fences for refusal keywords.
+const suspiciousOpenings = [
+  /^(?:error|an? error occurred|request failed|upstream error|generation failed|internal server error|bad gateway|service unavailable|gateway timeout|rate limit(?: exceeded)?|HTTP\s+[45]\d\d|[45]\d\d[ \t]+(?:bad gateway|service unavailable|gateway timeout|too many requests|unauthorized|forbidden|not found))(?:$|[\s:：.!])/iu,
+  /^(?:错误(?:信息)?|系统错误|生成失败|请求失败|服务(?:暂时)?不可用|上游(?:请求)?(?:失败|错误)|网络错误|连接超时|请求超时|访问被拒绝|内容被过滤)(?:$|[\s:：，。！])/u,
+  /^(?:as an ai(?: language model| assistant)?[,\s]+)?(?:(?:i(?:['’]m| am) )?sorry[,!.\s]*(?:but\s+)?)?i (?:can(?:not|['’]t)|(?:am|['’]m) unable to) (?:help(?!\s+but\b)|assist|provide|generate|fulfil|fulfill|comply|complete|respond|answer|create|write|do (?:this|that))\b/iu,
+  /^(?:(?:抱歉|很抱歉|对不起)[，,。！!\s]*(?:但|不过)?)?(?:我|本助手|本模型)?(?:目前|暂时)?(?:无法|不能|不便)(?:为(?:你|您))?(?:帮助|协助|提供|生成|完成|满足|处理|响应|回答|创作|继续(?:生成|创作|回答))/u,
+];
+
+/**
+ * New automatic writes only. Unfamiliar refusals can be missed and first-person prose can match.
+ * Never treat a non-match as semantic proof, or reject/rewrite an existing archive with this heuristic.
+ */
+export const classifyNarrativeDraftRetention = (draft: NarrativeDraft): NarrativeDraftRetention => {
+  if (draft.completion.kind === 'unconfirmed') return { mode: 'explicit-only', reason: 'unconfirmed-completion' };
+  // A Markdown title is neither proof of prose nor a reason to discard a short story.
+  const opening = draft.markdown.trim().replace(/^(?:#{1,6}[ \t]+[^\n]*\n[ \t\r\n]*)+/u, '').replace(/^(?:\*\*|__)/u, '');
+  let diagnosticEnvelope = false;
+  if (opening.startsWith('{')) {
+    try { diagnosticEnvelope = hasExplicitNarrativeDraftRejection(JSON.parse(opening)); } catch { /* Incomplete JSON is not evidence. */ }
+  }
+  return diagnosticEnvelope || suspiciousOpenings.some(pattern => pattern.test(opening))
+    ? { mode: 'explicit-only', reason: 'suspected-non-narrative' }
+    : { mode: 'automatic' };
+};
+
+export const canAutomaticallyRetainNarrativeDraft = (draft: NarrativeDraft): boolean =>
+  classifyNarrativeDraftRetention(draft).mode === 'automatic';
 
 /** No entries/templateId: old history importers must not mistake these for established facts. */
 export const buildNarrativeDraftArchive = (drafts: readonly NarrativeDraft[]): NarrativeDraftArchive => ({

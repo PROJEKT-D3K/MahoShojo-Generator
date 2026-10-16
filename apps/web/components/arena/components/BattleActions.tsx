@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
+import { getAuthSnapshot, subscribeAuthSnapshot } from '@/lib/auth-client-store';
 
 import { ProviderCooldownNotice } from '@/components/ai/ProviderCooldownNotice';
 import { TokenIndicator } from '@/components/shared/TokenIndicator';
@@ -16,7 +17,7 @@ import { useBattleEngine } from '../hooks/useBattleEngine';
 import { BattleStoreState } from '../types';
 import { NarrativeHistoryModal } from './NarrativeHistoryModal';
 import { useNarrativeHistoryStore } from '../stores/useNarrativeHistoryStore';
-import { NARRATIVE_DRAFTS_STORAGE_KEY, useNarrativeDraftsStore } from '../stores/useNarrativeDraftsStore';
+import { useNarrativeDraftsStore } from '../stores/useNarrativeDraftsStore';
 import { resolveArenaRoomGenerationAction } from '../multiplayer/generation-bridge';
 import { useArenaRoomContext } from '../multiplayer/useArenaRoom';
 import { ArenaRoomGenerationPreflightDialog } from '../multiplayer/ArenaRoomGenerationPreflightDialog';
@@ -119,10 +120,17 @@ export function BattleActions({ showAdvancedUtilities = true }: { showAdvancedUt
   const teamsState = useBattleSelector((state) => state.teams);
   const userProviderConfig = useBattleSelector((state) => state.userProviderConfig);
   const [showNarrativeModal, setShowNarrativeModal] = useState(false);
-  const draftCount = useNarrativeDraftsStore((state) => state.drafts.length + (state.candidate && !state.drafts.some(draft => draft.requestId === state.candidate?.requestId) ? 1 : 0));
+  const draftCount = useNarrativeDraftsStore((state) => new Set([...state.drafts, ...state.conflictingDrafts, ...state.unsavedDrafts, ...(state.candidate ? [state.candidate] : [])].map(draft => draft.requestId)).size);
+  const draftAuth = useSyncExternalStore(subscribeAuthSnapshot, getAuthSnapshot, getAuthSnapshot);
+  const draftScope = draftAuth.loading ? null : draftAuth.user ? `account:${draftAuth.user.id}` : 'anonymous';
+  useLayoutEffect(() => {
+    const store = useNarrativeDraftsStore.getState();
+    store.clearCandidate();
+    store.setScope(draftScope);
+    store.loadDrafts();
+  }, [draftScope, draftAuth.identityEpoch]);
   useEffect(() => {
-    useNarrativeDraftsStore.getState().loadDrafts();
-    const observe = (event: StorageEvent) => { if (event.key === NARRATIVE_DRAFTS_STORAGE_KEY) useNarrativeDraftsStore.getState().observeStorage(event.newValue); };
+    const observe = (event: StorageEvent) => { if (event.key === null || event.key.startsWith('arena-narrative-drafts')) useNarrativeDraftsStore.getState().observeStorage(event.newValue); };
     window.addEventListener('storage', observe);
     return () => window.removeEventListener('storage', observe);
   }, []);

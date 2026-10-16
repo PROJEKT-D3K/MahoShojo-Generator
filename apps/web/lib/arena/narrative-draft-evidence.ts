@@ -1,6 +1,6 @@
 import { ARENA_CANONICAL_RESOURCE_LIMITS } from '@mahoshojo/contracts/arena-capabilities';
 import { SafeJsonValueSchema } from '@mahoshojo/contracts/json-value';
-import { NARRATIVE_DRAFT_FAILURE_CODES, type NarrativeDraftCompletion } from '@mahoshojo/domain/narrative-drafts';
+import { hasExplicitNarrativeDraftRejection, NARRATIVE_DRAFT_FAILURE_CODES, type NarrativeDraftCompletion } from '@mahoshojo/domain/narrative-drafts';
 import type { ArenaGenerationTerminalBoundary } from '@mahoshojo/hosted-api/arena-generation/client';
 import { compareGenerationSseIds, parseGenerationSseBlock } from '@mahoshojo/hosted-api/arena-generation/sse';
 
@@ -60,6 +60,12 @@ export const createHostedNarrativeDraftEvidence = () => {
         || payload.reportFormat === 'web' || payload.webPackage || payload.shouldRedirect === true) rejected = true;
       if (event.event === 'markdown' && typeof payload.chunk !== 'string') rejected = true;
       if (event.event === 'snapshot' && typeof payload.markdown !== 'string') rejected = true;
+      // Content refusal/error signals cannot be overridden by a later generic transport failure.
+      if (event.event === 'markdown' || event.event === 'snapshot') {
+        // Failed terminal snapshots carry task status beside valid prose (or an empty status-only update).
+        const contentEnvelope = event.event === 'snapshot' && payload.status === 'failed' ? { ...payload, status: undefined } : payload;
+        if (hasExplicitNarrativeDraftRejection(contentEnvelope)) rejected = true;
+      }
       if (event.event === 'error' || event.event === 'done') {
         terminal = true;
         const textFields = ['code', 'error', 'message', 'upstreamRequestId'];

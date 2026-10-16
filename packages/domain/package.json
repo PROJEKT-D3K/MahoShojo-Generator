@@ -274,7 +274,8 @@
     "./narrative-drafts": "./src/narrative-drafts.ts",
     "./sensitive-word-filter": "./src/sensitive-word-filter.ts",
     "./word-filter-utils": "./src/word-filter-utils.ts",
-    "./shield-word-filter": "./src/shield-word-filter.ts"
+    "./shield-word-filter": "./src/shield-word-filter.ts",
+    "./narrative-draft-storage": "./src/narrative-draft-storage.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

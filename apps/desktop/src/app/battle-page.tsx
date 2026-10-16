@@ -14,7 +14,7 @@ import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-o
 import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
 import { ArenaReportFormatSelectorView, BattleReportCard, StreamingBattleReportCard, CombatantUpdatesPresentation } from '@mahoshojo/ui-web/arena-report';
 import { CardLibraryModal, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
-import { NarrativeHistoryPicker, NarrativeDraftsPanel } from '@mahoshojo/ui-web/narrative-history';
+import { NarrativeHistoryPicker, NarrativeDraftsPanel, NarrativeLegacyDraftsSection } from '@mahoshojo/ui-web/narrative-history';
 import { buildNarrativeDraftArchive, type NarrativeDraft } from '@mahoshojo/domain/narrative-drafts';
 import { AiReasoningPanel, GenerationModeSwitcher, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { ThemeImage } from '@mahoshojo/ui-web/media';
@@ -78,6 +78,7 @@ const createStorySession = (product: DesktopArenaProduct) => {
 /** Desktop owns session/IO only. The actual Web controls, layout and report are shared. */
 export function DesktopBattleForm({ session, repository, product = 'battle', webPackages, story }: { session: DesktopArenaSession; repository: IpcLocalCardRepository; product?: DesktopArenaProduct; webPackages?: DesktopArenaWebPackages; story: DesktopArenaStorySession }) {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const draftArchive = useSyncExternalStore(session.narrativeDrafts.subscribe, session.narrativeDrafts.getState);
   const storyOwner = story;
   const storyState = useSyncExternalStore(storyOwner.subscribe, storyOwner.getSnapshot);
   useEffect(() => { void storyOwner.initialize(); }, [storyOwner]);
@@ -149,6 +150,13 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const strictReady = !strictActive || Boolean(strictCheck?.key === strictSnapshotKey && strictCheck.result.willCount && describeDesktopStrictSetup(strictInput, strictCheck.season).reasons.length === 0);
   const invalidateStrict = () => { strictSnapshotKeyRef.current = {}; strictPreparation.current?.controller.abort(); strictPreparation.current = null; checkedStrict(null); setStrictRevision(value => value + 1); };
 
+  const narrativeScope = cloudState.bootstrapped ? cloudState.account ? `account:${cloudState.account.userId}` : 'anonymous' : null;
+  useLayoutEffect(() => { session.setNarrativeDraftScope(narrativeScope); }, [session, narrativeScope]);
+  useEffect(() => {
+    const observe = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(`mahoshojo.desktop.arena.${product}.narrative-drafts:v2:`)) session.narrativeDrafts.loadDrafts(); };
+    window.addEventListener('storage', observe);
+    return () => window.removeEventListener('storage', observe);
+  }, [session, product]);
   useLayoutEffect(() => { ownerEpoch.current += 1; session.setScope(scope); packageOwner.setScope(scope); aiStore.cancelPreparingGeneration(); setError(null); setImportWarnings([]); setRecoveryHint(null); diagnosisFlight.current = null; setDiagnosing(false); }, [scope, session, aiStore, packageOwner]);
   // Resolving an initially anonymous account updates the Hosted actor without
   // cancelling unrelated Direct credential preparation at the same target scope.
@@ -405,6 +413,18 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const download = (filename: string, text: string, mimeType: string) => { try { downloadTextFile(filename, text, mimeType); } catch (cause) { reportError(cause); } };
   const exportAll = () => download('arena-complete.json', session.exportDocument(), 'application/json');
   const exportNarrativeDrafts = (drafts: readonly NarrativeDraft[]) => download('arena-narrative-drafts.json', JSON.stringify(buildNarrativeDraftArchive(drafts), null, 2), 'application/json');
+  const draftArchiveAction = (action: () => { ok: boolean; error?: string }) => {
+    if (session.narrativeDrafts.getState().scope !== narrativeScope || cloudStore.getCredentialEpoch() !== accountCredentialEpoch) return { ok: false as const, error: '账号已切换，请重新操作。' };
+    const result = action();
+    return result.ok ? { ok: true as const } : { ok: false as const, error: result.error ?? session.narrativeDrafts.getState().error ?? '操作未完成，请重试或先导出。' };
+  };
+  const draftArchiveScopeKey = `${narrativeScope ?? 'pending'}:${accountCredentialEpoch}`;
+  const copyNarrativeDraft = (content: string) => navigator.clipboard.writeText(content);
+  const narrativeArchiveControls = {
+    scopeKey: draftArchiveScopeKey, conflictingDrafts: draftArchive.conflictingDrafts, unsavedRequestIds: draftArchive.unsavedRequestIds, unsavedDrafts: draftArchive.unsavedDrafts,
+    onRetryUnsaved: () => draftArchiveAction(() => session.narrativeDrafts.retryUnsavedDrafts(narrativeScope)), confirmAction: (message: string) => window.confirm(message), onCopy: copyNarrativeDraft,
+    onDelete: (ids: readonly string[]) => draftArchiveAction(() => session.narrativeDrafts.deleteDrafts(ids, narrativeScope)),
+  };
   const ranking = state.hosted?.ranking;
   const hostedSummary = state.hosted ? (({ companion: _companion, ...summary }) => summary)(state.hosted) : null;
   const result = (state.rawText || state.reasoning || state.report) ? <section ref={resultRef} className="mt-6 space-y-4" aria-label="战报结果">
@@ -463,16 +483,25 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     </div>
     {state.saveStatus === 'saved' ? <p role="status">已保存到本地库，可在卡库重新打开。</p> : null}
     {state.saveError ? <p role="alert">{state.saveError}</p> : null}
-    {state.narrativeDraftCandidate ? <NarrativeDraftsPanel drafts={[]} candidate={state.narrativeDraftCandidate} status={state.narrativeDraftStatus}
+    {state.narrativeDraftCandidate ? <NarrativeDraftsPanel {...narrativeArchiveControls} drafts={draftArchive.drafts.filter(item => item.requestId === state.narrativeDraftCandidate?.requestId)} candidate={state.narrativeDraftCandidate} status={state.narrativeDraftStatus}
       onSave={() => { session.saveNarrativeDraft(); }} onExport={exportNarrativeDrafts}
       renderMarkdown={content => <MarkdownBlock content={content} variant="light" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} />} /> : null}
   </section> : null;
   const settings = <>
           <ArenaDataSettingsPanel value={draft.settings} onChange={(patch) => update({ settings: { ...draft.settings, ...patch } })} disabled={disabled} footerNote={<p className="text-xs">设置与角色工作副本保存在本机草稿；原始库卡保持不变。</p>} />
-          <NarrativeHistorySettings value={draft.settings} onChange={(patch) => update({ settings: { ...draft.settings, ...patch } })} disabled={disabled} persistenceNote="完成后追加正式历史；合资格失败正文另存未完成草稿。超限或写入失败时请导出。" readingNote="只有正式历史用于提示词，未完成草稿仅供查看和导出。" />
+          <NarrativeHistorySettings value={draft.settings} onChange={(patch) => update({ settings: { ...draft.settings, ...patch } })} disabled={disabled} persistenceNote="完成后追加正式历史。未完成草稿的自动保留请使用下面的独立本机开关。" readingNote="只有正式历史用于提示词，未完成草稿仅供查看和导出。" />
           <button type="button" className={secondary} disabled={disabled} onClick={() => setHistoryOpen(true)}>引用本地叙事历史</button>
           <p className="text-xs">已引用 {draft.historyReferences.length} 条；正式 {draft.narrativeHistoryEntries.length} 条 · 未完成草稿 {draft.narrativeDrafts?.length ?? 0} 条</p>
-          <NarrativeDraftsPanel drafts={draft.narrativeDrafts ?? []} status="idle" onExport={exportNarrativeDrafts}
+          {draftArchive.error && <p role="alert" className="text-xs">{draftArchive.error}</p>}
+          <NarrativeDraftsPanel {...narrativeArchiveControls} drafts={draftArchive.drafts} candidate={draftArchive.candidate} status={draftArchive.status} onExport={exportNarrativeDrafts}
+            onSave={() => { session.saveNarrativeDraft(); }} autoRetain={draftArchive.autoRetain}
+            onAutoRetainChange={value => draftArchiveAction(() => session.narrativeDrafts.setAutoRetain(value))}
+            renderLegacyAction={() => <NarrativeLegacyDraftsSection scopeKey={draftArchiveScopeKey} legacy={draftArchive.legacy}
+              onLoad={() => { session.loadLegacyNarrativeDrafts(); }} confirmAction={message => window.confirm(message)}
+              onDelete={ids => draftArchiveAction(() => session.narrativeDrafts.deleteLegacyDrafts(ids))}
+              onCopyToCurrent={ids => draftArchiveAction(() => session.narrativeDrafts.copyLegacyDrafts(ids, narrativeScope))}
+              onCopy={copyNarrativeDraft} onExport={exportNarrativeDrafts}
+              onExportRaw={raw => download('arena-legacy-narrative-drafts.json', raw, 'application/json')} />}
             renderMarkdown={content => <MarkdownBlock content={content} variant="light" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} />} />
   </>;
   const slots = {

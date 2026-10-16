@@ -59,6 +59,7 @@ import { useNarrativeHistoryStore } from '../stores/useNarrativeHistoryStore';
 import { useNarrativeDraftsStore } from '../stores/useNarrativeDraftsStore';
 import { createNarrativeDraftCandidate } from '@mahoshojo/domain/narrative-drafts';
 import { createHostedNarrativeDraftEvidence } from '@/lib/arena/narrative-draft-evidence';
+import { captureNarrativeDraftOwner } from '@/lib/arena/narrative-draft-owner';
 import { resolveApiErrorMessage } from '@/lib/client/apiError';
 import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { appendReasoningDelta, normalizeReasoningSource, updateReasoningStatus } from '@/lib/ai/reasoning-normalizer';
@@ -482,6 +483,9 @@ export const useBattleEngine = () => {
     latestResultNavigationRequest = null;
     useBattleStore.setState({ resultNavigation: null });
     setIsGenerating(true);
+    const narrativeDraftOwner = captureNarrativeDraftOwner();
+    useNarrativeDraftsStore.getState().setScope(narrativeDraftOwner.scope);
+    const autoRetainNarrativeDraft = useNarrativeDraftsStore.getState().autoRetain;
     useNarrativeDraftsStore.getState().clearCandidate();
     setArenaGenerationConnectionState(null);
     setIsStreaming(false);
@@ -1649,15 +1653,15 @@ export const useBattleEngine = () => {
 	          }
 
           const currentDraftScope = draftScopeMounted.current && sharedGenerationAbortController === abortController;
-          if (isSseResponse && currentDraftScope && !abortController.signal.aborted && !authoritativeWebContract) {
+          if (isSseResponse && currentDraftScope && narrativeDraftOwner.isCurrent() && !abortController.signal.aborted && !authoritativeWebContract) {
             const completedRequest = draftEvidence.completedRequest();
-            if (completedRequest) useNarrativeDraftsStore.getState().completeRequest(completedRequest);
+            if (completedRequest) useNarrativeDraftsStore.getState().completeRequest(completedRequest, narrativeDraftOwner.scope);
             const evidence = draftEvidence.resolve(accumulatedText);
             const candidate = evidence && createNarrativeDraftCandidate({
               ...evidence, createdAt: draftCreatedAt, source: 'hosted', acceptedText: sanitizeTextByShieldWords(accumulatedText),
               reportFormat, generationMode, current: currentDraftScope, cancelled: false, completed: authoritativeStreamDone,
             });
-            if (candidate) useNarrativeDraftsStore.getState().offerDraft(candidate, settings.writeNarrativeHistory);
+            if (candidate) useNarrativeDraftsStore.getState().offerDraft(candidate, autoRetainNarrativeDraft, narrativeDraftOwner.scope);
           }
 
 	          if (sseEndedWithoutDone) {

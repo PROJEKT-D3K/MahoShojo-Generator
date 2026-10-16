@@ -12,7 +12,7 @@ import { readSublimationHistorySource } from '../src/features/sublimation/histor
 
 const memory = () => {
   const values = new Map<string, string>();
-  return { values, getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+  return { values, get length() { return values.size; }, key: (index: number) => [...values.keys()][index] ?? null, getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
 };
 const repository = () => {
   const records = new Map<string, LocalCardRecordV1>();
@@ -49,11 +49,12 @@ const native = (text: string, finishReason = 'stop', wait?: Promise<void>) => {
   });
   return { invoke, profileId: 'loopback-profile', createChannel: () => ({}) };
 };
-const build = () => { const repo = repository(), storage = memory(); const session = new DesktopArenaSession({ repository: repo.port, storage, requestId: () => 'arena-fixed', now: () => '2026-10-09T23:00:00.000Z' }); session.setScope('account-A:target-A'); return { session, storage, ...repo }; };
+const build = () => { const repo = repository(), storage = memory(); const session = new DesktopArenaSession({ repository: repo.port, storage, requestId: () => 'arena-fixed', now: () => '2026-10-09T23:00:00.000Z' }); session.setScope('account-A:target-A'); session.setNarrativeDraftScope('account:A'); session.narrativeDrafts.setAutoRetain(true); return { session, storage, ...repo }; };
 
 describe('未完成草稿保留与已有会话存储', () => {
   it('自动写入关闭时只有显式保存，并可重新打开独立归档', async () => {
     const f = build(), base = makeDraft('daily', 'stream');
+    f.session.narrativeDrafts.setAutoRetain(false);
     const source: ArenaDraft = { ...base, settings: { ...base.settings, writeNarrativeHistory: false } };
     f.session.updateDraft(source); await f.session.generate(native(valid(true), 'length'), source, intent('stream'));
     expect(f.session.getSnapshot().narrativeDraftStatus).toBe('available'); expect(f.session.getSnapshot().draft.narrativeDrafts).toBeUndefined();
@@ -61,7 +62,7 @@ describe('未完成草稿保留与已有会话存储', () => {
     expect(f.session.getSnapshot().draft.narrativeDrafts).toHaveLength(1); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toEqual([]);
     const archive = JSON.parse(f.session.exportNarrativeDrafts()); expect(archive.kind).toBe('arena-narrative-draft-archive');
     expect(archive).not.toHaveProperty('entries'); expect(JSON.stringify(archive)).not.toContain('独立思考');
-    f.session.dispose(); const reopened = new DesktopArenaSession({ repository: f.port, storage: f.storage }); reopened.restoreDraft();
+    f.session.dispose(); const reopened = new DesktopArenaSession({ repository: f.port, storage: f.storage }); reopened.setNarrativeDraftScope('account:A'); reopened.restoreDraft();
     expect(reopened.getSnapshot().draft.narrativeDrafts).toEqual(archive.drafts); reopened.dispose();
   });
   it('quota写入失败保留旧磁盘、内存导出，并只在真实重试成功后显示已保存', async () => {
@@ -71,20 +72,20 @@ describe('未完成草稿保留与已有会话存储', () => {
     await f.session.generate(native(valid(true), 'length'), source, intent('stream'));
     expect(f.session.getSnapshot().narrativeDraftStatus).toBe('memory-only'); expect(f.storage.values.get(ARENA_DRAFT_KEY)).toBe(previous);
     expect(JSON.parse(f.session.exportNarrativeDrafts()).drafts).toHaveLength(1);
-    f.storage.setItem = setItem; f.session.retryDraftSave(); expect(f.session.getSnapshot().narrativeDraftStatus).toBe('stored'); f.session.dispose();
+    f.storage.setItem = setItem; f.session.retryDraftSave(); f.session.saveNarrativeDraft(); expect(f.session.getSnapshot().narrativeDraftStatus).toBe('stored'); f.session.dispose();
   });
   it('损坏的旧草稿不被失败归档覆盖', async () => {
     const saved = memory(), repo = repository(); saved.values.set(ARENA_DRAFT_KEY, '{broken');
-    const session = new DesktopArenaSession({ repository: repo.port, storage: saved, requestId: () => 'new-request' }); session.setScope('A');
+    const session = new DesktopArenaSession({ repository: repo.port, storage: saved, requestId: () => 'new-request' }); session.setScope('A'); session.setNarrativeDraftScope('account:A'); session.narrativeDrafts.setAutoRetain(true);
     const source = makeDraft('daily', 'stream'); session.updateDraft(source);
     await session.generate(native(valid(true), 'length'), source, intent('stream'));
-    expect(saved.values.get(ARENA_DRAFT_KEY)).toBe('{broken'); expect(session.getSnapshot().narrativeDraftStatus).toBe('memory-only');
+    expect(saved.values.get(ARENA_DRAFT_KEY)).toBe('{broken'); expect(session.getSnapshot().narrativeDraftStatus).toBe('stored');
     expect(JSON.parse(session.exportNarrativeDrafts()).drafts).toHaveLength(1); session.dispose();
   });
-  it('4Mi UTF16总存储上限包含独立草稿，超限不截断内存正文', async () => {
+  it('页面草稿与独立叙事归档分别限额，正文不重复嵌入页面草稿', async () => {
     const f = build(), source = makeDraft('daily', 'stream'); f.session.updateDraft(source);
     const text = 'x'.repeat(1_450_000); await f.session.generate(native(text, 'length'), source, intent('stream'));
-    expect(f.session.getSnapshot().narrativeDraftStatus).toBe('memory-only'); expect(f.session.getSnapshot().draftError).toContain('4 MiB');
+    expect(f.session.getSnapshot().narrativeDraftStatus).toBe('stored'); expect(f.session.getSnapshot().draftError).toBeNull();
     expect(JSON.parse(f.session.exportNarrativeDrafts()).drafts[0].markdown).toBe(text);
     expect(JSON.parse(f.storage.values.get(ARENA_DRAFT_KEY)!).draft.narrativeDrafts).toBeUndefined(); f.session.dispose();
   });
@@ -93,7 +94,7 @@ describe('未完成草稿保留与已有会话存储', () => {
     const source: ArenaDraft = { ...base, settings: { ...base.settings, writeNarrativeHistory: false } };
     f.session.updateDraft(source); await f.session.generate(native(valid(true)), source, intent('stream')); f.session.dispose();
     const reopened = new DesktopArenaSession({ repository: f.port, storage: f.storage, requestId: () => 'arena-fixed' });
-    reopened.restoreDraft(); reopened.setScope('A');
+    reopened.setNarrativeDraftScope('account:A'); reopened.restoreDraft(); reopened.setScope('A');
     await reopened.generate(native(valid(true), 'length'), reopened.getSnapshot().draft, intent('stream'));
     expect(reopened.getSnapshot().narrativeDraftCandidate).toBeNull(); expect(reopened.getSnapshot().draft.narrativeDrafts).toBeUndefined(); reopened.dispose();
   });
@@ -103,15 +104,15 @@ describe('未完成草稿保留与已有会话存储', () => {
     const next = native(valid(true)); await f.session.generate(next, f.session.getSnapshot().draft, intent('stream'));
     const sent = next.invoke.mock.calls.find(([command]) => command.startsWith('stream_'))?.[1]?.request as AiExecutionRequest;
     expect(sent.arenaInputJson).not.toContain('FAILED-DRAFT-BODY'); expect(JSON.stringify(sent.messages)).not.toContain('FAILED-DRAFT-BODY');
-    expect(f.session.getSnapshot().draft.narrativeDrafts).toEqual([]); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1); f.session.dispose();
+    expect(f.session.getSnapshot().draft.narrativeDrafts ?? []).toEqual([]); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1); f.session.dispose();
   });
   it('同request冲突保旧正文，不能因旧id存在而谎报新候选已存', async () => {
     const f = build(), source = makeDraft('daily', 'stream'); f.session.updateDraft(source);
     await f.session.generate(native('原失败正文', 'length'), source, intent('stream'));
     await f.session.generate(native('不同而且更长的失败正文', 'length'), f.session.getSnapshot().draft, intent('stream'));
     expect(f.session.getSnapshot().draft.narrativeDrafts?.[0]?.markdown).toBe('原失败正文');
-    expect(f.session.getSnapshot().narrativeDraftStatus).toBe('available'); expect(f.session.saveNarrativeDraft()).toBe(false);
-    expect(JSON.parse(f.storage.values.get(ARENA_DRAFT_KEY)!).draft.narrativeDrafts[0].markdown).toBe('原失败正文'); f.session.dispose();
+    expect(f.session.getSnapshot().narrativeDraftStatus).toBe('memory-only'); expect(f.session.saveNarrativeDraft()).toBe(false);
+    expect(f.session.narrativeDrafts.getState().drafts[0].markdown).toBe('原失败正文'); f.session.dispose();
   });
 });
 

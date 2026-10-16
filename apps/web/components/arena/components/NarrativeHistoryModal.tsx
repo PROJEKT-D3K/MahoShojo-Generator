@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NarrativeHistoryEditor, NarrativeDraftsPanel, type NarrativeHistoryActionResult } from '@mahoshojo/ui-web/narrative-history';
+import { NarrativeHistoryEditor, NarrativeDraftsPanel, NarrativeLegacyDraftsSection, type NarrativeHistoryActionResult } from '@mahoshojo/ui-web/narrative-history';
 import {
   buildNarrativeHistoryCardPayload,
   extractNarrativeHistoryImportEntries,
@@ -20,7 +20,8 @@ import { randomUUID } from '@/lib/crypto';
 import { quickCheck } from '@/lib/sensitive-word-filter';
 import { useNarrativeHistoryStore } from '../stores/useNarrativeHistoryStore';
 import { useNarrativeDraftsStore } from '../stores/useNarrativeDraftsStore';
-import { buildNarrativeDraftArchive } from '@mahoshojo/domain/narrative-drafts';
+import { buildNarrativeDraftArchive, type NarrativeDraft } from '@mahoshojo/domain/narrative-drafts';
+import { captureNarrativeDraftOwner } from '@/lib/arena/narrative-draft-owner';
 
 type Props = { isOpen: boolean; onClose: () => void };
 const now = () => new Date().toISOString();
@@ -29,7 +30,15 @@ const now = () => new Date().toISOString();
 export function NarrativeHistoryModal({ isOpen, onClose }: Props) {
   const store = useNarrativeHistoryStore();
   const draftStore = useNarrativeDraftsStore();
-  const draftCount = draftStore.drafts.length + (draftStore.candidate && !draftStore.drafts.some(draft => draft.requestId === draftStore.candidate?.requestId) ? 1 : 0);
+  const draftOwner = captureNarrativeDraftOwner();
+  const draftAction = (action: () => { ok: boolean; error?: string }) => {
+    if (!draftOwner.isCurrent() || draftStore.scope !== draftOwner.scope) return { ok: false as const, error: '账号已切换，请重新操作。' };
+    const result = action();
+    return result.ok ? { ok: true as const } : { ok: false as const, error: result.error ?? useNarrativeDraftsStore.getState().error ?? '操作未完成，请重试或先导出。' };
+  };
+  const exportDrafts = (drafts: readonly NarrativeDraft[]) => downloadBlob(new Blob([JSON.stringify(buildNarrativeDraftArchive(drafts), null, 2)], { type: 'application/json' }), '未完成叙事草稿.json');
+  const copyDraft = (markdown: string) => navigator.clipboard.writeText(markdown);
+  const draftCount = new Set([...draftStore.drafts, ...draftStore.conflictingDrafts, ...draftStore.unsavedDrafts, ...(draftStore.candidate ? [draftStore.candidate] : [])].map(draft => draft.requestId)).size;
   useEffect(() => { if (isOpen) useNarrativeDraftsStore.getState().loadDrafts(); }, [isOpen]);
   const { entries, lastUpdatedAt, sort } = store;
   const [showCloudImport, setShowCloudImport] = useState(false);
@@ -146,8 +155,20 @@ export function NarrativeHistoryModal({ isOpen, onClose }: Props) {
         style={{ backgroundColor: '#22c55e', backgroundImage: 'linear-gradient(to right, #22c55e, #16a34a)' }} />}
       sizeIndicator={<><JsonSizeIndicator data={historyCardData} warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。" />
         <p>正式 {entries.length} 条 · 未完成草稿 {draftCount} 条</p>
-        <NarrativeDraftsPanel drafts={draftStore.drafts} candidate={draftStore.candidate} status={draftStore.status}
-          onSave={draftStore.saveCandidate} onExport={(drafts) => downloadBlob(new Blob([JSON.stringify(buildNarrativeDraftArchive(drafts), null, 2)], { type: 'application/json' }), '未完成叙事草稿.json')} />
+        {draftStore.error && <p role="alert" className="text-xs">{draftStore.error}</p>}
+        <NarrativeDraftsPanel scopeKey={draftStore.scope ?? 'pending'} drafts={draftStore.drafts} candidate={draftStore.candidate} status={draftStore.status}
+          onSave={() => { draftAction(() => draftStore.saveCandidate()); }} onExport={exportDrafts}
+          confirmAction={message => window.confirm(message)} onCopy={copyDraft}
+          onDelete={ids => draftAction(() => draftStore.deleteDrafts(ids, draftOwner.scope))}
+          conflictingDrafts={draftStore.conflictingDrafts} unsavedRequestIds={draftStore.unsavedRequestIds} unsavedDrafts={draftStore.unsavedDrafts}
+          onRetryUnsaved={() => draftAction(() => draftStore.retryUnsavedDrafts(draftOwner.scope))}
+          autoRetain={draftStore.autoRetain} onAutoRetainChange={value => draftAction(() => draftStore.setAutoRetain(value))}
+          renderLegacyAction={() => <NarrativeLegacyDraftsSection scopeKey={draftStore.scope ?? 'pending'} legacy={draftStore.legacy}
+            onLoad={() => { draftStore.loadLegacyDrafts(); }} confirmAction={message => window.confirm(message)}
+            onDelete={ids => draftAction(() => draftStore.deleteLegacyDrafts(ids))}
+            onCopyToCurrent={ids => draftAction(() => draftStore.copyLegacyDrafts(ids, draftOwner.scope))}
+            onCopy={copyDraft} onExport={exportDrafts}
+            onExportRaw={raw => downloadBlob(new Blob([raw], { type: 'application/json' }), '旧设备叙事草稿原件.json')} />} />
       </>}
     />
     <BattleDataModal isOpen={isOpen && showCloudImport} onClose={() => { if (!cloudPending.current) setShowCloudImport(false); }}

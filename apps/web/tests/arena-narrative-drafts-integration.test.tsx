@@ -4,12 +4,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NARRATIVE_DRAFT_FAILURE_CODES } from '@mahoshojo/domain/narrative-drafts';
 
-const mocks = vi.hoisted(() => ({ requestId: '', dispatch: vi.fn(), quickCheck: vi.fn(), update: vi.fn(), appendHistory: vi.fn(), ranking: vi.fn(), cooldown: vi.fn() }));
+const mocks = vi.hoisted(() => ({ scope: 0, requestId: '', dispatch: vi.fn(), quickCheck: vi.fn(), update: vi.fn(), appendHistory: vi.fn(), ranking: vi.fn(), cooldown: vi.fn() }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ setQueryData: mocks.ranking }) }));
 vi.mock('@/lib/client-route-adapter', () => ({ useClientRouteAdapter: () => ({ push: vi.fn() }) }));
 vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({ isCooldown: false, startCooldown: mocks.cooldown, remainingTime: 0, otherRemainingTime: 0 }) }));
 vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: mocks.quickCheck }));
 vi.mock('@/lib/shield-word-filter', () => ({ applyShieldWords: (text: string) => ({ filteredText: text }) }));
+vi.mock('@/lib/arena/narrative-draft-owner', () => ({ captureNarrativeDraftOwner: () => { const scope = mocks.scope; return { scope: `account:test-${scope}`, isCurrent: () => scope === mocks.scope }; } }));
 vi.mock('@/lib/auth', () => ({ authStorage: { getAuthHeader: async () => null, getActivityHeaders: async () => ({}) } }));
 vi.mock('@/components/arena/hooks/useBattleActions', () => ({ useBattleActions: () => ({ handleResolveRandomPlaceholders: async () => {} }) }));
 vi.mock('@/components/arena/hooks/useStreamCombatantUpdater', () => ({ useStreamCombatantUpdater: () => ({ updateFromMarkdown: mocks.update, retryGenerationUpdate: vi.fn() }) }));
@@ -35,7 +36,9 @@ const respond = (body: string, patch: Record<string, string> = {}) => mocks.disp
 beforeEach(async () => {
   vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear();
   mocks.quickCheck.mockResolvedValue({ hasSensitiveWords: false, matchDetails: [], detectedWords: [] });
-  useNarrativeDraftsStore.setState(useNarrativeDraftsStore.getInitialState());
+  mocks.scope += 1;
+  useNarrativeDraftsStore.getState().setScope(`account:test-${mocks.scope}`);
+  useNarrativeDraftsStore.getState().setAutoRetain(true);
   useNarrativeHistoryStore.setState(useNarrativeHistoryStore.getInitialState());
   const initial = useBattleStore.getInitialState();
   useBattleStore.setState({ ...initial, reportFormat: 'markdown', generationMode: 'stream', battleMode: 'daily', combatants: [{ type: 'general-character', filename: 'test.json', data: { name: '角色甲' }, isValid: false, isPreset: false }], settings: { ...initial.settings, writeArenaHistory: true, writeCurrentState: true, writeNarrativeHistory: true } });
@@ -52,16 +55,38 @@ describe('real C0 → Web wrapper → battle hook draft retention', () => {
     const state = useNarrativeDraftsStore.getState();
     expect(state.status).toBe('stored'); expect(state.drafts).toHaveLength(1);
     expect(state.drafts[0]).toMatchObject({ markdown: '# 未完成的故事\n安全正文', completion: { kind: 'server-failed', code }, source: 'hosted' });
-    const raw = localStorage.getItem(NARRATIVE_DRAFTS_STORAGE_KEY)!;
+    const raw = JSON.stringify(Object.fromEntries(Object.keys(localStorage).map(key => [key, localStorage.getItem(key)])));
+    expect(localStorage.getItem(NARRATIVE_DRAFTS_STORAGE_KEY)).toBeNull();
     expect(raw).not.toContain('private reasoning'); expect(raw).not.toContain('不应保存'); expect(raw).not.toContain('角色甲'); expect(raw).not.toContain('upstream failed');
     expect(useNarrativeHistoryStore.getState().entries).toEqual([]); expect(useBattleStore.getState().combatants).toEqual(roster);
     expect(mocks.update).not.toHaveBeenCalled(); expect(mocks.appendHistory).not.toHaveBeenCalled(); expect(mocks.ranking).not.toHaveBeenCalled();
   });
-  it('offers explicit saving with writeNarrativeHistory disabled', async () => {
-    await act(async () => useBattleStore.setState({ settings: { ...useBattleStore.getState().settings, writeNarrativeHistory: false } }));
+  it('offers explicit saving when the independent auto-retain preference is disabled', async () => {
+    await act(async () => useNarrativeDraftsStore.getState().setAutoRetain(false));
     respond(sse(1, 'markdown', { chunk: markdown }) + failed()); await act(async () => current.handleGenerate());
     expect(useNarrativeDraftsStore.getState().status).toBe('available'); expect(localStorage.getItem(NARRATIVE_DRAFTS_STORAGE_KEY)).toBeNull();
     useNarrativeDraftsStore.getState().saveCandidate(); expect(useNarrativeDraftsStore.getState().status).toBe('stored');
+  });
+  it('keeps automatic drafts independent of formal history writing', async () => {
+    await act(async () => useBattleStore.setState({ settings: { ...useBattleStore.getState().settings, writeNarrativeHistory: false } }));
+    respond(sse(1, 'markdown', { chunk: markdown }) + failed());
+    await act(async () => current.handleGenerate());
+    expect(useNarrativeDraftsStore.getState().status).toBe('stored');
+    expect(useNarrativeHistoryStore.getState().entries).toEqual([]);
+  });
+  it('does not apply late draft evidence after account ownership changes', async () => {
+    let release!: () => void;
+    mocks.quickCheck.mockImplementation(async (text: string) => {
+      if (text.includes('安全正文')) await new Promise<void>(resolve => { release = resolve; });
+      return { hasSensitiveWords: false, matchDetails: [], detectedWords: [] };
+    });
+    respond(sse(1, 'markdown', { chunk: markdown }) + failed());
+    let task!: Promise<void>;
+    await act(async () => { task = current.handleGenerate(); await vi.waitFor(() => expect(release).toBeTypeOf('function')); });
+    mocks.scope += 1; useNarrativeDraftsStore.getState().setScope(`account:test-${mocks.scope}`);
+    await act(async () => { release(); await task; });
+    expect(useNarrativeDraftsStore.getState().candidate).toBeNull();
+    expect(useNarrativeDraftsStore.getState().drafts).toEqual([]);
   });
   it.each([
     ['malformed terminal boolean', sse(1, 'markdown', { chunk: markdown }) + sse(3, 'error', { status: 'failed', code: 'AI_STREAM_INCOMPLETE', ok: 'bad' })],

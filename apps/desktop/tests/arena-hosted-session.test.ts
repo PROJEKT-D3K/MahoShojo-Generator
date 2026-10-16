@@ -18,7 +18,7 @@ const draft = (): ArenaDraft => ({ ...createInitialArenaDraft(), generationMode:
   settings: { ...createInitialArenaDraft().settings, writeNarrativeHistory: true, writeArenaHistory: false, writeCurrentState: false } });
 function storage() {
   const data = new Map<string, string>(); let fail = false;
-  return { data, fail: () => { fail = true; }, recover: () => { fail = false; }, getItem: (key: string) => data.get(key) ?? null,
+  return { data, get length() { return data.size; }, key: (index: number) => [...data.keys()][index] ?? null, fail: () => { fail = true; }, recover: () => { fail = false; }, getItem: (key: string) => data.get(key) ?? null,
     setItem: (key: string, value: string) => { if (fail) throw new Error('disk failed'); data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
 }
 function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feedback: { ranking?: unknown; nativeEvents?: DesktopArenaHostedChannelEvent[]; rejectAfterDone?: boolean; omitDone?: boolean; lateRanking?: unknown; failureCode?: string; duplicateCursor?: boolean } = {}) {
@@ -28,7 +28,7 @@ function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feed
   }) } as unknown as CardRepository;
   const random = vi.fn(() => 0);
   const session = new DesktopArenaSession({ product, repository, storage: saved, now: () => now, requestId: () => feedback.nativeEvents?.[0]?.requestId ?? 'hosted-session-1', random,
-    hostedTestPorts: { createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: 0 } }); session.setScope('actor-A:target-A');
+    hostedTestPorts: { createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: 0 } }); session.setScope('actor-A:target-A'); session.setNarrativeDraftScope('account:A'); session.narrativeDrafts.setAutoRetain(true);
   const operations: DesktopArenaHostedOperation[] = [];
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') { release?.(); return; }

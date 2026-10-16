@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as arenaCore from '@mahoshojo/ai-core/arena-generation';
 import { appendNarrativeHistoryEntry } from '@mahoshojo/domain/narrative-history-operations';
-import { createNarrativeDraftCandidate } from '@mahoshojo/domain/narrative-drafts';
+import { buildNarrativeDraftArchive, canAutomaticallyRetainNarrativeDraft, createNarrativeDraftCandidate, parseNarrativeDraftArchive } from '@mahoshojo/domain/narrative-drafts';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import type { JsonValue } from '@mahoshojo/contracts/json-value';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { assembleArenaGenerationPrompt, buildArenaGenerationInputSnapshot, buildArenaStoryGenerationInputSnapshot, type ArenaGenerationInputSnapshot } from '@mahoshojo/ai-core/arena-generation';
 import { buildBattleStoryArenaRequest, type BattleStoryArenaRequestInput } from '@mahoshojo/domain/arena-battle-story-request';
@@ -148,6 +149,45 @@ it('normal-stop malformed metadata retains collector-accepted rawText, including
     acceptedText: result.rawText, completion: result.draftCompletion ?? null, reportFormat: 'markdown', generationMode: 'stream', current: true, cancelled: false, completed: false });
   expect(draft?.markdown).toBe('前文\r\n```json\r\n<!-- MAHOSHOJO_META {} -->\r\n```\r\n后文末文');
   expect(JSON.stringify(draft)).not.toContain('独立推理');
+});
+it.each(['length', 'metadata'] as const)('the Arena collector rejects structured refusal/error before %s draft evidence', async failure => {
+  const structuredCases: JsonValue[] = [{ refusal: 'I cannot assist with that request.' }, { error: { code: 'provider-error' } }];
+  for (const structured of structuredCases) {
+    const text = failure === 'length' ? '非空文本' : '非空文本<!-- MAHOSHOJO_ARENA_META {"version":"invalid"} -->';
+    const native = harness(text, events => {
+      const terminal = events.at(-1)!;
+      if (terminal.type === 'result' && terminal.result.status === 'completed') {
+        terminal.result.output.structured = structured;
+        if (failure === 'length') terminal.result.finishReason = 'length';
+      }
+      return events;
+    });
+    const result = await executeArenaDirect(native.options, input(), task(), host(), new AbortController().signal);
+    expect(result.status).toBe('failed');
+    expect(result.rawText).toBe(text);
+    expect(result).not.toHaveProperty('draftCompletion');
+    expect(result).not.toHaveProperty('historyCandidate');
+  }
+});
+it.each(['eof', 'length', 'metadata'] as const)('%s retains suspicious plain text only for explicit save/export', async failure => {
+  const body = '# 回复\n抱歉，我无法帮助你完成这个请求。';
+  const text = body + (failure === 'metadata' ? '<!-- MAHOSHOJO_ARENA_META {"version":"invalid"} -->' : '');
+  const native = harness(text, events => {
+    if (failure === 'eof') return events.slice(0, -1);
+    const terminal = events.at(-1)!;
+    if (failure === 'length' && terminal.type === 'result' && terminal.result.status === 'completed') terminal.result.finishReason = 'length';
+    return events;
+  });
+  const result = await executeArenaDirect(native.options, input(), task(), host(), new AbortController().signal);
+  if (result.status !== 'invalid-output' && result.status !== 'failed') throw new Error('expected incomplete output');
+  const draft = createNarrativeDraftCandidate({ requestId: result.requestId, source: result.mode, createdAt: '2026-01-01T00:00:00Z',
+    acceptedText: result.rawText, completion: result.draftCompletion ?? null, reportFormat: 'markdown', generationMode: 'stream', current: true, cancelled: false, completed: false });
+  expect(draft?.markdown).toBe(body);
+  expect(canAutomaticallyRetainNarrativeDraft(draft!)).toBe(false);
+  const archive = buildNarrativeDraftArchive([draft!]);
+  expect(parseNarrativeDraftArchive(archive)).toEqual(archive);
+  expect(result).not.toHaveProperty('historyCandidate');
+  expect(native.invoke).toHaveBeenCalledTimes(1);
 });
 it('metadata unsafe keys and unexpected extractor errors never acquire draft evidence', async () => {
   const text = '保留正文<!-- MAHOSHOJO_ARENA_META {"version":"bad","constructor":{"private":"no"}} -->';

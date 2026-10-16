@@ -734,21 +734,28 @@ describe('Failed narrative drafts through the real Desktop route', () => {
       failureCode = 'AI_STREAM_INCOMPLETE';
       const source = draft();
       const original: ArenaDraft = { ...source, settings: { ...source.settings, writeNarrativeHistory: automatic } };
-      saveDraft(original, product); await mount(product); await restoreAndSelectStream(); await click('生成战报');
+      saveDraft(original, product); await mount(product); await restoreAndSelectStream();
+      await openSection('⚙️ 读写设置');
+      if (automatic) {
+        const toggle = [...container.querySelectorAll('label')].find(label => label.textContent?.includes('自动保留未完成草稿'))!.querySelector('input')!;
+        await act(async () => { toggle.click(); });
+      }
+      await click('生成战报');
       await vi.waitFor(async () => {
         await settle();
         expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(automatic ? '草稿已保存到本机' : '有未保存草稿');
       });
       const readSaved = () => JSON.parse(localStorage.getItem(draftKey(product))!) as { draft: ArenaDraft; output: { phase: string } };
       expect(readSaved().output.phase).toBe('failed');
-      expect(readSaved().draft.narrativeDrafts ?? []).toHaveLength(automatic ? 1 : 0);
+      expect(readSaved().draft.narrativeDrafts).toBeUndefined();
+      expect(container.textContent).toContain(automatic ? '草稿已保存到本机' : '有未保存草稿');
       if (!automatic) await click('保存未完成草稿');
       await vi.waitFor(() => expect(container.textContent).toContain('草稿已保存到本机'));
       expect(button('将本次正文加入活动历史')).toBeUndefined();
       expect(button('保存叙事历史到本地库')).toBeUndefined();
       expect(readSaved().draft.narrativeHistoryEntries).toEqual([]);
       expect(readSaved().draft.combatants).toEqual(original.combatants);
-      expect(readSaved().draft.narrativeDrafts).toHaveLength(1);
+      expect(readSaved().draft.narrativeDrafts).toBeUndefined();
       expect(roleRequests).toHaveLength(0); expect(docs.size).toBe(0);
       await click('导出未完成草稿', container.querySelector('[aria-label="战报结果"]')!);
       const [filename, json] = mocks.download.mock.calls.at(-1)!;
@@ -762,7 +769,8 @@ describe('Failed narrative drafts through the real Desktop route', () => {
       expect(container.textContent).toContain('正式 0 条 · 未完成草稿 1 条');
       const archive = container.querySelector('[aria-label="未完成叙事草稿"]')!;
       expect(archive.textContent).toContain('甲与乙共同守护车站');
-      expect(archive.querySelector('textarea, input')).toBeNull();
+      expect(archive.querySelector('textarea')).toBeNull();
+      expect(archive.querySelector('input[type=checkbox]')).not.toBeNull();
       expect(button('保存未完成草稿', archive)).toBeUndefined();
       await click('导出未完成草稿', archive);
       expect(JSON.parse(mocks.download.mock.calls.at(-1)![1])).toEqual(exported);
