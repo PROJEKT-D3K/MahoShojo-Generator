@@ -23,6 +23,7 @@ it('keeps external confirmation/error above the announcement and Escape returns 
     await act(async () => root.render(<ExternalLinksProvider invoke={invoke}><Content /></ExternalLinksProvider>));
     await click(container.querySelector<HTMLButtonElement>('.announcement-trigger')!);
     await click(getButton('查看详情'));
+    await act(async () => { await import('@mahoshojo/ui-web/markdown'); });
     const link = container.querySelector<HTMLAnchorElement>('a[href="https://example.com/help"]')!;
     await click(link);
     const confirmation = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find((dialog) => dialog.textContent?.includes('打开外部链接？'))!;
