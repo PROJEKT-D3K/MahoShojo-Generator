@@ -6,6 +6,7 @@ import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
 import { QuestionnaireMetadataEditor } from './metadata';
 import { QuestionnaireQuestionsEditor } from './questions';
+import { QuestionnaireEditorGuide, QuestionnaireTransferWorkspace } from './QuestionnaireTransferWorkspace';
 
 export interface LocalQuestionnairePanelProps {
   repository: CardRepository;
@@ -29,6 +30,7 @@ export function LocalQuestionnairePanel({ repository, saveCard, downloadText, co
   const [items, setItems] = useState<LocalCardRecordV1[]>([]);
   const [cursor, setCursor] = useState<string>();
   const [opened, setOpened] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
   const [unreadable, setUnreadable] = useState(0);
   const snapshot = JSON.stringify(editor);
   const [savedSnapshot, setSavedSnapshot] = useState(snapshot);
@@ -67,21 +69,35 @@ export function LocalQuestionnairePanel({ repository, saveCard, downloadText, co
   return <div className="mt-6">
     <p className="text-sm text-slate-600">编辑本地问卷，条件与跳题沿用 Web 编辑器。保存为新的未签名问卷，nativeAllowed 固定为 false；不会覆盖来源卡或上传云端。</p>
     <p className="mt-2 text-xs text-amber-800">当前编辑与粘贴仅保留在本页，尚未自动保存草稿。请先保存到本地卡库；下载仅发起文件下载，请自行确认文件已落盘。</p>
+    <QuestionnaireEditorGuide />
+    <QuestionnaireTransferWorkspace
+      importText={paste}
+      onImportTextChange={(text) => { changed(); setPaste(text); }}
+      onImportFileChange={(event) => {
+        const file = event.currentTarget.files?.[0]; event.currentTarget.value = '';
+        if (!file || !canReplace()) return;
+        void run(async () => {
+          const text = await readQuestionnaireJsonFile(file);
+          if (!alive.current) return;
+          setPaste(text); apply(text, file.name);
+        });
+      }}
+      onApplyPaste={() => { if (canReplace(false)) void run(async () => apply(paste, '粘贴问卷.json')); }}
+      applyPasteDisabled={!paste.trim()}
+      importDescription="JSON 最多 1 MiB。载入新来源前会询问是否放弃未保存的编辑；失败保留当前内容。"
+      fileInputLabel="上传问卷 JSON"
+      fileInputAccept="application/json,.json"
+      disabled={blocked}
+      jsonPreview={json}
+      previewExpanded={showPreview}
+      onPreviewExpandedChange={setShowPreview}
+      editedExportDisabled={!!jsonError}
+      downloadLabel="下载编辑 JSON"
+      onDownloadJson={() => void run(async () => { await downloadText(json, editor.title || '问卷'); if (alive.current) setStatus('已发起下载，请确认保存位置。'); })}
+      onDownloadSource={source ? () => void run(async () => { await downloadText(source.text, `原始来源-${source.name}`); if (alive.current) setStatus('已发起原始来源下载；其中的签名或原生声明未作验证。'); }) : undefined}
+    />
     <fieldset disabled={blocked} className="min-w-0 border-0 p-0 disabled:opacity-70">
       <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-        <h2 className="text-lg font-semibold">导入现有问卷</h2>
-        <p className="mt-1 text-xs text-slate-500">JSON 最多 1 MiB。载入新来源前会询问是否放弃未保存的编辑；失败保留当前内容。</p>
-        <label className="mt-3 block"><span className="text-xs">上传问卷 JSON</span><input aria-label="上传问卷 JSON" type="file" accept="application/json,.json" className="input-field" onChange={(event) => {
-          const file = event.currentTarget.files?.[0]; event.currentTarget.value = '';
-          if (!file || !canReplace()) return;
-          void run(async () => {
-            const text = await readQuestionnaireJsonFile(file);
-            if (!alive.current) return;
-            setPaste(text); apply(text, file.name);
-          });
-        }} /></label>
-        <label className="mt-3 block"><span className="text-xs">粘贴问卷 JSON</span><textarea aria-label="粘贴问卷 JSON" value={paste} onChange={(event) => { changed(); setPaste(event.target.value); }} className="input-field h-28 font-mono text-xs" /></label>
-        <button type="button" className="generate-button mt-2 mb-0" disabled={!paste.trim()} onClick={() => { if (canReplace(false)) void run(async () => apply(paste, '粘贴问卷.json')); }}>应用粘贴内容</button>
         <div className="mt-4"><button type="button" className="footer-link" onClick={() => void loadLibrary(false)}>{opened ? '刷新本地问卷库' : '打开本地问卷库'}</button></div>
         {opened ? <div className="mt-2 grid gap-2">
           {items.map((item) => <button type="button" key={item.id} className="rounded border border-slate-200 bg-white p-2 text-left text-sm" onClick={() => {
@@ -105,12 +121,9 @@ export function LocalQuestionnairePanel({ repository, saveCard, downloadText, co
           const result = await saveCard(JSON.parse(json) as Record<string, unknown>, editor.title.trim() || '未命名问卷');
           if (alive.current) { setSavedSnapshot(snapshot); setStatus(result === 'saved' ? '已另存为本地未签名问卷。' : '相同内容已在本地库，未覆盖已有记录。'); }
         })}>另存到本地问卷库</button>
-        <button type="button" className="footer-link" disabled={!!jsonError} onClick={() => void run(async () => { await downloadText(json, editor.title || '问卷'); if (alive.current) setStatus('已发起下载，请确认保存位置。'); })}>下载编辑 JSON</button>
-        {source ? <button type="button" className="footer-link" onClick={() => void run(async () => { await downloadText(source.text, `原始来源-${source.name}`); if (alive.current) setStatus('已发起原始来源下载；其中的签名或原生声明未作验证。'); })}>下载原始来源</button> : null}
       </div>
     </fieldset>
     {(error || jsonError) ? <p role="alert" className="mt-3 text-sm text-rose-700">{error || jsonError}</p> : null}
     {status ? <p role="status" className="mt-3 text-sm text-emerald-800">{status}</p> : null}
-    <details className="mt-4" open><summary>编辑 JSON 预览</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-xs">{json}</pre></details>
   </div>;
 }

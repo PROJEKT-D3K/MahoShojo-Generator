@@ -15,6 +15,51 @@ vi.mock('../src/features/external-links/external-links-provider', () => ({ useEx
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 describe('Desktop questionnaire editor real host wiring', () => {
+  it('exposes named import and export regions before the editor with an operable JSON preview', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
+    const namedSection = (name: string) => {
+      const section = [...container.querySelectorAll('section')].find((node) => {
+        const labelledBy = node.getAttribute('aria-labelledby')?.split(/\s+/).map((id) => document.getElementById(id)?.textContent).join(' ');
+        return (node.getAttribute('aria-label') || labelledBy) === name;
+      });
+      expect(section, `accessible region: ${name}`).toBeDefined();
+      return section!;
+    };
+    const button = (name: string) => [...container.querySelectorAll('button')].find((node) => node.textContent === name)!;
+    try {
+      await act(async () => root.render(<DesktopQuestionnaireEditor />));
+      const imports = namedSection('导入现有问卷');
+      const exports = namedSection('导出问卷');
+      const title = [...container.querySelectorAll('label')].find((node) => node.textContent === '问卷标题')!;
+      expect(imports.querySelector('[aria-label="粘贴问卷 JSON"]')).not.toBeNull();
+      expect(imports.contains(button('应用粘贴内容'))).toBe(true);
+      expect(exports.contains(button('下载编辑 JSON'))).toBe(true);
+      expect(imports.compareDocumentPosition(exports) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(exports.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(container.textContent).toContain('创建指引');
+      expect(container.textContent).toContain('optionsFrom');
+      expect(container.textContent).toContain('suggestionsFrom');
+      expect([...imports.querySelectorAll('button')].some((node) => node.textContent === '从剪贴板导入')).toBe(false);
+      expect([...imports.querySelectorAll('button')].some((node) => node.textContent === '清空')).toBe(false);
+      expect([...exports.querySelectorAll('button')].some((node) => node.textContent === '复制 JSON')).toBe(false);
+      const toggle = button('收起预览');
+      expect(exports.contains(toggle)).toBe(true);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      const previewId = toggle.getAttribute('aria-controls');
+      expect(previewId).toBeTruthy();
+      const preview = document.getElementById(previewId!)!;
+      expect(exports.contains(preview)).toBe(true);
+      expect(JSON.parse(preview.textContent!).title).toBe('未命名问卷');
+      await act(async () => toggle.click());
+      expect(button('展开预览').getAttribute('aria-expanded')).toBe('false');
+      const collapsed = document.getElementById(previewId!);
+      expect(collapsed === null || collapsed.hidden).toBe(true);
+      await act(async () => button('展开预览').click());
+      expect(button('收起预览').getAttribute('aria-controls')).toBe(previewId);
+      expect(JSON.parse(document.getElementById(previewId!)!.textContent!).title).toBe('未命名问卷');
+    } finally { act(() => root.unmount()); container.remove(); }
+  });
   it('saves via existing IPC insert-if-absent with unsigned provenance and downloads exact result', async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     vi.stubGlobal('crypto', webcrypto); vi.stubGlobal('Blob', NodeBlob); vi.useFakeTimers();
@@ -74,6 +119,55 @@ describe('Desktop questionnaire editor real host wiring', () => {
       act(() => { expect(mocks.blocker()).toBe(true); });
       expect(fetch).not.toHaveBeenCalled(); expect(mocks.invoke).toHaveBeenCalledTimes(1);
       expect(revoke).not.toHaveBeenCalled(); vi.advanceTimersByTime(60_000); expect(revoke).toHaveBeenCalledWith('blob:questionnaire');
+    } finally { act(() => root.unmount()); container.remove(); }
+  });
+  it('keeps dirty after a malformed save ACK and confirms an explicit same-digest retry without overwriting', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.stubGlobal('crypto', webcrypto);
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const stored = new Map<string, string>();
+    const writes: LocalCardRecordV1[] = [];
+    mocks.invoke.mockReset();
+    mocks.invoke.mockImplementation(async (command: string, args: { id?: string; request?: { writeMode: string; document: string } }) => {
+      if (command === 'get_local_card') return stored.get(args.id!) ?? null;
+      if (command !== 'save_local_card') throw new Error(`Unexpected IPC ${command}`);
+      expect(args.request?.writeMode).toBe('insert-if-absent');
+      const record = JSON.parse(args.request!.document) as LocalCardRecordV1;
+      if (stored.has(record.id)) return { id: record.id, alreadyPresent: true };
+      writes.push(record); stored.set(record.id, args.request!.document);
+      return { id: record.id, alreadyPresent: 'unconfirmed' };
+    });
+    const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
+    const button = (name: string) => [...container.querySelectorAll('button')].find((node) => node.textContent === name)!;
+    try {
+      await act(async () => root.render(<DesktopQuestionnaireEditor />));
+      const input = container.querySelector('[aria-label="粘贴问卷 JSON"]') as HTMLTextAreaElement;
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, JSON.stringify({ id: 'ack', kind: 'magical-girl', title: '保存确认测试', questions: [{ id: 'one', question: '第一题' }] }));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await act(async () => button('应用粘贴内容').click());
+      const draft = container.querySelector('pre')!.textContent;
+      await act(async () => button('另存到本地问卷库').click());
+      await act(async () => { await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('本次写入状态未知')); });
+      expect(container.querySelector('pre')!.textContent).toBe(draft);
+      expect(container.textContent).not.toContain('已另存为本地未签名问卷');
+      act(() => expect(mocks.blocker()).toBe(true));
+      const failedUnload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(failedUnload); expect(failedUnload.defaultPrevented).toBe(true);
+      const firstDocument = [...stored.values()][0];
+      expect(writes).toHaveLength(1);
+      expect(mocks.invoke.mock.calls.filter(([command]) => command === 'save_local_card')).toHaveLength(1);
+      await act(async () => button('另存到本地问卷库').click());
+      await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('相同内容已在本地库，未覆盖已有记录')); });
+      expect(stored.size).toBe(1); expect([...stored.values()][0]).toBe(firstDocument); expect(writes).toHaveLength(1);
+      const saves = mocks.invoke.mock.calls.filter(([command]) => command === 'save_local_card');
+      expect(saves).toHaveLength(2);
+      expect(JSON.parse(saves[1][1].request.document).id).toBe(writes[0].id);
+      expect(JSON.parse(saves[1][1].request.document).contentDigest).toBe(writes[0].contentDigest);
+      expect(container.textContent).not.toContain('本次写入状态未知');
+      act(() => expect(mocks.blocker()).toBe(false));
+      expect(fetch).not.toHaveBeenCalled();
     } finally { act(() => root.unmount()); container.remove(); }
   });
 });

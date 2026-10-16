@@ -29,6 +29,46 @@ beforeEach(() => { vi.clearAllMocks(); list.mockResolvedValue({ items: [], nextC
 afterEach(() => { act(() => root.unmount()); container.remove(); });
 
 describe('local questionnaire editor', () => {
+  it('keeps preview operable while a pending save disables editing, imports and export actions', async () => {
+    await load(); const before = data();
+    let resolveSave!: (result: 'saved') => void;
+    saveCard.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve; }));
+    await click('另存到本地问卷库');
+    try {
+      expect(field('问卷标题').matches(':disabled')).toBe(true);
+      expect(container.querySelector('[aria-label="粘贴问卷 JSON"]')!.matches(':disabled')).toBe(true);
+      const uploadLabel = [...container.querySelectorAll('label')].find((node) => node.textContent === '上传问卷 JSON')!;
+      expect(uploadLabel.control!.matches(':disabled')).toBe(true);
+      for (const name of ['另存到本地问卷库', '下载编辑 JSON', '下载原始来源', '应用粘贴内容', '打开本地问卷库']) {
+        expect(button(name).matches(':disabled'), name).toBe(true);
+        await click(name);
+      }
+      expect(saveCard).toHaveBeenCalledTimes(1); expect(downloadText).not.toHaveBeenCalled(); expect(list).not.toHaveBeenCalled();
+      const toggle = button('收起预览');
+      expect(toggle.matches(':disabled')).toBe(false);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      const previewId = toggle.getAttribute('aria-controls'); expect(previewId).toBeTruthy();
+      await click('收起预览'); expect(button('展开预览').getAttribute('aria-expanded')).toBe('false');
+      const collapsed = document.getElementById(previewId!); expect(collapsed === null || collapsed.hidden).toBe(true);
+      await click('展开预览'); expect(button('收起预览').getAttribute('aria-expanded')).toBe('true');
+      expect(JSON.parse(document.getElementById(previewId!)!.textContent!)).toEqual(before);
+      expect(dirty).toHaveBeenLastCalledWith(true);
+    } finally { await act(async () => resolveSave('saved')); }
+    expect(field('问卷标题').matches(':disabled')).toBe(false);
+    expect(dirty).toHaveBeenLastCalledWith(false);
+  });
+  it('downloads exact original bytes with invalid JSON without saving or clearing dirty edits', async () => {
+    const source = '\uFEFF' + JSON.stringify(original, null, 2) + '\n';
+    paste(source); await click('应用粘贴内容');
+    const label = [...container.querySelectorAll('label')].find((node) => node.textContent === '额外字段 JSON（可选）')!;
+    edit(label.parentElement!.querySelector('textarea')!, 'null');
+    expect(button('另存到本地问卷库').matches(':disabled')).toBe(true);
+    expect(button('下载编辑 JSON').matches(':disabled')).toBe(true);
+    await click('下载原始来源');
+    expect(downloadText).toHaveBeenCalledExactlyOnceWith(source, '原始来源-粘贴问卷.json');
+    expect(dirty).toHaveBeenLastCalledWith(true); expect(saveCard).not.toHaveBeenCalled();
+    expect(label.parentElement!.querySelector('textarea')!.value).toBe('null');
+  });
   it('loads, edits, reorders and saves using the shared editor, retaining extensions and source', async () => {
     await load();
     expect(data().nativeAllowed).toBe(false); expect(data()).not.toHaveProperty('signature');
