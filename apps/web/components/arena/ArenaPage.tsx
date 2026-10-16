@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AdvancedArenaPageView } from '@mahoshojo/ui-web/arena';
 
 import BattleDataModal from '@/components/BattleDataModal';
-import DataCardDetailsModal from '@/components/DataCardDetailsModal';
 import Footer from '@/components/Footer';
 import { ErrorMessage } from '@/components/ErrorMessage';
+import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
 import { useAuth } from '@/lib/useAuth';
 import { ONLINE_DATA_CARD_TYPES } from '@mahoshojo/contracts/data-cards';
 
@@ -39,13 +39,11 @@ import {
 } from './types';
 import { useBattleActions } from './hooks/useBattleActions';
 import { useLanguagesQuery } from './hooks/useArenaData';
-import { ArenaRankingModal } from './components/ArenaRankingModal';
 import { ArenaCommunitySection } from './shared/ArenaCommunitySection';
 import { ArenaPageLinks } from './shared/ArenaPageLinks';
 import { ArenaRankingLinks } from './shared/ArenaRankingLinks';
 import { ArenaRoomProvider } from './multiplayer/useArenaRoom';
 import { ArenaEditorWorkspaceBoundary } from './multiplayer/ArenaRoomProposalWorkspace';
-import { ArenaRoomDialog } from './multiplayer/ArenaRoomDialog';
 import { ArenaEditorWorkspaceLayout } from './editor/ArenaEditorWorkspaceLayout';
 import {
   countArenaSelectedReferenceItems,
@@ -53,6 +51,13 @@ import {
   MAX_ARENA_REFERENCE_ITEMS,
 } from '@/lib/arena/resource-budget';
 
+const DataCardDetailsModal = lazy(() => import('@/components/DataCardDetailsModal'));
+const ArenaRankingModal = lazy(
+  () => import('./components/ArenaRankingModal').then((module) => ({ default: module.ArenaRankingModal })),
+);
+const ArenaRoomDialog = lazy(
+  () => import('./multiplayer/ArenaRoomDialog').then((module) => ({ default: module.ArenaRoomDialog })),
+);
 const ArenaMultiplayerPanel = dynamic(
   () => import('./multiplayer/ArenaMultiplayerPanel').then((module) => (
     module.ArenaMultiplayerContextPanel
@@ -82,6 +87,7 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
   const [showImageModal, setShowImageModal] = useState(false);
   const [savedImageUrl, setSavedImageUrl] = useState<string | null>(null);
   const [showRankingModal, setShowRankingModal] = useState(false);
+  const [hasOpenedRankingModal, setHasOpenedRankingModal] = useState(false);
 
   const combatants = useBattleStore((state: BattleStoreState) => state.combatants);
   const scenario = useBattleStore((state: BattleStoreState) => state.scenario);
@@ -182,6 +188,11 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
     setShowBattleDataModal(true);
   };
 
+  const handleOpenRankingModal = () => {
+    setHasOpenedRankingModal(true);
+    setShowRankingModal(true);
+  };
+
   const handleSaveImage = (imageUrl: string) => {
     setSavedImageUrl(imageUrl);
     setShowImageModal(true);
@@ -199,7 +210,7 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
     <>
       <AdvancedArenaPageView
         header={<BattleHeader />}
-        links={<><ArenaRankingLinks onOpenRankingModal={() => setShowRankingModal(true)} /><ArenaPageLinks variant="full" /></>}
+        links={<><ArenaRankingLinks onOpenRankingModal={handleOpenRankingModal} /><ArenaPageLinks variant="full" /></>}
         beforeWorkspace={multiplayer?.enabled ? <ArenaMultiplayerPanel enabled origin={multiplayer.origin} authLoading={authLoading} isAuthenticated={isAuthenticated} displayName={user?.username ?? '玩家'} /> : null}
         result={<>
           {multiplayer?.enabled ? <ArenaMultiplayerResult onSaveImage={handleSaveImage} /> : null}
@@ -351,21 +362,26 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
       </AdvancedArenaPageView>
 
       {showImageModal && savedImageUrl ? (
-        <ArenaRoomDialog
-          open
-          titleId="arena-saved-image-dialog-heading"
-          title="保存战报图片"
-          description="长按图片保存到相册。"
-          widthClassName="max-w-lg"
-          onClose={() => {
-            setShowImageModal(false);
-            setSavedImageUrl(null);
-          }}
-        >
-          <div aria-label="战报图片" className="items-center flex flex-col p-2">
-            <img src={savedImageUrl} alt="魔法少女战斗报告" className="w-full h-auto rounded-lg mx-auto" />
-          </div>
-        </ArenaRoomDialog>
+        <DeferredChunkBoundary onClose={() => {
+          setShowImageModal(false);
+          setSavedImageUrl(null);
+        }}>
+          <ArenaRoomDialog
+            open
+            titleId="arena-saved-image-dialog-heading"
+            title="保存战报图片"
+            description="长按图片保存到相册。"
+            widthClassName="max-w-lg"
+            onClose={() => {
+              setShowImageModal(false);
+              setSavedImageUrl(null);
+            }}
+          >
+            <div aria-label="战报图片" className="items-center flex flex-col p-2">
+              <img src={savedImageUrl} alt="魔法少女战斗报告" className="w-full h-auto rounded-lg mx-auto" />
+            </div>
+          </ArenaRoomDialog>
+        </DeferredChunkBoundary>
       ) : null}
 
       <BattleDataModal
@@ -419,7 +435,7 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
       />
 
       {selectedCombatant && (
-        <DataCardDetailsModal
+        <DeferredChunkBoundary onClose={() => setSelectedCombatant(null)}><DataCardDetailsModal
           source={selectedCombatant.isPreset ? { kind: 'preset' } : { kind: 'local', label: '当前输入副本' }}
           isOpen
           onClose={() => setSelectedCombatant(null)}
@@ -448,10 +464,10 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
             createdAt: selectedCombatant.sourceDataCardCreatedAt,
             updatedAt: selectedCombatant.sourceDataCardUpdatedAt,
           }}
-        />
+        /></DeferredChunkBoundary>
       )}
 
-      <ArenaRankingModal isOpen={showRankingModal} onClose={() => setShowRankingModal(false)} />
+      {hasOpenedRankingModal ? <DeferredChunkBoundary isOpen={showRankingModal} onClose={() => setShowRankingModal(false)}><ArenaRankingModal isOpen={showRankingModal} onClose={() => setShowRankingModal(false)} /></DeferredChunkBoundary> : null}
     </>
   );
 

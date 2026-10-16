@@ -201,12 +201,32 @@ describe('GlobalTopBar adapter', () => {
     expect(html).toContain('关闭导航');
   });
 
-  test('mounts the host-owned AuthModal closed until auth is requested', async () => {
+  test('defers AuthModal until auth is requested', async () => {
     const { GlobalTopBar } = await import('@/components/navigation/GlobalTopBar');
     const html = renderToStaticMarkup(<GlobalTopBar pathname="/" />);
 
-    expect(html).toContain('data-auth-modal="true"');
-    expect(html).toContain('data-auth-modal-open="false"');
+    expect(html).not.toContain('data-auth-modal');
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<GlobalTopBar pathname="/" />));
+      expect(container.querySelector('[data-auth-modal]')).toBeNull();
+
+      const requestAuthButton = [...container.querySelectorAll('button')]
+        .find((button) => button.textContent?.trim() === '登录 / 注册');
+      expect(requestAuthButton).toBeDefined();
+      await act(async () => requestAuthButton!.click());
+      for (let attempt = 0; attempt < 20 && !container.querySelector('[data-auth-modal]'); attempt++) {
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 25)));
+      }
+
+      expect(container.querySelector('[data-auth-modal-open="true"]')).not.toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
   });
 
   test.each([false, true])('本地退出清除失败复用错误区；已换代=%s 时不打扰新身份', async (stale) => {

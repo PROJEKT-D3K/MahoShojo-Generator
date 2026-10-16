@@ -1,13 +1,55 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Component, lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import type { Announcement } from '@mahoshojo/contracts/announcements';
 import { interpolateWithQQGroups } from '../community/index';
-import { MarkdownBlock } from '../markdown/MarkdownBlock';
 import type { ExternalMediaPolicy } from '../markdown/text/index';
 import { DENY_EXTERNAL_MEDIA } from '../markdown/text/index';
 import type { ExternalLinkRenderProps } from '../markdown/MarkdownBlock';
 import { useBaseModalAccessibility } from '../modal/BaseModal';
+
+const MarkdownBlock = lazy(() =>
+  import('../markdown/MarkdownBlock').then((module) => ({ default: module.MarkdownBlock })),
+);
+
+type AnnouncementMarkdownErrorBoundaryProps = {
+  readonly children: ReactNode;
+  readonly fallbackContent: string;
+  readonly onReload: () => void;
+};
+
+type AnnouncementMarkdownErrorBoundaryState = {
+  readonly hasError: boolean;
+};
+
+export class AnnouncementMarkdownErrorBoundary extends Component<
+  AnnouncementMarkdownErrorBoundaryProps,
+  AnnouncementMarkdownErrorBoundaryState
+> {
+  state: AnnouncementMarkdownErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): AnnouncementMarkdownErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(_error: Error, _info: ErrorInfo): void {
+    // Keep a failed optional markdown chunk local to the announcement body.
+  }
+
+  render(): ReactNode {
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div className="space-y-3" role="alert">
+        <p className="text-sm text-red-700">公告正文加载失败，以下为纯文本内容。可刷新页面后重试。</p>
+        <button type="button" className="rounded border px-3 py-1 text-sm" onClick={this.props.onReload}>
+          刷新页面重试
+        </button>
+        <pre className="whitespace-pre-wrap break-words text-sm text-gray-700">{this.props.fallbackContent}</pre>
+      </div>
+    );
+  }
+}
 
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
@@ -270,16 +312,23 @@ export function AnnouncementCenter({
                   {selectedAnnouncement.publisher && <span>发布者: {selectedAnnouncement.publisher}</span>}
                 </div>
                 <div className="px-6 py-4 overflow-y-auto flex-grow">
-                  <MarkdownBlock
-                    content={interpolateWithQQGroups(selectedAnnouncement.content)}
-                    variant="light"
-                    mode="article"
-                    externalMediaPolicy={externalMediaPolicy}
-                    onNavigateInternal={onNavigateInternal}
-                    resolveInternalHref={resolveInternalHref}
-                    onNavigateExternal={onNavigateExternal}
-                    renderExternalLink={renderExternalLink}
-                  />
+                  <AnnouncementMarkdownErrorBoundary
+                    fallbackContent={selectedAnnouncement.content}
+                    onReload={() => window.location.reload()}
+                  >
+                    <Suspense fallback={<p className="p-6 text-sm text-gray-600" role="status">正在加载公告正文…</p>}>
+                      <MarkdownBlock
+                        content={interpolateWithQQGroups(selectedAnnouncement.content)}
+                        variant="light"
+                        mode="article"
+                        externalMediaPolicy={externalMediaPolicy}
+                        onNavigateInternal={onNavigateInternal}
+                        resolveInternalHref={resolveInternalHref}
+                        onNavigateExternal={onNavigateExternal}
+                        renderExternalLink={renderExternalLink}
+                      />
+                    </Suspense>
+                  </AnnouncementMarkdownErrorBoundary>
                 </div>
                 <div className="px-6 py-4 border-t border-gray-200 flex justify-start">
                   <button

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { lazy, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { AVAILABLE, type CapabilitySnapshot } from '@mahoshojo/ui-web/capability';
@@ -11,12 +11,14 @@ import {
   type TopBarAccountState,
 } from '@mahoshojo/ui-web/shell';
 
-import AuthModal from '@/components/CharManager/AuthModal';
 import { useTopBarMessages } from '@/components/navigation/useTopBarMessages';
 import { useTopBarProfile } from '@/components/navigation/useTopBarProfile';
 import UserTitle from '@/components/UserTitle';
+import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
 import { useAuth } from '@/lib/useAuth';
 import { AuthStorageError } from '@/lib/auth-identity';
+
+const AuthModal = lazy(() => import('@/components/CharManager/AuthModal'));
 
 /**
  * Web 宿主侧能力快照：产品导航、顶栏路径在 Web 全部已交付——
@@ -148,16 +150,20 @@ export function GlobalTopBar({ pathname, defaultMobileOpen = false }: GlobalTopB
         defaultMobileOpen={defaultMobileOpen}
       />
 
-      <AuthModal
-        isOpen={showAuthModal}
-        onClose={() => {
-          setShowAuthModal(false);
-          setAuthMessage(null);
-        }}
-        onLogin={handleLogin}
-        onRegister={handleRegister}
-        authMessage={authMessage}
-      />
+      {showAuthModal ? (
+        <DeferredChunkBoundary onClose={() => setShowAuthModal(false)}>
+          <AuthModal
+            isOpen
+            onClose={() => {
+              setShowAuthModal(false);
+              setAuthMessage(null);
+            }}
+            onLogin={handleLogin}
+            onRegister={handleRegister}
+            authMessage={authMessage}
+          />
+        </DeferredChunkBoundary>
+      ) : null}
     </>
   );
 }

@@ -59,7 +59,7 @@ const render = async (props: Record<string, unknown> = {}): Promise<void> => {
   await act(async () => root.render(
     <BattleDataModal isOpen onClose={() => {}} selectedType="character" onSelectCard={() => {}} {...props} />,
   ));
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  await act(async () => { await vi.dynamicImportSettled(); });
 };
 
 const rail = (): HTMLElement => document.body.querySelector<HTMLElement>('[role="tablist"]')!;

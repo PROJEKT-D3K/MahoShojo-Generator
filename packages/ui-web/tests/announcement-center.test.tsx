@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
-import { act, StrictMode } from 'react';
+import { act, lazy, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AnnouncementCenter, sortAnnouncements } from '../src/announcement/AnnouncementCenter';
+import {
+  AnnouncementCenter,
+  AnnouncementMarkdownErrorBoundary,
+  sortAnnouncements,
+} from '../src/announcement/AnnouncementCenter';
 import type { AnnouncementDismissalStore } from '../src/announcement/index';
 import type { Announcement } from '@mahoshojo/contracts/announcements';
 import { ShellEscapeMenu } from '../src/shell/EscapeMenu';
@@ -74,6 +78,14 @@ const click = (el: Element): void => {
   });
 };
 
+const waitForLazyMarkdown = async (): Promise<void> => {
+  await act(async () => {
+    for (let attempt = 0; attempt < 20 && container.querySelector('[role="status"]'); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  });
+};
+
 const pressKey = (key: string, init: KeyboardEventInit = {}): KeyboardEvent => {
   const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
   act(() => {
@@ -127,6 +139,26 @@ describe('sortAnnouncements', () => {
 });
 
 describe('AnnouncementCenter', () => {
+  it('keeps a rejected lazy markdown chunk local and offers the original content as plain text', async () => {
+    const onReload = vi.fn();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const FailedLazyMarkdown = lazy(() => Promise.reject(new Error('markdown chunk failed')));
+
+    render(
+      <AnnouncementMarkdownErrorBoundary fallbackContent={'<script>alert(1)</script>\n原文'} onReload={onReload}>
+        <FailedLazyMarkdown />
+      </AnnouncementMarkdownErrorBoundary>,
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('公告正文加载失败');
+    expect(container.querySelector('pre')?.textContent).toBe('<script>alert(1)</script>\n原文');
+    expect(container.querySelector('script')).toBeNull();
+    click(container.querySelector('button')!);
+    expect(onReload).toHaveBeenCalledOnce();
+    errorLog.mockRestore();
+  });
+
   it('renders nothing and reserves no space when the latest entry is dismissed', () => {
     render(<AnnouncementCenter announcements={ANNOUNCEMENTS} dismissal={makeDismissal(new Set(['pinned']))} />);
 
@@ -147,6 +179,18 @@ describe('AnnouncementCenter', () => {
     expect(document.body.lastElementChild).toBe(spacer());
     expect(container.querySelector('.announcement-spacer')).toBeNull();
     expect(observers[0].observe).toHaveBeenCalledWith(ticker, { box: 'border-box' });
+  });
+
+  it('loads announcement markdown only for a selected detail and renders its body', async () => {
+    render(<AnnouncementCenter announcements={ANNOUNCEMENTS} dismissal={makeDismissal()} />);
+
+    expect(container.textContent).not.toContain('置顶内容');
+    click(trigger());
+    click(detailButtons()[0]);
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('正在加载公告正文');
+    await waitForLazyMarkdown();
+
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('置顶内容');
   });
 
   it('dismissing the ticker stores the latest id and removes its spacer without opening the list', () => {
@@ -374,7 +418,7 @@ describe('AnnouncementCenter', () => {
     expect(observers.every((observer) => observer.disconnect.mock.calls.length === 1)).toBe(true);
   });
 
-  it('opens the list from the ticker and drills into the detail view', () => {
+  it('opens the list from the ticker and drills into the detail view', async () => {
     render(<AnnouncementCenter announcements={ANNOUNCEMENTS} dismissal={makeDismissal()} />);
 
     click(trigger());
@@ -384,13 +428,14 @@ describe('AnnouncementCenter', () => {
     expect(titles).toEqual(['📌 置顶公告', '最新公告', '旧公告']);
 
     click(detailButtons()[2]);
+    await waitForLazyMarkdown();
 
     const markdown = container.querySelector('div.overflow-y-auto');
     expect(markdown?.textContent).toContain('旧内容');
     expect(container.querySelector('h2')?.textContent).toContain('旧公告');
   });
 
-  it('interpolates QQ group placeholders and routes external links through the host', () => {
+  it('interpolates QQ group placeholders and routes external links through the host', async () => {
     const onNavigateExternal = vi.fn();
     const announcements: Announcement[] = [
       {
@@ -410,6 +455,7 @@ describe('AnnouncementCenter', () => {
 
     click(trigger());
     click(detailButtons()[0]);
+    await waitForLazyMarkdown();
 
     const markdown = container.querySelector('div.overflow-y-auto')!;
     expect(markdown.textContent).toContain('1059830952');
@@ -420,7 +466,7 @@ describe('AnnouncementCenter', () => {
     expect(onNavigateExternal).toHaveBeenCalledWith('https://afdian.com/a/MahoShojo');
   });
 
-  it('renders unhandled external links as blocked notes instead of dead anchors', () => {
+  it('renders unhandled external links as blocked notes instead of dead anchors', async () => {
     const announcements: Announcement[] = [
       {
         id: 'a1',
@@ -433,6 +479,7 @@ describe('AnnouncementCenter', () => {
 
     click(trigger());
     click(detailButtons()[0]);
+    await waitForLazyMarkdown();
 
     const markdown = container.querySelector('div.overflow-y-auto')!;
     expect(markdown.querySelector('a[href^="https://"]')).toBeNull();

@@ -72,6 +72,7 @@ const render = async (props: Record<string, unknown> = {}): Promise<void> => {
       {...props}
     />,
   ));
+  await act(async () => { await vi.dynamicImportSettled(); });
 };
 
 it('未登录也能打开本地库并看到本机数据卡', async () => {

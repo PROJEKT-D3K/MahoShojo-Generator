@@ -1,14 +1,30 @@
 'use client';
 
-// Web 薄适配（D5.0e）：实现已迁入 @mahoshojo/ui-web/card-library，
-// 本文件只负责装配 Web 运行地宿主并保持原有 props 面不变。
+import { lazy, Suspense, useEffect, useState } from 'react';
+import type { CardLibraryModalProps } from '@mahoshojo/ui-web/card-library';
 
-import { CardLibraryModal, type CardLibraryModalProps } from '@mahoshojo/ui-web/card-library';
-import { useWebCardLibraryHost } from '@/lib/card-library-host';
+import { DeferredChunkBoundary, DeferredChunkLoading } from '@/components/shared/DeferredChunkBoundary';
 
 export type BattleDataModalProps = Omit<CardLibraryModalProps, 'host'>;
 
+const BattleDataModalContent = lazy(() => import('./BattleDataModalContent'));
+
 export default function BattleDataModal(props: BattleDataModalProps) {
-  const host = useWebCardLibraryHost();
-  return <CardLibraryModal host={host} {...props} />;
+  const [hasOpened, setHasOpened] = useState(props.isOpen);
+
+  useEffect(() => {
+    if (props.isOpen) setHasOpened(true);
+  }, [props.isOpen]);
+
+  if (!hasOpened) return null;
+
+  return (
+    <DeferredChunkBoundary isOpen={props.isOpen} onClose={props.onClose}>
+      <Suspense fallback={(
+        <DeferredChunkLoading isOpen={props.isOpen} onClose={props.onClose} title="正在加载数据卡库…" />
+      )}>
+        <BattleDataModalContent {...props} />
+      </Suspense>
+    </DeferredChunkBoundary>
+  );
 }

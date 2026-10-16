@@ -295,6 +295,10 @@ describe('DataCardReportModal accessibility contract', () => {
 });
 
 describe('BattleDataModal accessibility and capabilities', () => {
+  beforeEach(async () => {
+    // 本组验证加载后的交互；代码块首次加载、关闭和失败由 deferred-card-library 单独覆盖。
+    await import('@/components/BattleDataModalContent');
+  });
   it('renders a labelled dialog with keyboard-native single selection and restores focus on close', async () => {
     const trigger = document.createElement('button');
     trigger.type = 'button';

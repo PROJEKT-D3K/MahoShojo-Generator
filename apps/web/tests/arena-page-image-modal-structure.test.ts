@@ -23,6 +23,8 @@ const arenaPageSource = readFileSync(
  */
 describe('Arena 保存图片窗口结构', () => {
   it('使用共享 ArenaRoomDialog，而不是无键盘语义的自制 fixed overlay', () => {
-    expect(arenaPageSource).toContain('import { ArenaRoomDialog }');
+    expect(arenaPageSource).toContain('const ArenaRoomDialog = lazy(');
+    expect(arenaPageSource).toContain("import('./multiplayer/ArenaRoomDialog')");
+    expect(arenaPageSource).toContain('<ArenaRoomDialog');
   });
 });

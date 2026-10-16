@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, useEffect, useMemo, useState } from 'react';
 
 import BattleDataModal from '@/components/BattleDataModal';
-import DataCardDetailsModal from '@/components/DataCardDetailsModal';
+import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
 import Footer from '@/components/Footer';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { BattleLitePageView } from '@mahoshojo/ui-web/arena';
@@ -20,7 +20,6 @@ import { GenerationModeSwitcher } from '@/components/arena/components/Generation
 import { MaterialPanel } from '@/components/arena/components/MaterialPanel';
 import { PresetSelector } from '@/components/arena/components/PresetSelector';
 import { RosterUploader } from '@/components/arena/components/RosterUploader';
-import { ArenaRankingModal } from '@/components/arena/components/ArenaRankingModal';
 import { useBattleActions } from '@/components/arena/hooks/useBattleActions';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 import {
@@ -46,6 +45,11 @@ import {
   MAX_ARENA_REFERENCE_ITEMS,
 } from '@/lib/arena/resource-budget';
 
+const DataCardDetailsModal = lazy(() => import('@/components/DataCardDetailsModal'));
+const ArenaRankingModal = lazy(
+  () => import('@/components/arena/components/ArenaRankingModal').then((module) => ({ default: module.ArenaRankingModal })),
+);
+
 export function BattleLitePage() {
   const { isAuthenticated } = useAuth();
   const [showBattleDataModal, setShowBattleDataModal] = useState(false);
@@ -54,6 +58,7 @@ export function BattleLitePage() {
   const [showImageModal, setShowImageModal] = useState(false);
   const [savedImageUrl, setSavedImageUrl] = useState<string | null>(null);
   const [showRankingModal, setShowRankingModal] = useState(false);
+  const [hasOpenedRankingModal, setHasOpenedRankingModal] = useState(false);
 
   const combatants = useBattleStore((state: BattleStoreState) => state.combatants);
   const scenario = useBattleStore((state: BattleStoreState) => state.scenario);
@@ -144,6 +149,11 @@ export function BattleLitePage() {
     setShowBattleDataModal(true);
   };
 
+  const handleOpenRankingModal = () => {
+    setHasOpenedRankingModal(true);
+    setShowRankingModal(true);
+  };
+
   const handleSaveImage = (imageUrl: string) => {
     setSavedImageUrl(imageUrl);
     setShowImageModal(true);
@@ -170,7 +180,7 @@ export function BattleLitePage() {
         maxReferenceItems={MAX_ARENA_REFERENCE_ITEMS}
         slots={{
           header: <BattleLiteHeader />,
-          rankingLinks: <ArenaRankingLinks onOpenRankingModal={() => setShowRankingModal(true)} />,
+          rankingLinks: <ArenaRankingLinks onOpenRankingModal={handleOpenRankingModal} />,
           pageLinks: <ArenaPageLinks variant="lite" />,
           presets: <PresetSelector />,
           database: <>                <DatabaseSelector
@@ -265,7 +275,7 @@ export function BattleLitePage() {
       />
 
       {selectedCombatant ? (
-        <DataCardDetailsModal
+        <DeferredChunkBoundary onClose={() => setSelectedCombatant(null)}><DataCardDetailsModal
           source={selectedCombatant.isPreset ? { kind: 'preset' } : { kind: 'local', label: '当前输入副本' }}
           isOpen
           onClose={() => setSelectedCombatant(null)}
@@ -294,10 +304,10 @@ export function BattleLitePage() {
             createdAt: selectedCombatant.sourceDataCardCreatedAt,
             updatedAt: selectedCombatant.sourceDataCardUpdatedAt,
           }}
-        />
+        /></DeferredChunkBoundary>
       ) : null}
 
-      <ArenaRankingModal isOpen={showRankingModal} onClose={() => setShowRankingModal(false)} />
+      {hasOpenedRankingModal ? <DeferredChunkBoundary isOpen={showRankingModal} onClose={() => setShowRankingModal(false)}><ArenaRankingModal isOpen={showRankingModal} onClose={() => setShowRankingModal(false)} /></DeferredChunkBoundary> : null}
     </>
   );
 }

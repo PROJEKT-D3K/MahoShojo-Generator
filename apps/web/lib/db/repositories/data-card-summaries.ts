@@ -74,24 +74,63 @@ export async function listDataCardSummaries(
     .leftJoin(dataCardMetrics, eq(dataCardMetrics.dataCardId, dataCards.id))
     .leftJoin(favorites, and(eq(favorites.dataCardId, dataCards.id), eq(favorites.userId, userId ?? -1)))
     .where(and(...conditions));
-  const [totals, rows] = await Promise.all([
-    from(db.select({ total: count(),
-      private: sql<number>`COALESCE(SUM(CASE WHEN CAST(${dataCards.isPublic} AS INTEGER) = 0 THEN 1 ELSE 0 END), 0)`,
-      public: sql<number>`COALESCE(SUM(CASE WHEN CAST(${dataCards.isPublic} AS INTEGER) = 1 THEN 1 ELSE 0 END), 0)`,
-      pending: sql<number>`COALESCE(SUM(CASE WHEN ${dataCards.reviewStatus} = 'pending' THEN 1 ELSE 0 END), 0)`,
-    })),
-    from(db.select({
-      id: dataCards.id, user_id: dataCards.userId, type: dataCards.type, name: dataCards.name,
-      description: dataCards.description, is_public: sql<number>`CAST(${dataCards.isPublic} AS INTEGER)`,
-      review_status: dataCards.reviewStatus, created_at: dataCards.createdAt, updated_at: dataCards.updatedAt,
-      usage_count: dataCards.usageCount, like_count: dataCards.likeCount, favorite_count: dataCards.favoriteCount,
-      is_recommended: sql<number>`CAST(${dataCards.isRecommended} AS INTEGER)`, username: users.username,
-      roleType, nativeAllowed, has_pending_update: source === 'my' ? sql<boolean>`${dataCardUpdates.data} IS NOT NULL` : sql<boolean>`0`,
-      tag_ids: sql<string | null>`(SELECT group_concat(DISTINCT tag_id) FROM data_card_tags WHERE data_card_id = ${dataCards.id})`,
-      favorited_at: favorites.createdAt,
-      isLegacyQuestionnaire: query.includeLegacyQuestionnaires ? legacyQuestionnaire : sql<boolean>`0`,
-    })).orderBy(desc(sortColumn), desc(updated), desc(dataCards.id)).limit(query.limit).offset(query.offset),
-  ]);
+  const aggregate = {
+    total: count(),
+    private: sql<number>`COALESCE(SUM(CASE WHEN CAST(${dataCards.isPublic} AS INTEGER) = 0 THEN 1 ELSE 0 END), 0)`,
+    public: sql<number>`COALESCE(SUM(CASE WHEN CAST(${dataCards.isPublic} AS INTEGER) = 1 THEN 1 ELSE 0 END), 0)`,
+    pending: sql<number>`COALESCE(SUM(CASE WHEN ${dataCards.reviewStatus} = 'pending' THEN 1 ELSE 0 END), 0)`,
+  };
+  const totalsQuery = source === 'public'
+    ? query.nativeOnly
+      ? db.select({ total: count(), private: sql<number>`0`, public: count(), pending: sql<number>`0` })
+        .from(dataCards)
+        .innerJoin(users, eq(users.id, dataCards.userId))
+        .leftJoin(dataCardMetrics, eq(dataCardMetrics.dataCardId, dataCards.id))
+        .where(and(...conditions))
+      : db.select({ total: count(), private: sql<number>`0`, public: count(), pending: sql<number>`0` })
+        .from(dataCards)
+        .innerJoin(users, eq(users.id, dataCards.userId))
+        .where(and(...conditions))
+    : from(db.select(aggregate));
+
+  const rowSelection = {
+    id: dataCards.id, user_id: dataCards.userId, type: dataCards.type, name: dataCards.name,
+    description: dataCards.description, is_public: sql<number>`CAST(${dataCards.isPublic} AS INTEGER)`,
+    review_status: dataCards.reviewStatus, created_at: dataCards.createdAt, updated_at: dataCards.updatedAt,
+    usage_count: dataCards.usageCount, like_count: dataCards.likeCount, favorite_count: dataCards.favoriteCount,
+    is_recommended: sql<number>`CAST(${dataCards.isRecommended} AS INTEGER)`, username: users.username,
+    roleType, nativeAllowed, has_pending_update: source === 'my' ? sql<boolean>`${dataCardUpdates.data} IS NOT NULL` : sql<boolean>`0`,
+    tag_ids: sql<string | null>`(SELECT group_concat(DISTINCT tag_id) FROM data_card_tags WHERE data_card_id = ${dataCards.id})`,
+    favorited_at: favorites.createdAt,
+    isLegacyQuestionnaire: query.includeLegacyQuestionnaires ? legacyQuestionnaire : sql<boolean>`0`,
+  };
+  const rowsQuery = source === 'public'
+    ? (() => {
+      // 保留原筛选和排序语义，先对 ID 与排序键分页，再计算 JSON 投影和标签聚合。
+      const publicPageSelection = db.select({
+        id: dataCards.id,
+        sortPrimary: sql`${sortColumn}`.as('sort_primary'),
+        sortUpdated: sql`${updated}`.as('sort_updated'),
+      }).from(dataCards).innerJoin(users, eq(users.id, dataCards.userId));
+      const publicPageFiltered = query.nativeOnly
+        ? publicPageSelection.leftJoin(dataCardMetrics, eq(dataCardMetrics.dataCardId, dataCards.id)).where(and(...conditions))
+        : publicPageSelection.where(and(...conditions));
+      const page = publicPageFiltered.orderBy(desc(sortColumn), desc(updated), desc(dataCards.id))
+        .limit(query.limit).offset(query.offset).as('public_summary_page');
+
+      return db.select({
+        ...rowSelection,
+        has_pending_update: sql<boolean>`0`,
+      }).from(page)
+        .innerJoin(dataCards, eq(dataCards.id, page.id))
+        .innerJoin(users, eq(users.id, dataCards.userId))
+        .leftJoin(favorites, and(eq(favorites.dataCardId, dataCards.id), eq(favorites.userId, userId ?? -1)))
+        .orderBy(desc(page.sortPrimary), desc(page.sortUpdated), desc(page.id));
+    })()
+    : from(db.select(rowSelection)).orderBy(desc(sortColumn), desc(updated), desc(dataCards.id))
+      .limit(query.limit).offset(query.offset);
+
+  const [totals, rows] = await Promise.all([totalsQuery, rowsQuery]);
   const total = Number(totals[0]?.total ?? 0);
   const cards = rows.map((row) => DataCardSummarySchema.parse({
     ...row, nativeAllowed: Boolean(row.nativeAllowed), has_pending_update: Boolean(row.has_pending_update),
