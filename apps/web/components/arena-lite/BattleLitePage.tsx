@@ -1,5 +1,6 @@
 'use client';
 
+import { ImagePreviewModal } from '@mahoshojo/ui-web/modal';
 import { lazy, useEffect, useMemo, useState } from 'react';
 
 import BattleDataModal from '@/components/BattleDataModal';
@@ -224,33 +225,17 @@ export function BattleLitePage() {
         }}
       />
 
-      {showImageModal && savedImageUrl ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', paddingLeft: '2rem', paddingRight: '2rem' }}
-        >
-          <div className="battle-lite-modal-surface relative max-h-[80vh] w-full max-w-lg overflow-auto rounded-lg">
-            <div className="battle-lite-modal-header sticky top-0 z-10 flex justify-end p-2 backdrop-blur">
-              <button
-                onClick={() => {
-                  setShowImageModal(false);
-                  setSavedImageUrl(null);
-                }}
-                aria-label="关闭"
-                className="battle-lite-modal-close text-3xl leading-none"
-              >
-                ×
-              </button>
-            </div>
-            <div className="px-4 pb-4">
-              <p className="battle-lite-muted-text mt-2 text-center text-sm">📱 长按图片保存到相册</p>
-              <div className="flex flex-col items-center p-2">
-                <img src={savedImageUrl} alt="魔法少女战斗报告" className="mx-auto h-auto w-full rounded-lg" />
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <ImagePreviewModal
+        isOpen={showImageModal}
+        imageUrl={savedImageUrl}
+        onClose={() => { setShowImageModal(false); setSavedImageUrl(null); }}
+        imageAlt="魔法少女战斗报告"
+        imageWidth="full"
+        hint="📱 长按图片保存到相册"
+        closeOnBackdrop={false}
+        closeButtonAriaLabel="关闭"
+        deferToOtherModals
+      />
 
       <BattleDataModal
         isOpen={showBattleDataModal}

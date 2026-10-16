@@ -14,6 +14,7 @@ type ImagePreviewModalProps = {
   maxWidthClassName?: string;
   zIndexClassName?: string;
   closeOnBackdrop?: boolean;
+  deferToOtherModals?: boolean;
   closeButtonAriaLabel?: string;
 };
 
@@ -33,6 +34,7 @@ export function ImagePreviewModal({
   maxWidthClassName = 'max-w-lg',
   zIndexClassName,
   closeOnBackdrop = true,
+  deferToOtherModals = false,
   closeButtonAriaLabel,
 }: ImagePreviewModalProps) {
   return (
@@ -43,6 +45,7 @@ export function ImagePreviewModal({
       maxWidthClassName={maxWidthClassName}
       zIndexClassName={zIndexClassName}
       closeOnBackdrop={closeOnBackdrop}
+      deferToOtherModals={deferToOtherModals}
       closeButtonAriaLabel={closeButtonAriaLabel}
     >
       <p className="text-center text-sm text-gray-600 dark:text-gray-400">{hint}</p>

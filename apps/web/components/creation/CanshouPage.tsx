@@ -1,5 +1,6 @@
 'use client';
 
+import { ImagePreviewModal } from '@mahoshojo/ui-web/modal';
 import { BackHomeLink } from '@mahoshojo/ui-web/shell';
 import { getQuestionnaireQuestionPresentation } from '@mahoshojo/ui-web/questionnaire';
 import { QuestionnaireResultActions } from '@mahoshojo/ui-web/details-controls';
@@ -1754,25 +1755,17 @@ export const CanshouPage: React.FC = () => {
         />
       )}
 
-      {showImageModal && savedImageUrl && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg max-w-lg w-full max-h-[80vh] overflow-auto relative">
-            <div className="sticky top-0 z-10 bg-white/95 backdrop-blur flex justify-end p-2">
-              <button
-                onClick={() => setShowImageModal(false)}
-                aria-label="关闭"
-                className="text-3xl leading-none text-gray-600 hover:text-gray-900"
-              >
-                ×
-              </button>
-            </div>
-            <div className="px-4 pb-4">
-              <p className="text-center text-sm text-gray-600 mb-2">长按图片保存到相册</p>
-              <img src={savedImageUrl} alt="残兽档案" className="w-full h-auto rounded-lg" />
-            </div>
-          </div>
-        </div>
-      )}
+      <ImagePreviewModal
+        isOpen={showImageModal}
+        imageUrl={savedImageUrl}
+        onClose={() => setShowImageModal(false)}
+        imageAlt="残兽档案"
+        imageWidth="full"
+        hint="长按图片保存到相册"
+        closeOnBackdrop={false}
+        closeButtonAriaLabel="关闭"
+        deferToOtherModals
+      />
     </>
   );
 };

@@ -35,15 +35,25 @@ const lockViewportScroll = () => {
 
 export const acquireModalEnvironment = (fallbackFocus: HTMLElement | null = null) => {
   const id = Symbol('modal-environment');
-  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const parentTargets = [...activeLayers.values()].at(-1) ?? [];
-  // 每层保留进入时的返回链：中间层先卸载，也不会丢失更早的存活入口。
-  const targets = [...new Set([previousFocus, fallbackFocus, ...parentTargets]
-    .filter((target): target is HTMLElement => target !== null))];
+  const captureTargets = (parentTargets: readonly HTMLElement[], previousTargets: readonly HTMLElement[] = []) => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // 每层保留进入时的返回链：中间层先卸载，也不会丢失更早的存活入口。
+    return [...new Set([previousFocus, fallbackFocus, ...parentTargets, ...previousTargets]
+      .filter((target): target is HTMLElement => target !== null))];
+  };
+  let targets = captureTargets([...activeLayers.values()].at(-1) ?? []);
   if (activeLayers.size === 0) releaseViewportScroll = lockViewportScroll();
   activeLayers.set(id, targets);
 
   return {
+    // 延迟初始 focus 的消费者在真正聚焦前刷新：继承前层已更新的链，仍同步持有滚动锁。
+    refreshReturnFocus: () => {
+      const entries = [...activeLayers.entries()];
+      const index = entries.findIndex(([layerId]) => layerId === id);
+      if (index < 0) return;
+      targets = captureTargets(entries[index - 1]?.[1] ?? [], targets);
+      activeLayers.set(id, targets);
+    },
     releaseScroll: () => {
       if (activeLayers.delete(id) && activeLayers.size === 0) {
         releaseViewportScroll?.();

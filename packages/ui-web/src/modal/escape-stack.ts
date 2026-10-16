@@ -33,9 +33,25 @@ interface RegisteredEscapeLayer {
   readonly id: symbol;
   readonly onEscape: EscapeLayerHandler;
   readonly trapsFocus: boolean;
+  readonly deferred: boolean;
 }
 
 const layers: RegisteredEscapeLayer[] = [];
+const focusTrapListeners = new Set<() => void>();
+const notifyFocusTrapLayers = () => { for (const listener of focusTrapListeners) listener(); };
+
+// 异步预览只观察已登记的普通模态层；不读 DOM/z-index，也不改变 Escape 的栈顺序。
+// 让位的预览不互相阻断，避免登记/暂停之间自激循环。
+export const hasNonDeferredFocusTrapLayer = () => layers.some(layer => layer.trapsFocus && !layer.deferred);
+// 延迟初始 focus 也要尊重稍后登记的下拉等普通层；让位层之间仍按登记顺序聚焦。
+export const hasNonDeferredLayerAbove = (id: symbol) => {
+  const index = layers.findIndex(layer => layer.id === id);
+  return index >= 0 && layers.slice(index + 1).some(layer => !layer.deferred);
+};
+export const subscribeFocusTrapLayers = (listener: () => void) => {
+  focusTrapListeners.add(listener);
+  return () => { focusTrapListeners.delete(listener); };
+};
 let escapeFallback: (() => boolean) | null = null;
 let dispatchInstalled = false;
 
@@ -64,6 +80,8 @@ export interface EscapeLayerRegistration {
   readonly id: symbol;
   /** 该层拥有焦点约束（模态框/抽屉）；默认 false。 */
   readonly trapsFocus?: boolean;
+  /** 异步预览让位层，不阻断其他让位层；不影响 Escape 的正常栈序。 */
+  readonly deferred?: boolean;
   readonly onEscape: EscapeLayerHandler;
 }
 
@@ -72,14 +90,19 @@ export const pushEscapeLayer = (registration: EscapeLayerRegistration): void => 
   layers.push({
     id: registration.id,
     trapsFocus: registration.trapsFocus === true,
+    deferred: registration.deferred === true,
     onEscape: registration.onEscape,
   });
   ensureDispatchInstalled();
+  notifyFocusTrapLayers();
 };
 
 export const popEscapeLayer = (id: symbol): void => {
   const index = layers.findIndex((layer) => layer.id === id);
-  if (index >= 0) layers.splice(index, 1);
+  if (index >= 0) {
+    layers.splice(index, 1);
+    notifyFocusTrapLayers();
+  }
 };
 
 /**
