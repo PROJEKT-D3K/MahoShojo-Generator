@@ -32,7 +32,7 @@ vi.mock('next/link', () => ({
     [key: string]: unknown;
   }) {
     return (
-      <a href={href} {...props}>
+      <a href={href} {...props} data-host-link="next">
         {children}
       </a>
     );
@@ -58,6 +58,19 @@ afterEach(() => {
 });
 
 describe('Web encyclopedia page frame', () => {
+  const expectSharedHeaderLinks = () => {
+    const header = container.querySelector('[data-testid="encyclopedia-page-card"] > header')!;
+    const links = [...header.querySelectorAll('a[data-host-link="next"]')];
+    expect(links.map((link) => ({
+      href: link.getAttribute('href'), text: link.textContent, className: link.className,
+    }))).toEqual([
+      { href: '/', text: '返回首页', className: 'footer-link' },
+      { href: '/arena', text: '竞技场', className: 'text-blue-600 hover:underline' },
+      { href: '/ranking', text: '排行榜', className: 'text-blue-600 hover:underline' },
+    ]);
+    expect(links[0].parentElement?.className).toBe('flex items-center gap-4 text-sm');
+  };
+
   it('renders the shared frame around the index and injects the web subtitle', async () => {
     const { WebEncyclopediaIndex } = await import('@/components/encyclopedia/WebEncyclopediaViews');
     await act(async () => root.render(<WebEncyclopediaIndex />));
@@ -70,6 +83,7 @@ describe('Web encyclopedia page frame', () => {
     expect(container.textContent).toContain('篇条目');
     expect(container.textContent).toContain('欢迎提交 PR');
     expect(container.textContent).not.toContain('离线');
+    expectSharedHeaderLinks();
   });
 
   it('renders the shared frame around the entry', async () => {
@@ -79,6 +93,7 @@ describe('Web encyclopedia page frame', () => {
     const frame = container.querySelector('[data-testid="encyclopedia-page-frame"]');
     expect(frame?.classList.contains('magic-background-white')).toBe(true);
     expect(container.querySelector('[data-testid="encyclopedia-entry"]')).not.toBeNull();
+    expectSharedHeaderLinks();
   });
 });
 

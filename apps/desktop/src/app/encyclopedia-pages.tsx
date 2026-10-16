@@ -1,11 +1,10 @@
-import { BackHomeLink } from '@mahoshojo/ui-web/shell';
 import { useParams, useRouter, useSearch } from '@tanstack/react-router';
 import {
   encyclopediaEntries,
   parseEncyclopediaFilter,
   type EncyclopediaContentSource,
 } from '@mahoshojo/ui-web/encyclopedia';
-import { EncyclopediaEntryView, EncyclopediaIndexView } from '@mahoshojo/ui-web/encyclopedia-views';
+import { EncyclopediaEntryView, EncyclopediaHeaderLinks, EncyclopediaIndexView } from '@mahoshojo/ui-web/encyclopedia-views';
 
 import { useExternalLinks } from '../features/external-links/external-links-provider';
 import {
@@ -28,8 +27,11 @@ const DESKTOP_INDEX_SUBTITLE = `${encyclopediaEntries.length} 篇条目 · 涵�
 const createDesktopNavigate = (router: ReturnType<typeof useRouter>) =>
   (href: string, options?: ProductHrefNavigateOptions) => navigateByProductHref(router, href, options);
 
-const homeLink = (router: ReturnType<typeof useRouter>) => (
-  <BackHomeLink href="#/" onNavigate={() => { void router.navigate({ to: '/' }); }} />
+const headerLinks = (router: ReturnType<typeof useRouter>) => (
+  <EncyclopediaHeaderLinks
+    onNavigate={createDesktopNavigate(router)}
+    resolveInternalHref={resolveInternalHrefForHashHistory}
+  />
 );
 
 /**
@@ -55,7 +57,7 @@ export function DesktopEncyclopediaIndex() {
       initialQuery={initial.query}
       initialCategoryId={initial.categoryId}
       subtitle={DESKTOP_INDEX_SUBTITLE}
-      headerLinks={homeLink(router)}
+      headerLinks={headerLinks(router)}
     />
   );
 }
@@ -86,7 +88,7 @@ export function DesktopEncyclopediaEntry() {
       hash={fragment}
       onNavigate={createDesktopNavigate(router)}
       onNavigateExternal={openContent}
-      headerLinks={homeLink(router)}
+      headerLinks={headerLinks(router)}
     />
   );
 }

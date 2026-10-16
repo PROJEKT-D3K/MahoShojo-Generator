@@ -41,6 +41,11 @@ export {
 } from './EncyclopediaLinks';
 
 export {
+  EncyclopediaHeaderLinks,
+  type EncyclopediaHeaderLinksProps,
+} from './EncyclopediaHeaderLinks';
+
+export {
   EncyclopediaPageFrame,
   type EncyclopediaPageFrameProps,
 } from './EncyclopediaPageFrame';
