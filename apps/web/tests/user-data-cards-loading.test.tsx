@@ -39,6 +39,14 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 
+const renderBattleDataModal = async (props: Partial<React.ComponentProps<typeof BattleDataModal>> = {}) => {
+  await act(async () => root.render(
+    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" {...props} />,
+  ));
+  // 先等真实懒加载模块及其 React 更新，不等待测试刻意挂起的数据请求。
+  await act(async () => { await vi.dynamicImportSettled(); });
+};
+
 it('显式失败、重试恢复，刷新失败保留上次完整页', async () => {
   vi.spyOn(client, 'getDataCardSummaryPage').mockRejectedValueOnce(new Error('网络不可用')).mockResolvedValueOnce(page()).mockRejectedValueOnce(new Error('暂时不可用'));
   await act(async () => root.render(<Harness />));
@@ -95,7 +103,7 @@ it('管理列表初次失败可重试；刷新失败保留可见卡片与筛选�
 it('Arena 私有库加载独立于公开库，刷新失败仍展示旧卡，收藏切换读取摘要并取消旧来源', async () => {
   const pending = deferred();
   const get = vi.spyOn(client, 'getDataCardSummaryPage').mockReturnValueOnce(pending.promise).mockRejectedValueOnce(new Error('不可用')).mockResolvedValue(page([]));
-  await act(async () => root.render(<BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" />));
+  await renderBattleDataModal();
   expect(get).toHaveBeenCalledOnce(); expect(document.body.textContent).toContain('加载中...');
   await act(async () => { pending.resolve(page()); });
   await act(async () => [...document.querySelectorAll('button')].find((b) => b.textContent?.startsWith('我的角色 ('))!.click());
@@ -110,7 +118,7 @@ it('公开库高级筛选不随 Tab 泄漏进我的卡/收藏摘要查询', asyn
   const fetchMock = vi.fn(async () => Response.json({ success: true, cards: [], items: {}, tags: [{ id: 'tag', name: '标签', scope: 'system', isActive: true }] }));
   vi.stubGlobal('fetch', fetchMock);
   const get = vi.spyOn(client, 'getDataCardSummaryPage').mockResolvedValue(page([]));
-  await act(async () => root.render(<BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" />));
+  await renderBattleDataModal();
   const clickButton = async (predicate: (text: string) => boolean) => {
     const button = [...document.querySelectorAll('button')].find((b) => typeof b.textContent === 'string' && predicate(b.textContent));
     expect(button).toBeDefined();
@@ -175,7 +183,7 @@ it('Arena 详情连续点击 last-click-wins：新请求中止旧请求，后点
   const first = deferred<any>(); const second = deferred<any>();
   vi.spyOn(client, 'getDataCardSummaryPage').mockResolvedValue(page([cardA, cardB]));
   const full = vi.spyOn(client, 'loadFullDataCard').mockImplementation((target: any) => (target.id === 'card-a' ? first.promise : second.promise));
-  await act(async () => root.render(<BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" />));
+  await renderBattleDataModal();
   const clickCard = async (name: string) => {
     const button = [...document.querySelectorAll('button')].find((b) => b.textContent === name);
     expect(button).toBeDefined();
@@ -235,9 +243,7 @@ it('公开库搜索 A 成功后搜索 B 失败，不把 A 的结果留在 B 的�
     if (url.includes('search=B')) return new Response(null, { status: 500 });
     return Response.json({ success: true, cards: [publicCardA] });
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
   await typeSearch('A');
@@ -257,9 +263,7 @@ it('公开库切换到管理员推荐失败，不把公开库结果留在推荐�
     if (url.includes('recommendedOnly=1')) return new Response(null, { status: 500 });
     return Response.json({ success: true, cards: [publicCardA] });
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
   expect(document.body.textContent).toContain('公开甲卡');
@@ -283,9 +287,7 @@ it('公开列表首次 503 自动重试一次后成功，不把瞬时故障展�
     if (listCalls === 1) return new Response(null, { status: 503 });
     return Response.json({ success: true, cards: [publicCardA] });
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
   armed = true;
@@ -309,9 +311,7 @@ it('公开列表持续超时有界结束后进入错误态，不永久停留在�
     listCalls += 1;
     throw new DOMException('The operation timed out.', 'TimeoutError');
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
   armed = true;
@@ -333,9 +333,7 @@ it('公开切推荐 Tab 只发一次列表请求，不产生被立即 abort 的�
     listUrls.push(url);
     return Response.json({ success: true, cards: [] });
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
   const before = listUrls.length;
@@ -354,9 +352,7 @@ it('重复点击当前公开 Tab 仍保留搜索词，不发无搜索条件请�
     listUrls.push(url);
     return Response.json({ success: true, cards: [] });
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
   await typeSearch('A');
@@ -384,9 +380,7 @@ it('公开库下一页发 offset=12 并停留在第 2 页，不被公开查询 e
     listUrls.push(url);
     return Response.json({ success: true, cards: pageCards });
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
   expect(document.body.textContent).toContain('第 1 页');
@@ -427,9 +421,7 @@ it('roleType 高级筛选后服务端分页第 2 页不被公开查询 effect �
       nextOffset: offset + cards.length < roleCards.length ? offset + cards.length : null,
     });
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
 
@@ -479,9 +471,7 @@ it('公开单卡刷新遇 404 清除 stale 卡片，不显示“上次成功结�
     }
     return Response.json({ success: true, cards: [] });
   }));
-  await act(async () => root.render(
-    <BattleDataModal isOpen onClose={vi.fn()} onSelectCard={vi.fn()} selectedType="character" initialTab="public" />,
-  ));
+  await renderBattleDataModal({ initialTab: 'public' });
   await flushAsync();
   await flushAsync();
   await typeSearch(uuid);
