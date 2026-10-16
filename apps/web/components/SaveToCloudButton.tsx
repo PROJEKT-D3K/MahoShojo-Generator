@@ -5,6 +5,7 @@ import DataCardsModal from './CharManager/DataCardsModal';
 import RecycleBinModal from './CharManager/RecycleBinModal';
 import { useAuth } from '@/lib/useAuth';
 import { authStorage, dataCardApi, type AuthData } from '@/lib/auth';
+import { captureAuthIdentity } from '@/lib/auth-identity';
 import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
 import { CloudCardActionButtons, ReplaceCardModal } from '@mahoshojo/ui-web/cloud-save';
 import { quickCheck } from '@/lib/sensitive-word-filter';
@@ -59,6 +60,7 @@ function SaveToCloudButtonView({
 }: SaveToCloudButtonProps) {
   const router = useRouter();
   const { isAuthenticated, user, authSource } = useAuth();
+  const identity = captureAuthIdentity();
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [cardName, setCardName] = useState('');
   const [cardDescription, setCardDescription] = useState('');
@@ -66,6 +68,7 @@ function SaveToCloudButtonView({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isPreparing, setIsPreparing] = useState(false);
+  const [isOperating, setIsOperating] = useState(false);
   const [preparedData, setPreparedData] = useState<any>(null);
   const [cardsRefresh, setCardsRefresh] = useState(0);
   const [userCapacity, setUserCapacity] = useState<number | undefined>(undefined);
@@ -85,12 +88,15 @@ function SaveToCloudButtonView({
   const [uncertain, setUncertain] = useState(false);
   const [checkedOwnCards, setCheckedOwnCards] = useState(false);
   const busy = useRef(false);
+  const mounted = useRef(true);
   const guardRef = useRef(operationGuard); guardRef.current = operationGuard;
   const releaseGuard = useRef<(() => void) | null>(null);
   const busyTicket = useRef<object | null>(null);
   const setOperationBusy = useCallback((value: boolean): (() => void) | undefined => {
     if (busy.current === value) return;
     busy.current = value;
+    // A stale operation still releases its ticket; the current controls must observe that release.
+    if (mounted.current) setIsOperating(value);
     if (value) {
       const ticket = {}; busyTicket.current = ticket;
       const guard = guardRef.current; releaseGuard.current = guard ? () => guard.onBusyChange(false) : null; guard?.onBusyChange(true);
@@ -99,17 +105,18 @@ function SaveToCloudButtonView({
     busyTicket.current = null;
     const release = releaseGuard.current; releaseGuard.current = null; release?.();
   }, []);
-  const isOperationBlocked = () => busy.current || Boolean(guardRef.current?.isBlocked());
+  const isOperationBlocked = () => !identity.isCurrent() || busy.current || Boolean(guardRef.current?.isBlocked());
   const operation = useRef(0);
   const capacityOperation = useRef(0);
-  const mounted = useRef(true);
   // Compare source content, not callbacks: callers often recreate getData on every render.
   let source = '';
   try { source = JSON.stringify([sourceKey, data, cardType, defaultName, defaultDescription, defaultIsPublic]); }
   catch { source = 'invalid-data'; }
-  const context = `${user?.id ?? ''}:${isAuthenticated}:${authSource ?? ''}:${source}`;
+  // Even an A → logout → A transition with identical credentials revokes the old intent.
+  const context = `${user?.id ?? ''}:${identity.epoch}:${isAuthenticated}:${authSource ?? ''}:${source}`;
   const latestContext = useRef(context);
   latestContext.current = context;
+  const isContextCurrent = (ownerContext: string) => identity.isCurrent() && ownerContext === latestContext.current;
   const draftContext = useRef<string | null>(null);
   const uncertainRef = useRef(false);
 
@@ -147,7 +154,7 @@ function SaveToCloudButtonView({
     setUserCapacity(undefined);
     setUserUsedSlots(undefined);
     const capacityInfo = await dataCardApi.getUserCapacity().catch(() => null);
-    if (!mounted.current || ownerContext !== latestContext.current || request !== capacityOperation.current) return;
+    if (!mounted.current || !isContextCurrent(ownerContext) || request !== capacityOperation.current) return;
     if (capacityInfo) {
       setUserCapacity(capacityInfo.capacity);
       setUserUsedSlots(capacityInfo.usedSlots);
@@ -163,7 +170,7 @@ function SaveToCloudButtonView({
     setPreparedData(null);
     try {
       const next = getData ? await getData() : data;
-      if (!mounted.current || token !== operation.current || ownerContext !== latestContext.current) return null;
+      if (!mounted.current || token !== operation.current || !isContextCurrent(ownerContext)) return null;
       if (!next) return null;
       // Freeze the complete wire data; subsequent source mutations must not alter a draft.
       const snapshot = JSON.parse(JSON.stringify(next));
@@ -171,7 +178,7 @@ function SaveToCloudButtonView({
       draftContext.current = ownerContext;
       return snapshot;
     } catch (error) {
-      if (!mounted.current || token !== operation.current || ownerContext !== latestContext.current) return null;
+      if (!mounted.current || token !== operation.current || !isContextCurrent(ownerContext)) return null;
       throw error;
     } finally {
       releaseOperation?.();
@@ -197,10 +204,10 @@ function SaveToCloudButtonView({
     let resolvedData;
     try { resolvedData = await resolveData(); }
     catch (error) {
-      if (ownerContext === latestContext.current && mounted.current) alert(error instanceof Error ? error.message : '准备保存数据失败。');
+      if (isContextCurrent(ownerContext) && mounted.current) alert(error instanceof Error ? error.message : '准备保存数据失败。');
       return;
     }
-    if (!mounted.current || preparation !== operation.current || ownerContext !== latestContext.current) return;
+    if (!mounted.current || preparation !== operation.current || !isContextCurrent(ownerContext)) return;
     if (!resolvedData) { alert('没有可保存的数据。'); return; }
     const type = cardType ?? (isScenarioData(resolvedData) ? 'scenario' : 'character');
     const inferredName = type === 'character'
@@ -222,7 +229,7 @@ function SaveToCloudButtonView({
     const releaseOperation = setOperationBusy(true); setIsPreparing(true);
     const token = ++operation.current;
     const ownerContext = context;
-    const isCurrent = () => mounted.current && token === operation.current && ownerContext === latestContext.current;
+    const isCurrent = () => mounted.current && token === operation.current && isContextCurrent(ownerContext);
     try {
       const expectedAuth = await authStorage.getAuth();
       if (!isCurrent()) return;
@@ -242,7 +249,7 @@ function SaveToCloudButtonView({
     const releaseOperation = setOperationBusy(true); setIsSaving(true); setReplacementError(null);
     const token = ++operation.current;
     const ownerContext = context;
-    const isCurrent = () => mounted.current && token === operation.current && ownerContext === latestContext.current;
+    const isCurrent = () => mounted.current && token === operation.current && isContextCurrent(ownerContext);
     const target = replacementTarget;
     let sent = false;
     try {
@@ -282,7 +289,7 @@ function SaveToCloudButtonView({
     const releaseOperation = setOperationBusy(true);
     const token = ++operation.current;
     const ownerContext = context;
-    const isCurrent = () => mounted.current && token === operation.current && ownerContext === latestContext.current;
+    const isCurrent = () => mounted.current && token === operation.current && isContextCurrent(ownerContext);
     const submission = {
       userId: user.id,
       name: cardName,
@@ -372,7 +379,7 @@ function SaveToCloudButtonView({
         alert(error instanceof Error ? error.message : '准备替换数据失败。');
         return null;
       });
-      if (!mounted.current || ownerContext !== latestContext.current || preparation !== operation.current) return;
+      if (!mounted.current || !isContextCurrent(ownerContext) || preparation !== operation.current) return;
       if (!resolvedData) {
         if (!hadResolveError) {
           alert('没有可替换的数据。');
@@ -391,14 +398,14 @@ function SaveToCloudButtonView({
         onSave={() => void handleSaveClick()}
         onReplace={handleReplaceClick}
         saveLabel={isPreparing ? '准备中...' : buttonText}
-        saveDisabled={!canOperate || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
-        replaceDisabled={!canOperate || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
+        saveDisabled={!canOperate || isOperating || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
+        replaceDisabled={!canOperate || isOperating || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
       /> : <>
         <button
           onClick={() => void handleSaveClick()}
           className={className}
           style={style}
-          disabled={!canOperate || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())} // 如果没有数据且无法动态准备，则禁用
+          disabled={!canOperate || isOperating || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())} // 如果没有数据且无法动态准备，则禁用
         >
           {isPreparing ? '准备中...' : buttonText}
         </button>
@@ -406,7 +413,7 @@ function SaveToCloudButtonView({
           onClick={handleReplaceClick}
           className={`${className} ml-2`}
           style={{ ...style, backgroundColor: '#f59e0b', backgroundImage: 'linear-gradient(to right, #f59e0b, #f97316)' }}
-          disabled={!canOperate || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
+          disabled={!canOperate || isOperating || isPreparing || isSaving || Boolean(operationGuard?.isBlocked())}
         >
           替换已有
         </button>

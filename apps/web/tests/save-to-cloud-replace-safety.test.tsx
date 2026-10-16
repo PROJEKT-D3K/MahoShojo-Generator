@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import SaveToCloudButton from '@/components/SaveToCloudButton';
 import { authStorage, dataCardApi } from '@/lib/auth';
+import { beginAuthIdentityTransition } from '@/lib/auth-identity';
 const mocks = vi.hoisted(() => ({ user: { id: 7 }, check: vi.fn(), push: vi.fn(), picker: null as any }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock('@/lib/useAuth', () => ({ useAuth: () => ({ isAuthenticated: true, user: mocks.user, authSource: 'legacy-bearer' }) }));
@@ -121,4 +122,42 @@ test('来源变化保留已派发替换的page guard，旧ticket终态才释放'
   await act(async () => { pending.resolve(Response.json(ack)); await flush(); });
   expect(blocked).toBe(false); expect(window.alert).not.toHaveBeenCalled(); expect(button('确认替换')).toBeUndefined();
   expect(changes.mock.calls.map(([value]) => value)).toEqual([true, false, true, false, true, false]);
+});
+
+test.each([false, true])('同账号同凭据换代使敏感检查中的旧替换失效（已重渲染：%s）', async (rerender) => {
+  const render = () => act(async () => { root.render(<SaveToCloudButton data={data} />); await flush(); });
+  await render(); await choose();
+  let finish!: (value: { hasSensitiveWords: boolean }) => void;
+  mocks.check.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  await click('确认替换'); expect(writes()).toHaveLength(0);
+  beginAuthIdentityTransition();
+  if (rerender) await render();
+  await act(async () => { finish({ hasSensitiveWords: false }); await flush(); });
+  expect(writes()).toHaveLength(0); expect(window.alert).not.toHaveBeenCalled();
+  await render(); expect(button('确认替换')).toBeUndefined();
+});
+
+test('同账号换代拒绝迟到目标预览，不创建可确认的旧目标', async () => {
+  const render = () => act(async () => { root.render(<SaveToCloudButton data={data} />); await flush(); });
+  await render(); await click('替换已有');
+  const pending = deferred(); fetcher.mockReturnValueOnce(pending.promise); await click('选择目标');
+  beginAuthIdentityTransition(); await render();
+  await act(async () => { pending.resolve(Response.json(ready)); await flush(); });
+  expect(button('确认替换')).toBeUndefined(); expect(writes()).toHaveLength(0); expect(window.alert).not.toHaveBeenCalled();
+});
+
+test('同账号换代后已发送的写请求只释放原ticket，不认领迟到成功或重放', async () => {
+  let blocked = false;
+  const changes = vi.fn((value: boolean) => { blocked = value; });
+  const guard = { isBlocked: () => blocked, onBusyChange: changes };
+  const render = () => act(async () => { root.render(<SaveToCloudButton data={data} operationGuard={guard} />); await flush(); });
+  await render(); await choose();
+  const pending = deferred(); fetcher.mockReturnValueOnce(pending.promise); await click('确认替换');
+  expect(writes()).toHaveLength(1); expect(blocked).toBe(true);
+  beginAuthIdentityTransition(); await render(); expect(blocked).toBe(true);
+  await act(async () => { pending.resolve(Response.json(ack)); await flush(); });
+  expect(writes()).toHaveLength(1); expect(window.alert).not.toHaveBeenCalled(); expect(blocked).toBe(false);
+  expect(button('确认替换')).toBeUndefined();
+  expect(button('替换已有').disabled).toBe(false);
+  await choose(); expect(button('确认替换')).toBeTruthy(); expect(writes()).toHaveLength(1);
 });

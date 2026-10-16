@@ -3,6 +3,7 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import SaveToCloudButton from '@/components/SaveToCloudButton';
+import { beginAuthIdentityTransition } from '@/lib/auth-identity';
 
 const mocks = vi.hoisted(() => ({
   auth: { userId: 7, username: 'owner', authKey: 'mock' },
@@ -110,6 +111,25 @@ describe.each([undefined, 'generation-result'] as const)('Web explicit create li
     mocks.user = { id: 8 }; await render();
     await act(async () => check.resolve({ hasSensitiveWords: false }));
     expect(mocks.create).not.toHaveBeenCalled(); expect(mocks.modal.isOpen).toBe(false);
+  });
+  it.each([false, true])('同账号同凭据换代阻断旧新建（已重渲染：%s）', async (rerender) => {
+    const check = deferred<any>(); mocks.check.mockReturnValueOnce(check.promise);
+    await render(); await open(); await act(async () => { void mocks.modal.onSave(); });
+    beginAuthIdentityTransition();
+    if (rerender) await render();
+    await act(async () => check.resolve({ hasSensitiveWords: false }));
+    expect(mocks.create).not.toHaveBeenCalled(); expect(window.alert).not.toHaveBeenCalled();
+    await render(); expect(mocks.modal.isOpen).toBe(false);
+  });
+  it('同账号换代不认领已发送新建的迟到成功、不重放', async () => {
+    const create = deferred<any>(); mocks.create.mockReturnValueOnce(create.promise);
+    await render(); await open(); await act(async () => { void mocks.modal.onSave(); });
+    expect(mocks.create).toHaveBeenCalledOnce();
+    beginAuthIdentityTransition(); await render();
+    await act(async () => create.resolve({ success: true, id: 'old-account-intent' }));
+    expect(mocks.create).toHaveBeenCalledOnce(); expect(window.alert).not.toHaveBeenCalled(); expect(mocks.modal.isOpen).toBe(false);
+    expect([...container.querySelectorAll('button')].map((button) => button.disabled)).toEqual([false, false]);
+    await open(); expect(mocks.modal.isOpen).toBe(true); expect(mocks.create).toHaveBeenCalledOnce();
   });
   it('same-owner credential changes cannot show a stale success', async () => {
     const create = deferred<any>(); mocks.create.mockReturnValue(create.promise);
