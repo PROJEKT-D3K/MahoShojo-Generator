@@ -24,7 +24,12 @@ interface SaveToCloudButtonProps {
   className?: string;
   style?: React.CSSProperties;
   presentation?: 'generation-result';
-  operationGuard?: { isBlocked: () => boolean; onBusyChange: (busy: boolean) => void };
+  operationGuard?: {
+    isBlocked: () => boolean;
+    onBusyChange: (busy: boolean) => void;
+    /** Only owned create/replace calls; unlike picker activity, settlement survives an identity change. */
+    onWritePendingChange?: (pending: boolean) => void;
+  };
 }
 
 // 检测是否为情景文件
@@ -106,6 +111,12 @@ function SaveToCloudButtonView({
     const release = releaseGuard.current; releaseGuard.current = null; release?.();
   }, []);
   const isOperationBlocked = () => !identity.isCurrent() || busy.current || Boolean(guardRef.current?.isBlocked());
+  const beginOwnedWrite = () => {
+    const notify = guardRef.current?.onWritePendingChange;
+    notify?.(true);
+    // Keep the original notifier, just as the operation ticket keeps its original guard release.
+    return () => notify?.(false);
+  };
   const operation = useRef(0);
   const capacityOperation = useRef(0);
   // Compare source content, not callbacks: callers often recreate getData on every render.
@@ -252,11 +263,13 @@ function SaveToCloudButtonView({
     const isCurrent = () => mounted.current && token === operation.current && isContextCurrent(ownerContext);
     const target = replacementTarget;
     let sent = false;
+    let releaseWrite: (() => void) | undefined;
     try {
       const checked = await quickCheck(`${target.name} ${target.description || ''} ${JSON.stringify(selection.data)}`);
       if (!isCurrent()) return;
       if (checked.hasSensitiveWords) { navigateToArrested(); return; }
       sent = true;
+      releaseWrite = beginOwnedWrite();
       const result = await dataCardApi.replaceOwnedCard(target, selection.data, { expectedUserId: user.id, expectedAuth: selection.expectedAuth, isCurrent });
       if (!isCurrent()) return;
       if (result.success) {
@@ -273,7 +286,7 @@ function SaveToCloudButtonView({
       if (!isCurrent()) return;
       if (sent) { replacementUnknown.current = true; setReplacementUncertain(true); setCheckedOwnCards(false); setReplacementError('替换结果不确定，请检查我的云端卡及待审版本；不会自动重发。'); }
       else setReplacementError(error instanceof Error ? error.message : '准备替换失败，输入已保留');
-    } finally { releaseOperation?.(); if (isCurrent()) setIsSaving(false); }
+    } finally { releaseWrite?.(); releaseOperation?.(); if (isCurrent()) setIsSaving(false); }
   };
 
   const handleSave = async () => {
@@ -301,6 +314,7 @@ function SaveToCloudButtonView({
     setIsSaving(true);
     setSaveError(null);
     let sent = false;
+    let releaseWrite: (() => void) | undefined;
     try {
       const expectedAuth = await authStorage.getAuth();
       if (!isCurrent()) return;
@@ -309,6 +323,7 @@ function SaveToCloudButtonView({
       if (!isCurrent()) return;
       if (sensitiveWordResult.hasSensitiveWords) { navigateToArrested(); return; }
       sent = true;
+      releaseWrite = beginOwnedWrite();
       const result = await dataCardApi.createCard(
         submission.type, submission.name, submission.description, submission.data, submission.isPublic,
         { expectedUserId: submission.userId, expectedAuth, isCurrent },
@@ -353,6 +368,7 @@ function SaveToCloudButtonView({
         setSaveError(error instanceof Error ? error.message : '准备保存失败，输入已保留。');
       }
     } finally {
+      releaseWrite?.();
       releaseOperation?.();
       if (isCurrent()) setIsSaving(false);
     }

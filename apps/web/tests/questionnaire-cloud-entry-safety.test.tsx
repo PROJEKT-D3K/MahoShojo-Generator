@@ -154,3 +154,48 @@ describe('问卷兼容编辑保留本地稿的出口', () => {
     expect(dataCardApi.replaceCard).not.toHaveBeenCalled(); expect(dataCardApi.repairQuestionnaireType).not.toHaveBeenCalled();
   });
 });
+
+describe('问卷页在途云写的离页守卫', () => {
+  test.each([['create', 7], ['replace', 7], ['create', 8], ['replace', 8]] as const)('账号换代不能提前释放已派发的 %s（当前用户 %s），原请求终态后恢复操作', async (kind, nextUserId) => {
+    await renderPage(); await importDraft();
+    if (kind === 'create') await click('保存为云端问卷'); else await chooseTarget();
+    let finish!: (response: Response) => void;
+    fetcher.mockReturnValueOnce(new Promise<Response>((resolve) => { finish = resolve; }));
+    await click(kind === 'create' ? '保存' : '确认替换');
+    expect(writes()).toHaveLength(1);
+    const blocked = () => { const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; };
+    const link = document.createElement('a'); link.href = '/leave-questionnaire'; document.body.append(link);
+    let reachedLink = false;
+    link.addEventListener('click', (event) => { reachedLink = true; event.preventDefault(); });
+    try {
+      expect(blocked()).toBe(true);
+      mocks.userId = nextUserId; mocks.epoch = beginAuthIdentityTransition().identity.epoch; await renderPage();
+      expect(blocked()).toBe(true);
+      link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+      expect(reachedLink).toBe(false);
+      await click('替换已有'); expect(writes()).toHaveLength(1);
+    } finally {
+      await act(async () => { finish(Response.json(kind === 'create' ? { success: true, id: 'created-q', accountFenceVersion: 1, ownerUserId: 7 } : ack, { status: kind === 'create' ? 201 : 200 })); await flush(); });
+      link.remove();
+    }
+    expect(blocked()).toBe(false); expect(window.alert).not.toHaveBeenCalled();
+    document.body.append(link);
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+    expect(reachedLink).toBe(true); link.remove();
+    expect(button('保存为云端问卷')!.disabled).toBe(false); expect(button('替换已有')!.disabled).toBe(false);
+    await click('保存为云端问卷'); expect(button('保存')).toBeTruthy(); expect(writes()).toHaveLength(1);
+    expect(draftInput().value).toBe(JSON.stringify(questionnaire));
+  });
+  test('尚未派写的目标预览换代后不会留下持久离页锁', async () => {
+    await renderPage(); await importDraft(); await click('替换已有');
+    let finish!: (response: Response) => void;
+    fetcher.mockReturnValueOnce(new Promise<Response>((resolve) => { finish = resolve; }));
+    await click('替换');
+    mocks.epoch = beginAuthIdentityTransition().identity.epoch; await renderPage();
+    const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false); expect(writes()).toHaveLength(0);
+    await act(async () => { finish(Response.json(ready)); await flush(); });
+    expect(button('确认替换')).toBeUndefined(); expect(button('替换已有')!.disabled).toBe(false);
+  });
+
+});

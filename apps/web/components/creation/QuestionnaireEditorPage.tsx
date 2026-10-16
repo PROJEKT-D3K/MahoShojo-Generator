@@ -48,14 +48,20 @@ export const QuestionnaireEditorPage: React.FC = () => {
   const cloudScope = `${user?.id ?? ''}:${identityEpoch}`;
   const cloudScopeRef = useRef(cloudScope);
   const cloudOperationBusy = useRef(false);
+  const cloudWritePending = useRef(false);
+  const [hasPendingCloudWrite, setPendingCloudWrite] = useState(false);
   if (cloudScopeRef.current !== cloudScope) { cloudScopeRef.current = cloudScope; cloudOperationBusy.current = false; }
   const [cloudBusyState, setCloudBusy] = useState({ scope: cloudScope, busy: false });
-  const cloudBusy = cloudBusyState.scope === cloudScope && cloudBusyState.busy;
-  const cloudOperationGuard = useMemo(() => ({ isBlocked: () => cloudScopeRef.current !== cloudScope || cloudOperationBusy.current,
-    onBusyChange: (value: boolean) => { if (cloudScopeRef.current === cloudScope) { cloudOperationBusy.current = value; setCloudBusy({ scope: cloudScope, busy: value }); } } }), [cloudScope]);
-  useUnsavedPageGuard(() => cloudOperationBusy.current, '正在处理云端数据卡，请等待响应后再离开', () => false);
+  const cloudBusy = hasPendingCloudWrite || (cloudBusyState.scope === cloudScope && cloudBusyState.busy);
+  const cloudOperationGuard = useMemo(() => ({ isBlocked: () => cloudScopeRef.current !== cloudScope || cloudOperationBusy.current || cloudWritePending.current,
+    onBusyChange: (value: boolean) => { if (cloudScopeRef.current === cloudScope) { cloudOperationBusy.current = value; setCloudBusy({ scope: cloudScope, busy: value }); } },
+    // SaveToCloudButton owns one write ticket and releases this original notification at settlement.
+    // Picker reads/metadata retain their existing scope-local busy lifecycle.
+    onWritePendingChange: (value: boolean) => { cloudWritePending.current = value; if (mounted.current) setPendingCloudWrite(value); },
+  }), [cloudScope]);
+  useUnsavedPageGuard(() => cloudOperationBusy.current || cloudWritePending.current, '正在处理云端数据卡，请等待响应后再离开', () => false);
   const runCloudOperation = async (handler: () => Promise<void>) => {
-    if (cloudOperationBusy.current) return;
+    if (cloudOperationGuard.isBlocked()) return;
     cloudOperationGuard.onBusyChange(true);
     try { await handler(); } finally { cloudOperationGuard.onBusyChange(false); }
   };
