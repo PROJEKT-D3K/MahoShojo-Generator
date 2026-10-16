@@ -42,6 +42,7 @@ import {
   areArenaRoomSharedConfigsExactlyEqual,
   areArenaRoomSharedConfigsSemanticallyEqual,
 } from './shared-config-equality';
+import { GenerationStoryBuffer } from './generation-story-buffer';
 
 export type ArenaRoomControllerPhase =
   | 'closed'
@@ -588,6 +589,11 @@ export const createArenaRoomController = (
   let generationStartPending = false;
   let pendingGenerationStartRequest: ArenaRoomGenerationStartRequest | null = null;
   let generationFence = 0;
+  let recoveryStories: {
+    readonly key: string;
+    readonly fence: number;
+    readonly buffer: GenerationStoryBuffer;
+  } | null = null;
   let unknownProposalMutation: UnknownProposalMutation | null = null;
   const configTrackingScope = ++configTrackingScopeSequence;
   let configPublishOperation = 0;
@@ -728,6 +734,7 @@ export const createArenaRoomController = (
 
   const advanceGenerationFence = (clearRecoveries = false): void => {
     generationFence += 1;
+    recoveryStories = null;
     cancelGenerationRecoveries(clearRecoveries);
   };
 
@@ -889,6 +896,7 @@ export const createArenaRoomController = (
       readonly generationId: string;
       readonly attempt: number;
     },
+    stories?: GenerationStoryBuffer,
   ): boolean => {
     const current = state.session;
     if (
@@ -906,13 +914,19 @@ export const createArenaRoomController = (
       || view.status === 'cancelled'
       || view.status === 'producer_lost'
     ) pendingGenerationStartRequest = null;
-    const storyCursor = view.nextChunkSeq === 0
-      ? null
-      : { generationId: view.generation.generationId, chunkSeq: view.nextChunkSeq - 1 };
     const terminal = view.status === 'completed'
       || view.status === 'failed'
       || view.status === 'cancelled'
       || view.status === 'producer_lost';
+    const buffered = !terminal ? stories?.rebase(view.nextChunkSeq) : undefined;
+    const nextChunkSeq = buffered?.nextChunkSeq ?? view.nextChunkSeq;
+    const storyCursor = nextChunkSeq === 0
+      ? null
+      : { generationId: view.generation.generationId, chunkSeq: nextChunkSeq - 1 };
+    const gap = buffered?.gap ? { generationId: view.generation.generationId, ...buffered.gap } : null;
+    // A terminal HTTP result also owns the recovery fence. An older running GET
+    // must not revive it after cancel/status/start has confirmed completion.
+    if (terminal) advanceGenerationFence(true);
     if (terminal && unknownManagementMutation?.operation === 'cancel-generation') {
       unknownManagementMutation = null;
     }
@@ -926,12 +940,12 @@ export const createArenaRoomController = (
       },
       generation: {
         mirror: view.generation,
-        phase: generationPhaseForStatus(view.status),
+        phase: gap ? 'resyncing' : generationPhaseForStatus(view.status),
         status: view.status,
         authoritativeMarkdown: view.markdown,
-        markdown: view.markdown,
+        markdown: view.markdown + (buffered?.markdown ?? ''),
         storyCursor,
-        gap: null,
+        gap,
         finalAuthoritative: view.finalAuthoritative,
         generationRecordId: view.generationRecordId ?? null,
         errorCode: view.errorCode ?? null,
@@ -958,6 +972,10 @@ export const createArenaRoomController = (
     const mirror = current?.snapshot.activeGeneration;
     if (!current || !mirror || !isActive()) return null;
     const key = recoveryKeyFor(current.roomId, current.roomEpoch, mirror);
+    if (recoveryStories?.key !== key || recoveryStories.fence !== generationFence) {
+      recoveryStories = { key, fence: generationFence, buffer: new GenerationStoryBuffer() };
+    }
+    const stories = recoveryStories;
     const existing = generationRecoveries.get(key);
     if (existing) {
       if (reason === 'baseline' || reason === 'terminal') existing.rerunAfterFlight = true;
@@ -1063,11 +1081,16 @@ export const createArenaRoomController = (
           || state.generation.recoveryCode != null;
         const noticeBeforeInstall = state.notice;
         if (
-          installAuthoritativeGenerationView(view, captured)
+          installAuthoritativeGenerationView(view, captured, stories.buffer)
           && hadRecoveryNotice
           && state.notice === noticeBeforeInstall
         ) {
           publish({ notice: null });
+        }
+        if (state.generation.gap) {
+          // A baseline that predates an actual missing/overflowed frame cannot
+          // repair that gap. Share the existing bounded safe-read retry budget.
+          throw new ArenaRoomClientError('ROOM_UNAVAILABLE', null, '战报基线尚未覆盖缺失内容');
         }
         return;
       } catch (error) {
@@ -1195,6 +1218,9 @@ export const createArenaRoomController = (
       .finally(() => {
         if (generationRecoveries.get(key) !== entry) return;
         generationRecoveries.delete(key);
+        // Manual retry must not forget a known gap or the frames collected while
+        // a failed GET was in flight. The same byte/frame budgets still apply.
+        if (recoveryStories === stories && state.generation.phase !== 'unavailable') recoveryStories = null;
         if (entry.rerunAfterFlight && isActive()) void requestGenerationRecovery('terminal');
       });
     generationRecoveries.set(key, entry);
@@ -1250,7 +1276,20 @@ export const createArenaRoomController = (
     const lastChunkSeq = cursor?.generationId === event.generationId ? cursor.chunkSeq : -1;
     if (event.chunkSeq <= lastChunkSeq) return;
     const expectedChunkSeq = lastChunkSeq + 1;
-    if (state.generation.gap || state.generation.phase === 'resyncing') return;
+    const bufferDuringRecovery = (): void => {
+      if (
+        recoveryStories?.key === recoveryKeyFor(current.roomId, current.roomEpoch, mirror)
+        && recoveryStories.fence === generationFence
+      ) recoveryStories.buffer.add(event);
+    };
+    if (
+      state.generation.gap
+      || state.generation.phase === 'resyncing'
+      || (state.generation.phase === 'unavailable' && recoveryStories !== null)
+    ) {
+      bufferDuringRecovery();
+      return;
+    }
     if (event.chunkSeq !== expectedChunkSeq) {
       publish({
         generation: {
@@ -1264,6 +1303,7 @@ export const createArenaRoomController = (
         },
       });
       void requestGenerationRecovery('gap');
+      bufferDuringRecovery();
       return;
     }
     publish({
@@ -2094,8 +2134,16 @@ export const createArenaRoomController = (
         || state.session?.roomId !== captured.roomId
         || state.session.roomEpoch !== captured.roomEpoch
         || state.session.self.userId !== captured.selfUserId
+        || state.session.snapshot.activeGeneration?.generationId !== captured.generationId
+        || state.session.snapshot.activeGeneration.attempt !== captured.attempt
       ) return;
-      installAuthoritativeGenerationView(authoritative, captured);
+      const observed = state.session.snapshot.activeGeneration;
+      const responseIsActive = authoritative.status === 'reserved'
+        || authoritative.status === 'running' || authoritative.status === 'finalizing';
+      if (responseIsActive && (
+        observed.state === 'completed' || observed.state === 'failed' || observed.state === 'cancelled'
+      )) return;
+      if (!installAuthoritativeGenerationView(authoritative, captured)) return;
       if (
         authoritative.status === 'reserved'
         || authoritative.status === 'running'
@@ -2648,13 +2696,37 @@ export const createArenaRoomController = (
         || state.session?.roomId !== expectedRoomId
         || state.session.roomEpoch !== expectedRoomEpoch
       ) return;
+      const observed = state.session.snapshot.activeGeneration;
+      const sameAttempt = observed?.generationId === view.generation.generationId
+        && observed.attempt === view.generation.attempt
+        && observed.generationRequestId === request.generationRequestId;
+      const responseIsActive = view.status === 'reserved' || view.status === 'running' || view.status === 'finalizing';
+      if (
+        (observed && observed.generationRequestId !== request.generationRequestId
+          && state.generation.pendingRequestId !== request.generationRequestId)
+        // Keep terminal replies eligible: a control event alone does not supply
+        // the final authoritative body if its safe GET is still unavailable.
+        || (sameAttempt && responseIsActive && (
+          observed.state === 'completed' || observed.state === 'failed' || observed.state === 'cancelled'
+          || (observed.state === 'running' && view.status === 'reserved')
+          || (state.generation.storyCursor?.chunkSeq ?? -1) >= view.nextChunkSeq
+        ))
+      ) return;
+      const key = recoveryKeyFor(expectedRoomId, expectedRoomEpoch, view.generation);
+      const stories = recoveryStories?.key === key && recoveryStories.fence === generationFence
+        ? recoveryStories.buffer
+        : undefined;
       advanceGenerationFence(true);
       if (!installAuthoritativeGenerationView(view, {
         roomId: expectedRoomId,
         roomEpoch: expectedRoomEpoch,
         generationId: view.generation.generationId,
         attempt: view.generation.attempt,
-      })) return;
+      }, stories)) return;
+      if (state.generation.gap && stories) {
+        recoveryStories = { key, fence: generationFence, buffer: stories };
+        void requestGenerationRecovery('gap');
+      }
       publish({ notice: '多人生成已开始', error: null });
     } catch (error) {
       if (

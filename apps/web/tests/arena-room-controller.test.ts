@@ -2149,9 +2149,9 @@ describe('Arena Room browser controller', () => {
     });
     await vi.waitFor(() => expect(controller.getSnapshot().generation).toMatchObject({
       phase: 'running',
-      markdown: '权威全文',
+      markdown: '权威全文继续跳号',
       authoritativeMarkdown: '权威全文',
-      storyCursor: { generationId: 'generation-1', chunkSeq: 3 },
+      storyCursor: { generationId: 'generation-1', chunkSeq: 4 },
       gap: null,
     }));
   });
@@ -2195,6 +2195,421 @@ describe('Arena Room browser controller', () => {
       markdown: '已生成基线',
       storyCursor: { generationId: 'generation-1', chunkSeq: 1 },
     }));
+  });
+
+  const sendStory = (socket: FakeSocket, chunkSeq: number, delta: string,
+    scope: { generationId?: string; roomEpoch?: string } = {}) => socket.message(JSON.stringify({
+    protocolVersion: 1, type: 'story.delta', roomId: 'room-1',
+    roomEpoch: scope.roomEpoch ?? 'epoch-1', generationId: scope.generationId ?? 'generation-1',
+    chunkSeq, timestamp: '2026-08-28T00:02:00.000Z', payload: { delta },
+  }));
+
+  const delayedBaseline = async () => {
+    const h = createHarness({ recoveryDelayMs: () => 0 });
+    type View = Awaited<ReturnType<ArenaRoomClient['getGenerationView']>>;
+    const reads: Array<(view: View) => void> = [];
+    const rejects: Array<(error: unknown) => void> = [];
+    vi.mocked(h.client.getGenerationView).mockImplementation(() => new Promise((resolve, reject) => {
+      reads.push(resolve); rejects.push(reject);
+    }));
+    await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+    h.sockets[0]!.open();
+    sendGenerationControlEvent(h.sockets[0]!, 'generation.started', 1);
+    return { ...h, reads, rejects, socket: h.sockets[0]! };
+  };
+
+  it('首字前 GET 延迟时保留所有按序在途分片，不制造新的 gap', async () => {
+    const h = await delayedBaseline();
+    sendStory(h.socket, 0, 'A'); sendStory(h.socket, 1, 'B');
+    expect(h.controller.getSnapshot().generation).toMatchObject({ phase: 'resyncing', markdown: '' });
+    h.reads.shift()!({ ...generationView, markdown: '', nextChunkSeq: 0 });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'running', markdown: 'AB', authoritativeMarkdown: '', gap: null,
+      storyCursor: { generationId: 'generation-1', chunkSeq: 1 },
+    }));
+    sendStory(h.socket, 2, 'C');
+    expect(h.controller.getSnapshot().generation.markdown).toBe('ABC');
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+    expect(h.client.startGeneration).not.toHaveBeenCalled();
+    h.controller.dispose();
+  });
+
+  it('GET 基线覆盖在途前缀后只拼接未覆盖后缀，重复帧不重复追加', async () => {
+    const h = await delayedBaseline();
+    sendStory(h.socket, 0, 'A'); sendStory(h.socket, 1, 'B');
+    sendStory(h.socket, 2, 'C'); sendStory(h.socket, 2, 'C');
+    h.reads.shift()!({ ...generationView, markdown: 'AB', nextChunkSeq: 2 });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'running', markdown: 'ABC', authoritativeMarkdown: 'AB', gap: null,
+      storyCursor: { generationId: 'generation-1', chunkSeq: 2 },
+    }));
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+    h.controller.dispose();
+  });
+
+  it('真实缺口沿用 safe GET 退避并从覆盖缺口的新基线接回后缀', async () => {
+    const h = await delayedBaseline();
+    sendStory(h.socket, 0, 'A'); sendStory(h.socket, 2, 'C');
+    h.reads.shift()!({ ...generationView, markdown: '', nextChunkSeq: 0 });
+    await vi.waitFor(() => expect(h.queued).toHaveLength(1));
+    expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'resyncing', markdown: 'A', gap: { expectedChunkSeq: 1, receivedChunkSeq: 2 },
+    });
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+    await h.runNextTimer(); sendStory(h.socket, 3, 'D');
+    h.reads.shift()!({ ...generationView, markdown: 'AB', nextChunkSeq: 2 });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'running', markdown: 'ABCD', gap: null,
+      storyCursor: { generationId: 'generation-1', chunkSeq: 3 },
+    }));
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(2);
+    expect(h.client.startGeneration).not.toHaveBeenCalled();
+    h.controller.dispose();
+  });
+
+  it('始终过旧的 GET 最多读取四次，不能形成无限快速恢复循环', async () => {
+    const h = await delayedBaseline(); sendStory(h.socket, 1, '缺少前缀');
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      h.reads.shift()!({ ...generationView, markdown: '', nextChunkSeq: 0 });
+      if (attempt < 4) {
+        await vi.waitFor(() => expect(h.queued).toHaveLength(1)); await h.runNextTimer();
+      }
+    }
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation.phase).toBe('unavailable'));
+    expect(h.queued).toHaveLength(0);
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(4);
+    expect(h.client.startGeneration).not.toHaveBeenCalled();
+    h.controller.dispose();
+  });
+
+  it.each(['gap', 'transport'] as const)('%s 耗尽后手动恢复保留已知分片或缺口', async (kind) => {
+    const h = await delayedBaseline();
+    sendStory(h.socket, kind === 'gap' ? 1 : 0, kind === 'gap' ? 'B' : 'A');
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      const resolve = h.reads.shift()!;
+      const reject = h.rejects.shift()!;
+      if (kind === 'gap') resolve({ ...generationView, markdown: '', nextChunkSeq: 0 });
+      else reject(new ArenaRoomClientError('ROOM_UNAVAILABLE', 503, '暂不可用'));
+      if (attempt < 4) {
+        await vi.waitFor(() => expect(h.queued).toHaveLength(1)); await h.runNextTimer();
+      }
+    }
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation.phase).toBe('unavailable'));
+    const manual = h.controller.retryGenerationRecovery();
+    h.reads.shift()!({ ...generationView, markdown: '', nextChunkSeq: 0 });
+    if (kind === 'gap') {
+      await vi.waitFor(() => expect(h.queued).toHaveLength(1));
+      expect(h.controller.getSnapshot().generation.gap).toMatchObject({ expectedChunkSeq: 0, receivedChunkSeq: 1 });
+      await h.runNextTimer();
+      h.reads.shift()!({ ...generationView, markdown: 'A', nextChunkSeq: 1 });
+    }
+    await manual;
+    expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'running', gap: null, markdown: kind === 'gap' ? 'AB' : 'A',
+    });
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(kind === 'gap' ? 6 : 5);
+    expect(h.client.startGeneration).not.toHaveBeenCalled();
+    h.controller.dispose();
+  });
+
+  it('缓存溢出时保持缺口直到新基线覆盖丢失高水位', async () => {
+    const h = await delayedBaseline();
+    for (let seq = 0; seq <= 128; seq += 1) sendStory(h.socket, seq, 'A');
+    h.reads.shift()!({ ...generationView, markdown: '', nextChunkSeq: 0 });
+    await vi.waitFor(() => expect(h.queued).toHaveLength(1));
+    expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'resyncing', markdown: '', gap: { expectedChunkSeq: 0, receivedChunkSeq: 128 },
+    });
+    await h.runNextTimer();
+    h.reads.shift()!({ ...generationView, markdown: 'A'.repeat(129), nextChunkSeq: 129 });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation.phase).toBe('running'));
+    sendStory(h.socket, 129, 'B');
+    expect(h.controller.getSnapshot().generation.markdown).toBe('A'.repeat(129) + 'B');
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(2);
+    h.controller.dispose();
+  });
+
+  it('权威终态直接覆盖缓存 preview，终态后迟到分片无效', async () => {
+    const h = await delayedBaseline(); sendStory(h.socket, 0, '临时正文');
+    h.reads.shift()!({
+      ...generationView, generation: { ...generationMirror, state: 'completed' },
+      status: 'completed', markdown: '最终正文', nextChunkSeq: 0, finalAuthoritative: true,
+      generationRecordId: 'generation-1', result: generationResult,
+    });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'completed', markdown: '最终正文', finalAuthoritative: true, storyCursor: null,
+    }));
+    sendStory(h.socket, 1, '迟到分片');
+    expect(h.controller.getSnapshot().generation.markdown).toBe('最终正文');
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+    h.controller.dispose();
+  });
+
+  it('新 generation 隔离旧缓存与迟到 GET', async () => {
+    const h = await delayedBaseline(); sendStory(h.socket, 0, '旧正文');
+    sendGenerationControlEvent(h.socket, 'generation.started', 2, {
+      generationRequestId: 'request-22222222', generationId: 'generation-2',
+    });
+    sendStory(h.socket, 0, '新正文', { generationId: 'generation-2' });
+    h.reads.shift()!({ ...generationView, markdown: '旧基线', nextChunkSeq: 0 });
+    h.reads.shift()!({ ...generationView,
+      generation: { ...generationMirror, generationRequestId: 'request-22222222', generationId: 'generation-2' },
+      markdown: '', nextChunkSeq: 0,
+    });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'running', markdown: '新正文', mirror: { generationId: 'generation-2' },
+      storyCursor: { generationId: 'generation-2', chunkSeq: 0 },
+    }));
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(2);
+    h.controller.dispose();
+  });
+
+  it('同 generation 的新 snapshot 围栏保留等待补读时收到的新分片', async () => {
+    const h = await delayedBaseline(); sendStory(h.socket, 0, '旧分片');
+    h.socket.message(JSON.stringify({
+      protocolVersion: 1, type: 'room.snapshot', roomId: 'room-1', roomEpoch: 'epoch-1',
+      controlSeq: 2, timestamp: '2026-08-28T00:02:00.000Z',
+      payload: { ...snapshot, controlSeq: 2, activeGeneration: generationMirror },
+    }));
+    sendStory(h.socket, 0, '新分片');
+    h.reads.shift()!({ ...generationView, markdown: '过期基线', nextChunkSeq: 0 });
+    await vi.waitFor(() => expect(h.client.getGenerationView).toHaveBeenCalledTimes(2));
+    h.reads.shift()!({ ...generationView, markdown: '', nextChunkSeq: 0 });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'running', markdown: '新分片', storyCursor: { generationId: 'generation-1', chunkSeq: 0 },
+    }));
+    h.controller.dispose();
+  });
+
+  it.each(['epoch', 'attempt'] as const)('新 %s 的 snapshot 不继承旧缓冲与旧 GET', async (change) => {
+    const h = await delayedBaseline(); sendStory(h.socket, 0, '旧缓冲');
+    const roomEpoch = change === 'epoch' ? 'epoch-2' : 'epoch-1';
+    const generation = { ...generationMirror, attempt: change === 'attempt' ? 2 : 1 };
+    h.socket.message(JSON.stringify({
+      protocolVersion: 1, type: 'room.snapshot', roomId: 'room-1', roomEpoch,
+      controlSeq: 2, timestamp: '2026-08-28T00:02:00.000Z',
+      payload: { ...snapshot, roomEpoch, controlSeq: 2, activeGeneration: generation },
+    }));
+    sendStory(h.socket, 0, '新缓冲', { roomEpoch });
+    if (change === 'epoch') sendStory(h.socket, 1, '旧 epoch 迟到帧');
+    h.reads.shift()!({ ...generationView, markdown: '旧 GET', nextChunkSeq: 0 });
+    h.reads.shift()!({ ...generationView, roomEpoch, generation, markdown: '', nextChunkSeq: 0 });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'running', markdown: '新缓冲', mirror: { attempt: generation.attempt },
+      storyCursor: { generationId: 'generation-1', chunkSeq: 0 }, gap: null,
+    }));
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(2);
+    h.controller.dispose();
+  });
+
+  it.each(['access', 'membership'] as const)('%s 失效清空缓冲，迟到 GET 不再恢复旧正文', async (cause) => {
+    const h = await delayedBaseline(); sendStory(h.socket, 0, '私有旧正文');
+    if (cause === 'access') h.controller.setAccess({ enabled: true, authenticated: false });
+    else h.socket.closed(1008, 'membership-revoked');
+    h.reads.shift()!({ ...generationView, markdown: '迟到旧 GET', nextChunkSeq: 0 });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().session).toBeNull());
+    expect(h.controller.getSnapshot().generation.markdown).toBe('');
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+    h.controller.dispose();
+  });
+
+  it.each([false, true])('start POST 晚回包保留同一生成已收到正文，GET 已完成=%s', async (getFinished) => {
+    const h = createHarness();
+    type View = Awaited<ReturnType<ArenaRoomClient['getGenerationView']>>;
+    let resolveStart!: (view: View) => void;
+    let resolveGet!: (view: View) => void;
+    vi.mocked(h.client.startGeneration).mockImplementation(() => new Promise((resolve) => { resolveStart = resolve; }));
+    vi.mocked(h.client.getGenerationView).mockImplementation(() => new Promise((resolve) => { resolveGet = resolve; }));
+    await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+    h.sockets[0]!.open();
+    const start = h.controller.startGeneration(generationStartRequest);
+    sendGenerationControlEvent(h.sockets[0]!, 'generation.started', 1);
+    sendStory(h.sockets[0]!, 0, 'A'); sendStory(h.sockets[0]!, 1, 'B');
+    if (getFinished) {
+      resolveGet({ ...generationView, markdown: '', nextChunkSeq: 0 });
+      await vi.waitFor(() => expect(h.controller.getSnapshot().generation.phase).toBe('running'));
+    }
+    resolveStart({ ...generationView, markdown: '', nextChunkSeq: 0 });
+    await start;
+    if (!getFinished) resolveGet({ ...generationView, markdown: '旧 GET', nextChunkSeq: 0 });
+    sendStory(h.sockets[0]!, 2, 'C');
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({
+      phase: 'running', markdown: 'ABC', gap: null,
+      storyCursor: { generationId: 'generation-1', chunkSeq: 2 },
+    }));
+    expect(h.client.startGeneration).toHaveBeenCalledTimes(1);
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+    h.controller.dispose();
+  });
+
+  it.each(['reserved', 'running', 'finalizing'] as const)(
+    '晚到的 %s start POST 不能将已观察终态改回活跃态', async (status) => {
+      const h = createHarness();
+      type View = Awaited<ReturnType<ArenaRoomClient['getGenerationView']>>;
+      let resolveStart!: (view: View) => void;
+      vi.mocked(h.client.startGeneration).mockImplementation(() => new Promise((resolve) => { resolveStart = resolve; }));
+      vi.mocked(h.client.getGenerationView).mockImplementation(() => new Promise(() => {}));
+      await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+      h.sockets[0]!.open();
+      const start = h.controller.startGeneration(generationStartRequest);
+      sendGenerationControlEvent(h.sockets[0]!, 'generation.completed', 1, { generationRecordId: 'generation-1' });
+      resolveStart({ ...generationView, status,
+        generation: { ...generationMirror, state: status === 'reserved' ? 'starting' : 'running' }, markdown: '' });
+      await start;
+      expect(h.controller.getSnapshot().generation).toMatchObject({
+        mirror: { state: 'completed' }, status: 'completed', phase: 'resyncing', finalAuthoritative: false,
+      });
+      expect(h.client.startGeneration).toHaveBeenCalledTimes(1);
+      h.controller.dispose();
+    },
+  );
+
+  it('reserved start POST 晚于 running 事件时保留在途 GET 和缓存', async () => {
+    const h = createHarness();
+    type View = Awaited<ReturnType<ArenaRoomClient['getGenerationView']>>;
+    let resolveStart!: (view: View) => void;
+    let resolveGet!: (view: View) => void;
+    vi.mocked(h.client.startGeneration).mockImplementation(() => new Promise((resolve) => { resolveStart = resolve; }));
+    vi.mocked(h.client.getGenerationView).mockImplementation(() => new Promise((resolve) => { resolveGet = resolve; }));
+    await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+    h.sockets[0]!.open();
+    const start = h.controller.startGeneration(generationStartRequest);
+    sendGenerationControlEvent(h.sockets[0]!, 'generation.started', 1);
+    sendStory(h.sockets[0]!, 0, 'A');
+    resolveStart({ ...generationView, generation: { ...generationMirror, state: 'starting' }, status: 'reserved', markdown: '' });
+    await start;
+    expect(h.controller.getSnapshot().generation.phase).toBe('resyncing');
+    resolveGet({ ...generationView, markdown: '', nextChunkSeq: 0 });
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation).toMatchObject({ phase: 'running', markdown: 'A' }));
+    sendStory(h.sockets[0]!, 1, 'B');
+    expect(h.controller.getSnapshot().generation.markdown).toBe('AB');
+    expect(h.client.startGeneration).toHaveBeenCalledTimes(1);
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+    h.controller.dispose();
+  });
+
+  it.each((['completed', 'failed', 'cancelled', 'producer_lost'] as const).flatMap((status) =>
+    [false, true].map((pending) => ({ status, pending }))))(
+    '合法 $status start POST 可在终态 GET 失败后收敛，pendingRequestId 保留=$pending', async ({ status, pending }) => {
+      const h = createHarness();
+      type View = Awaited<ReturnType<ArenaRoomClient['getGenerationView']>>;
+      let resolveStart!: (view: View) => void;
+      vi.mocked(h.client.startGeneration).mockImplementation(() => new Promise((resolve) => { resolveStart = resolve; }));
+      vi.mocked(h.client.getGenerationView).mockRejectedValue(new ArenaRoomClientError('ROOM_UNAVAILABLE', 503, '临时失败'));
+      await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+      h.sockets[0]!.open();
+      const start = h.controller.startGeneration(generationStartRequest);
+      const mirrorState = status === 'producer_lost' ? 'failed' : status;
+      if (pending) {
+        h.sockets[0]!.message(JSON.stringify({
+          protocolVersion: 1, type: 'room.snapshot', roomId: 'room-1', roomEpoch: 'epoch-1',
+          controlSeq: 1, timestamp: '2026-08-28T00:02:00.000Z',
+          payload: { ...snapshot, controlSeq: 1, activeGeneration: { ...generationMirror, state: mirrorState } },
+        }));
+      } else {
+        sendGenerationControlEvent(h.sockets[0]!, status === 'completed' ? 'generation.completed' : 'generation.failed', 1,
+          status === 'completed' ? { generationRecordId: 'generation-1' } : { errorCode: 'generation-failed' });
+      }
+      expect(h.controller.getSnapshot().generation.pendingRequestId).toBe(pending ? generationStartRequest.generationRequestId : null);
+      await vi.waitFor(() => expect(h.queued).toHaveLength(1));
+      resolveStart({ ...generationView, generation: { ...generationMirror, state: mirrorState }, status,
+        markdown: '终态权威正文', finalAuthoritative: status === 'completed',
+        ...(status === 'completed' ? { generationRecordId: 'generation-1', result: generationResult } : {}),
+      });
+      await start;
+      expect(h.controller.getSnapshot().generation).toMatchObject({
+        status, phase: mirrorState, markdown: '终态权威正文', authoritativeMarkdown: '终态权威正文',
+        finalAuthoritative: status === 'completed', pendingRequestId: null,
+      });
+      expect(h.queued).toHaveLength(0);
+      expect(h.client.startGeneration).toHaveBeenCalledTimes(1);
+      expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+      h.controller.dispose();
+    },
+  );
+
+  it.each([false, true])('新请求 POST 仅在仍有 pending intent 时覆盖旧 generation，pending=%s', async (pending) => {
+    const h = createHarness();
+    type View = Awaited<ReturnType<ArenaRoomClient['getGenerationView']>>;
+    let resolveStart!: (view: View) => void;
+    vi.mocked(h.client.startGeneration).mockImplementation(() => new Promise((resolve) => { resolveStart = resolve; }));
+    vi.mocked(h.client.getGenerationView).mockImplementation(() => new Promise(() => {}));
+    await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+    h.sockets[0]!.open();
+    const other = { ...generationMirror, generationId: 'generation-other', generationRequestId: 'request-other000' };
+    if (pending) {
+      h.sockets[0]!.message(JSON.stringify({
+        protocolVersion: 1, type: 'room.snapshot', roomId: 'room-1', roomEpoch: 'epoch-1',
+        controlSeq: 1, timestamp: '2026-08-28T00:02:00.000Z',
+        payload: { ...snapshot, controlSeq: 1, activeGeneration: { ...other, state: 'completed' } },
+      }));
+    }
+    const start = h.controller.startGeneration(generationStartRequest);
+    if (!pending) sendGenerationControlEvent(h.sockets[0]!, 'generation.started', 1, {
+      generationId: other.generationId, generationRequestId: other.generationRequestId,
+    });
+    expect(h.controller.getSnapshot().generation.pendingRequestId).toBe(pending ? generationStartRequest.generationRequestId : null);
+    resolveStart({ ...generationView, generation: { ...generationMirror, state: 'completed' }, status: 'completed',
+      markdown: '本次权威正文', finalAuthoritative: true, generationRecordId: 'generation-1', result: generationResult });
+    await start;
+    expect(h.controller.getSnapshot().session?.snapshot.activeGeneration?.generationId).toBe(pending ? 'generation-1' : 'generation-other');
+    expect(h.controller.getSnapshot().generation.markdown).toBe(pending ? '本次权威正文' : '');
+    expect(h.client.startGeneration).toHaveBeenCalledTimes(1);
+    h.controller.dispose();
+  });
+
+  it.each(['reserved', 'running', 'finalizing'] as const)(
+    '终态 GET 已安装后迟到的 %s cancel HTTP 不得复活生成或重挂管理锁', async (status) => {
+      const h = createHarness();
+      type View = Awaited<ReturnType<ArenaRoomClient['getGenerationView']>>;
+      let resolveCancel!: (view: View) => void;
+      vi.mocked(h.client.cancelGeneration).mockImplementation(() => new Promise((resolve) => { resolveCancel = resolve; }));
+      await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+      h.sockets[0]!.open();
+      sendGenerationControlEvent(h.sockets[0]!, 'generation.started', 1);
+      await vi.waitFor(() => expect(h.controller.getSnapshot().generation.phase).toBe('running'));
+      const cancel = h.controller.cancelGeneration();
+      vi.mocked(h.client.getGenerationView).mockResolvedValue({
+        ...generationView, generation: { ...generationMirror, state: 'completed' }, status: 'completed',
+        markdown: '最终正文', finalAuthoritative: true, generationRecordId: 'generation-1', result: generationResult,
+      });
+      sendGenerationControlEvent(h.sockets[0]!, 'generation.completed', 2, { generationRecordId: 'generation-1' });
+      await vi.waitFor(() => expect(h.controller.getSnapshot().generation.phase).toBe('completed'));
+      resolveCancel({ ...generationView, status,
+        generation: { ...generationMirror, state: status === 'reserved' ? 'starting' : 'running' }, markdown: '' });
+      await cancel;
+      expect(h.controller.getSnapshot()).toMatchObject({
+        generation: { phase: 'completed', markdown: '最终正文', finalAuthoritative: true },
+        managementOperation: null, managementResultUnknown: false,
+      });
+      expect(h.client.cancelGeneration).toHaveBeenCalledTimes(1);
+      expect(h.client.startGeneration).not.toHaveBeenCalled();
+      h.controller.dispose();
+    },
+  );
+
+  it('cancel HTTP 已确认终态后迟到的 running GET 不得复活生成或暂存正文', async () => {
+    const h = await delayedBaseline(); sendStory(h.socket, 0, '待取消正文');
+    vi.mocked(h.client.cancelGeneration).mockResolvedValue({
+      ...generationView, generation: { ...generationMirror, state: 'cancelled' },
+      status: 'cancelled', markdown: '', nextChunkSeq: 0, finalAuthoritative: false,
+    });
+    await h.controller.cancelGeneration();
+    expect(h.controller.getSnapshot().generation.phase).toBe('cancelled');
+    h.reads.shift()!({ ...generationView, markdown: '迟到运行中正文', nextChunkSeq: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.controller.getSnapshot().generation).toMatchObject({ phase: 'cancelled', markdown: '' });
+    expect(h.client.cancelGeneration).toHaveBeenCalledTimes(1);
+    expect(h.client.getGenerationView).toHaveBeenCalledTimes(1);
+    h.controller.dispose();
+  });
+
+  it('dispose 后暂存分片与迟到基线均不再发布', async () => {
+    const h = await delayedBaseline(); sendStory(h.socket, 0, '待丢弃');
+    const observed = vi.fn(); h.controller.subscribe(observed); h.controller.dispose(); observed.mockClear();
+    h.reads.shift()!({ ...generationView, markdown: '迟到基线', nextChunkSeq: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observed).not.toHaveBeenCalled();
   });
 
   it('generation GET 临时失败时只对 safe-read 有界重试，并在恢复后安装权威视图', async () => {
