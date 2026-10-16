@@ -1,10 +1,10 @@
 'use client';
 
-import { BaseModal } from '@mahoshojo/ui-web/modal';
+import { RankingDetailsLoadingModal } from '@mahoshojo/ui-web/ranking';
 import type { CardDetailsSource } from '@mahoshojo/ui-web/card-details';
 
 import type { ComponentProps } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import DataCardDetailsModal from '@/components/DataCardDetailsModal';
 import { mapPublicDataCardRowToDetailsCard } from '@/lib/data-card-read-mappers';
@@ -120,11 +120,6 @@ function LeaderboardEntityDetailsScope(props: LeaderboardEntityDetailsModalProps
 
   const requestIdRef = useRef(0);
 
-  const modalTitle = useMemo(() => {
-    if (!entity) return '角色详情';
-    return entity.entityType === 'preset' ? '预设角色详情' : '数据卡详情';
-  }, [entity]);
-
   useEffect(() => {
     if (!isOpen || !entity) return;
 
@@ -168,29 +163,13 @@ function LeaderboardEntityDetailsScope(props: LeaderboardEntityDetailsModalProps
 
   if (isLoading || !detailsCard) {
     return (
-      <BaseModal isOpen onClose={onClose} title={modalTitle} maxWidthClassName="max-w-md">
-          {detailsPendingNotice ? (
-            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              {detailsPendingNotice}
-            </div>
-          ) : null}
-          <div className="mt-4 text-sm text-gray-600">
-            {error ? (
-              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-800">
-                <div>加载失败：{error}</div>
-                <button
-                  type="button"
-                  onClick={() => setRetryNonce((prev) => prev + 1)}
-                  className="mt-2 rounded-md bg-white px-2 py-1 text-xs text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50"
-                >
-                  重试
-                </button>
-              </div>
-            ) : (
-              '正在加载角色详情...'
-            )}
-          </div>
-      </BaseModal>
+      <RankingDetailsLoadingModal
+        entityType={entity.entityType}
+        pendingNotice={detailsPendingNotice}
+        error={error}
+        onRetry={() => setRetryNonce((prev) => prev + 1)}
+        onClose={onClose}
+      />
     );
   }
 

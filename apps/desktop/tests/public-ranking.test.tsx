@@ -60,6 +60,30 @@ describe('Desktop actual anonymous ranking browser', () => {
     mocks.invoke.mockImplementation(async (_command, { request }) => request.kind === 'leaderboard' ? { kind: 'leaderboard', data: { success: true, items: [{ ...fixture.responses.leaderboard.items[0], entityType: 'preset', entityId: 'legacy-not-bundled.json', displayName: '旧预设' }] } } : response(request));
     await render(); expect(container.textContent).toContain('旧预设'); expect(container.querySelector('[aria-label="查看角色详情：旧预设"]')).toBeNull(); expect(container.querySelector('[title*="未收录"]')).not.toBeNull();
   });
+  it('详情失败保留榜单提示，显式重试后可关闭且迟到正文不会重开弹窗', async () => {
+    await render();
+    const opener = container.querySelector<HTMLButtonElement>('[aria-label^="查看角色详情"]')!; opener.focus();
+    const first = deferred<unknown>(), retry = deferred<unknown>();
+    let requests = 0;
+    mocks.invoke.mockImplementation(async (command, { request }) => command === 'cloud_card_library_request'
+      ? (++requests === 1 ? first.promise : retry.promise) : response(request));
+    await act(async () => opener.click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('数据卡详情');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在加载角色详情');
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('当前榜单：#1');
+    await act(async () => first.resolve({ status: 503, body: { success: false } }));
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('HTTP 503');
+    expect(document.body.textContent).toContain('当前榜单：#1');
+    const retryButton = [...document.querySelectorAll('button')].find((node) => node.textContent === '重试')!;
+    await act(async () => retryButton.click());
+    expect(requests).toBe(2); expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在加载角色详情');
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="关闭对话框"]')!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.activeElement).toBe(opener);
+    const id = fixture.responses.leaderboard.items[0]!.entityId;
+    await act(async () => retry.resolve({ status: 200, body: { success: true, card: { id, name: '迟到榜单正文', type: 'character', data: '{"name":"迟到角色"}', is_public: 1 } } }));
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(requests).toBe(2);
+  });
   it('keeps draft queue/sort changes unapplied until Apply and uses a single bounded page', async () => {
     await render(); await select(1, 'free'); await select(2, 'tech'); await select(3, 'asc');
     expect(mocks.invoke).toHaveBeenCalledTimes(3);

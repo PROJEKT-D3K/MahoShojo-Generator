@@ -2,3 +2,4 @@ export { RankingPageView, type PublicRankingReader, type RankingPageViewProps, t
 export { LeaderboardSeasonExtrema } from './LeaderboardSeasonExtrema';
 export { EntityRatingHistoryButton, type EntityRatingHistoryButtonProps } from './EntityRatingHistoryButton';
 export { EntityRatingHistoryModal, type EntityRatingHistoryItem, type EntityRatingHistoryModalProps } from './EntityRatingHistoryModal';
+export { RankingDetailsLoadingModal, type RankingDetailsLoadingModalProps } from './RankingDetailsLoadingModal';

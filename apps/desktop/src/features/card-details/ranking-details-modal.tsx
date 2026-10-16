@@ -3,8 +3,7 @@ import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { PUBLIC_DATA_CARD_NOT_FOUND_CODE } from '@mahoshojo/contracts/desktop-cloud';
 import { mapPublicDataCardRowToDetailsCard, saveLocalDataCard, type CardLibraryDetailsCard, type CardLibraryHost } from '@mahoshojo/ui-web/card-library';
 import type { CardDetailsSource } from '@mahoshojo/ui-web/card-details';
-import type { RankingDetailsTarget } from '@mahoshojo/ui-web/ranking';
-import { BaseModal } from '@mahoshojo/ui-web/modal';
+import { RankingDetailsLoadingModal, type RankingDetailsTarget } from '@mahoshojo/ui-web/ranking';
 import { fetchArenaPreset } from '../arena/input';
 import { DesktopCardDetailsModal } from './card-details-modal';
 
@@ -46,7 +45,7 @@ function RankingDetailsScope({ entity, onClose, host }: { entity: RankingDetails
     });
     return () => controller.abort();
   }, [entity, host.online, retry]);
-  if (!loaded) return <BaseModal isOpen onClose={onClose} title="角色详情" maxWidthClassName="max-w-md"><p className="text-sm text-gray-600">{entity.pendingNotice}</p>{error ? <div role="alert" className="mt-3 text-sm text-red-700"><p>{error}</p><button type="button" onClick={() => setRetry((value) => value + 1)} className="mt-2 rounded border px-3 py-2">重试</button></div> : <p role="status" className="mt-3">正在加载角色详情…</p>}</BaseModal>;
+  if (!loaded) return <RankingDetailsLoadingModal entityType={entity.entityType} pendingNotice={entity.pendingNotice} error={error} onRetry={() => setRetry((value) => value + 1)} onClose={onClose} />;
   return <DesktopCardDetailsModal isOpen onClose={onClose} {...loaded} ratingHistoryEntity={{ entityType: entity.entityType, entityId: entity.entityId }} pendingNotice={entity.pendingNotice} localLibrarySaveState={saveState}
     onSaveCopyToLocalLibrary={async () => {
       setSaveState({ busy: true, message: null });
