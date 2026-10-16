@@ -17,6 +17,7 @@ import {
 } from '@mahoshojo/ui-web/details-controls';
 import { convertDataCard, createBlankDataCard } from '@mahoshojo/domain/sublimation';
 import { MarkdownBlock } from '@mahoshojo/ui-web/markdown';
+import { useEscapeLayer } from '@mahoshojo/ui-web/modal';
 import {
   ScenarioPageLayout,
   ScenarioFormSections,
@@ -117,6 +118,14 @@ function ScenarioForm({ session }: { session: ScenarioSession }) {
     if (confirmRegenerate && !dialog?.open) dialog?.showModal();
     else if (!confirmRegenerate && dialog?.open) dialog.close();
   }, [confirmRegenerate]);
+  useEscapeLayer({
+    active: confirmRegenerate !== false,
+    trapsFocus: true,
+    onEscape: () => {
+      if (!session.isBusy()) setConfirmRegenerate(false);
+      return true;
+    },
+  });
   const guard = useLeaveGuard(
     () => cloudSavingRef.current || editorSavingRef.current || session.isBusy() || session.hasUnsavedDraft(),
     '生成或保存尚未完成，或当前草稿未能保存。请等待、取消生成，或重试保存草稿后再离开。也可以确认清除草稿以放弃当前内容。',

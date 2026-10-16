@@ -47,6 +47,7 @@ import {
   useFreeAttachments,
 } from '@mahoshojo/ui-web/free';
 import { MarkdownBlock } from '@mahoshojo/ui-web/markdown';
+import { useEscapeLayer } from '@mahoshojo/ui-web/modal';
 import { BackHomeLink, ProductFooter } from '@mahoshojo/ui-web/shell';
 import type { HomeAssetSource } from '@mahoshojo/ui-web/home';
 import { FreeSession, createEmptyFreeDraftDocument, type FreeDraft } from '../features/free/session';
@@ -142,6 +143,14 @@ function FreeForm({ session }: { session: FreeSession }) {
     if (confirmRegenerate && !dialog?.open) dialog?.showModal();
     else if (!confirmRegenerate && dialog?.open) dialog.close();
   }, [confirmRegenerate]);
+  useEscapeLayer({
+    active: confirmRegenerate !== false,
+    trapsFocus: true,
+    onEscape: () => {
+      if (!session.isBusy()) setConfirmRegenerate(false);
+      return true;
+    },
+  });
   const guard = useLeaveGuard(
     () => cloudSavingRef.current || session.isBusy() || session.hasUnsavedDraft(),
     '生成或保存尚未完成，或当前草稿未能保存。请等待、取消生成，或重试保存草稿后再离开。也可以确认清除草稿以放弃当前内容。',

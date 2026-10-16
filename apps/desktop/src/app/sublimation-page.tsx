@@ -14,6 +14,7 @@ import { AiReasoningPanel, GenerationModeSwitcher, JsonSizeIndicator, SaveJsonBu
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
 import { SublimationPageFrame, SublimationPageHeader, SublimationSourceInput, SublimationTargetField, SublimationGuidanceField, SublimationNarrativeField, SublimationPreserveFields, SublimationCurrentStateFieldset, SublimationArenaHistoryStrategyFieldset, getDefaultPreserveFields, getPersonalityPreset } from '@mahoshojo/ui-web/sublimation';
 import { ScenarioLanguageField } from '@mahoshojo/ui-web/scenario';
+import { useEscapeLayer } from '@mahoshojo/ui-web/modal';
 import { BackHomeLink, ProductFooter } from '@mahoshojo/ui-web/shell';
 import { buildSafeFileName } from '@mahoshojo/ui-web/client';
 import { SublimationSession, createInitialSublimationDraft, buildSublimationInput, type SublimationDraft } from '../features/sublimation/session';
@@ -90,6 +91,14 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
     if (confirmation && !confirmDialog.current?.open) confirmDialog.current?.showModal();
     else if (!confirmation && confirmDialog.current?.open) confirmDialog.current.close();
   }, [confirmation]);
+  useEscapeLayer({
+    active: confirmation !== null,
+    trapsFocus: true,
+    onEscape: () => {
+      if (!session.isBusy()) setConfirmation(null);
+      return true;
+    },
+  });
   useEffect(() => {
     const controller = new AbortController();
     void fetch('/languages.json', { signal: controller.signal, credentials: 'omit', redirect: 'error' })
