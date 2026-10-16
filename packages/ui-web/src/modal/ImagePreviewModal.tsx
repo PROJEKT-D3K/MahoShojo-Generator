@@ -10,7 +10,11 @@ type ImagePreviewModalProps = {
   title?: ReactNode;
   hint?: ReactNode;
   imageAlt?: string;
+  imageWidth?: 'half' | 'full';
   maxWidthClassName?: string;
+  zIndexClassName?: string;
+  closeOnBackdrop?: boolean;
+  closeButtonAriaLabel?: string;
 };
 
 /**
@@ -25,7 +29,11 @@ export function ImagePreviewModal({
   title = '图片预览',
   hint = '💫 长按图片保存到相册',
   imageAlt = '生成结果长图',
+  imageWidth = 'half',
   maxWidthClassName = 'max-w-lg',
+  zIndexClassName,
+  closeOnBackdrop = true,
+  closeButtonAriaLabel,
 }: ImagePreviewModalProps) {
   return (
     <BaseModal
@@ -33,11 +41,14 @@ export function ImagePreviewModal({
       title={title}
       onClose={onClose}
       maxWidthClassName={maxWidthClassName}
+      zIndexClassName={zIndexClassName}
+      closeOnBackdrop={closeOnBackdrop}
+      closeButtonAriaLabel={closeButtonAriaLabel}
     >
       <p className="text-center text-sm text-gray-600 dark:text-gray-400">{hint}</p>
       <div className="flex flex-col items-center p-2">
         {imageUrl ? (
-          <img src={imageUrl} alt={imageAlt} className="mx-auto h-auto w-1/2 rounded-lg" />
+          <img src={imageUrl} alt={imageAlt} className={`mx-auto h-auto rounded-lg ${imageWidth === 'full' ? 'w-full' : 'w-1/2'}`} />
         ) : null}
       </div>
     </BaseModal>

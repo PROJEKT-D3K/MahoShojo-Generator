@@ -1,5 +1,7 @@
 'use client';
 
+import { ImagePreviewModal } from '@mahoshojo/ui-web/modal';
+
 import React, { useState, useRef, useEffect } from 'react';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { NamePageView } from '@mahoshojo/ui-web/name-generation';
@@ -220,35 +222,16 @@ export function NamePage() {
         </div>}
         footer={<Footer />}
       />
-        {showImageModal && savedImageUrl && (
-          <div className="fixed inset-0 bg-black flex items-center justify-center z-50"
-            style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', paddingLeft: '2rem', paddingRight: '2rem' }}
-          >
-            <div className="bg-white rounded-lg max-w-lg w-full max-h-[80vh] overflow-auto relative">
-              <div className="sticky top-0 z-10 bg-white/95 backdrop-blur flex justify-end p-2">
-                <button
-                  onClick={() => setShowImageModal(false)}
-                  aria-label="关闭"
-                  className="text-gray-500 hover:text-gray-700 text-3xl leading-none"
-                >
-                  ×
-                </button>
-              </div>
-              <div className="px-4 pb-4">
-                <p className="text-center text-sm text-gray-600" style={{ marginTop: '0.5rem' }}>
-                  💫 长按图片保存到相册
-                </p>
-                <div className="items-center flex flex-col" style={{ padding: '0.5rem' }}>
-                  <img
-                    src={savedImageUrl}
-                    alt="魔法少女登记表"
-                    className="w-1/2 h-auto rounded-lg mx-auto"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <ImagePreviewModal
+          isOpen={showImageModal}
+          imageUrl={savedImageUrl}
+          imageAlt="魔法少女登记表"
+          hint="💫 长按图片保存到相册"
+          imageWidth="half"
+          closeOnBackdrop={false}
+          closeButtonAriaLabel="关闭"
+          onClose={() => setShowImageModal(false)}
+        />
     </>
   );
 }

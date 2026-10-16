@@ -54,6 +54,51 @@ describe('ImagePreviewModal a11y (G3-r1)', () => {
     expect(dialog()).toBeNull();
   });
 
+  it('保留全宽图片、既有层级和关闭标签的入口选项', async () => {
+    await render(<ImagePreviewModal
+      isOpen imageUrl="blob:full-width" imageWidth="full" imageAlt="角色卡片"
+      zIndexClassName="z-[1000]" closeButtonAriaLabel="关闭" onClose={() => {}}
+    />);
+    const preview = dialog()!;
+    expect(preview.querySelector('img')?.classList.contains('w-full')).toBe(true);
+    expect(preview.querySelector('img')?.classList.contains('w-1/2')).toBe(false);
+    expect(preview.parentElement?.classList.contains('z-[1000]')).toBe(true);
+    expect(preview.querySelector('button[aria-label="关闭"]')).toBe(document.activeElement);
+    expect(preview.querySelector('img')?.getAttribute('alt')).toBe('角色卡片');
+  });
+
+  it('不可点击遮罩的入口仍允许关闭按钮与 Escape，Tab 留在模态框内', async () => {
+    const onClose = vi.fn();
+    await render(<ImagePreviewModal isOpen imageUrl="blob:preview" closeOnBackdrop={false} onClose={onClose} />);
+    const preview = dialog()!;
+    const backdrop = preview.previousElementSibling as HTMLButtonElement;
+    expect(backdrop.getAttribute('aria-hidden')).toBe('true');
+    expect(backdrop.tabIndex).toBe(-1);
+    await act(async () => backdrop.click());
+    expect(onClose).not.toHaveBeenCalled();
+    const closeButton = preview.querySelector<HTMLButtonElement>('button')!;
+    const content = preview.querySelector<HTMLElement>('[role="region"]')!;
+    content.focus();
+    await act(async () => { content.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })); });
+    expect(document.activeElement).toBe(closeButton);
+    await act(async () => { closeButton.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })); });
+    expect(document.activeElement).toBe(content);
+    await act(async () => { content.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await act(async () => closeButton.click());
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('既有调用默认保留半宽图片和遮罩关闭', async () => {
+    const onClose = vi.fn();
+    await render(<ImagePreviewModal isOpen imageUrl="blob:preview" onClose={onClose} />);
+    const preview = dialog()!;
+    expect(preview.querySelector('img')?.classList.contains('w-1/2')).toBe(true);
+    const backdrop = preview.previousElementSibling as HTMLButtonElement;
+    await act(async () => backdrop.click());
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('初始焦点落在关闭按钮；Escape 触发 onClose', async () => {
     const onClose = vi.fn();
     await render(<ImagePreviewModal isOpen imageUrl="blob:preview" onClose={onClose} />);

@@ -2,7 +2,7 @@ import { PrivateResultSave } from '../features/cloud-save/private-result-save';
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
 import { CanshouRegenerateButton, generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
 import { QuestionnaireDraftPanel } from './questionnaire-draft-panel';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from '@tanstack/react-router';
 import { MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES } from '@mahoshojo/contracts/desktop-ipc';
@@ -73,7 +73,7 @@ import {
 import { CanshouCard, GeneralCharacterCard, type CanshouDetails, type GeneralCharacterCardData } from '@mahoshojo/ui-web/character-card';
 import { revokeBlobUrl } from '@mahoshojo/ui-web/client';
 import { CardLibraryModal, type BattleSelectionPayload, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
-import { useEscapeLayer } from '@mahoshojo/ui-web/modal';
+import { ImagePreviewModal, useEscapeLayer } from '@mahoshojo/ui-web/modal';
 import { BackHomeLink, ProductFooter } from '@mahoshojo/ui-web/shell';
 import type { HomeAssetSource } from '@mahoshojo/ui-web/home';
 import { CanshouSession } from '../features/canshou/session';
@@ -204,12 +204,13 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
   const resultSectionRef = useRef<HTMLDivElement | null>(null);
   const previousTargetsRef = useRef<QuestionnaireAnswerMatchTarget[] | null>(null);
   const previousSignatureRef = useRef<string | null>(null);
-  useEffect(() => {
+  // 原生 top layer 先同步退场，再让子预览的 effect 接管焦点。
+  useLayoutEffect(() => {
     const dialog = regenerateDialog.current;
     if (confirmRegenerate && !dialog?.open) dialog?.showModal();
     else if (!confirmRegenerate && dialog?.open) dialog.close();
   }, [confirmRegenerate]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const dialog = detailsDialog.current;
     if (detailsSelection && !dialog?.open) dialog?.showModal();
     else if (!detailsSelection && dialog?.open) dialog.close();
@@ -230,13 +231,6 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
     trapsFocus: true,
     onEscape: () => {
       setDetailsSelection(null);
-      return true;
-    },
-  });
-  useEscapeLayer({
-    active: showImageModal && savedImageUrl !== null,
-    onEscape: () => {
-      setShowImageModal(false);
       return true;
     },
   });
@@ -1066,33 +1060,17 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
           />
         </div>
         {/* 长按保存弹窗：与 Web `/canshou` 同一交互——图片预览 + 手动保存提示。 */}
-        {showImageModal && savedImageUrl && (
-          <div className="fixed inset-0 flex items-center justify-center" style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', paddingLeft: '2rem', paddingRight: '2rem', zIndex: 1000 }}>
-            <div className="bg-white rounded-lg max-w-lg w-full max-h-[80vh] overflow-auto relative">
-              <div className="sticky top-0 z-10 bg-white/95 backdrop-blur flex justify-end p-2">
-                <button
-                  onClick={() => setShowImageModal(false)}
-                  aria-label="关闭"
-                  className="text-gray-500 hover:text-gray-700 text-3xl leading-none"
-                >
-                  ×
-                </button>
-              </div>
-              <div className="px-4 pb-4">
-                <p className="text-center text-sm text-gray-600" style={{ marginTop: '0.5rem' }}>
-                  💫 长按图片保存到相册
-                </p>
-                <div className="items-center flex flex-col" style={{ padding: '0.5rem' }}>
-                  <img
-                    src={savedImageUrl}
-                    alt="残兽档案"
-                    className="w-1/2 h-auto rounded-lg mx-auto"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <ImagePreviewModal
+          isOpen={showImageModal && confirmRegenerate === false && detailsSelection === null}
+          imageUrl={savedImageUrl}
+          imageAlt="残兽档案"
+          hint="💫 长按图片保存到相册"
+          imageWidth="half"
+          closeOnBackdrop={false}
+          closeButtonAriaLabel="关闭"
+          zIndexClassName="z-[1000]"
+          onClose={() => setShowImageModal(false)}
+        />
         <CardLibraryModal
           host={cardLibraryHost}
           isOpen={pickerOpen}
