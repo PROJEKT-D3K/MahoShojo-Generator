@@ -1,5 +1,5 @@
 import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderToReadableStream, renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -17,6 +17,10 @@ const readyState: ArenaRoomControllerState = {
   unknownOperation: null,
   proposalOperation: null,
   proposalResultUnknown: false,
+  configPublishPending: false,
+  configPublishResultUnknown: false,
+  managementOperation: null,
+  managementResultUnknown: false,
   generation: {
     mirror: null,
     phase: 'idle',
@@ -27,6 +31,7 @@ const readyState: ArenaRoomControllerState = {
     gap: null,
     finalAuthoritative: false,
     generationRecordId: null,
+    result: null,
     errorCode: null,
     pendingRequestId: null,
     startResultUnknown: false,
@@ -52,6 +57,7 @@ const session = {
     controlSeq: 0,
     sharedConfig: {
       battleMode: 'classic' as const,
+      reportFormat: 'markdown' as const,
       combatants: [{
         key: 'host-local:character:1',
         displayName: '角色',
@@ -264,7 +270,7 @@ describe('Arena multiplayer panel accessibility/permissions', () => {
     expect(memberHtml).not.toContain('个待处理');
   });
 
-  it('显示多人生成预览，并明确区分权威终态与结果未知', () => {
+  it('等待多人战报展示加载完成，并明确区分权威终态与结果未知', async () => {
     const completedState: ArenaRoomControllerState = {
       ...readyState,
       phase: 'connected',
@@ -291,14 +297,23 @@ describe('Arena multiplayer panel accessibility/permissions', () => {
         },
       },
     };
-    const completed = renderToStaticMarkup(
+    const preview = renderToStaticMarkup(<ArenaRoomGenerationResult state={completedState} />);
+    expect(preview).toContain('正在加载战报卡片');
+    expect(preview).toContain('最终战报');
+    expect(preview).toContain('导出正文');
+
+    // 静态渲染不会等待 Suspense；完整战报断言必须等真实的按需展示模块就绪。
+    const completedStream = await renderToReadableStream(
       <ArenaRoomGenerationResult state={completedState} />,
     );
+    await completedStream.allReady;
+    const completed = await new Response(completedStream).text();
     expect(completed).toContain('房间战报');
     expect(completed).toContain('战报已完成');
     expect(completed).toContain('data-arena-battle-result-presentation="v1"');
     expect(completed).toContain('最终战报');
     expect(completed).toContain('房间记者');
+    expect(completed).not.toContain('正在加载战报卡片');
     expect(completed).toContain('战后角色变化');
     expect(completed).not.toContain('重做角色更新');
     expect(completed).not.toContain('应用手动修改');
