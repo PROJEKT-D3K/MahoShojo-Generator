@@ -43,7 +43,7 @@ const host: DataCardsModalHost = {
 };
 
 type WebDataCardsModalProps = Omit<DataCardsModalProps, 'host' | 'metadataEditor' | 'deletePort'> & {
-  metadataGuard?: { onBusyChange: (busy: boolean) => void; isBlocked?: () => boolean };
+  metadataGuard?: { onBusyChange: (busy: boolean) => void | (() => void); isBlocked?: () => boolean };
   onMetadataSaved?: () => void;
 };
 export default function DataCardsModal(props: WebDataCardsModalProps) {
@@ -65,7 +65,11 @@ function WebDataCardsModalView({ metadataGuard, onMetadataSaved, ownerId, identi
   latest.current = { metadataGuard, onMetadataSaved, externalBusy: props.busy };
   const metadataEditor = useMemo(() => ownerId === undefined ? undefined : createWebOwnedCardMetadataPort(ownerId, identity, {
     isBlocked: () => Boolean(pending.current || latest.current.externalBusy || latest.current.metadataGuard?.isBlocked?.()),
-    onBusyChange: (value) => { pending.current = value; latest.current.metadataGuard?.onBusyChange(value); },
+    onBusyChange: (value) => {
+      pending.current = value;
+      const release = latest.current.metadataGuard?.onBusyChange(value);
+      return typeof release === 'function' ? () => { pending.current = false; release(); } : undefined;
+    },
     onSaved: () => latest.current.onMetadataSaved?.(),
   }), [ownerId, identity, pending]);
   const deletePort = useMemo(() => ownerId === undefined ? undefined : createWebOwnedCardDeletePort(ownerId, identity, {

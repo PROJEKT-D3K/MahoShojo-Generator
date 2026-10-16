@@ -12,7 +12,8 @@ export interface OwnedCardMetadataPort {
   isBlocked?(): boolean;
   read(id: string): Promise<OwnedCardMetadataRead>;
   write(target: OwnedDataCardReplacementTarget, draft: OwnedCardMetadataDraft): Promise<OwnedCardMetadataOutcome>;
-  onBusyChange?(busy: boolean): void;
+  /** A returned release belongs to this acquisition and remains safe after identity changes. */
+  onBusyChange?(busy: boolean): void | (() => void);
   onSaved?(): void;
 }
 export const METADATA_UNCERTAIN_MESSAGE = '修改结果不确定，服务器可能已保存。输入已保留，不会自动重发；请重新读取云端信息并核对，再决定是否提交新的修改。';
@@ -50,7 +51,14 @@ export function useOwnedCardMetadataEditor(port: OwnedCardMetadataPort | undefin
   const pending = useRef(false);
   const operation = useRef(0);
   const assign = (next: Selection | null) => { selected.current = next; setSelection(next); };
-  const busy = (value: boolean) => { pending.current = value; owner.current?.onBusyChange?.(value); };
+  const ownedRelease = useRef(false);
+  const busy = (value: boolean) => { pending.current = value; return owner.current?.onBusyChange?.(value); };
+  const holdBusy = () => {
+    const release = busy(true);
+    ownedRelease.current = typeof release === 'function';
+    // Legacy boolean hosts keep their existing hide/unmount lifecycle.
+    return () => { if (typeof release === 'function') { pending.current = false; release(); } };
+  };
   const clearObserved = () => {
     if (observedOwner.current && session.owner === observedOwner.current) {
       session.uncertain = false; session.owner = undefined; session.edit = undefined;
@@ -59,12 +67,12 @@ export function useOwnedCardMetadataEditor(port: OwnedCardMetadataPort | undefin
   };
   const hide = () => {
     operation.current += 1;
-    if (pending.current) busy(false);
+    if (pending.current && !ownedRelease.current) busy(false);
     const saved = session.owner === observedOwner.current ? restore() : null;
     if (saved) { observedOwner.current = session.owner; owner.current = port ?? null; }
     assign(saved);
   };
-  useEffect(() => { active.current = true; return () => { active.current = false; operation.current += 1; if (pending.current && owner.current?.isCurrent()) owner.current.onBusyChange?.(false); }; }, []);
+  useEffect(() => { active.current = true; return () => { active.current = false; operation.current += 1; if (pending.current && !ownedRelease.current && owner.current?.isCurrent()) owner.current.onBusyChange?.(false); }; }, []);
   const visibilityAction = useRef<() => void>(() => {});
   visibilityAction.current = () => {
     if (!open) hide();
@@ -83,14 +91,15 @@ export function useOwnedCardMetadataEditor(port: OwnedCardMetadataPort | undefin
     owner.current = captured;
     const base: Selection = checking ? previous! : { card, draft: { name: String(card.name ?? ''), description: String(card.description ?? ''), isPublic: card.is_public === -1 ? -1 : card.is_public === 1 ? 1 : 0 }, phase: 'reading', target: null, candidate: null, error: null };
     const next = { ...base, phase: checking ? 'checking' as const : 'reading' as const, candidate: null };
-    assign(next); setStatus(null); busy(true);
+    assign(next); setStatus(null); const releaseBusy = holdBusy();
     const ticket = ++operation.current;
     const observed = observedOwner.current;
     let result: OwnedCardMetadataRead;
     try { result = await captured.read(card.id); }
     catch { result = { kind: 'rejected', message: '读取云端信息失败，输入已保留，请重试' }; }
+    releaseBusy();
     if (!active.current || ticket !== operation.current) return;
-    busy(false);
+    if (!ownedRelease.current) busy(false);
     if (checking && observed && session.owner !== observed) { assign(null); return; }
     if (!owns(captured, ticket)) { assign({ ...next, phase: 'conflict', error: '登录状态已变化，请重新打开当前账号的数据卡管理' }); return; }
     if (result.kind !== 'ready' || result.target.id !== card.id) {
@@ -112,7 +121,7 @@ export function useOwnedCardMetadataEditor(port: OwnedCardMetadataPort | undefin
       assign({ ...current, error: '名称须为 1–20 字，描述最多 300 字' }); return;
     }
     const next = { ...current, phase: 'saving' as const, error: null };
-    assign(next); busy(true);
+    assign(next); const releaseBusy = holdBusy();
     const ticket = ++operation.current;
     const token = {};
     observedOwner.current = token; session.owner = token; session.uncertain = true;
@@ -120,8 +129,9 @@ export function useOwnedCardMetadataEditor(port: OwnedCardMetadataPort | undefin
     let result: OwnedCardMetadataOutcome;
     try { result = await captured.write(current.target, { ...current.draft, name: current.draft.name.trim() }); }
     catch { result = { kind: 'uncertain', message: METADATA_UNCERTAIN_MESSAGE }; }
+    releaseBusy();
     if (!active.current || ticket !== operation.current) return;
-    busy(false);
+    if (!ownedRelease.current) busy(false);
     if (session.owner !== token) { assign(null); return; }
     if (!owns(captured, ticket)) {
       assign({ ...next, phase: 'uncertain', error: '登录状态已变化，刚才的修改结果可能不确定，请核对原账号的云端卡' }); return;
