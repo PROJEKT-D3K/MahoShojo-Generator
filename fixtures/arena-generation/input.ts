@@ -1,4 +1,4 @@
-/** Test-only, synthetic fixture frozen against 76acdab3 before pure-core extraction. */
+/** Synthetic input shared by pure-core and Hosted behavior tests. */
 export const arenaModes = ['classic', 'kizuna', 'daily', 'scenario'] as const;
 export const arenaDeliveries = ['stream', 'non-stream'] as const;
 export const arenaParityPayload = (mode: string, deliveryMode: string) => ({

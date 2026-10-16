@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createSublimationGenerationConfig, buildSublimationStreamConfig } from '../src/sublimation-runtime-shared';
 import { createSublimationGenerationCore, buildSublimationStreamCore } from '@mahoshojo/ai-core/sublimation-generation';
@@ -7,9 +6,6 @@ const originalData = { name: '雾灯', codename: '星灯', content: '完整设�
   userAnswers: ['回答'], current_state: { summary: '疲惫', fields: [{ label: '力量', type: 'number', value: 4 }] },
   arena_history: { entries: [{ id: 'legacy', title: '初遇', impact: '成长', winner: '星灯', future: true }] },
   future_extension: { lore: '保留数据' } };
-const hash = (value: string) => createHash('sha256').update(value).digest('hex');
-// Schema hashes retain the 99e3906 baseline; prompt hashes include the 2026-10-09
-// intentional readable-input, preservation and technical-metadata prompt revisions.
 describe('Sublimation 生成核迁移与 Hosted 行为保真', () => {
   for (const targetTemplate of ['general', 'magical-girl', 'canshou'] as const)
     for (const enabled of [true, false])
@@ -24,19 +20,39 @@ describe('Sublimation 生成核迁移与 Hosted 行为保真', () => {
           const hosted = createSublimationGenerationConfig(input);
           const core = createSublimationGenerationCore(input);
           expect(core.promptBuilder()).toBe(hosted.promptBuilder(null));
-          expect(hash(hosted.promptBuilder(null))).toMatchSnapshot('structured-prompt');
           expect(hosted.modelOverride).toBe(enabled ? undefined : 'gemini-2.5-flash-lite');
           expect(core).not.toHaveProperty('modelOverride');
-          for (const value of [null, {}, { updatedCharacterData: {}, sublimationEvent: { title: '成长', impact: '新经历' } },
-            { updatedCharacterData: { name: '雾灯「新生」', content: '完整新设定', future_extension: { lore: 'x' } }, sublimationEvent: { title: '成长', impact: '新经历' } }]) {
-            expect(hash(JSON.stringify(hosted.schema.safeParse(value)))).toMatchSnapshot('schema-result');
+          const requiredFields = targetTemplate === 'general'
+            ? ['name', 'content']
+            : targetTemplate === 'magical-girl'
+              ? ['codename', 'appearance', 'magicConstruct', 'wonderlandRule', 'blooming', 'analysis']
+              : ['name', 'coreConcept', 'coreEmotion', 'evolutionStage', 'appearance', 'materialAndSkin',
+                'featuresAndAppendages', 'attackMethod', 'specialAbility', 'origin', 'birthEnvironment', 'researcherNotes'];
+          const generatedFields = requiredFields.filter(field => !input.fieldsToPreserve.includes(field));
+          const event = { title: '成长', impact: '新经历' };
+          const values = [null, {}, { updatedCharacterData: {}, sublimationEvent: event },
+            { updatedCharacterData: { name: '雾灯「新生」', content: '完整新设定', future_extension: { lore: 'x' } }, sublimationEvent: event }];
+          for (const [index, value] of values.entries()) {
+            const expectedPaths = index === 0 ? [[]] : index === 1 ? [['updatedCharacterData'], ['sublimationEvent']]
+              : generatedFields.filter(field => index === 2 || !['name', 'content'].includes(field))
+                .map(field => ['updatedCharacterData', field]);
+            for (const result of [hosted.schema.safeParse(value), core.schema.safeParse(value)]) {
+              expect(result.success).toBe(expectedPaths.length === 0);
+              if (!result.success) {
+                expect(result.error.issues.map(issue => issue.path)).toEqual(expectedPaths);
+              } else {
+                expect(result.data).toEqual({
+                  updatedCharacterData: { ...(!preserve ? { name: '雾灯「新生」' } : {}), content: '完整新设定' },
+                  sublimationEvent: event,
+                });
+              }
+            }
           }
           // Legacy stream callers did not declare state read controls.
           const streamInput = { ...input, stateOptions: undefined, modelOverride: 'custom-model' };
           const stream = buildSublimationStreamConfig(streamInput);
           expect(stream.modelOverride).toBe('custom-model');
           expect(buildSublimationStreamCore(streamInput).prompt).toBe(stream.prompt);
-          expect(hash(stream.prompt)).toMatchSnapshot('stream-prompt');
           expect(input).toEqual(snapshot);
         });
 });

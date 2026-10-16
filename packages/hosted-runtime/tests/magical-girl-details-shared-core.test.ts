@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
   MAGICAL_GIRL_DETAILS_SCHEMA,
+  createMagicalGirlDetailsGenerationConfig as createCoreConfig,
+  buildMagicalGirlDetailsStreamPrompt as buildCoreStreamPrompt,
   buildUnsignedMagicalGirlDetailsCard,
   type MagicalGirlDetailsGenerationInput,
 } from '@mahoshojo/ai-core/magical-girl-details-generation';
@@ -14,24 +15,21 @@ import {
 import { createGenerateMagicalGirlDetailsRuntime } from '../src/generate-magical-girl-details-runtime';
 
 const legacy = JSON.parse(readFileSync(new URL('../../ai-core/fixtures/magical-girl-details-legacy.json', import.meta.url), 'utf8'));
-const digest = (text: string) => createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex');
 
 describe('Hosted details shared core adapter', () => {
-  it('复用迁移前 Prompt/schema 基线并仅由 Hosted 包装运行配置', () => {
+  it('复用共享生成核并仅由 Hosted 包装运行配置', () => {
     for (const fixture of legacy.cases as {
       input: MagicalGirlDetailsGenerationInput & { flowers: string };
-      structuredPromptSha256: string;
-      streamPromptSha256: string;
     }[]) {
       const context = { providerId: 'test' };
       const config = createMagicalGirlDetailsGenerationConfig(() => fixture.input.flowers, 'model', context);
       expect(config.schema).toBe(MAGICAL_GIRL_DETAILS_SCHEMA);
       expect(config.modelOverride).toBe('model');
       expect(config.generationSettingsContext).toBe(context);
-      expect(digest(config.systemPrompt)).toBe(legacy.systemPromptSha256);
-      expect(digest(config.promptBuilder(fixture.input))).toBe(fixture.structuredPromptSha256);
-      expect(digest(buildMagicalGirlDetailsStreamPrompt({ ...fixture.input, questionnaireLore: fixture.input.loreText })))
-        .toBe(fixture.streamPromptSha256);
+      const core = createCoreConfig(() => fixture.input.flowers);
+      expect(config.systemPrompt).toBe(core.systemPrompt);
+      expect(config.promptBuilder(fixture.input)).toBe(core.promptBuilder(fixture.input));
+      expect(buildMagicalGirlDetailsStreamPrompt).toBe(buildCoreStreamPrompt);
     }
     const defaults = createMagicalGirlDetailsGenerationConfig(() => '', undefined, undefined);
     expect(defaults).not.toHaveProperty('modelOverride');

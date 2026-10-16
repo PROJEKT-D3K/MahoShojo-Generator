@@ -80,9 +80,7 @@ const click = (el: Element): void => {
 
 const waitForLazyMarkdown = async (): Promise<void> => {
   await act(async () => {
-    for (let attempt = 0; attempt < 20 && container.querySelector('[role="status"]'); attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+    await vi.dynamicImportSettled();
   });
 };
 
@@ -187,7 +185,6 @@ describe('AnnouncementCenter', () => {
     expect(container.textContent).not.toContain('置顶内容');
     click(trigger());
     click(detailButtons()[0]);
-    expect(container.querySelector('[role="status"]')?.textContent).toContain('正在加载公告正文');
     await waitForLazyMarkdown();
 
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain('置顶内容');

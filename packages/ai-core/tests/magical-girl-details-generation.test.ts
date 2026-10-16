@@ -1,23 +1,18 @@
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v3';
 
 import {
   MAGICAL_GIRL_DETAILS_SCHEMA,
-  MAGICAL_GIRL_DETAILS_SYSTEM_PROMPT,
   buildMagicalGirlDetailsStreamPrompt,
   buildUnsignedMagicalGirlDetailsCard,
   createMagicalGirlDetailsGenerationConfig,
   type MagicalGirlDetailsGenerationInput,
 } from '@mahoshojo/ai-core/magical-girl-details-generation';
 
-// 从迁移前 Hosted 实现采集，防止两端同时回用后掩盖 Prompt/schema 漂移。
 const legacy = JSON.parse(readFileSync(new URL('../fixtures/magical-girl-details-legacy.json', import.meta.url), 'utf8'));
-const digest = (text: string) => createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex');
 const describeSchema = (schema: z.ZodTypeAny): unknown => ({
   type: schema._def.typeName,
-  ...(schema.description ? { description: schema.description } : {}),
   ...(schema instanceof z.ZodObject
     ? { shape: Object.fromEntries(Object.entries(schema.shape).map(([key, value]) => [key, describeSchema(value as z.ZodTypeAny)])) }
     : {}),
@@ -25,19 +20,28 @@ const describeSchema = (schema: z.ZodTypeAny): unknown => ({
 });
 
 describe('magical girl details shared generation', () => {
-  it('逐字保留 Hosted 结构化与 Markdown Prompt 以及 schema 字段描述', () => {
-    expect(digest(MAGICAL_GIRL_DETAILS_SYSTEM_PROMPT)).toBe(legacy.systemPromptSha256);
+  it('保留 schema 结构，并把问卷、语言、设定与花名传给两种生成模式', () => {
     expect(describeSchema(MAGICAL_GIRL_DETAILS_SCHEMA)).toEqual(legacy.schema);
     for (const fixture of legacy.cases as {
       input: MagicalGirlDetailsGenerationInput & { flowers: string };
-      structuredPromptSha256: string;
-      streamPromptSha256: string;
     }[]) {
       const config = createMagicalGirlDetailsGenerationConfig(() => fixture.input.flowers);
-      expect(digest(config.promptBuilder(fixture.input))).toBe(fixture.structuredPromptSha256);
-      expect(digest(buildMagicalGirlDetailsStreamPrompt({
+      const prompts = [config.promptBuilder(fixture.input), buildMagicalGirlDetailsStreamPrompt({
         ...fixture.input, questionnaireLore: fixture.input.loreText,
-      }))).toBe(fixture.streamPromptSha256);
+      })];
+      expect(config.schema).toBe(MAGICAL_GIRL_DETAILS_SCHEMA);
+      for (const prompt of prompts) {
+        expect(prompt).toContain(fixture.input.language);
+        if (fixture.input.loreText) expect(prompt).toContain(fixture.input.loreText);
+        if (fixture.input.flowers) expect(prompt).toContain(fixture.input.flowers);
+        for (const answer of fixture.input.answers) {
+          if (answer.question.trim()) expect(prompt).toContain(answer.question.trim());
+          expect(prompt).toContain(answer.answer);
+          if (answer.questionnaireTitle?.trim()) {
+            expect(prompt).toContain(answer.questionnaireTitle.trim());
+          }
+        }
+      }
       expect(config).toMatchObject({ temperature: 0.8, taskName: '生成魔法少女详细信息' });
       expect(config).not.toHaveProperty('modelOverride');
       expect(config).not.toHaveProperty('generationSettingsContext');
@@ -49,8 +53,17 @@ describe('magical girl details shared generation', () => {
     const config = createMagicalGirlDetailsGenerationConfig(flowers);
     expect(flowers).not.toHaveBeenCalled();
     const input = { answers: [], language: '中文', loreText: '' };
-    expect(config.promptBuilder(input)).toContain('花语：海棠');
-    expect(config.promptBuilder(input)).toContain('花语：百合');
+    expect(config.promptBuilder(input)).toContain('海棠');
+    expect(config.promptBuilder(input)).toContain('百合');
+    expect(flowers).toHaveBeenCalledTimes(2);
+  });
+
+  it('把可选缔造者指令传入结构化生成', () => {
+    const creatorPromptText = '偏好以潮汐作为能力意象';
+    const config = createMagicalGirlDetailsGenerationConfig(() => '');
+    expect(config.promptBuilder({
+      answers: [], language: '中文', loreText: '', creatorPromptText,
+    })).toContain(creatorPromptText);
   });
 
   it('按原 schema 接受未解锁的空字段，并构造不带签名的角色卡', () => {

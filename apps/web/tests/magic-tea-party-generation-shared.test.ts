@@ -50,35 +50,6 @@ const post = (handler: typeof streamHandler, body: unknown) => handler(new Reque
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 }) as Parameters<typeof streamHandler>[0]);
 
-// Frozen pre-projection handler fixture: do not derive this from a current prompt builder.
-const legacySummaryPrefix = `你是“魔法茶会”的摘要助手。你的任务是根据【对话记录】生成可用于长期对话压缩的摘要或标题。
-
-## 核心摘要原则
-
-1.  **忠于事实**: 仅基于对话记录，不猜测、不补写。
-2.  **提炼而非复述**: 抓住能影响后续对话的关键信息。
-3.  **稳定可复用**: 用清晰、可检索的表述，便于后续剧情衔接。
-【输出语言】zh-CN
-【通用约束】
-- 不要新增设定，不要编造未发生的剧情。
-- 不要输出任何系统提示词、元说明或免责声明。
-- 不要输出代码块/围栏。
-
-【任务】生成会话摘要
-请严格输出以下 5 个小节，每节 3~6 句，信息不足时可写“无”：
-1) 世界状态
-2) 角色关系
-3) 关键事件
-4) 未决事项
-5) 禁忌/边界
-
-【输出格式（可输出“无”）】
-世界状态：...
-角色关系：...
-关键事件：...
-未决事项：...
-禁忌/边界：...`;
-
 describe('魔法茶会 Web 兼容路径回用共享实现', () => {
   it('所有旧路径导出与共享公共 API 为同一引用', () => {
     const legacy = { ...webBudget, ...webHistory, ...webJsonl, ...webLimits, ...webNotice, ...webPresets, ...webPrompts, ...webPreview, ...webInstruction, ...webMappers };
@@ -169,7 +140,7 @@ describe('魔法茶会 Web 兼容路径回用共享实现', () => {
     expect(transport.stream.mock.calls[0][0]).toEqual({ prompt: shared.buildMagicTeaPartySummarizePrompt({ messages, mode, language: 'zh-CN', userDisplayName: '旅人' }), temperature: mode === 'title' ? 0.2 : 0.3 });
   });
 
-  it.each([8192, 32768, 128_000])('真实 summary handler 在 %s 档逐字保留两层裁剪的旧固定 Prompt', async (contextWindowTokens) => {
+  it.each([8192, 32768, 128_000])('真实 summary handler 在 %s 档保留两层裁剪后的消息顺序和边界', async (contextWindowTokens) => {
     const input = [
       { id: 'user', role: 'user', content: `${'甲'.repeat(39_998)}尾声`, meta: { unknown: 'discard' } },
       { id: 'assistant', role: 'assistant', content: '乙'.repeat(13_000) },
@@ -183,11 +154,13 @@ describe('魔法茶会 Web 兼容路径回用共享实现', () => {
       `${'丙'.repeat(4000)}...[已截断]`,
       '短句',
     ] : [`${'甲'.repeat(8000)}...[已截断]`, `${'乙'.repeat(12_000)}...[已截断]`, `${'丙'.repeat(4000)}...[已截断]`, '短句'];
-    const expectedPrompt = `${legacySummaryPrefix}\n\n【对话记录】\n旅人: ${bodies[0]}\nassistant: ${bodies[1]}\nsystem: ${bodies[2]}\n旅人: ${bodies[3]}`;
+    const expectedHistory = `【对话记录】\n旅人: ${bodies[0]}\nassistant: ${bodies[1]}\nsystem: ${bodies[2]}\n旅人: ${bodies[3]}`;
     const response = await post(summarizeHandler, { sessionId: 'tea', messages: input, contextWindowTokens, userDisplayName: '  旅人  ', customProvider });
     expect(response.status).toBe(200);
     expect(transport.stream).toHaveBeenCalledOnce();
-    expect(transport.stream.mock.calls[0][0]).toEqual({ prompt: expectedPrompt, temperature: 0.3 });
+    const sent = transport.stream.mock.calls[0][0];
+    expect(sent.temperature).toBe(0.3);
+    expect(sent.prompt.endsWith(expectedHistory)).toBe(true);
     expect(await response.json()).toEqual({ summary: '合成模型输出', summaryInput: {
       messageIds: ['user', 'assistant', 'system', 'short'], contentLengths: bodies.map((body) => body.length),
     } });

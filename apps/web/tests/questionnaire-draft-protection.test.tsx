@@ -2,6 +2,9 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DetailsPage } from '@/components/creation/DetailsPage';
+import { CanshouPage } from '@/components/creation/CanshouPage';
+import { CreatorPage } from '@/components/creation/CreatorPage';
 
 const mocks = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mocks.push, replace: vi.fn(), back: vi.fn(), refresh: vi.fn() }), usePathname: () => '/details', useSearchParams: () => new URLSearchParams() }));
@@ -21,6 +24,7 @@ const magicalCard = {
 };
 const beastCard = { name: '保留结果', coreConcept: '思念', coreEmotion: '孤独', evolutionStage: '幼年期', appearance: '雾', materialAndSkin: '雾', featuresAndAppendages: '', attackMethod: '', specialAbility: '', origin: '', birthEnvironment: '', researcherNotes: '', userAnswers: magicalCard.userAnswers };
 const pages = ['Details', 'Canshou', 'Creator'] as const;
+const pageComponents = { Details: DetailsPage, Canshou: CanshouPage, Creator: CreatorPage };
 type Page = typeof pages[number];
 let page: Page;
 let root: Root;
@@ -28,8 +32,24 @@ let container: HTMLDivElement;
 let calls: string[];
 const key = () => page === 'Canshou' ? 'canshouAnswersDraft' : 'magicalGirlAnswersDraft';
 const questionnaire = () => ({ id: 'draft-guard', title: '草稿保护问卷', description: '测试', kind: page === 'Canshou' ? 'canshou' : 'magical-girl', nativeAllowed: true, questions: [{ id: 'q1', question: '角色想法', type: 'text' }] });
-const response = (data: unknown) => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
-const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+const pendingResponseReads = new Set<Promise<unknown>>();
+const response = (data: unknown) => {
+  const value = new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+  const readJson = value.json.bind(value);
+  value.json = () => {
+    const pending = readJson();
+    pendingResponseReads.add(pending);
+    void pending.then(() => pendingResponseReads.delete(pending), () => pendingResponseReads.delete(pending));
+    return pending;
+  };
+  return value;
+};
+const settle = async () => {
+  // A committed effect can start the next questionnaire read. Drain each real read and React update.
+  do {
+    await act(async () => { await Promise.all([...pendingResponseReads]); });
+  } while (pendingResponseReads.size > 0);
+};
 const button = (text: string) => [...container.querySelectorAll('button')].find((node) => node.textContent?.includes(text));
 const click = async (text: string) => { expect(button(text), text).toBeTruthy(); await act(async () => button(text)!.click()); await settle(); };
 const input = () => container.querySelector<HTMLTextAreaElement>('.ui-web-questionnaire-answer-input')!;
@@ -39,7 +59,7 @@ const clearAnswers = async () => { if (!button('清空存档')) await click('一
 const mount = async () => {
   window.history.replaceState({}, '', `/${page.toLowerCase()}`);
   window.localStorage.setItem(page === 'Canshou' ? 'mahoshojo.canshou.preferences.v1' : 'mahoshojo.details.preferences.v1', JSON.stringify({ generationMode: 'non-stream', showBulkFillSection: true }));
-  const { [page + 'Page']: PageComponent } = await import(`../components/creation/${page}Page.tsx`);
+  const PageComponent = pageComponents[page];
   await act(async () => root.render(<PageComponent />)); await settle();
 };
 beforeEach(() => {

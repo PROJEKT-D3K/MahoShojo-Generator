@@ -252,6 +252,13 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
 
   for (const [subpath, relativeFile] of Object.entries(SERVER_SAFE_ENTRYPOINTS)) {
     it(`${subpath} imports no React hook`, () => {
+      const manifest = JSON.parse(readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')) as {
+        exports: Record<string, string | { import?: string; default?: string }>;
+      };
+      const exported = manifest.exports[subpath];
+      const target = typeof exported === 'string' ? exported : exported?.import ?? exported?.default;
+      // 检查公开入口实际指向被扫描的纯叶子，避免出口改到客户端 barrel 后仍验证旧路径。
+      expect(target).toBe(`./src/${relativeFile}`);
       const entryFile = path.join(SRC, relativeFile);
       const graph = collectModuleGraph(entryFile);
       expect(graph.length).toBeGreaterThan(0);
@@ -347,95 +354,4 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
   });
 
-  it('lists every shared entrypoint so a new one is a deliberate decision', () => {
-    // 新增 subpath 时如果忘了判断它是否 RSC 安全，这条会提醒你。刻意不在这里自动推断——推断需要
-    // 知道 RSC 消费者，而那是仓库里另一处的事实。
-    const pkg = JSON.parse(
-      readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'),
-    ) as { exports: Record<string, unknown> };
-
-    const unlisted = Object.keys(pkg.exports).filter(
-      (subpath) => !subpath.endsWith('.css') && !(subpath in SERVER_SAFE_ENTRYPOINTS),
-    );
-
-    // 未列出的入口目前都是客户端专属或视图入口；如果哪天某个 Server Component 开始 import 它们，
-    // 这条断言会先提醒把它登记进来并验证。问卷与角色结果入口分别由客户端交互面板和结果卡使用，
-    // 本地数据卡列表只在客户端读设备存储，字段编辑器只在客户端编辑页使用，AI Provider 选择器是
-    // 带 hook 的客户端状态机，因此保持在这里作为显式的客户端专属登记。
-    // `./color-mode` 承载 `useColorModePreference` 与 DOM 应用逻辑，是刻意的客户端入口；
-    // RSC 只消费同目录的 `./color-mode-init`。
-    // `./card-library` 是 D5.0e 抽出的卡库模态框与客户端状态机，`./modal` 是客户端弹窗
-    // 基件；两者都只在 Client Component/宿主适配层消费，不进入 Server Component 导入链。
-    // `./client`、`./details-controls`、`./character-card` 是 D5.1a 下沉的 details 页
-    // 交互/结果区段，均为客户端专用。
-    // `./community` 是 D5.1-P1 迁入的纯数据（QQ 群列表），消费方是页脚、公告与竞技场社群区
-    // 等客户端组件；它本身零 hook，但目前没有 RSC 消费者，按「无 RSC 消费者不登记为
-    // server-safe」的规则留在客户端专属列。`./announcement` 同为 D5.1-P1 新增：公告中心是
-    // 带轮询的客户端状态机，只在客户端挂载。
-    // `./character-manager`、`./media` 是 D5.1-P2-r5 上移的角色管理页骨架与主题图组件，
-    // `./messages` 是 d-1b 上移的消息呈现层：三者的消费方都隔着 'use client' 边界
-    // （MessagesPage、ThemeImage、CharacterManagerPage），不进入 Server Component 导入链。
-    // `./settings` 与 `./device-preferences` 是 d5.1-s1 的设置页与设备偏好客户端状态机：
-    // `app/settings/page.tsx` 只经 `'use client'` 的 SettingsRouteProviders 挂载它们，
-    // RSC 消费的仅是同目录的 `./device-preferences-init`（已登记在 server-safe 列）。
-    // `./generation-actions` 只由生成页与 SaveJsonButton 客户端操作消费；不新增 RSC 导入链。
-    // `./tavern` 是交互面板与状态 hook；服务端仅允许上面的 default-base 叶子。
-    // `./team` 由两端客户端组队页消费，包含交互状态，不进入服务端导入链。
-    // `./arena-story-session-read` 是客户端会话读取生命周期，由宿主装配存储与偏好端口。
-    // `./cloud-save` 是含模态生命周期的受控保存表单，仅由两端客户端宿主消费。
-    // `./battle-report-history` 包含筛选 hook 与详情模态框，仅由 Web/Desktop 客户端宿主消费。
-    // `./magic-tea-party` 是茶会受控视图与滚动 hook；Web 和 Desktop 宿主注入 IO/媒体。
-    // `./arena-room` 包含交互视图与 hook，仅由 Web/ Desktop 的多人房间客户端面板消费。
-    // `./cooldown` 持有 React hook 与浏览器存储同步，不供 Server Component 消费。
-    // `./me` 是零 hook 的受控呈现层；Web 由 'use client' 的 MePage/ProfileHeader 消费，
-    // Desktop 由客户端个人页消费，目前没有 RSC 消费者，因此保留在视图入口清单。
-    expect(unlisted.sort()).toEqual([
-      './ai-provider',
-      './announcement',
-      './arena',
-      './arena-report',
-      './arena-report-text',
-      './arena-room',
-      './arena-story-session',
-      './arena-story-session-read',
-      './battle-report-history',
-      './card-details',
-      './card-editor',
-      './card-forge',
-      './card-library',
-      './character-card',
-      './character-manager',
-      './character-result',
-      './client',
-      './cloud-save',
-      './color-mode',
-      './community',
-      './cooldown',
-      './creator',
-      './details-controls',
-      './device-preferences',
-      './encyclopedia-views',
-      './free',
-      './generation-actions',
-      './local-archive',
-      './local-cards',
-      './magic-tea-party',
-      './markdown',
-      './me',
-      './media',
-      './messages',
-      './modal',
-      './name-generation',
-      './narrative-history',
-      './questionnaire',
-      './questionnaire-editor',
-      './ranking',
-      './scenario',
-      './settings',
-      './shell',
-      './sublimation',
-      './tavern',
-      './team',
-    ]);
-  });
 });

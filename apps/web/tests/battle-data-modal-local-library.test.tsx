@@ -39,7 +39,7 @@ const character = (name: string): Record<string, unknown> => ({ name, codename: 
 beforeEach(async () => {
   resetLocalLibraryDbConnection();
   resetLocalCardRepository();
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(LOCAL_LIBRARY_DB_NAME);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);

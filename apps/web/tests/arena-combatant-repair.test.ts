@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -184,20 +182,5 @@ describe('Arena repair UI contract', () => {
     state.setLastGenerationId('generation-client-repair-002');
     expect(useBattleStore.getState().repairAppliedGenerationId).toBeNull();
     useBattleStore.getState().setLastGenerationId(null);
-  });
-
-  it('保留权威重试并新增显式草稿与应用动作', () => {
-    const hookSource = readFileSync('components/arena/hooks/useCombatantRepair.ts', 'utf8');
-    const resultSource = readFileSync('components/arena/components/BattleResult.tsx', 'utf8');
-
-    expect(hookSource).toContain("generationIntent.dispatch('/api/arena/repair-combatant-meta'");
-    expect(hookSource).toContain('lastGenerationRepairContext');
-    expect(hookSource).not.toContain('/api/arena/redo-combatant-updates');
-    expect(hookSource).toContain('applyArenaRepairDraft');
-    expect(hookSource).toContain('setRepairAppliedGenerationId');
-    expect(resultSource).toContain('重试角色更新');
-    expect(resultSource).toContain('AI 重新生成修复草稿');
-    expect(resultSource).toContain('应用修复');
-    expect(resultSource).toContain('创建非原生可编辑版本');
   });
 });

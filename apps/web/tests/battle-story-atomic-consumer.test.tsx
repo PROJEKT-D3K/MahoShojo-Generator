@@ -10,6 +10,8 @@ import { BattleStorySessionPanel } from '@/components/arena/components/BattleSto
 import { __resetAiSessionDbForTest } from '@/lib/ai-session/storage';
 import { AI_SESSION_DB_NAME, AI_SESSION_STORE_NAMES } from '@/lib/ai-session/types';
 import * as storage from '@/lib/ai-session/battle-story/storage';
+import * as sessionRead from '@mahoshojo/ui-web/arena-story-session-read';
+import * as actorClient from '@/lib/arena/resumable-generation-client';
 import * as branchProjection from '@mahoshojo/domain/arena-story-branch';
 import * as tailRewriteProjection from '@mahoshojo/domain/arena-story-tail-rewrite';
 import * as middleRewriteProjection from '@mahoshojo/domain/arena-story-middle-rewrite';
@@ -61,6 +63,7 @@ let container: HTMLDivElement;
 let root: Root;
 let stream: ReadableStreamDefaultController<Uint8Array>;
 let requestSignal: AbortSignal;
+let pendingRestore: Promise<void> | null;
 const scroll = vi.fn();
 const event = (name: string, data: unknown) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 const send = (events: string) => stream.enqueue(new TextEncoder().encode(events));
@@ -77,9 +80,15 @@ function Harness() {
   </div>;
 }
 
+async function awaitSessionRestore() {
+  expect(pendingRestore).not.toBeNull();
+  await act(async () => { await pendingRestore; });
+  expect(session.isReady).toBe(true);
+}
+
 async function mount() {
   await act(async () => root.render(<Harness />));
-  await vi.waitFor(async () => { await act(async () => {}); expect(session.isReady).toBe(true); });
+  await awaitSessionRestore();
 }
 
 async function start() {
@@ -91,6 +100,15 @@ async function start() {
 }
 
 beforeEach(async () => {
+  pendingRestore = null;
+  const createReader = sessionRead.createBattleStorySessionReader;
+  vi.spyOn(sessionRead, 'createBattleStorySessionReader').mockImplementation((...args) => {
+    const reader = createReader(...args);
+    const restore = reader.restore;
+    // Await the real reader and IndexedDB work, rather than racing a polling deadline.
+    reader.restore = (callbacks) => (pendingRestore = restore(callbacks));
+    return reader;
+  });
   await __resetAiSessionDbForTest();
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(AI_SESSION_DB_NAME);
@@ -138,6 +156,11 @@ async function finish(pending: Promise<void>, markdown = '# 完成章\n正文') 
 }
 
 it('normal first anonymous header initialization still dispatches one generation and saves', async () => {
+  // A first visit needs fresh module memory as well as empty localStorage.
+  vi.resetModules();
+  const freshActorClient = await vi.importActual<typeof actorClient>('@/lib/arena/resumable-generation-client');
+  vi.spyOn(actorClient, 'withArenaGenerationActorToken').mockImplementation(freshActorClient.withArenaGenerationActorToken);
+  vi.spyOn(actorClient, 'captureArenaGenerationActorToken').mockImplementation(freshActorClient.captureArenaGenerationActorToken);
   expect(localStorage.getItem('mahoshojo_auth')).toBeNull();
   expect(localStorage.getItem('mahoshojo:arena:generation-actor:v1')).toBeNull();
   await mount(); const { pending } = await start(); await finish(pending, '# 匿名首章');
@@ -357,7 +380,7 @@ describe('real story hook + IndexedDB completed result persistence', () => {
       const value = useOriginal(); useLayoutEffect(() => { session = value; }); return value;
     });
     await act(async () => root.render(<BattleStorySessionPanel />));
-    await vi.waitFor(async () => { await act(async () => {}); expect(session.isReady).toBe(true); });
+    await awaitSessionRestore();
     vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockRejectedValueOnce(new storage.BattleStoryCommitNotSavedError(new Error('known fault')));
     const button = (text: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === text)!;
     const { pending } = await start(); await finish(pending, '# UI待保存章\n正文');
@@ -544,7 +567,7 @@ describe('actual pending outcome panel', () => {
       const value = useOriginal(); useLayoutEffect(() => { session = value; }); return value;
     });
     await act(async () => root.render(<BattleStorySessionPanel />));
-    await vi.waitFor(async () => { await act(async () => {}); expect(session.isReady).toBe(true); });
+    await awaitSessionRestore();
     const { pending } = await start(); await completeForRoles('# Panel完整正文');
     const button = (text: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === text)!;
     expect(container.querySelector('[data-story-pending-outcome]')?.textContent).toContain('Panel完整正文');
@@ -1241,7 +1264,7 @@ async function mountActualPanel() {
     const value = useOriginal(); useLayoutEffect(() => { session = value; }); return value;
   });
   await act(async () => root.render(<BattleStorySessionPanel />));
-  await vi.waitFor(async () => { await act(async () => {}); expect(session.isReady).toBe(true); });
+  await awaitSessionRestore();
 }
 const panelButton = (text: string) => [...container.querySelectorAll('button')].find((button) => button.textContent === text)!;
 

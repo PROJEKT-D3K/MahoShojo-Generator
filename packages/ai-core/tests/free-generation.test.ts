@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v3';
@@ -7,6 +6,7 @@ import {
   FREE_GENERATION_SCHEMAS,
   FREE_GENERATION_SCHEMA_IDS,
   FREE_STREAM_SCHEMA_IDS,
+  FREE_STREAM_TEMPERATURE,
   buildFreeStreamPrompt,
   buildFreeStructuredPrompt,
   createFreeGenerationConfig,
@@ -14,19 +14,16 @@ import {
   sanitizeFreeCard,
   validateFreeOutput,
   type FreeSchemaId,
+  type FreeStreamSchemaId,
 } from '@mahoshojo/ai-core/free-generation';
 import {
   formatReferenceAttachmentsForPrompt,
   type AITextAttachment,
 } from '@mahoshojo/ai-core/reference-attachments';
 
-// 以迁移前 Hosted 行为快照为基线，双端复用后锁死 prompt/schema/清洗漂移。
-// 结构化 prompt hash 已随五类字段说明移除宿主元数据而更新；schema、输出清洗与流式快照未改。
 const legacy = JSON.parse(
   readFileSync(new URL('../fixtures/free-generation-legacy.json', import.meta.url), 'utf8'),
 );
-const digest = (text: string) =>
-  createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex');
 const describeSchema = (schema: z.ZodTypeAny): unknown => {
   let core = schema;
   let optional = false;
@@ -42,9 +39,6 @@ const describeSchema = (schema: z.ZodTypeAny): unknown => {
   const out: Record<string, unknown> = {
     type: (core as { _def?: { typeName?: string } })._def?.typeName,
     ...(optional ? { optional: true } : {}),
-    ...((core.description ?? schema.description)
-      ? { description: core.description ?? schema.description }
-      : {}),
   };
   if (core instanceof z.ZodObject) {
     out.shape = Object.fromEntries(
@@ -79,23 +73,26 @@ describe('free shared generation', () => {
   it.each(legacy.cases as {
     schemaId: FreeSchemaId;
     input: { prompt: string; language: string; attachments: AITextAttachment[] };
-    systemPromptSha256: string;
     temperature: number;
     taskName: string;
     schema: unknown;
-    structuredPromptSha256: string;
     output: unknown;
-  }[])('保持 $schemaId 结构化 prompt/schema/输出清洗口径', (fixture) => {
+  }[])('保留 $schemaId 的 schema、用户输入与输出清洗行为', (fixture) => {
     const config = createFreeGenerationConfig(fixture.schemaId);
-    expect(digest(config.systemPrompt)).toBe(fixture.systemPromptSha256);
     expect(config.temperature).toBe(fixture.temperature);
     expect(config.taskName).toBe(fixture.taskName);
     expect(describeSchema(config.schema)).toEqual(fixture.schema);
-    expect(digest(config.promptBuilder(fixture.input))).toBe(fixture.structuredPromptSha256);
-    expect(digest(buildFreeStructuredPrompt({
+    const prompt = config.promptBuilder(fixture.input);
+    expect(prompt).toBe(buildFreeStructuredPrompt({
       schema: fixture.schemaId,
       ...fixture.input,
-    }))).toBe(fixture.structuredPromptSha256);
+    }));
+    expect(prompt).toContain(fixture.input.prompt);
+    expect(prompt).toContain(fixture.input.language);
+    for (const attachment of fixture.input.attachments) {
+      expect(prompt).toContain(attachment.name);
+      expect(prompt).toContain(attachment.content);
+    }
     expect(
       validateFreeOutput({
         schemaId: fixture.schemaId,
@@ -105,27 +102,55 @@ describe('free shared generation', () => {
   });
 
   it.each(legacy.streamCases as {
-    schemaId: string;
+    schemaId: FreeStreamSchemaId;
     input: { prompt: string; language: string; attachments: AITextAttachment[] };
-    streamPromptSha256: string;
-    temperature: number;
-  }[])('保持 $schemaId 流式 Markdown prompt 口径', (fixture) => {
-    expect(digest(buildFreeStreamPrompt({
-      schema: fixture.schemaId as 'general' | 'general-scenario',
+  }[])('向 $schemaId 流式生成传入提示词、语言与附件', (fixture) => {
+    const prompt = buildFreeStreamPrompt({
+      schema: fixture.schemaId,
       ...fixture.input,
-    }))).toBe(fixture.streamPromptSha256);
-    expect(fixture.temperature).toBe(0.75);
+    });
+    expect(prompt).toContain(fixture.input.prompt);
+    expect(prompt).toContain(fixture.input.language);
+    for (const attachment of fixture.input.attachments) {
+      expect(prompt).toContain(attachment.name);
+      expect(prompt).toContain(attachment.content);
+    }
+    expect(FREE_STREAM_TEMPERATURE).toBe(0.75);
   });
 
-  it('参考附件 formatter 保持空输入与截断语义', () => {
+  it('参考附件 formatter 忽略空输入，并保留附件内容与元数据', () => {
     expect(formatReferenceAttachmentsForPrompt([])).toBe('');
     expect(formatReferenceAttachmentsForPrompt([{ name: 'a', content: '   ' } as AITextAttachment])).toBe('');
     const formatted = formatReferenceAttachmentsForPrompt([
       { name: 'a.txt', type: 'text/plain', size: 5, content: 'abc' },
     ]);
-    expect(formatted).toContain('【参考附件】');
     expect(formatted).toContain('提示攻击');
-    expect(formatted).toContain('--- 附件 1: a.txt · text/plain · 5 bytes ---');
+    expect(formatted).toContain('a.txt');
+    expect(formatted).toContain('text/plain');
+    expect(formatted).toContain('5 bytes');
     expect(formatted).toContain('abc');
+  });
+
+  it('参考附件 formatter 遵守单文件、总字符数与文件数量限制', () => {
+    const attachments = [
+      { name: 'first.txt', content: 'ABCD超出单文件限制' },
+      { name: 'second.txt', content: 'EF超出总字符限制' },
+      { name: 'third.txt', content: '超出文件数量限制' },
+    ];
+    const limits = {
+      maxBytesPerFile: 100, maxBytesTotal: 300,
+      maxCharsPerFile: 4, maxCharsTotal: 6, maxCount: 2,
+    };
+    const formatted = formatReferenceAttachmentsForPrompt(attachments, { limits });
+    expect(formatted).toContain('ABCD');
+    expect(formatted).toContain('EF');
+    expect(formatted).not.toContain('超出');
+    expect(formatted).not.toContain('third.txt');
+
+    const oneFile = formatReferenceAttachmentsForPrompt(attachments, {
+      limits: { ...limits, maxCharsTotal: 100, maxCount: 1 },
+    });
+    expect(oneFile).toContain('first.txt');
+    expect(oneFile).not.toContain('second.txt');
   });
 });

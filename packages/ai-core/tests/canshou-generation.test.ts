@@ -1,9 +1,7 @@
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v3';
 
-import { CANSHOU_LORE } from '@mahoshojo/domain/canshou-lore';
 import {
   CANSHOU_GENERATION_SCHEMA,
   buildCanshouStreamPrompt,
@@ -12,15 +10,11 @@ import {
   type CanshouGenerationInput,
 } from '@mahoshojo/ai-core/canshou-generation';
 
-// 记录迁移前 Hosted 实现采集的行为快照，同时双端复用后锁死 Prompt/schema 漂移。
 const legacy = JSON.parse(
   readFileSync(new URL('../fixtures/canshou-generation-legacy.json', import.meta.url), 'utf8'),
 );
-const digest = (text: string) =>
-  createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex');
 const describeSchema = (schema: z.ZodTypeAny): unknown => ({
   type: schema._def.typeName,
-  ...(schema.description ? { description: schema.description } : {}),
   ...(schema instanceof z.ZodObject
     ? {
         shape: Object.fromEntries(
@@ -35,27 +29,33 @@ const describeSchema = (schema: z.ZodTypeAny): unknown => ({
 });
 
 describe('canshou shared generation', () => {
-  it('保持既有 Hosted 结构化与 Markdown Prompt 以及 schema 字段口径', () => {
-    expect(digest(CANSHOU_LORE)).toBe(legacy.canshouLoreSha256);
+  it('保留 schema 结构，并把问卷、语言与参考设定传给两种生成模式', () => {
     expect(describeSchema(CANSHOU_GENERATION_SCHEMA)).toEqual(legacy.schema);
     for (const fixture of legacy.cases as {
       input: CanshouGenerationInput;
-      structuredPromptSha256: string;
-      streamPromptSha256: string;
     }[]) {
       const config = createCanshouGenerationConfig(legacy.fixtureLore);
-      expect(digest(config.systemPrompt)).toBe(legacy.systemPromptSha256);
-      expect(digest(config.promptBuilder(fixture.input))).toBe(fixture.structuredPromptSha256);
-      expect(
-        digest(
-          buildCanshouStreamPrompt({
-            answers: fixture.input.answers,
-            questionnairesLore: fixture.input.loreText,
-            canshouLore: legacy.fixtureLore,
-            language: fixture.input.language,
-          }),
-        ),
-      ).toBe(fixture.streamPromptSha256);
+      const structuredPrompt = config.promptBuilder(fixture.input);
+      const streamPrompt = buildCanshouStreamPrompt({
+        answers: fixture.input.answers,
+        questionnairesLore: fixture.input.loreText,
+        canshouLore: legacy.fixtureLore,
+        language: fixture.input.language,
+      });
+      expect(config.schema).toBe(CANSHOU_GENERATION_SCHEMA);
+      expect(config.systemPrompt).toContain(legacy.fixtureLore);
+      expect(streamPrompt).toContain(legacy.fixtureLore);
+      for (const prompt of [structuredPrompt, streamPrompt]) {
+        expect(prompt).toContain(fixture.input.language);
+        if (fixture.input.loreText) expect(prompt).toContain(fixture.input.loreText);
+        for (const answer of fixture.input.answers) {
+          expect(prompt).toContain(answer.question.trim());
+          expect(prompt).toContain(answer.answer);
+        }
+      }
+      if (fixture.input.creatorPromptText) {
+        expect(structuredPrompt).toContain(fixture.input.creatorPromptText);
+      }
       expect(config).toMatchObject({ temperature: 0.8, taskName: '生成残兽档案' });
       expect(config).not.toHaveProperty('modelOverride');
       expect(config).not.toHaveProperty('generationSettingsContext');

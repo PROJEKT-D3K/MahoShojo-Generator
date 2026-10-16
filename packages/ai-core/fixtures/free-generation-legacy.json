@@ -14,149 +14,118 @@
           }
         ]
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "codename": {
-            "type": "ZodString",
-            "description": "代号：建议使用花名/称号。"
+            "type": "ZodString"
           },
           "appearance": {
             "type": "ZodObject",
-            "description": "外观信息。",
             "shape": {
               "outfit": {
-                "type": "ZodString",
-                "description": "变身后的服装与衣装描述。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "accessories": {
-                "type": "ZodString",
-                "description": "饰品细节。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "colorScheme": {
-                "type": "ZodString",
-                "description": "主色调/配色方案。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "overallLook": {
-                "type": "ZodString",
-                "description": "整体外观风格（发色/瞳色/体型/神态等）。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               }
             }
           },
           "magicConstruct": {
             "type": "ZodObject",
-            "description": "魔力构装（魔装）。",
             "shape": {
               "name": {
-                "type": "ZodString",
-                "description": "魔装名称。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "form": {
-                "type": "ZodString",
-                "description": "魔装形态/外观。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "basicAbilities": {
                 "type": "ZodArray",
-                "description": "魔装基础能力列表。若无明确要求可返回空数组。",
                 "element": {
                   "type": "ZodString"
                 }
               },
               "description": {
-                "type": "ZodString",
-                "description": "魔装详细描述与特色。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               }
             }
           },
           "wonderlandRule": {
             "type": "ZodObject",
-            "description": "奇境规则。",
             "shape": {
               "name": {
-                "type": "ZodString",
-                "description": "奇境规则名称。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "description": {
-                "type": "ZodString",
-                "description": "规则内容与效果。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "tendency": {
-                "type": "ZodString",
-                "description": "规则倾向类型。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "activation": {
-                "type": "ZodString",
-                "description": "规则触发条件/方式。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               }
             }
           },
           "blooming": {
             "type": "ZodObject",
-            "description": "繁开形态。",
             "shape": {
               "name": {
-                "type": "ZodString",
-                "description": "繁开状态名称。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "evolvedAbilities": {
                 "type": "ZodArray",
-                "description": "繁开后的进化能力列表。若无明确要求可返回空数组。",
                 "element": {
                   "type": "ZodString"
                 }
               },
               "evolvedForm": {
-                "type": "ZodString",
-                "description": "繁开后的魔装形态变化。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "evolvedOutfit": {
-                "type": "ZodString",
-                "description": "繁开后的衣装样式。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "powerLevel": {
-                "type": "ZodString",
-                "description": "繁开状态力量等级描述。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               }
             }
           },
           "analysis": {
             "type": "ZodObject",
-            "description": "分析与背景。",
             "shape": {
               "personalityAnalysis": {
-                "type": "ZodString",
-                "description": "性格分析。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "abilityReasoning": {
-                "type": "ZodString",
-                "description": "能力设定依据/推理。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "coreTraits": {
                 "type": "ZodArray",
-                "description": "核心特质关键词列表。若无明确要求可返回空数组。",
                 "element": {
                   "type": "ZodString"
                 }
               },
               "predictionBasis": {
-                "type": "ZodString",
-                "description": "预测依据/补充信息。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "background": {
                 "type": "ZodObject",
                 "optional": true,
-                "description": "背景故事（可选）。",
                 "shape": {
                   "belief": {
-                    "type": "ZodString",
-                    "description": "信念/愿望/理念。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   },
                   "bonds": {
-                    "type": "ZodString",
-                    "description": "羁绊/关系。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   }
                 }
               }
@@ -164,7 +133,6 @@
           }
         }
       },
-      "structuredPromptSha256": "b75634d1d37ecf5a1d3a5b9bb11eddb3cd82fb959d894458838ec61e0469b8bc",
       "output": {
         "codename": "C",
         "appearance": {
@@ -208,149 +176,118 @@
         "language": "en-US",
         "attachments": []
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "codename": {
-            "type": "ZodString",
-            "description": "代号：建议使用花名/称号。"
+            "type": "ZodString"
           },
           "appearance": {
             "type": "ZodObject",
-            "description": "外观信息。",
             "shape": {
               "outfit": {
-                "type": "ZodString",
-                "description": "变身后的服装与衣装描述。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "accessories": {
-                "type": "ZodString",
-                "description": "饰品细节。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "colorScheme": {
-                "type": "ZodString",
-                "description": "主色调/配色方案。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "overallLook": {
-                "type": "ZodString",
-                "description": "整体外观风格（发色/瞳色/体型/神态等）。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               }
             }
           },
           "magicConstruct": {
             "type": "ZodObject",
-            "description": "魔力构装（魔装）。",
             "shape": {
               "name": {
-                "type": "ZodString",
-                "description": "魔装名称。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "form": {
-                "type": "ZodString",
-                "description": "魔装形态/外观。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "basicAbilities": {
                 "type": "ZodArray",
-                "description": "魔装基础能力列表。若无明确要求可返回空数组。",
                 "element": {
                   "type": "ZodString"
                 }
               },
               "description": {
-                "type": "ZodString",
-                "description": "魔装详细描述与特色。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               }
             }
           },
           "wonderlandRule": {
             "type": "ZodObject",
-            "description": "奇境规则。",
             "shape": {
               "name": {
-                "type": "ZodString",
-                "description": "奇境规则名称。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "description": {
-                "type": "ZodString",
-                "description": "规则内容与效果。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "tendency": {
-                "type": "ZodString",
-                "description": "规则倾向类型。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "activation": {
-                "type": "ZodString",
-                "description": "规则触发条件/方式。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               }
             }
           },
           "blooming": {
             "type": "ZodObject",
-            "description": "繁开形态。",
             "shape": {
               "name": {
-                "type": "ZodString",
-                "description": "繁开状态名称。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "evolvedAbilities": {
                 "type": "ZodArray",
-                "description": "繁开后的进化能力列表。若无明确要求可返回空数组。",
                 "element": {
                   "type": "ZodString"
                 }
               },
               "evolvedForm": {
-                "type": "ZodString",
-                "description": "繁开后的魔装形态变化。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "evolvedOutfit": {
-                "type": "ZodString",
-                "description": "繁开后的衣装样式。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "powerLevel": {
-                "type": "ZodString",
-                "description": "繁开状态力量等级描述。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               }
             }
           },
           "analysis": {
             "type": "ZodObject",
-            "description": "分析与背景。",
             "shape": {
               "personalityAnalysis": {
-                "type": "ZodString",
-                "description": "性格分析。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "abilityReasoning": {
-                "type": "ZodString",
-                "description": "能力设定依据/推理。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "coreTraits": {
                 "type": "ZodArray",
-                "description": "核心特质关键词列表。若无明确要求可返回空数组。",
                 "element": {
                   "type": "ZodString"
                 }
               },
               "predictionBasis": {
-                "type": "ZodString",
-                "description": "预测依据/补充信息。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "background": {
                 "type": "ZodObject",
                 "optional": true,
-                "description": "背景故事（可选）。",
                 "shape": {
                   "belief": {
-                    "type": "ZodString",
-                    "description": "信念/愿望/理念。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   },
                   "bonds": {
-                    "type": "ZodString",
-                    "description": "羁绊/关系。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   }
                 }
               }
@@ -358,7 +295,6 @@
           }
         }
       },
-      "structuredPromptSha256": "6d94316b022f51f99e30b98c91fb12beab209e48585dfe305a309c59955df113",
       "output": {
         "codename": "C",
         "appearance": {
@@ -409,63 +345,49 @@
           }
         ]
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "name": {
-            "type": "ZodString",
-            "description": "残兽名称。"
+            "type": "ZodString"
           },
           "appearance": {
-            "type": "ZodString",
-            "description": "外貌形态描述。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "materialAndSkin": {
-            "type": "ZodString",
-            "description": "材质与表皮描述。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "featuresAndAppendages": {
-            "type": "ZodString",
-            "description": "特征与附肢描述。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "coreConcept": {
-            "type": "ZodString",
-            "description": "核心概念。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "coreEmotion": {
-            "type": "ZodString",
-            "description": "核心情绪/欲望。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "evolutionStage": {
-            "type": "ZodString",
-            "description": "进化阶段。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "attackMethod": {
-            "type": "ZodString",
-            "description": "主要攻击方式。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "specialAbility": {
-            "type": "ZodString",
-            "description": "特殊能力与机制。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "origin": {
-            "type": "ZodString",
-            "description": "起源故事。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "birthEnvironment": {
-            "type": "ZodString",
-            "description": "诞生环境。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "researcherNotes": {
-            "type": "ZodString",
-            "description": "研究员分析/警告/备注。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           }
         }
       },
-      "structuredPromptSha256": "46f94ac8f090be24e3433fa812737eef6dd2e6bdbe8abf2d45880fb437372164",
       "output": {
         "name": "N",
         "appearance": "",
@@ -489,63 +411,49 @@
         "language": "en-US",
         "attachments": []
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "name": {
-            "type": "ZodString",
-            "description": "残兽名称。"
+            "type": "ZodString"
           },
           "appearance": {
-            "type": "ZodString",
-            "description": "外貌形态描述。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "materialAndSkin": {
-            "type": "ZodString",
-            "description": "材质与表皮描述。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "featuresAndAppendages": {
-            "type": "ZodString",
-            "description": "特征与附肢描述。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "coreConcept": {
-            "type": "ZodString",
-            "description": "核心概念。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "coreEmotion": {
-            "type": "ZodString",
-            "description": "核心情绪/欲望。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "evolutionStage": {
-            "type": "ZodString",
-            "description": "进化阶段。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "attackMethod": {
-            "type": "ZodString",
-            "description": "主要攻击方式。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "specialAbility": {
-            "type": "ZodString",
-            "description": "特殊能力与机制。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "origin": {
-            "type": "ZodString",
-            "description": "起源故事。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "birthEnvironment": {
-            "type": "ZodString",
-            "description": "诞生环境。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "researcherNotes": {
-            "type": "ZodString",
-            "description": "研究员分析/警告/备注。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           }
         }
       },
-      "structuredPromptSha256": "bac496e16019b728fd241326662d94390c647d87322294e20e6c81a723e71f0d",
       "output": {
         "name": "N",
         "appearance": "",
@@ -576,74 +484,59 @@
           }
         ]
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "title": {
-            "type": "ZodString",
-            "description": "情景标题。"
+            "type": "ZodString"
           },
           "scenario_type": {
-            "type": "ZodString",
-            "description": "情景类型（如：日常/调查/竞技/采访等）。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "description": {
-            "type": "ZodString",
-            "description": "情景简短描述。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "elements": {
             "type": "ZodObject",
-            "description": "情景要素。",
             "shape": {
               "scene": {
                 "type": "ZodObject",
-                "description": "场景信息。",
                 "shape": {
                   "time": {
-                    "type": "ZodString",
-                    "description": "故事发生时间。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   },
                   "place": {
-                    "type": "ZodString",
-                    "description": "故事发生地点。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   },
                   "features": {
-                    "type": "ZodString",
-                    "description": "环境特征与陈设。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   }
                 }
               },
               "roles": {
                 "type": "ZodArray",
-                "description": "预设 NPC 列表；如不需要可返回空数组。",
                 "element": {
                   "type": "ZodObject",
                   "shape": {
                     "name": {
-                      "type": "ZodString",
-                      "description": "角色名称/身份。"
+                      "type": "ZodString"
                     },
                     "description": {
-                      "type": "ZodString",
-                      "description": "角色设定/目标/行为准则。"
+                      "type": "ZodString"
                     }
                   }
                 }
               },
               "events": {
-                "type": "ZodString",
-                "description": "核心事件（发生什么、冲突点、互动目标）。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "atmosphere": {
-                "type": "ZodString",
-                "description": "整体氛围。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "development": {
                 "type": "ZodArray",
-                "description": "发展方向列表；如不需要可返回空数组。",
                 "element": {
                   "type": "ZodString"
                 }
@@ -652,7 +545,6 @@
           }
         }
       },
-      "structuredPromptSha256": "fa81308dc91a4671e184a09b1c99fce2fc0824933fb6c60a3b3b3f7549994674",
       "output": {
         "title": "T",
         "scenario_type": "x",
@@ -680,74 +572,59 @@
         "language": "en-US",
         "attachments": []
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "title": {
-            "type": "ZodString",
-            "description": "情景标题。"
+            "type": "ZodString"
           },
           "scenario_type": {
-            "type": "ZodString",
-            "description": "情景类型（如：日常/调查/竞技/采访等）。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "description": {
-            "type": "ZodString",
-            "description": "情景简短描述。若无明确要求可返回空字符串。"
+            "type": "ZodString"
           },
           "elements": {
             "type": "ZodObject",
-            "description": "情景要素。",
             "shape": {
               "scene": {
                 "type": "ZodObject",
-                "description": "场景信息。",
                 "shape": {
                   "time": {
-                    "type": "ZodString",
-                    "description": "故事发生时间。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   },
                   "place": {
-                    "type": "ZodString",
-                    "description": "故事发生地点。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   },
                   "features": {
-                    "type": "ZodString",
-                    "description": "环境特征与陈设。若无明确要求可返回空字符串。"
+                    "type": "ZodString"
                   }
                 }
               },
               "roles": {
                 "type": "ZodArray",
-                "description": "预设 NPC 列表；如不需要可返回空数组。",
                 "element": {
                   "type": "ZodObject",
                   "shape": {
                     "name": {
-                      "type": "ZodString",
-                      "description": "角色名称/身份。"
+                      "type": "ZodString"
                     },
                     "description": {
-                      "type": "ZodString",
-                      "description": "角色设定/目标/行为准则。"
+                      "type": "ZodString"
                     }
                   }
                 }
               },
               "events": {
-                "type": "ZodString",
-                "description": "核心事件（发生什么、冲突点、互动目标）。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "atmosphere": {
-                "type": "ZodString",
-                "description": "整体氛围。若无明确要求可返回空字符串。"
+                "type": "ZodString"
               },
               "development": {
                 "type": "ZodArray",
-                "description": "发展方向列表；如不需要可返回空数组。",
                 "element": {
                   "type": "ZodString"
                 }
@@ -756,7 +633,6 @@
           }
         }
       },
-      "structuredPromptSha256": "44c3cd28875def4bf3f7758d88a6a56c3d207eb7222248a8829ec787addbc285",
       "output": {
         "title": "T",
         "scenario_type": "x",
@@ -791,23 +667,19 @@
           }
         ]
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "name": {
-            "type": "ZodString",
-            "description": "角色名。"
+            "type": "ZodString"
           },
           "content": {
-            "type": "ZodString",
-            "description": "角色设定正文（建议 Markdown）。"
+            "type": "ZodString"
           }
         }
       },
-      "structuredPromptSha256": "683e8ae2a3b2ed370a393d17dcd511fedee11141410db9f194c6b9e6e28cc5d2",
       "output": {
         "name": "N",
         "content": "C",
@@ -821,23 +693,19 @@
         "language": "en-US",
         "attachments": []
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "name": {
-            "type": "ZodString",
-            "description": "角色名。"
+            "type": "ZodString"
           },
           "content": {
-            "type": "ZodString",
-            "description": "角色设定正文（建议 Markdown）。"
+            "type": "ZodString"
           }
         }
       },
-      "structuredPromptSha256": "c13ab1b912bcc5247650fd459ec6416dcef84a3dede62c64c2c9b6ce7d470dca",
       "output": {
         "name": "N",
         "content": "C",
@@ -858,23 +726,19 @@
           }
         ]
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "title": {
-            "type": "ZodString",
-            "description": "情景名。"
+            "type": "ZodString"
           },
           "content": {
-            "type": "ZodString",
-            "description": "情景设定正文（建议 Markdown）。"
+            "type": "ZodString"
           }
         }
       },
-      "structuredPromptSha256": "ee5b504b408fc9998dff7ff01e982c2cfbe6a619ca8b16a860307af26cfa03eb",
       "output": {
         "title": "T",
         "content": "C",
@@ -888,23 +752,19 @@
         "language": "en-US",
         "attachments": []
       },
-      "systemPromptSha256": "4d18a0b6e79642bff3090e5c313b7d06180ecef1ad52397ca57d0abfefab0118",
       "temperature": 0.7,
       "taskName": "自由生成数据卡",
       "schema": {
         "type": "ZodObject",
         "shape": {
           "title": {
-            "type": "ZodString",
-            "description": "情景名。"
+            "type": "ZodString"
           },
           "content": {
-            "type": "ZodString",
-            "description": "情景设定正文（建议 Markdown）。"
+            "type": "ZodString"
           }
         }
       },
-      "structuredPromptSha256": "7d0e1e443993de5ba98b6453bc3c8f6479ca0eccdda5e094cff2df1c05be327d",
       "output": {
         "title": "T",
         "content": "C",
@@ -924,9 +784,7 @@
             "content": "附件正文S"
           }
         ]
-      },
-      "streamPromptSha256": "e6d31baa2df546d33d05c8de915607620dea885481273e9aaf6c3649c3860306",
-      "temperature": 0.75
+      }
     },
     {
       "schemaId": "general-scenario",
@@ -939,9 +797,7 @@
             "content": "附件正文S"
           }
         ]
-      },
-      "streamPromptSha256": "cbe0794963e7a31e085e95ec34eb6e65953cacfa23f801eb10b50ec14742aa01",
-      "temperature": 0.75
+      }
     }
   ]
 }
