@@ -733,7 +733,7 @@ export const CharacterManagerPage: React.FC = () => {
                 description: card.description,
                 isPublic: getDataCardVisibilityValue(card),
             });
-            setMessage({ type: 'info', text: '问卷数据卡请优先在 /questionnaire-editor 编辑；此处仅提供兼容替换能力。' });
+            setMessage({ type: 'info', text: '此处暂不支持问卷原位覆写。请先导出 JSON 备份，或在专用问卷编辑器另存为新问卷。' });
             closeDataCardsModal();
             return;
         }
@@ -2118,11 +2118,6 @@ export const CharacterManagerPage: React.FC = () => {
                 }}
                 rawJson={questionnaireCompatRawJson}
                 targetCard={questionnaireCompatTargetCard}
-                onReplaceSuccess={(pendingReview) => {
-                    setMessage({ type: 'success', text: pendingReview ? '更新已提交审核，审核通过后生效' : '问卷数据卡已替换' });
-                    loadUserDataCards();
-                    loadUserBadges();
-                }}
             />
 
             < NarrativeHistoryCardEditorModal

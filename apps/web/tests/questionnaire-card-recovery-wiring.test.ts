@@ -16,11 +16,13 @@ const compatModalSource = readFileSync(
 );
 
 describe('legacy questionnaire data-card recovery wiring', () => {
-  test('问卷编辑器通过摘要纳入旧问卷，并保留显式类型修复', () => {
+  test('问卷编辑器通过摘要纳入旧问卷，载入不隐式修复类型', () => {
     expect(questionnaireEditorSource).toContain("useDataCardSummaryPage('my'");
     expect(questionnaireEditorSource).toContain("types: ['questionnaire'], includeLegacyQuestionnaires: true");
-    expect(questionnaireEditorSource).toContain('isLegacyQuestionnaire');
-    expect(questionnaireEditorSource).toContain('repairQuestionnaireType');
+    expect(questionnaireEditorSource).toContain('handleLoadQuestionnaireCard');
+    expect(questionnaireEditorSource).not.toContain('repairQuestionnaireType');
+    expect(questionnaireEditorSource).not.toContain('onReplaceCard=');
+    expect(questionnaireEditorSource).not.toContain('replaceCard(');
   });
 
   test('角色管理中心按内容识别错标问卷并绑定真实卡片', () => {
@@ -28,11 +30,10 @@ describe('legacy questionnaire data-card recovery wiring', () => {
     expect(characterManagerSource).toContain('openQuestionnaireCompat(raw, {');
   });
 
-  test('兼容编辑器在替换前恢复数据卡类型', () => {
-    const repairIndex = compatModalSource.indexOf('repairQuestionnaireType');
-    const replaceIndex = compatModalSource.indexOf('replaceCard');
-
-    expect(repairIndex).toBeGreaterThan(-1);
-    expect(replaceIndex).toBeGreaterThan(repairIndex);
+  test('兼容编辑器不再提供旧修复覆写链，父页同步移除成功回调', () => {
+    expect(compatModalSource).not.toContain('repairQuestionnaireType');
+    expect(compatModalSource).not.toContain('replaceCard');
+    expect(characterManagerSource).not.toContain('onReplaceSuccess=');
+    expect(characterManagerSource).not.toContain('此处仅提供兼容替换能力');
   });
 });

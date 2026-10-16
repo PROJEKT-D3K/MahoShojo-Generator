@@ -5,7 +5,6 @@ import { buildEditableQuestionnaire, importEditableQuestionnaire, createEmptyQue
 import { QuestionnaireEditorPageView, QuestionnaireEditorGuide, QuestionnaireTransferWorkspace, QuestionnaireQuestionsEditor, QuestionnaireMetadataEditor, readQuestionnaireJsonFile } from '@mahoshojo/ui-web/questionnaire-editor';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import Link from 'next/link';
-import { useAppRouterAdapter } from '@/lib/app-router-adapter';
 import SaveToCloudButton from '@/components/SaveToCloudButton';
 import Footer from '@/components/Footer';
 import { ErrorMessage } from '@/components/ErrorMessage';
@@ -19,15 +18,12 @@ import {
 } from '@/lib/questionnaires';
 import { dataCardApi } from '@/lib/auth';
 import { useAuth } from '@/lib/useAuth';
-import { quickCheck } from '@/lib/sensitive-word-filter';
 import { config } from '@/lib/config';
-import { getDataCardVisibilityValue } from '@/lib/data-card-status';
 import { useDataCardSummaryPage } from '@/lib/use-data-card-summary-page';
 import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
 import { exceedsUtf8ByteLimit } from '@/lib/data-card-size';
 
 export const QuestionnaireEditorPage: React.FC = () => {
-  const router = useAppRouterAdapter();
   const importIntent = useRef(0);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; importIntent.current += 1; }; }, []);
@@ -225,12 +221,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
   const handleLoadQuestionnaireCard = async (card: any) => {
     const intent = ++importIntent.current;
     try {
-      if (card?.isLegacyQuestionnaire) {
-        const repairResult = await dataCardApi.repairQuestionnaireType(card.id);
-        if (!repairResult.success) {
-          throw new Error(repairResult.error || '恢复问卷数据卡类型失败');
-        }
-      }
       if (!mounted.current || intent !== importIntent.current) return;
       const raw = typeof card?.data === 'string' ? card.data : JSON.stringify(card?.data ?? {}, null, 2);
       if (!handleImport(raw)) return;
@@ -238,35 +228,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
       flashMessage(`✅ 已载入云端问卷：${card?.name || '未命名问卷'}`);
     } catch (error) {
       if (mounted.current && intent === importIntent.current) setEditorError(error instanceof Error ? error.message : '加载问卷数据卡失败');
-    }
-  };
-
-  const handleReplaceQuestionnaireCard = async (card: any) => {
-    if (!window.confirm(`确认用当前编辑内容替换「${card.name}」吗？`)) return;
-    const textToCheck = `${card.name} ${card.description} ${JSON.stringify(questionnaireData)}`;
-    const sensitiveWordResult = await quickCheck(textToCheck);
-    if (sensitiveWordResult.hasSensitiveWords) {
-      router.push('/arrested');
-      return;
-    }
-    if (card?.isLegacyQuestionnaire) {
-      const repairResult = await dataCardApi.repairQuestionnaireType(card.id);
-      if (!repairResult.success) {
-        setEditorError(repairResult.error || '恢复问卷数据卡类型失败');
-        return;
-      }
-    }
-    const result = await dataCardApi.replaceCard(card.id, {
-      name: card.name,
-      description: card.description,
-      isPublic: getDataCardVisibilityValue(card),
-      data: questionnaireData,
-    });
-    if (result.success) {
-      flashMessage(result.pendingReview ? '✅ 更新已提交审核，审核通过后生效' : '✅ 问卷已替换');
-      loadUserQuestionnaireCards();
-    } else {
-      setEditorError(result.error || '替换失败');
     }
   };
 
@@ -298,7 +259,7 @@ export const QuestionnaireEditorPage: React.FC = () => {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-700">云端问卷库</h3>
-                  <p className="mt-1 text-xs text-slate-500">浏览、编辑你的私有问卷卡，并载入当前编辑器。</p>
+                  <p className="mt-1 text-xs text-slate-500">浏览、管理你的问卷卡，并载入当前编辑器。</p>
                 </div>
                 <button
                   type="button"
@@ -332,7 +293,8 @@ export const QuestionnaireEditorPage: React.FC = () => {
               {!isAuthenticated && (
                 <p className="mt-3 text-xs text-rose-500">尚未登录，无法访问云端问卷库。</p>
               )}
-              <p className="mt-2 text-xs text-slate-400">提示：默认展示私有问卷，可在筛选中切换公开状态。</p>
+              <p className="mt-2 text-xs text-slate-400">提示：默认展示私有问卷，可在筛选中切换公开状态。替换当前问卷请使用下方“替换已有”。</p>
+              <p className="mt-2 text-xs text-slate-500">历史误分类问卷暂不支持一步原位覆写；载入仅导入本地编辑稿，不修改云端类型。请先导出备份，或另存为新问卷。</p>
             </div>
 
             <QuestionnaireMetadataEditor value={{ questions, questionnaireId, kind, title, description, loreMarkdown, logoUrl, version, extensions }}
@@ -390,7 +352,6 @@ export const QuestionnaireEditorPage: React.FC = () => {
 
         onLoadCard={(card) => runCloudOperation(() => handleLoadQuestionnaireCard(card))}
 
-        onReplaceCard={(card) => runCloudOperation(() => handleReplaceQuestionnaireCard(card))}
         userCapacity={userCapacity ?? undefined}
         userUsedSlots={userUsedSlots}
         onOpenRecycleBin={() => {
