@@ -81,6 +81,48 @@ describe('Web / Desktop 真实管理模态框共源控制', () => {
     await render({ isOpen: false, onReplaceCard: replace });
     await act(async () => { pending.resolve(row); }); expect(replace).not.toHaveBeenCalled();
   });
+  it('正文读取和宿主准备期间立即反馈，关闭与Escape仍可用', async () => {
+    const reading = deferred<unknown>(), preparing = deferred<void>();
+    host.loadFullCard = vi.fn(() => reading.promise);
+    const replace = vi.fn(() => preparing.promise), close = vi.fn();
+    await render({ onReplaceCard: replace, onClose: close });
+    await click(button('替换'));
+    expect(document.querySelector('[role=status]')?.textContent).toContain('正在处理数据卡');
+    expect(document.querySelector<HTMLButtonElement>('[aria-label=关闭]')?.disabled).toBe(false);
+    expect(replace).not.toHaveBeenCalled();
+    await act(async () => { reading.resolve(row); });
+    expect(replace).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role=status]')?.textContent).toContain('正在处理数据卡');
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(close).toHaveBeenCalledOnce();
+    await render({ isOpen: false, onReplaceCard: replace, onClose: close });
+    await act(async () => { preparing.resolve(); });
+  });
+  it('关闭重开后的新loading不被旧动作finally清除', async () => {
+    const old = deferred<unknown>(), current = deferred<unknown>();
+    host.loadFullCard = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    const replace = vi.fn();
+    await render({ onReplaceCard: replace }); await click(button('替换'));
+    await render({ isOpen: false, onReplaceCard: replace });
+    await render({ onReplaceCard: replace }); await click(button('替换'));
+    await act(async () => { old.resolve(row); });
+    expect(document.querySelector('[role=status]')?.textContent).toContain('正在处理数据卡');
+    expect(replace).not.toHaveBeenCalled();
+    await act(async () => { current.resolve(row); });
+    expect(document.querySelector('[role=status]')).toBeNull();
+    expect(replace).toHaveBeenCalledOnce();
+  });
+  it.each(['read', 'prepare'])('%s失败清理loading并保留列表供手动重试', async (stage) => {
+    const failure = deferred<unknown>();
+    const replace = stage === 'prepare' ? vi.fn(() => failure.promise as Promise<void>) : vi.fn();
+    if (stage === 'read') host.loadFullCard = vi.fn(() => failure.promise);
+    await render({ onReplaceCard: replace }); await click(button('替换'));
+    expect(document.querySelector('[role=status]')).not.toBeNull();
+    await act(async () => { failure.reject(new Error('目标读取失败')); });
+    expect(document.querySelector('[role=status]')).toBeNull();
+    expect(document.querySelector('[role=alert]')?.textContent).toBe('目标读取失败');
+    expect(document.querySelector('[role=dialog]')?.textContent).toContain('雾灯');
+  });
   it('账号凭据代际改变取消旧读取且清理原详情，旧响应不进入新账号', async () => {
     const pending = deferred<unknown>(); host.loadFullCard = vi.fn(() => pending.promise); const replace = vi.fn();
     await render({ scopeKey: 'owner-1:epoch-1', onReplaceCard: replace });

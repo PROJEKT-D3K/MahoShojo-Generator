@@ -627,6 +627,11 @@ export const CharacterManagerPage: React.FC = () => {
             void loadUserBadges();
         },
     });
+    // 离开列表时一并取消替换目标认领；受检读取迟到不能在新界面打开确认框。
+    const closeDataCardsModal = () => {
+        cloudWrite.cancelReplacementSelection();
+        setShowDataCardsModal(false);
+    };
     // 账号变更不将旧的资料编辑/选择/专用云端目标带到新账号；编辑器正文保留。
     useEffect(() => {
         setShowDataCardsModal(false); setCurrentPage(1); setUserBadges([]);
@@ -688,7 +693,7 @@ export const CharacterManagerPage: React.FC = () => {
                     isPublic: getDataCardVisibilityValue(card),
                 });
                 setShowHistoryCardEditor(true);
-                setShowDataCardsModal(false);
+                closeDataCardsModal();
                 return;
             }
             if (isQuestionnaireDataCard(card)) {
@@ -700,12 +705,12 @@ export const CharacterManagerPage: React.FC = () => {
                     isPublic: getDataCardVisibilityValue(card),
                 });
                 setMessage({ type: 'info', text: '已进入问卷数据卡兼容模式：建议前往 /questionnaire-editor 进行完整编辑。' });
-                setShowDataCardsModal(false);
+                closeDataCardsModal();
                 return;
             }
             // card.data 是一个 JSON 字符串，我们直接将其传递给统一的加载处理函数
             await processJsonData(card.data);
-            setShowDataCardsModal(false);
+            closeDataCardsModal();
             // 成功消息现在由 processJsonData 内部处理，这里无需重复设置
         } catch {
             setMessage({ type: 'error', text: '加载数据卡失败' });
@@ -727,14 +732,14 @@ export const CharacterManagerPage: React.FC = () => {
                 isPublic: getDataCardVisibilityValue(card),
             });
             setMessage({ type: 'info', text: '问卷数据卡请优先在 /questionnaire-editor 编辑；此处仅提供兼容替换能力。' });
-            setShowDataCardsModal(false);
+            closeDataCardsModal();
             return;
         }
         if (!characterData) {
             setMessage({ type: 'error', text: '请先在编辑区加载/生成要替换的内容' });
             return;
         }
-        if (await cloudWrite.selectReplacement(card.id)) setShowDataCardsModal(false);
+        if (await cloudWrite.selectReplacement(card.id)) closeDataCardsModal();
     };
 
     const handleReplaceHistoryCard = async (payload: NarrativeHistoryDataCardV1) => {
@@ -2081,8 +2086,7 @@ export const CharacterManagerPage: React.FC = () => {
             < DataCardsModal
                 isOpen={showDataCardsModal}
                 onClose={() => {
-                    cloudWrite.cancelReplacementSelection();
-                    setShowDataCardsModal(false);
+                    closeDataCardsModal();
                     setCurrentPage(1);
                 }}
                 dataCards={[]}
@@ -2106,7 +2110,7 @@ export const CharacterManagerPage: React.FC = () => {
             capacityKnown={capacityKnown}
             userUsedSlots={userUsedSlots}
             onOpenRecycleBin={() => {
-                setShowDataCardsModal(false);
+                closeDataCardsModal();
                 setShowRecycleBinModal(true);
             }}
                 recycleLimit={config.RECYCLE_BIN_LIMIT}

@@ -32,7 +32,8 @@ const mount = async (isNative = false) => {
 };
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; };
 beforeEach(() => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true; state.userId = 7; state.resign.mockReset(); state.push.mockClear(); state.logout.mockReset().mockResolvedValue(undefined); localStorage.clear();
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  state.userId = 7; state.resign.mockReset(); state.push.mockClear(); state.logout.mockReset().mockResolvedValue(undefined); localStorage.clear();
   vi.spyOn(authStorage, 'getAuth').mockImplementation(async () => ({ userId: state.userId, username: 'tester' })); vi.spyOn(authStorage, 'getAuthHeader').mockResolvedValue(null);
   vi.spyOn(dataCardApi, 'getUserCapacity').mockResolvedValue({ capacity: 20, usedSlots: 0 }); vi.spyOn(dataCardApi, 'getRecycleBin').mockResolvedValue([]);
   vi.spyOn(dataCardApi, 'createCard').mockResolvedValue({ success: true, id: 'new-card' }); vi.spyOn(dataCardApi, 'readOwnedReplacementTarget').mockResolvedValue({ success: true, target }); vi.spyOn(dataCardApi, 'replaceOwnedCard').mockResolvedValue({ success: true, pendingReview: true });
@@ -80,6 +81,69 @@ describe('Web真实角色管理普通角色/情景云写宿主', () => {
     await mount(); await act(async () => { [...container.querySelectorAll('button')].find((node) => node.textContent?.includes('我的数据卡'))!.click(); }); await waitFor(() => !!button('替换')); await click('替换');
     state.userId = 8; await act(async () => { root.render(<CharacterManagerPage />); }); await act(async () => { old.resolve({ success: true, target }); });
     expect(document.querySelector('[role=dialog]')).toBeNull(); expect(dataCardApi.replaceOwnedCard).not.toHaveBeenCalled(); expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('雾灯');
+  });
+  it.each(['close', 'escape', 'recycle'])('替换目标读取中经%s离开列表，迟到目标不再开确认或写入', async (leave) => {
+    const old = deferred<{ success: boolean; target: OwnedDataCardReplacementTarget }>();
+    vi.mocked(dataCardApi.readOwnedReplacementTarget).mockReturnValue(old.promise);
+    await mount();
+    await act(async () => { [...container.querySelectorAll('button')].find((node) => node.textContent?.includes('我的数据卡'))!.click(); });
+    await waitFor(() => !!button('替换')); await click('替换');
+    expect(dataCardApi.readOwnedReplacementTarget).toHaveBeenCalledOnce();
+    if (leave === 'close') await act(async () => { document.querySelector<HTMLButtonElement>('[role=dialog] [aria-label=关闭]')!.click(); });
+    else if (leave === 'escape') await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    else await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find((node) => node.textContent?.trim().startsWith('回收站'))!.click(); });
+    await act(async () => { old.resolve({ success: true, target }); });
+    expect(button('确认替换')).toBeUndefined();
+    expect(dataCardApi.replaceOwnedCard).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('雾灯');
+  });
+  it('取消后重开不会被旧目标响应抢占，也不会释放新读取的等待态', async () => {
+    const old = deferred<{ success: boolean; target: OwnedDataCardReplacementTarget }>();
+    const current = deferred<{ success: boolean; target: OwnedDataCardReplacementTarget }>();
+    vi.mocked(dataCardApi.readOwnedReplacementTarget).mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    const openList = async () => {
+      await act(async () => { [...container.querySelectorAll('button')].find((node) => node.textContent?.includes('我的数据卡'))!.click(); });
+      await waitFor(() => !!button('替换')); await click('替换');
+    };
+    await mount(); await openList();
+    await act(async () => { document.querySelector<HTMLButtonElement>('[role=dialog] [aria-label=关闭]')!.click(); });
+    await openList();
+    await act(async () => { old.resolve({ success: true, target }); });
+    expect(button('确认替换')).toBeUndefined();
+    expect(document.querySelector('[role=status]')?.textContent).toContain('正在处理数据卡');
+    const currentTarget = { ...target, version: '2'.repeat(64) };
+    await act(async () => { current.resolve({ success: true, target: currentTarget }); });
+    expect(dataCardApi.replaceOwnedCard).not.toHaveBeenCalled();
+    await click('确认替换');
+    expect(dataCardApi.replaceOwnedCard).toHaveBeenCalledExactlyOnceWith(currentTarget, expect.anything(), expect.objectContaining({ expectedUserId: 7 }));
+  });
+  it('回收站离开后迟到失败不污染新界面，正文和新选择能力保留', async () => {
+    const old = deferred<{ success: boolean; error: string }>();
+    vi.mocked(dataCardApi.readOwnedReplacementTarget).mockReturnValueOnce(old.promise);
+    await mount();
+    await act(async () => { [...container.querySelectorAll('button')].find((node) => node.textContent?.includes('我的数据卡'))!.click(); });
+    await waitFor(() => !!button('替换')); await click('替换');
+    await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find((node) => node.textContent?.trim().startsWith('回收站'))!.click(); });
+    await act(async () => { old.resolve({ success: false, error: '旧目标读取失败' }); });
+    expect(document.body.textContent).not.toContain('旧目标读取失败');
+    expect(button('确认替换')).toBeUndefined();
+    expect(dataCardApi.replaceOwnedCard).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('雾灯');
+  });
+  it('等待反馈不解除已发送替换的写锁，重复点击和Escape不会重发或关闭', async () => {
+    const writing = deferred<{ success: boolean; pendingReview: boolean }>();
+    vi.mocked(dataCardApi.replaceOwnedCard).mockReturnValue(writing.promise);
+    await mount();
+    await act(async () => { [...container.querySelectorAll('button')].find((node) => node.textContent?.includes('我的数据卡'))!.click(); });
+    await waitFor(() => !!button('替换')); await click('替换');
+    await act(async () => { button('确认替换').click(); button('确认替换').click(); });
+    expect(dataCardApi.replaceOwnedCard).toHaveBeenCalledOnce();
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(button('替换中...')?.disabled).toBe(true);
+    expect(document.querySelector('[role=dialog]')).not.toBeNull();
+    await act(async () => { writing.resolve({ success: true, pendingReview: true }); });
+    expect(document.querySelector('[role=dialog]')).toBeNull();
+    expect(dataCardApi.replaceOwnedCard).toHaveBeenCalledOnce();
   });
   it('替换未知响应不自动重放且失败保稿，必须回列表重新读取目标', async () => {
     vi.mocked(dataCardApi.replaceOwnedCard).mockResolvedValue({ success: false, uncertain: true, error: '替换结果不确定' });

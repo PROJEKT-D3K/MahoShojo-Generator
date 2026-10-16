@@ -294,11 +294,12 @@ function DataCardsModalScope({
   const error = serverPaged ? page.error : suppliedError;
   const onReload = serverPaged ? page.reload : suppliedReload;
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionPending, setActionPending] = useState(false);
   const actionController = useRef<AbortController | null>(null);
   const { reload: reloadSummary } = page;
   useEffect(() => { if (refreshKey || metadata.refresh || deletion.refresh) reloadSummary(); }, [refreshKey, metadata.refresh, deletion.refresh, reloadSummary]);
   useEffect(() => {
-    if (!isOpen) { setSelectedCard(null); setShowDetailsModal(false); setActionError(null); }
+    if (!isOpen) { setSelectedCard(null); setShowDetailsModal(false); setActionError(null); setActionPending(false); }
     return () => { actionController.current?.abort(); actionController.current = null; };
   }, [isOpen]);
   const withCardAction = async (action: (signal: AbortSignal) => void | Promise<void>, failureMessage: string) => {
@@ -306,13 +307,13 @@ function DataCardsModalScope({
     if (suppliedBusy || metadata.isBusy() || isDeleting() || actionController.current !== null) return;
     const controller = new AbortController();
     actionController.current = controller;
-    setActionError(null);
+    setActionError(null); setActionPending(true);
     try {
       await action(controller.signal);
     } catch (cause) {
       if (!controller.signal.aborted) setActionError(cause instanceof Error ? cause.message : failureMessage);
     } finally {
-      if (actionController.current === controller) actionController.current = null;
+      if (actionController.current === controller) { actionController.current = null; setActionPending(false); }
     }
   };
   const withFullCard = (card: any, action: (full: any) => void | Promise<void>) => withCardAction(async (signal) => {
@@ -607,6 +608,7 @@ function DataCardsModalScope({
         </div>
 
         <div className={BASE_MODAL_BODY_LAYOUT_CLASS_NAME} role="region" aria-labelledby={titleId} tabIndex={0}>
+          {actionPending && <p role="status" className="text-gray-600 text-center py-3">正在处理数据卡，请稍候…</p>}
         {/* fieldset 只承载禁用语义，普通 div 负责 flex 收缩与原生滚动。 */}
         <fieldset disabled={busy} className="min-w-0">
           {(error || actionError) && <p role="alert" className="text-red-600 text-center py-3">{actionError || (error && dataCards.length > 0 ? `刷新失败，当前显示上次成功结果：${error}` : error)}</p>}
