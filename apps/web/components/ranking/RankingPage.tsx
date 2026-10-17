@@ -8,7 +8,7 @@ import { readWebRanking } from '@/lib/arena/read-public-ranking';
 import { LeaderboardEntityDetailsModal, type LeaderboardEntityDetailsTarget } from './LeaderboardEntityDetailsModal';
 import { getArenaCachedRank, isCanonicalPublicLeaderboardQuery, upsertArenaRankCacheFromLeaderboard } from '@/lib/arena/rank-cache';
 
-const keys = { seasons: 'seasonsConfig', tags: 'tags', leaderboard: 'arenaLeaderboard', search: 'arenaLeaderboardSearch', archive: 'seasonArchive', ratingHistory: 'entityRatingHistory' } as const;
+const keys = { seasons: 'seasonsConfig', tags: 'tags', leaderboard: 'arenaLeaderboard', search: 'arenaLeaderboardSearch', archive: 'seasonArchive', ratingHistory: 'entityRatingHistory', entityRating: 'entityRating' } as const;
 const useRankingQuery: RankingQueryHook = ({ request, enabled, staleTime }) => useQuery({
   queryKey: [keys[request.kind], request],
   queryFn: ({ signal }) => readWebRanking(request, signal),

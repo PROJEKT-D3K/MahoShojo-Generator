@@ -5,7 +5,7 @@ import { PUBLIC_RANKING_BODY_BUDGETS, PublicRankingRequestSchema, PublicRankingR
 describe('public ranking read boundary', () => {
   it('keeps all fixed paths, body budgets and public nested projections', () => {
     expect(PUBLIC_RANKING_BODY_BUDGETS).toEqual(fixture.budgets);
-    for (const kind of ['leaderboard', 'search', 'tags', 'seasons', 'archive', 'ratingHistory'] as const) {
+    for (const kind of ['leaderboard', 'search', 'tags', 'seasons', 'archive', 'ratingHistory', 'entityRating'] as const) {
       const request = PublicRankingRequestSchema.parse(fixture.requests[kind]);
       expect(publicRankingPath(request).split('?')[0]).toBe(fixture.paths[kind]);
       const wire = PublicRankingResponseSchema.parse({ kind, data: fixture.responses[kind] });

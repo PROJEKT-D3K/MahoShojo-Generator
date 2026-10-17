@@ -7,6 +7,8 @@ const LEADERBOARD_PATH: &str = "/api/arena/leaderboard";
 const SEARCH_PATH: &str = "/api/arena/leaderboard/search";
 const TAGS_PATH: &str = "/api/tags";
 const SEASONS_PATH: &str = "/config/seasons.json";
+const ENTITY_RATING_PATH: &str = "/api/arena/entity-rating";
+const ENTITY_RATING_MAX_BYTES: usize = 16 * 1024;
 const RATING_HISTORY_PATH: &str = "/api/arena/entity-rating-history";
 // Client transport guard, not a server eligibility or historical-record cap.
 const RATING_HISTORY_MAX_BYTES: usize = 256 * 1024;
@@ -96,6 +98,21 @@ fn natural<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SafeInteger, D::Err
     }
     Ok(value)
 }
+// Match the existing entity-rating handler: finite, floored, nonnegative numbers.
+// That endpoint has no safe-integer cap; do not reject otherwise valid old facts.
+fn current_rating_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    // Read the original numeric token directly from the bounded response bytes.
+    // serde_json's default f64 parser can round large legal JS numbers differently;
+    // std's parser correctly rounds without changing unrelated response contracts.
+    let raw = Box::<serde_json::value::RawValue>::deserialize(d)?;
+    let value: f64 = raw.get().parse().map_err(serde::de::Error::custom)?;
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
+        return Err(serde::de::Error::custom(
+            "expected nonnegative finite integer",
+        ));
+    }
+    Ok(value)
+}
 // A required nullable field must reject absence, not silently act as optional.
 fn nullable<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
@@ -132,6 +149,7 @@ query_enum!(Sort { Rating => "rating", Tech => "tech" });
 query_enum!(Order { Desc => "desc", Asc => "asc" });
 query_enum!(NativeFilter { Any => "any", Yes => "1", No => "0" });
 query_enum!(EntityType { DataCard => "data_card", Preset => "preset" });
+string_enum!(DataCardEntity { DataCard => "data_card" });
 string_enum!(StrictQueue { Strict => "strict" });
 string_enum!(RatingResult { Win => "win", Loss => "loss", Draw => "draw" });
 string_enum!(Tier { Unranked => "无牌", White => "白牌", Word => "字牌", Flower => "花牌", Wand => "权杖" });
@@ -175,6 +193,12 @@ enum Operation {
         filters: RankingFilters,
         q: String,
         limit: SafeInteger,
+    },
+    EntityRating {
+        #[serde(rename = "entityType")]
+        entity_type: DataCardEntity,
+        #[serde(rename = "entityId")]
+        entity_id: String,
     },
     RatingHistory {
         #[serde(rename = "entityType")]
@@ -235,6 +259,22 @@ impl PublicRankingRequest {
     fn route(&self) -> Result<(String, usize), CloudError> {
         let invalid = || CloudError::new(CloudErrorCode::InvalidRequest, "排行榜读取参数无效");
         let (filters, limit, path, extra, budget) = match &self.0 {
+            Operation::EntityRating { entity_id, .. } => {
+                let id = trim_query(entity_id);
+                if id.is_empty() || id.encode_utf16().count() > 200 {
+                    return Err(invalid());
+                }
+                let mut query = url::form_urlencoded::Serializer::new(String::new());
+                query.extend_pairs([
+                    ("entityType", "data_card"),
+                    ("entityId", id),
+                    ("queue", "strict"),
+                ]);
+                return Ok((
+                    format!("{ENTITY_RATING_PATH}?{}", query.finish()),
+                    ENTITY_RATING_MAX_BYTES,
+                ));
+            }
             Operation::RatingHistory {
                 entity_type,
                 entity_id,
@@ -575,6 +615,19 @@ impl SeasonArchive {
         }
     }
 }
+object! {
+    pub struct EntityRating {
+        success: bool,
+        queue: StrictQueue,
+        entity_type: DataCardEntity,
+        entity_id: String,
+        found: bool,
+        #[serde(deserialize_with = "current_rating_number")]
+        rating: f64,
+        #[serde(deserialize_with = "current_rating_number")]
+        games: f64,
+    }
+}
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "camelCase")]
 pub enum PublicRankingResponse {
@@ -584,6 +637,7 @@ pub enum PublicRankingResponse {
     Seasons(Seasons),
     Archive(Box<SeasonArchive>),
     RatingHistory(RatingHistory),
+    EntityRating(EntityRating),
 }
 
 pub async fn read_public_ranking(
@@ -632,6 +686,16 @@ pub async fn read_public_ranking(
         )
     };
     match request.0 {
+        Operation::EntityRating {
+            entity_type: DataCardEntity::DataCard,
+            entity_id,
+        } => {
+            let data: EntityRating = serde_json::from_slice(&bytes).map_err(|_| incompatible())?;
+            if !data.success || data.entity_id != trim_query(&entity_id) {
+                return Err(incompatible());
+            }
+            Ok(PublicRankingResponse::EntityRating(data))
+        }
         Operation::Leaderboard { limit, offset, .. } => {
             let data: RankingList = serde_json::from_slice(&bytes).map_err(|_| incompatible())?;
             if !data.success
@@ -697,13 +761,14 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
 
-    const KINDS: [&str; 6] = [
+    const KINDS: [&str; 7] = [
         "leaderboard",
         "search",
         "tags",
         "seasons",
         "archive",
         "ratingHistory",
+        "entityRating",
     ];
     fn fixture() -> Value {
         serde_json::from_str(include_str!(
@@ -832,6 +897,7 @@ mod tests {
             ("seasons", SEASONS_MAX_BYTES),
             ("archive", ARCHIVE_MAX_BYTES),
             ("ratingHistory", RATING_HISTORY_MAX_BYTES),
+            ("entityRating", ENTITY_RATING_MAX_BYTES),
         ] {
             let route = request(kind).route().unwrap();
             assert_eq!(route.1, budget);
@@ -1391,6 +1457,151 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.code, expected);
             assert!(!error.message.contains("private"));
+        }
+    }
+    #[tokio::test]
+    async fn entity_rating_fixed_target_and_handler_numeric_domain() {
+        let req = request("entityRating");
+        let (route, budget) = req.route().unwrap();
+        assert_eq!(
+            route,
+            "/api/arena/entity-rating?entityType=data_card&entityId=public-card&queue=strict"
+        );
+        assert_eq!(budget, 16 * 1024);
+        for field in [
+            "queue",
+            "seasonId",
+            "limit",
+            "credentials",
+            "token",
+            "url",
+            "path",
+            "headers",
+            "body",
+        ] {
+            let mut value = fixture()["requests"]["entityRating"].clone();
+            value[field] = json!("forbidden");
+            assert!(invalid_request(value), "{field}");
+        }
+        for id in ["".to_string(), " \u{feff}\n".to_string(), "😀".repeat(101)] {
+            let mut value = fixture()["requests"]["entityRating"].clone();
+            value["entityId"] = json!(id);
+            assert!(invalid_request(value));
+        }
+        for kind in ["preset", "local", "cache"] {
+            let mut value = fixture()["requests"]["entityRating"].clone();
+            value["entityType"] = json!(kind);
+            assert!(invalid_request(value));
+        }
+        let id = "旧 / ?&+%😀";
+        let mut value = fixture()["requests"]["entityRating"].clone();
+        value["entityId"] = json!(format!(" \u{feff}{id}\n"));
+        let req = serde_json::from_value(value).unwrap();
+        let mut body = fixture()["responses"]["entityRating"].clone();
+        body["entityId"] = json!(id);
+        let (origin, seen, task) = server(200, serde_json::to_vec(&body).unwrap(), "").await;
+        read_public_ranking(&CloudState::with_origin(&origin), req)
+            .await
+            .unwrap();
+        let head = seen.await.unwrap();
+        let url = url::Url::parse(&format!(
+            "{origin}{}",
+            head.split_whitespace().nth(1).unwrap()
+        ))
+        .unwrap();
+        assert_eq!(url.path(), ENTITY_RATING_PATH);
+        assert_eq!(
+            url.query_pairs().into_owned().collect::<Vec<_>>(),
+            vec![
+                ("entityType".into(), "data_card".into()),
+                ("entityId".into(), id.into()),
+                ("queue".into(), "strict".into()),
+            ]
+        );
+        task.await.unwrap();
+        let original = fixture()["responses"]["entityRating"].clone();
+        for value in [
+            0.0,
+            1000.0,
+            9_007_199_254_740_992.0,
+            1.234_567_890_123_456_7e100,
+            f64::MAX,
+        ] {
+            let mut body = original.clone();
+            body["rating"] = json!(value);
+            body["games"] = json!(value);
+            let output = serde_json::to_value(read("entityRating", body).await.unwrap()).unwrap();
+            assert_eq!(output["data"]["rating"].as_f64(), Some(value));
+        }
+        for (field, value) in [
+            ("success", json!(false)),
+            ("queue", json!("free")),
+            ("entityType", json!("preset")),
+            ("entityId", json!("other")),
+            ("found", Value::Null),
+            ("rating", json!(-1)),
+            ("rating", json!(1.5)),
+            ("games", json!("7")),
+            ("games", json!(true)),
+            ("games", json!([7])),
+            ("games", json!({"value": 7})),
+            ("games", Value::Null),
+        ] {
+            let mut body = original.clone();
+            body[field] = value;
+            assert_eq!(
+                read("entityRating", body).await.unwrap_err().code,
+                CloudErrorCode::ProtocolMismatch,
+                "{field}"
+            );
+        }
+        for key in original.as_object().unwrap().keys() {
+            let mut body = original.clone();
+            body.as_object_mut().unwrap().remove(key);
+            assert_eq!(
+                read("entityRating", body).await.unwrap_err().code,
+                CloudErrorCode::ProtocolMismatch,
+                "missing {key}"
+            );
+        }
+        let mut missing = original;
+        missing["found"] = json!(false);
+        missing["rating"] = json!(1000);
+        missing["games"] = json!(0);
+        assert!(read("entityRating", missing).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn entity_rating_consumes_actual_web_handler_wire() {
+        let Some(directory) = std::env::var_os("PUBLIC_RANKING_HANDLER_WIRE_INPUT") else {
+            return;
+        };
+        for name in ["found", "missing", "zero", "fraction", "large"] {
+            let bytes =
+                std::fs::read(std::path::PathBuf::from(&directory).join(format!("{name}.json")))
+                    .unwrap();
+            let expected: Value = serde_json::from_slice(&bytes).unwrap();
+            #[derive(Deserialize)]
+            struct OriginalNumbers {
+                rating: Box<serde_json::value::RawValue>,
+                games: Box<serde_json::value::RawValue>,
+            }
+            let numbers: OriginalNumbers = serde_json::from_slice(&bytes).unwrap();
+            let output =
+                serde_json::to_value(read_bytes("entityRating", 200, bytes).await.unwrap())
+                    .unwrap();
+            for key in ["success", "queue", "entityType", "entityId", "found"] {
+                assert_eq!(output["data"][key], expected[key]);
+            }
+            for (key, raw) in [("rating", numbers.rating), ("games", numbers.games)] {
+                assert_eq!(
+                    output["data"][key].as_f64(),
+                    Some(raw.get().parse().unwrap())
+                );
+            }
+            // The Desktop wire test compares these outputs against JSON.parse of
+            // the original handler bytes, outside every Rust numeric parser.
+            probe(&format!("entityRating-handler-{name}"), &output);
         }
     }
 }

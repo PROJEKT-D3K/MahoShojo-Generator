@@ -54,6 +54,11 @@
       "kind": "ratingHistory",
       "entityType": "data_card",
       "entityId": "public-card"
+    },
+    "entityRating": {
+      "kind": "entityRating",
+      "entityType": "data_card",
+      "entityId": "public-card"
     }
   },
   "responses": {
@@ -300,6 +305,15 @@
         }
       ],
       "privateMetadata": "DROP"
+    },
+    "entityRating": {
+      "success": true,
+      "queue": "strict",
+      "entityType": "data_card",
+      "entityId": "public-card",
+      "found": true,
+      "rating": 1200,
+      "games": 7
     }
   },
   "budgets": {
@@ -308,7 +322,8 @@
     "tags": 1048576,
     "seasons": 262144,
     "archive": 4194304,
-    "ratingHistory": 262144
+    "ratingHistory": 262144,
+    "entityRating": 16384
   },
   "paths": {
     "leaderboard": "/api/arena/leaderboard",
@@ -316,6 +331,7 @@
     "tags": "/api/tags",
     "seasons": "/config/seasons.json",
     "archive": "/data/seasons/archive_S3.json",
-    "ratingHistory": "/api/arena/entity-rating-history"
+    "ratingHistory": "/api/arena/entity-rating-history",
+    "entityRating": "/api/arena/entity-rating"
   }
 }
