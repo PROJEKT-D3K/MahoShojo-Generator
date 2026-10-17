@@ -176,7 +176,9 @@ local intendedTerminal = ''
 if state.intendedTerminal ~= nil and state.intendedTerminal ~= cjson.null then
   intendedTerminal = cjson.encode(state.intendedTerminal)
 end
-return { 'claimed', state.generationRequestId, state.payloadHash, state.mode or '', intendedTerminal }
+local mode = state.mode
+if mode == nil or mode == cjson.null then mode = '' end
+return { 'claimed', state.generationRequestId, state.payloadHash, mode, intendedTerminal }
 `;
 
 const RELEASE_RESERVATION_SCRIPT = `

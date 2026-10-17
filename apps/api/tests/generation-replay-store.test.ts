@@ -804,3 +804,18 @@ describe('RedisGenerationReplayStore', () => {
     );
   });
 });
+
+it('normalizes JSON null mode before returning a successful lease-reaper claim', async () => {
+  const evaluate = vi.fn<RedisGenerationClient['eval']>(async (script) => script.includes('GEN_DISCOVER_IDENTITY')
+    ? 'mahoshojo:gen:v1:req:user:hash:request-1234'
+    : ['claimed', reserveInput.generationRequestId, reserveInput.payloadHash, '', '']);
+  const store = createRedisGenerationReplayStore({ getClient: () => ({
+    eval: evaluate, get: async () => null, xRead: async () => null,
+  }) });
+  await expect(store.claimLeaseExpiry({
+    generationId: reserveInput.generationId, actorKey: reserveInput.actorKey,
+    reaperToken: 'reaper', now: reserveInput.now, leaseExpiresAt: reserveInput.leaseExpiresAt,
+  })).resolves.toMatchObject({ kind: 'claimed', mode: null });
+  const script = evaluate.mock.calls.find(([text]) => text.includes('GEN_CLAIM_LEASE_EXPIRY_V1'))![0];
+  expect(script).toContain("if mode == nil or mode == cjson.null then mode = '' end");
+});
