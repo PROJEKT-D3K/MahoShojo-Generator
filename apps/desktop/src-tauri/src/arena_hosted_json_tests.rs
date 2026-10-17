@@ -905,3 +905,69 @@ async fn json_real_error_writer_utf16_fields_remain_original_and_keep_http_statu
 
 #[path = "arena_hosted_reconciliation_tests.rs"]
 mod reconciliation_tests;
+
+/// Test-only Renderer -> production Native HTTP -> loopback server -> Channel journey.
+/// Uses an isolated library and in-memory synthetic credentials; never accepts remote origins.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the owned Renderer loopback journey driver"]
+async fn real_arena_hosted_journey_pipe() {
+    use std::io::{BufRead, Write};
+    let origin = std::env::var("MAHO_ARENA_JOURNEY_ORIGIN").unwrap();
+    let url = reqwest::Url::parse(&origin).unwrap();
+    assert_eq!(url.scheme(), "http");
+    assert_eq!(url.host_str(), Some("127.0.0.1"));
+    assert!(url.port().is_some());
+    assert!(url.username().is_empty() && url.password().is_none());
+    assert_eq!(url.path(), "/");
+    assert!(url.query().is_none() && url.fragment().is_none());
+    let mut state = ArenaState::with_origin(origin.clone());
+    state.reconciliation_origin = origin;
+    let cloud = CloudState::new().unwrap();
+    let secrets = Secrets::default();
+    login(&secrets, 123);
+    secrets.set("preset:deepseek:api-key", KEY).unwrap();
+    fn send(value: Value) {
+        let mut out = std::io::stdout().lock();
+        writeln!(out, "{value}").unwrap();
+        out.flush().unwrap();
+    }
+    struct PipeSink(u64);
+    impl EventSink for PipeSink {
+        fn send(&self, event: ChannelEvent) -> Result<(), ArenaError> {
+            send(json!({"id":self.0,"event":event}));
+            Ok(())
+        }
+    }
+    send(json!({"id":0,"ok":true,"value":"arena-hosted-journey-ready"}));
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    loop {
+        let mut line = String::new();
+        let size = input.read_line(&mut line).unwrap();
+        if size == 0 {
+            break;
+        }
+        assert!(size <= INPUT_BYTES * 2);
+        let frame: Value = serde_json::from_str(&line).unwrap();
+        let id = frame["id"].as_u64().unwrap();
+        let command = frame["command"].as_str().unwrap();
+        if command == "close" {
+            send(json!({"id":id,"ok":true,"value":null}));
+            break;
+        }
+        let request: ArenaRequest = serde_json::from_value(frame["request"].clone()).unwrap();
+        let result = match command {
+            "arena_hosted_stream" => stream(&state, &cloud, &secrets, request, &PipeSink(id))
+                .await
+                .map(|_| Value::Null),
+            "arena_hosted_control" => control(&state, &cloud, &secrets, request)
+                .await
+                .map(|value| serde_json::to_value(value).unwrap()),
+            _ => panic!("unsupported test-only command"),
+        };
+        match result {
+            Ok(value) => send(json!({"id":id,"ok":true,"value":value})),
+            Err(error) => send(json!({"id":id,"ok":false,"error":error})),
+        }
+    }
+}
