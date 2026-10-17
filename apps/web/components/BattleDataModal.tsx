@@ -4,10 +4,11 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import type { CardLibraryModalProps } from '@mahoshojo/ui-web/card-library';
 
 import { DeferredChunkBoundary, DeferredChunkLoading } from '@/components/shared/DeferredChunkBoundary';
+import { createDeferredModuleLoader } from '@/lib/client/loadDeferredModule';
 
 export type BattleDataModalProps = Omit<CardLibraryModalProps, 'host'>;
 
-const BattleDataModalContent = lazy(() => import('./BattleDataModalContent'));
+const BattleDataModalContent = lazy(createDeferredModuleLoader(() => import('./BattleDataModalContent')));
 
 export default function BattleDataModal(props: BattleDataModalProps) {
   const [hasOpened, setHasOpened] = useState(props.isOpen);

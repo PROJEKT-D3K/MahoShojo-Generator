@@ -17,8 +17,9 @@ import UserTitle from '@/components/UserTitle';
 import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
 import { useAuth } from '@/lib/useAuth';
 import { AuthStorageError } from '@/lib/auth-identity';
+import { createDeferredModuleLoader } from '@/lib/client/loadDeferredModule';
 
-const AuthModal = lazy(() => import('@/components/CharManager/AuthModal'));
+const AuthModal = lazy(createDeferredModuleLoader(() => import('@/components/CharManager/AuthModal')));
 
 /**
  * Web 宿主侧能力快照：产品导航、顶栏路径在 Web 全部已交付——

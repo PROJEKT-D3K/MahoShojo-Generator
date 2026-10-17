@@ -5,6 +5,7 @@ import { lazy, useEffect, useMemo, useState } from 'react';
 
 import BattleDataModal from '@/components/BattleDataModal';
 import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
+import { createDeferredModuleLoader } from '@/lib/client/loadDeferredModule';
 import Footer from '@/components/Footer';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { BattleLitePageView } from '@mahoshojo/ui-web/arena';
@@ -47,10 +48,10 @@ import {
   MAX_ARENA_REFERENCE_ITEMS,
 } from '@/lib/arena/resource-budget';
 
-const DataCardDetailsModal = lazy(() => import('@/components/DataCardDetailsModal'));
-const ArenaRankingModal = lazy(
+const DataCardDetailsModal = lazy(createDeferredModuleLoader(() => import('@/components/DataCardDetailsModal')));
+const ArenaRankingModal = lazy(createDeferredModuleLoader(
   () => import('@/components/arena/components/ArenaRankingModal').then((module) => ({ default: module.ArenaRankingModal })),
-);
+));
 
 export function BattleLitePage() {
   const { isAuthenticated } = useAuth();

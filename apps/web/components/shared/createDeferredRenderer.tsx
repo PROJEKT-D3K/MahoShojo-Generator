@@ -1,6 +1,8 @@
 'use client';
 
 import { Component, Suspense, lazy, type ComponentType, type ReactNode } from 'react';
+import { createDeferredModuleLoader } from '@/lib/client/loadDeferredModule';
+import { DeferredChunkRecovery } from './DeferredChunkRecovery';
 
 /** Only the optional renderer remounts on retry; its owner's generation/recovery hooks stay mounted. */
 export function createDeferredRenderer<Props extends object>(
@@ -11,22 +13,25 @@ export function createDeferredRenderer<Props extends object>(
     wrapFallback?: (content: ReactNode, props: Props) => ReactNode;
   },
 ) {
-  let CurrentRenderer = lazy(load);
+  const loadWithRetry = createDeferredModuleLoader(load);
+  const createRenderer = () => lazy(loadWithRetry);
+  let CurrentRenderer = createRenderer();
 
   return class DeferredRenderer extends Component<Props, {
     hasError: boolean;
+    error: unknown;
     Renderer: typeof CurrentRenderer;
   }> {
-    state = { hasError: false, Renderer: CurrentRenderer };
+    state = { hasError: false, error: null as unknown, Renderer: CurrentRenderer };
 
-    static getDerivedStateFromError() {
-      return { hasError: true };
+    static getDerivedStateFromError(error: unknown) {
+      return { hasError: true, error };
     }
 
     retry = () => {
-      // React.lazy caches rejections. A fresh lazy instance retries the chunk without reloading the page.
-      CurrentRenderer = lazy(load);
-      this.setState({ hasError: false, Renderer: CurrentRenderer });
+      // Reset React's rejected lazy cache, not webpack's deployment-specific asset URL.
+      CurrentRenderer = createRenderer();
+      this.setState({ hasError: false, error: null, Renderer: CurrentRenderer });
     };
 
     renderFallback = () => {
@@ -34,12 +39,8 @@ export function createDeferredRenderer<Props extends object>(
         <div className="space-y-3 rounded-lg border border-gray-200 p-3">
           <div role={this.state.hasError ? 'alert' : 'status'} className="text-sm">
             {this.state.hasError ? `${options.label}加载失败，已有内容仍保留。` : `正在加载${options.label}…`}
-            {this.state.hasError ? (
-              <button type="button" onClick={this.retry} className="ml-3 rounded border px-3 py-1">
-                重试加载
-              </button>
-            ) : null}
           </div>
+          {this.state.hasError ? <DeferredChunkRecovery error={this.state.error} onRetry={this.retry} /> : null}
           {options.fallback?.(this.props)}
         </div>
       );

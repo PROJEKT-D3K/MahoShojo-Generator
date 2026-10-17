@@ -8,6 +8,7 @@ import BattleDataModal from '@/components/BattleDataModal';
 import Footer from '@/components/Footer';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
+import { createDeferredModuleLoader } from '@/lib/client/loadDeferredModule';
 import { useAuth } from '@/lib/useAuth';
 import { ONLINE_DATA_CARD_TYPES } from '@mahoshojo/contracts/data-cards';
 import { getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
@@ -52,25 +53,26 @@ import {
   MAX_ARENA_REFERENCE_ITEMS,
 } from '@/lib/arena/resource-budget';
 
-const DataCardDetailsModal = lazy(() => import('@/components/DataCardDetailsModal'));
-const ArenaRankingModal = lazy(
+const DataCardDetailsModal = lazy(createDeferredModuleLoader(() => import('@/components/DataCardDetailsModal')));
+const ArenaRankingModal = lazy(createDeferredModuleLoader(
   () => import('./components/ArenaRankingModal').then((module) => ({ default: module.ArenaRankingModal })),
-);
-const ArenaRoomDialog = lazy(
+));
+const ArenaRoomDialog = lazy(createDeferredModuleLoader(
   () => import('./multiplayer/ArenaRoomDialog').then((module) => ({ default: module.ArenaRoomDialog })),
-);
+));
+const loadMultiplayerModule = createDeferredModuleLoader(() => import('./multiplayer/ArenaMultiplayerPanel'));
 const ArenaMultiplayerPanel = dynamic(
-  () => import('./multiplayer/ArenaMultiplayerPanel').then((module) => (
+  () => loadMultiplayerModule().then((module) => (
     module.ArenaMultiplayerContextPanel
   )),
-  { ssr: false },
+  { ssr: false, loading: () => <p role="status">正在加载多人房间…</p> },
 );
 
 const ArenaMultiplayerResult = dynamic(
-  () => import('./multiplayer/ArenaMultiplayerPanel').then((module) => (
+  () => loadMultiplayerModule().then((module) => (
     module.ArenaMultiplayerContextResult
   )),
-  { ssr: false },
+  { ssr: false, loading: () => <p role="status">正在加载多人战报…</p> },
 );
 
 type ArenaPageProps = {
@@ -207,9 +209,9 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
       <AdvancedArenaPageView
         header={<BattleHeader />}
         links={<><ArenaRankingLinks onOpenRankingModal={handleOpenRankingModal} /><ArenaPageLinks variant="full" /></>}
-        beforeWorkspace={multiplayer?.enabled ? <ArenaMultiplayerPanel enabled origin={multiplayer.origin} authLoading={authLoading} isAuthenticated={isAuthenticated} displayName={user?.username ?? '玩家'} /> : null}
+        beforeWorkspace={multiplayer?.enabled ? <DeferredChunkBoundary mode="inline" label="多人房间"><ArenaMultiplayerPanel enabled origin={multiplayer.origin} authLoading={authLoading} isAuthenticated={isAuthenticated} displayName={user?.username ?? '玩家'} /></DeferredChunkBoundary> : null}
         result={<>
-          {multiplayer?.enabled ? <ArenaMultiplayerResult onSaveImage={handleSaveImage} /> : null}
+          {multiplayer?.enabled ? <DeferredChunkBoundary mode="inline" label="多人战报"><ArenaMultiplayerResult onSaveImage={handleSaveImage} /></DeferredChunkBoundary> : null}
           <BattleResult onSaveImage={handleSaveImage} />
           <BattleStorySessionPanel onSaveImage={handleSaveImage} />
         </>}

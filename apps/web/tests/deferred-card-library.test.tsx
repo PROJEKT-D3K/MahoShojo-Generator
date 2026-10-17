@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client';
 import { expect, test, vi } from 'vitest';
 import BattleDataModal from '@/components/BattleDataModal';
 import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
+import appDynamic from 'next/dist/shared/lib/app-dynamic';
+import { createDeferredModuleLoader } from '@/lib/client/loadDeferredModule';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -79,5 +81,47 @@ test('真实 lazy 拒绝只显示局部错误，Escape 关闭并保留父页面'
     await act(async () => root.unmount());
     errorLog.mockRestore();
     container.remove();
+  }
+});
+
+test('多人内联模块失败由局部边界承接，保留同页输出和输入', async () => {
+  const Broken = lazy(async () => { throw Object.assign(new Error('Loading chunk 42 failed.'), { name: 'ChunkLoadError' }); });
+  const container = document.createElement('div'); const root = createRoot(container);
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  try {
+    await act(async () => root.render(<><input defaultValue="房间草稿" /><p>已有战报正文</p>
+      <DeferredChunkBoundary mode="inline" label="多人房间"><Broken /></DeferredChunkBoundary></>));
+    expect(container.textContent).toContain('多人房间加载失败');
+    expect(container.textContent).toContain('已有战报正文');
+    expect(container.querySelector('input')?.value).toBe('房间草稿');
+    expect(confirm).not.toHaveBeenCalled();
+    await act(async () => container.querySelector('button')!.click());
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(container.querySelector('input')?.value).toBe('房间草稿');
+  } finally {
+    await act(async () => root.unmount()); errorLog.mockRestore(); confirm.mockRestore();
+  }
+});
+
+test('实际Next app-dynamic保留ssr:false加载提示，耗尽重试后仅隔离多人模块', async () => {
+  vi.useFakeTimers();
+  const load = vi.fn().mockRejectedValue(Object.assign(new Error('Loading chunk 42 failed.'), { name: 'ChunkLoadError' }));
+  const Dynamic = appDynamic(createDeferredModuleLoader(load), {
+    ssr: false,
+    loading: () => <p role="status">正在加载多人房间…</p>,
+  });
+  const container = document.createElement('div'); const root = createRoot(container);
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await act(async () => root.render(<><input defaultValue="同页草稿" />
+      <DeferredChunkBoundary mode="inline" label="多人房间"><Dynamic /></DeferredChunkBoundary></>));
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('正在加载多人房间…');
+    await act(async () => vi.advanceTimersByTimeAsync(1200));
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('多人房间加载失败');
+    expect(container.querySelector('input')?.value).toBe('同页草稿');
+  } finally {
+    await act(async () => root.unmount()); errorLog.mockRestore(); vi.useRealTimers();
   }
 });
