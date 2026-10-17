@@ -161,6 +161,72 @@ afterEach(async () => {
 });
 
 describe('Desktop /battle journey against loopback fixture', () => {
+  it.each(['battle', 'arena'] as const)('/%s shares the guide and ordinary navigation without claiming unavailable capabilities', async product => {
+    saveDraft(draft('daily', 'non-stream'));
+    localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('kizuna', 'stream') }));
+    window.location.hash = `#/${product}`;
+    const router = await mount();
+    const page = () => container.querySelector(product === 'battle' ? '.battle-lite-panel' : '.arena-page-shell')!;
+    const guide = () => [...page().querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].find(item => item.textContent?.includes('使用须知'))!;
+    expect(page().textContent).toContain('分别保存草稿；切换页面不会带入已选角色、情景或生成结果');
+    expect(page().textContent).toContain('插图生成暂未开放');
+    expect(page().textContent).not.toContain('共享同一套');
+    expect(page().textContent).not.toContain('桌面简洁版 ·');
+    expect(button('快速查看排行榜', page())).toBeUndefined();
+    for (const href of ['/details', '/canshou', '/encyclopedia/arena', '/encyclopedia/guidance', '/ranking']) {
+      expect(page().querySelector(`a[href="#${href}"]`), href).not.toBeNull();
+    }
+    if (product === 'battle') expect(page().querySelector('.battle-lite-hero-card a[href="#/arena"]')).not.toBeNull();
+    if (product === 'arena') {
+      const external = [...page().querySelectorAll<HTMLAnchorElement>('a')].find(link => link.textContent === '前往万途竞技场')!;
+      await act(async () => external.click());
+      expect(mocks.invoke).toHaveBeenCalledWith('open_external_url', { url: 'https://wantu-waystation.pages.dev/arena' });
+      expect(window.location.hash).toBe('#/arena');
+    }
+    expect(guide().getAttribute('aria-expanded')).toBe('true');
+    await act(async () => guide().click());
+    const guideKey = product === 'battle' ? 'battle-lite.section.guide.open' : 'arena.section.guide.open';
+    expect(localStorage.getItem(guideKey)).toBe('0');
+    const switchLink = [...page().querySelectorAll<HTMLAnchorElement>('a')].find(link => link.textContent === (product === 'battle' ? '进入完整版竞技场' : '切换到简洁版'))!;
+    const other = product === 'battle' ? 'arena' : 'battle';
+    // The host keeps native modified-click semantics, rather than eagerly navigating.
+    const modified = new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true });
+    await act(async () => switchLink.dispatchEvent(modified));
+    expect(modified.defaultPrevented).toBe(false);
+    await act(async () => switchLink.click());
+    await vi.waitFor(() => expect(window.location.hash).toBe(`#/${other}`)); await settle();
+    expect(container.textContent).toContain(other === 'arena' ? '本页是完整版竞技场' : '本页是 `/battle` 简洁版');
+    expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.battleMode).toBe('daily');
+    expect(JSON.parse(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)!).draft.battleMode).toBe('kizuna');
+    await act(async () => router.history.back());
+    await vi.waitFor(() => expect(window.location.hash).toBe(`#/${product}`)); await settle();
+    expect(guide().getAttribute('aria-expanded')).toBe('false');
+    expect(calls()).toHaveLength(0);
+    await act(async () => (page().querySelector('a[href="#/ranking"]') as HTMLAnchorElement).click());
+    await vi.waitFor(() => expect(window.location.hash).toBe('#/ranking')); await settle();
+    expect(container.querySelector('h1')?.textContent).toBe('排位排行榜');
+  });
+
+  it.each(['battle', 'arena'] as const)('/%s ordinary guide links respect an in-flight generation leave decision', async product => {
+    const key = product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
+    localStorage.setItem(key, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
+    window.location.hash = `#/${product}`; hold = true; await mount(); await click('生成战报');
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    const page = container.querySelector(product === 'battle' ? '.battle-lite-panel' : '.arena-page-shell')!;
+    for (const href of ['/ranking', '/encyclopedia/arena', product === 'battle' ? '/arena' : '/battle']) {
+      await act(async () => (page.querySelector(`a[href="#${href}"]`) as HTMLAnchorElement).click()); await settle();
+      expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('确认离开'));
+      expect(window.location.hash).toBe(`#/${product}`);
+      expect(button('取消生成').disabled).toBe(false);
+    }
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await act(async () => (page.querySelector('a[href="#/ranking"]') as HTMLAnchorElement).click());
+    await vi.waitFor(() => expect(window.location.hash).toBe('#/ranking')); await settle();
+    release?.(); await settle();
+    expect(received).toHaveLength(1);
+    expect(container.querySelector('[aria-label="战报结果"]')).toBeNull();
+  });
+
   it.each(['battle', 'arena'] as const)('/%s reopens its valid local draft automatically without replaying work', async product => {
     const value = draft('daily', 'non-stream');
     const key = product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
@@ -421,7 +487,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
     const battleOriginal = JSON.stringify({ version: 1, draft: { ...draft('daily', 'stream'), customStoryLength: '独立简洁稿' } }); localStorage.setItem(ARENA_DRAFT_KEY, battleOriginal);
     for (const output of ['non-stream', 'stream'] as const) {
       localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: { ...draft(mode, output), selectedQuestionnaires: [{ source: 'upload', selectionId: 'lore', questionnaire: { id: 'lore', title: '岛屿设定', kind: 'magical-girl', questions: [], loreMarkdown: '星海岛屿' } }] } }));
-      window.location.hash = '#/arena'; const router = await mount(); expect(container.textContent).toContain('桌面高级单次');
+      window.location.hash = '#/arena'; const router = await mount(); expect(container.textContent).toContain('本页是完整版竞技场');
       await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
       expect(JSON.parse(received.at(-1)!.arenaInputJson!)).toMatchObject({ mode, questionnaires: [{ loreMarkdown: '星海岛屿' }] });
       await click('保存叙事历史到本地库'); expect([...docs.values()].some((item) => item.cardType === 'history')).toBe(true);

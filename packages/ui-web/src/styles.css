@@ -131,6 +131,12 @@
     text-decoration: underline;
   }
 
+  .battle-lite-link:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+    text-decoration: underline;
+  }
+
   .battle-lite-info-box {
     background: var(--battle-lite-info-bg, var(--app-surface-80));
     border: 1px solid var(--battle-lite-info-border, var(--app-border-strong));

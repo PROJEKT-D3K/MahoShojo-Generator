@@ -19,6 +19,8 @@ export { ScenarioPresetGridPicker, type ScenarioPresetGridPickerProps } from './
 export { ScenarioPickerPanel, type ScenarioPickerPanelProps } from './ScenarioPickerPanel';
 export { BattleLitePageView, type BattleLitePageViewProps } from './BattleLitePageView';
 export { BattleLiteHeaderView, type BattleLiteHeaderViewProps } from './BattleLiteHeaderView';
+export { BattleLiteHeader, AdvancedArenaHeader, type ArenaHeaderProps } from './ArenaHeaders';
+export { ArenaPageLinks, ArenaRankingLinks, type ArenaPageLinksProps, type ArenaRankingLinksProps, type ArenaPageLinkProps, type ArenaPageLinkComponent } from './ArenaPageNavigation';
 export { ArenaRosterImportPanel, type ArenaRosterImportPanelProps } from './ArenaRosterImportPanel';
 export { ArenaDataSettingsPanel, type ArenaDataSettingsValue, type ArenaDataSettingsPanelProps } from './ArenaDataSettingsPanel';
 export { NarrativeHistorySettings, type NarrativeHistorySettingsValue, type NarrativeHistorySettingsProps } from './NarrativeHistorySettings';
