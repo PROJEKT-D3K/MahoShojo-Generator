@@ -2,6 +2,7 @@ import { parseGenerationRankingResponse, type GenerationRankingResponse } from '
 import { ARENA_COMPANION_PROTOCOL_VERSION, ArenaCompanionEnvelopeSchema, type ArenaCompanionEnvelope } from '@mahoshojo/contracts/arena-companion';
 import { DesktopArenaHostedJsonCreateRequestSchema } from '@mahoshojo/contracts/desktop-arena-hosted-json';
 import { runArenaHostedJson } from './hosted-json';
+import { sanitizeArenaHostedErrorCode } from './hosted-error-diagnostic';
 import { validateHostedOutput, sameHostedPackageRef as sameRef } from './hosted-output';
 import { DesktopArenaHostedAnyRecoveryPointerSchema as DesktopArenaHostedRecoveryPointerSchema, type DesktopArenaHostedAnyRecoveryPointer as DesktopArenaHostedRecoveryPointer } from '@mahoshojo/contracts/desktop-arena-hosted-json';
 import { collectArenaHostedStreamOutput, createArenaHostedStreamOutput } from './hosted-stream-output';
@@ -57,6 +58,8 @@ export interface ArenaHostedDetails {
   delivery?: 'stream' | 'non-stream';
   companion?: ArenaCompanionEnvelope | null;
   companionState?: 'complete' | 'recovered-model-only' | 'unavailable';
+  /** Checked transport diagnostics only; never a provider response or completion authority. */
+  responseError?: { httpStatus: number; code: string | null };
 }
 /** Draft data is public output only; parse it again without restoring execution authority. */
 export const parseArenaHostedDetails = (value: unknown, generationId?: string | null): ArenaHostedDetails | null => {
@@ -72,6 +75,14 @@ export const parseArenaHostedDetails = (value: unknown, generationId?: string | 
     || !(v.validationMessage === null || typeof v.validationMessage === 'string') || typeof v.restored !== 'boolean') throw new Error('Hosted output');
   if (v.delivery !== undefined && v.delivery !== 'stream' && v.delivery !== 'non-stream') throw new Error('Hosted delivery');
   if (v.companionState !== undefined && (typeof v.companionState !== 'string' || !['complete', 'recovered-model-only', 'unavailable'].includes(v.companionState))) throw new Error('Hosted companion state');
+  let responseError: ArenaHostedDetails['responseError'];
+  if (v.responseError !== undefined) {
+    if (!v.responseError || typeof v.responseError !== 'object' || Array.isArray(v.responseError)) throw new Error('Hosted response diagnostic');
+    const diagnostic = v.responseError as Record<string, unknown>;
+    if (Object.keys(diagnostic).some(key => key !== 'httpStatus' && key !== 'code') || !Number.isInteger(diagnostic.httpStatus) || Number(diagnostic.httpStatus) < 100 || Number(diagnostic.httpStatus) > 599
+      || !(diagnostic.code === null || typeof diagnostic.code === 'string' && /^[A-Z][A-Z0-9_]{1,127}$/u.test(diagnostic.code))) throw new Error('Hosted response diagnostic');
+    responseError = { httpStatus: Number(diagnostic.httpStatus), code: sanitizeArenaHostedErrorCode(diagnostic.code) };
+  }
   const ranking = parseGenerationRankingResponse(v.ranking);
   const companion = v.companion == null ? null : ArenaCompanionEnvelopeSchema.parse(v.companion);
   const metaEvent = v.metaEvent === null ? null : DesktopArenaHostedSseEventSchema.parse(v.metaEvent);
@@ -83,6 +94,7 @@ export const parseArenaHostedDetails = (value: unknown, generationId?: string | 
     metadataState: v.metadataState as ArenaHostedDetails['metadataState'], headerMeta: v.headerMeta === null ? null : DesktopArenaHostedHeaderMetaSchema.parse(v.headerMeta),
     recoveryCredentialState: v.recoveryCredentialState as ArenaHostedDetails['recoveryCredentialState'], metaEvent, terminal,
     outputValidation: v.outputValidation as ArenaHostedDetails['outputValidation'], validationMessage: v.validationMessage, restored: v.restored, softTimeoutWarning: null,
+    ...(responseError ? { responseError } : {}),
     ...(v.delivery ? { delivery: v.delivery as ArenaHostedDetails['delivery'] } : {}),
     ...(v.companionState ? { companionState: v.companionState as ArenaHostedDetails['companionState'], companion } : {}) };
 };

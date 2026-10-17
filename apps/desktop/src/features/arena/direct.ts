@@ -33,6 +33,7 @@ import { countBattleStoryCommitJsonBytes } from '@mahoshojo/domain/arena-story-c
 import type { NarrativeHistoryAppendInput } from '@mahoshojo/domain/narrative-history-operations';
 import { describeDesktopPresetModelSupport } from '../ai-config/desktop-ai-config';
 import { createDesktopAiExecutionPort, type DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
+import { DesktopAiError } from '../../platform/direct-ai-bridge';
 
 /** B1 is a protocol adapter, not a card family, Hosted route, history writer or UI. */
 export type ArenaDirectInput = ArenaGenerationInputSnapshot;
@@ -83,6 +84,35 @@ const isOrdinaryMetadataFailure = (candidate: string): boolean => {
   try { parseStructuredJsonWithSchema(candidate, StreamUpdateMetaSchema); return true; }
   catch (diagnostic) { return diagnostic instanceof StructuredJsonParseError && diagnostic.code === 'invalid-output'; }
 };
+
+// Native and provider messages may contain private upstream values. Keep only
+// recognized codes, and render local explanations rather than those messages.
+const directFailureMessages = {
+  'profile-not-found': '所选客户端连接已不存在，请重新选择连接。',
+  'profile-rejected': '所选客户端连接配置无效，请检查服务地址和模型。',
+  'missing-secret': '客户端连接缺少凭据，请重新配置 API Key。',
+  'unsupported-request': '请求参数不受客户端支持，请检查模型名称和生成参数。',
+  'upstream-unavailable': '无法连接供应商或供应商暂不可用，请检查服务地址和网络。',
+  'upstream-rejected': '供应商拒绝了请求，请检查 API Key、模型权限和生成参数。',
+  'stream-protocol': '供应商返回的流式响应不符合客户端协议。',
+  cancelled: '客户端执行已中止。',
+  failed: '客户端执行发生内部错误。',
+  'invalid-request': '生成请求参数无效，请检查模型名称和生成参数。',
+  'unsupported-model': '所选模型不支持当前生成方式。',
+  'authentication-failed': '供应商凭据不可用，请检查或重新配置 API Key。',
+  'permission-denied': '供应商拒绝了请求，请检查 API Key、模型权限和生成参数。',
+  'rate-limited': '供应商已限流，请稍后重试。',
+  timeout: '生成连接已超时。',
+  'service-unavailable': '无法连接供应商或供应商暂不可用，请检查服务地址和网络。',
+  'content-filtered': '供应商未通过内容审核，请调整输入。',
+  'invalid-response': '供应商未返回可用的生成响应。',
+  'output-too-large': '生成达到输出限制，请检查输出 token 上限或缩短输入。',
+  'internal-error': '生成执行发生内部错误，暂时无法确定具体原因。',
+} as const;
+type DirectFailureCode = keyof typeof directFailureMessages;
+const knownDirectFailureCode = (code: string): DirectFailureCode | undefined =>
+  Object.prototype.hasOwnProperty.call(directFailureMessages, code) ? code as DirectFailureCode : undefined;
+const directFailureMessage = (code: DirectFailureCode): string => `${directFailureMessages[code]}（${code}）已保留收到的正文。`;
 
 /** One explicit request, one native execution; no provider retries or persistence. */
 export const executeArenaDirect = async (
@@ -206,27 +236,38 @@ export const executeArenaDirect = async (
   const request = parsedRequest.data;
   task.requestId = request.requestId;
   const port = createDesktopAiExecutionPort(executionOptions);
+  let sourceFailureCode: DirectFailureCode | undefined;
   const source = async function* (): AsyncGenerator<AiStreamEvent> {
-    for await (const event of port.stream(request, signal)) {
-      yield event;
-      // Only retain events after the common collector accepted identity, order,
-      // single terminal and the fixed byte policy. A rejected event is never resumed.
-      if (event.type === 'text-delta') rawText += event.delta;
-      if (event.type === 'reasoning-delta') reasoning += event.delta;
-      if (event.type === 'usage') usage = event.usage;
-      if (onPartial && event.type !== 'result' && !signal.aborted) onPartial(partial());
+    try {
+      for await (const event of port.stream(request, signal)) {
+        yield event;
+        // Only retain events after the common collector accepted identity, order,
+        // single terminal and the fixed byte policy. A rejected event is never resumed.
+        if (event.type === 'text-delta') rawText += event.delta;
+        if (event.type === 'reasoning-delta') reasoning += event.delta;
+        if (event.type === 'usage') usage = event.usage;
+        if (onPartial && event.type !== 'result' && !signal.aborted) onPartial(partial());
+      }
+    } catch (cause) {
+      // The shared collector deliberately hides source exceptions. Preserve the
+      // closed diagnostic code before it becomes source-failed, never its message.
+      if (cause instanceof DesktopAiError) sourceFailureCode = knownDirectFailureCode(cause.code);
+      throw cause;
     }
   };
   try {
     terminal = await collectAiStreamResult(request, source());
   } catch (cause) {
     if (signal.aborted) return cancelled();
+    if (cause instanceof AiStreamProtocolError && cause.code === 'source-failed' && sourceFailureCode) {
+      return failed(sourceFailureCode, directFailureMessage(sourceFailureCode));
+    }
     return failed('invalid-response', '生成连接或流协议失败，已保留收到的正文。', false,
       cause instanceof AiStreamProtocolError && cause.code === 'missing-terminal' ? { kind: 'missing-terminal' } : undefined);
   }
   if (signal.aborted) return cancelled();
   if (terminal.status === 'cancelled') return cancelled();
-  if (terminal.status === 'failed') return failed(terminal.error.code, '生成失败，已保留收到的正文。');
+  if (terminal.status === 'failed') return failed(terminal.error.code, directFailureMessage(terminal.error.code));
   // A terminal cannot replace the accepted body with an unrelated full result.
   if (terminal.output.text !== rawText || (terminal.output.reasoning !== undefined && terminal.output.reasoning !== reasoning)) {
     return failed('invalid-response', '终态与已接收内容不一致，已保留收到的正文。');

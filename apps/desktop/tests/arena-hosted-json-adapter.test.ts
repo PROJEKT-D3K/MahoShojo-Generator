@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { ARENA_COMPANION_PROTOCOL_VERSION, ArenaCompanionEnvelopeSchema, type ArenaCompanionEnvelope } from '@mahoshojo/contracts/arena-companion';
 import { DesktopArenaHostedJsonCreateRequestSchema, DesktopArenaHostedRecoveryPointerV2Schema } from '@mahoshojo/contracts/desktop-arena-hosted-json';
 import { DesktopArenaHostedControlRequestSchema, DesktopArenaHostedControlResponseSchema, DesktopArenaHostedStreamRequestSchema } from '@mahoshojo/contracts/desktop-arena-hosted';
-import { executeArenaHosted, resumeArenaHosted, ARENA_HOSTED_USER_STOP, ARENA_HOSTED_DETACH, type ArenaHostedContext, type ArenaHostedIntent, type ArenaHostedPartial } from '../src/features/arena/hosted';
+import { executeArenaHosted, parseArenaHostedDetails, resumeArenaHosted, ARENA_HOSTED_USER_STOP, ARENA_HOSTED_DETACH, type ArenaHostedContext, type ArenaHostedIntent, type ArenaHostedPartial } from '../src/features/arena/hosted';
 import { DesktopArenaHostedRecovery, ARENA_HOSTED_RECOVERY_KEYS } from '../src/features/arena/hosted-recovery';
+import { getArenaHostedErrorDiagnostic } from '../src/features/arena/hosted-json';
+import { sanitizeArenaHostedErrorCode } from '../src/features/arena/hosted-error-diagnostic';
 import { createInitialArenaDraft, buildDesktopArenaInput } from '../src/features/arena/session';
 import type { ArenaHostedChannel } from '../src/platform/arena-hosted-bridge';
 const requestId = 'json-adapter-request', generationId = `arena_${'c'.repeat(64)}`, now = '2026-10-10T07:00:00.000Z';
@@ -32,7 +34,7 @@ function context(product: 'battle' | 'arena' = 'battle') {
   return { host, storage, values };
 }
 const intent: ArenaHostedIntent = { requestId, mode: 'hosted', generationMode: 'non-stream', modelId: 'default', systemConfig: {} };
-function native(options: { hold?: boolean; fail?: unknown; reply?: ArenaCompanionEnvelope; lookupStatus?: number; raw?: string; restored?: boolean } = {}) {
+function native(options: { hold?: boolean; fail?: unknown; reply?: ArenaCompanionEnvelope; lookupStatus?: number; status?: number; rejectAfterDelivery?: boolean; raw?: string; restored?: boolean; omitResponseRequestId?: boolean } = {}) {
   const operations: Record<string, unknown>[] = []; let release!: () => void, started!: () => void;
   const ready = new Promise<void>(yes => { started = yes; }); const held = new Promise<void>(yes => { release = yes; });
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
@@ -49,11 +51,11 @@ function native(options: { hold?: boolean; fail?: unknown; reply?: ArenaCompanio
     if (request.operation === 'create-json') {
       DesktopArenaHostedJsonCreateRequestSchema.parse(request); started(); if (options.hold) await held;
       if (options.fail) throw options.fail;
-      send({ kind: 'json-response', status: options.reply && !('report' in options.reply.body) ? 502 : 200, generationId, generationRequestId: requestId, recoveryCredentialState: 'stored' });
+      send({ kind: 'json-response', status: options.status ?? (options.reply && !('report' in options.reply.body) ? 502 : 200), generationId, ...(!options.omitResponseRequestId ? { generationRequestId: requestId } : {}), recoveryCredentialState: 'stored' });
       const value = options.reply ?? envelope((request.body as { mode: string }).mode, (request.body as { reportFormat: 'markdown' | 'web' }).reportFormat);
       const raw = options.raw ?? JSON.stringify(value);
       for (let offset = 0; offset < raw.length; offset += 83) send({ kind: 'json-fragment', text: raw.slice(offset, offset + 83), final: offset + 83 >= raw.length });
-      send({ kind: 'json-end' }); return;
+      send({ kind: 'json-end' }); if (options.rejectAfterDelivery) throw new Error('synthetic late transport failure'); return;
     }
     DesktopArenaHostedStreamRequestSchema.parse(request);
     send({ kind: 'response', status: 200, generationId, generationRequestId: requestId, metadataState: 'missing', recoveryCredentialState: 'stored' });
@@ -145,6 +147,92 @@ describe('real complete companion bridge and C0 recovery adapter', () => {
       body: { code: 'ARENA_COMPANION_PROTOCOL_UNSUPPORTED', error: 'unsupported', generationId, status: 'completed' }, metadata: null });
     const n = native({ reply: failure }), c = context(); const result = await run(n, c);
     expect(result).toMatchObject({ status: 'failed', hosted: { serverStatus: 'completed', companion: failure } }); expect(c.host.recovery.getSnapshot().pointer?.state).toBe('completed'); expect(n.operations).toHaveLength(1);
+  });
+  it.each([
+    [401, 'UNAUTHORIZED', '账号身份'],
+    [429, 'RATE_LIMITED', '请求频率'],
+    [400, 'INVALID_REQUEST', '请求参数'],
+    [502, 'ARENA_PROVIDER_UNAVAILABLE', '服务器生成服务'],
+  ])('preserves HTTP %s and public %s instead of blaming the envelope', async (status, code, reason) => {
+    const failure = ArenaCompanionEnvelopeSchema.parse({ version: ARENA_COMPANION_PROTOCOL_VERSION,
+      body: { code, error: 'synthetic-private-provider-diagnostic', message: 'synthetic-private-server-detail' }, metadata: null });
+    const n = native({ reply: failure, status: status as number }), c = context(); const result = await run(n, c);
+    expect(result.status).toBe('failed');
+    if (result.status !== 'failed') throw new Error('expected checked error');
+    expect(result.message).toContain(`HTTP ${status}`); expect(result.message).toContain(code);
+    expect(result.message).toContain(reason); expect(result.message).not.toContain('synthetic-private');
+    expect(result.message).not.toContain('未取得受支持');
+    expect(result.hosted.companion).toEqual(failure); expect(result.hosted.companionState).toBe('unavailable');
+    expect(result.hosted.responseError).toEqual({ httpStatus: status, code });
+    expect(parseArenaHostedDetails(result.hosted)?.responseError).toEqual({ httpStatus: status, code });
+    expect(getArenaHostedErrorDiagnostic(result.hosted)).toEqual({ httpStatus: status, code });
+    expect(getArenaHostedErrorDiagnostic({ ...result.hosted, responseError: undefined })).toEqual({ httpStatus: null, code });
+    for (const invalid of [{ httpStatus: 999, code }, { httpStatus: status, code: 'contains secret' }, { httpStatus: status, code, error: 'private' }]) {
+      expect(() => parseArenaHostedDetails({ ...result.hosted, responseError: invalid })).toThrow('Hosted response diagnostic');
+    }
+    expect(c.host.recovery.getSnapshot().pointer?.state).toBe('unknown');
+    expect(n.operations.map(op => op.operation)).toEqual(['create-json']);
+  });
+  it.each(['failed', 'cancelled', 'producer_lost'] as const)('keeps an explicitly bound %s terminal without recreating', async status => {
+    const failure = ArenaCompanionEnvelopeSchema.parse({ version: ARENA_COMPANION_PROTOCOL_VERSION,
+      body: { code: 'GENERATION_FAILED', generationId, status }, metadata: null });
+    const n = native({ reply: failure }), c = context(); const result = await run(n, c);
+    expect(result).toMatchObject({ status: 'failed', hosted: { serverStatus: status, companion: failure } });
+    expect(c.host.recovery.getSnapshot().pointer?.state).toBe(status); expect(n.operations).toHaveLength(1);
+  });
+  it.each(['ACCOUNT_PRIVATE_CANARY_123', 'REQUEST_PRIVATE_CANARY_456', 'COOKIE_PRIVATE_CANARY_789', 'KEY_PRIVATE_CANARY_ABC'])('never exposes a code-shaped private value %s in diagnostics', async code => {
+    const failure = ArenaCompanionEnvelopeSchema.parse({ version: ARENA_COMPANION_PROTOCOL_VERSION,
+      body: { code, error: 'synthetic-private-original', message: 'synthetic-private-provider-response' }, metadata: null });
+    const n = native({ reply: failure, status: 502 }), c = context(); const result = await run(n, c);
+    expect(result.status).toBe('failed'); if (result.status !== 'failed') throw new Error('expected checked error');
+    expect(result.message).toContain('HTTP 502'); expect(result.message).toContain('UNRECOGNIZED_ERROR');
+    expect(result.message).not.toContain(code); expect(result.message).not.toContain('synthetic-private');
+    expect(result.hosted.responseError).toEqual({ httpStatus: 502, code: 'UNRECOGNIZED_ERROR' });
+    expect(getArenaHostedErrorDiagnostic(result.hosted)).toEqual({ httpStatus: 502, code: 'UNRECOGNIZED_ERROR' });
+    expect(getArenaHostedErrorDiagnostic({ ...result.hosted, responseError: undefined })).toEqual({ httpStatus: null, code: 'UNRECOGNIZED_ERROR' });
+    expect(parseArenaHostedDetails({ ...result.hosted, responseError: { httpStatus: 502, code } })?.responseError)
+      .toEqual({ httpStatus: 502, code: 'UNRECOGNIZED_ERROR' });
+    // Keep the once-validated original for explicit backup, not the shareable summary.
+    expect(result.hosted.companion).toEqual(failure);
+    expect(c.host.recovery.getSnapshot().pointer?.state).toBe('unknown');
+    expect(n.operations.map(op => op.operation)).toEqual(['create-json']);
+  });
+  it('diagnostic code projection is closed and bounded for arbitrary old draft values', () => {
+    for (const value of ['GENERATION_FAILED_PRIVATE_SUFFIX', 'A'.repeat(100000), '__proto__', 'constructor', 'code with spaces', '秘密']) {
+      expect(sanitizeArenaHostedErrorCode(value)).toBe('UNRECOGNIZED_ERROR');
+    }
+    for (const value of [null, undefined, '', 502, {}]) expect(sanitizeArenaHostedErrorCode(value)).toBeNull();
+    expect(sanitizeArenaHostedErrorCode('UNAUTHORIZED')).toBe('UNAUTHORIZED');
+    expect(sanitizeArenaHostedErrorCode('ARENA_COMPANION_PROTOCOL_UNSUPPORTED')).toBe('ARENA_COMPANION_PROTOCOL_UNSUPPORTED');
+  });
+  it.each(['failed', 'completed'] as const)('a claimed %s terminal without bound generation identity remains unknown', async status => {
+    const failure = ArenaCompanionEnvelopeSchema.parse({ version: ARENA_COMPANION_PROTOCOL_VERSION,
+      body: { code: 'GENERATION_FAILED', status }, metadata: null });
+    const n = native({ reply: failure }), c = context(); const result = await run(n, c);
+    if (result.status !== 'failed') throw new Error('expected failure');
+    expect(result.message).not.toContain('服务器任务已完成');
+    expect(c.host.recovery.getSnapshot().pointer?.state).toBe('unknown'); expect(n.operations).toHaveLength(1);
+  });
+  it.each(['failed', 'completed', 'cancelled', 'producer_lost'] as const)('a claimed %s with only a generation ID cannot establish a request-bound terminal', async status => {
+    const failure = ArenaCompanionEnvelopeSchema.parse({ version: ARENA_COMPANION_PROTOCOL_VERSION,
+      body: { code: 'GENERATION_FAILED', generationId, status }, metadata: null });
+    const n = native({ reply: failure, omitResponseRequestId: true }), c = context(); const result = await run(n, c);
+    if (result.status !== 'failed') throw new Error('expected failure');
+    expect(result.message).not.toContain('服务器任务已完成'); expect(result.hosted.serverStatus).toBeNull();
+    expect(c.host.recovery.getSnapshot().pointer?.state).toBe('unknown'); expect(n.operations.map(op => op.operation)).toEqual(['create-json']);
+  });
+  it.each(['failed', 'completed'] as const)('an explicit matching body request identity binds %s even without the optional error header', async status => {
+    const failure = ArenaCompanionEnvelopeSchema.parse({ version: ARENA_COMPANION_PROTOCOL_VERSION,
+      body: { code: 'GENERATION_FAILED', generationId, generationRequestId: requestId, status }, metadata: null });
+    const n = native({ reply: failure, omitResponseRequestId: true }), c = context(); const result = await run(n, c);
+    expect(result.hosted.serverStatus).toBe(status); expect(c.host.recovery.getSnapshot().pointer?.state).toBe(status);
+    expect(n.operations.map(op => op.operation)).toEqual(['create-json']);
+  });
+  it('a late Native rejection retains checked output but cannot grant a failed server terminal', async () => {
+    const n = native({ rejectAfterDelivery: true }), c = context(); const result = await run(n, c);
+    expect(result).toMatchObject({ status: 'failed', hosted: { companion: envelope(), companionState: 'unavailable' } });
+    expect(c.host.recovery.getSnapshot().pointer?.state).toBe('unknown');
+    expect(n.operations.map(op => op.operation)).toEqual(['create-json']);
   });
   it('a proven pre-dispatch failure rolls back only its owned new pointer', async () => {
     const c = context(), n = native({ fail: { code: 'capability-unavailable', dispatchState: 'not-dispatched', intentOwnership: 'prior-retained', message: 'private' } });

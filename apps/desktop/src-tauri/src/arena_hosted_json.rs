@@ -88,7 +88,11 @@ fn public_text(raw: &RawValue) -> bool {
     true
 }
 /// A small, finite public error map. Free text stays borrowed raw so all JS strings survive.
-fn validate_error(raw: &RawValue, flight: &Arc<Mutex<Flight>>) -> Result<bool, ArenaError> {
+fn validate_error(
+    raw: &RawValue,
+    flight: &Arc<Mutex<Flight>>,
+    response_request_id: Option<&str>,
+) -> Result<bool, ArenaError> {
     if raw.get().len() > HEADER_BYTES {
         return Err(protocol());
     }
@@ -132,7 +136,13 @@ fn validate_error(raw: &RawValue, flight: &Arc<Mutex<Flight>>) -> Result<bool, A
     {
         return Err(protocol());
     }
-    Ok(map.contains_key("generationId")
+    // A generation ID alone cannot authorize dropping the original request's recovery slot.
+    let request_bound = response_request_id == Some(f.request_id.as_str())
+        || map
+            .get("generationRequestId")
+            .is_some_and(|v| identity(v).is_ok_and(|id| id == f.request_id));
+    Ok(request_bound
+        && map.contains_key("generationId")
         && map
             .get("status")
             .is_some_and(|v| identity(v).is_ok_and(|s| terminal_status(&s))))
@@ -141,6 +151,7 @@ pub(super) fn validate_envelope(
     raw: &str,
     success: bool,
     flight: &Arc<Mutex<Flight>>,
+    response_request_id: Option<&str>,
 ) -> Result<bool, ArenaError> {
     let envelope: Envelope<'_> = serde_json::from_str(raw).map_err(|_| protocol())?;
     if identity(envelope.version)? != PROTOCOL_VERSION
@@ -169,7 +180,7 @@ pub(super) fn validate_envelope(
         }
         true
     } else {
-        validate_error(envelope.body, flight)?
+        validate_error(envelope.body, flight, response_request_id)?
     };
     reject_json_secret_echo(raw, flight)?;
     Ok(terminal)
@@ -374,7 +385,7 @@ pub(super) async fn deliver(
     }
     let wire = read_wire(response, check).await?;
     check()?;
-    let terminal = validate_envelope(&wire, success, flight)?;
+    let terminal = validate_envelope(&wire, success, flight, generation_request_id.as_deref())?;
     check()?;
     let recovery_credential_state = flight.lock().map_err(|_| stale())?.credential_state();
     emit(

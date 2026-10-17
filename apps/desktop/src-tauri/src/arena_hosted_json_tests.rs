@@ -257,7 +257,7 @@ fn json_secret_scanner_checks_unicode_escapes_and_preserves_lone_surrogates() {
         let mut object = base.clone();
         object["body"]["report"]["headline"] = json!(secret);
         let raw = object.to_string();
-        assert!(json_delivery::validate_envelope(&raw, true, &flight).is_err());
+        assert!(json_delivery::validate_envelope(&raw, true, &flight, None).is_err());
         let encoded = secret
             .encode_utf16()
             .map(|u| format!("\\u{u:04x}"))
@@ -266,24 +266,24 @@ fn json_secret_scanner_checks_unicode_escapes_and_preserves_lone_surrogates() {
             &serde_json::to_string(secret).unwrap(),
             &format!("\"{encoded}\""),
         );
-        assert!(json_delivery::validate_envelope(&raw, true, &flight).is_err());
+        assert!(json_delivery::validate_envelope(&raw, true, &flight, None).is_err());
     }
     flight.lock().unwrap().secrets_to_redact = vec!["ABCXYZ".into()];
     let mut escaped = base.clone();
     escaped["body"]["report"]["headline"] = json!("ABCXYZ");
     let mixed = escaped.to_string().replace("ABCXYZ", r"A\u0042CXYZ");
-    assert!(json_delivery::validate_envelope(&mixed, true, &flight).is_err());
+    assert!(json_delivery::validate_envelope(&mixed, true, &flight, None).is_err());
     escaped["body"]["report"]["headline"] = json!(r"\u0041BCXYZ");
-    json_delivery::validate_envelope(&escaped.to_string(), true, &flight).unwrap();
+    json_delivery::validate_envelope(&escaped.to_string(), true, &flight, None).unwrap();
     escaped["body"]["report"]["ABCXYZ"] = json!("field name echo");
-    assert!(json_delivery::validate_envelope(&escaped.to_string(), true, &flight).is_err());
+    assert!(json_delivery::validate_envelope(&escaped.to_string(), true, &flight, None).is_err());
     flight.lock().unwrap().secrets_to_redact = vec!["do-not-join".into()];
     let mut object = base;
     object["body"]["report"]["headline"] = json!("do-not-");
     object["body"]["report"]["article"]["body"] = json!("join");
-    json_delivery::validate_envelope(&object.to_string(), true, &flight).unwrap();
+    json_delivery::validate_envelope(&object.to_string(), true, &flight, None).unwrap();
     let raw = object.to_string().replace("do-not-", r"\ud83d");
-    json_delivery::validate_envelope(&raw, true, &flight).unwrap();
+    json_delivery::validate_envelope(&raw, true, &flight, None).unwrap();
     assert!(serde_json::from_str::<Value>(&raw).is_err());
 }
 #[tokio::test]
@@ -352,6 +352,58 @@ async fn json_public_error_envelope_is_preserved_but_never_a_report() {
             index == 1
         );
         srv.task.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn json_error_terminal_requires_request_binding_before_implicit_replacement() {
+    for binding in ["none", "header", "body"] {
+        for status in ["completed", "failed", "cancelled", "producer_lost"] {
+            let mut body =
+                json!({ "generationId": gid(), "status": status, "code": "GENERATION_FAILED" });
+            if binding == "body" {
+                body["generationRequestId"] = json!(RID);
+            }
+            let wire = json!({ "version": json_delivery::PROTOCOL_VERSION, "body": body, "metadata": null }).to_string();
+            let srv = server(2, move |index, _| {
+                if index == 0 {
+                    return json_capability();
+                }
+                let mut reply = json_reply(502, wire.clone());
+                if binding != "header" {
+                    reply.headers.retain(|(name, _)| {
+                        !name.eq_ignore_ascii_case("x-mahoshojo-generation-request-id")
+                    });
+                }
+                reply
+            })
+            .await;
+            let state = ArenaState::with_origin(srv.origin);
+            let cloud = CloudState::new().unwrap();
+            let secrets = Secrets::default();
+            let sink = Sink::default();
+            stream(&state, &cloud, &secrets, create_json(false, false), &sink)
+                .await
+                .unwrap();
+            assert_eq!(
+                state.flights.lock().unwrap()[&Product::Battle]
+                    .lock()
+                    .unwrap()
+                    .terminal,
+                binding != "none"
+            );
+            let mut next = create_json(false, false);
+            if let ArenaRequest::CreateJson { request_id, .. } = &mut next {
+                *request_id = "synthetic-next-request".into();
+            }
+            let replacement = state.prepare(&next, &cloud, &secrets);
+            if binding == "none" {
+                assert_eq!(replacement.err().unwrap().code, "recovery-conflict");
+            } else {
+                assert!(replacement.is_ok());
+            }
+            srv.task.await.unwrap();
+        }
     }
 }
 

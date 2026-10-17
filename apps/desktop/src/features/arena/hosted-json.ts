@@ -8,6 +8,7 @@ import { openArenaHostedJson, type ArenaHostedJsonReply } from '../../platform/a
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import type { ArenaHostedContext, ArenaHostedDetails, ArenaHostedOutcome, ArenaHostedPartial } from './hosted';
 import { validateHostedOutput, sameHostedPackageRef } from './hosted-output';
+import { sanitizeArenaHostedErrorCode } from './hosted-error-diagnostic';
 
 /** The full checked envelope is retained once. This projection reuses its strings for the shared report. */
 export const projectArenaCompanionReportForView = (value: ArenaCompanionEnvelope): ArenaBattleReport | null => {
@@ -17,6 +18,38 @@ export const projectArenaCompanionReportForView = (value: ArenaCompanionEnvelope
     ...(value.body.adjudicationResults ? { adjudicationResults: value.body.adjudicationResults } : {}),
     ...(aiReasoning ? { aiReasoning: aiReasoning.status === 'complete'
       ? { status: 'done' as const, source: 'unknown' as const, text: aiReasoning.text } : aiReasoning } : {}) };
+};
+
+/** Old saved error envelopes may have a public code but no recorded HTTP status. */
+export const getArenaHostedErrorDiagnostic = (details: ArenaHostedDetails | null): { httpStatus: number | null; code: string | null } | null => {
+  const body = details?.companion?.body;
+  const diagnostic = details?.responseError;
+  const code = diagnostic?.code ?? (body && !('report' in body) ? body.code : null);
+  const httpStatus = diagnostic?.httpStatus;
+  const safeCode = sanitizeArenaHostedErrorCode(code);
+  const safeStatus = typeof httpStatus === 'number' && Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : null;
+  return safeStatus !== null || safeCode !== null ? { httpStatus: safeStatus, code: safeCode } : null;
+};
+
+/** A generation ID alone cannot bind an error's claimed status to this request. */
+const hasBoundErrorIdentity = (reply: ArenaHostedJsonReply, requestId: string): boolean =>
+  !('report' in reply.envelope.body) && Boolean(reply.envelope.body.generationId)
+  && reply.envelope.body.generationId === reply.response.generationId
+  && (reply.response.generationRequestId === requestId || reply.envelope.body.generationRequestId === requestId);
+
+/** Display only the closed diagnostic code, never arbitrary server/provider diagnostics. */
+const describeArenaHostedJsonFailure = (reply: ArenaHostedJsonReply, boundIdentity: boolean): string => {
+  if ('report' in reply.envelope.body) throw new Error('expected companion error');
+  const { status } = reply.envelope.body;
+  const code = sanitizeArenaHostedErrorCode(reply.envelope.body.code);
+  const http = reply.response.status;
+  const identity = `HTTP ${http}${code ? ` · ${code}` : ''}`;
+  if (status === 'completed' && boundIdentity) return `服务器任务已完成，但完整非流式报告未交付（${identity}）；可按原请求恢复正文，附加元数据可能缺失。`;
+  const reason = http === 401 || http === 403 ? '账号身份或请求权限未通过验证，请检查登录状态'
+    : http === 429 ? '请求频率或并发数已达限制，请稍后检查原请求'
+    : http === 400 || http === 413 || http === 422 ? '请求参数未被服务器接受，请检查当前设置'
+    : '服务器生成服务未完成本次交付，可按原请求检查状态';
+  return `战报生成失败（${identity}）：${reason}。`;
 };
 
 /** One real JSON create. Recovery is injected as an existing C0 resume-only path, never a second create. */
@@ -97,9 +130,12 @@ export const runArenaHostedJson = async (
     const reply = next.value; checkedReply = true; context.recovery.settlePrepared(pointer.requestId);
     details = { ...details, companion: reply.envelope, companionState: 'complete', softTimeoutWarning: null };
     if (!('report' in reply.envelope.body)) {
-      details = { ...details, companionState: 'unavailable', connectionState: 'failed', serverStatus: reply.envelope.body.status ?? null,
-        validationMessage: '未取得受支持的完整非流式封套；可按原请求恢复正文与终态，附加元数据可能缺失。' };
-      update(reply.envelope.body.status === 'completed' ? 'completed' : 'unknown');
+      const boundIdentity = hasBoundErrorIdentity(reply, pointer.requestId);
+      details = { ...details, companionState: 'unavailable', connectionState: 'failed', serverStatus: boundIdentity ? reply.envelope.body.status ?? null : null,
+        validationMessage: describeArenaHostedJsonFailure(reply, boundIdentity),
+        responseError: { httpStatus: reply.response.status, code: sanitizeArenaHostedErrorCode(reply.envelope.body.code) } };
+      const terminal = boundIdentity ? reply.envelope.body.status : null;
+      update(terminal === 'completed' || terminal === 'failed' || terminal === 'cancelled' || terminal === 'producer_lost' ? terminal : 'unknown');
       return { ...common(), status: 'failed', message: details.validationMessage! };
     }
     const envelope = reply.envelope as ArenaCompanionSuccessEnvelope;
@@ -130,7 +166,8 @@ export const runArenaHostedJson = async (
     if (current() && !checkedReply && cause instanceof ArenaHostedBridgeError && cause.dispatchState === 'unknown') {
       update('unknown'); return await recover();
     }
-    update('failed');
+    // A checked envelope is exportable before invoke settles, but is not a server terminal.
+    update(cause instanceof ArenaHostedBridgeError && cause.dispatchState === 'not-dispatched' ? 'failed' : 'unknown');
     return { ...common(), status: 'failed', message: cause instanceof ArenaHostedBridgeError ? cause.message : '完整战报校验未完成，可按原请求恢复。' };
   } finally { reader?.releaseLock(); }
 };
