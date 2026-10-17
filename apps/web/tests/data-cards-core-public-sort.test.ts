@@ -97,6 +97,27 @@ describe('listPublicDataCardsWithFilters', () => {
     expect(await listUserFavoritesWithCards(db, 8, undefined, { limit: 8, offset: 0 })).toEqual([]);
   });
 
+  test('旧全文公开列表按 id 稳定分页，保留原始列的 NULL 排序', async () => {
+    exec(`
+      DELETE FROM data_cards;
+      INSERT INTO data_cards (id,user_id,type,name,data,is_public,review_status,created_at,updated_at,like_count,usage_count,favorite_count)
+      VALUES
+        ('a',1,'character','a','{}',1,'approved','2026-01-01','2026-01-01',0,0,0),
+        ('b',1,'character','b','{}',1,'approved','2026-01-01','2026-01-01',0,0,0),
+        ('c',1,'character','c','{}',1,'approved',NULL,'2026-02-01',0,0,0),
+        ('d',1,'character','d','{}',1,'approved',NULL,'2026-02-01',0,0,0),
+        ('e',1,'character','e','{}',1,'approved','2026-01-01','2026-01-01',NULL,NULL,NULL),
+        ('f',1,'character','f','{}',1,'approved','2026-01-01','2026-01-01',NULL,NULL,NULL);
+    `);
+    for (const sortBy of [undefined, 'created_at', 'likes', 'usage', 'favorites'] as const) {
+      const pages = await Promise.all([0, 2, 4].map((offset) => listPublicDataCardsWithFilters(db, { sortBy, limit: 2, offset })));
+      const ids = pages.flat().map((row) => row.id);
+      expect(ids).toEqual(!sortBy || sortBy === 'created_at'
+        ? ['f', 'e', 'b', 'a', 'd', 'c'] : ['b', 'a', 'd', 'c', 'f', 'e']);
+      expect(new Set(ids).size).toBe(6);
+    }
+  });
+
   test('管理员推荐列表应保留用户选择的排序方式', async () => {
     const cases: Array<{
       sortBy: 'likes' | 'usage' | 'favorites' | 'created_at';

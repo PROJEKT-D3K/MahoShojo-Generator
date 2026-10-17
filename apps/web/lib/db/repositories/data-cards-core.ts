@@ -948,7 +948,7 @@ export const listPublicDataCardsWithFilters = async (
     .from(dataCards)
     .innerJoin(users, eq(dataCards.userId, users.id))
     .where(and(...conditions))
-    .orderBy(...orderBy)
+    .orderBy(...orderBy, desc(dataCards.id))
     .limit(safeLimit)
     .offset(safeOffset);
 
