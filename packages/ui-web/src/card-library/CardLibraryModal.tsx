@@ -19,7 +19,7 @@ import {
   mapPublicDataCardRowToSourceData,
   normalizePublicVisibilityValue,
 } from './read-mappers';
-import { isLocalDataCardRow, mapLocalCardRecordToDetailsCard, markCachedDataCardRow, getCachedDataCardRowMeta, isCachedDataCardRow, type LocalDataCardRow } from './rows';
+import { getCardLibraryRowSelectionId, isLocalDataCardRow, mapLocalCardRecordToDetailsCard, markCachedDataCardRow, getCachedDataCardRowMeta, isCachedDataCardRow, type LocalDataCardRow } from './rows';
 import { buildSafeFileName } from '../client/fileName';
 import { useLocalDataCards } from './use-local-data-cards';
 import { useLocalLibraryAutoSave } from './use-local-library-auto-save';
@@ -52,14 +52,16 @@ type BattleDataSelectedType = DataCardType | 'all';
 const TAB_ID_PREFIX = 'battle-data-source';
 const TAB_ARIA_LABEL = '数据卡来源';
 
+type SelectionResult = void | false | Promise<void | false>;
+
 export interface CardLibraryModalProps {
   host: CardLibraryHost;
   /** 仅检查已有记录：不提供选择或卡片写入/使用动作。默认保持原选择器行为。 */
   browseOnly?: boolean;
   isOpen: boolean;
   onClose: () => void;
-  onSelectCard?: (card: any, context: CardLibrarySelectionContext) => void;
-  onToggleCard?: (card: any, nextSelected: boolean, context: CardLibrarySelectionContext) => void;
+  onSelectCard?: (card: any, context: CardLibrarySelectionContext) => SelectionResult;
+  onToggleCard?: (card: any, nextSelected: boolean, context: CardLibrarySelectionContext) => SelectionResult;
   selectedType: BattleDataSelectedType;
   allowedTypes?: DataCardType[];
   initialTab?: BattleDataTab;
@@ -67,6 +69,8 @@ export interface CardLibraryModalProps {
   titleOverride?: string;
   selectionMode?: 'single' | 'multi';
   selectedCardIds?: string[];
+  /** Opt in to source-separated row identities and transactional, single-flight selection. */
+  selectedSelectionIds?: string[];
   selectedCountOverride?: number;
   maxSelected?: number;
   externalError?: string | null;
@@ -183,6 +187,7 @@ export function CardLibraryModal({
   titleOverride,
   selectionMode = 'single',
   selectedCardIds,
+  selectedSelectionIds,
   selectedCountOverride,
   maxSelected,
   externalError,
@@ -207,7 +212,15 @@ export function CardLibraryModal({
   const cardReadController = useRef<AbortController>(new AbortController());
   // 详情按“每次动作”创建：新的详情点击会中止上一次未完成的详情读取（last-click-wins）。
   const cardDetailControllerRef = useRef<AbortController | null>(null);
-  const isSingleSelectingRef = useRef(false);
+  const selectionFlightRef = useRef<symbol | null>(null);
+  const [selectionPending, setSelectionPending] = useState(false);
+  const sourceIdentityMode = selectedSelectionIds !== undefined;
+  const closeSelection = () => {
+    cardReadController.current.abort();
+    selectionFlightRef.current = null;
+    setSelectionPending(false);
+    onCloseRef.current();
+  };
   const [publicDataCards, setPublicDataCards] = useState<any[]>([]);
   // 「上一次成功在线结果」标记：查询键 + 该行数。行数为 0 的成功结果
   // 不能算「可保留的在线行」——同条件刷新失败时必须允许缓存降级。
@@ -331,7 +344,7 @@ export function CardLibraryModal({
     trapsFocus: true,
     onEscape: () => {
       if (childOverlayOpenRef.current) return true;
-      onCloseRef.current();
+      closeSelection();
       return true;
     },
   });
@@ -549,14 +562,17 @@ export function CardLibraryModal({
   const listError = activeTab === 'my' ? myPage.error : activeTab === 'favorites' ? favoritesPage.error : isLocalTab ? localCards.error : publicError;
   const listIdle = activeTab === 'my' ? myPage.status === 'idle' : activeTab === 'favorites' ? favoritesPage.status === 'idle' : false;
   const { reload: reloadFavorites } = favoritesPage;
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     cardReadController.current = new AbortController();
+    selectingCardIdsRef.current = new Set();
+    selectionFlightRef.current = null;
+    setSelectionPending(false);
     return () => {
       cardReadController.current.abort();
       cardDetailControllerRef.current?.abort();
       cardDetailControllerRef.current = null;
     };
-  }, [isOpen, activeTab, userId, host.auth.credentialEpoch]);
+  }, [isOpen, activeTab, accountKey, host.auth.credentialEpoch]);
   useEffect(() => {
     if (!isOpen || isPublicTab) return;
     const status = activeTab === 'my' ? myPage.status : activeTab === 'favorites' ? favoritesPage.status : null;
@@ -1169,7 +1185,7 @@ export function CardLibraryModal({
     setActiveFilters((prev) => normalizeFiltersBySelectedType(prev));
   }, [normalizeFiltersBySelectedType]);
 
-  const selectedIdSet = useMemo(() => new Set((selectedCardIds || []).filter((x): x is string => typeof x === 'string' && Boolean(x))), [selectedCardIds]);
+  const selectedIdSet = useMemo(() => new Set((selectedSelectionIds ?? selectedCardIds ?? []).filter((x): x is string => typeof x === 'string' && Boolean(x))), [selectedCardIds, selectedSelectionIds]);
   const selectedCount = typeof selectedCountOverride === 'number' ? selectedCountOverride : selectedIdSet.size;
   const atLimit = selectionMode === 'multi' && typeof maxSelected === 'number' && maxSelected > 0 && selectedCount >= maxSelected;
   const canToggle = selectionMode === 'multi' && typeof onToggleCard === 'function';
@@ -1290,109 +1306,100 @@ export function CardLibraryModal({
     throw new CachedCardUnavailableError('本机缓存中没有这张卡。');
   }, [host.publicCache, host.online, publicFailedKey, currentPublicRequestKey, markCachedRowWithdrawn]);
 
-  // 处理卡片选择
+  // Hosts acknowledge a committed selection; cancelled/failed admissions must not close or count usage.
   const handleSelectCard = async (card: any) => {
-    if (browseOnly) return;
+    if (browseOnly || !isOpen) return;
     const cardId = typeof card?.id === 'string' ? card.id : '';
     if (!cardId) return;
-
+    const rowSelectionId = getCardLibraryRowSelectionId(card);
+    const selectionKey = sourceIdentityMode ? rowSelectionId : cardId;
+    const exclusive = sourceIdentityMode || selectionMode === 'single';
+    if (exclusive && selectionFlightRef.current) return;
+    const pendingIds = selectingCardIdsRef.current;
+    if (pendingIds.has(selectionKey)) return;
+    const token = Symbol();
+    const signal = cardReadController.current.signal;
+    if (signal.aborted) return;
+    pendingIds.add(selectionKey);
+    if (exclusive) { selectionFlightRef.current = token; setSelectionPending(true); }
     setSelectError(null);
-
-    if (selectionMode === 'single' && isSingleSelectingRef.current) return;
-    if (selectingCardIdsRef.current.has(cardId)) return;
-    selectingCardIdsRef.current.add(cardId);
-    if (selectionMode === 'single') isSingleSelectingRef.current = true;
+    const current = () => !signal.aborted && (!exclusive || selectionFlightRef.current === token);
 
     try {
-      const isSelected = selectedIdSet.has(cardId);
+      const isSelected = selectedIdSet.has(selectionKey);
       const nextSelected = !isSelected;
-
       if (selectionMode === 'multi') {
-        if (!nextSelected && !canToggle) {
-          return;
-        }
-        if (nextSelected && atLimit) {
-          return;
-        }
+        if (!nextSelected && !canToggle || nextSelected && atLimit) return;
       }
-
-      const signal = cardReadController.current.signal;
-      // 本地库记录本来就带着完整正文；走 host.online.loadFullCard 只会得到一次注定 404 的请求。
+      // Removing an existing row requires no current body or network authority. In particular,
+      // a cached row must not re-resolve to a different cloud identity before its removal.
+      if (sourceIdentityMode && selectionMode === 'multi' && !nextSelected) {
+        const storageLocation = isLocalDataCardRow(card) ? 'local' : isCachedDataCardRow(card) ? 'cache' : 'cloud';
+        const result = onToggleCard?.(undefined, false, { selectionId: rowSelectionId, rowSelectionId, storageLocation, signal });
+        if (result && typeof result.then === 'function') await result;
+        return;
+      }
       const isLocalRow = isLocalDataCardRow(card);
-      // 缓存行只按正文快照选择/预览——仅摘要行在 UI 层已禁用入口，这里兜底拦截。
       const isCacheRow = isCachedDataCardRow(card);
       if (isCacheRow && !getCachedDataCardRowMeta(card)?.hasBody) return;
       const cachedResolved = isCacheRow ? await loadCachedCardBody(cardId, signal) : null;
-      const full = isLocalRow
-        ? card
-        : isCacheRow
-          ? cachedResolved!.card
-          : typeof card.data === 'string' ? card : await host.online.loadFullCard(card, activeTab === 'my' ? 'my' : 'public', signal);
-      if (signal.aborted) return;
+      const full = isLocalRow ? card : isCacheRow ? cachedResolved!.card
+        : typeof card.data === 'string' ? card : await host.online.loadFullCard(card, activeTab === 'my' ? 'my' : 'public', signal);
+      if (!current()) return;
       const payload = mapPublicDataCardRowToBattleSelectionPayload(full);
-      // 选中上下文：canonical 卡 id 相同的不同来源副本（云端卡 vs 本地副本 vs 缓存快照）
-      // 必须产出不同 selectionId，下游问卷作用域据此隔离（D5.0e-r1 / D5.1-K2）。
-      // 缓存行按需重验证成功时正文已是线上已验证事实，语义如实升级为 cloud。
       const selectionContext: CardLibrarySelectionContext = isLocalRow
         ? { selectionId: `local:${cardId}`, storageLocation: 'local' }
         : isCacheRow && cachedResolved?.viaCache !== false
           ? { selectionId: `cache:${cardId}`, storageLocation: 'cache' }
           : { selectionId: `cloud:${cardId}`, storageLocation: 'cloud', cloudCardId: cardId, cloudCardUpdatedAt: payload._updatedAt };
       selectionContext.rawSourceData = mapPublicDataCardRowToSourceData(full);
-
-      if (selectionMode === 'multi') {
-        if (canToggle) {
-          onToggleCard?.(payload, nextSelected, selectionContext);
-        } else if (nextSelected) {
-          onSelectCard?.(payload, selectionContext);
-        }
-      } else {
-        onSelectCard?.(payload, selectionContext);
-        onClose();
-      }
-
-      // 如果是公开卡片且未使用过，增加使用次数（仅在「加入」时触发）。
-      // `_cardId !== ''` 即已验证的线上身份：本地行与缓存快照（`_cardId:''`）
-      // 不产生线上计数；缓存行重验证成功后才恢复线上身份，此时计数是诚实的。
+      selectionContext.rowSelectionId = rowSelectionId;
+      selectionContext.signal = signal;
+      const result = selectionMode === 'multi' && canToggle
+        ? onToggleCard?.(payload, nextSelected, selectionContext)
+        : onSelectCard?.(payload, selectionContext);
+      // Preserve synchronous legacy callbacks, including their single-picker close fences.
+      const applied = result && typeof result.then === 'function' ? await result : result;
+      if (applied === false || !current()) return;
+      if (selectionMode === 'single') onClose();
       if (nextSelected && payload._cardId !== '' && isPublicVisibility(payload._isPublic) && !host.platform.marks.isUsed(cardId)) {
         void (async () => {
-          try {
-            if (await host.online.reportCardStat(cardId, 'usage')) {
-              // 服务端确认后才写入本地使用标记
-              host.platform.marks.markUsed(cardId);
-            }
-          } catch (error) {
-            console.error('增加使用次数失败:', error);
-          }
+          try { if (await host.online.reportCardStat(cardId, 'usage')) host.platform.marks.markUsed(cardId); }
+          catch (error) { console.error('增加使用次数失败:', error); }
         })();
       }
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return;
+      if (!current() || error instanceof Error && error.name === 'AbortError') return;
       console.error('解析数据卡失败:', error);
       setSelectError(error instanceof Error ? error.message : '解析数据卡失败，请稍后重试。');
     } finally {
-      selectingCardIdsRef.current.delete(cardId);
-      if (selectionMode === 'single') isSingleSelectingRef.current = false;
+      pendingIds.delete(selectionKey);
+      if (selectionFlightRef.current === token) { selectionFlightRef.current = null; setSelectionPending(false); }
     }
   };
 
   const handleImportDeck = useCallback(async (deckId: string) => {
     if (!deckId) return;
     if (!allowDeckImport) return;
-    if (selectionMode !== 'multi') return;
+    if (selectionMode !== 'multi' || !isOpen) return;
+    if (sourceIdentityMode && selectionFlightRef.current) return;
+    const token = Symbol(), signal = cardReadController.current.signal;
+    if (signal.aborted) return;
+    if (sourceIdentityMode) { selectionFlightRef.current = token; setSelectionPending(true); }
 
     // 卡组读取是账号绑定请求：await 期间账号可能已切换——旧账号的迟到响应
     // 绝不能经 onToggleCard/onSelectCard 写进新账号的选择状态（DESK-ONLINE-010）。
     const ownerKey = latestAccountKeyRef.current;
     try {
       const detail = await host.online.getDeckCards(deckId);
-      if (latestAccountKeyRef.current !== ownerKey) return;
+      if (signal.aborted || latestAccountKeyRef.current !== ownerKey) return;
       const entries = Array.isArray(detail?.cards) ? detail.cards : [];
 
       let remaining = typeof maxSelected === 'number' && maxSelected > 0 ? Math.max(0, maxSelected - selectedCount) : Number.POSITIVE_INFINITY;
       const nextSelectedIds = new Set(selectedIdSet);
 
       for (const entry of entries) {
+        if (signal.aborted || latestAccountKeyRef.current !== ownerKey) return;
         if (remaining <= 0) break;
         if (!entry?.isAccessible || !entry?.card) continue;
 
@@ -1400,25 +1407,27 @@ export function CardLibraryModal({
         if (!effectiveAllowedTypeSet.has(card.type)) continue;
 
         const cardId = typeof card?.id === 'string' ? card.id : '';
-        if (!cardId || nextSelectedIds.has(cardId)) continue;
+        const selectionKey = sourceIdentityMode ? `cloud:${cardId}` : cardId;
+        if (!cardId || nextSelectedIds.has(selectionKey)) continue;
 
         try {
           const payload = mapPublicDataCardRowToBattleSelectionPayload(card);
           const selectionContext: CardLibrarySelectionContext = {
             selectionId: `cloud:${cardId}`,
+            rowSelectionId: `cloud:${cardId}`,
+            signal,
             storageLocation: 'cloud',
             cloudCardId: cardId,
             cloudCardUpdatedAt: payload._updatedAt,
             rawSourceData: mapPublicDataCardRowToSourceData(card),
           };
 
-          if (canToggle) {
-            onToggleCard?.(payload, true, selectionContext);
-          } else {
-            onSelectCard?.(payload, selectionContext);
-          }
+          const result = canToggle ? onToggleCard?.(payload, true, selectionContext) : onSelectCard?.(payload, selectionContext);
+          const applied = result && typeof result.then === 'function' ? await result : result;
+          if (signal.aborted || latestAccountKeyRef.current !== ownerKey) return;
+          if (applied === false) continue;
 
-          nextSelectedIds.add(cardId);
+          nextSelectedIds.add(selectionKey);
           remaining -= 1;
 
           if (isPublicVisibility(payload._isPublic) && !host.platform.marks.isUsed(cardId)) {
@@ -1431,13 +1440,18 @@ export function CardLibraryModal({
             })();
           }
         } catch (error) {
+          if (signal.aborted || latestAccountKeyRef.current !== ownerKey) return;
           console.error('解析数据卡失败:', error);
+          setSelectError(error instanceof Error ? error.message : '解析数据卡失败，请稍后重试。');
         }
       }
     } catch (error) {
+      if (signal.aborted || latestAccountKeyRef.current !== ownerKey) return;
       console.error('导入卡组失败:', error);
+    } finally {
+      if (selectionFlightRef.current === token) { selectionFlightRef.current = null; setSelectionPending(false); }
     }
-  }, [allowDeckImport, canToggle, effectiveAllowedTypeSet, host.online, host.platform, maxSelected, onSelectCard, onToggleCard, selectedCount, selectedIdSet, selectionMode]);
+  }, [isOpen, sourceIdentityMode, allowDeckImport, canToggle, effectiveAllowedTypeSet, host.online, host.platform, maxSelected, onSelectCard, onToggleCard, selectedCount, selectedIdSet, selectionMode]);
 
   const handleDownloadCard = useCallback(async (card: any) => {
     const downloadJson = host.platform.downloadJson;
@@ -2081,11 +2095,12 @@ export function CardLibraryModal({
         <button
           type="button"
           ref={closeButtonRef}
-          onClick={onClose}
+          onClick={closeSelection}
           aria-label={`关闭${modalTitle}`}
           className="absolute right-4 top-4 z-10 inline-flex min-h-10 min-w-10 items-center justify-center text-gray-400 hover:text-gray-600 text-2xl"
         >×</button>
 		        <h2 id={modalTitleId} className="text-xl font-bold pr-8">{modalTitle}</h2>
+          {selectionPending && <div className="mt-2 text-sm text-gray-600" role="status">正在处理选择…</div>}
           {selectError && (
             <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {selectError}
@@ -2509,17 +2524,17 @@ export function CardLibraryModal({
 		                  // handleFavoriteToggleForCard 的 authenticated 检查兜底。
 		                  // 缓存行不提供收藏入口——收藏是服务器权威写路径（DESK-CACHE-004）。
 		                  const enableFavorite = authStatus !== 'unauthenticated' && activeTab !== 'my' && !rowIsCached;
-	                    const isSelected = selectedIdSet.has(card.id);
+	                    const isSelected = selectedIdSet.has(sourceIdentityMode ? getCardLibraryRowSelectionId(card) : card.id);
 	                    // 仅摘要缓存行：可浏览元数据，但正文相关动作一律不可执行。
 	                    const rowBodyUnavailable = rowIsCached && cachedMeta.hasBody !== true;
-	                    const itemDisabled = rowBodyUnavailable || (selectionMode === 'multi' && !isSelected && atLimit);
+	                    const itemDisabled = selectionPending || (rowBodyUnavailable && !(sourceIdentityMode && isSelected)) || (selectionMode === 'multi' && !isSelected && atLimit);
 	                    const showQuickToggle = !browseOnly && selectionMode === 'multi';
-	                    const quickToggleDisabled = rowBodyUnavailable || (isSelected ? !canToggle : itemDisabled);
-	                    const quickToggleTitle = rowBodyUnavailable
+	                    const quickToggleDisabled = selectionPending || (isSelected ? !canToggle || rowBodyUnavailable && !sourceIdentityMode : itemDisabled);
+	                    const quickToggleTitle = rowBodyUnavailable && !(sourceIdentityMode && isSelected)
 	                      ? '只缓存了摘要，联网后才能使用这张卡'
 	                      : isSelected
 	                        ? (canToggle ? '移除' : '当前模式不支持移除')
-	                        : (itemDisabled ? '已达到上限' : '加入');
+	                        : (atLimit ? '已达到上限' : '加入');
                       const questionnaireNativeAllowed = resolveQuestionnaireNativeAllowed(card);
 
 		                  return (

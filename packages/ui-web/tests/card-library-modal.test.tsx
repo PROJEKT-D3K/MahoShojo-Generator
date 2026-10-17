@@ -14,6 +14,7 @@ import {
   DataCardEmptyState,
   mapDataCardRuntimeSourceInfo,
   type CardLibraryHost,
+  type CardLibrarySelectionContext,
   type CardLibraryPublicCachePort,
 } from '../src/card-library/index';
 
@@ -1243,4 +1244,124 @@ test('保存 A 的迟到反馈不落入后来打开的 B 详情', async () => {
   const buttons = [...document.querySelectorAll('button')].filter((node) => node.textContent?.trim() === '详情'); await click(buttons[1]!);
   await act(async () => saving.resolve()); await settle();
   const dialogs = document.querySelectorAll('[role="dialog"]'); expect(dialogs[dialogs.length - 1]!.textContent).toContain('copy-b'); expect(dialogs[dialogs.length - 1]!.textContent).not.toContain('已保存到本地库');
+});
+
+test('异步单选等待宿主提交，失败不关闭也不计使用', async () => {
+  const gate = deferred<false>();
+  const { host, online } = createHost([record('a')]);
+  const onClose = vi.fn();
+  await render({ host, isOpen: true, onClose, onSelectCard: () => gate.promise,
+    selectedType: 'character', initialTab: 'local', visibleTabs: ['local'] });
+  await settle();
+  await click(document.querySelector('[aria-label="选择本地角色 a"]')!);
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => gate.resolve(false));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(online.reportCardStat).not.toHaveBeenCalled();
+});
+
+test('来源多选等待真实提交并显式单飞，关闭立即取消宿主信号', async () => {
+  const gate = deferred<void>();
+  const { host } = createHost([record('a'), record('b')]);
+  const onClose = vi.fn();
+  const onToggleCard = vi.fn((_payload: unknown, _selected: boolean, _context: CardLibrarySelectionContext) => gate.promise);
+  await render({ host, isOpen: true, onClose, onToggleCard, selectedType: 'character',
+    initialTab: 'local', visibleTabs: ['local'], selectionMode: 'multi', selectedSelectionIds: [] });
+  await settle();
+  await click(document.querySelector('[aria-label="加入"]')!);
+  expect(onToggleCard).toHaveBeenCalledTimes(1);
+  const context = onToggleCard.mock.calls[0]![2] as import('../src/card-library').CardLibrarySelectionContext;
+  expect(context.rowSelectionId).toBe('local:a');
+  expect(context.signal?.aborted).toBe(false);
+  expect(document.body.textContent).toContain('正在处理选择');
+  expect([...document.querySelectorAll<HTMLButtonElement>('[aria-label="加入"]')].every(button => button.disabled)).toBe(true);
+  await click(document.querySelector('button[aria-label^="关闭"]')!);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(context.signal?.aborted).toBe(true);
+  await act(async () => gate.resolve());
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test('来源多选按带前缀身份撤选，不把同裸 ID 的云端选择套到本地行', async () => {
+  const { host } = createHost([record('a')]);
+  const onToggleCard = vi.fn();
+  const props = { host, isOpen: true, onClose: vi.fn(), onToggleCard, selectedType: 'character' as const,
+    initialTab: 'local' as const, visibleTabs: ['local'] as const, selectionMode: 'multi' as const };
+  await render({ ...props, visibleTabs: ['local'], selectedSelectionIds: ['cloud:a'] });
+  await settle(); expect(document.querySelector('[aria-label="加入"]')).toBeTruthy();
+  await render({ ...props, visibleTabs: ['local'], selectedSelectionIds: ['local:a'] });
+  await click(document.querySelector('[aria-label="移除"]')!);
+  expect(onToggleCard).toHaveBeenCalledWith(undefined, false, expect.objectContaining({ rowSelectionId: 'local:a', selectionId: 'local:a' }));
+});
+
+test('来源多选账号切换中止宿主在途提交，旧 finally 不解锁新提交', async () => {
+  const old = deferred<void>(), next = deferred<void>();
+  const { host } = createHost([record('a')], { auth: { status: 'authenticated', userId: 1, userBadges: [] } });
+  const saved: string[] = [];
+  const onToggleCard = vi.fn(async (_payload: unknown, _selected: boolean, context: CardLibrarySelectionContext) => {
+    await (onToggleCard.mock.calls.length === 1 ? old.promise : next.promise);
+    if (context.signal?.aborted) return false as const;
+    saved.push(context.rowSelectionId!);
+  });
+  const props = { host, isOpen: true, onClose: vi.fn(), onToggleCard, selectedType: 'character' as const,
+    initialTab: 'local' as const, selectionMode: 'multi' as const, selectedSelectionIds: [] };
+  await render({ ...props, visibleTabs: ['local'] }); await settle();
+  await click(document.querySelector('[aria-label="加入"]')!);
+  const firstSignal = onToggleCard.mock.calls[0]![2].signal!;
+  await render({ ...props, host: { ...host, auth: { status: 'authenticated', userId: 2, userBadges: [] } }, visibleTabs: ['local'] });
+  await settle(); expect(firstSignal.aborted).toBe(true);
+  await click(document.querySelector('[aria-label="加入"]')!);
+  await act(async () => old.resolve());
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="加入"]')!.disabled).toBe(true);
+  expect(saved).toEqual([]);
+  await act(async () => next.resolve());
+  expect(saved).toEqual(['local:a']);
+});
+
+test('缓存重验证升级保留原行 key，关闭重开撤选不重新读正文', async () => {
+  const row = { ...publicCard('same'), data: JSON.stringify({ name: 'same', _cardId: 'original-extension' }) };
+  const { host, online } = createHost([], { online: { fetchPublicCards: vi.fn(async () => ({ ok: true, status: 200, data: { success: true, cards: [], total: 0, nextOffset: null } })), fetchPublicCardById: vi.fn(async () => ({ ok: true, status: 200, data: { success: true, card: row } })) } });
+  host.publicCache = createCachePort([cachedEntry('same')]);
+  const onToggleCard = vi.fn();
+  const props = { host, isOpen: true, onClose: vi.fn(), onToggleCard, selectedType: 'character' as const,
+    initialTab: 'public' as const, selectionMode: 'multi' as const, selectedSelectionIds: [] };
+  await render(props); await settle();
+  await click([...document.querySelectorAll('button')].find(button => button.textContent?.includes('已缓存'))!); await settle();
+  await click(document.querySelector('[aria-label="加入"]')!); await settle();
+  expect(onToggleCard.mock.calls[0]![2]).toMatchObject({ rowSelectionId: 'cache:same', selectionId: 'cloud:same', storageLocation: 'cloud', cloudCardId: 'same', rawSourceData: { _cardId: 'original-extension' } });
+  await render({ ...props, isOpen: false, selectedSelectionIds: ['cache:same'] });
+  await render({ ...props, selectedSelectionIds: ['cache:same'] }); await settle();
+  await click([...document.querySelectorAll('button')].find(button => button.textContent?.includes('已缓存'))!); await settle();
+  const beforeReads = vi.mocked(online.fetchPublicCardById).mock.calls.length;
+  await click(document.querySelector('[aria-label="移除"]')!);
+  expect(online.fetchPublicCardById).toHaveBeenCalledTimes(beforeReads);
+  expect(onToggleCard.mock.calls.at(-1)).toEqual([undefined, false, expect.objectContaining({ rowSelectionId: 'cache:same' })]);
+});
+
+test('已选仅摘要缓存仍可精确撤选，无正文与附属网络动作', async () => {
+  const { host, online } = createHost([]); host.publicCache = createCachePort([cachedEntry('summary', false)]);
+  const onToggleCard = vi.fn();
+  await render({ host, isOpen: true, onClose: vi.fn(), onToggleCard, selectedType: 'character', initialTab: 'public',
+    selectionMode: 'multi', selectedSelectionIds: ['cache:summary'] }); await settle();
+  await click([...document.querySelectorAll('button')].find(button => button.textContent?.includes('已缓存'))!); await settle();
+  await click(document.querySelector('[aria-label="移除"]')!);
+  expect(onToggleCard).toHaveBeenCalledWith(undefined, false, expect.objectContaining({ rowSelectionId: 'cache:summary' }));
+  expect(host.publicCache.loadCachedCard).not.toHaveBeenCalled();
+  expect(online.fetchPublicCardById).not.toHaveBeenCalled(); expect(online.reportCardStat).not.toHaveBeenCalled();
+});
+
+test('卡组逐项等待提交，拒绝的卡不占上限或上报使用', async () => {
+  const first = deferred<false>();
+  const { host, online } = createHost([], { auth: { status: 'authenticated', userId: 1, userBadges: [] }, online: {
+    getDeckCards: vi.fn(async () => ({ cards: ['a', 'b'].map(id => ({ isAccessible: true, card: publicCard(id) })) })),
+  } });
+  host.slots.DecksModal = ({ onImportDeck }) => <button onClick={() => onImportDeck('deck')}>导入测试卡组</button>;
+  const onToggleCard = vi.fn((_payload: unknown, _selected: boolean, context: CardLibrarySelectionContext) => context.rowSelectionId === 'cloud:a' ? first.promise : undefined);
+  await render({ host, isOpen: true, onClose: vi.fn(), onToggleCard, selectedType: 'character', initialTab: 'public',
+    selectionMode: 'multi', selectedSelectionIds: [], maxSelected: 1 }); await settle();
+  await click([...document.querySelectorAll('button')].find(button => button.textContent === '导入测试卡组')!); await settle();
+  expect(onToggleCard).toHaveBeenCalledTimes(1); expect(online.reportCardStat).not.toHaveBeenCalled();
+  await act(async () => first.resolve(false)); await settle();
+  expect(onToggleCard).toHaveBeenCalledTimes(2);
+  expect(online.reportCardStat).toHaveBeenCalledTimes(1); expect(online.reportCardStat).toHaveBeenCalledWith('b', 'usage');
 });

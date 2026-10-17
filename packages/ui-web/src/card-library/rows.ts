@@ -102,3 +102,7 @@ export const getCachedDataCardRowMeta = (row: unknown): CachedDataCardRowMeta | 
     lastSuccessAt: typeof record.lastSuccessAt === 'string' ? record.lastSuccessAt : null,
   };
 };
+
+/** Identity of the actual library row, never inferred from editable card-body metadata. */
+export const getCardLibraryRowSelectionId = (row: { id: string }): string =>
+  `${isLocalDataCardRow(row) ? 'local' : isCachedDataCardRow(row) ? 'cache' : 'cloud'}:${row.id}`;

@@ -296,6 +296,10 @@ export interface CardLibrarySelectionContext {
    * 不是已验证的线上引用，Strict/多人/权威写入照常由服务器重新验权）。
    */
   selectionId: string;
+  /** Stable displayed row identity, retained when a cached row resolves to a fresh cloud body. UI only. */
+  rowSelectionId?: string;
+  /** This selection attempt only. Hosts must check before committing; never store in drafts or card data. */
+  signal?: AbortSignal;
   storageLocation: 'local' | 'cloud' | 'cache';
   /** 仅云端行有值；本地行与缓存快照行 MUST NOT 产出（与 `_cardId === ''` 同一不变量）。 */
   cloudCardId?: string;
