@@ -2175,11 +2175,8 @@ describe('Arena generation lifecycle service', () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ code: 'GENERATION_OWNERSHIP_UNAVAILABLE' });
     expect(execute).not.toHaveBeenCalled();
-    expect(store.states.get('generation-1')?.terminal?.status).toBe('producer_lost');
-    expect(store.states.get('generation-1')?.snapshot).toMatchObject({
-      status: 'producer_lost',
-      lastEventId: '1-0',
-    });
+    expect(store.states.get('generation-1')?.terminal).toMatchObject({ status: 'producer_lost', replayUncertain: true });
+    expect(store.states.get('generation-1')?.snapshot).toBeNull();
     expect(store.events.get('generation-1')).toEqual([
       expect.objectContaining({
         id: '1-0',
@@ -3129,12 +3126,8 @@ describe('Arena generation lifecycle service', () => {
     expect(durable).toMatchObject({
       status: 'producer_lost',
       leaseExpiresAt: null,
-      terminal: { status: 'producer_lost' },
-      snapshot: {
-        status: 'producer_lost',
-        markdown: '',
-        reasoning: '',
-      },
+      terminal: { status: 'producer_lost', replayUncertain: true },
+      snapshot: null,
     });
     expect(events.events).toEqual([
       expect.objectContaining({
@@ -3146,7 +3139,11 @@ describe('Arena generation lifecycle service', () => {
       }),
     ]);
     expect(durable?.lastEventId).toBe(events.events[0]?.id);
-    expect(durable?.snapshot?.lastEventId).toBe(events.events[0]?.id);
+    const resumed = await service.resume(new Request('https://example.test/resume'), { generationId: 'generation-1' });
+    expect(resumed.status).toBe(200);
+    const replay = await resumed.text();
+    expect(replay).toContain('producer_lost');
+    expect(replay).not.toContain('event: snapshot');
   });
 
   test('expired producer lease stays unavailable when durable terminal commit fails', async () => {
@@ -3492,14 +3489,9 @@ describe('Arena generation lifecycle service', () => {
     expect(store.states.get('generation-1')?.terminal).toMatchObject({
       status: 'completed',
       resultRef: 'r2:terminal',
+      replayUncertain: true,
     });
-    expect(store.states.get('generation-1')?.snapshot).toMatchObject({
-      status: 'completed',
-      markdown: 'durable completed report',
-      reasoning: '',
-      telemetry: null,
-      terminalResultRef: 'r2:terminal',
-    });
+    expect(store.states.get('generation-1')?.snapshot).toBeNull();
     expect(store.events.get('generation-1')).toHaveLength(301);
     expect(store.events.get('generation-1')?.at(-1)).toEqual(expect.objectContaining({
       id: '301-0',
@@ -3559,13 +3551,9 @@ describe('Arena generation lifecycle service', () => {
     });
     expect(store.states.get('generation-1')).toMatchObject({
       status: 'cancelled',
-      terminal: { status: 'cancelled', code: 'USER_CANCELLED' },
+      terminal: { status: 'cancelled', code: 'USER_CANCELLED', replayUncertain: true },
       leaseExpiresAt: null,
-      snapshot: {
-        status: 'cancelled',
-        markdown: '',
-        reasoning: '',
-      },
+      snapshot: null,
     });
     expect(store.events.get('generation-1')?.at(-1)).toEqual(expect.objectContaining({
       type: 'done',
@@ -4198,7 +4186,7 @@ describe('Arena generation lifecycle service', () => {
     const originalReadState = store.readState.bind(store);
     vi.spyOn(store, 'readState')
       .mockImplementationOnce(originalReadState)
-      .mockResolvedValueOnce(null);
+      .mockResolvedValue(null);
     const service = createService(store, {
       execute: vi.fn(async () => ({ status: 'completed' as const })),
     }, {

@@ -481,8 +481,10 @@ const parseStoredTerminal = (value: unknown): GenerationTerminal | null => {
   }
   const publicError = value.publicError;
   const persistenceWarning = value.persistenceWarning;
+  const replayUncertain = value.replayUncertain;
   if (
     ('code' in value && typeof value.code !== 'string')
+    || (replayUncertain !== undefined && typeof replayUncertain !== 'boolean')
     || ('resultRef' in value && !nullableString(value.resultRef))
     || (persistenceWarning !== undefined
       && !isArenaGenerationPersistenceWarning(persistenceWarning))
@@ -494,6 +496,7 @@ const parseStoredTerminal = (value: unknown): GenerationTerminal | null => {
   const resultRef = value.resultRef;
   return {
     status: value.status,
+    ...(replayUncertain === undefined ? {} : { replayUncertain: replayUncertain as boolean }),
     ...(code === undefined ? {} : { code: code as string }),
     ...(resultRef === undefined ? {} : { resultRef: resultRef as string | null }),
     ...(persistenceWarning === undefined ? {} : {
@@ -524,11 +527,26 @@ const parseStoredState = (raw: string): StoredGenerationState => {
   } catch {
     throw new Error('REDIS_GENERATION_STATE_INVALID');
   }
+  // This hint only makes corruption fail more conservatively; it never authorizes a read.
+  const invalidEvidence = (code: string): Error => new Error(
+    isRecord(parsed.terminal) && parsed.terminal.replayUncertain === true
+      ? 'REDIS_GENERATION_UNCERTAIN_SNAPSHOT_UNAVAILABLE'
+      : code,
+  );
+  let terminal: GenerationTerminal | null;
+  try { terminal = parseStoredTerminal(parsed.terminal); } catch {
+    throw invalidEvidence('REDIS_GENERATION_STATE_INVALID');
+  }
   const preparationSeed = parsed.preparationSeed ?? null;
   const preparationVersion = parsed.preparationVersion ?? null;
-  const snapshot = parseStoredSnapshot(parsed.snapshot);
-  const terminal = parseStoredTerminal(parsed.terminal);
-  const intendedTerminal = parseStoredTerminal(parsed.intendedTerminal);
+  let snapshot: GenerationSnapshot | null;
+  try { snapshot = parseStoredSnapshot(parsed.snapshot); } catch {
+    throw invalidEvidence('REDIS_GENERATION_STATE_INVALID');
+  }
+  let intendedTerminal: GenerationTerminal | null;
+  try { intendedTerminal = parseStoredTerminal(parsed.intendedTerminal); } catch {
+    throw invalidEvidence('REDIS_GENERATION_STATE_INVALID');
+  }
   if (
     typeof parsed.actorHash !== 'string'
     || typeof parsed.reservationKey !== 'string'
@@ -552,7 +570,7 @@ const parseStoredState = (raw: string): StoredGenerationState => {
       || (snapshot.persistenceWarning ?? null) !== (terminal.persistenceWarning ?? null)
     ))
   ) {
-    throw new Error('REDIS_GENERATION_STATE_INVALID');
+    throw invalidEvidence('REDIS_GENERATION_STATE_INVALID');
   }
   return {
     actorHash: parsed.actorHash,

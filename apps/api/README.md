@@ -328,3 +328,9 @@ Native 必须在创建及跨重启首次恢复前以不携 Cookie、actor token�
 运行 `pnpm --filter @mahoshojo/api benchmark:replay-local /absolute/path/to/redis-server`，使用来自 Redis 官方来源的本地二进制。脚本只启动仅绑定 127.0.0.1 的临时实例，以每次随机认证和进程 PID 校验避免误连，禁用持久化，不读取 `REDIS_URL`，退出时清理合成数据。
 
 输出区分 Redis 脚本 CPU、本地往返、请求协议字节和 state 重写字节；`small-state-control` 仅隔离内嵌 snapshot 的开销，不是可部署 adapter。保留全量 snapshot 的同频上传仍有累计平方成本，不能用小 state 对照的延迟代替完整优化结果。此基准不覆盖生产网络、并发订阅、持久化或副本负载，也不设跨机器耗时门槛。
+
+### 不确定追加后的终态恢复
+
+新版 writer 在 append 结果未知时不重试写入，也不再发布 running checkpoint；终态内部记录 `replayUncertain`。新版 reader 对显式 true 的 completed 成功只接受该 writer 留下的完整终态 snapshot，以既有 replace 语义恢复后发送唯一 terminal；超预算或正文证据损坏时返回现有内容不可用/transport 错误。failed、cancelled、producer_lost 缺少完整快照时只传递已验证的精确终态，不发空 snapshot，不清除已收到的正文或 reasoning。D1/R2 目前不能证明完整 reasoning，不拿 body-only 回退冒充完整快照；异常活动租约接管也不会伪造完整恢复。正常历史记录在 Redis TTL 退出后由 durable 重建缓存，继续走原 legacy 恢复路径。
+
+该保证要求所有相关 writer/reader 已升级；旧记录缺少内部标记时保留原兼容行为，不宣称已证明无缺口。整份 Redis state 丢失后也无法仅由 D1 还原该标记。内部标记不加入 public SSE/status/Room/D1 字段。

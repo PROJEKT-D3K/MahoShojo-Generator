@@ -61,6 +61,18 @@ describe('shared Hosted C0 output collector', () => {
       markdown: '😀完整', metaEvent: { event: 'meta_error', data: { raw: '原件' } }, terminal: { event: 'error' }, serverStatus: 'failed',
     });
   });
+  it.each(['failed', 'cancelled', 'producer_lost'] as const)('preserves partial body and reasoning with a terminal-only %s', async status => {
+    const terminalEvent = status === 'cancelled' ? 'done' : 'error';
+    const onEvent = vi.fn();
+    const output = await collectArenaHostedStreamOutput(new Response(
+      wire('markdown', { chunk: '部分正文' }) + wire('reasoning', { chunk: '部分推理' }, '2-0')
+      + wire(terminalEvent, { status, ok: false, error: '未完成' }, '3-0'),
+    ), { ...options(), onEvent });
+    expect(output).toMatchObject({ markdown: '部分正文', reasoning: '部分推理', serverStatus: status,
+      terminal: { event: terminalEvent, data: { status, ok: false } } });
+    expect(onEvent.mock.calls.filter(([event]) => event.event === 'done' || event.event === 'error')).toHaveLength(1);
+    expect(onEvent.mock.calls.some(([event]) => event.event === 'snapshot')).toBe(false);
+  });
   it('keeps caller-owned originals after a later read failure and releases the reader lock', async () => {
     const output = createArenaHostedStreamOutput(); let reads = 0;
     const body = new ReadableStream<Uint8Array>({ pull(controller) {
