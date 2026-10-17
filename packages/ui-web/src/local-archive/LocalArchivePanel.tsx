@@ -1,3 +1,5 @@
+import { Button } from '../card-library/Button';
+
 import {
   toArchivePreflightView,
   type ArchiveExportProgress,
@@ -89,15 +91,15 @@ export const LocalArchivePanel = ({ model, actions, limits }: LocalArchiveView) 
           <br />
           归档<strong>不包含</strong> AI Provider 凭据、账号信息或服务器凭据；换设备后需要重新配置这些。
         </p>
-        <button
+        <Button
           type="button"
           data-testid="archive-export-start"
           disabled={busy}
           onClick={actions.startExport}
-          className="mt-3 min-h-11 rounded-lg border border-(--app-border-strong) bg-(--app-surface-strong) px-4 py-2 text-sm font-medium hover:bg-(--app-surface-90) disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-3 min-h-11 px-4"
         >
           {model.exporting ? '正在导出…' : '导出整库'}
-        </button>
+        </Button>
         {model.exportProgress !== null && <ExportProgress progress={model.exportProgress} />}
         {model.exportError !== null && (
           <ErrorNote testId="archive-export-error" message={model.exportError} />
@@ -114,15 +116,15 @@ export const LocalArchivePanel = ({ model, actions, limits }: LocalArchiveView) 
         <p className="text-sm text-(--app-text-muted)">
           选择一个此前导出的归档文件。会先完整预检并显示摘要与冲突条数，确认后才写入。
         </p>
-        <button
+        <Button
           type="button"
           data-testid="archive-import-pick"
           disabled={busy}
           onClick={actions.pickImportFile}
-          className="mt-3 min-h-11 rounded-lg border border-(--app-border-strong) bg-(--app-surface-strong) px-4 py-2 text-sm font-medium hover:bg-(--app-surface-90) disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-3 min-h-11 px-4"
         >
           {model.inspecting ? '正在预检…' : '选择归档文件'}
-        </button>
+        </Button>
         {model.importError !== null && (
           <ErrorNote testId="archive-import-error" message={model.importError} />
         )}
@@ -154,24 +156,25 @@ export const LocalArchivePanel = ({ model, actions, limits }: LocalArchiveView) 
               已存在的记录不会被覆盖（existing-wins）。导入不会创建 AI Provider，也不会发起网络请求。
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <button
+              <Button
                 type="button"
                 data-testid="archive-import-confirm"
                 disabled={busy}
                 onClick={actions.confirmImport}
-                className="min-h-11 rounded-lg bg-(--app-accent) px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                variant="primary"
+                className="min-h-11 px-4"
               >
                 {model.applying ? '正在导入…' : '确认导入'}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 data-testid="archive-import-cancel"
                 disabled={busy}
                 onClick={actions.cancelImport}
-                className="min-h-11 rounded-lg border border-(--app-border-strong) px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                className="min-h-11 px-4"
               >
                 取消
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -198,15 +201,15 @@ export const LocalArchivePanel = ({ model, actions, limits }: LocalArchiveView) 
                 ))}
               </ul>
             )}
-            <button
+            <Button
               type="button"
               data-testid="archive-reset"
               disabled={busy}
               onClick={actions.reset}
-              className="mt-3 min-h-11 rounded-lg border border-(--app-border-strong) px-4 py-2 text-sm"
+              className="mt-3 min-h-11 px-4"
             >
               继续导入另一个归档
-            </button>
+            </Button>
           </div>
         )}
       </Panel>

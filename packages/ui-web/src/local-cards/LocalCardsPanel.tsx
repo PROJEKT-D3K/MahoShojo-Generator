@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
 
+import { Button } from '../card-library/Button';
+
 import type { LocalCardMutation, LocalCardsActions, LocalCardsModel } from './controller';
 import {
   LOCAL_CARD_TYPE_LABELS,
@@ -21,11 +23,6 @@ export interface LocalCardsPanelProps {
 }
 
 const PAGE_SIZE = 20;
-
-const buttonClass =
-  'min-h-11 rounded-lg border border-(--app-border-strong) px-3 py-2 text-sm hover:bg-(--app-surface-90) disabled:cursor-not-allowed disabled:opacity-50';
-const dangerButtonClass =
-  'min-h-11 rounded-lg bg-(--app-accent-strong) px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50';
 
 const formatTime = (iso: string): string => new Date(iso).toLocaleString();
 
@@ -97,6 +94,7 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
   const [confirming, setConfirming] = useState<{ id: string; action: 'delete' | 'purge' } | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const cancelledFocusRef = useRef<{ target: HTMLButtonElement; view: LocalCardsModel['view'] } | null>(null);
   const searchId = useId();
   const typeId = useId();
 
@@ -111,12 +109,24 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
     setExpandedId(null);
   }, [model.view]);
   useEffect(() => {
-    if (confirming !== null) cancelRef.current?.focus();
-  }, [confirming]);
+    if (confirming !== null) {
+      cancelledFocusRef.current = null;
+      cancelRef.current?.focus();
+      return;
+    }
+    const cancelled = cancelledFocusRef.current;
+    cancelledFocusRef.current = null;
+    // 关闭确认后触发器才解除 disabled；不向卸载或已切换视图的旧目标归还焦点。
+    if (!cancelled || cancelled.view !== model.view) return;
+    const { target } = cancelled;
+    const active = target.ownerDocument.activeElement;
+    if (target === triggerRef.current && target.isConnected && !target.disabled
+      && (active === null || active === target.ownerDocument.body)) target.focus();
+  }, [confirming, model.view]);
 
   const closeConfirm = (): void => {
+    if (triggerRef.current) cancelledFocusRef.current = { target: triggerRef.current, view: model.view };
     setConfirming(null);
-    triggerRef.current?.focus();
   };
 
   return (
@@ -134,16 +144,17 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
 
       <div role="group" aria-label="本地数据卡视图" className="mt-3 flex gap-2">
         {(['active', 'recycle'] as const).map((view) => (
-          <button
+          <Button
             key={view}
             type="button"
             aria-pressed={model.view === view}
             data-testid={`local-cards-view-${view}`}
             onClick={() => actions.setView(view)}
-            className={`${buttonClass} ${model.view === view ? 'bg-(--app-surface-strong) font-medium' : ''}`}
+            variant={model.view === view ? 'primary' : 'secondary'}
+            className="min-h-11"
           >
             {view === 'active' ? '数据卡' : '回收站'}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -173,9 +184,9 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
             ))}
           </select>
         </label>
-        <button type="button" className={buttonClass} onClick={actions.reload} disabled={model.status === 'loading'}>
+        <Button type="button" className="min-h-11" onClick={actions.reload} disabled={model.status === 'loading'}>
           刷新
-        </button>
+        </Button>
       </div>
 
       {model.pending !== null && (
@@ -198,7 +209,7 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
           <p role="alert" data-testid="local-cards-load-error" className="text-sm text-(--app-accent-strong)">
             本地库读取失败：{model.loadError}
           </p>
-          <button type="button" className={`${buttonClass} mt-2`} onClick={actions.reload}>重试</button>
+          <Button type="button" className="mt-2 min-h-11" onClick={actions.reload}>重试</Button>
         </div>
       ) : model.status !== 'ready' ? (
         <p role="status" className="mt-3 text-sm text-(--app-text-muted)">正在读取本地库…</p>
@@ -231,32 +242,33 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <button
+                      <Button
                         type="button"
-                        className={buttonClass}
+                        className="min-h-11"
                         aria-expanded={expanded}
                         onClick={() => setExpandedId(expanded ? null : record.id)}
                       >
                         {expanded ? '收起详情' : '详情'}
-                      </button>
+                      </Button>
                       {!recycle && onEdit !== undefined && (canEdit?.(record) ?? true) && (
-                        <button type="button" className={buttonClass} onClick={() => onEdit(record)}>
+                        <Button type="button" className="min-h-11" onClick={() => onEdit(record)}>
                           编辑
-                        </button>
+                        </Button>
                       )}
                       {recycle && (
-                        <button
+                        <Button
                           type="button"
-                          className={buttonClass}
+                          className="min-h-11"
                           disabled={writeDisabled || confirming !== null}
                           onClick={() => actions.restore(record.id)}
                         >
                           {pendingHere && model.pending?.action === 'restore' ? '正在恢复…' : '恢复'}
-                        </button>
+                        </Button>
                       )}
-                      <button
+                      <Button
                         type="button"
-                        className={buttonClass}
+                        variant={recycle ? 'danger' : 'secondary'}
+                        className="min-h-11"
                         disabled={writeDisabled || confirming !== null}
                         onClick={(event) => {
                           triggerRef.current = event.currentTarget;
@@ -264,7 +276,7 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
                         }}
                       >
                         {recycle ? '彻底删除…' : '移入回收站…'}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   {confirmHere !== null && (
@@ -279,12 +291,13 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
                       </p>
                       <p className="mt-1 text-sm">{CONFIRM_COPY[confirmHere.action].body}</p>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <button ref={cancelRef} type="button" className={buttonClass} onClick={closeConfirm}>
+                        <Button ref={cancelRef} type="button" className="min-h-11" onClick={closeConfirm}>
                           取消
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
-                          className={dangerButtonClass}
+                          variant="danger"
+                          className="min-h-11"
                           disabled={writeDisabled}
                           onClick={() => {
                             setConfirming(null);
@@ -293,7 +306,7 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
                           }}
                         >
                           {CONFIRM_COPY[confirmHere.action].confirm}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   )}
@@ -303,9 +316,9 @@ export const LocalCardsPanel = ({ model, actions, disabled = false, onEdit, canE
             })}
           </ul>
           {filtered.length > shown.length && (
-            <button type="button" className={`${buttonClass} mt-3`} onClick={() => setVisible((value) => value + PAGE_SIZE)}>
+            <Button type="button" className="mt-3 min-h-11" onClick={() => setVisible((value) => value + PAGE_SIZE)}>
               显示更多
-            </button>
+            </Button>
           )}
         </>
       )}

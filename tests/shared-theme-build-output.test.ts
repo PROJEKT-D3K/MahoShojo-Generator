@@ -137,6 +137,15 @@ const expectSharedOutput = (css: string, artifact: string): void => {
   expect(buttonDeclarations('focus-visible\\:ring-fuchsia-500')['--tw-ring-color'], artifact).toBe('var(--color-fuchsia-500)');
   expect(buttonDeclarations('focus-visible\\:ring-offset-2')['--tw-ring-offset-width'], artifact).toBe('2px');
   expect(buttonDeclarations('disabled\\:cursor-not-allowed').cursor, artifact).toBe('not-allowed');
+  // Local library actions reuse the primary/danger variants in both hosts.
+  for (const [utility, property, token] of [
+    ['bg-fuchsia-600', 'background-color', '--color-fuchsia-600'],
+    ['hover\\:bg-fuchsia-700', 'background-color', '--color-fuchsia-700'],
+    ['text-red-700', 'color', '--color-red-700'],
+    ['hover\\:bg-red-50', 'background-color', '--color-red-50'],
+    ['dark\\:text-red-300', 'color', '--color-red-300'],
+    ['dark\\:hover\\:bg-red-950\\/40', 'background-color', '--color-red-950'],
+  ]) expect(buttonDeclarations(utility)[property], artifact).toContain(token);
   // Brand visibility and modal scroll containment must survive each actual host pipeline.
   expect(declarationsFor('.theme-image-light').display, artifact).toBe('inline-block');
   expect(declarationsFor('.theme-image-dark').display, artifact).toBe('none');
@@ -225,13 +234,23 @@ const compileWebCss = async (): Promise<string> => {
   return result.css;
 };
 
-const readDesktopBuiltCss = (): string | null => {
-  if (!existsSync(DESKTOP_DIST)) return null;
-  const assetDirectory = path.join(DESKTOP_DIST, 'assets');
+const readBuiltCss = (assetDirectory: string): string | null => {
   if (!existsSync(assetDirectory)) return null;
   const cssFiles = readdirSync(assetDirectory).filter((name) => name.endsWith('.css'));
   if (cssFiles.length === 0) return null;
   return cssFiles.map((name) => readFileSync(path.join(assetDirectory, name), 'utf8')).join('\n');
+};
+
+const readWebLibraryBuiltCss = (): string | null => {
+  const html = path.join(WEB_ROOT, '.next', 'server', 'app', 'local-library.html');
+  if (!existsSync(html)) return null;
+  // Next splits CSS; cascade order comes from the page's links, not directory enumeration.
+  const links = [...readFileSync(html, 'utf8').matchAll(/<link\b[^>]*>/g)]
+    .filter(([tag]) => /rel="stylesheet"/.test(tag))
+    .map(([tag]) => /href="\/_next\/(static\/css\/[^"?]+\.css)"/.exec(tag)?.[1])
+    .filter((file): file is string => file !== undefined);
+  expect(links.length, 'Web local-library production page must load its stylesheet').toBeGreaterThan(0);
+  return links.map((file) => readFileSync(path.join(WEB_ROOT, '.next', file), 'utf8')).join('\n');
 };
 
 describe('shared result surface CSS contract', () => {
@@ -255,6 +274,8 @@ describe('shared theme reaches the Web production stylesheet', () => {
   it('compiles shared-only utilities and carries the shared theme tokens', async () => {
     const css = await compileWebCss();
     expectSharedOutput(css, 'Web 产物');
+    const builtCss = readWebLibraryBuiltCss();
+    if (builtCss !== null) expectSharedOutput(builtCss, 'Web Next production 产物');
     for (const selector of ['.battle-lite-shell', '.battle-lite-panel', '.battle-lite-surface-card', '.battle-lite-hero-card', '.battle-lite-danger-button', '.battle-lite-chip-active', '.battle-lite-modal-surface', '.battle-lite-file-input']) {
       expect(css, `Web 产物缺少共享竞技场样式 ${selector}`).toContain(selector);
     }
@@ -272,7 +293,7 @@ describe('shared theme reaches the Web production stylesheet', () => {
 
 describe('shared theme reaches the Desktop production stylesheet', () => {
   it('compiles shared-only utilities and carries the shared theme tokens', () => {
-    const css = readDesktopBuiltCss();
+    const css = readBuiltCss(path.join(DESKTOP_DIST, 'assets'));
 
     // Desktop 的产物需要先构建一次。跳过而不是伪造：一条会因为构建顺序而随机跳过的断言等于没有断言；
     // desktop-ci 的 `Verify desktop frontend` 步骤会在真实构建之后跑这条，因此那里不会跳过。

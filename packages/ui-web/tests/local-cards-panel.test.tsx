@@ -71,10 +71,12 @@ test('移入回收站需要确认，取消不写入，确认后进入回收站�
   expect(container.textContent).toContain('角色 a');
   expect(container.textContent).toContain('无签名 · 导入');
 
-  await click(button('移入回收站…'));
+  const deleteTrigger = button('移入回收站…')!;
+  await click(deleteTrigger);
   expect(container.querySelector('[data-testid="local-card-confirm"]')).not.toBeNull();
   expect(document.activeElement?.textContent).toBe('取消');
   await click(button('取消'));
+  expect(document.activeElement).toBe(deleteTrigger);
   expect(store.delete).not.toHaveBeenCalled();
 
   await click(button('移入回收站…'));
@@ -97,10 +99,13 @@ test('移入回收站需要确认，取消不写入，确认后进入回收站�
 });
 
 test('宿主禁用时只读浏览仍可用，写入口不可点', async () => {
-  const { host } = createHost([record('a')]);
+  const { host, store } = createHost([record('a')]);
   await act(async () => root.render(<Harness host={host} disabled />));
   await settle();
   expect((button('移入回收站…') as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => button('移入回收站…')!.click());
+  expect(container.querySelector('[data-testid="local-card-confirm"]')).toBeNull();
+  expect(store.delete).not.toHaveBeenCalled();
   await click(button('详情'));
   expect(container.querySelector('[data-testid="local-card-details"]')?.textContent).toContain('"codename": "a"');
 });
@@ -150,4 +155,29 @@ test('搜索与类型筛选只影响显示，无结果时说明是筛选所致',
   });
   expect(container.querySelectorAll('[data-testid="local-card-item"]')).toHaveLength(1);
   expect(container.textContent).toContain('雾港');
+});
+
+test.each(['switch-view', 'unmount', 'move-focus'] as const)('取消后 %s 不向旧触发器抢焦点', async (change) => {
+  const { host, store } = createHost([record('a')]);
+  await act(async () => root.render(<Harness host={host} />));
+  await settle();
+  const trigger = button('移入回收站…')!;
+  await click(trigger);
+  const focus = vi.spyOn(trigger, 'focus');
+  const external = document.createElement('button');
+  document.body.append(external);
+  try {
+    await act(async () => {
+      button('取消')!.click();
+      if (change === 'switch-view') container.querySelector<HTMLButtonElement>('[data-testid="local-cards-view-recycle"]')!.click();
+      if (change === 'unmount') root.render(null);
+      if (change === 'move-focus') external.focus();
+    });
+    expect(focus).not.toHaveBeenCalled();
+    if (change === 'move-focus') expect(document.activeElement).toBe(external);
+    expect(store.delete).not.toHaveBeenCalled();
+    expect(store.purge).not.toHaveBeenCalled();
+  } finally {
+    external.remove();
+  }
 });
