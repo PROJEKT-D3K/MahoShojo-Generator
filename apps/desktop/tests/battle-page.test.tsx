@@ -66,7 +66,8 @@ beforeAll(async () => {
 afterAll(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); });
 const button = (text: string, scope: ParentNode = document) => [...scope.querySelectorAll('button')].find((entry) => entry.textContent?.trim() === text)!;
 const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); }); };
-const click = async (text: string, scope?: ParentNode) => { expect(button(text, scope), text).toBeTruthy(); await act(async () => button(text, scope).click()); await settle(); };
+const openRecoveryTools = async () => { const toggle = button('问题排查'); if (toggle?.getAttribute('aria-expanded') === 'false') { await act(async () => toggle.click()); await settle(); } };
+const click = async (text: string, scope?: ParentNode) => { if (text === '检查恢复条件') await openRecoveryTools(); expect(button(text, scope), text).toBeTruthy(); await act(async () => button(text, scope).click()); await settle(); };
 const openGenerationOptions = async () => {
   const section = [...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].find((item) => item.textContent?.includes('⚡ 生成方式'));
   if (section?.getAttribute('aria-expanded') === 'false') { await act(async () => section.click()); await settle(); }
@@ -169,14 +170,15 @@ describe('Desktop /battle journey against loopback fixture', () => {
     const pointerRaw = JSON.stringify(pointer); localStorage.setItem(ARENA_HOSTED_RECOVERY_KEYS[product], pointerRaw);
     localStorage.setItem(key, raw); window.location.hash = `#/${product}`; await mount();
     expect(container.textContent).toContain('已恢复本机草稿与原文');
-    expect(button('恢复原服务器战报').disabled).toBe(false); expect(button('检查本机恢复身份').disabled).toBe(false);
+    expect(button('找回上次战报').disabled).toBe(false); expect(button('检查恢复条件')).toBeUndefined();
+    await openRecoveryTools(); expect(button('检查恢复条件').disabled).toBe(false);
     expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS[product])).toBe(pointerRaw);
     expect(button('恢复草稿')).toBeUndefined(); expect(button('生成战报').disabled).toBe(false);
     expect(document.querySelector<HTMLInputElement>('#arena-story-guidance')?.disabled).toBe(false);
     expect(calls()).toHaveLength(0); expect(docs.size).toBe(0);
     expect(mocks.invoke.mock.calls.some(([command]) => ['arena_hosted_stream', 'arena_hosted_control'].includes(command))).toBe(false);
     expect(localStorage.getItem(key)).toBe(raw);
-    await click('导出当前会话');
+    await click('下载会话备份');
     const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
     expect(exported.draft.combatants).toHaveLength(2); expect(exported.result).toMatchObject({ phase: 'failed', rawText: '重启前完整原文', reasoning: '保留思考' });
     expect(exported.generation).toBeNull(); expect(exported.candidates).toBeNull();
@@ -449,7 +451,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
     failSave = false; await click('另存完整历史到本地库'); await click('另存完整历史到本地库'); expect(docs.size).toBe(1);
     const record = [...docs.values()][0]!; expect(record.provenance).toEqual({ kind: 'unsigned' });
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="关闭叙事历史"]')!.click()); await settle();
-    await click('导出当前会话'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]); expect(exported.draft.historyOriginals[0].text).toBe(raw);
+    await click('下载会话备份'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]); expect(exported.draft.historyOriginals[0].text).toBe(raw);
     expect(calls()).toHaveLength(0);
   });
   it('advanced late history upload after target change preserves unsubmitted paste and writes nothing', async () => {
@@ -927,12 +929,12 @@ describe('Desktop Hosted story routes through prepared targets and default binde
     });
     await finishColdPending(outcome);
     expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBe(raw);
-    expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).toContain(original.requestId);
-    expect(button('恢复原服务器战报').disabled).toBe(false);
+    expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).not.toContain(original.requestId);
+    expect(button('找回上次战报').disabled).toBe(false);
     vi.mocked(window.confirm).mockReturnValue(false); await click('生成战报');
     expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('已有服务器恢复记录'));
     expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBe(raw); expect(streamCommands('create-json')).toHaveLength(0);
-    vi.mocked(window.confirm).mockReturnValue(true); await click('恢复原服务器战报');
+    vi.mocked(window.confirm).mockReturnValue(true); await click('找回上次战报');
     expect(mocks.invoke.mock.calls.filter(([command, args]) => command === 'arena_hosted_control' && args.request.operation === 'lookup-request')).toEqual([
       ['arena_hosted_control', { request: { operation: 'lookup-request', product: 'battle', requestId: original.requestId, actor: original.actor, restoreSession: true } }],
     ]);
@@ -952,10 +954,10 @@ describe('Desktop Hosted story routes through prepared targets and default binde
     expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBeNull();
     expect(container.textContent).toContain('原生槽仍保留另一恢复身份'); expect(container.textContent).toContain('不能保证本产品已可新建');
     expect(streamCommands('create-json')).toHaveLength(0); expect(requests('create-story-stream')).toHaveLength(1);
-    expect(button('检查本机恢复身份').disabled).toBe(false); await click('检查本机恢复身份');
-    expect(container.querySelector('[aria-label="本机恢复身份诊断"]')?.textContent).toContain(originalRequestId);
+    await openRecoveryTools(); expect(button('检查恢复条件').disabled).toBe(false); await click('检查恢复条件');
+    expect(container.querySelector('[aria-label="本机恢复身份诊断"]')?.textContent).not.toContain(originalRequestId);
     vi.mocked(window.confirm).mockReturnValue(false); await click('生成战报');
-    expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining(originalRequestId));
+    expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('放弃找回上次战报'));
     expect(streamCommands('create-json')).toHaveLength(0); expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBeNull();
   });
 
@@ -1537,5 +1539,36 @@ describe('Desktop Arena character-library parity', () => {
     expect(container.textContent).toContain('暂时没有可随机匹配的公开角色');
     expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.combatants).toHaveLength(2);
     expect(button('随机匹配角色').disabled).toBe(false); expect(calls()).toHaveLength(0);
+  });
+});
+
+describe('session backup feedback in the real route', () => {
+  it.each(['battle', 'arena'] as const)('/%s explains backup contents and reports only download initiation', async product => {
+    window.location.hash = `#/${product}`;
+    const key = product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
+    localStorage.setItem(key, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
+    await mount();
+    expect(container.querySelector('[aria-label="会话备份"]')?.textContent).toContain('角色、输入草稿、已收到的结果和恢复状态');
+    await click('下载会话备份');
+    expect(mocks.download).toHaveBeenLastCalledWith('arena-complete.json', expect.any(String), 'application/json');
+    expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).draft.combatants).toHaveLength(2);
+    expect(container.textContent).toContain('已发起下载，请查看系统保存提示或下载目录');
+    expect(container.textContent).toContain('无法确认文件是否已保存'); expect(calls()).toHaveLength(0);
+    mocks.download.mockImplementationOnce(() => { throw new Error('private OS diagnostic'); });
+    await click('下载会话备份');
+    expect(container.textContent).toContain('未能发起下载，当前内容仍保留');
+    expect(container.textContent).not.toContain('已发起下载'); expect(container.textContent).not.toContain('private OS diagnostic');
+    expect(calls()).toHaveLength(0);
+  });
+  it('shows protected local-draft problems above disabled controls and keeps the original exportable', async () => {
+    const original = '{"synthetic":"unfinished draft"'; localStorage.setItem(ARENA_DRAFT_KEY, original);
+    await mount();
+    const notice = container.querySelector('[aria-label="本机草稿提示"]')!;
+    expect(notice.textContent).toContain('旧草稿无法读取，原数据已保留');
+    expect(notice.compareDocumentPosition(button('生成战报')) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    await click('下载会话备份', notice);
+    expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).protectedLocalDraft.raw).toBe(original);
+    expect(localStorage.getItem(ARENA_DRAFT_KEY)).toBe(original); expect(calls()).toHaveLength(0);
+
   });
 });

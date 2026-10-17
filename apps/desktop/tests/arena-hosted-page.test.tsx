@@ -105,7 +105,8 @@ beforeAll(async () => {
 afterAll(async () => { await new Promise<void>(done => server.close(() => done())); });
 const button = (text: string, scope: ParentNode = document) => [...scope.querySelectorAll<HTMLButtonElement>('button')].find(entry => entry.textContent?.trim() === text);
 const settle = async () => { await act(async () => { await new Promise(done => setTimeout(done, 25)); }); };
-const click = async (text: string, scope?: ParentNode) => { expect(button(text, scope), text).toBeTruthy(); await act(async () => button(text, scope)!.click()); await settle(); };
+const openRecoveryTools = async () => { const toggle = button('问题排查'); if (toggle?.getAttribute('aria-expanded') === 'false') { await act(async () => toggle.click()); await settle(); } };
+const click = async (text: string, scope?: ParentNode) => { if (text === '检查恢复条件') await openRecoveryTools(); expect(button(text, scope), text).toBeTruthy(); await act(async () => button(text, scope)!.click()); await settle(); };
 const openSection = async (name: string) => {
   const section = [...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].find(item => item.textContent?.includes(name));
   if (section?.getAttribute('aria-expanded') === 'false') { await act(async () => section.click()); await settle(); }
@@ -365,11 +366,11 @@ describe('Hosted recovery and interruption ownership through the real route', ()
     // A cold pointer may retain a terminal/cancel-unconfirmed cursor while its body draft is unavailable.
     localStorage.setItem(ARENA_HOSTED_RECOVERY_KEYS[product], JSON.stringify({ ...saved, state: 'cancel_unconfirmed', cursor: '99-0' }));
     accountId = actor ?? 99; resetDesktopCloudSessionStoreForTests(); await mount(product); expect(streamRequests).toHaveLength(1);
-    expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).toContain(actor === null ? '原匿名身份' : '账号 42');
-    await click('恢复原服务器战报'); expect(controlRequests).toHaveLength(0); expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining(actor === null ? '以原匿名身份' : '以原账号'));
+    expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).toContain(actor === null ? '本机保留的上次访问身份' : '上次生成时的账号');
+    await click('找回上次战报'); expect(controlRequests).toHaveLength(0); expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining(actor === null ? '以原匿名身份' : '以原账号'));
     vi.mocked(window.confirm).mockReturnValue(true);
     const beforeRecovery = mocks.invoke.mock.calls.length;
-    await act(async () => { button('恢复原服务器战报')!.click(); button('恢复原服务器战报')!.click(); });
+    await act(async () => { button('找回上次战报')!.click(); button('找回上次战报')!.click(); });
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     expect(streamRequests.map(request => request.operation)).toEqual(['create-stream', 'resume']);
     expect(controlRequests).toEqual([{ operation: 'lookup-request', product, requestId: saved.requestId, actor: saved.actor, restoreSession: true }]);
@@ -388,7 +389,7 @@ describe('Hosted recovery and interruption ownership through the real route', ()
     accountId = 42; saveDraft(draft()); await mount(); await restoreAndSelectStream(); await click('生成战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     await act(async () => root.unmount()); root = createRoot(container); localStorage.removeItem(ARENA_DRAFT_KEY); accountId = 43; resetDesktopCloudSessionStoreForTests(); await mount();
-    vi.mocked(window.confirm).mockReturnValue(true); await click('恢复原服务器战报');
+    vi.mocked(window.confirm).mockReturnValue(true); await click('找回上次战报');
     expect(container.textContent).toContain('请先登录原生成账号'); expect(controlRequests).toHaveLength(0); expect(streamRequests).toHaveLength(1);
   });
 
@@ -480,7 +481,7 @@ describe('Hosted non-stream lifecycle through the real route', () => {
     expect(pointer).toMatchObject({ version: 3, delivery: 'non-stream', actor: { kind: 'account', expectedUserId: 42 } });
     const originalRaw = output.text;
     await act(async () => root.unmount()); root = createRoot(container); localStorage.removeItem(ADVANCED_ARENA_DRAFT_KEY);
-    await mount('arena'); vi.mocked(window.confirm).mockReturnValue(true); await click('恢复原服务器战报');
+    await mount('arena'); vi.mocked(window.confirm).mockReturnValue(true); await click('找回上次战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('已恢复原任务可用正文与终态'); });
     expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('原完整非流式 JSON'));
     expect(streamRequests.map(request => request.operation)).toEqual(['create-json', 'resume']);
@@ -522,7 +523,7 @@ describe('Hosted preparation fails closed in the shared route', () => {
     await act(async () => { button('生成战报')!.click(); button('生成战报')!.click(); });
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('恢复指针保存失败'); });
     expect(streamRequests).toHaveLength(0); expect(controlRequests).toHaveLength(0); expect(httpRequests).toHaveLength(0); expect(activeCloseHandles).toBe(1);
-    expect(button('生成战报')!.disabled).toBe(false); await click('导出当前会话');
+    expect(button('生成战报')!.disabled).toBe(false); await click('下载会话备份');
     const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]); expect(exported.draft.combatants).toEqual(draft().combatants); expect(exported.hostedRecovery.saved).toBe(false);
   });
   it('late StrictMode close registrations block preparation until ready, then leave exactly one active handle', async () => {
@@ -549,7 +550,7 @@ describe('Read-only Native recovery diagnosis through the real route', () => {
   });
   const preparePage = async (product: Product = 'battle', raw: string | null = corruptRaw) => {
     if (raw !== null) localStorage.setItem(ARENA_HOSTED_RECOVERY_KEYS[product], raw);
-    saveDraft({ ...draft(), generationMode: 'stream' }, product); await mount(product);
+    saveDraft({ ...draft(), generationMode: 'stream' }, product); await mount(product); await openRecoveryTools();
   };
   const expectReadOnly = () => {
     expect(streamRequests).toHaveLength(0); expect(controlRequests).toHaveLength(0); expect(httpRequests).toHaveLength(0);
@@ -569,23 +570,23 @@ describe('Read-only Native recovery diagnosis through the real route', () => {
         return realSet.call(this, name, value);
       });
       const remove = vi.spyOn(Storage.prototype, 'removeItem');
-      expect(button('生成战报')!.disabled).toBe(true); await click('检查本机恢复身份');
+      expect(button('生成战报')!.disabled).toBe(true); await click('检查恢复条件');
       expect(hintCalls()).toEqual([['arena_hosted_recovery_hint', { request: { product } }]]);
-      expect(diagnosis()?.textContent).toContain(nativeRequestId); expect(diagnosis()?.textContent).toContain(state === 'expired' ? '凭据已到期' : '本机身份可用');
-      expect(diagnosis()?.textContent).toContain('不保证服务器仍保留结果'); expectReadOnly();
+      expect(diagnosis()?.textContent ?? '').not.toContain(nativeRequestId); expect(diagnosis()?.textContent ?? '').toContain(state === 'expired' ? '上次访问身份已过期' : '已找到上次访问身份');
+      expect(diagnosis()?.textContent ?? '').toContain(state === 'expired' ? '可能无法找回服务器内容' : '能否取回内容还需服务器确认'); expectReadOnly();
       expect(set.mock.calls.filter(([name]) => name === key)).toEqual([]); expect(remove.mock.calls.filter(([name]) => name === key)).toEqual([]);
       expect(window.confirm).not.toHaveBeenCalled(); expect(localStorage.getItem(key)).toBe(corruptRaw); expect(button('生成战报')!.disabled).toBe(false);
 
       await click('生成战报'); expectReadOnly(); expect(localStorage.getItem(key)).toBe(corruptRaw); expect(writes).toEqual([]);
       expect(window.confirm).toHaveBeenCalledOnce(); const consent = vi.mocked(window.confirm).mock.calls[0]![0]!;
-      expect(consent).toContain(nativeRequestId); expect(consent).toContain('放弃其本机恢复'); expect(consent).toContain('不会停止旧服务器任务');
-      expect(consent).toContain('新指针保存成功后替换');
+      expect(consent).not.toContain(nativeRequestId); expect(consent).toContain('放弃找回上次战报'); expect(consent).toContain('旧服务器任务不会停止');
+      expect(consent).toContain('新的恢复记录保存成功后才会替换原记录');
 
       vi.mocked(window.confirm).mockReturnValue(true); failPointerWrite = true; await click('生成战报');
       await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('恢复指针保存失败'); });
       expectReadOnly(); expect(localStorage.getItem(key)).toBe(corruptRaw); expect(writes).toEqual([]);
-      expect(button('生成战报')!.disabled).toBe(true); expect(diagnosis()?.textContent).not.toContain(nativeRequestId);
-      failPointerWrite = false; await click('检查本机恢复身份'); await click('生成战报');
+      expect(button('生成战报')!.disabled).toBe(true); expect(diagnosis()?.textContent ?? '').not.toContain(nativeRequestId);
+      failPointerWrite = false; await click('检查恢复条件'); await click('生成战报');
       await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
       expect(streamRequests).toHaveLength(1); expect(streamRequests[0]).toMatchObject({ operation: 'create-stream', product, replaceRequestId: nativeRequestId });
       expect(streamRequests[0]!.requestId).not.toBe(nativeRequestId); expect(writes[0]?.previous).toBe(corruptRaw);
@@ -600,16 +601,16 @@ describe('Read-only Native recovery diagnosis through the real route', () => {
   it('replaces the exact Native identity independently of a different valid local pointer, then invalidates that hint when a new pointer owns recovery', async () => {
     const original = validPointer('battle', 'local-original-request-0002');
     mocks.hint.mockResolvedValue({ product: 'battle', state: 'available', requestId: nativeRequestId, actorKind: 'anonymous' });
-    await preparePage('battle', JSON.stringify(original)); await click('检查本机恢复身份');
-    expectReadOnly(); expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).toContain(original.requestId);
-    expect(diagnosis()?.textContent).toContain(nativeRequestId); expect(JSON.parse(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)!)).toEqual(original);
-    await click('生成战报'); expectReadOnly(); expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining(nativeRequestId));
+    await preparePage('battle', JSON.stringify(original)); await click('检查恢复条件');
+    expectReadOnly(); expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).not.toContain(original.requestId);
+    expect(diagnosis()?.textContent ?? '').not.toContain(nativeRequestId); expect(JSON.parse(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)!)).toEqual(original);
+    await click('生成战报'); expectReadOnly(); expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('放弃找回上次战报'));
     vi.mocked(window.confirm).mockReturnValue(true); await click('生成战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     expect(streamRequests).toHaveLength(1); expect(streamRequests[0]).toMatchObject({ operation: 'create-stream', replaceRequestId: nativeRequestId });
     const newRequestId = streamRequests[0]!.requestId; expect(newRequestId).not.toBe(original.requestId); expect(newRequestId).not.toBe(nativeRequestId);
     expect(JSON.parse(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)!).requestId).toBe(newRequestId);
-    expect(diagnosis()?.textContent).not.toContain(nativeRequestId); expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).toContain(newRequestId);
+    expect(diagnosis()?.textContent ?? '').not.toContain(nativeRequestId); expect(container.querySelector('[aria-label="服务器恢复记录"]')?.textContent).not.toContain(newRequestId);
     await click('生成战报'); await vi.waitFor(async () => { await settle(); expect(streamRequests).toHaveLength(2); expect(container.textContent).toContain('服务器生成完成'); });
     expect(streamRequests[1]).toMatchObject({ operation: 'create-stream', replaceRequestId: newRequestId });
     expect(streamRequests[1]!.requestId).not.toBe(newRequestId); expect(hintCalls()).toHaveLength(1); expect(controlRequests).toHaveLength(0);
@@ -620,50 +621,50 @@ describe('Read-only Native recovery diagnosis through the real route', () => {
     let resolveHint!: (value: DesktopArenaHostedRecoveryHint) => void;
     mocks.hint.mockReturnValue(new Promise<DesktopArenaHostedRecoveryHint>(resolve => { resolveHint = resolve; }));
     await preparePage(); const key = ARENA_HOSTED_RECOVERY_KEYS.battle;
-    await act(async () => { button('检查本机恢复身份')!.click(); button('检查本机恢复身份')!.click(); }); await settle();
-    expect(hintCalls()).toHaveLength(1); expect(button('检查本机恢复身份')!.disabled).toBe(true); expect(button('生成战报')!.disabled).toBe(true);
+    await act(async () => { button('检查恢复条件')!.click(); button('检查恢复条件')!.click(); }); await settle();
+    expect(hintCalls()).toHaveLength(1); expect(button('检查恢复条件')!.disabled).toBe(true); expect(button('生成战报')!.disabled).toBe(true);
     await click('生成战报'); expectReadOnly(); expect(window.confirm).not.toHaveBeenCalled(); expect(localStorage.getItem(key)).toBe(corruptRaw);
     await act(async () => resolveHint({ product: 'battle', state: 'available', requestId: nativeRequestId, actorKind: 'anonymous' })); await settle();
-    expect(diagnosis()?.textContent).toContain(nativeRequestId); expect(button('检查本机恢复身份')!.disabled).toBe(false); expect(button('生成战报')!.disabled).toBe(false);
+    expect(diagnosis()?.textContent ?? '').not.toContain(nativeRequestId); expect(button('检查恢复条件')!.disabled).toBe(false); expect(button('生成战报')!.disabled).toBe(false);
     expect(hintCalls()).toHaveLength(1); expectReadOnly(); expect(activeCloseHandles).toBe(1);
   });
 
   it.each(['account', 'target'] as const)('a changed %s scope discards a late diagnosis without publishing its identity or clearing a newer flight', async kind => {
     accountId = 42; const resolvers: ((value: DesktopArenaHostedRecoveryHint) => void)[] = [];
     mocks.hint.mockImplementation(() => new Promise<DesktopArenaHostedRecoveryHint>(resolve => { resolvers.push(resolve); }));
-    await preparePage(); await click('检查本机恢复身份'); expect(hintCalls()).toHaveLength(1);
+    await preparePage(); await click('检查恢复条件'); expect(hintCalls()).toHaveLength(1);
     if (kind === 'account') await act(async () => { await getDesktopCloudSessionStore().signOut(); });
     else await act(async () => getDesktopAiConfigStore().selectProviderTarget({ kind: 'preset', providerId: 'deepseek' }));
-    await settle(); expect(button('检查本机恢复身份')!.disabled).toBe(false); await click('检查本机恢复身份'); expect(hintCalls()).toHaveLength(2);
+    await settle(); await openRecoveryTools(); expect(button('检查恢复条件')!.disabled).toBe(false); await click('检查恢复条件'); expect(hintCalls()).toHaveLength(2);
     await act(async () => resolvers[0]!({ product: 'battle', state: 'available', requestId: nativeRequestId, actorKind: 'account' })); await settle();
-    expect(diagnosis()?.textContent).not.toContain(nativeRequestId); expect(button('检查本机恢复身份')!.disabled).toBe(true); expect(button('生成战报')!.disabled).toBe(true);
-    await click('检查本机恢复身份'); expect(hintCalls()).toHaveLength(2);
+    expect(diagnosis()?.textContent ?? '').not.toContain(nativeRequestId); expect(button('检查恢复条件')!.disabled).toBe(true); expect(button('生成战报')!.disabled).toBe(true);
+    await click('检查恢复条件'); expect(hintCalls()).toHaveLength(2);
     await act(async () => resolvers[1]!({ product: 'battle', state: 'none' })); await settle();
-    expect(diagnosis()?.textContent).toContain('未找到可显示的原生恢复记录'); expect(diagnosis()?.textContent).not.toContain(nativeRequestId);
-    expect(button('检查本机恢复身份')!.disabled).toBe(false); expect(button('生成战报')!.disabled).toBe(true);
+    expect(diagnosis()?.textContent ?? '').toContain('本机未找到当前身份的恢复记录'); expect(diagnosis()?.textContent ?? '').not.toContain(nativeRequestId);
+    expect(button('检查恢复条件')!.disabled).toBe(false); expect(button('生成战报')!.disabled).toBe(true);
     expectReadOnly(); expect(window.confirm).not.toHaveBeenCalled(); expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBe(corruptRaw); expect(activeCloseHandles).toBe(1);
   });
 
   it('refuses an approved stale repair when another local writer changes the original pointer after diagnosis', async () => {
     mocks.hint.mockResolvedValue({ product: 'battle', state: 'available', requestId: nativeRequestId, actorKind: 'anonymous' });
-    await preparePage(); await click('检查本机恢复身份');
+    await preparePage(); await click('检查恢复条件');
     const key = ARENA_HOSTED_RECOVERY_KEYS.battle, newerRaw = JSON.stringify(validPointer('battle', 'newer-local-request-0003'));
     localStorage.setItem(key, newerRaw); const set = vi.spyOn(Storage.prototype, 'setItem'), remove = vi.spyOn(Storage.prototype, 'removeItem');
     vi.mocked(window.confirm).mockReturnValue(true); await click('生成战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('恢复指针保存失败'); });
     expectReadOnly(); expect(localStorage.getItem(key)).toBe(newerRaw); expect(set.mock.calls.filter(([name]) => name === key)).toEqual([]);
-    expect(remove.mock.calls.filter(([name]) => name === key)).toEqual([]); expect(diagnosis()?.textContent).not.toContain(nativeRequestId); expect(button('生成战报')!.disabled).toBe(true);
+    expect(remove.mock.calls.filter(([name]) => name === key)).toEqual([]); expect(diagnosis()?.textContent ?? '').not.toContain(nativeRequestId); expect(button('生成战报')!.disabled).toBe(true);
   });
 
   it.each(['none', 'unavailable'] as const)('%s diagnosis never invents a replacement identity or unlocks a corrupt pointer', async state => {
-    mocks.hint.mockResolvedValue({ product: 'battle', state }); await preparePage(); await click('检查本机恢复身份');
-    expect(diagnosis()?.textContent).toContain(state === 'none' ? '未找到可显示的原生恢复记录' : '原生恢复凭据无法读取');
-    expect(diagnosis()?.textContent).not.toContain('原生记录：'); expect(diagnosis()?.textContent).not.toContain('untrusted-partial-id');
+    mocks.hint.mockResolvedValue({ product: 'battle', state }); await preparePage(); await click('检查恢复条件');
+    expect(diagnosis()?.textContent ?? '').toContain(state === 'none' ? '本机未找到当前身份的恢复记录' : '暂时无法读取上次访问身份');
+    expect(diagnosis()?.textContent ?? '').not.toContain('原生记录：'); expect(diagnosis()?.textContent ?? '').not.toContain('untrusted-partial-id');
     expect(button('生成战报')!.disabled).toBe(true); vi.mocked(window.confirm).mockReturnValue(true); await click('生成战报');
     expectReadOnly(); expect(window.confirm).not.toHaveBeenCalled(); expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBe(corruptRaw);
     // A clean page can still submit a new intent without fabricating an old request ID; Native owns admission.
     await act(async () => root.unmount()); root = createRoot(container); localStorage.removeItem(ARENA_HOSTED_RECOVERY_KEYS.battle);
-    await mount(); await click('检查本机恢复身份'); expectReadOnly(); await click('生成战报');
+    await mount(); await click('检查恢复条件'); expectReadOnly(); await click('生成战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     expect(streamRequests).toHaveLength(1); expect(streamRequests[0]).toMatchObject({ operation: 'create-stream', product: 'battle' });
     // Optional undefined fields survive the in-process Zod parse but are absent from the Native JSON payload.

@@ -1182,3 +1182,27 @@ describe('Desktop member full shared editor journey', () => {
   });
 
 });
+
+it('keeps top-page draft repair and discard constrained while allowing a read-only backup', async () => {
+  seedOrdinary(); await mount(); await open();
+  const create = await startAction('创建多人房间', 'create'); const authority = await confirmMembership(create, 'host');
+  await publishOnline(authority); const before = ordinarySnapshot();
+  const realSet = Storage.prototype.setItem;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+    if (key === ADVANCED_ARENA_DRAFT_KEY) throw new DOMException('synthetic quota full', 'QuotaExceededError');
+    return realSet.call(this, key, value);
+  });
+  await change('#room-host-draft-arena-story-guidance', '保留房主未存引导');
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="本机草稿提示"]')?.textContent).toContain('页面草稿保存失败'));
+  const notice = container.querySelector('[aria-label="本机草稿提示"]')!;
+  expect(notice.closest('[hidden]')).toBeNull();
+  expect(requiredButton('重试保存草稿', notice).disabled).toBe(true);
+  expect(requiredButton('清除草稿', notice).disabled).toBe(true);
+  expect(requiredButton('下载会话备份', notice).disabled).toBe(false);
+  vi.mocked(window.confirm).mockClear();
+  await click('清除草稿', notice); await click('重试保存草稿', notice);
+  expect(window.confirm).not.toHaveBeenCalled(); expect(ordinarySnapshot()).toEqual(before);
+  expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(reportText);
+  expect((container.querySelector('#room-host-draft-arena-story-guidance') as HTMLInputElement).value).toBe('保留房主未存引导');
+  assertConstrained();
+});

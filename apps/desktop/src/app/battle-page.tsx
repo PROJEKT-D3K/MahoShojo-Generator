@@ -4,6 +4,8 @@ import { useRouter } from '@tanstack/react-router';
 import type { DesktopArenaHostedRecoveryHint } from '@mahoshojo/contracts/desktop-arena-hosted';
 import type { ArenaHostedRecoveryReplacement } from '../features/arena/hosted-recovery';
 import { readArenaHostedRecoveryHint } from '../platform/arena-hosted-bridge';
+import { getArenaHostedErrorDiagnostic } from '../features/arena/hosted-json';
+import { ArenaBackupNotice, DesktopArenaRecoveryControls, arenaRecoveryStatusLabel, buildArenaSafeDiagnostic, type ArenaBackupFeedback } from '../features/arena/recovery-controls';
 import { ARENA_CANONICAL_CAPABILITIES } from '@mahoshojo/contracts/arena-capabilities';
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { SCENARIO_PRESET_LIST } from '@mahoshojo/domain/scenario-presets';
@@ -13,7 +15,7 @@ import { buildArenaMaterialState, type ArenaMaterialState } from '@mahoshojo/dom
 import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-operations';
 import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, ArenaCharacterDatabaseSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
 import { ArenaReportFormatSelectorView, BattleReportCard, StreamingBattleReportCard, CombatantUpdatesPresentation } from '@mahoshojo/ui-web/arena-report';
-import { CardLibraryModal, mapPublicDataCardRowToSourceData, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
+import { Button, CardLibraryModal, mapPublicDataCardRowToSourceData, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { NarrativeHistoryPicker, NarrativeDraftsPanel, NarrativeLegacyDraftsSection } from '@mahoshojo/ui-web/narrative-history';
 import { buildNarrativeDraftArchive, type NarrativeDraft } from '@mahoshojo/domain/narrative-drafts';
 import { AiReasoningPanel, GenerationModeSwitcher, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -117,6 +119,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const [diagnosing, setDiagnosing] = useState(false);
   const diagnosisFlight = useRef<symbol | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [backupFeedback, setBackupFeedback] = useState<ArenaBackupFeedback>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [presetPage, setPresetPage] = useState(1);
   const [languages, setLanguages] = useState([{ code: 'zh-CN', name: '简体中文' }]);
@@ -162,7 +165,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     window.addEventListener('storage', observe);
     return () => window.removeEventListener('storage', observe);
   }, [session, product]);
-  useLayoutEffect(() => { ownerEpoch.current += 1; session.setScope(scope); packageOwner.setScope(scope); aiStore.cancelPreparingGeneration(); setError(null); setImportWarnings([]); setRecoveryHint(null); diagnosisFlight.current = null; setDiagnosing(false); }, [scope, session, aiStore, packageOwner]);
+  useLayoutEffect(() => { ownerEpoch.current += 1; session.setScope(scope); packageOwner.setScope(scope); aiStore.cancelPreparingGeneration(); setError(null); setBackupFeedback(null); setImportWarnings([]); setRecoveryHint(null); diagnosisFlight.current = null; setDiagnosing(false); }, [scope, session, aiStore, packageOwner]);
   // Resolving an initially anonymous account updates the Hosted actor without
   // cancelling unrelated Direct credential preparation at the same target scope.
   useLayoutEffect(() => { storyOwner.setExecutionScope(scope, cloudState.bootstrapped ? cloudState.account ? { kind: 'account', expectedUserId: cloudState.account.userId } : { kind: 'anonymous' } : null); }, [scope, cloudState.bootstrapped, cloudState.account?.userId, storyOwner]);
@@ -359,7 +362,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     const repair = hostedTarget ? repairHint?.repair : undefined;
     const previousRequest = hostedTarget ? repairHint && 'requestId' in repairHint.value ? repairHint.value.requestId : recovery.pointer?.requestId : undefined;
     if (hostedTarget && recovery.blocked && !repair) { setError(recovery.error); return; }
-    if (previousRequest && !window.confirm(repair ? `本机诊断到原请求 ${previousRequest}。确认放弃其本机恢复并开始新请求？不会停止旧服务器任务；本机原指针仅在新指针保存成功后替换。` : '已有服务器恢复记录。确认以新请求替换？这会放弃原记录的页面恢复入口，不会停止旧服务器任务。')) return;
+    if (previousRequest && !window.confirm(repair ? '本机找到了上次服务器生成的恢复记录。确认放弃找回上次战报并开始新生成？旧服务器任务不会停止，新的恢复记录保存成功后才会替换原记录。' : '已有服务器恢复记录。确认以新请求替换？这会放弃原记录的页面恢复入口，不会停止旧服务器任务。')) return;
     if (state.rawText && !window.confirm('开始新生成将替换当前结果，请先保存或完整导出。继续？')) return;
     const sourceDraft = session.getSnapshot().draft;
     const checked = strictCheckRef.current, strictKey = strictSnapshotKey, strictIntent = strictActiveRef.current, credentialEpoch = cloudStore.getCredentialEpoch();
@@ -437,7 +440,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   };
   const reasoning = state.hosted?.delivery === 'non-stream' && state.report?.aiReasoning ? state.report.aiReasoning : state.reasoning ? { status: state.phase === 'generating' ? 'thinking' as const : 'done' as const, source: 'provider' as const, text: state.reasoning } : null;
   const download = (filename: string, text: string, mimeType: string) => { try { downloadTextFile(filename, text, mimeType); } catch (cause) { reportError(cause); } };
-  const exportAll = () => download('arena-complete.json', session.exportDocument(), 'application/json');
+  const exportAll = () => {
+    setBackupFeedback(null);
+    try { downloadTextFile('arena-complete.json', session.exportDocument(), 'application/json'); setBackupFeedback('download-started'); }
+    catch { setBackupFeedback('failed'); }
+  };
+  const safeDiagnostic = buildArenaSafeDiagnostic({ phase: state.phase, location: state.generation ? state.generation.intent.mode === 'hosted' ? 'server' : 'client' : null, hosted: state.hosted, response: getArenaHostedErrorDiagnostic(state.hosted) });
   const exportNarrativeDrafts = (drafts: readonly NarrativeDraft[]) => download('arena-narrative-drafts.json', JSON.stringify(buildNarrativeDraftArchive(drafts), null, 2), 'application/json');
   const draftArchiveAction = (action: () => { ok: boolean; error?: string }) => {
     if (session.narrativeDrafts.getState().scope !== narrativeScope || cloudStore.getCredentialEpoch() !== accountCredentialEpoch) return { ok: false as const, error: '账号已切换，请重新操作。' };
@@ -452,14 +460,13 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     onDelete: (ids: readonly string[]) => draftArchiveAction(() => session.narrativeDrafts.deleteDrafts(ids, narrativeScope)),
   };
   const ranking = state.hosted?.ranking;
-  const hostedSummary = state.hosted ? (({ companion: _companion, ...summary }) => summary)(state.hosted) : null;
   const result = (state.rawText || state.reasoning || state.report) ? <section ref={resultRef} className="mt-6 space-y-4" aria-label="战报结果">
     {state.resultFormat === 'web' ? <><DesktopArenaWebResult key={`${scope}:${state.generation?.intent.requestId ?? 'restored'}`} state={state} owner={packageOwner} disabled={disabled} />{reasoning ? <AiReasoningPanel reasoning={reasoning} /> : null}</> : state.report && state.activeGenerationMode !== 'stream' ? <BattleReportCard report={{ ...state.report, aiReasoning: reasoning }} mode={state.report.mode} ports={{ mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: openContent, downloadMarkdown: (text: string, filename: string) => download(filename, text, 'text/markdown;charset=utf-8') }} />
       : state.markdown && state.activeGenerationMode === 'stream' ? <StreamingBattleReportCard aiReasoning={reasoning} reporterInfo={state.report?.reporterInfo} adjudicationResults={state.generation?.adjudicationResults} content={state.markdown} mode={state.generation?.input.battleMode ?? draft.battleMode} isStreaming={state.phase === 'generating'} onStopGeneration={() => session.cancel()} ports={{ mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: openContent, downloadMarkdown: (text: string, filename: string) => download(filename, text, 'text/markdown;charset=utf-8') }} /> : null}
     {state.resultFormat !== 'web' && !(state.markdown && state.activeGenerationMode === 'stream') && !state.report && reasoning ? <AiReasoningPanel reasoning={reasoning} /> : null}
     <details><summary>{state.hosted ? '服务器收到的正文（控制元数据单独保留）' : '完整原始输出（含元数据）'}</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all">{state.rawText}</pre></details>
     {state.hosted ? <div className="space-y-2" aria-label="服务器生成状态">
-      <p role="status">连接：{state.hosted.connectionState}；{state.hosted.terminal?.event === 'done' || (state.hosted.companionState === 'complete' && state.hosted.serverStatus === 'completed') ? '服务器任务终态' : '最近服务响应状态'}：{state.hosted.serverStatus ?? '尚未确认'}。连接或恢复错误不表示任务已取消。</p>
+      <p role="status">{arenaRecoveryStatusLabel(state.hosted.connectionState)}。连接或恢复失败不表示服务器任务已停止。</p>
       <p role="status" aria-label="本次排位结算反馈">{!state.hosted.ranking ? '本次排位结算结果尚未取得，不能据此判断是否计分。'
         : !state.hosted.ranking.success ? '本次排位结算结果读取失败，是否已计分尚未确认。'
         : state.hosted.ranking.state === 'pending' ? '服务器返回本次排位仍待结算；当前未继续查询。'
@@ -479,7 +486,6 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       {state.hosted.recoveryCredentialState === 'memory-only' ? <p role="alert">匿名恢复凭据保存失败，当前任务可继续；关闭应用后可能无法恢复，请完整导出。</p> : null}
       {state.hosted.validationMessage ? <p role="status">{state.hosted.validationMessage}</p> : null}
       {state.hosted.companionState === 'complete' ? <p role="status">完整非流式报告与附加元数据已保留；服务端判定 {state.hosted.companion?.metadata?.adjudicationResults?.length ?? 0} 条。完整导出包含全部原字段，状态面板不重复展开大体积 JSON。</p> : null}
-      <details><summary>服务器公开元数据与终态</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(state.hosted.delivery === 'non-stream' ? hostedSummary : state.hosted, null, 2)}</pre></details>
     </div> : null}
     {state.hosted && state.phase === 'completed' ? <CombatantUpdatesPresentation
       title="角色更新" description={`可下载/保存本次更新的角色设定（共 ${state.roleUpdates.items.length} 个）`}
@@ -507,6 +513,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       {(state.candidates?.characterEffects.length || session.hasHostedCharacterCopies()) ? <button className={secondary} type="button" disabled={disabled} onClick={() => { void session.save('characters'); }}>另存战后角色副本</button> : null}
       {draft.narrativeHistoryEntries.length ? <button className={secondary} type="button" disabled={disabled} onClick={() => { void session.save('history'); }}>保存叙事历史到本地库</button> : null}
     </div>
+    <ArenaBackupNotice feedback={backupFeedback} />
     {state.saveStatus === 'saved' ? <p role="status">已保存到本地库，可在卡库重新打开。</p> : null}
     {state.saveError ? <p role="alert">{state.saveError}</p> : null}
     {state.narrativeDraftCandidate ? <NarrativeDraftsPanel {...narrativeArchiveControls} drafts={draftArchive.drafts.filter(item => item.requestId === state.narrativeDraftCandidate?.requestId)} candidate={state.narrativeDraftCandidate} status={state.narrativeDraftStatus}
@@ -530,8 +537,14 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
               onExportRaw={raw => download('arena-legacy-narrative-drafts.json', raw, 'application/json')} />}
             renderMarkdown={content => <MarkdownBlock content={content} variant="light" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} />} />
   </>;
+  const sessionNotice = state.pendingRestore || state.draftError || guard.message ? <section aria-label="本机草稿提示" className="my-4 space-y-3 rounded-xl border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+    {state.pendingRestore ? <><p role="status">本机还有上次工作稿，请先恢复再继续编辑。恢复只读取本机内容，不会开始生成。</p><Button disabled={busy || roomState.constrained} onClick={() => { if (!roomOwner.isConstrained()) session.restoreDraft(); }}>恢复草稿</Button><Button variant="danger" disabled={busy || roomState.constrained} onClick={() => { if (!roomOwner.isConstrained() && window.confirm('清除旧草稿？此操作不会删除本地库。')) session.discardDraft(); }}>清除草稿</Button></> : null}
+    {state.draftError ? <><p role="alert">{state.draftError}</p><div className="flex flex-wrap gap-2"><Button disabled={busy || roomState.constrained} onClick={() => { if (!roomOwner.isConstrained()) session.retryDraftSave(); }}>重试保存草稿</Button><Button variant="danger" disabled={busy || roomState.constrained} onClick={() => { if (!roomOwner.isConstrained() && window.confirm('清除旧草稿及当前页面内容？请先导出。')) session.discardDraft(); }}>清除草稿</Button></div></> : null}
+    {guard.message ? <p role="alert">{guard.message}</p> : null}
+    {state.pendingRestore || state.draftError ? <><Button size="sm" onClick={exportAll}>下载会话备份</Button><ArenaBackupNotice feedback={backupFeedback} /></> : null}
+  </section> : null;
   const slots = {
-        header: <BattleLiteHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={300} height={84} alt="魔法少女竞技场" />} description="选择角色，生成属于他们的故事。" helper={product === 'arena' ? '桌面高级单次 · 本机独立工作稿 · 客户端 Direct' : '桌面简洁版 · 本机工作副本 · Direct / 服务器生成'} />,
+        header: <><BattleLiteHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={300} height={84} alt="魔法少女竞技场" />} description="选择角色，生成属于他们的故事。" helper={product === 'arena' ? '桌面高级单次 · 本机独立工作稿 · 客户端 Direct' : '桌面简洁版 · 本机工作副本 · Direct / 服务器生成'} />{sessionNotice}</>,
         rankingLinks: null, pageLinks: product === 'battle' ? <a className="footer-link" href="#/arena" onClick={(event) => { event.preventDefault(); navigateByProductHref(router, '/arena'); }}>高级单次配置</a> : null,
         presets: <PresetGridPicker title="预设角色" presets={PRESET_LIST} currentPage={presetPage} onPageChange={setPresetPage} disabled={disabled} maxSelected={limits.maxCombatants} selectedCountOverride={draft.combatants.length} selectedFilenames={draft.combatants.filter((item) => item.isPreset).map((item) => item.filename)} onToggle={(preset) => togglePreset(preset.filename)} />,
         database: <><ArenaCharacterDatabaseSelector className="!mb-0" title={null} layout={product === 'battle' ? 'column' : 'row'}
@@ -571,24 +584,17 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           <GenerationModeSwitcher optionDescriptions={{ stream: '生成时逐步显示正文；Web 输出仅显示安全源码，隔离运行仍待验。' }} value={draft.generationMode} disabled={disabled} onChange={(generationMode) => update({ generationMode })} helper={hostedTarget ? '流式逐步返回正文；非流式等待完整报告与附加元数据。连接断开只恢复原任务可用内容，停止需服务器确认。' : draft.reportFormat === 'web' ? '两种方式都生成相同 Web 目标；流式期间只显示安全源码，不执行内容。' : '非流式输出结构化战报；流式逐步显示 Markdown。'} />
         </>,
         actions: <>
-          {state.pendingRestore ? <p role="status">发现本机草稿。<button type="button" className={secondary} onClick={() => session.restoreDraft()}>恢复草稿</button><button type="button" className={secondary} onClick={() => { if (window.confirm('清除旧草稿？此操作不会删除本地库。')) session.discardDraft(); }}>清除草稿</button></p> : null}
           <button type="button" className={generationSubmitClassName} disabled={disabled || !strictReady || !!hostedUnavailable || !!target.unavailableReason || !!readinessMessage || (hostedTarget && recovery.blocked && !repairHint)} onClick={generate}>生成战报</button>
           {busy && (!storyOwner.isBusy() || !storyState.hosted?.busy || storyState.hosted.busy === 'model') ? <button type="button" className={secondary} disabled={state.saving || packageState.busy} onClick={() => { aiStore.cancelPreparingGeneration(); ownerEpoch.current += 1; if (storyOwner.isBusy()) storyOwner.cancel(); else session.cancel(); }}>{storyOwner.isBusy() ? storyState.hosted?.busy === 'model' ? '请求服务器停止' : '取消生成' : state.generation?.intent.mode === 'hosted' || state.hosted ? '请求服务器停止' : '取消生成'}</button> : null}
-          {recovery.pointer ? <section aria-label="服务器恢复记录" className="space-y-2"><p>原服务器请求：{recovery.pointer.requestId} · {recovery.pointer.actor.kind === 'anonymous' ? '原匿名身份' : `账号 ${recovery.pointer.actor.expectedUserId}`} · {recovery.pointer.state}</p>
-            <button type="button" className={secondary} disabled={disabled || !cloudState.bootstrapped} onClick={restoreHosted}>恢复原服务器战报</button>
-</section> : null}
-          {recovery.error ? <p role="alert">{recovery.error}{recovery.blocked ? <button type="button" className={secondary} disabled={disabled} onClick={() => { if (window.confirm('清除无法读取的原恢复指针？不会停止服务器任务。')) session.hostedRecovery.discard(); }}>清除损坏恢复指针</button> : null}</p> : null}
-          {hostedTarget || recovery.pointer || recovery.blocked ? <section aria-label="本机恢复身份诊断" className="space-y-2">
-            <button type="button" className={secondary} disabled={disabled || !cloudState.bootstrapped} onClick={() => { void diagnoseRecovery(); }}>检查本机恢复身份</button>
-            {currentHint ? <p role="status">{currentHint.value.state === 'none' ? '当前身份下未找到可显示的原生恢复记录；这不证明服务器没有任务。' : currentHint.value.state === 'unavailable' ? '原生恢复凭据无法读取，无法确认原请求；不会清除凭据或猜测身份。' : <>原生记录：{currentHint.value.requestId} · {currentHint.value.actorKind === 'anonymous' ? '原匿名身份' : '当前账号'} · {currentHint.value.state === 'expired' ? '凭据已到期' : '本机身份可用'}。此提示不保证服务器仍保留结果。点击生成时可明确确认放弃此记录的本机恢复，不会停止服务器任务。</>}</p> : null}
-          </section> : null}
+          <DesktopArenaRecoveryControls scopeKey={`${scope}:${state.generation?.intent.requestId ?? state.hostedGenerationId ?? 'draft'}`} pointer={recovery.pointer} showRecoveryCheck={hostedTarget || !!recovery.pointer || recovery.blocked}
+            recoveryError={recovery.error} blocked={recovery.blocked} disabled={disabled} identityReady={cloudState.bootstrapped} diagnosing={diagnosing}
+            hint={currentHint?.value ?? null} diagnostic={safeDiagnostic} backupFeedback={backupFeedback} onRestore={restoreHosted} onDiagnose={() => { void diagnoseRecovery(); }}
+            onDiscard={() => { if (window.confirm('清除无法读取的本机恢复记录？不会停止服务器任务，也不会清除上次访问身份。')) session.hostedRecovery.discard(); }} onExport={exportAll} />
           {state.phase === 'generating' && state.hosted?.softTimeoutWarning ? <p role="status">{state.hosted.softTimeoutWarning} 此提示不会自动停止或重新创建请求。</p> : null}
           {hostedUnavailable ? <p role="status">{hostedUnavailable}</p> : null}
-          <button type="button" className={secondary} onClick={() => { void exportAll(); }}>导出当前会话</button>
-          {state.draftError ? <p role="alert">{state.draftError}<button type="button" disabled={busy} onClick={() => session.retryDraftSave()}>重试保存草稿</button><button type="button" disabled={busy} onClick={() => { if (window.confirm('清除旧草稿及当前页面内容？请先导出。')) session.discardDraft(); }}>清除草稿</button></p> : null}
           {readinessMessage ? <p>{readinessMessage}</p> : null}
           {importWarnings.length ? <ul role="status">{importWarnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
-          {error || guard.message ? <p role="alert">{error ?? guard.message}</p> : null}
+          {error ? <p role="alert">{error}</p> : null}
           {state.message ? <p role="status">{state.message}</p> : null}
         </>,
         community: null, result, storySession: <DesktopArenaStoryControls owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={strictActive ? '请先退出严格排位准备，再生成连续故事。' : hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
@@ -596,7 +602,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         footer: <ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />,
   };
   return <>
-    {product === 'arena' ? <AdvancedArenaPageView header={<AdvancedArenaHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} description="桌面高级单次 · 角色、主辅情景与故事设定" guideChildren={<p>配置输入后生成单次战报。此页使用独立本机草稿，支持客户端 Direct、官方服务器流式/非流式报告与 Web 源码生成/验证/导出；角色更新遵循服务器冻结权限；线性连续故事使用本机独立目录；隔离运行和插图尚未开放。<button className="footer-link" type="button" onClick={() => navigateByProductHref(router, '/battle')}>前往简洁版</button></p>} />} beforeWorkspace={<><DesktopArenaRoomPanel languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
+    {product === 'arena' ? <AdvancedArenaPageView header={<AdvancedArenaHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} description="桌面高级单次 · 角色、主辅情景与故事设定" guideChildren={<p>配置输入后生成单次战报。此页使用独立本机草稿，支持客户端 Direct、官方服务器流式/非流式报告与 Web 源码生成/验证/导出；角色更新遵循服务器冻结权限；线性连续故事使用本机独立目录；隔离运行和插图尚未开放。<button className="footer-link" type="button" onClick={() => navigateByProductHref(router, '/battle')}>前往简洁版</button></p>} />} beforeWorkspace={<>{sessionNotice}<DesktopArenaRoomPanel languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
       {roomState.memberModel && memberWorkspaceSession ? <DesktopRoomMemberWorkspace owner={roomOwner} model={roomState.memberModel} session={memberWorkspaceSession} languages={languages} /> : null}
       {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained}><ArenaEditorWorkspaceLayout disabled={disabled} sections={buildArenaEditorSections([
         { kind: 'presetCharacters', description: '选择内置角色', defaultOpen: true, content: slots.presets },
