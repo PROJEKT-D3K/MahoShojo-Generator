@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { authStorage } from '@/lib/auth';
 import { AUTH_STORAGE_KEY } from '@/lib/auth-identity';
-import { buildGenerationApiHeaders } from '@/lib/hono-api-client';
+import { buildGenerationApiHeaders, createGenerationApiIntent } from '@/lib/hono-api-client';
+import { honoApiConfig } from '@/config/hono-api';
+import { AI_META_REQUEST_HEADER, AI_META_REQUEST_VALUE } from '@/lib/client/read-json-with-ai-meta';
+
+const originalHonoConfig = { ...honoApiConfig };
 
 const verified = {
   success: true,
@@ -28,7 +32,40 @@ beforeEach(() => {
 
 afterEach(() => {
   authStorage.clearAuth();
+  Object.assign(honoApiConfig, originalHonoConfig);
   vi.unstubAllGlobals();
+});
+
+describe('creation channels delegate request identity to the intent', () => {
+  const channels = [
+    ['/api/generate-magical-girl', false],
+    ...['generate-scenario', 'generate-free', 'generate-canshou', 'generate-magical-girl-details', 'creator/generate', 'generate-sublimation']
+      .flatMap((path) => [[`/api/${path}`, false], [`/api/${path}-stream?format=sse`, true]]),
+  ] as Array<[string, boolean]>;
+
+  it.each(channels)('%s retains its special headers, verifies once and never replays a failed POST', async (path, stream) => {
+    honoApiConfig.enabled = false;
+    honoApiConfig.routingMode = 'static-next';
+    const verify = vi.fn(async () => Response.json({ success: false }, { status: 401 }));
+    const business = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ error: 'synthetic unavailable' }, { status: 503 }));
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => String(input) === '/api/auth/verify' ? verify() : business(input, init)));
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (stream) headers.Accept = 'text/event-stream';
+    else if (path !== '/api/generate-magical-girl') headers[AI_META_REQUEST_HEADER] = AI_META_REQUEST_VALUE;
+    const intent = createGenerationApiIntent();
+
+    await expect(intent.dispatch(path, { method: 'POST', headers, body: '{"fixture":true}' }))
+      .rejects.toMatchObject({ code: 'AMBIGUOUS_OPERATION_OUTCOME' });
+    await expect(intent.dispatch(path, { method: 'POST' })).rejects.toMatchObject({ code: 'GENERATION_INTENT_ALREADY_DISPATCHED' });
+
+    expect(verify).toHaveBeenCalledOnce();
+    expect(business).toHaveBeenCalledOnce();
+    const [target, init] = business.mock.calls[0]!;
+    expect(target).toBe(path);
+    expect(init?.body).toBe('{"fixture":true}');
+    expect(init?.credentials).toBe('same-origin');
+    expect(Object.fromEntries(new Headers(init?.headers))).toEqual(Object.fromEntries(new Headers(headers)));
+  });
 });
 
 const mockVerify = (response: () => Promise<Response>) => {

@@ -83,7 +83,6 @@ import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import { getAnswerLimitInfo, isAnswerOverLimit, QUESTIONNAIRE_NATIVE_MAX_ANSWER_CHARS } from '@/lib/questionnaire-limits';
 import { exceedsUtf8ByteLimit } from '@/lib/data-card-size';
-import { authStorage } from '@/lib/auth';
 import { useGenerationApiIntentLatch } from '@/lib/use-generation-api-intent-latch';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { buildCustomProviderRequestPayload } from '@/lib/ai/custom-provider';
@@ -1273,10 +1272,8 @@ export const DetailsPage: React.FC = () => {
         ? '/api/generate-magical-girl-details-stream?format=sse'
         : '/api/generate-magical-girl-details';
 
-      const activityHeaders = await authStorage.getActivityHeaders();
       const requestHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
-        ...activityHeaders,
       };
       if (generationMode === 'stream') {
         requestHeaders.Accept = 'text/event-stream';

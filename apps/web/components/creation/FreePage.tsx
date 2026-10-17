@@ -36,7 +36,6 @@ import { readJsonOrTextFromResponse, resolveApiErrorMessage } from '@/lib/client
 import { AI_META_REQUEST_HEADER, AI_META_REQUEST_VALUE, readJsonWithAiMeta } from '@/lib/client/read-json-with-ai-meta';
 import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { downloadBlob } from '@/lib/client/blobUrl';
-import { authStorage } from '@/lib/auth';
 import { useGenerationApiIntentLatch } from '@/lib/use-generation-api-intent-latch';
 import { STREAM_ABORT_REASON_USER } from '@/lib/stream/abort';
 import type { AIReasoningEnvelope } from '@/types/ai-reasoning';
@@ -390,10 +389,8 @@ export function FreePage() {
       }
 
       const endpoint = generationMode === 'stream' ? '/api/generate-free-stream?format=sse' : '/api/generate-free';
-      const activityHeaders = await authStorage.getActivityHeaders();
       const requestHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
-        ...activityHeaders,
       };
       if (generationMode === 'stream') {
         requestHeaders.Accept = 'text/event-stream';

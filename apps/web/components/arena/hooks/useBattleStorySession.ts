@@ -89,6 +89,7 @@ import { authStorage } from '@/lib/auth';
 import { getAuthSnapshot, subscribeAuthSnapshot } from '@/lib/auth-client-store';
 import { randomUUID, secureRandomUUID } from '@/lib/crypto';
 import { useGenerationApiIntentLatch } from '@/lib/use-generation-api-intent-latch';
+import { buildGenerationApiHeaders } from '@/lib/hono-api-client';
 import { readJsonOrTextFromResponse, resolveApiErrorMessage } from '@/lib/client/apiError';
 import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { downloadBlob } from '@/lib/client/blobUrl';
@@ -642,12 +643,7 @@ export function useBattleStorySession() {
         headers.Accept = 'text/event-stream';
       }
 
-      const authHeader = await authStorage.getAuthHeader();
-      if (authHeader) {
-        headers.Authorization = authHeader;
-      }
-      Object.assign(headers, await authStorage.getActivityHeaders());
-      return headers;
+      return Object.fromEntries(await buildGenerationApiHeaders(authStorage, headers));
     },
     []
   );

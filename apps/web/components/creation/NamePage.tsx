@@ -22,7 +22,6 @@ import { CreatorEntryLink } from '@/components/shared/CreatorEntryLink';
 import { readJsonOrTextFromResponse, resolveApiErrorMessage } from '@/lib/client/apiError';
 import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { downloadBlob } from '@/lib/client/blobUrl';
-import { authStorage } from '@/lib/auth';
 import type { GenerationApiIntent } from '@/lib/hono-api-client';
 import { useGenerationApiIntentLatch } from '@/lib/use-generation-api-intent-latch';
 
@@ -41,12 +40,10 @@ async function generateMagicalGirl(
   language: string,
 ): Promise<MagicalGirl> {
   try {
-    const activityHeaders = await authStorage.getActivityHeaders();
     const response = await generationIntent.dispatch('/api/generate-magical-girl', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...activityHeaders,
       },
       body: JSON.stringify({ name: inputName, language: language }),
     });

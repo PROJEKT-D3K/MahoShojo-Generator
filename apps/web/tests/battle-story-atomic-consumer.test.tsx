@@ -169,6 +169,10 @@ it('normal first anonymous header initialization still dispatches one generation
   expect(headers.get('X-Mahoshojo-Generation-Actor-Token')).toMatch(/^bootstrap\./u);
   expect(session.selectedChapter?.markdown).toBe('# 匿名首章');
   expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  expect(fixture.authHeader).toHaveBeenCalledOnce();
+  expect(fixture.activityHeaders).toHaveBeenCalledExactlyOnceWith({ skipSessionBootstrap: true });
+  expect(headers.get('Content-Type')).toBe('application/json');
+  expect(headers.get('Accept')).toBe('text/event-stream');
 });
 
 describe('real story hook + IndexedDB completed result persistence', () => {
@@ -311,7 +315,7 @@ describe('real story hook + IndexedDB completed result persistence', () => {
   it('summary 迟到只更新匹配会话，不把用户从第一章跳回最新章', async () => {
     let resolveSummary!: (response: Response) => void;
     const response = new Promise<Response>((resolve) => { resolveSummary = resolve; });
-    const fetch = vi.fn(() => response); vi.stubGlobal('fetch', fetch);
+    const fetch = vi.fn((_url: string, _init: RequestInit) => response); vi.stubGlobal('fetch', fetch);
     await mount(); const first = await start(); await finish(first.pending, '# 第1章');
     const firstChapter = session.selectedChapter!.id;
     for (const index of [2, 3]) {
@@ -320,6 +324,13 @@ describe('real story hook + IndexedDB completed result persistence', () => {
       await finish(pending, `# 第${index}章`);
     }
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]![0]).toBe('/api/arena/session/refresh-summary');
+    const summaryHeaders = new Headers(fetch.mock.calls[0]![1].headers);
+    expect(summaryHeaders.get('Content-Type')).toBe('application/json');
+    expect(summaryHeaders.has('Accept')).toBe(false);
+    expect(fixture.authHeader).toHaveBeenCalledTimes(4);
+    expect(fixture.activityHeaders).toHaveBeenCalledTimes(4);
+    expect(fixture.activityHeaders.mock.calls.every(([options]) => options?.skipSessionBootstrap === true)).toBe(true);
     await act(async () => session.setSelectedChapterId(firstChapter));
     await act(async () => resolveSummary(new Response(JSON.stringify({ summary: '完整摘要', fallback: true }), { status: 200 })));
     await vi.waitFor(async () => { await act(async () => {}); expect(session.isRefreshingSummary).toBe(false); });

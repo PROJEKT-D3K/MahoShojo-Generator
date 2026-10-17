@@ -64,7 +64,6 @@ import { readJsonOrTextFromResponse, resolveApiErrorMessage } from '@/lib/client
 import { AI_META_REQUEST_HEADER, AI_META_REQUEST_VALUE, readJsonWithAiMeta } from '@/lib/client/read-json-with-ai-meta';
 import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { downloadBlob } from '@/lib/client/blobUrl';
-import { authStorage } from '@/lib/auth';
 import { useGenerationApiIntentLatch } from '@/lib/use-generation-api-intent-latch';
 import { buildCustomProviderRequestPayload } from '@/lib/ai/custom-provider';
 import { mapDataCardSourceMeta } from '@/lib/data-card-read-mappers';
@@ -1072,10 +1071,8 @@ export const CanshouPage: React.FC = () => {
       const customProviderPayload = buildCustomProviderRequestPayload(userProviderConfig);
 
       const endpoint = generationMode === 'stream' ? '/api/generate-canshou-stream?format=sse' : '/api/generate-canshou';
-      const activityHeaders = await authStorage.getActivityHeaders();
       const requestHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
-        ...activityHeaders,
       };
       if (generationMode === 'stream') {
         requestHeaders.Accept = 'text/event-stream';

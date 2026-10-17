@@ -53,7 +53,6 @@ import { AI_META_REQUEST_HEADER, AI_META_REQUEST_VALUE, readJsonWithAiMeta } fro
 import { formatHttpErrorMessage } from '@/lib/client/httpError';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import { getAnswerLimitInfo, isAnswerOverLimit, QUESTIONNAIRE_NATIVE_MAX_ANSWER_CHARS } from '@/lib/questionnaire-limits';
-import { authStorage } from '@/lib/auth';
 import { useGenerationApiIntentLatch } from '@/lib/use-generation-api-intent-latch';
 import { buildCustomProviderRequestPayload } from '@/lib/ai/custom-provider';
 import { mapDataCardSourceMeta } from '@/lib/data-card-read-mappers';
@@ -1762,10 +1761,8 @@ export const CreatorPage: React.FC = () => {
         ? '/api/creator/generate-stream?format=sse'
         : '/api/creator/generate';
 
-      const activityHeaders = await authStorage.getActivityHeaders();
       const requestHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
-        ...activityHeaders,
       };
       if (generationMode === 'stream') {
         requestHeaders.Accept = 'text/event-stream';
