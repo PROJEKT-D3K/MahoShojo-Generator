@@ -1,3 +1,4 @@
+import { DesktopQuestionnaireDetailsModal } from '../features/questionnaire/questionnaire-details-modal';
 import { PrivateResultSave } from '../features/cloud-save/private-result-save';
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
 import { CanshouRegenerateButton, generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
@@ -200,7 +201,6 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
   const [showImageModal, setShowImageModal] = useState(false);
   const [deviceType, setDeviceType] = useState<DeviceType>('unknown');
   const regenerateDialog = useRef<HTMLDialogElement>(null);
-  const detailsDialog = useRef<HTMLDialogElement>(null);
   const resultSectionRef = useRef<HTMLDivElement | null>(null);
   const previousTargetsRef = useRef<QuestionnaireAnswerMatchTarget[] | null>(null);
   const previousSignatureRef = useRef<string | null>(null);
@@ -210,27 +210,13 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
     if (confirmRegenerate && !dialog?.open) dialog?.showModal();
     else if (!confirmRegenerate && dialog?.open) dialog.close();
   }, [confirmRegenerate]);
-  useLayoutEffect(() => {
-    const dialog = detailsDialog.current;
-    if (detailsSelection && !dialog?.open) dialog?.showModal();
-    else if (!detailsSelection && dialog?.open) dialog.close();
-  }, [detailsSelection]);
   // Escape 层级登记（DESK-PARITY-007）：原生 <dialog> 的 UA cancel 与共享栈
-  // 收同一语义——一次按键只关最上面一层，不穿透到壳上的菜单兜底；两处
-  // setState 幂等，重复收口无害。
+  // 收同一语义——一次按键只关最上面一层，不穿透到壳上的菜单兜底。
   useEscapeLayer({
     active: confirmRegenerate !== false,
     trapsFocus: true,
     onEscape: () => {
       if (!session.isBusy()) setConfirmRegenerate(false);
-      return true;
-    },
-  });
-  useEscapeLayer({
-    active: detailsSelection !== null,
-    trapsFocus: true,
-    onEscape: () => {
-      setDetailsSelection(null);
       return true;
     },
   });
@@ -939,29 +925,6 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
                 <button className={actionClass} disabled={busy} onClick={() => { setConfirmRegenerate(false); runPendingAction(true); }}>确定重新生成</button>
               </div>
             </dialog>
-            <dialog ref={detailsDialog} aria-labelledby="selection-details-title" className="m-auto max-w-2xl rounded-lg border border-(--app-border) bg-(--app-surface) p-5 text-(--app-text) backdrop:bg-black/40" onCancel={() => setDetailsSelection(null)}>
-              <h2 id="selection-details-title" className="text-xl font-semibold">
-                {detailsSelection?.questionnaire.title ?? '问卷详情'}
-              </h2>
-              {detailsSelection && (
-                <>
-                  <p className="mt-2 text-sm text-(--app-text-muted)">
-                    来源：{detailsSelection.selectionId?.startsWith('cache:') ? '公开库缓存快照（可能与线上最新版本不同）' : detailsSelection.source === 'preset' ? '预设' : detailsSelection.source === 'upload' ? '本地上传/本地库' : '云端数据卡'}
-                    {detailsSelection.dataCardAuthor ? ` · 作者：${detailsSelection.dataCardAuthor}` : ''}
-                    {detailsSelection.questionnaire.nativeAllowed ? ' · 原生许可' : ' · 非原生'}
-                    {` · 题目 ${detailsSelection.questionnaire.questions.length} 道`}
-                    {detailsSelection.questionnaire.loreMarkdown?.trim() ? ' · 含设定' : ''}
-                  </p>
-                  {detailsSelection.questionnaire.description?.trim() && (
-                    <p className="mt-2 text-sm">{detailsSelection.questionnaire.description}</p>
-                  )}
-                  <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded border p-3 text-xs">{JSON.stringify(detailsSelection.questionnaire, null, 2)}</pre>
-                </>
-              )}
-              <div className="mt-4 flex justify-end">
-                <button autoFocus className={actionClass} onClick={() => setDetailsSelection(null)}>关闭</button>
-              </div>
-            </dialog>
             {(actionError || actionInfo || state.message || state.reasoning) && (
               <div className="mt-4 space-y-2">
                 {actionError && <p role="alert">{actionError}</p>}
@@ -1059,6 +1022,8 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
             onNavigateExternal={openFixed}
           />
         </div>
+        {/* fixed 详情必须放在带 backdrop-filter 的问卷卡片外。 */}
+        <DesktopQuestionnaireDetailsModal selection={detailsSelection} onClose={() => setDetailsSelection(null)} />
         {/* 长按保存弹窗：与 Web `/canshou` 同一交互——图片预览 + 手动保存提示。 */}
         <ImagePreviewModal
           isOpen={showImageModal && confirmRegenerate === false && detailsSelection === null}

@@ -9,13 +9,24 @@ import { downloadTextFile } from '../../platform/download-text-file';
 
 type DesktopCardDetailsProps = CardLibraryDetailsModalProps & { pendingNotice?: string; ratingHistoryEntity?: Pick<RankingDetailsTarget, 'entityType' | 'entityId'> };
 
+/** 数据卡与当前问卷副本共用的受控 Markdown 出口。 */
+export function DesktopCardDetailsMarkdown({ content }: { content: string }) {
+  const { openContent } = useExternalLinks();
+  return <div onClickCapture={(event) => {
+    // 相对链接也不能绕开内容链接确认/校验而直接导航 WebView。
+    const anchor = event.target instanceof Element ? event.target.closest('a') : null;
+    if (!anchor) return;
+    event.preventDefault(); event.stopPropagation();
+    openContent(anchor.getAttribute('href') ?? '');
+  }}><MarkdownBlock content={content} variant="light" className="text-sm" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} /></div>;
+}
+
 export function DesktopCardDetailsModal(props: DesktopCardDetailsProps) {
   return props.isOpen ? <DesktopCardDetailsScope key={`${props.source.kind}:${props.card.id}`} {...props} /> : null;
 }
 
 function DesktopCardDetailsScope({ card, source, onSaveCopyToLocalLibrary, localLibrarySaveState, pendingNotice, ratingHistoryEntity, ...props }: DesktopCardDetailsProps) {
   const [isRatingHistoryOpen, setIsRatingHistoryOpen] = useState(false);
-  const { openContent } = useExternalLinks();
   const scope = useMemo(() => ({}), [card.id, card.data, source.kind]);
   const currentScope = useRef<object | null>(scope);
   const running = useRef(false);
@@ -40,13 +51,7 @@ function DesktopCardDetailsScope({ card, source, onSaveCopyToLocalLibrary, local
     }
   };
   return <BasicCardDetailsModal {...props} card={card} source={source} obscured={isRatingHistoryOpen}
-    renderMarkdown={(content) => <div onClickCapture={(event) => {
-      // 相对链接也不能绕开内容链接确认/校验而直接导航 WebView。
-      const anchor = event.target instanceof Element ? event.target.closest('a') : null;
-      if (!anchor) return;
-      event.preventDefault(); event.stopPropagation();
-      openContent(anchor.getAttribute('href') ?? '');
-    }}><MarkdownBlock content={content} variant="light" className="text-sm" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} /></div>}
+    renderMarkdown={(content) => <DesktopCardDetailsMarkdown content={content} />}
     beforeOverview={pendingNotice ? <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{pendingNotice}</p> : undefined}
     metadata={<section className="space-y-2 text-xs text-gray-500">{ratingHistoryEntity && <EntityRatingHistoryButton {...ratingHistoryEntity} readRanking={readDesktopRanking} onOpenChange={setIsRatingHistoryOpen} />}<p>原生：未确认（本机未验证）；未查询线上指标</p>{card.tagIds?.length ? <p>标签 ID（未取得名称）：{card.tagIds.join('、')}</p> : null}</section>}
     footer={<>

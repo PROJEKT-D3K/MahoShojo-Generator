@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDesktopRouter } from '../src/app/router';
 import { DETAILS_DRAFT_KEY } from '../src/features/details/session';
 import { CANSHOU_DRAFT_KEY } from '../src/features/canshou/session';
+import { CREATOR_DRAFT_KEY } from '../src/features/creator/session';
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
 import { resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
@@ -47,6 +48,9 @@ vi.mock('../src/features/details/generation', async (original) => ({
 }));
 vi.mock('../src/features/canshou/generation', async (original) => ({
   ...await original<object>(), executeCanshouGeneration: mocks.generate,
+}));
+vi.mock('../src/features/creator/generation', async (original) => ({
+  ...await original<object>(), executeCreatorGeneration: mocks.generate,
 }));
 vi.mock('../src/platform/local-card-bridge', () => ({
   IpcLocalCardRepository: class { putIfAbsent = mocks.save; },
@@ -182,7 +186,7 @@ describe.each(routes)('Desktop $path image preview through the real route', ({ p
     return router;
   };
 
-  it.each(['details', 'regenerate'] as const)('defers a late export behind the native %s dialog without stealing its keys', async (kind) => {
+  it.each(['details', 'regenerate'] as const)('defers a late export behind the foreground %s dialog without stealing its keys', async (kind) => {
     const router = await mount();
     const originalOutput = JSON.parse(window.localStorage.getItem(draftKey)!).output;
     const imageUrl = `blob:late-${kind}`;
@@ -191,39 +195,42 @@ describe.each(routes)('Desktop $path image preview through the real route', ({ p
     expect(mocks.pendingExport).toBeTypeOf('function');
     expect(image()).toBeNull();
 
-    let nativeTrigger: HTMLButtonElement;
+    let foregroundTrigger: HTMLButtonElement;
     if (kind === 'details') {
       if (path === '/canshou') await click(pageButton('返回编辑答案'));
       await click([...container.querySelectorAll('button')].find((button) => button.textContent?.includes('问卷设置'))!);
-      nativeTrigger = pageButton('详情');
+      foregroundTrigger = pageButton('详情');
     } else {
-      nativeTrigger = pageButton(path === '/details' ? '重新生成' : '不满意？再来一次');
-      expect(nativeTrigger.disabled).toBe(false);
+      foregroundTrigger = pageButton(path === '/details' ? '重新生成' : '不满意？再来一次');
+      expect(foregroundTrigger.disabled).toBe(false);
     }
-    nativeTrigger.focus();
-    await click(nativeTrigger);
-    const native = container.querySelector<HTMLDialogElement>(
-      `dialog[aria-labelledby="${kind === 'details' ? 'selection-details-title' : 'regenerate-title'}"]`,
-    )!;
-    expect(native.open).toBe(true);
-    const nativeButton = native.querySelector<HTMLButtonElement>('button')!;
-    expect(document.activeElement === nativeButton).toBe(true);
+    foregroundTrigger.focus();
+    await click(foregroundTrigger);
+    const foreground = container.querySelector<HTMLElement>(kind === 'details'
+      ? '[role="dialog"]' : 'dialog[aria-labelledby="regenerate-title"]')!;
+    expect(foreground).not.toBeNull();
+    if (kind === 'regenerate') expect((foreground as HTMLDialogElement).open).toBe(true);
+    else expect(foreground.getAttribute('aria-modal')).toBe('true');
+    const foregroundButton = foreground.querySelector<HTMLButtonElement>('button')!;
+    expect(document.activeElement === foregroundButton).toBe(true);
 
     await act(async () => { mocks.pendingExport!(); mocks.pendingExport = null; });
     await settle();
-    expect.soft(image(), 'a late export must wait for the native top layer').toBeNull();
-    expect.soft(document.activeElement === nativeButton, 'late export must not take native focus').toBe(true);
-    nativeButton.focus();
-    expect.soft((await press('Tab')).defaultPrevented, 'native Tab must not reach the image focus trap').toBe(false);
-    nativeButton.focus();
-    expect.soft((await press('Tab', true)).defaultPrevented).toBe(false);
+    expect.soft(image(), 'a late export must wait for the foreground dialog').toBeNull();
+    expect.soft(document.activeElement === foregroundButton, 'late export must not take foreground focus').toBe(true);
+    foregroundButton.focus();
+    expect.soft((await press('Tab')).defaultPrevented, 'Tab must not reach the image focus trap').toBe(false);
+    foregroundButton.focus();
+    // 共享详情自行环绕 Tab；重新生成仍由原生 dialog 处理。
+    expect.soft((await press('Tab', true)).defaultPrevented).toBe(kind === 'details');
     expect(mocks.revoke).not.toHaveBeenCalled();
 
-    // 第一次 Escape 只关闭 native owner；迟到的同一 URL 随后显示，
+    // 第一次 Escape 只关闭当前详情/确认层；迟到的同一 URL 随后显示，
     // 不能同一事件再关图片或触发壳菜单/重生成/保存。
-    nativeButton.focus();
+    foregroundButton.focus();
     await press('Escape');
-    expect(native.open).toBe(false);
+    if (kind === 'regenerate') expect((foreground as HTMLDialogElement).open).toBe(false);
+    else expect(foreground.isConnected).toBe(false);
     expect(image()?.getAttribute('src')).toBe(imageUrl);
     expect(menu()).toBeNull();
     expect(document.activeElement === closeButton()).toBe(true);
@@ -236,7 +243,7 @@ describe.each(routes)('Desktop $path image preview through the real route', ({ p
     await press('Escape');
     expect(image()).toBeNull();
     expect(menu()).toBeNull();
-    expect(document.activeElement === nativeTrigger).toBe(true);
+    expect(document.activeElement === foregroundTrigger).toBe(true);
     expect(mocks.generate).not.toHaveBeenCalled();
     expect(mocks.save).not.toHaveBeenCalled();
     expect(JSON.parse(window.localStorage.getItem(draftKey)!).output).toEqual(originalOutput);
@@ -335,5 +342,54 @@ describe.each(routes)('Desktop $path image preview through the real route', ({ p
     await act(async () => { root!.unmount(); root = null; });
     expect(image()).toBeNull();
     expect(mocks.revoke.mock.calls).toEqual([['blob:preview-first'], ['blob:preview-second']]);
+  });
+});
+
+describe('Desktop /creator late image preview through the real route', () => {
+  it.each(['details', 'regenerate'] as const)('waits for the %s layer to close without losing the restored result', async (kind) => {
+    const card = { name: '创作保留角色', content: '已有结果', templateId: '通用角色' };
+    window.localStorage.setItem(CREATOR_DRAFT_KEY, JSON.stringify({
+      version: 1, answers: { 'preset:preview::first': '保留回答' }, language: 'zh-CN', imageSaveMode: 'modal',
+      template: 'general', generationMode: 'non-stream', freeformBrief: '', selectedRuleIds: [], primaryRuleId: null,
+      questionnaireSelections: [{
+        source: 'preset', selectionId: 'preset:preview',
+        questionnaire: { id: 'preview', kind: 'magical-girl', title: '创作预览问卷', nativeAllowed: true,
+          questions: [{ id: 'first', question: '角色描述？', type: 'text' }] },
+      }],
+      output: { mode: 'direct-local', phase: 'completed', cardKind: 'general', card, rawText: JSON.stringify(card) },
+    }));
+    window.location.hash = '#/creator';
+    const router = createDesktopRouter(); await router.load();
+    await act(async () => root!.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
+    await settle();
+    const originalOutput = JSON.parse(window.localStorage.getItem(CREATOR_DRAFT_KEY)!).output;
+    mocks.deferExport = true;
+    await openPreview('blob:late-creator');
+    if (kind === 'details') await click([...container.querySelectorAll('button')].find((button) => button.textContent?.includes('问卷设置'))!);
+    const trigger = pageButton(kind === 'details' ? '详情' : '重新生成');
+    trigger.focus(); await click(trigger);
+    const foreground = container.querySelector<HTMLElement>(kind === 'details'
+      ? '[role="dialog"]' : 'dialog[aria-labelledby="regenerate-title"]')!;
+    expect(foreground).not.toBeNull();
+    const foregroundButton = foreground.querySelector<HTMLButtonElement>('button')!;
+    const image = () => document.querySelector<HTMLImageElement>('img[alt="生成结果长图"]');
+    await act(async () => { mocks.pendingExport!(); mocks.pendingExport = null; });
+    await settle();
+    expect(image(), 'late Creator image must wait instead of covering the active questionnaire/confirmation').toBeNull();
+    expect(document.activeElement).toBe(foregroundButton);
+    await press('Escape');
+    expect(image()?.getAttribute('src')).toBe('blob:late-creator');
+    expect(menu()).toBeNull();
+    const imageClose = image()!.closest('[role="dialog"]')!.querySelector<HTMLButtonElement>('button[aria-label="关闭对话框"]')!;
+    expect(document.activeElement).toBe(imageClose);
+    await press('Escape');
+    expect(image()).toBeNull(); expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(mocks.generate).not.toHaveBeenCalled(); expect(mocks.save).not.toHaveBeenCalled();
+    expect(JSON.parse(window.localStorage.getItem(CREATOR_DRAFT_KEY)!).output).toEqual(originalOutput);
+    expect(router.state.location.pathname).toBe('/creator');
+    expect(mocks.revoke).not.toHaveBeenCalled();
+    await act(async () => { root!.unmount(); root = null; });
+    expect(mocks.revoke.mock.calls).toEqual([['blob:late-creator']]);
   });
 });
