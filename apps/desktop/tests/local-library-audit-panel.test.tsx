@@ -105,6 +105,10 @@ describe('本地库完整性面板（IPC mock）', () => {
     await mount();
     expect(button('检查完整性')?.disabled).toBe(false);
     expect(button('清理可回收空间')?.disabled).toBe(true);
+    await act(async () => button('清理可回收空间')!.click());
+    expect(bridge.invoke).not.toHaveBeenCalled();
+    button('检查完整性')!.focus();
+    expect(document.activeElement).toBe(button('检查完整性'));
   });
 
   it('干净报告显示规模分母与「未发现不一致」，清理入口保持关闭', async () => {

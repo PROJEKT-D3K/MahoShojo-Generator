@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Button } from '@mahoshojo/ui-web/card-library';
 import type { DesktopBackupList, DesktopBackupSummary } from '@mahoshojo/contracts/desktop-ipc';
 import {
   createLocalBackup,
@@ -165,12 +166,12 @@ export const LocalBackupsPanel = ({ enabled, maintenanceBusy, acquireOperation, 
           </p>
         </div>
         <div className="flex gap-2">
-          <button type="button" className="rounded border border-(--app-border) px-3 py-2 text-sm" disabled={!enabled || busy || restorePending || selectedBackup !== null || maintenanceBusy} onClick={() => void run('refresh')}>
+          <Button type="button" disabled={!enabled || busy || restorePending || selectedBackup !== null || maintenanceBusy} onClick={() => void run('refresh')}>
             刷新列表
-          </button>
-          <button type="button" className="rounded bg-(--app-accent-strong) px-3 py-2 text-sm text-white" disabled={!enabled || busy || restorePending || selectedBackup !== null || maintenanceBusy} onClick={() => void run('create')}>
+          </Button>
+          <Button type="button" variant="primary" disabled={!enabled || busy || restorePending || selectedBackup !== null || maintenanceBusy} onClick={() => void run('create')}>
             创建备份
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -192,9 +193,10 @@ export const LocalBackupsPanel = ({ enabled, maintenanceBusy, acquireOperation, 
                 <dt className="text-(--app-text-muted)">备份根目录</dt><dd className="break-all">{backup.directory}</dd>
                 <dt className="text-(--app-text-muted)">本次备份路径</dt><dd className="break-all">{backup.absolutePath}</dd>
               </dl>
-              <button
+              <Button
                 type="button"
-                className="mt-3 rounded border border-(--app-border) px-3 py-2 text-sm"
+                variant="danger"
+                className="mt-3"
                 disabled={!enabled || busy || restorePending || selectedBackup !== null || maintenanceBusy}
                 onClick={(event) => {
                   restoreTriggerRef.current = event.currentTarget;
@@ -202,7 +204,7 @@ export const LocalBackupsPanel = ({ enabled, maintenanceBusy, acquireOperation, 
                 }}
               >
                 使用此备份整体替换本地库…
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
@@ -220,19 +222,18 @@ export const LocalBackupsPanel = ({ enabled, maintenanceBusy, acquireOperation, 
               系统凭据不会随备份恢复。若 Provider 凭据缺失，请重新打开应用后到设置重新录入。
             </p>
             <div className="mt-5 flex justify-end gap-2">
-              <button
+              <Button
                 ref={cancelRestoreRef}
                 type="button"
-                className="rounded border border-(--app-border) px-3 py-2 text-sm"
                 onClick={() => {
                   setSelectedBackup(null);
                 }}
               >
                 取消
-              </button>
-              <button type="button" className="rounded bg-(--app-accent-strong) px-3 py-2 text-sm text-white" disabled={!enabled || maintenanceBusy} onClick={() => void confirmRestore()}>
+              </Button>
+              <Button type="button" variant="danger" disabled={!enabled || maintenanceBusy} onClick={() => void confirmRestore()}>
                 确认整体替换并退出
-              </button>
+              </Button>
             </div>
         </section>
       )}
@@ -253,14 +254,14 @@ export const LocalBackupsPanel = ({ enabled, maintenanceBusy, acquireOperation, 
           )}
           {restoreError && <p className="mt-2 text-sm">{restoreError}</p>}
           {exitAccepted && <p className="mt-2 text-sm">退出请求已提交。本地库仍保持锁定；如应用窗口没有关闭，可再次请求退出。</p>}
-          <button
+          <Button
             type="button"
-            className="mt-3 rounded bg-(--app-accent-strong) px-3 py-2 text-sm text-white"
+            className="mt-3"
             disabled={restoreBusy || restoreExitBusy}
             onClick={() => void requestRestoreExit()}
           >
             {restoreExitBusy ? '正在请求退出…' : '退出应用并继续恢复'}
-          </button>
+          </Button>
         </section>
       )}
     </section>

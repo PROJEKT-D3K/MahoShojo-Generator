@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { Button } from '@mahoshojo/ui-web/card-library';
 import { invoke } from '@tauri-apps/api/core';
 import type {
   DesktopLocalLibraryAuditFinding,
@@ -147,9 +148,6 @@ export const LocalLibraryAuditPanel = ({ enabled, maintenanceBusy, acquireOperat
       });
   }, [acquireOperation, busy, enabled, releaseOperation, runAudit]);
 
-  const actionClass =
-    'rounded border border-(--app-border) px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50';
-
   return (
     <section className="rounded-lg border border-(--app-border) bg-(--app-surface) p-4" aria-labelledby="local-audit-heading">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -160,18 +158,17 @@ export const LocalLibraryAuditPanel = ({ enabled, maintenanceBusy, acquireOperat
           </p>
         </div>
         <div className="flex gap-2">
-          <button type="button" className={actionClass} disabled={!enabled || busy !== null || maintenanceBusy} onClick={handleAudit}>
+          <Button type="button" disabled={!enabled || busy !== null || maintenanceBusy} onClick={handleAudit}>
             {busy === 'audit' ? '正在检查…' : '检查完整性'}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className={actionClass}
             disabled={!enabled || busy !== null || maintenanceBusy || summary === null || !summary.hasReclaimableSpace}
             title={summary === null ? '先检查完整性' : undefined}
             onClick={handleCollect}
           >
             {busy === 'gc' ? '正在清理…' : '清理可回收空间'}
-          </button>
+          </Button>
         </div>
       </header>
 

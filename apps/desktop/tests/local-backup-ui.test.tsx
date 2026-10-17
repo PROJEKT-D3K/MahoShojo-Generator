@@ -112,6 +112,8 @@ describe('local backup page integration', () => {
     expect(button('创建备份').disabled).toBe(true);
     expect(button('刷新列表').disabled).toBe(true);
     expect(button('检查完整性').disabled).toBe(true);
+    await act(async () => { button('创建备份').click(); button('刷新列表').click(); });
+    expect(bridge.invoke).not.toHaveBeenCalledWith(CREATE_LOCAL_BACKUP_COMMAND, undefined);
     await act(async () => { finish({ location: 'archive.zip', byteLength: 1, entryCount: 1 }); });
     await settle();
     expect(button('创建备份').disabled).toBe(false);
