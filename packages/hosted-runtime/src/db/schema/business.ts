@@ -89,7 +89,32 @@ export const dataCards = sqliteTable('data_cards', {
   updatedAt: text('updated_at'),
   deletedAt: text('deleted_at'),
   recycleGeneration: text('recycle_generation'),
-});
+}, (table) => ({
+  publicSummaryCreatedIndex: index('idx_data_cards_public_summary_created').on(
+    table.isPublic, table.reviewStatus,
+    sql`COALESCE(${table.createdAt}, ${table.updatedAt}) DESC`,
+    sql`COALESCE(${table.updatedAt}, ${table.createdAt}) DESC`,
+    sql`${table.id} DESC`, table.type, table.userId,
+  ).where(sql`${table.isPublic} = 1 AND ${table.reviewStatus} = 'approved' AND ${table.deletedAt} IS NULL`),
+  publicSummaryLikesIndex: index('idx_data_cards_public_summary_likes').on(
+    table.isPublic, table.reviewStatus,
+    sql`COALESCE(${table.likeCount}, 0) DESC`,
+    sql`COALESCE(${table.updatedAt}, ${table.createdAt}) DESC`,
+    sql`${table.id} DESC`, table.type, table.userId,
+  ).where(sql`${table.isPublic} = 1 AND ${table.reviewStatus} = 'approved' AND ${table.deletedAt} IS NULL`),
+  publicSummaryTypeCreatedIndex: index('idx_data_cards_public_summary_type_created').on(
+    table.isPublic, table.reviewStatus, table.type,
+    sql`COALESCE(${table.createdAt}, ${table.updatedAt}) DESC`,
+    sql`COALESCE(${table.updatedAt}, ${table.createdAt}) DESC`,
+    sql`${table.id} DESC`, table.userId,
+  ).where(sql`${table.isPublic} = 1 AND ${table.reviewStatus} = 'approved' AND ${table.deletedAt} IS NULL`),
+  publicSummaryTypeLikesIndex: index('idx_data_cards_public_summary_type_likes').on(
+    table.isPublic, table.reviewStatus, table.type,
+    sql`COALESCE(${table.likeCount}, 0) DESC`,
+    sql`COALESCE(${table.updatedAt}, ${table.createdAt}) DESC`,
+    sql`${table.id} DESC`, table.userId,
+  ).where(sql`${table.isPublic} = 1 AND ${table.reviewStatus} = 'approved' AND ${table.deletedAt} IS NULL`),
+}));
 
 export const reportCases = sqliteTable(
   'report_cases',
