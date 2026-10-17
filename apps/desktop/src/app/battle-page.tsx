@@ -13,7 +13,7 @@ import { normalizeCustomStoryLength } from '@mahoshojo/domain/story-length';
 import { parseCombatantsFromText } from '@mahoshojo/domain/arena-file-parser';
 import { buildArenaMaterialState, type ArenaMaterialState } from '@mahoshojo/domain/arena-materials';
 import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-operations';
-import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, ArenaCharacterDatabaseSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
+import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, ArenaCharacterDatabaseSelector, StoryOptionsPanel, CharacterPresetPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
 import { ArenaReportFormatSelectorView, BattleReportCard, StreamingBattleReportCard, CombatantUpdatesPresentation } from '@mahoshojo/ui-web/arena-report';
 import { Button, CardLibraryModal, mapPublicDataCardRowToSourceData, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { NarrativeHistoryPicker, NarrativeDraftsPanel, NarrativeLegacyDraftsSection } from '@mahoshojo/ui-web/narrative-history';
@@ -34,6 +34,7 @@ import type { PublicSeasonMeta } from '@mahoshojo/contracts/public-ranking';
 import { DesktopStrictConfigurationDiagnostics, type DesktopStrictCheckSnapshot } from '../features/arena/strict-configuration-diagnostics';
 import { addAdvancedCombatants, addAdvancedAuxScenario, removeAdvancedCombatants, removeAdvancedAuxScenarios, setAdvancedMainScenario } from '../features/arena/advanced-input';
 import { addArenaCombatants, arenaItemName, fetchArenaPreset, moveArenaItem, parseArenaJson, parseArenaScenario, readArenaFile } from '../features/arena/input';
+import { useArenaPresetDownload } from '../features/arena/use-preset-download';
 import { readSublimationHistorySource, type SublimationHistorySource } from '../features/sublimation/history-source';
 import { useDesktopAiConfig } from '../features/ai-config/use-desktop-ai-config';
 import { resolveDesktopAiTarget, type ResolvedDesktopAiTarget } from '../features/ai-config/desktop-ai-config';
@@ -63,6 +64,7 @@ import type { StoryBranchAnchorRequest } from '@mahoshojo/contracts/desktop-aren
 
 const secondary = generationActionClassNames.secondary;
 const limits = ARENA_CANONICAL_CAPABILITIES;
+const characterPresets = { magicalGirl: PRESET_LIST.filter(preset => preset.type === 'magical-girl'), canshou: PRESET_LIST.filter(preset => preset.type === 'canshou') };
 type LibraryPurpose = 'character' | 'scenario' | 'auxScenario' | 'material';
 const reject = () => { throw new Error('当前页面未开放此能力。'); };
 const strictTargetIdentity = (target: ResolvedDesktopAiTarget) => JSON.stringify([target.location, target.providerTarget, target.modelId, target.generationOverrides, target.unavailableReason]);
@@ -121,7 +123,11 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const [error, setError] = useState<string | null>(null);
   const [backupFeedback, setBackupFeedback] = useState<ArenaBackupFeedback>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
-  const [presetPage, setPresetPage] = useState(1);
+  const [magicalGirlPage, setMagicalGirlPage] = useState(1);
+  const [canshouPage, setCanshouPage] = useState(1);
+  const [loadingPresetFilename, setLoadingPresetFilename] = useState<string | null>(null);
+  const presetSelection = useRef<symbol | null>(null);
+  const presetDownload = useArenaPresetDownload();
   const [languages, setLanguages] = useState([{ code: 'zh-CN', name: '简体中文' }]);
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -247,11 +253,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     return (current) => applyCharacters(current, items, warnings, true);
   });
   const togglePreset = (filename: string) => {
-    if (disabled) return;
+    if (disabled || session.isBusy()) return;
     if (draft.combatants.some((item) => item.isPreset && item.filename === filename)) { update(product === 'arena' ? removeAdvancedCombatants(draft, draft.combatants.flatMap((item, index) => item.isPreset && item.filename === filename ? [index] : [])) : { combatants: draft.combatants.filter((item) => !(item.isPreset && item.filename === filename)) }); return; }
+    const token = Symbol(); presetSelection.current = token; setLoadingPresetFilename(filename);
     void performImport(async (signal) => { const warnings: string[] = []; const text = await fetchArenaPreset('character', filename, signal);
       const items = retainDesktopArenaSelectionSource(await parseCharacters(text, warnings), parseArenaJson(text), { kind: 'preset', filename });
-      return (current) => applyCharacters(current, items, warnings); }).catch(() => undefined);
+      return (current) => applyCharacters(current, items, warnings); }).catch(() => undefined).finally(() => { if (presetSelection.current === token) { presetSelection.current = null; setLoadingPresetFilename(null); } });
   };
   const loadScenario = (read: (signal: AbortSignal) => Promise<string>, filename: string | null = null, auxiliary = false, sourceIdentity?: string, isPreset = false) => performImport(async (signal) => {
     const content = parseArenaScenario(await read(signal)); return (current) => {
@@ -546,7 +553,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const slots = {
         header: <><BattleLiteHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={300} height={84} alt="魔法少女竞技场" />} description="选择角色，生成属于他们的故事。" helper={product === 'arena' ? '桌面高级单次 · 本机独立工作稿 · 客户端 Direct' : '桌面简洁版 · 本机工作副本 · Direct / 服务器生成'} />{sessionNotice}</>,
         rankingLinks: null, pageLinks: product === 'battle' ? <a className="footer-link" href="#/arena" onClick={(event) => { event.preventDefault(); navigateByProductHref(router, '/arena'); }}>高级单次配置</a> : null,
-        presets: <PresetGridPicker title="预设角色" presets={PRESET_LIST} currentPage={presetPage} onPageChange={setPresetPage} disabled={disabled} maxSelected={limits.maxCombatants} selectedCountOverride={draft.combatants.length} selectedFilenames={draft.combatants.filter((item) => item.isPreset).map((item) => item.filename)} onToggle={(preset) => togglePreset(preset.filename)} />,
+        presets: <><CharacterPresetPicker grouped={characterPresets} magicalGirlPage={magicalGirlPage} onMagicalGirlPageChange={setMagicalGirlPage} canshouPage={canshouPage} onCanshouPageChange={setCanshouPage} disabled={disabled} maxSelected={limits.maxCombatants} selectedCountOverride={draft.combatants.length} selectedFilenames={draft.combatants.filter((item) => item.isPreset).map((item) => item.filename)} loadingFilename={state.importing ? loadingPresetFilename : null} onToggle={(preset) => togglePreset(preset.filename)} onDownload={presetDownload.download} downloadDisabled={presetDownload.downloading} />
+          {presetDownload.feedback && <p role={presetDownload.feedback.kind === 'error' ? 'alert' : 'status'} className={`mb-4 text-sm ${presetDownload.feedback.kind === 'error' ? 'text-red-600' : 'text-gray-600'}`}>{presetDownload.feedback.message}</p>}</>,
         database: <><ArenaCharacterDatabaseSelector className="!mb-0" title={null} layout={product === 'battle' ? 'column' : 'row'}
           onOpenCharacterModal={() => openLibrary('character')} onRandomMatchCharacter={() => { void randomMatchCharacter(); }}
           isAuthenticated={libraryHost.auth.status !== 'unauthenticated'} isGenerating={disabled} isMatching={isMatchingCharacter ? 'character' : null}

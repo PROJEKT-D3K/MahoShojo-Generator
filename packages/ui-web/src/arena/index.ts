@@ -14,6 +14,7 @@ export { StoryOptionsPanel, type StoryLengthOption, type LanguageOption } from '
 export { BattleModeControl } from './presentation/BattleModeControl';
 export { StoryOptionsControl, type StoryOptionsControlProps } from './presentation/StoryOptionsControl';
 export { PresetGridPicker, type PresetGridPickerProps } from './PresetGridPicker';
+export { CharacterPresetPicker, type CharacterPresetPickerProps } from './CharacterPresetPicker';
 export { ScenarioPresetGridPicker, type ScenarioPresetGridPickerProps } from './ScenarioPresetGridPicker';
 export { ScenarioPickerPanel, type ScenarioPickerPanelProps } from './ScenarioPickerPanel';
 export { BattleLitePageView, type BattleLitePageViewProps } from './BattleLitePageView';

@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { SCENARIO_PRESET_LIST } from '@mahoshojo/domain/scenario-presets';
 import rankingFixture from '@mahoshojo/contracts/fixtures/public-ranking.json';
 import { StoryPendingSnapshotSchema } from '@mahoshojo/contracts/desktop-arena-story';
@@ -267,6 +268,40 @@ describe('Desktop /battle journey against loopback fixture', () => {
     localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5, selection: { executionPreference: 'client', clientTarget: { kind: 'preset', providerId: 'deepseek' }, serverTarget: { kind: 'system' } }, hiddenPresetIds: [], presetsByProviderId: { deepseek: { selectedModelId: 'deepseek-chat', generationOverrides: {} } } }));
     saveDraft(draft('daily', 'stream')); await mount(); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
     expect(calls()).toHaveLength(1); expect(calls()[0]![0]).toBe('stream_target_ai'); expect(calls()[0]![1]).toMatchObject({ target: { kind: 'preset', providerId: 'deepseek' } });
+  });
+  it.each(['battle', 'arena'] as const)('/%s character presets use independent groups and download the untouched original without changing selection', async product => {
+    window.location.hash = `#/${product}`; await mount();
+    const group = (title: string) => [...container.querySelectorAll('h3')].find(heading => heading.textContent === title)!.parentElement!;
+    const girls = group('选择预设魔法少女'), monsters = group('选择预设残兽');
+    expect(girls.querySelectorAll('[aria-pressed]')).toHaveLength(4); expect(monsters.querySelectorAll('[aria-pressed]')).toHaveLength(4);
+    await click('下一页', girls); expect(girls.textContent).toContain('第 2 /'); expect(monsters.textContent).toContain('第 1 /');
+    const preset = PRESET_LIST.find(item => item.type === 'canshou')!;
+    const select = () => monsters.querySelector<HTMLButtonElement>('[aria-pressed]')!;
+    await act(async () => select().click()); await settle();
+    const key = product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
+    const snapshot = localStorage.getItem(key)!; const selected = JSON.parse(snapshot).draft.combatants[0];
+    const raw = readFileSync(resolve(process.cwd(), '../../content/presets', preset.filename), 'utf8');
+    expect(selected).toMatchObject({ filename: preset.filename, desktopSource: 'preset', isPreset: true, isValid: false, data: JSON.parse(raw) });
+    expect(select().getAttribute('aria-pressed')).toBe('true');
+    await act(async () => monsters.querySelector<HTMLButtonElement>('[aria-label^="下载预设："]')!.click()); await settle();
+    expect(mocks.download).toHaveBeenCalledExactlyOnceWith(preset.filename, raw, 'application/json');
+    expect(localStorage.getItem(key)).toBe(snapshot); expect(container.textContent).toContain('已发起');
+    await act(async () => select().click()); await settle();
+    expect(JSON.parse(localStorage.getItem(key)!).draft.combatants).toHaveLength(0); expect(calls()).toHaveLength(0);
+  });
+  it('character preset loading is visible and cancellation retains the roster before a successful retry', async () => {
+    await mount(); const baseFetch = fetch; const gate = deferred<Response>();
+    vi.mocked(fetch).mockImplementationOnce(() => gate.promise);
+    const select = () => container.querySelector<HTMLButtonElement>('[aria-label="选择预设角色：翠雀"]')!;
+    await act(async () => { select().click(); select().click(); });
+    expect(container.textContent).toContain('加载中...'); expect(select().disabled).toBe(true);
+    await click('取消生成');
+    await act(async () => gate.resolve(new Response(readFileSync(resolve(process.cwd(), '../../content/presets/M01_centaurea.json'), 'utf8')))); await settle();
+    expect(container.querySelector('[aria-label="取消选择预设角色：翠雀"]')).toBeNull();
+    expect(container.textContent).not.toContain('加载中...'); expect(select().disabled).toBe(false);
+    // The original stub continues to serve only bundled fixture paths after its one deferred call.
+    expect(fetch).toBe(baseFetch); await act(async () => select().click()); await settle();
+    expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.combatants).toHaveLength(1);
   });
   it('loads bundled character/scenario presets and uploads materials through the shared controls', async () => {
     await mount(); const firstPreset = document.querySelector<HTMLButtonElement>('[aria-label="选择预设角色：翠雀"]')!;

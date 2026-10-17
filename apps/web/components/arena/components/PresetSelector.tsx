@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 
 import type { Preset } from '@/lib/presets';
-import { PresetGridPicker } from '@/components/PresetGridPicker';
+import { CharacterPresetPicker } from '@mahoshojo/ui-web/arena';
 
 import { useBattleStore } from '../stores/useBattleStore';
 import { BattleStoreState, Combatant, hasCombatantLimit, MAX_COMBATANTS } from '../types';
@@ -86,29 +86,18 @@ export function PresetSelector() {
   }
 
   return (
-    <>
-      <PresetGridPicker
-        title="选择预设魔法少女"
-        presets={grouped.magicalGirl}
-        currentPage={mgPage}
-        onPageChange={setMgPage}
-        disabled={isGenerating}
-        maxSelected={maxSelected}
-        selectedFilenames={combatantFilenames}
-        loadingFilename={loadingPreset}
-        onToggle={handleSelect}
-      />
-      <PresetGridPicker
-        title="选择预设残兽"
-        presets={grouped.canshou}
-        currentPage={canshouPage}
-        onPageChange={setCanshouPage}
-        disabled={isGenerating}
-        maxSelected={maxSelected}
-        selectedFilenames={combatantFilenames}
-        loadingFilename={loadingPreset}
-        onToggle={handleSelect}
-      />
-    </>
+    <CharacterPresetPicker
+      grouped={grouped}
+      magicalGirlPage={mgPage}
+      onMagicalGirlPageChange={setMgPage}
+      canshouPage={canshouPage}
+      onCanshouPageChange={setCanshouPage}
+      disabled={isGenerating}
+      maxSelected={maxSelected}
+      selectedFilenames={combatantFilenames}
+      loadingFilename={loadingPreset}
+      onToggle={handleSelect}
+      getDownloadHref={(filename) => `/presets/${encodeURIComponent(filename)}`}
+    />
   );
 }
