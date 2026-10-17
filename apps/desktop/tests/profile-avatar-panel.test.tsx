@@ -12,6 +12,7 @@ vi.mock('../src/app/useLeaveGuard', () => ({ useLeaveGuard: (busy: () => boolean
   mocks.busy = busy; mocks.confirmLeave = confirmLeave; return { ready: mocks.ready, message: null };
 } }));
 import { ProfileSignaturePanel } from '../src/features/account/ProfileSignaturePanel';
+import { DesktopCloudSessionStore } from '../src/features/account/cloud-session-store';
 import { getCachedMyProfile, getTopbarAvatar, invalidateTopbarAvatar, resetTopbarAvatarForTests, useTopbarAvatar } from '../src/features/account/use-topbar-avatar';
 const oldAvatar = 'data:image/webp;base64,QUJD'; const newAvatar = 'data:image/webp;base64,bmV3';
 let root: Root; let container: HTMLDivElement; let mounted: boolean;
@@ -127,6 +128,43 @@ describe('Desktop shared avatar field host', () => {
     const old = deferred<unknown>(); mocks.invoke.mockReturnValueOnce(old.promise); await render();
     mocks.epoch += 1; mocks.state.account = { userId: 2, username: 'B' }; await render();
     await act(async () => old.reject({ code: 'not-authenticated', message: 'old' })); expect(mocks.refresh).not.toHaveBeenCalled();
+  });
+  it.each(['expired', 'signed-out'])('cached startup clears profile after %s and ignores its late rejection', async (state) => {
+    const status = deferred<unknown>();
+    const profile = deferred<unknown>();
+    mocks.invoke.mockImplementation((command) => {
+      if (command === 'cloud_cached_account') return Promise.resolve({ account: { userId: 1, username: 'A' } });
+      if (command === 'cloud_auth_status') return status.promise;
+      if (command === 'cloud_me_profile') return profile.promise;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const store = new DesktopCloudSessionStore({ invoke: mocks.invoke });
+    mocks.refresh.mockImplementation(store.refresh);
+    const bootstrapping = store.bootstrap();
+    await flush();
+    mocks.state = store.getSnapshot();
+    expect(mocks.state.verification).toBe('checking');
+    await render();
+    expect(container.querySelector('[aria-label="个人资料"]')).not.toBeNull();
+
+    // Native has mapped the server's absent-session response to the IPC terminal state.
+    await act(async () => { status.resolve({ state }); await bootstrapping; });
+    mocks.state = store.getSnapshot();
+    await render();
+    expect(mocks.state.account).toBeNull();
+    expect(mocks.state.lastError).toBeNull();
+    expect(container.querySelector('[aria-label="个人资料"]')).toBeNull();
+    expect(container.querySelector('[data-testid="topbar-avatar"]')).toBeNull();
+
+    await act(async () => { profile.reject({ code: 'not-authenticated', message: 'expired' }); await flush(); });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(store.getSnapshot().verification).toBe(state);
+    expect(store.getSnapshot().account).toBeNull();
+    expect(store.getSnapshot().authFlow.kind).toBe('idle');
+    expect(container.textContent).not.toContain('资料未能载入');
+    expect(mocks.invoke.mock.calls.map(([command]) => command)).toEqual([
+      'cloud_cached_account', 'cloud_auth_status', 'cloud_me_profile',
+    ]);
   });
   it('an explicit readback callback is inert after the owning panel unmounts', async () => {
     await render(); mocks.invoke.mockRejectedValueOnce({ code: 'network-error', message: 'unknown' }); await select();

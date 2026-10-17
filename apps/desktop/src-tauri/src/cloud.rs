@@ -1166,11 +1166,39 @@ pub fn cloud_login_cancel(state: &CloudState, flow_id: &str) -> bool {
 
 /* ── 会话状态 / 注销 / 在线探测 ────────────────────────────────────────── */
 
-#[derive(Debug, Deserialize)]
-struct GetSessionResponse {
-    session: Option<serde_json::Value>,
-    #[allow(dead_code)]
-    user: Option<serde_json::Value>,
+/// Better Auth 的无会话响应是顶层 `null`；也兼容显式双 null 的旧 envelope。
+/// 缺字段、错误 envelope 或不完整身份不能当作「已过期」清凭据，更不能确认登录。
+fn has_active_server_session(payload: &serde_json::Value) -> Result<bool, CloudError> {
+    use serde_json::Value;
+
+    if payload.is_null() {
+        return Ok(false);
+    }
+    match (payload.get("session"), payload.get("user")) {
+        (Some(Value::Null), Some(Value::Null)) => Ok(false),
+        (Some(Value::Object(session)), Some(Value::Object(user))) => {
+            let session_id = session.get("id").and_then(Value::as_str);
+            let user_id = session.get("userId").and_then(Value::as_str);
+            let expires_at = session.get("expiresAt").and_then(Value::as_str);
+            if session_id.is_some_and(|id| !id.is_empty())
+                && user_id.is_some_and(|id| !id.is_empty())
+                && user_id == user.get("id").and_then(Value::as_str)
+                && expires_at.is_some_and(|value| {
+                    time::OffsetDateTime::parse(
+                        value,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .is_ok()
+                })
+            {
+                // 只验证服务端形状，不用本机时钟或初次授权时缓存的期限否认滑动续期。
+                Ok(true)
+            } else {
+                Err(CloudError::invalid_response("会话状态查询"))
+            }
+        }
+        _ => Err(CloudError::invalid_response("会话状态查询")),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1234,20 +1262,20 @@ pub async fn cloud_auth_status(
         return Ok(CloudSessionStatus::Unreachable);
     }
 
+    // 空正文仍是协议错误，不能用会把空正文归一成 null 的通用 JSON 读取器。
     let payload = response
-        .json::<GetSessionResponse>()
+        .json::<serde_json::Value>()
         .await
         .map_err(|_| CloudError::invalid_response("会话状态查询"))?;
 
-    match payload.session {
-        Some(session_value) if !session_value.is_null() => Ok(CloudSessionStatus::Active {
+    if has_active_server_session(&payload)? {
+        Ok(CloudSessionStatus::Active {
             account: CloudAccountSummary::from(&session.account),
             session_expires_at: session.session_expires_at.clone(),
-        }),
-        _ => {
-            clear_session_if_current(secrets, &snapshot.raw, Some((state, snapshot.epoch)))?;
-            Ok(CloudSessionStatus::Expired)
-        }
+        })
+    } else {
+        clear_session_if_current(secrets, &snapshot.raw, Some((state, snapshot.epoch)))?;
+        Ok(CloudSessionStatus::Expired)
     }
 }
 
@@ -4760,7 +4788,8 @@ mod tests {
                             "user": {"id": "au_1"}
                         }))
                     } else {
-                        json(serde_json::json!({"session": null, "user": null}))
+                        // Better Auth returns a top-level null for an absent/expired session.
+                        json(serde_json::Value::Null)
                     }
                 }
                 SIGN_OUT_PATH => {
@@ -9728,4 +9757,5 @@ mod tests {
     }
     include!("cloud_profile_avatar_tests.rs");
     include!("cloud_session_cleanup_tests.rs");
+    include!("cloud_session_status_tests.rs");
 }

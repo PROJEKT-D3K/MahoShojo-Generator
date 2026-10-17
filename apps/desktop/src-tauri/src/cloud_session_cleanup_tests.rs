@@ -147,7 +147,11 @@ fn session_cleanup_native_late_status_expiry_keeps_new_login() {
     // Native concurrent commands. The single renderer store waits for statusPromise
     // before requestAuth; this does not claim that UI login bypasses that wait.
     rt().block_on(async {
-        for status in [401, 200] {
+        for (status, body) in [
+            (401, r#"{"error":"unauthorized"}"#),
+            (200, "null"),
+            (200, r#"{"session":null,"user":null}"#),
+        ] {
             for replacement in ["same-bytes", "new-cookie", "new-account"] {
                 let server = spawn_mock_server();
                 let state = CloudState::with_origin(&server.origin);
@@ -156,8 +160,7 @@ fn session_cleanup_native_late_status_expiry_keeps_new_login() {
                 let original = load_session(&secrets).unwrap().unwrap();
                 *server.exchange_session_override.lock().unwrap() =
                     Some(next_cleanup_session(&original, replacement));
-                *server.get_session_override.lock().unwrap() =
-                    Some((status, r#"{"session":null,"user":null}"#.into()));
+                *server.get_session_override.lock().unwrap() = Some((status, body.into()));
                 let (seen, ready) = oneshot::channel();
                 *server.get_session_request_seen.lock().unwrap() = Some(seen);
                 let (release, wait) = std::sync::mpsc::channel();
@@ -335,8 +338,7 @@ fn session_cleanup_current_status_expiry_and_offline_signout_still_delete() {
         let secrets = MemorySecrets::new();
         for status in [401, 200] {
             store_login_session(&state, &secrets, &stored_test_session()).unwrap();
-            *server.get_session_override.lock().unwrap() =
-                Some((status, r#"{"session":null}"#.into()));
+            *server.get_session_override.lock().unwrap() = Some((status, "null".into()));
             assert!(matches!(
                 cloud_auth_status(&state, &secrets).await.unwrap(),
                 CloudSessionStatus::Expired
