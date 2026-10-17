@@ -383,7 +383,7 @@ const messagesRoute = createRoute({
   component: lazyRouteComponent(() => import('./messages-page'), 'DesktopMessages'),
 });
 
-/** 最小个人页：账号投影 + 登录/退出操作面（复用设置页 AccountPanel）。 */
+/** 个人页展示资料与战报；登录/退出由顶栏提供，账号管理留在设置页。 */
 const meRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/me',

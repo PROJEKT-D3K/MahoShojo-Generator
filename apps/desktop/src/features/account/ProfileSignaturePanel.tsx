@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { Button } from '@mahoshojo/ui-web/card-library';
 import { ProfileAvatarField, ProfileSignatureField, compressAvatarToWebpBase64InBrowser, useProfileSignatureEditor } from '@mahoshojo/ui-web/settings';
 import { useLeaveGuard } from '../../app/useLeaveGuard';
 import { clearMyProfileAvatar, saveMyProfileAvatar, saveMyProfileSignature } from '../../platform/cloud-bridge';
@@ -102,15 +103,15 @@ export function ProfileSignaturePanel() {
     {currentAvatar.message && <p role="status" className="mb-3 text-xs text-gray-500">{currentAvatar.message}</p>}
     {currentAvatar.error && <div role="alert" className="mb-3 text-xs text-red-800">{currentAvatar.error}
       {currentAvatar.uncertain && <div>请求中断时服务端仍可能已保存；可先读取线上头像核对，再决定是否重试。
-        <button type="button" className="ml-2 underline" disabled={currentAvatar.action !== null} onClick={retry}>读取线上头像</button>
+        <Button size="sm" className="ml-2" disabled={currentAvatar.action !== null} onClick={retry}>读取线上头像</Button>
       </div>}
     </div>}
     <ProfileSignatureField editor={{ ...editor, canSave: editor.canSave && guard.ready }} />
     {editor.error && <div className="mt-2 text-xs text-gray-500">
       请求中断时服务端仍可能已保存；可先读取线上签名核对，再决定是否重试。
-      <button type="button" className="ml-2 underline" disabled={editor.saving} onClick={retry}>读取线上签名</button>
+      <Button size="sm" className="ml-2" disabled={editor.saving} onClick={retry}>读取线上签名</Button>
     </div>}
-    {error && <div className="mt-2 text-xs text-red-800">{error} <button type="button" className="underline" onClick={retry}>重试载入</button></div>}
+    {error && <div className="mt-2 text-xs text-red-800">{error} <Button size="sm" onClick={retry}>重试载入</Button></div>}
     {guard.message && <p role="alert" className="mt-2 text-xs text-red-800">{guard.message}</p>}
   </section>;
 }

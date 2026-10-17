@@ -109,6 +109,34 @@ const expectSharedOutput = (css: string, artifact: string): void => {
     });
     return layers;
   };
+  // Account actions consume the existing Button; its state classes must survive both host pipelines.
+  const buttonUtilities = [
+    'border-gray-300', 'bg-white', 'text-gray-800', 'hover\\:bg-gray-50',
+    'dark\\:border-gray-600', 'dark\\:bg-gray-900', 'dark\\:text-gray-100', 'dark\\:hover\\:bg-gray-800',
+    'focus-visible\\:ring-2', 'focus-visible\\:ring-fuchsia-500', 'focus-visible\\:ring-offset-2',
+    'disabled\\:cursor-not-allowed', 'disabled\\:opacity-50', 'min-h-8', 'min-h-10',
+  ];
+  for (const utility of buttonUtilities) expect(css, `${artifact} 缺少账号按钮样式 ${utility}`).toContain(`.${utility}`);
+  const buttonDeclarations = (utility: string): Record<string, string> => {
+    const declarations: Record<string, string> = {};
+    stylesheet.walkRules((rule) => {
+      // Web keeps nested variant rules; Desktop flattens them during minification.
+      if (rule.selectors.some((selector) => selector === `.${utility}` || selector.startsWith(`.${utility}:`))) {
+        rule.walkDecls((declaration) => { declarations[declaration.prop] = declaration.value; });
+      }
+    });
+    return declarations;
+  };
+  for (const size of [8, 10]) {
+    expect(declarationsFor(`.min-h-${size}`)['min-height']?.replace(/\s/g, ''), artifact)
+      .toBe(`calc(var(--spacing)*${size})`);
+  }
+  expect(buttonDeclarations('hover\\:bg-gray-50')['background-color'], artifact).toBe('var(--color-gray-50)');
+  expect(buttonDeclarations('dark\\:hover\\:bg-gray-800')['background-color'], artifact).toBe('var(--color-gray-800)');
+  expect(buttonDeclarations('focus-visible\\:ring-2')['--tw-ring-shadow'], artifact).toContain('2px');
+  expect(buttonDeclarations('focus-visible\\:ring-fuchsia-500')['--tw-ring-color'], artifact).toBe('var(--color-fuchsia-500)');
+  expect(buttonDeclarations('focus-visible\\:ring-offset-2')['--tw-ring-offset-width'], artifact).toBe('2px');
+  expect(buttonDeclarations('disabled\\:cursor-not-allowed').cursor, artifact).toBe('not-allowed');
   // Brand visibility and modal scroll containment must survive each actual host pipeline.
   expect(declarationsFor('.theme-image-light').display, artifact).toBe('inline-block');
   expect(declarationsFor('.theme-image-dark').display, artifact).toBe('none');

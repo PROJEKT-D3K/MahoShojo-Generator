@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Button } from '../card-library/Button';
 
 export const PROFILE_SIGNATURE_MAX_LENGTH = 120;
 /** 与线上签名一致：CRLF 归一、120 UTF-16 单位；不截出半个代理字符。 */
@@ -106,14 +107,14 @@ export function ProfileSignatureField({ editor }: { editor: ProfileSignatureEdit
     <div className="mt-2 flex items-center justify-between gap-2">
       <div role="status" className="text-xs text-gray-500">提示：支持换行；{hint}</div>
       <div className="flex items-center gap-2">
-        <button type="button" className="rounded-lg border bg-white px-3 py-2 text-xs hover:bg-gray-50 disabled:opacity-50"
-          onClick={() => editor.change('')} disabled={!editor.draft || editor.saving}>清空</button>
-        <button type="button" className="rounded-lg border bg-white px-3 py-2 text-xs hover:bg-gray-50 disabled:opacity-50"
-          onClick={() => void editor.submit()} disabled={!editor.dirty || editor.saving || !editor.canSave}>保存</button>
+        <Button size="sm"
+          onClick={() => editor.change('')} disabled={!editor.draft || editor.saving}>清空</Button>
+        <Button size="sm"
+          onClick={() => void editor.submit()} disabled={!editor.dirty || editor.saving || !editor.canSave}>保存</Button>
       </div>
     </div>
     {editor.conflict && <div className="mt-2 text-xs text-amber-800">线上签名已变化，当前草稿已保留。保存将覆盖线上签名。
-      <button type="button" className="ml-2 underline" disabled={editor.saving} onClick={editor.discard}>放弃草稿并采用线上签名</button>
+      <Button size="sm" className="ml-2" disabled={editor.saving} onClick={editor.discard}>放弃草稿并采用线上签名</Button>
     </div>}
     {editor.error && <div role="alert" className="mt-2 text-xs text-red-800">{editor.error}</div>}
   </div>;

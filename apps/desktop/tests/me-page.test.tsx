@@ -4,14 +4,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), state: {} as any, epoch: 0, refresh: vi.fn(), navigate: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
-vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate: mocks.navigate }), Link: ({ to, children }: any) => <a href={to}>{children}</a> }));
+vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate: mocks.navigate }), Link: ({ to, children, className }: any) => <a href={to} className={className}>{children}</a> }));
 vi.mock('../src/features/account/use-desktop-cloud-session', () => {
   const store = { getSnapshot: () => mocks.state, getCredentialEpoch: () => mocks.epoch, refresh: mocks.refresh };
   return { useDesktopCloudSession: () => ({ state: mocks.state, store }) };
 });
-vi.mock('../src/features/account/AccountPanel', () => ({ AccountPanel: ({ presentation }: { presentation: string }) => <div>会话：{presentation}</div> }));
 vi.mock('../src/features/battle-reports/BattleReportHistoryPanel', () => ({ BattleReportHistoryPanel: () => <section><h2>战报记录</h2></section> }));
 vi.mock('../src/features/external-links/external-links-provider', () => ({ useExternalLinks: () => ({ openFixed: vi.fn() }) }));
+import { buttonClassName } from '@mahoshojo/ui-web/card-library';
 import { DesktopMe } from '../src/app/me-page';
 import { acceptSavedProfileAvatar, beginMyProfileMutation, invalidateTopbarAvatar, resetTopbarAvatarForTests } from '../src/features/account/use-topbar-avatar';
 let root: Root; let container: HTMLDivElement;
@@ -29,12 +29,13 @@ it('does not fetch private profile or mount an editor while signed out', async (
   mocks.state = { ...mocks.state, account: null, verification: 'signed-out' }; await render();
   expect(mocks.invoke).not.toHaveBeenCalled(); expect(container.querySelector('[aria-label="个人资料"]')).toBeNull();
   expect(container.querySelector('textarea')).toBeNull(); expect(container.textContent).toContain('战报记录');
+  expect(container.querySelector('[data-testid="account-panel"]')).toBeNull();
 });
 it('assembles the common page with one battle title and routes editing to account settings', async () => {
   await render(); expect(container.querySelector('h1')?.textContent).toBe('个人页');
   expect(container.textContent).toContain('签名');
   expect(container.querySelector('.border-yellow-200')?.textContent).toContain('不保证长期保存');
-  expect(container.querySelector('.border-yellow-200')?.textContent).toContain('此页不保存本地副本'); expect(container.textContent).toContain('会话：summary');
+  expect(container.querySelector('.border-yellow-200')?.textContent).toContain('此页不保存本地副本'); expect(container.querySelector('[data-testid="account-panel"]')).toBeNull();
   expect([...container.querySelectorAll('h2')].filter(x => x.textContent === '战报记录')).toHaveLength(1);
   expect(container.querySelector('textarea')).toBeNull();
   act(() => [...container.querySelectorAll('button')].find(x => x.textContent === '编辑资料')!.click());
@@ -59,4 +60,18 @@ it.each(['switch', 'relogin'] as const)('ignores late profile 401 after %s and r
   mocks.invoke.mockResolvedValueOnce({ userId: mocks.state.account.userId, signature: '新签名' }); await render();
   await act(async () => old.reject({ code: 'not-authenticated', message: 'old 401' }));
   expect(container.textContent).toContain('新签名'); expect(mocks.refresh).not.toHaveBeenCalled();
+});
+
+it('keeps page navigation as links and gives account actions the shared focusable button style', async () => {
+  await render();
+  const links = [...container.querySelectorAll<HTMLAnchorElement>('nav[aria-label="个人页导航"] a')];
+  expect(links.map(link => link.getAttribute('href'))).toEqual(['/settings', '/']);
+  for (const link of links) {
+    expect(link.className).toBe(buttonClassName({ size: 'sm' }));
+    link.focus(); expect(document.activeElement).toBe(link);
+  }
+  const edit = [...container.querySelectorAll('button')].find(button => button.textContent === '编辑资料')!;
+  expect(edit.type).toBe('button');
+  expect(edit.className).toBe(buttonClassName({ size: 'sm' }));
+  edit.focus(); expect(document.activeElement).toBe(edit);
 });

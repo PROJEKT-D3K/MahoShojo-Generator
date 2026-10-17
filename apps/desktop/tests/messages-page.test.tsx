@@ -357,15 +357,16 @@ describe('desktop messages page', () => {
     ).toBe(true);
   });
 
-  it('/me renders the cached identity + session panel without credential exposure', async () => {
+  it('/me renders the cached profile without a duplicate account panel', async () => {
     await mountAt('/me');
 
     const page = container.querySelector('[data-testid="page-me"]');
     expect(page).not.toBeNull();
-    // 共源资料头显示名称和账号 ID；会话面板使用同一份 cached-first 身份。
+    // 共源资料头显示 cached-first 身份，登录/退出保留在顶栏。
     const profile = page?.querySelector('[aria-label="个人资料"]');
     expect(profile?.textContent).toContain(ACCOUNT.displayName);
     expect(profile?.textContent).toContain(`ID：${ACCOUNT.userId}`);
-    expect(page?.querySelector('[data-testid="account-panel"]')?.textContent).toContain(ACCOUNT.displayName);
+    expect(page?.querySelector('[data-testid="account-panel"]')).toBeNull();
+    expect(container.querySelector('header.global-topbar')?.textContent).toContain('退出登录');
   });
 });

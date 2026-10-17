@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buttonClassName } from '../src/card-library/Button';
 import { ProfileSignatureField, useProfileSignatureEditor, normalizeProfileSignature, type ProfileSignatureEditorState } from '../src/settings';
 let root: Root; let container: HTMLDivElement; let editor: ProfileSignatureEditorState;
 let props: Parameters<typeof useProfileSignatureEditor>[0];
@@ -18,12 +19,19 @@ describe('profile personal signature shared editor', () => {
   it('loads nonempty data once and never permits a blank write before data arrives', async () => {
     await render(); expect(editor.loaded).toBe(false); expect(container.querySelector('textarea')?.disabled).toBe(true);
     await act(() => editor.submit()); expect(props.save).not.toHaveBeenCalled();
-    props.signature = '原有签名'; await render(); expect(editor.draft).toBe('原有签名'); expect(editor.dirty).toBe(false);
+    props.signature = '原有签名'; await render();
+    for (const control of container.querySelectorAll('button')) {
+      expect(control.type).toBe('button');
+      expect(control.className).toBe(buttonClassName({ size: 'sm' }));
+    }
+    expect(editor.draft).toBe('原有签名'); expect(editor.dirty).toBe(false);
     props.signature = '刷新签名'; await render(); expect(editor.draft).toBe('刷新签名');
   });
   it('retains a dirty draft on refetch and requires explicit discard or overwrite', async () => {
     props.signature = '原有'; await render(); act(() => editor.change('草稿'));
     props.signature = '另一端更新'; await render(); expect(editor.draft).toBe('草稿'); expect(editor.conflict).toBe(true);
+    const discard = [...container.querySelectorAll('button')].find(control => control.textContent === '放弃草稿并采用线上签名')!;
+    expect(discard.className).toBe(buttonClassName({ size: 'sm', className: 'ml-2' }));
     act(() => editor.discard()); expect(editor.draft).toBe('另一端更新'); expect(editor.dirty).toBe(false);
   });
   it('uses only confirmed canonical success and single-flights repeated clicks', async () => {

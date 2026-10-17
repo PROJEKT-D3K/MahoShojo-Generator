@@ -1,6 +1,7 @@
 'use client';
 
 import { useId } from 'react';
+import { Button } from '../card-library/Button';
 
 export type ProfileAvatarFieldProps = {
   avatarDataUrl: string | null;
@@ -60,14 +61,13 @@ export function ProfileAvatarField({
           </div>
         </div>
 
-        <button
-          type="button"
-          className="rounded-lg border bg-white px-3 py-2 text-xs hover:bg-gray-50 disabled:opacity-50"
+        <Button
+          size="sm"
           onClick={() => void clearAvatar().catch(() => {})}
           disabled={!avatarDataUrl || busy}
         >
           清除头像
-        </button>
+        </Button>
       </div>
     </div>
   );

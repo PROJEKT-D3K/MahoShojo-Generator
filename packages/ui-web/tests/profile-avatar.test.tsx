@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buttonClassName } from '../src/card-library/Button';
 import { ProfileAvatarField, type ProfileAvatarFieldProps } from '../src/settings';
 
 const ORIGINAL = 'data:image/webp;base64,b2xk';
@@ -36,6 +37,7 @@ describe('controlled profile avatar field', () => {
     expect(container.querySelector('img')?.alt).toBe('头像预览');
     expect(container.querySelector('img')?.src).toBe(ORIGINAL);
     expect(clearButton().textContent).toBe('清除头像');
+    expect(clearButton().className).toBe(buttonClassName({ size: 'sm' }));
     expect(clearButton().disabled).toBe(false);
   });
 

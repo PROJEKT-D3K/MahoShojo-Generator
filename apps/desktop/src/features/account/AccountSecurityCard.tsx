@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { DesktopCloudAccountPage } from '@mahoshojo/contracts/desktop-ipc';
+import { Button } from '@mahoshojo/ui-web/card-library';
 import { SettingsCard, SettingsFieldRow } from '@mahoshojo/ui-web/settings';
 import { openCloudAccountPage } from '../../platform/external-links-bridge';
 
@@ -34,12 +35,12 @@ export function AccountSecurityCard({ openPage = openInBrowser }: {
     }
   };
 
-  const button = (page: DesktopCloudAccountPage, label: string) => <button
-    type="button"
+  const button = (page: DesktopCloudAccountPage, label: string) => <Button
+    size="sm"
     disabled={pending !== null}
     onClick={() => { void open(page); }}
-    className="ui-web-settings-motion rounded-md border border-(--app-border) px-3 py-1.5 text-xs font-medium text-(--app-text-muted) transition-colors enabled:hover:border-(--app-accent-strong) enabled:hover:text-(--app-accent-strong) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--app-accent-strong) disabled:cursor-not-allowed disabled:opacity-50"
-  >{pending === page ? '正在打开…' : label}</button>;
+    className="ui-web-settings-motion"
+  >{pending === page ? '正在打开…' : label}</Button>;
 
   return <SettingsCard title="账号安全" description="以下操作在系统浏览器中完成。浏览器可能登录了不同账号，请先核对。">
     <SettingsFieldRow label="安全设置" description="前往网页版管理账号安全，未登录时请先在浏览器中登录。" control={button('account-security', '在浏览器打开账号安全')} />

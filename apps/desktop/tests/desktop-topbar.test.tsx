@@ -388,6 +388,98 @@ describe('desktop shared topbar', () => {
     expect(accountButton()?.textContent).toBe('登录 / 注册');
   });
 
+  it.each(['signed-out', 'expired'] as const)('/me keeps topbar login reachable for %s without duplicating account controls', async (state) => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'cloud_cached_account') return state === 'expired'
+        ? { account: { userId: 7, username: 'homura' }, sessionExpiresAt: '2026-10-12T00:00:00.000Z' } : null;
+      if (command === 'cloud_auth_status') return { state };
+      return defaultInvokeImpl(command);
+    });
+    const router = await mount();
+    await act(async () => { await router.navigate({ to: '/me' }); }); await settle();
+    const page = () => container.querySelector('[data-testid="page-me"]');
+    expect(page()).not.toBeNull();
+    expect(page()?.querySelector('[data-testid="account-panel"]')).toBeNull();
+    expect(page()?.querySelector('[aria-label="个人资料"]')).toBeNull();
+    expect(accountButton()?.textContent).toBe('登录 / 注册');
+    if (state === 'expired') expect(accountButton()?.title).toContain('会话已过期');
+    await click(accountButton());
+    expect(invokeMock.mock.calls.filter(call => call[0] === 'cloud_login_begin')).toHaveLength(1);
+    expect(container.querySelector('header.global-topbar')?.textContent).toContain('退出登录');
+    expect(page()?.querySelector('[data-testid="account-panel"]')).toBeNull();
+    expect(page()?.querySelector('[aria-label="个人资料"]')).not.toBeNull();
+  });
+
+  it('/me links to settings to cancel a topbar login, then exposes failure feedback and retry there', async () => {
+    let releaseAwait: ((value: unknown) => void) | undefined;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'cloud_login_await') return new Promise(resolve => { releaseAwait = resolve; });
+      if (command === 'cloud_login_cancel') { releaseAwait?.({ status: 'cancelled' }); return true; }
+      return defaultInvokeImpl(command);
+    });
+    const router = await mount();
+    await act(async () => { await router.navigate({ to: '/me' }); }); await settle();
+    await click(accountButton());
+    expect(accountButton()?.textContent).toBe('登录中…');
+    expect(container.querySelector('[data-testid="page-me"] [data-testid="account-panel"]')).toBeNull();
+    const settingsLink = [...container.querySelectorAll('[aria-label="个人页导航"] a')].find(link => link.textContent === '设置');
+    await click(settingsLink ?? null);
+    expect(router.state.location.pathname).toBe('/settings');
+    const panelButton = (label: string) => [...container.querySelectorAll('[data-testid="account-panel"] button')].find(button => button.textContent === label) ?? null;
+    expect(panelButton('复制授权地址')).not.toBeNull();
+    await click(panelButton('取消登录'));
+    expect(invokeMock.mock.calls).toContainEqual(['cloud_login_cancel', { flowId: 'flow-1' }]);
+    expect(accountButton()?.textContent).toBe('登录 / 注册');
+    await click(accountButton());
+    await act(async () => { releaseAwait?.({ status: 'failed', code: 'state-mismatch', message: '回跳不匹配' }); }); await settle();
+    expect(container.querySelector('[data-testid="account-panel"] [role="alert"]')?.textContent).toContain('回跳不匹配');
+    expect(accountButton()?.textContent).toBe('登录 / 注册');
+    await click(accountButton());
+    expect(invokeMock.mock.calls.filter(call => call[0] === 'cloud_login_begin')).toHaveLength(3);
+    await act(async () => { releaseAwait?.({ status: 'cancelled' }); }); await settle();
+  });
+
+  it.each(['login', 'sign-out'] as const)('/me preserves a prior topbar %s failure when opening settings, then clears it on retry', async (operation) => {
+    let failed = false;
+    let signedIn = operation === 'sign-out';
+    const account = { userId: 7, username: 'homura', displayName: 'homura' };
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'cloud_cached_account') return signedIn
+        ? { account, sessionExpiresAt: '2026-10-12T00:00:00.000Z' } : null;
+      if (command === 'cloud_auth_status') return signedIn
+        ? { state: 'active', account } : { state: 'signed-out' };
+      if (command === 'cloud_login_await' && !failed) {
+        failed = true;
+        return { status: 'failed', code: 'state-mismatch', message: '回跳不匹配' };
+      }
+      if (command === 'cloud_sign_out') {
+        if (!failed) {
+          failed = true;
+          throw { code: 'storage-unavailable', message: '本地凭据删除失败' };
+        }
+        signedIn = false;
+        return { revoked: true };
+      }
+      return defaultInvokeImpl(command);
+    });
+    const router = await mount();
+    await act(async () => { await router.navigate({ to: '/me' }); }); await settle();
+    const signOutButton = () => [...container.querySelectorAll('header.global-topbar button')]
+      .find(button => button.textContent === '退出登录') ?? null;
+    await click(operation === 'login' ? accountButton() : signOutButton());
+    expect(failed).toBe(true);
+    const settingsLink = [...container.querySelectorAll('[aria-label="个人页导航"] a')]
+      .find(link => link.textContent === '设置');
+    await click(settingsLink ?? null);
+    expect(router.state.location.pathname).toBe('/settings');
+    const alert = () => container.querySelector('[data-testid="account-panel"] [role="alert"]');
+    expect(alert()?.textContent).toContain(operation === 'login' ? '回跳不匹配' : '本地凭据删除失败');
+    await click(operation === 'login' ? accountButton() : signOutButton());
+    expect(alert()).toBeNull();
+    if (operation === 'login') expect(container.querySelector('header.global-topbar')?.textContent).toContain('homura');
+    else expect(accountButton()?.textContent).toBe('登录 / 注册');
+  });
+
   it('keeps the mobile drawer outside the header and closes it with Escape', async () => {
     await mount();
 

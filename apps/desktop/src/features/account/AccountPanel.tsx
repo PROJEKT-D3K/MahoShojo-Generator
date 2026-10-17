@@ -13,12 +13,13 @@
 // `cloud_auth_status` 验证身份再按需开授权流，没有绕过确认直达
 // `startLogin` 的路径。
 //
-// `refresh()` 在进入设置页时触发一次：会话再验证属于 r2 允许的有界、非阻塞
-// 后台刷新（DESK-ONLINE-008 r2 / ADR §4）；与 bootstrap 在途验证会合为同一次。
+// 进入设置页时做一次有界、非阻塞再验证；与 bootstrap 在途验证会合。
+// 已确认身份下的操作错误留给用户查看，下一次显式操作仍经同一 store 重试。
 
 import { useEffect, useState } from 'react';
 
 import type { DesktopCloudOnlineStatus } from '@mahoshojo/contracts/desktop-cloud';
+import { Button } from '@mahoshojo/ui-web/card-library';
 
 import { invoke } from '@tauri-apps/api/core';
 import { DesktopCloudError, probeCloudOnlineStatus } from '../../platform/cloud-bridge';
@@ -31,7 +32,7 @@ const StatusChip = ({ label, className }: { label: string; className: string }) 
   <span className={`rounded-full border px-2 py-0.5 text-xs ${className}`}>{label}</span>
 );
 
-export const AccountPanel = ({ presentation = 'full' }: { presentation?: 'full' | 'summary' }) => {
+export const AccountPanel = () => {
   const { state: sessionState, store: sessionStore } = useDesktopCloudSession();
   const { account, bootstrapped, verification } = sessionState;
   const attempt =
@@ -46,7 +47,12 @@ export const AccountPanel = ({ presentation = 'full' }: { presentation?: 'full' 
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    void sessionStore.refresh();
+    const current = sessionStore.getSnapshot();
+    // 顶栏登录/退出失败后才打开设置时，不让自动读取抹掉失败原因。
+    // 启动或会话读取失败仍是 unreachable，进入设置可照常重新验证。
+    const hasActionError = current.lastError !== null &&
+      ['verified', 'signed-out', 'expired'].includes(current.verification);
+    if (!hasActionError) void sessionStore.refresh();
     // 不在卸载时取消在途授权：flow 是进程级会话（顶栏发起的登录同样流经
     // 这个 store），只有显式「取消登录」、native deadline 或应用生命周期
     // 结束才终止它——离开设置页不等于放弃授权。
@@ -168,42 +174,36 @@ export const AccountPanel = ({ presentation = 'full' }: { presentation?: 'full' 
 
       <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
         {account === null && !busy && (
-          <button
+          <Button
             type="button"
-            className="rounded-md border border-(--app-border) px-3 py-1.5 hover:bg-(--app-surface-muted)"
             onClick={() => void login()}
           >
             登录账号
-          </button>
+          </Button>
         )}
         {attempt && (
-          <button
+          <Button
             type="button"
-            className="rounded-md border border-(--app-border) px-3 py-1.5 hover:bg-(--app-surface-muted)"
             onClick={() => void sessionStore.cancelLogin()}
           >
             取消登录
-          </button>
+          </Button>
         )}
         {account !== null && !attempt && (
-          <button
+          <Button
             type="button"
-            className="rounded-md border border-(--app-border) px-3 py-1.5 hover:bg-(--app-surface-muted)"
             onClick={() => void signOut()}
           >
             退出登录
-          </button>
+          </Button>
         )}
-        {presentation === 'full' && (
-        <button
+        <Button
           type="button"
-          className="rounded-md border border-(--app-border) px-3 py-1.5 hover:bg-(--app-surface-muted)"
           disabled={probeBusy}
           onClick={() => void runProbe()}
         >
           {probeBusy ? '正在探测…' : '检查在线服务'}
-        </button>
-        )}
+        </Button>
       </div>
 
       {attempt && (
@@ -211,21 +211,20 @@ export const AccountPanel = ({ presentation = 'full' }: { presentation?: 'full' 
           <p>
             已在系统浏览器中打开授权页。完成登录后本面板会自动更新；若浏览器未弹出，请复制以下地址手动打开：
           </p>
-          <p className="break-all rounded-md border border-(--app-border) bg-(--app-surface-muted) px-2 py-1.5 font-mono text-xs">
+          <p className="break-all rounded-md border border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-900 px-2 py-1.5 font-mono text-xs">
             {attempt.authorizeUrl}
           </p>
-          <button
+          <Button
             type="button"
-            className="rounded-md border border-(--app-border) px-3 py-1.5 hover:bg-(--app-surface-muted)"
             onClick={() => void copyAuthorizeUrl()}
           >
             复制授权地址
-          </button>
+          </Button>
           {copied && <span className="ml-2 text-xs text-(--app-text-muted)">已复制</span>}
         </div>
       )}
 
-      {presentation === 'full' && probe && (
+      {probe && (
         <dl className="mt-3 grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm">
           <dt className="text-(--app-text-muted)">服务可达</dt>
           <dd>{probe.reachable ? '是' : '否'}</dd>
