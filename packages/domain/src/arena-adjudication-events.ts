@@ -69,7 +69,10 @@ export const matchesArenaCombatantIdentifier = (combatant: unknown, identifier: 
   if (!normalizedIdentifier || !combatant || typeof combatant !== 'object') return false;
 
   const record = combatant as Record<string, unknown>;
-  const directMatches = [record.id, record.filename, record.sourceDataCardId, record.adjudicationSourceKey]
+  // New library rows can share filenames with uploads or presets. Keep their UI identity distinct.
+  const filename = typeof record.cardLibrarySelectionId === 'string' && /^(cloud|local|cache):.+$/.test(record.cardLibrarySelectionId)
+    ? undefined : record.filename;
+  const directMatches = [record.id, filename, record.sourceDataCardId, record.adjudicationSourceKey]
     .map(normalizeText)
     .some((value) => value === normalizedIdentifier);
   if (directMatches) return true;

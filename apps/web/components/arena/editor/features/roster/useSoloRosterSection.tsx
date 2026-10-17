@@ -17,9 +17,9 @@ import {
 } from '@/lib/arena/generation-ranking';
 
 import { useBattleActions } from '../../../hooks/useBattleActions';
-import { useBattleStore } from '../../../stores/useBattleStore';
+import { getArenaRosterCombatantKey as getCombatantKey, useBattleStore } from '../../../stores/useBattleStore';
 import { formatCombatantCount, isCombatantLimitReached } from '../../../types';
-import type { Combatant, CombatantData } from '../../../types';
+import type { CombatantData } from '../../../types';
 import { getCombatantDisplayName } from '../../../utils/characterValidator';
 import {
   GENERATION_RANKING_MAX_ATTEMPTS,
@@ -39,8 +39,6 @@ const COMBATANT_TYPE_LABELS: Record<CombatantData['type'], string> = {
   canshou: '残兽',
   'general-character': '通用角色',
 };
-
-const getCombatantKey = (combatant: Combatant) => ('id' in combatant ? combatant.id : combatant.filename);
 
 type Queue = 'strict' | 'free';
 
@@ -141,9 +139,9 @@ export const useSoloRosterSectionModel = (input: {
   const copyJson = async (combatant: CombatantData) => {
     const jsonData = JSON.stringify(combatant.data, null, 2);
     await navigator.clipboard.writeText(jsonData);
-    setCopiedStatus((prev) => ({ ...prev, [combatant.filename]: true }));
+    setCopiedStatus((prev) => ({ ...prev, [getCombatantKey(combatant)]: true }));
     setTimeout(() => {
-      setCopiedStatus((prev) => ({ ...prev, [combatant.filename]: false }));
+      setCopiedStatus((prev) => ({ ...prev, [getCombatantKey(combatant)]: false }));
     }, 2000);
   };
 
@@ -414,7 +412,7 @@ export const useSoloRosterSectionModel = (input: {
           {data.wasCorrected ? <span className="text-yellow-600 whitespace-nowrap">(格式已修正)</span> : null}
         </>
       ),
-      copied: Boolean(copiedStatus[data.filename]),
+      copied: Boolean(copiedStatus[getCombatantKey(data)]),
       onShowDetails: () => onShowDetails(data),
       onDownload: data.wasCorrected ? () => downloadJson(data) : undefined,
       onCopy: data.wasCorrected ? () => { void copyJson(data); } : undefined,
@@ -499,15 +497,15 @@ export const useSoloRosterSectionModel = (input: {
     rowExtras,
     actions: {
       moveRow: moveCombatant,
-      removeRow: (key) => removeCombatant(key),
-      setGuidance: (key, value) => updateCombatantCharacterGuidance(key, value),
+      removeRow: (key) => removeCombatant({ rosterKey: key }),
+      setGuidance: (key, value) => updateCombatantCharacterGuidance({ rosterKey: key }, value),
       addPlaceholder: handleAddRandomPlaceholder,
       clearRoster: handleClearRoster,
       createTeam: () => `${TEAM_KEY_PREFIX}${addTeam()}`,
       renameTeam: (key, name) => renameTeam(teamIdFromKey(key), name),
       removeTeam: (key) => removeTeam(teamIdFromKey(key)),
       moveTeam: () => undefined,
-      assignCombatant: (combatantKey, teamKey) => updateCombatantTeam(combatantKey, teamKey ? teamIdFromKey(teamKey) : null),
+      assignCombatant: (combatantKey, teamKey) => updateCombatantTeam({ rosterKey: combatantKey }, teamKey ? teamIdFromKey(teamKey) : null),
       moveTeamMember: () => undefined,
       toggleTeamCollapsed: (key) => toggleTeamCollapsed(teamIdFromKey(key)),
     },

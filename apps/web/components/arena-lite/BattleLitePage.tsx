@@ -10,6 +10,7 @@ import { ErrorMessage } from '@/components/ErrorMessage';
 import { BattleLitePageView } from '@mahoshojo/ui-web/arena';
 import { useAuth } from '@/lib/useAuth';
 import { ONLINE_DATA_CARD_TYPES } from '@mahoshojo/contracts/data-cards';
+import { getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
 
 import { BattleActions } from '@/components/arena/components/BattleActions';
 import { BattleModeSwitcher } from '@/components/arena/components/BattleModeSwitcher';
@@ -94,15 +95,10 @@ export function BattleLitePage() {
     selectedQuestionnaires,
   });
 
-  const selectedCharacterDataCardIds = useMemo(() => {
-    const out: string[] = [];
-    combatants.forEach((combatant) => {
-      if ('sourceDataCardId' in combatant && typeof combatant.sourceDataCardId === 'string' && combatant.sourceDataCardId) {
-        out.push(combatant.sourceDataCardId);
-      }
-    });
-    return out;
-  }, [combatants]);
+  const selectedCharacterSelectionIds = useMemo(
+    () => combatants.map(getCombatantCardLibrarySelectionId).filter((id): id is string => id !== null),
+    [combatants],
+  );
 
   const selectedScenarioDataCardIds = useMemo(() => {
     return typeof scenario?.sourceDataCardId === 'string' && scenario.sourceDataCardId ? [scenario.sourceDataCardId] : [];
@@ -240,19 +236,22 @@ export function BattleLitePage() {
       <BattleDataModal
         isOpen={showBattleDataModal}
         onClose={() => setShowBattleDataModal(false)}
-        onSelectCard={(card) => void handleSelectDataCard(card)}
+        onSelectCard={(card, context) => dataModalType === 'character'
+          ? handleToggleCombatantDataCard(card, true, context)
+          : handleSelectDataCard(card)}
         onToggleCard={
           dataModalType === 'character'
-            ? (card, nextSelected) => void handleToggleCombatantDataCard(card, nextSelected)
+            ? (card, nextSelected, context) => handleToggleCombatantDataCard(card, nextSelected, context)
             : (dataModalType === 'material' ? (card, nextSelected) => void handleToggleMaterialDataCard(card, nextSelected) : undefined)
         }
         selectedType={dataModalType === 'character' ? 'character' : (dataModalType === 'material' ? 'all' : 'scenario')}
         allowedTypes={dataModalType === 'material' ? [...ONLINE_DATA_CARD_TYPES] : undefined}
         titleOverride={dataModalType === 'material' ? '选择素材' : undefined}
         selectionMode={dataModalType === 'scenario' ? 'single' : 'multi'}
+        selectedSelectionIds={dataModalType === 'character' ? selectedCharacterSelectionIds : undefined}
         selectedCardIds={
           dataModalType === 'character'
-            ? selectedCharacterDataCardIds
+            ? undefined
             : (dataModalType === 'material' ? selectedMaterialDataCardIds : selectedScenarioDataCardIds)
         }
         selectedCountOverride={dataModalType === 'character' ? combatants.length : (dataModalType === 'material' ? materials.length : undefined)}

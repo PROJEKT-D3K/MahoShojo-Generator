@@ -43,6 +43,17 @@ describe('real Web Strict controls consume shared configuration checks', () => {
     expect(container.textContent).toContain('一键严格设置');
     expect(fetch).not.toHaveBeenCalled();
   });
+  it('严格设置按卡库身份清除同名角色引导，旧上传角色仍兼容', async () => {
+    useBattleStore.setState({ combatants: [
+      { type: 'general-character', filename: '同名.json', isValid: false, isPreset: false, cardLibrarySelectionId: 'local:one', characterGuidance: '本地行动', data: { name: '同名' } },
+      { type: 'general-character', filename: '同名.json', isValid: false, isPreset: false, cardLibrarySelectionId: 'cache:two', characterGuidance: '缓存行动', data: { name: '同名' } },
+      { type: 'general-character', filename: 'local:one', isValid: false, isPreset: false, characterGuidance: '上传行动', data: { name: '上传' } },
+    ] });
+    await render(); await apply();
+    expect(useBattleStore.getState().combatants.map((item) => 'data' in item ? item.characterGuidance : undefined)).toEqual(['', '', '']);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('retains the real one-click setup action, and keeps it disabled while generating', async () => {
     const prior = useBattleStore.getState();
     useBattleStore.setState({ battleMode: 'daily', selectedLanguage: 'en-US',

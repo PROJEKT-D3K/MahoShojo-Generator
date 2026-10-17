@@ -10,6 +10,7 @@ import { ErrorMessage } from '@/components/ErrorMessage';
 import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
 import { useAuth } from '@/lib/useAuth';
 import { ONLINE_DATA_CARD_TYPES } from '@mahoshojo/contracts/data-cards';
+import { getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
 
 import { BattleHeader } from './components/BattleHeader';
 import { PresetSelector } from './components/PresetSelector';
@@ -134,15 +135,10 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
     return auxCount > 0 ? `主情景：${main}｜辅助：${auxCount}` : `主情景：${main}`;
   }, [auxScenarios.length, battleMode, scenario.content, scenario.fileName]);
 
-  const selectedCharacterDataCardIds = useMemo(() => {
-    const out: string[] = [];
-    combatants.forEach((c) => {
-      if ('sourceDataCardId' in c && typeof c.sourceDataCardId === 'string' && c.sourceDataCardId) {
-        out.push(c.sourceDataCardId);
-      }
-    });
-    return out;
-  }, [combatants]);
+  const selectedCharacterSelectionIds = useMemo(
+    () => combatants.map(getCombatantCardLibrarySelectionId).filter((id): id is string => id !== null),
+    [combatants],
+  );
 
   const selectedScenarioDataCardIds = useMemo(() => {
     return typeof scenario?.sourceDataCardId === 'string' && scenario.sourceDataCardId ? [scenario.sourceDataCardId] : [];
@@ -387,10 +383,12 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
       <BattleDataModal
         isOpen={showBattleDataModal}
         onClose={() => setShowBattleDataModal(false)}
-        onSelectCard={(card) => void handleSelectDataCard(card)}
+        onSelectCard={(card, context) => dataModalType === 'character'
+          ? handleToggleCombatantDataCard(card, true, context)
+          : handleSelectDataCard(card)}
         onToggleCard={
           dataModalType === 'character'
-            ? (card, nextSelected) => void handleToggleCombatantDataCard(card, nextSelected)
+            ? (card, nextSelected, context) => handleToggleCombatantDataCard(card, nextSelected, context)
             : (
               dataModalType === 'auxScenario'
                 ? (card, nextSelected) => void handleToggleAuxScenarioDataCard(card, nextSelected)
@@ -409,9 +407,10 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
             : (dataModalType === 'material' ? '选择素材' : undefined)
         }
         selectionMode={dataModalType === 'scenario' ? 'single' : 'multi'}
+        selectedSelectionIds={dataModalType === 'character' ? selectedCharacterSelectionIds : undefined}
         selectedCardIds={
           dataModalType === 'character'
-            ? selectedCharacterDataCardIds
+            ? undefined
             : (
               dataModalType === 'auxScenario'
                 ? selectedAuxScenarioDataCardIds

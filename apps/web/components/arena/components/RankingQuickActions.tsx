@@ -23,7 +23,7 @@ import { getScenarioPresetByFilename } from '@/lib/scenario-presets';
 import { useAuth } from '@/lib/useAuth';
 
 import { useBattleActions } from '../hooks/useBattleActions';
-import { useBattleStore } from '../stores/useBattleStore';
+import { getArenaRosterCombatantKey, useBattleStore } from '../stores/useBattleStore';
 import type { BattleStoreState, CombatantData } from '../types';
 
 type StrictRangeInfo = {
@@ -339,12 +339,12 @@ export function RankingQuickActions() {
       }
     }
 
-    const configuration = buildStrictSetupConfiguration(seasonStrictRules, readableCombatants.map((combatant) => combatant.filename));
+    const configuration = buildStrictSetupConfiguration(seasonStrictRules, readableCombatants.map(getArenaRosterCombatantKey));
     setBattleMode(configuration.battleMode);
     setSelectedLanguage(configuration.selectedLanguage);
     updateSettings(configuration.settings);
     setAdjudicationEvents(configuration.adjudicationEvents);
-    configuration.characterGuidanceUpdates.forEach(({ filename, characterGuidance }) => updateCombatantCharacterGuidance(filename, characterGuidance));
+    configuration.characterGuidanceUpdates.forEach(({ filename, characterGuidance }) => updateCombatantCharacterGuidance({ rosterKey: filename }, characterGuidance));
     if (configuration.clearScenario) clearScenario();
     if (configuration.clearAuxScenarios) clearAuxScenarios();
     if (configuration.clearMaterials) clearMaterials();

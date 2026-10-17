@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AdjudicatorEvent } from '../src/arena-types';
 import * as events from '../src/arena-adjudication-events';
+import { getCombatantCardLibrarySelectionId } from '../src/arena-file-parser';
 import { buildArenaQuestionnaireRequest } from '../src/arena-questionnaire-request';
 import { buildQuestionnaireSelectionLoreText, type QuestionnaireSelection } from '../src/questionnaire-selection';
 import * as legacy from './fixtures/arena-source-events-legacy';
@@ -10,6 +11,21 @@ const event = (id: string, sourceKey?: string): AdjudicatorEvent => ({
 });
 
 describe('高级单次配置纯规则与提取前 Web 双跑', () => {
+  it('卡库 UI 身份来自外层来源，显式行不匹配同名上传或预设', () => {
+    const local = { filename: 'same.json', cardLibrarySelectionId: 'local:same', data: { sourceDataCardId: 'same' } };
+    const cache = { filename: 'same.json', cardLibrarySelectionId: 'cache:same', sourceDataCardId: 'same' };
+    expect(getCombatantCardLibrarySelectionId(local)).toBe('local:same');
+    expect(getCombatantCardLibrarySelectionId(cache)).toBe('cache:same');
+    expect(getCombatantCardLibrarySelectionId({ sourceDataCardId: ' same ' })).toBe('cloud:same');
+    expect(getCombatantCardLibrarySelectionId({ data: { sourceDataCardId: 'same', cardLibrarySelectionId: 'cloud:same' } })).toBeNull();
+    expect(events.matchesArenaCombatantIdentifier(local, 'same.json')).toBe(false);
+    expect(events.matchesArenaCombatantIdentifier(cache, 'same.json')).toBe(false);
+    expect(events.matchesArenaCombatantIdentifier({ filename: 'same.json' }, 'same.json')).toBe(true);
+    // Legacy string callers never interpret arbitrary user text as a new UI row key.
+    expect(events.matchesArenaCombatantIdentifier(local, 'local:same')).toBe(false);
+    expect(events.matchesArenaCombatantIdentifier(cache, 'local:same')).toBe(false);
+    expect(events.matchesArenaCombatantIdentifier({ sourceDataCardId: 'same' }, 'same')).toBe(true);
+  });
   it.each([
     null, {}, { id: ' id ' }, { filename: ' file ', fileName: ' scenario ' },
     { sourceDataCardId: ' card ', filename: 'file', fileName: 'scenario', sourceDataCardName: 'label' },

@@ -1,8 +1,16 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
+import { getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
+import type { CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 
-import { buildAdjudicationSourceKey, prepareAdjudicationEventImport } from '@/lib/arena/adjudication-events';
+import {
+  appendAdjudicationEventsFromSource,
+  buildAdjudicationSourceKey,
+  getCombatantAdjudicationSourceKey,
+  prepareAdjudicationEventImport,
+  removeAdjudicationEventsForKeys,
+} from '@/lib/arena/adjudication-events';
 import { buildArenaMaterialState } from '@/lib/arena/materials';
 import {
   canAddArenaReferenceItems,
@@ -60,6 +68,7 @@ export const materializeRandomCombatants = (
 });
 
 export const useBattleActions = () => {
+  const pendingLibrarySelections = useRef(new Map<string, symbol>());
   const useBattleSelector = <T,>(selector: (state: BattleStoreState) => T) => useBattleStore(selector);
   const combatants = useBattleSelector((state) => state.combatants);
   const auxScenarios = useBattleSelector((state) => state.auxScenarios);
@@ -68,7 +77,6 @@ export const useBattleActions = () => {
   const setError = useBattleSelector((state) => state.setError);
   const addCombatant = useBattleSelector((state) => state.addCombatant);
   const setCombatants = useBattleSelector((state) => state.setCombatants);
-  const removeCombatant = useBattleSelector((state) => state.removeCombatant);
   const setScenario = useBattleSelector((state) => state.setScenario);
   const addAuxScenario = useBattleSelector((state) => state.addAuxScenario);
   const removeAuxScenario = useBattleSelector((state) => state.removeAuxScenario);
@@ -433,19 +441,124 @@ export const useBattleActions = () => {
   );
 
   const handleToggleCombatantDataCard = useCallback(
-    async (cardData: any, nextSelected: boolean) => {
-      const sourceDataCardId = mapDataCardRuntimeSourceInfo(cardData).sourceDataCardId ?? '';
-      if (!sourceDataCardId) return;
+    async (cardData: unknown, nextSelected: boolean, context: CardLibrarySelectionContext): Promise<void | false> => {
+      const selectionId = context.rowSelectionId ?? context.selectionId;
+      if (context.signal?.aborted || !/^(cloud|local|cache):.+$/.test(selectionId)) return false;
+      const isSelected = (item: unknown) => getCombatantCardLibrarySelectionId(item) === selectionId;
 
+      // 撤选只依赖展示行身份；失效缓存或账号切换后不再读取正文和云端 ID。
       if (!nextSelected) {
-        removeCombatant(sourceDataCardId);
-        setError(null);
-        return;
+        pendingLibrarySelections.current.delete(selectionId);
+        let removed = false;
+        useBattleStore.setState((state) => {
+          if (context.signal?.aborted || state.isGenerating) return state;
+          const removedItems = state.combatants.filter(isSelected);
+          if (removedItems.length === 0) return state;
+          removed = true;
+          return {
+            combatants: state.combatants.filter((item) => !isSelected(item)),
+            adjudicationEvents: removeAdjudicationEventsForKeys(
+              state.adjudicationEvents,
+              removedItems.map(getCombatantAdjudicationSourceKey),
+            ),
+            error: null,
+          };
+        });
+        return removed ? undefined : false;
       }
 
-      await handleSelectDataCard(cardData);
+      if (pendingLibrarySelections.current.has(selectionId)
+        || useBattleStore.getState().isGenerating
+        || useBattleStore.getState().combatants.some(isSelected)) return false;
+      const token = Symbol();
+      pendingLibrarySelections.current.set(selectionId, token);
+      const releasePending = () => {
+        if (pendingLibrarySelections.current.get(selectionId) === token) pendingLibrarySelections.current.delete(selectionId);
+      };
+      context.signal?.addEventListener('abort', releasePending, { once: true });
+      const isCurrent = () => !context.signal?.aborted && pendingLibrarySelections.current.get(selectionId) === token;
+
+      try {
+        if (!context.rawSourceData) throw new Error('数据卡缺少原始正文，请重新选择。');
+        // 正文与展示元数据分离，保留原卡中同名的 _cardId 等用户扩展字段。
+        const data = JSON.parse(JSON.stringify(context.rawSourceData)) as Record<string, unknown>;
+        const metadata = mapDataCardRuntimeSourceInfo({
+          ...(cardData as Record<string, unknown>),
+          _storageLocation: context.storageLocation,
+          _cardId: context.storageLocation === 'cloud' ? context.cloudCardId : '',
+          _updatedAt: context.storageLocation === 'cloud' ? context.cloudCardUpdatedAt : undefined,
+        });
+        const resolvedName = getCombatantDisplayName(data);
+        const inferredTemplate = resolveArenaDataCardTemplate(data, 'character');
+        if (inferredTemplate === 'scenario' || inferredTemplate === 'general-scenario') {
+          throw new Error('请选择“角色”类型的数据卡。');
+        }
+        if (context.storageLocation === 'cloud'
+          && (!context.cloudCardId || context.selectionId !== `cloud:${context.cloudCardId}`)) {
+          throw new Error('线上数据卡来源无效，请重新选择。');
+        }
+        const isValid = await verifyOrigin(data);
+        if (!isCurrent()) return false;
+        const adjudicationSourceKey = `library:${selectionId}`;
+        const prepared = prepareAdjudicationEventImport(data.adjudicationEvents, resolvedName, adjudicationSourceKey);
+        const combatant: CombatantData = {
+          type: inferCombatantType(data),
+          data,
+          filename: `${metadata.sourceDataCardName || resolvedName}.json`,
+          isValid,
+          isPreset: false,
+          isNonStandard: false,
+          cardLibrarySelectionId: selectionId,
+          adjudicationSourceKey,
+          sourceDataCardName: metadata.sourceDataCardName,
+          sourceDataCardDescription: metadata.sourceDataCardDescription,
+          ...(context.storageLocation === 'cloud' ? {
+            sourceDataCardId: context.cloudCardId,
+            sourceDataCardUpdatedAt: context.cloudCardUpdatedAt,
+            sourceDataCardCreatedAt: metadata.sourceDataCardCreatedAt,
+            sourceIsPublic: metadata.sourceIsPublic,
+            sourceAuthor: metadata.sourceAuthor,
+            sourceDataCardUsageCount: metadata.sourceDataCardUsageCount,
+            sourceDataCardLikeCount: metadata.sourceDataCardLikeCount,
+            sourceDataCardFavoriteCount: metadata.sourceDataCardFavoriteCount,
+          } : {}),
+        };
+        let committed = false;
+        // 名单和事件在同一次更新中提交；异步校验结束后按最新名单判重/限额。
+        useBattleStore.setState((state) => {
+          if (!isCurrent() || state.isGenerating || state.combatants.some(isSelected)) return state;
+          if (isCombatantLimitReached(state.combatants.length, MAX_COMBATANTS)) {
+            return { error: `❌ 最多只能添加 ${MAX_COMBATANTS} 位角色。` };
+          }
+          committed = true;
+          return {
+            combatants: [...state.combatants, combatant],
+            adjudicationEvents: prepared.status === 'ready'
+              ? appendAdjudicationEventsFromSource(state.adjudicationEvents, prepared.events, prepared.sourceKey)
+              : state.adjudicationEvents,
+            error: prepared.status === 'legacy' ? `⚠️ 文件 "${resolvedName}" 包含旧版随机事件，已被忽略。` : null,
+          };
+        });
+        if (!isCurrent()) {
+          if (committed) {
+            useBattleStore.setState((state) => ({
+              combatants: state.combatants.filter((item) => item !== combatant),
+              adjudicationEvents: removeAdjudicationEventsForKeys(state.adjudicationEvents, [adjudicationSourceKey]),
+            }));
+          }
+          return false;
+        }
+        return committed ? undefined : false;
+      } catch (error) {
+        if (!isCurrent()) return false;
+        setError(`❌ 添加角色失败: ${error instanceof Error ? error.message : '未知错误'}`);
+        throw error;
+      } finally {
+        context.signal?.removeEventListener('abort', releasePending);
+        releasePending();
+      }
     },
-    [handleSelectDataCard, removeCombatant, setError]
+    [setError]
   );
 
   const handleRandomMatchAuxScenario = useCallback(async () => {

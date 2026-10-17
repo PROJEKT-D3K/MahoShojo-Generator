@@ -10,7 +10,7 @@ import { ARENA_CANONICAL_CAPABILITIES } from '@mahoshojo/contracts/arena-capabil
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { SCENARIO_PRESET_LIST } from '@mahoshojo/domain/scenario-presets';
 import { normalizeCustomStoryLength } from '@mahoshojo/domain/story-length';
-import { parseCombatantsFromText } from '@mahoshojo/domain/arena-file-parser';
+import { getCombatantCardLibrarySelectionId, parseCombatantsFromText } from '@mahoshojo/domain/arena-file-parser';
 import { buildArenaMaterialState, type ArenaMaterialState } from '@mahoshojo/domain/arena-materials';
 import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-operations';
 import { AdvancedArenaHeader, ArenaPageLinks, ArenaRankingLinks, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeader, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, ArenaCharacterDatabaseSelector, StoryOptionsPanel, CharacterPresetPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
@@ -209,7 +209,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const reportError = (cause: unknown) => { setError(cause instanceof Error ? cause.message : '操作失败，原输入仍保留。'); };
   const performImport = async (load: Parameters<DesktopArenaSession['importInput']>[0]) => {
     if (roomOwner.isConstrained() || !guard.ready || diagnosisFlight.current || preparing.current || aiState.generationActive || packageOwner.isBusy()) throw new Error('请等待当前操作完成。');
-    const epoch = ownerEpoch.current; setError(null); try { await session.importInput(load); } catch (cause) { if (epoch === ownerEpoch.current) reportError(cause); throw cause; }
+    const epoch = ownerEpoch.current; setError(null); try { await session.importInput(load); } catch (cause) { if (epoch === ownerEpoch.current && !(cause instanceof Error && cause.name === 'AbortError')) reportError(cause); throw cause; }
   };
   const prepareStrict = async (season: PublicSeasonMeta) => {
     if (roomOwner.isConstrained() || disabled || preparing.current || strictPreparation.current || session.isBusy() || storyOwner.isBusy() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection) return;
@@ -282,9 +282,11 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const parseSelectedCharacters = async (context: CardLibrarySelectionContext, warnings: string[]) => {
     const parsed = await parseCharacters(JSON.stringify(context.rawSourceData), warnings);
     const onlineId = context.storageLocation === 'cloud' && context.cloudCardId?.trim() ? context.cloudCardId.trim() : null;
-    const sourceIdentity = buildAdjudicationSourceKey({ sourceDataCardId: onlineId ?? context.selectionId }) ?? undefined;
+    const selectionId = context.rowSelectionId ?? context.selectionId;
+    if (onlineId && context.selectionId !== `cloud:${onlineId}`) throw new Error('角色库来源身份不匹配，请重新选择。');
     return (onlineId ? retainDesktopArenaSelectionSource(parsed, context.rawSourceData, { kind: 'online', cardId: onlineId }) : parsed)
-      .map(item => ({ ...item, adjudicationSourceKey: sourceIdentity,
+      .map(item => ({ ...item, cardLibrarySelectionId: selectionId,
+        adjudicationSourceKey: `library:${selectionId}`,
         ...(onlineId && context.cloudCardUpdatedAt?.trim() ? { sourceDataCardUpdatedAt: context.cloudCardUpdatedAt.trim() } : {}) }));
   };
   const randomMatchCharacter = async () => {
@@ -302,6 +304,37 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       });
     } catch { /* performImport 已报告当前作用域错误，原草稿保持不变。 */ }
     finally { if (matchingRequest.current === token) { matchingRequest.current = null; setIsMatchingCharacter(false); } }
+  };
+  const toggleCharacterCard = async (_payload: unknown, selected: boolean, context: CardLibrarySelectionContext): Promise<void | false> => {
+    if (library !== 'character' || disabled || context.signal?.aborted) return false;
+    const epoch = ownerEpoch.current, selectionId = context.rowSelectionId ?? context.selectionId;
+    const currentSelection = () => epoch === ownerEpoch.current && !context.signal?.aborted && !roomOwner.isConstrained();
+    let applied = false;
+    try {
+      await performImport(async signal => {
+        const warnings: string[] = [];
+        if (selected && !context.rawSourceData) throw new Error('卡库未提供完整原文，请重新选择。');
+        const items = selected ? await parseSelectedCharacters(context, warnings) : [];
+        return current => {
+          if (!currentSelection() || signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          const indices = current.combatants.flatMap((item, index) => getCombatantCardLibrarySelectionId(item) === selectionId ? [index] : []);
+          if (selected) {
+            if (indices.length) return current;
+            const next = applyCharacters(current, items, warnings);
+            applied = true;
+            return next;
+          }
+          if (!indices.length) return current;
+          applied = true;
+          return product === 'arena' ? removeAdvancedCombatants(current, indices)
+            : { ...current, combatants: current.combatants.filter((_, index) => !indices.includes(index)) };
+        };
+      });
+    } catch (cause) {
+      if (!currentSelection() || cause instanceof Error && cause.name === 'AbortError') return false;
+      throw cause;
+    }
+    return applied && currentSelection() ? undefined : false;
   };
   const chooseCard = (_payload: unknown, context: CardLibrarySelectionContext) => {
     if (!context.rawSourceData || disabled || !library) return;
@@ -631,7 +664,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
       showScenario={draft.battleMode === 'scenario'} hasScenario={!!draft.scenario.content} materialCount={draft.materials.length} referenceItemCount={referenceCount} maxReferenceItems={limits.maxReferenceItemsSanity}
       copy={{ modeDescription: '不同模式决定故事风格', storyOptionsDescription: '设置故事方向、历史读写和 AI 目标' }} slots={slots} />}
-    <CardLibraryModal host={libraryHost} isOpen={library !== null && !roomState.constrained} onClose={() => setLibrary(null)} onSelectCard={chooseCard} selectedType={library === 'material' ? 'all' : library === 'auxScenario' ? 'scenario' : library ?? 'character'} allowedTypes={library === 'material' ? undefined : [library === 'auxScenario' ? 'scenario' : library ?? 'character']} allowDeckImport={false} />
+    <CardLibraryModal host={libraryHost} isOpen={library !== null && !roomState.constrained} onClose={() => setLibrary(null)}
+      onSelectCard={library === 'character' ? undefined : chooseCard} onToggleCard={library === 'character' ? toggleCharacterCard : undefined}
+      selectionMode={library === 'character' ? 'multi' : 'single'}
+      selectedSelectionIds={library === 'character' ? draft.combatants.flatMap(item => { const id = getCombatantCardLibrarySelectionId(item); return id ? [id] : []; }) : undefined}
+      selectedCountOverride={library === 'character' ? draft.combatants.length : undefined} maxSelected={library === 'character' ? limits.maxCombatants : undefined}
+      selectedType={library === 'material' ? 'all' : library === 'auxScenario' ? 'scenario' : library ?? 'character'} allowedTypes={library === 'material' ? undefined : [library === 'auxScenario' ? 'scenario' : library ?? 'character']} allowDeckImport={false} />
     <NarrativeHistoryPicker isOpen={historyOpen && !roomState.constrained} onClose={() => setHistoryOpen(false)} entries={historySource?.entries ?? []} lastUpdatedAt={historySource?.lastUpdatedAt ?? null} sort={historySort} onSort={setHistorySort}
       readStatus={historySource?.status ?? 'loading'} formatDateTime={(value) => value} sourceHint={historySource?.message ?? '本地库只读引用，源记录保持不变。'}
       onConfirm={(entries) => { update({ historyReferences: entries }); setHistoryOpen(false); }} />

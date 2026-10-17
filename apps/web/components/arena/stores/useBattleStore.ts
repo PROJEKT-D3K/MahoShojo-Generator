@@ -3,10 +3,12 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { WebPackageRefSchema } from '@mahoshojo/contracts/web-package';
+import { getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
 
 import {
   BattleStoreState,
   BattleSettings,
+  type CombatantIdentifier,
   type ArenaGenerationRepairContext,
   isCombatantLimitReached,
   MAX_COMBATANTS,
@@ -38,6 +40,25 @@ import {
   removeQuestionnaireSelection,
   setQuestionnaireSelectionLore,
 } from '@mahoshojo/domain/questionnaire-selection';
+
+/** 仅供 roster 展示/操作使用；不持久化，也不覆盖原始文件名。 */
+export const getArenaRosterCombatantKey = (combatant: BattleStoreState['combatants'][number]): string => {
+  const libraryId = getCombatantCardLibrarySelectionId(combatant);
+  return JSON.stringify(libraryId
+    ? ['library', libraryId]
+    : 'id' in combatant ? ['placeholder', combatant.id] : ['file', combatant.filename]);
+};
+
+const matchesLegacyCombatantFilename = (item: BattleStoreState['combatants'][number], identifier: string): boolean =>
+  item.filename === identifier
+  && !('cardLibrarySelectionId' in item && item.cardLibrarySelectionId === getCombatantCardLibrarySelectionId(item));
+
+const buildCombatantIdentifierMatcher = (
+  identifier: CombatantIdentifier,
+  legacyMatch: (item: BattleStoreState['combatants'][number], value: string) => boolean = matchesArenaCombatantIdentifier,
+) => (item: BattleStoreState['combatants'][number]) => typeof identifier === 'string'
+  ? legacyMatch(item, identifier)
+  : getArenaRosterCombatantKey(item) === identifier.rosterKey;
 
 const cloneGenerationRepairContext = (
   context: ArenaGenerationRepairContext | null,
@@ -215,7 +236,7 @@ export const useBattleStore = create<BattleStoreState>()(
 
       removeCombatant: (identifier) =>
         set((state) => {
-          const removed = state.combatants.filter((item) => matchesArenaCombatantIdentifier(item, identifier));
+          const removed = state.combatants.filter(buildCombatantIdentifierMatcher(identifier));
           const removedKeys = removed.map(getCombatantAdjudicationSourceKey).filter(Boolean);
           return {
             combatants: state.combatants.filter((item) => !removed.includes(item)),
@@ -251,30 +272,25 @@ export const useBattleStore = create<BattleStoreState>()(
         }),
 
       updateCombatantTeam: (identifier, teamId) =>
-        set((state) => ({
-          combatants: state.combatants.map((combatant) => {
-            const isMatch = 'id' in combatant ? combatant.id === identifier || combatant.filename === identifier : combatant.filename === identifier;
-            if (isMatch) {
-              return {
-                ...combatant,
-                teamId: !teamId ? undefined : teamId,
-              };
-            }
-            return combatant;
-          }),
-        })),
+        set((state) => {
+          const matches = buildCombatantIdentifierMatcher(identifier, (item, value) =>
+            ('id' in item && item.id === value) || matchesLegacyCombatantFilename(item, value));
+          return {
+            combatants: state.combatants.map((combatant) => matches(combatant)
+              ? { ...combatant, teamId: !teamId ? undefined : teamId }
+              : combatant),
+          };
+        }),
 
-      updateCombatantCharacterGuidance: (filename, guidance) =>
-        set((state) => ({
-          combatants: state.combatants.map((combatant) => {
-            if (!('data' in combatant)) return combatant;
-            if (combatant.filename !== filename) return combatant;
-            return {
-              ...combatant,
-              characterGuidance: guidance,
-            };
-          }),
-        })),
+      updateCombatantCharacterGuidance: (identifier, guidance) =>
+        set((state) => {
+          const matches = buildCombatantIdentifierMatcher(identifier, matchesLegacyCombatantFilename);
+          return {
+            combatants: state.combatants.map((combatant) => 'data' in combatant && matches(combatant)
+              ? { ...combatant, characterGuidance: guidance }
+              : combatant),
+          };
+        }),
 
       addTeam: (name) => {
         let createdId = 1;

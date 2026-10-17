@@ -21,6 +21,8 @@ export interface CombatantData {
   /** 从多人 authority materialize 后保留原始 opaque resource key。 */
   arenaRoomKey?: string;
   adjudicationSourceKey?: string;
+  /** Library row identity for selection UI only; never a server reference or card-body field. */
+  cardLibrarySelectionId?: string;
   /** 用户对该角色的行动/想法引导（可选，最多 100 字）。 */
   characterGuidance?: string;
   sourceDataCardId?: string;
@@ -35,6 +37,14 @@ export interface CombatantData {
   sourceDataCardFavoriteCount?: number;
 }
 
+/** Legacy online inputs retain their cloud UI identity; names and card-body fields cannot supply it. */
+export const getCombatantCardLibrarySelectionId = (value: unknown): string | null => {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Record<string, unknown>;
+  if (typeof item.cardLibrarySelectionId === 'string' && /^(cloud|local|cache):.+$/.test(item.cardLibrarySelectionId)) return item.cardLibrarySelectionId;
+  return typeof item.sourceDataCardId === 'string' && item.sourceDataCardId.trim()
+    ? `cloud:${item.sourceDataCardId.trim()}` : null;
+};
 
 export interface ParseOptions {
   existingCount: number;

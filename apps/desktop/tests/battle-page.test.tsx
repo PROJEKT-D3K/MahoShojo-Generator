@@ -389,10 +389,10 @@ describe('Desktop /battle journey against loopback fixture', () => {
   it('selects real local and offline public-cache bodies without claiming online authority', async () => {
     const source: LocalCardRecordV1 = { id: 'lc_0123456789abcdef0123456789abcdef', schemaVersion: 1, storageLocation: 'local', cardType: 'character', title: '本地角色', data: { templateId: '通用角色', name: '本地角色', content: '原卡原文', signature: 'source-only' }, contentDigest: `sha256:${'a'.repeat(64)}`, provenance: { kind: 'unsigned', execution: 'imported' }, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' }; docs.set(source.id, source);
     await mount(); const section = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('🌐 在线角色库 / 随机匹配'))!; await act(async () => section.click()); await settle();
-    await click('浏览在线角色库'); const localTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(item => item.textContent?.startsWith('本地库'))!; await act(async () => localTab.click()); await vi.waitFor(() => expect(document.body.textContent).toContain('本地角色')); await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="选择本地角色"]')!.click());
+    await click('浏览在线角色库'); const localTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(item => item.textContent?.startsWith('本地库'))!; await act(async () => localTab.click()); await vi.waitFor(() => expect(document.body.textContent).toContain('本地角色')); await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="加入"]')!.click());
     await settle(); expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.combatants[0].data.content).toBe('原卡原文'); expect(docs.get(source.id)).toEqual(source);
-    await click('浏览在线角色库'); const publicTab = [...document.querySelectorAll('button')].find((item) => item.textContent?.startsWith('公开'))!;
-    expect(publicTab).toBeTruthy(); await act(async () => publicTab.click()); await settle(); await click('已缓存'); await vi.waitFor(() => expect(document.body.textContent).toContain('缓存角色')); await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="选择缓存角色"]')!.click()); await settle();
+    const publicTab = [...document.querySelectorAll('button')].find((item) => item.textContent?.startsWith('公开'))!;
+    expect(publicTab).toBeTruthy(); await act(async () => publicTab.click()); await settle(); await click('已缓存'); await vi.waitFor(() => expect(document.body.textContent).toContain('缓存角色')); await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="加入"]')!.click()); await settle();
     const stored = JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!); expect(stored.draft.combatants).toHaveLength(2); expect(stored.draft.combatants[1]).toMatchObject({ isValid: false, isPreset: false, data: { name: '缓存角色', content: '缓存完整原文' } });
     expect(stored.draft.combatants[1]).not.toHaveProperty('sourceDataCardId'); expect(calls()).toHaveLength(0); expect(docs.size).toBe(1);
   });
@@ -1563,6 +1563,105 @@ describe('Desktop Arena character-library parity', () => {
     expect(tab('我的角色')).toBeUndefined(); expect(tab('我的收藏')).toBeUndefined();
     expect(tab('公开角色')?.getAttribute('aria-selected')).toBe('true');
     expect(requests().some(item => ['data-cards.query', 'favorites.query'].includes(item.routeId))).toBe(false);
+  });
+
+  const localCharacter = (id: string, title: string): LocalCardRecordV1 => ({ id, schemaVersion: 1, storageLocation: 'local', cardType: 'character', title,
+    data: { templateId: '通用角色', name: '同名角色', content: title, _cardId: 'body-extension', sourceDataCardId: 'untrusted-body-id',
+      adjudicationEvents: [{ id, type: 'binary', description: title, probability: 100 }] }, contentDigest: `sha256:${'a'.repeat(64)}`,
+    provenance: { kind: 'unsigned', execution: 'imported' }, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' });
+  const toggleLibraryRow = (name: string, action: '加入' | '移除') => {
+    const card = [...document.querySelectorAll<HTMLElement>('.grid > .relative')].find(row => row.textContent?.includes(name));
+    expect(card, name).toBeTruthy();
+    const toggle = card!.querySelector<HTMLButtonElement>(`button[aria-label="${action}"]`); expect(toggle, action).toBeTruthy();
+    return toggle!;
+  };
+  it.each(['battle', 'arena'] as const)('/%s continuously selects same-name local sources and removes exactly one with its events', async product => {
+    const first = localCharacter('lc_11111111111111111111111111111111', '来源甲'), second = localCharacter('lc_22222222222222222222222222222222', '来源乙');
+    docs.set(first.id, first); docs.set(second.id, second);
+    window.location.hash = `#/${product}`; await mount(); await openLibrarySection(); await click('浏览在线角色库');
+    await act(async () => tab('本地库')!.click()); await settle();
+    await act(async () => toggleLibraryRow(first.title, '加入').click()); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    await act(async () => toggleLibraryRow(second.title, '加入').click()); await settle();
+    const read = () => JSON.parse(localStorage.getItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY)!).draft;
+    expect(read().combatants).toHaveLength(2);
+    expect(read().combatants[0]).toMatchObject({ cardLibrarySelectionId: `local:${first.id}`, data: first.data });
+    expect(read().combatants[0]).not.toHaveProperty('sourceDataCardId');
+    expect(read().combatants[0]).not.toHaveProperty('signal');
+    expect(read().combatants[0]).not.toHaveProperty('desktopSource');
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label^="关闭"]')!.click()); await settle();
+    await click('浏览在线角色库'); await act(async () => tab('本地库')!.click()); await settle();
+    await act(async () => toggleLibraryRow(first.title, '移除').click()); await settle();
+    expect(read().combatants).toHaveLength(1); expect(read().combatants[0].cardLibrarySelectionId).toBe(`local:${second.id}`);
+    if (product === 'arena') expect(read().adjudicationEvents).toEqual([expect.objectContaining({ sourceKey: `library:local:${second.id}`, description: second.title })]);
+    expect(docs.get(first.id)).toEqual(first); expect(docs.get(second.id)).toEqual(second); expect(calls()).toHaveLength(0);
+  });
+
+  it('uses the latest roster limit, disables additions at 32 and keeps exact removal available', async () => {
+    const source = localCharacter('lc_11111111111111111111111111111111', '第三十二位'); docs.set(source.id, source);
+    const base = draft('daily', 'stream'); base.combatants = Array.from({ length: 31 }, (_, index) => ({ ...base.combatants[0]!, filename: `角色${index}` }));
+    saveDraft(base); await mount(); await openLibrarySection(); await click('浏览在线角色库'); await act(async () => tab('本地库')!.click()); await settle();
+    await act(async () => toggleLibraryRow(source.title, '加入').click()); await settle();
+    const read = () => JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft;
+    expect(read().combatants).toHaveLength(32); expect(document.body.textContent).toContain('已选 32/32');
+    expect(toggleLibraryRow(source.title, '移除').disabled).toBe(false);
+    await act(async () => toggleLibraryRow(source.title, '移除').click()); await settle(); expect(read().combatants).toHaveLength(31);
+  });
+
+  it('keeps existing local Wantu conversion without rewriting the original library card', async () => {
+    const source = localCharacter('lc_11111111111111111111111111111111', '万途原件');
+    source.data = { format: 'wantu-data-card', card: { name: '万途角色', domains: { content: { kind: 'text', status: 'ready', value: '万途原文' } } } };
+    docs.set(source.id, source);
+    window.location.hash = '#/arena'; await mount(); await click('浏览在线角色库');
+    await act(async () => tab('本地库')!.click()); await settle();
+    await act(async () => toggleLibraryRow(source.title, '加入').click()); await settle();
+    const saved = JSON.parse(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)!).draft.combatants[0];
+    expect(saved).toMatchObject({ cardLibrarySelectionId: `local:${source.id}`, data: { templateId: '通用角色', name: '万途角色', content: '万途原文' } });
+    expect(saved).not.toHaveProperty('sourceDataCardId');
+    expect(docs.get(source.id)?.data).toEqual(source.data);
+  });
+
+  it.each(['close', 'account'] as const)('cancels a pending real library body on %s without admitting the late source', async reason => {
+    const gate = deferred<void>(); release = () => gate.resolve();
+    const row = publicRow(); const { data: _data, ...summary } = row;
+    fixture(async request => {
+      if (request.query?.id === row.id) { await gate.promise; return { status: 200, body: { success: true, card: row } }; }
+      return { status: 200, body: { success: true, cards: [summary], tags: [], total: 1 } };
+    });
+    await mount(); await openLibrarySection(); await click('浏览在线角色库');
+    await act(async () => toggleLibraryRow(row.name, '加入').click()); await settle();
+    expect(document.body.textContent).toContain('正在处理选择');
+    expect(toggleLibraryRow(row.name, '加入').disabled).toBe(true);
+    if (reason === 'close') {
+      await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label^="关闭"]')!.click()); await settle();
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    } else {
+      cloudAccount = { userId: 8, username: 'fixture-user-eight' };
+      await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+    }
+    await act(async () => gate.resolve()); await settle();
+    expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY) ?? '{"draft":{"combatants":[]}}').draft.combatants).toHaveLength(0);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it('rejects a delayed library addition when another completed import fills the latest draft', async () => {
+    const gate = deferred<void>(); release = () => gate.resolve();
+    const row = publicRow(), random = { ...publicRow(), id: 'other-source' }; const { data: _data, ...summary } = row;
+    fixture(async request => {
+      if (request.query?.id === row.id) { await gate.promise; return { status: 200, body: { success: true, card: row } }; }
+      if (request.routeId === 'random-public-card.query' || request.query?.id === random.id) return { status: 200, body: { success: true, card: random } };
+      return { status: 200, body: { success: true, cards: [summary], tags: [], total: 1 } };
+    });
+    const base = draft('daily', 'stream'); base.combatants = Array.from({ length: 31 }, (_, index) => ({ ...base.combatants[0]!, filename: `旧角色${index}` }));
+    saveDraft(base); await mount(); await openLibrarySection(); await click('浏览在线角色库');
+    await act(async () => toggleLibraryRow(row.name, '加入').click()); await settle();
+    await click('随机匹配角色');
+    const read = () => JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft;
+    expect(read().combatants).toHaveLength(32);
+    await act(async () => gate.resolve()); await settle();
+    expect(read().combatants).toHaveLength(32);
+    expect(read().combatants.some((item: { sourceDataCardId?: string }) => item.sourceDataCardId === row.id)).toBe(false);
+    expect(document.body.textContent).toContain('角色总数超过 32 位'); expect(document.querySelector('[role="dialog"]')).toBeTruthy();
   });
 
   it.each(['battle', 'arena'] as const)('/%s random selection is single-flight, freshly read and retains exact source data', async product => {

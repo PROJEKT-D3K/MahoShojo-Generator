@@ -89,6 +89,9 @@ export interface RandomCombatantPlaceholder {
 
 export type Combatant = CombatantData | RandomCombatantPlaceholder;
 
+/** 显式 roster 引用与旧文件名/来源别名分离，避免用户文本被解释为 UI key。 */
+export type CombatantIdentifier = string | { readonly rosterKey: string };
+
 export interface ScenarioState {
   content: Record<string, unknown> | null;
   fileName: string | null;
@@ -247,13 +250,13 @@ export interface BattleStoreState {
   updateSettings: (settings: Partial<BattleSettings>) => void;
 
   addCombatant: (combatant: Combatant) => void;
-  removeCombatant: (identifier: string) => void;
+  removeCombatant: (identifier: CombatantIdentifier) => void;
   setCombatants: (combatants: Combatant[]) => void;
   moveCombatant: (fromIndex: number, toIndex: number) => void;
   clearCombatants: () => void;
   /** 调整角色所属分队；teamId 为 null/0 代表未分队。identifier 支持角色 filename 或占位符 id。 */
-  updateCombatantTeam: (identifier: string, teamId: number | null) => void;
-  updateCombatantCharacterGuidance: (filename: string, guidance: string) => void;
+  updateCombatantTeam: (identifier: CombatantIdentifier, teamId: number | null) => void;
+  updateCombatantCharacterGuidance: (identifier: CombatantIdentifier, guidance: string) => void;
 
   /** 新建分队并返回分队 id。 */
   addTeam: (name?: string) => number;

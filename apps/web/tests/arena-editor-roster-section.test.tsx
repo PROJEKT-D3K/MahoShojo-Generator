@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenerationRankingParticipant, GenerationRankingQueueResult } from '@mahoshojo/contracts/arena-generation-ranking';
 
 import { CombatantList } from '@/components/arena/components/CombatantList';
-import { useBattleStore } from '@/components/arena/stores/useBattleStore';
+import { getArenaRosterCombatantKey, useBattleStore } from '@/components/arena/stores/useBattleStore';
 import type { CombatantData } from '@/components/arena/types';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -165,7 +165,7 @@ describe('shared Arena roster section via solo adapter', () => {
 
     const teamSelect = container.querySelector<HTMLSelectElement>('select[title="把角色加入/转移到该分队"]');
     if (!teamSelect) throw new Error('team member select not found');
-    act(() => setValue(teamSelect, 'alpha.json'));
+    act(() => setValue(teamSelect, JSON.stringify(['file', 'alpha.json'])));
 
     expect(useBattleStore.getState().combatants[0]?.teamId).toBe(1);
     expect(container.textContent).toContain('未分队');
@@ -205,7 +205,7 @@ describe('shared Arena roster section via solo adapter', () => {
 
     const moveBackSelect = container.querySelector<HTMLSelectElement>('select[title="把某个已分队的角色移回未分队"]');
     if (!moveBackSelect) throw new Error('move-back select not found');
-    act(() => setValue(moveBackSelect, 'alpha.json'));
+    act(() => setValue(moveBackSelect, JSON.stringify(['file', 'alpha.json'])));
     expect(useBattleStore.getState().combatants[0]?.teamId).toBeUndefined();
 
     act(() => button('删除').click());
@@ -227,12 +227,108 @@ describe('shared Arena roster section via solo adapter', () => {
     if (!(actionButton instanceof HTMLButtonElement)) throw new Error('guidance button not found');
     act(() => actionButton.click());
 
-    const guidance = container.querySelector<HTMLTextAreaElement>('textarea[id="arena-roster-guidance-alpha.json"]');
+    const guidance = [...container.querySelectorAll<HTMLTextAreaElement>('textarea')].find((node) => node.id === `arena-roster-guidance-${JSON.stringify(['file', 'alpha.json'])}`);
     if (!guidance) throw new Error('guidance textarea not found');
     act(() => setValue(guidance, '优先保护同伴'));
 
     const combatant = useBattleStore.getState().combatants[0];
     expect(combatant && 'data' in combatant ? combatant.characterGuidance : undefined).toBe('优先保护同伴');
+  });
+
+  it('同名卡库行使用独立 UI 身份编辑引导、分队并删除来源事件', () => {
+    const card = (id: string): CombatantData => ({
+      ...dataCombatant('同名.json', '同名'),
+      cardLibrarySelectionId: `local:${id}`,
+      adjudicationSourceKey: `library:local:${id}`,
+    });
+    useBattleStore.setState({
+      combatants: [card('one'), card('two')],
+      teams: [{ id: 1, name: '守护队', isCollapsed: false }],
+      adjudicationEvents: ['one', 'two'].map((id) => ({
+        id, description: id, type: 'binary', probability: 50, sourceKey: `library:local:${id}`,
+      })),
+    });
+    renderList();
+    const rows = [...container.querySelectorAll('.group')];
+    expect(rows).toHaveLength(2);
+    const actionButton = [...rows[1].querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === '行动');
+    if (!(actionButton instanceof HTMLButtonElement)) throw new Error('guidance button not found');
+    act(() => actionButton.click());
+    const guidance = [...container.querySelectorAll<HTMLTextAreaElement>('textarea')].find((node) => node.id === `arena-roster-guidance-${JSON.stringify(['library', 'local:two'])}`);
+    expect(guidance).not.toBeNull();
+    act(() => setValue(guidance!, '只修改第二个角色'));
+    expect(useBattleStore.getState().combatants.map((item) => 'data' in item ? item.characterGuidance : undefined))
+      .toEqual([undefined, '只修改第二个角色']);
+
+    const teamSelect = container.querySelector<HTMLSelectElement>('select[title="把角色加入/转移到该分队"]');
+    if (!teamSelect) throw new Error('team member select not found');
+    act(() => setValue(teamSelect, JSON.stringify(['library', 'local:two'])));
+    expect(useBattleStore.getState().combatants.map((item) => item.teamId)).toEqual([undefined, 1]);
+
+    const groupedRow = [...container.querySelectorAll('.group')].find((row) => row.textContent?.includes('只修改第二个角色'));
+    const removeButton = groupedRow?.querySelector<HTMLButtonElement>('button[aria-label="移除 同名"]');
+    if (!removeButton) throw new Error('second row remove button not found');
+    act(() => removeButton.click());
+    expect(useBattleStore.getState().combatants).toMatchObject([{ cardLibrarySelectionId: 'local:one' }]);
+    expect(useBattleStore.getState().adjudicationEvents.map((entry) => entry.id)).toEqual(['one']);
+  });
+
+  it('卡库 UI key 与旧上传 filename 相同也只修改/移除命中的卡库行', () => {
+    useBattleStore.setState({ combatants: [
+      { ...dataCombatant('同名.json', '库角色'), cardLibrarySelectionId: 'local:two', adjudicationSourceKey: 'library:local:two' },
+      { ...dataCombatant('local:two', '上传角色'), adjudicationSourceKey: 'file:local:two' },
+    ], adjudicationEvents: [
+      { id: 'library', description: 'library', type: 'binary', probability: 50, sourceKey: 'library:local:two' },
+      { id: 'upload', description: 'upload', type: 'binary', probability: 50, sourceKey: 'file:local:two' },
+    ] });
+    const reference = { rosterKey: getArenaRosterCombatantKey(useBattleStore.getState().combatants[0]) };
+    useBattleStore.getState().updateCombatantCharacterGuidance(reference, '卡库行动');
+    useBattleStore.getState().updateCombatantTeam(reference, 1);
+    expect(useBattleStore.getState().combatants.map((item) => ({ guidance: 'data' in item ? item.characterGuidance : undefined, teamId: item.teamId })))
+      .toEqual([{ guidance: '卡库行动', teamId: 1 }, { guidance: undefined, teamId: undefined }]);
+    useBattleStore.getState().removeCombatant(reference);
+    expect(useBattleStore.getState().combatants).toMatchObject([{ filename: 'local:two', data: { codename: '上传角色' } }]);
+    expect(useBattleStore.getState().adjudicationEvents.map((entry) => entry.id)).toEqual(['upload']);
+  });
+
+  it('真实 roster 点击碰撞上传行只删除上传自身，保留卡库行和事件', () => {
+    useBattleStore.setState({ combatants: [
+      { ...dataCombatant('同名.json', '库角色'), cardLibrarySelectionId: 'local:two', adjudicationSourceKey: 'library:local:two' },
+      { ...dataCombatant('local:two', '上传角色'), adjudicationSourceKey: 'file:local:two' },
+    ], adjudicationEvents: [
+      { id: 'library', description: 'library', type: 'binary', probability: 50, sourceKey: 'library:local:two' },
+      { id: 'upload', description: 'upload', type: 'binary', probability: 50, sourceKey: 'file:local:two' },
+    ] });
+    renderList();
+    const removeButton = container.querySelector<HTMLButtonElement>('button[aria-label="移除 上传角色"]');
+    expect(removeButton).not.toBeNull();
+    act(() => removeButton!.click());
+    expect(useBattleStore.getState().combatants).toMatchObject([{ cardLibrarySelectionId: 'local:two', data: { codename: '库角色' } }]);
+    expect(useBattleStore.getState().adjudicationEvents.map((entry) => entry.id)).toEqual(['library']);
+  });
+
+  it.each(['local:two', JSON.stringify(['library', 'local:two'])])('旧直接文件名 %s 不被猜成内部引用', (filename) => {
+    useBattleStore.setState({ combatants: [
+      { ...dataCombatant('同名.json', '库角色'), cardLibrarySelectionId: 'local:two', adjudicationSourceKey: 'library:local:two' },
+      { ...dataCombatant(filename, '上传角色'), adjudicationSourceKey: `file:${filename}` },
+    ] });
+    useBattleStore.getState().updateCombatantCharacterGuidance(filename, '上传行动');
+    useBattleStore.getState().updateCombatantTeam(filename, 1);
+    expect(useBattleStore.getState().combatants.map((item) => ({ guidance: 'data' in item ? item.characterGuidance : undefined, teamId: item.teamId })))
+      .toEqual([{ guidance: undefined, teamId: undefined }, { guidance: '上传行动', teamId: 1 }]);
+    useBattleStore.getState().removeCombatant(filename);
+    expect(useBattleStore.getState().combatants).toMatchObject([{ cardLibrarySelectionId: 'local:two' }]);
+  });
+
+  it.each(['source-id', 'source-event'])('旧引导/分队字符串 %s 不扩展成来源别名', (filename) => {
+    useBattleStore.setState({ combatants: [
+      { ...dataCombatant('cloud.json', '旧云角色'), sourceDataCardId: 'source-id', adjudicationSourceKey: 'source-event' },
+      dataCombatant(filename, '上传角色'),
+    ] });
+    useBattleStore.getState().updateCombatantCharacterGuidance(filename, '上传行动');
+    useBattleStore.getState().updateCombatantTeam(filename, 1);
+    expect(useBattleStore.getState().combatants.map((item) => ({ guidance: 'data' in item ? item.characterGuidance : undefined, teamId: item.teamId })))
+      .toEqual([{ guidance: undefined, teamId: undefined }, { guidance: '上传行动', teamId: 1 }]);
   });
 
   it('随机占位、移除与清空列表保持单人能力', () => {

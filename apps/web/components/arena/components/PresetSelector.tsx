@@ -27,7 +27,8 @@ export function PresetSelector() {
   const combatantFilenames = useMemo(
     () =>
       combatants
-        .filter((item): item is Combatant & { filename: string } => 'filename' in item)
+        .filter((item): item is Combatant & { filename: string } => 'filename' in item
+          && !('cardLibrarySelectionId' in item && item.cardLibrarySelectionId))
         .map((item) => item.filename),
     [combatants]
   );
