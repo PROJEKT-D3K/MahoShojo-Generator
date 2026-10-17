@@ -2355,7 +2355,7 @@ export const CreatorPage: React.FC = () => {
             ? creatorTemplate === 'general-scenario'
               ? '提示：选择流式生成后，将实时输出 Markdown，并生成【通用情景卡】（templateId=通用情景）。标题会优先从 Markdown 标题或“标题：...”字段解析，失败则回退到你的补充说明。'
               : '提示：选择流式生成后，将实时输出 Markdown，并生成【通用角色卡】（templateId=通用角色）。代号/名字会尝试从输出中解析，失败则回退到你的答案或补充说明。'
-            : '提示：非流式生成会返回结构化的魔法少女数据卡（适合保存为模板/用于升华等），但需要等待生成结束一次性返回。'
+            : '提示：非流式生成会在结束后一次性返回结构化角色数据卡。'
         }
         onConfigChange={setUserProviderConfig}
         providerCooldownMode={providerCooldownMode}
