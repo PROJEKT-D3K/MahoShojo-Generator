@@ -8,6 +8,7 @@ import {
 import { GenerationModeSwitcher, type GenerationMode } from '@/components/shared/GenerationModeSwitcher';
 import { TokenIndicator } from '@/components/shared/TokenIndicator';
 import type { ProviderCooldownMode } from '@/lib/cooldown';
+import { QuestionnaireLanguageSection } from '@mahoshojo/ui-web/details-controls';
 
 type CreatorAdvancedSidebarPanelProps = {
   tokenEstimateText: string | null;
@@ -63,38 +64,15 @@ export function CreatorAdvancedSidebarPanel({
         <p className="mt-1 text-center text-xs text-[color:var(--app-text-muted)]">输入内容近似估算，包含自由说明、规则约束、问卷回答与启用的设定；不含系统指令、模板包装和输出。</p>
       </div>
 
-      <div
-        data-creator-advanced-card="language"
-        data-creator-surface="subpanel"
-        className={joinCreatorClassNames(CREATOR_SUBPANEL_SURFACE_CLASS, 'p-3')}
-      >
-        <button
-          type="button"
-          onClick={onToggleLanguageSection}
-          className="flex w-full items-center justify-between text-left font-medium text-[color:var(--app-text)] hover:text-sky-500"
-        >
-          <span>生成语言</span>
-          <span className="ml-2">{showLanguageSection ? '▼' : '▶'}</span>
-        </button>
-        {showLanguageSection ? (
-          <div className="mt-3">
-            <select
-              id="language-select"
-              data-creator-control="field"
-              value={selectedLanguage}
-              onChange={(event) => onChangeLanguage(event.target.value)}
-              className={CREATOR_INPUT_CLASS}
-              disabled={submitting}
-            >
-              {languages.map((lang) => (
-                <option key={lang.code} value={lang.code}>
-                  {lang.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
-      </div>
+      <QuestionnaireLanguageSection
+        variant="creator"
+        expanded={showLanguageSection}
+        onToggle={onToggleLanguageSection}
+        languages={languages}
+        value={selectedLanguage}
+        onChange={onChangeLanguage}
+        disabled={submitting}
+      />
 
       <div
         data-creator-advanced-card="generation-mode"

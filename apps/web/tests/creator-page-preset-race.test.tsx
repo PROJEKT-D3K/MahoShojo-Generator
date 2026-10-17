@@ -188,7 +188,61 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe('Web CreatorPage 预设加载竞态（G3-r1-r1）', () => {
+describe('Web CreatorPage 高级语言与预设加载', () => {
+  it('keeps the shared language disclosure before generation settings and persists its value and expansion', async () => {
+    await mountPage();
+    await clickButton('高级生成');
+    const section = container.querySelector('[data-creator-advanced-card="language"]')!;
+    const toggle = section.querySelector('button')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(section.querySelector('select')).toBeNull();
+    const mode = container.querySelector('[data-creator-advanced-card="generation-mode"]')!;
+    expect(section.compareDocumentPosition(mode) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await clickButton('生成语言');
+    const select = section.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!;
+    await act(async () => setNativeValue(select, 'en'));
+    await clickButton('生成语言');
+    expect(JSON.parse(window.localStorage.getItem(DETAILS_PREFERENCE_KEY)!)).toMatchObject({ selectedLanguage: 'en', showLanguageSection: false });
+    await clickButton('生成语言');
+    expect(section.querySelector<HTMLSelectElement>('select')!.value).toBe('en');
+    expect(JSON.parse(window.localStorage.getItem(DETAILS_PREFERENCE_KEY)!)).toMatchObject({ selectedLanguage: 'en', showLanguageSection: true });
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/creator/generate'))).toBe(false);
+  });
+
+  it.each([true, false])('restores the existing language preference with expanded=%s', async (expanded) => {
+    window.localStorage.setItem(DETAILS_PREFERENCE_KEY, JSON.stringify({ selectedLanguage: 'en', showLanguageSection: expanded }));
+    await mountPage();
+    await clickButton('高级生成');
+    const section = container.querySelector('[data-creator-advanced-card="language"]')!;
+    expect(section.querySelector('button')!.getAttribute('aria-expanded')).toBe(String(expanded));
+    if (!expanded) await clickButton('生成语言');
+    expect(section.querySelector<HTMLSelectElement>('select')!.value).toBe('en');
+  });
+
+  it('sends the chosen language through the actual Creator request and locks it while pending', async () => {
+    window.localStorage.setItem(DETAILS_PREFERENCE_KEY, JSON.stringify({ generationMode: 'non-stream', showLanguageSection: true }));
+    let finish: ((response: Response) => void) | undefined;
+    const request = vi.fn((input: unknown, init?: RequestInit) => {
+      if (String(input).includes('/api/creator/generate')) return new Promise<Response>((resolve) => { finish = resolve; });
+      return fetchMock(input);
+    });
+    vi.stubGlobal('fetch', request);
+    await mountPage();
+    await startQuestionnaire();
+    await clickButton('高级生成');
+    const language = container.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!;
+    await act(async () => setNativeValue(language, 'en'));
+    await clickButton('还没想好', 400);
+    await clickButton('还没想好');
+    const generationCalls = request.mock.calls.filter(([input]) => String(input).includes('/api/creator/generate'));
+    expect(generationCalls).toHaveLength(1);
+    expect(JSON.parse(generationCalls[0]![1]!.body as string)).toMatchObject({ language: 'en' });
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!.disabled).toBe(true);
+    await act(async () => finish!(jsonResponse({ error: '测试请求结束' }, 400)));
+    await settle();
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!.disabled).toBe(false);
+  });
+
   it('suppresses stale preset-load responses when manual adds race in single mode', async () => {
     // 单选 latest-wins：B 后发起是较新意图；迟到的 A 不得覆盖/追加。
     await mountPage();

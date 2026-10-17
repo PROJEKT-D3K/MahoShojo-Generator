@@ -163,6 +163,78 @@ const mount = async () => {
 };
 
 describe('Desktop /creator workbench (native adapter mock)', () => {
+  it('starts with language collapsed before execution settings and preserves a missing-catalog draft language', async () => {
+    window.localStorage.setItem(CREATOR_DRAFT_KEY, JSON.stringify(draft({ language: 'custom-language' })));
+    await mount();
+    await click('高级生成');
+    const section = container.querySelector('[data-creator-advanced-card="language"]')!;
+    expect(section.querySelector('button')!.getAttribute('aria-expanded')).toBe('false');
+    expect(section.querySelector('select')).toBeNull();
+    expect(section.compareDocumentPosition(button('客户端')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await clickText('生成语言');
+    const select = section.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!;
+    expect(select.value).toBe('custom-language');
+    expect([...select.options].map((option) => option.value)).toEqual(['custom-language']);
+    await clickText('生成语言');
+    await clickText('生成语言');
+    expect(section.querySelector<HTMLSelectElement>('select')!.value).toBe('custom-language');
+    expect(JSON.parse(window.localStorage.getItem(CREATOR_DRAFT_KEY)!)).not.toHaveProperty('showLanguageSection');
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it('keeps language through collapse and execution switching, dispatches it, and retains the busy gate', async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === '/languages.json'
+      ? Promise.resolve({ ok: true, json: async () => [{ code: 'zh-CN', name: '简体中文' }, { code: 'en', name: 'English' }] })
+      : originalFetch(input, init)));
+    window.localStorage.setItem(CREATOR_DRAFT_KEY, JSON.stringify(draft()));
+    let finish: ((outcome: CreatorGenerationOutcome) => void) | undefined;
+    mocks.execute.mockImplementation(() => new Promise<CreatorGenerationOutcome>((resolve) => { finish = resolve; }));
+    await mount();
+    await click('高级生成');
+    await clickText('生成语言');
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!;
+    await act(async () => { select.value = 'en'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await clickText('生成语言');
+    await clickText('生成语言');
+    await click('服务器'); await click('客户端');
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!.value).toBe('en');
+    expect(JSON.parse(window.localStorage.getItem(CREATOR_DRAFT_KEY)!)).toMatchObject({ language: 'en' });
+    expect(mocks.execute).not.toHaveBeenCalled();
+    await click('生成数据卡');
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+    expect(mocks.execute.mock.calls[0]![1]).toMatchObject({ language: 'en' });
+    const pendingSelect = container.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!;
+    expect(pendingSelect.matches(':disabled')).toBe(true);
+    const toggle = container.querySelector('[data-creator-advanced-card="language"] button')!;
+    expect(toggle.matches(':disabled')).toBe(true);
+    await act(async () => finish!(completed('direct-local')));
+    await settle();
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="生成语言"]')!.matches(':disabled')).toBe(false);
+  });
+
+  it.each(['questionnaire', 'close-guard'] as const)('keeps language locked until %s initialization finishes', async (pending) => {
+    const releases: (() => void)[] = [];
+    if (pending === 'close-guard') {
+      mocks.listen.mockImplementation(() => new Promise((resolve) => releases.push(() => resolve(vi.fn()))));
+    } else {
+      const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input) === '/questionnaires/presets/index.json'
+        ? new Promise((resolve) => releases.push(() => resolve({ ok: true, json: async () => presetIndex })))
+        : originalFetch(input, init)));
+    }
+    await mount();
+    await click('高级生成');
+    const toggle = container.querySelector<HTMLButtonElement>('[data-creator-advanced-card="language"] button')!;
+    expect(toggle.matches(':disabled')).toBe(true);
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => releases.forEach((release) => release()));
+    await settle();
+    expect(container.querySelector('[data-creator-advanced-card="language"] button')!.matches(':disabled')).toBe(false);
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
   it.each(['missing', 'rejected'] as const)('copies the actual generated JSON through fallback when clipboard is %s', async (kind) => {
     const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     const originalExec = Object.getOwnPropertyDescriptor(document, 'execCommand');

@@ -74,6 +74,7 @@ import {
   GenerationModeSwitcher,
   JsonSizeIndicator,
   QuestionnaireAnswerExportPanel,
+  QuestionnaireLanguageSection,
   QuestionNavigator,
   isMobileFormFactor,
   recommendedSaveModes,
@@ -215,6 +216,7 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
   const [confirmRegenerate, setConfirmRegenerate] = useState<false | ConfirmRegenerateKind>(false);
   const [showIntroduction, setShowIntroduction] = useState(!restored);
   const [showQuestionnaireSettings, setShowQuestionnaireSettings] = useState(false);
+  const [showLanguageSection, setShowLanguageSection] = useState(false);
   const [showPasteImport, setShowPasteImport] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [pasteError, setPasteError] = useState<string | null>(null);
@@ -1002,6 +1004,14 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
         )}
         <p className="mt-1 text-center text-xs text-(--app-text-muted)">输入内容近似估算，包含自由说明、规则约束、问卷回答与启用的设定；不含系统指令、模板包装和输出。</p>
       </div>
+      <QuestionnaireLanguageSection
+        variant="creator"
+        expanded={showLanguageSection}
+        onToggle={() => setShowLanguageSection((expanded) => !expanded)}
+        languages={languages.length ? languages : [{ code: draft.language, name: draft.language }]}
+        value={draft.language}
+        onChange={(language) => updateDraft({ language })}
+      />
       <DesktopAiProviderPanel
         generationMode={generationMode}
         copy={{
@@ -1031,13 +1041,6 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
           </>
         }
       />
-      <label className="flex flex-col gap-1">生成语言
-        <select aria-label="生成语言" className="w-full rounded border border-(--app-border) bg-(--app-surface) px-3 py-2 text-(--app-text)" value={draft.language} onChange={(event) => updateDraft({ language: event.target.value })}>
-          {(languages.length ? languages : [{ code: draft.language, name: draft.language }]).map((lang) => (
-            <option key={lang.code} value={lang.code}>{lang.name}</option>
-          ))}
-        </select>
-      </label>
     </fieldset>
   );
 
