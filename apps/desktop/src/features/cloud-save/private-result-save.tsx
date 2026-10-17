@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { buttonClassName } from '@mahoshojo/ui-web/card-library';
 import { invoke } from '@tauri-apps/api/core';
 import { CloudCardActionButtons, CloudCardActionFeedback, SaveCardModal, ReplaceCardModal } from '@mahoshojo/ui-web/cloud-save';
 import type { OnlineDataCardType, OwnedDataCardReplacementTarget } from '@mahoshojo/contracts/data-cards';
@@ -152,15 +153,15 @@ function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, 
     }
   };
   const checkOwnCards = () => { setCheckedOwnCards(true); setLibraryPurpose('check'); setLibraryOpen(true); setRefresh((value) => value + 1); };
-  const uncertaintyControls = uncertain ? <div className="mt-4 space-y-2 text-sm">
-    <button onClick={checkOwnCards}>检查“我的云端卡”</button>
-    <button disabled={!checkedOwnCards} onClick={() => {
+  const uncertaintyControls = uncertain ? <div className="mt-4 flex flex-wrap gap-2 text-sm">
+    <button className={buttonClassName({ size: 'sm' })} onClick={checkOwnCards}>检查“我的云端卡”</button>
+    <button className={buttonClassName({ size: 'sm' })} disabled={!checkedOwnCards} onClick={() => {
       if (!pending.current && checkedOwnCards && window.confirm(uncertain === 'create' ? '已检查我的云端卡？再次新建可能产生重复副本，是否继续？' : '已检查我的云端卡及待审版本？请重新选择目标并确认新的替换，是否继续？')) {
         const wasReplace = uncertain === 'replace'; setUncertain(null); setError(null); setCheckedOwnCards(false);
         if (wasReplace) { setTarget(null); setReplaceOpen(false); setLibraryPurpose('replace'); setLibraryOpen(true); }
       }
     }}>{uncertain === 'create' ? '我已检查，仍要再次新建（可能重复）' : '我已检查，重新选择替换目标'}</button>
-  </div> : conflict ? <button onClick={() => { if (!pending.current) { setTarget(null); setReplaceOpen(false); setLibraryPurpose('replace'); setLibraryOpen(true); } }}>重新选择替换目标</button> : undefined;
+  </div> : conflict ? <button className={buttonClassName({ size: 'sm' })} onClick={() => { if (!pending.current) { setTarget(null); setReplaceOpen(false); setLibraryPurpose('replace'); setLibraryOpen(true); } }}>重新选择替换目标</button> : undefined;
   const feedback = <>
     {status && <p role="status">{status}</p>}
     {guard.message && <p role="alert">{guard.message}</p>}

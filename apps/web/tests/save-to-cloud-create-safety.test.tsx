@@ -99,6 +99,12 @@ describe.each([undefined, 'generation-result'] as const)('Web explicit create li
     mocks.create.mockResolvedValue({ success: false, uncertain: true });
     await render(); await open(); await submit(); await submit();
     expect(mocks.create).toHaveBeenCalledTimes(1); expect(mocks.modal.submitDisabled).toBe(true);
+    const inspect = container.querySelector('a')!;
+    expect(inspect.getAttribute('href')).toBe('/character-manager');
+    expect(inspect.target).toBe('_blank'); expect(inspect.rel).toBe('noopener noreferrer');
+    const retry = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('已检查'))!;
+    for (const action of [inspect, retry]) expect(action.className.split(' ')).toEqual(expect.arrayContaining(['hover:bg-gray-50', 'focus-visible:ring-2', 'focus-visible:ring-fuchsia-500', 'disabled:opacity-50']));
+    expect(retry.disabled).toBe(true);
     await act(async () => mocks.modal.onClose()); await open(); await submit();
     expect(mocks.create).toHaveBeenCalledTimes(1);
     await act(async () => { container.querySelector('a')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); });

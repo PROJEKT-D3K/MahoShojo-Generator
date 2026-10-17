@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { buttonClassName } from '@mahoshojo/ui-web/card-library';
 import type { OnlineDataCardType, OwnedDataCardReplacementTarget } from '@mahoshojo/contracts/data-cards';
 import type { ReplaceCardModalProps, SaveCardModalProps } from '@mahoshojo/ui-web/cloud-save';
 import { authStorage, dataCardApi, type OwnedDataCardWriteGuard } from '@/lib/auth';
@@ -155,12 +156,12 @@ export function useCharacterManagerCloudWrite(input: Input) {
     isOpen: saveOpen && formScope === scope, onClose: () => { if (!operation.current) setSaveOpen(false); }, onSave: () => void save(),
     ...form, onNameChange: (name) => setForm((value) => ({ ...value, name })), onDescriptionChange: (description) => setForm((value) => ({ ...value, description })), onPublicChange: (isPublic) => setForm((value) => ({ ...value, isPublic })),
     error: saveError, isSaving: busy && !replacementPreparing, submitDisabled: createUncertain || busy, data: input.data, usedSlots: input.usedSlots, userCapacity: input.userCapacity,
-    supplementaryContent: createUncertain ? <div className="mt-4 space-y-2 text-sm"><button type="button" onClick={() => { setCheckedOwnCards(true); latest.current.input.onInspectCards(); }}>检查我的云端卡</button><button type="button" disabled={!checkedOwnCards || busy} onClick={() => { if (!operation.current && checkedOwnCards && window.confirm('已检查我的云端卡？再次新建可能产生重复数据卡，确认继续？')) { uncertainCreates.current.delete(scope); setCreateUncertain(false); setSaveError(null); } }}>我已检查，仍要再次新建（可能重复）</button></div> : undefined,
+    supplementaryContent: createUncertain ? <div className="mt-4 flex flex-wrap gap-2 text-sm"><button type="button" className={buttonClassName({ size: 'sm' })} onClick={() => { setCheckedOwnCards(true); latest.current.input.onInspectCards(); }}>检查我的云端卡</button><button type="button" className={buttonClassName({ size: 'sm' })} disabled={!checkedOwnCards || busy} onClick={() => { if (!operation.current && checkedOwnCards && window.confirm('已检查我的云端卡？再次新建可能产生重复数据卡，确认继续？')) { uncertainCreates.current.delete(scope); setCreateUncertain(false); setSaveError(null); } }}>我已检查，仍要再次新建（可能重复）</button></div> : undefined,
   };
   const replaceModal: ReplaceCardModalProps = {
     isOpen: replacement?.scope === scope, target: replacement?.scope === scope ? { ...replacement.target, reviewStatus: replacement.target.reviewStatus ?? undefined } : null,
     onClose: () => { if (!operation.current) setReplacement(null); }, onConfirm: () => void replace(), isSaving: busy && !replacementPreparing, error: replaceError, submitDisabled: replaceBlocked || busy,
-    supplementaryContent: replaceBlocked ? <button type="button" onClick={() => { setReplacement(null); latest.current.input.onInspectCards(); }}>检查我的云端卡并重新选择目标</button> : undefined,
+    supplementaryContent: replaceBlocked ? <button type="button" className={buttonClassName({ size: 'sm' })} onClick={() => { setReplacement(null); latest.current.input.onInspectCards(); }}>检查我的云端卡并重新选择目标</button> : undefined,
   };
   return { openSave, selectReplacement, cancelReplacementSelection: () => { selection.current++; if (replacementPreparing && operation.current && !operation.current.writing) finish(operation.current); }, saveModal, replaceModal, busy, replacementPreparing, scope };
 }

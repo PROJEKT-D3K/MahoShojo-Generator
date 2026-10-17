@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { buttonClassName } from '@mahoshojo/ui-web/card-library';
 import { useRouter } from 'next/navigation';
 import SaveCardModal from './CharManager/SaveCardModal';
 import DataCardsModal from './CharManager/DataCardsModal';
@@ -450,9 +451,9 @@ function SaveToCloudButtonView({
         isSaving={isSaving}
         submitDisabled={uncertain}
         supplementaryContent={uncertain ? (
-          <div className="mt-3 text-sm">
-            <a href="/character-manager" target="_blank" rel="noopener noreferrer" className="underline" onClick={() => setCheckedOwnCards(true)}>检查我的云端卡</a>
-            <button type="button" disabled={!checkedOwnCards || isSaving} className="ml-3 underline disabled:opacity-50" onClick={() => {
+          <div className="mt-3 flex flex-wrap gap-2 text-sm">
+            <a href="/character-manager" target="_blank" rel="noopener noreferrer" className={buttonClassName({ size: 'sm' })} onClick={() => setCheckedOwnCards(true)}>检查我的云端卡</a>
+            <button type="button" disabled={!checkedOwnCards || isSaving} className={buttonClassName({ size: 'sm' })} onClick={() => {
               if (!checkedOwnCards || busy.current) return;
               if (!window.confirm('已检查我的云端卡？再次新建可能产生重复数据卡，是否继续？')) return;
               uncertainRef.current = false;
@@ -468,14 +469,14 @@ function SaveToCloudButtonView({
       <ReplaceCardModal isOpen={replacementOpen} target={replacementTarget ? { ...replacementTarget, reviewStatus: replacementTarget.reviewStatus ?? undefined } : null}
         onClose={() => { if (!busy.current) setReplacementOpen(false); }} onConfirm={() => void handleConfirmReplacement()}
         isSaving={isSaving} submitDisabled={replacementUncertain || replacementConflict} error={replacementError}
-        supplementaryContent={replacementUncertain ? <div className="space-y-2">
-          <a href="/character-manager" target="_blank" rel="noopener noreferrer" onClick={() => setCheckedOwnCards(true)}>检查我的云端卡及待审版本</a>
-          <button disabled={!checkedOwnCards || isSaving} onClick={() => {
+        supplementaryContent={replacementUncertain ? <div className="flex flex-wrap gap-2 text-sm">
+          <a href="/character-manager" target="_blank" rel="noopener noreferrer" className={buttonClassName({ size: 'sm' })} onClick={() => setCheckedOwnCards(true)}>检查我的云端卡及待审版本</a>
+          <button className={buttonClassName({ size: 'sm' })} disabled={!checkedOwnCards || isSaving} onClick={() => {
             if (!checkedOwnCards || busy.current || !window.confirm('已检查我的云端卡及待审版本？请重新选择目标并确认新的替换，是否继续？')) return;
             replacementUnknown.current = false; setReplacementUncertain(false); setReplacementOpen(false); setReplacementTarget(null);
             replacementSelection.current = null; setShowDataCardsForReplace(true); setCardsRefresh((value) => value + 1);
           }}>我已检查，重新选择目标</button>
-        </div> : replacementConflict ? <button onClick={() => { if (!busy.current) { setReplacementOpen(false); setReplacementTarget(null); replacementSelection.current = null; setShowDataCardsForReplace(true); setCardsRefresh((value) => value + 1); } }}>重新选择替换目标</button> : undefined} />
+        </div> : replacementConflict ? <button className={buttonClassName({ size: 'sm' })} onClick={() => { if (!busy.current) { setReplacementOpen(false); setReplacementTarget(null); replacementSelection.current = null; setShowDataCardsForReplace(true); setCardsRefresh((value) => value + 1); } }}>重新选择替换目标</button> : undefined} />
       <DataCardsModal
         isOpen={showDataCardsForReplace}
         busy={isSaving}

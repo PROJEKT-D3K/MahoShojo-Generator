@@ -13,6 +13,9 @@ const invoke = vi.fn(); const onBusyChange = vi.fn();
 const data = { name: '结果A', signature: 'original' };
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const button = (text: string) => [...document.querySelectorAll('button')].find((node) => node.textContent === text)!;
+const expectRecoveryStyle = (text: string) => expect(button(text).className.split(' ')).toEqual(expect.arrayContaining([
+  'border-gray-300', 'hover:bg-gray-50', 'focus-visible:ring-2', 'focus-visible:ring-fuchsia-500', 'disabled:opacity-50', 'disabled:cursor-not-allowed',
+]));
 const click = (text: string) => act(async () => { button(text).click(); await flush(); });
 const deferred = () => { let resolve!: (v: unknown) => void; const promise = new Promise((yes) => { resolve = yes; }); return { promise, resolve }; };
 const writes = () => invoke.mock.calls.filter(([, args]) => args.request.routeId === 'data-cards.create');
@@ -89,6 +92,8 @@ describe.each([undefined, 'generation-result'] as const)('private result cloud-s
     expect(document.body.textContent).toContain('云端容量未知'); expect(button('保存').disabled).toBe(false);
     invoke.mockResolvedValueOnce({ status: 500, body: { error: 'post insert' } }); await click('保存');
     expect(document.body.textContent).toContain('服务器可能已创建'); expect(button('保存').disabled).toBe(true); expect(document.querySelector<HTMLInputElement>('input')?.value).toBe('结果A');
+    expectRecoveryStyle('检查“我的云端卡”'); expectRecoveryStyle('我已检查，仍要再次新建（可能重复）');
+    expect(button('我已检查，仍要再次新建（可能重复）').disabled).toBe(true);
     await click('取消'); await click('保存到云端'); expect(button('保存').disabled).toBe(true); expect(writes()).toHaveLength(1);
     await click('检查“我的云端卡”'); expect(document.querySelector('[data-testid=own-cloud-library]')?.getAttribute('data-tabs')).toBe('my'); await click('关闭卡库'); vi.spyOn(window, 'confirm').mockReturnValue(true); await click('我已检查，仍要再次新建（可能重复）'); expect(writes()).toHaveLength(1); await click('保存'); expect(writes()).toHaveLength(2);
   });
@@ -144,6 +149,7 @@ describe.each([undefined, 'generation-result'] as const)('private result cloud-s
   it('target conflict retains result and requires a fresh preview before another confirm', async () => {
     await render(); await choose(); invoke.mockResolvedValueOnce({ status: 409, body: { error: 'TARGET_CHANGED' } }); await click('确认替换');
     expect(button('确认替换').disabled).toBe(true); expect(replacements()).toHaveLength(1);
+    expectRecoveryStyle('重新选择替换目标');
     await click('重新选择替换目标'); invoke.mockResolvedValueOnce({ ...ready(), body: { ...ready().body, target: { ...target, version: 'b'.repeat(64) } } }); await click('选择目标');
     expect(replacements()).toHaveLength(1); expect(button('确认替换').disabled).toBe(false);
     invoke.mockResolvedValueOnce({ status: 400, body: {} }); await click('确认替换'); expect(replacements()[1][1].request.body.expectedVersion).toBe('b'.repeat(64));
@@ -151,6 +157,8 @@ describe.each([undefined, 'generation-result'] as const)('private result cloud-s
   it('uncertain replacement stays blocked after cancellation until check and fresh target', async () => {
     await render(); await choose(); invoke.mockResolvedValueOnce({ status: 500, body: {} }); await click('确认替换');
     await click('取消'); await click('替换已有'); expect(button('确认替换').disabled).toBe(true); expect(replacements()).toHaveLength(1);
+    expectRecoveryStyle('检查“我的云端卡”'); expectRecoveryStyle('我已检查，重新选择替换目标');
+    expect(button('我已检查，重新选择替换目标').disabled).toBe(true);
     await click('检查“我的云端卡”'); expect(button('选择目标')).toBeUndefined(); await click('关闭卡库');
     vi.spyOn(window, 'confirm').mockReturnValue(true); await click('我已检查，重新选择替换目标'); expect(replacements()).toHaveLength(1);
     invoke.mockResolvedValueOnce(ready()); await click('选择目标'); expect(button('确认替换').disabled).toBe(false);

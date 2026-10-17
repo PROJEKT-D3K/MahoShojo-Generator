@@ -68,6 +68,8 @@ describe('Web真实角色管理普通角色/情景云写宿主', () => {
     await mount(); await click('保存到云端'); const fields = document.querySelectorAll<HTMLInputElement>('[role=dialog] input'); await inputValue(fields[0], '我的新名字');
     await click('保存'); expect(document.body.textContent).toContain('容量不足'); expect(document.querySelector<HTMLInputElement>('[role=dialog] input')?.value).toBe('我的新名字');
     await click('保存'); expect(button('保存').disabled).toBe(true); expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('雾灯');
+    for (const label of ['检查我的云端卡', '我已检查，仍要再次新建（可能重复）']) expect(button(label).className.split(' ')).toEqual(expect.arrayContaining(['hover:bg-gray-50', 'focus-visible:ring-2', 'focus-visible:ring-fuchsia-500', 'disabled:opacity-50']));
+    expect(button('我已检查，仍要再次新建（可能重复）').disabled).toBe(true);
     await click('取消'); await click('保存到云端'); expect(button('保存').disabled).toBe(true); expect(dataCardApi.createCard).toHaveBeenCalledTimes(2);
   });
   it('从真实管理卡片选替换目标，服务端版本先读后确认，取消零写，待审按ack反馈', async () => {
@@ -149,6 +151,7 @@ describe('Web真实角色管理普通角色/情景云写宿主', () => {
     vi.mocked(dataCardApi.replaceOwnedCard).mockResolvedValue({ success: false, uncertain: true, error: '替换结果不确定' });
     await mount(); await act(async () => { [...container.querySelectorAll('button')].find((node) => node.textContent?.includes('我的数据卡'))!.click(); }); await waitFor(() => !!button('替换')); await click('替换'); await click('确认替换');
     expect(button('确认替换').disabled).toBe(true); expect(dataCardApi.replaceOwnedCard).toHaveBeenCalledOnce(); expect(container.querySelector<HTMLInputElement>('#editor-field-name')?.value).toBe('雾灯');
+    expect(button('检查我的云端卡并重新选择目标').className.split(' ')).toEqual(expect.arrayContaining(['hover:bg-gray-50', 'focus-visible:ring-2', 'focus-visible:ring-fuchsia-500']));
     await click('检查我的云端卡并重新选择目标'); await waitFor(() => !!button('替换')); expect(dataCardApi.replaceOwnedCard).toHaveBeenCalledOnce();
   });
   it.each(['account', 'source'])('签名准备在途换%s，迟到的不合规响应不跳转、不写入、不污染新页面', async (change) => {

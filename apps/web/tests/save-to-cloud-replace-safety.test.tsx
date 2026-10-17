@@ -66,13 +66,19 @@ describe.each([undefined, 'generation-result'] as const)('Web result actual owne
     await render(); await choose(); fetcher.mockResolvedValueOnce(Response.json({}, { status: 500 })); await click('确认替换');
     expect(button('确认替换').disabled).toBe(true); await click('取消'); await click('替换已有');
     expect(button('确认替换').disabled).toBe(true); expect(writes()).toHaveLength(1);
+    const inspect = document.querySelector<HTMLAnchorElement>('a[href="/character-manager"]')!;
+    expect(inspect.target).toBe('_blank'); expect(inspect.rel).toBe('noopener noreferrer');
+    for (const action of [inspect, button('我已检查，重新选择目标')]) expect(action.className.split(' ')).toEqual(expect.arrayContaining(['hover:bg-gray-50', 'focus-visible:ring-2', 'focus-visible:ring-fuchsia-500', 'disabled:opacity-50']));
+    expect(button('我已检查，重新选择目标').disabled).toBe(true);
     expect(writes().every(([url]) => url.endsWith('/replace-owned'))).toBe(true);
     await act(async () => { document.querySelector<HTMLAnchorElement>('a[href="/character-manager"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); await flush(); });
     await click('我已检查，重新选择目标'); expect(writes()).toHaveLength(1); await click('选择目标'); expect(button('确认替换').disabled).toBe(false);
   });
   test('version conflict requires another preview and confirmation', async () => {
     await render(); await choose(); fetcher.mockResolvedValueOnce(Response.json({ error: 'TARGET_CHANGED' }, { status: 409 })); await click('确认替换');
-    expect(button('确认替换').disabled).toBe(true); await click('重新选择替换目标');
+    expect(button('确认替换').disabled).toBe(true);
+    expect(button('重新选择替换目标').className.split(' ')).toEqual(expect.arrayContaining(['hover:bg-gray-50', 'focus-visible:ring-2', 'focus-visible:ring-fuchsia-500']));
+    await click('重新选择替换目标');
     fetcher.mockResolvedValueOnce(Response.json({ ...ready, target: { ...target, version: 'b'.repeat(64) } })); await click('选择目标'); await click('确认替换');
     expect(JSON.parse(writes()[1][1].body).expectedVersion).toBe('b'.repeat(64));
   });
