@@ -67,7 +67,7 @@ type GenerationFetch = (
 
 export type GenerationApiAuth = Readonly<{
   getAuthHeader: () => Promise<string | null>;
-  getActivityHeaders: () => Promise<Record<string, string>>;
+  getActivityHeaders: (_options?: { skipSessionBootstrap?: boolean }) => Promise<Record<string, string>>;
 }>;
 
 export type GenerationApiIntentDependencies = {
@@ -146,7 +146,8 @@ export const buildGenerationApiHeaders = async (
     headers.set('Authorization', authHeader);
   }
 
-  const activityHeaders = await auth.getActivityHeaders();
+  // 会话探测已经由 getAuthHeader 完成；保留串行读取以使用它更新后的身份。
+  const activityHeaders = await auth.getActivityHeaders({ skipSessionBootstrap: true });
   for (const [name, value] of Object.entries(activityHeaders)) {
     if (!headers.has(name)) headers.set(name, value);
   }

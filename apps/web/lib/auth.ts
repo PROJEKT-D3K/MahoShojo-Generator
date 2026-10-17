@@ -279,11 +279,11 @@ export const authStorage = {
   },
 
   // 获取“活跃统计”头（不依赖额外 D1 读取）
-  async getActivityHeaders(): Promise<Record<string, string>> {
+  async getActivityHeaders(options: { skipSessionBootstrap?: boolean } = {}): Promise<Record<string, string>> {
     const identity = captureAuthIdentity();
     let auth = await this.getAuth();
     if (!identity.isCurrent()) return {};
-    if (!auth) {
+    if (!auth && !options.skipSessionBootstrap) {
       const bootstrapped = await bootstrapAuthFromSession();
       auth = bootstrapped?.identity.isCurrent() ? bootstrapped.auth : null;
     }
