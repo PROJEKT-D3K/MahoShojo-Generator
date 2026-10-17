@@ -193,8 +193,24 @@ describe('Desktop /battle journey against loopback fixture', () => {
     const other = product === 'battle' ? 'arena' : 'battle';
     // The host keeps native modified-click semantics, rather than eagerly navigating.
     const modified = new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true });
-    await act(async () => switchLink.dispatchEvent(modified));
-    expect(modified.defaultPrevented).toBe(false);
+    let preventedByHost: boolean | undefined;
+    const emulateModifiedClickDefault = (event: MouseEvent) => {
+      if (event !== modified) return;
+      // React's root handler has already run. jsdom ignores Ctrl when following
+      // anchors, so suppress only its incorrect current-document navigation.
+      preventedByHost = event.defaultPrevented;
+      event.preventDefault();
+    };
+    const historyLength = window.history.length;
+    document.addEventListener('click', emulateModifiedClickDefault);
+    try {
+      await act(async () => switchLink.dispatchEvent(modified));
+    } finally {
+      document.removeEventListener('click', emulateModifiedClickDefault);
+    }
+    expect(preventedByHost).toBe(false);
+    expect(window.location.hash).toBe(`#/${product}`);
+    expect(window.history.length).toBe(historyLength);
     await act(async () => switchLink.click());
     await vi.waitFor(() => expect(window.location.hash).toBe(`#/${other}`)); await settle();
     expect(container.textContent).toContain(other === 'arena' ? '本页是完整版竞技场' : '本页是 `/battle` 简洁版');
