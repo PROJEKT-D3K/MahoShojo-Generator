@@ -207,3 +207,18 @@ it.skipIf(!nativeRankingFixture)('consumes real runtime → Native loopback → 
   expect(f.operations.map(op => op.operation)).toEqual(['create-stream']); expect(f.records.size).toBe(0);
   f.session.appendHostedHistory(); expect(f.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1); f.session.dispose();
 });
+
+
+it('exports and restores a safe native rejection even when no Hosted response arrived', async () => {
+  const f = fixture(), source = draft(); f.session.updateDraft(source);
+  await f.session.generateHosted({ invoke: async () => { throw { code: 'capability-unavailable', message: 'private-hosted-message', dispatchState: 'not-dispatched', intentOwnership: 'prior-retained' }; } }, source, intent, actor);
+  const diagnostic = { source: 'server', stage: 'create-stream', code: 'capability-unavailable', dispatchState: 'not-dispatched' };
+  expect(f.session.getSnapshot().phase).toBe('failed');
+  expect(JSON.parse(f.session.exportDocument()).result.failureDiagnostic).toEqual(diagnostic);
+  expect(f.session.exportDocument()).not.toContain('private-hosted-message'); f.session.dispose();
+  const reopened = fixture('battle', f.saved); reopened.session.restoreDraft();
+  expect(reopened.session.getSnapshot().failureDiagnostic).toEqual(diagnostic);
+  expect(parseArenaHostedDetails({ ...reopened.session.getSnapshot().hosted, failureDiagnostic: { ...diagnostic, code: 'PRIVATE_SECRET', message: 'private-message' } })?.failureDiagnostic)
+    .toEqual({ ...diagnostic, code: 'unclassified' });
+  reopened.session.dispose();
+});

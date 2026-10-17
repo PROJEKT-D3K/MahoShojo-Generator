@@ -33,6 +33,7 @@ import { countBattleStoryCommitJsonBytes } from '@mahoshojo/domain/arena-story-c
 import type { NarrativeHistoryAppendInput } from '@mahoshojo/domain/narrative-history-operations';
 import { describeDesktopPresetModelSupport } from '../ai-config/desktop-ai-config';
 import { createDesktopAiExecutionPort, type DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
+import { parseArenaFailureDiagnostic, type ArenaFailureDiagnostic, type ArenaFailureStage } from './failure-diagnostic';
 import { DesktopAiError } from '../../platform/direct-ai-bridge';
 
 /** B1 is a protocol adapter, not a card family, Hosted route, history writer or UI. */
@@ -75,7 +76,7 @@ export type ArenaDirectOutcome = CommonOutcome & (
       /** Candidate only. A later host writer must verify this original scopeKey. */
       historyCandidate?: NarrativeHistoryAppendInput & { scopeKey: string; requestId: string } }
   | { status: 'cancelled'; reason: 'aborted' }
-  | { status: 'failed' | 'invalid-output'; code: string; message: string; draftCompletion?: NarrativeDraftCompletion }
+  | { status: 'failed' | 'invalid-output'; code: string; message: string; failureDiagnostic?: ArenaFailureDiagnostic; draftCompletion?: NarrativeDraftCompletion }
 );
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -88,6 +89,9 @@ const isOrdinaryMetadataFailure = (candidate: string): boolean => {
 // Native and provider messages may contain private upstream values. Keep only
 // recognized codes, and render local explanations rather than those messages.
 const directFailureMessages = {
+  'ipc-receipt-invalid': '桌面界面与原生程序的流式交付协议不匹配，请完全退出并更新桌面程序后再试。',
+  'ipc-delivery-timeout': '桌面程序未能交付全部生成数据，请保留当前内容并重新打开程序。',
+  'ipc-delivery-invalid': '桌面程序的生成数据交付不符合协议，请保留当前内容并更新程序。',
   'profile-not-found': '所选客户端连接已不存在，请重新选择连接。',
   'profile-rejected': '所选客户端连接配置无效，请检查服务地址和模型。',
   'missing-secret': '客户端连接缺少凭据，请重新配置 API Key。',
@@ -143,8 +147,10 @@ export const executeArenaDirect = async (
   const partial = (): ArenaDirectPartial => ({ rawText, markdown: splitStreamMeta(rawText).markdown, reasoning, usage });
   const common = (): CommonOutcome => ({ ...partial(), requestId: task.requestId, scopeKey: host.scopeKey, mode: task.mode, terminal });
   const cancelled = (): ArenaDirectOutcome => ({ ...common(), status: 'cancelled', reason: 'aborted' });
+  let failureStage: ArenaFailureStage = 'request';
   const failed = (code: string, message: string, invalid = false, draftCompletion?: NarrativeDraftCompletion): ArenaDirectOutcome => ({
     ...common(), status: invalid ? 'invalid-output' : 'failed', code, message,
+    failureDiagnostic: parseArenaFailureDiagnostic({ source: 'client', stage: failureStage, code })!,
     ...(draftCompletion && task.generationMode === 'stream' && input.reportFormat === 'markdown' && !story ? { draftCompletion } : {}),
   });
   if (signal.aborted) return cancelled();
@@ -236,6 +242,7 @@ export const executeArenaDirect = async (
   const request = parsedRequest.data;
   task.requestId = request.requestId;
   const port = createDesktopAiExecutionPort(executionOptions);
+  failureStage = 'native-stream';
   let sourceFailureCode: DirectFailureCode | undefined;
   const source = async function* (): AsyncGenerator<AiStreamEvent> {
     try {
@@ -268,6 +275,7 @@ export const executeArenaDirect = async (
   if (signal.aborted) return cancelled();
   if (terminal.status === 'cancelled') return cancelled();
   if (terminal.status === 'failed') return failed(terminal.error.code, directFailureMessage(terminal.error.code));
+  failureStage = 'output';
   // A terminal cannot replace the accepted body with an unrelated full result.
   if (terminal.output.text !== rawText || (terminal.output.reasoning !== undefined && terminal.output.reasoning !== reasoning)) {
     return failed('invalid-response', '终态与已接收内容不一致，已保留收到的正文。');

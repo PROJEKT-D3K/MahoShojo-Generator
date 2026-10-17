@@ -1,3 +1,4 @@
+import { parseArenaFailureDiagnostic } from './failure-diagnostic';
 import { createStreamReadWithTimeout, buildStreamSoftTimeoutMessage, DEFAULT_STREAM_READ_IDLE_TIMEOUT_MS, DEFAULT_STREAM_READ_TOTAL_TIMEOUT_MS } from '@mahoshojo/ai-core/stream-timeout';
 import { ARENA_WEB_PACKAGE_META_ABSENT_MESSAGE, hasArenaWebPackageReport, type ArenaBattleReport, type ArenaMetadataStatus } from '@mahoshojo/ai-core/arena-generation';
 import type { ArenaCompanionEnvelope, ArenaCompanionSuccessEnvelope } from '@mahoshojo/contracts/arena-companion';
@@ -24,7 +25,9 @@ export const projectArenaCompanionReportForView = (value: ArenaCompanionEnvelope
 export const getArenaHostedErrorDiagnostic = (details: ArenaHostedDetails | null): { httpStatus: number | null; code: string | null } | null => {
   const body = details?.companion?.body;
   const diagnostic = details?.responseError;
-  const code = diagnostic?.code ?? (body && !('report' in body) ? body.code : null);
+  const terminal = details?.terminal;
+  const code = diagnostic?.code ?? (body && !('report' in body) ? body.code : null)
+    ?? (terminal && 'code' in terminal.data ? terminal.data.code : null);
   const httpStatus = diagnostic?.httpStatus;
   const safeCode = sanitizeArenaHostedErrorCode(code);
   const safeStatus = typeof httpStatus === 'number' && Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : null;
@@ -60,7 +63,7 @@ export const runArenaHostedJson = async (
 ): Promise<ArenaHostedOutcome> => {
   let generationId: string | null = null, markdown = '', reasoning = '';
   let details: ArenaHostedDetails = { connectionState: 'connecting', serverStatus: null, ranking: null, telemetry: null,
-    metadataState: 'missing', headerMeta: null, recoveryCredentialState: 'stored', metaEvent: null, terminal: null,
+    responseStatus: null, metadataState: 'missing', headerMeta: null, recoveryCredentialState: 'stored', metaEvent: null, terminal: null,
     outputValidation: 'pending', validationMessage: null, restored: false, delivery: 'non-stream', companionState: 'unavailable', companion: null };
   const current = () => context.isCurrent?.() !== false;
   const assertCurrent = () => { if (!current()) throw new ArenaHostedBridgeError('scope-changed', 'not-dispatched'); };
@@ -119,7 +122,7 @@ export const runArenaHostedJson = async (
       onResponse: response => {
         assertCurrent(); signal.throwIfAborted();
         generationId = response.generationId ?? null;
-        details = { ...details, recoveryCredentialState: response.recoveryCredentialState, connectionState: 'generating' }; update('generating'); publish();
+        details = { ...details, responseStatus: response.status, recoveryCredentialState: response.recoveryCredentialState, connectionState: 'generating' }; update('generating'); publish();
       } });
     // Reuse the shared soft-timeout reader from dispatch, including the entire wait for first headers.
     reader = new ReadableStream<ArenaHostedJsonReply>({ start(controller) {
@@ -166,6 +169,10 @@ export const runArenaHostedJson = async (
     if (current() && !checkedReply && cause instanceof ArenaHostedBridgeError && cause.dispatchState === 'unknown') {
       update('unknown'); return await recover();
     }
+    details = { ...details, failureDiagnostic: parseArenaFailureDiagnostic({ source: 'server', stage: 'create-json',
+      code: cause instanceof ArenaHostedBridgeError ? cause.code : 'unclassified',
+      ...(cause instanceof ArenaHostedBridgeError ? { dispatchState: cause.dispatchState } : {}),
+    })! };
     // A checked envelope is exportable before invoke settles, but is not a server terminal.
     update(cause instanceof ArenaHostedBridgeError && cause.dispatchState === 'not-dispatched' ? 'failed' : 'unknown');
     return { ...common(), status: 'failed', message: cause instanceof ArenaHostedBridgeError ? cause.message : '完整战报校验未完成，可按原请求恢复。' };

@@ -527,7 +527,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     try { downloadTextFile('arena-complete.json', session.exportDocument(), 'application/json'); setBackupFeedback('download-started'); }
     catch { setBackupFeedback('failed'); }
   };
-  const safeDiagnostic = buildArenaSafeDiagnostic({ phase: state.phase, location: state.generation ? state.generation.intent.mode === 'hosted' ? 'server' : 'client' : null, hosted: state.hosted, response: getArenaHostedErrorDiagnostic(state.hosted) });
+  const safeDiagnostic = buildArenaSafeDiagnostic({ phase: state.phase, failureDiagnostic: state.failureDiagnostic ?? state.hosted?.failureDiagnostic, location: state.generation ? state.generation.intent.mode === 'hosted' ? 'server' : 'client' : null, hosted: state.hosted, response: getArenaHostedErrorDiagnostic(state.hosted) });
   const exportNarrativeDrafts = (drafts: readonly NarrativeDraft[]) => download('arena-narrative-drafts.json', JSON.stringify(buildNarrativeDraftArchive(drafts), null, 2), 'application/json');
   const draftArchiveAction = (action: () => { ok: boolean; error?: string }) => {
     if (session.narrativeDrafts.getState().scope !== narrativeScope || cloudStore.getCredentialEpoch() !== accountCredentialEpoch) return { ok: false as const, error: '账号已切换，请重新操作。' };

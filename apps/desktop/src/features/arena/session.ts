@@ -1,3 +1,5 @@
+import { parseArenaFailureDiagnostic, type ArenaFailureDiagnostic, type ArenaFailureStage } from './failure-diagnostic';
+import { ArenaHostedBridgeError } from '../../platform/arena-hosted-bridge';
 import { clearDesktopArenaSource, projectDesktopArenaCombatant } from './strict-source';
 import { createArenaHostedNativeSettle } from '../../platform/arena-hosted-settle';
 import { buildNarrativeDraftArchive, createNarrativeDraftCandidate,
@@ -61,6 +63,7 @@ export type ArenaSessionPhase = 'idle' | 'generating' | 'completed' | 'failed' |
 export interface ArenaSessionState extends ArenaDirectPartial {
   draft: ArenaDraft; generation: { input: ArenaDraft; intent: ArenaDirectIntent | ArenaHostedIntent; scopeKey: string; startedAt: string; adjudicationResults: AdjudicationResult[]; profileId: string; providerTarget: DesktopAiExecutionOptions['providerTarget'] } | null; phase: ArenaSessionPhase; activeGenerationMode: ArenaDraft['generationMode'] | null; report: ArenaBattleReport | null;
   hosted: ArenaHostedDetails | null; hostedGenerationId: string | null;
+  failureDiagnostic?: ArenaFailureDiagnostic | null;
   roleUpdates: { status: 'idle' | 'updating' | 'completed' | 'unavailable' | 'restored'; message: string | null;
     items: readonly { combatantIndex: number; data: Record<string, unknown>; isNative: boolean }[] };
   resultFormat: 'markdown' | 'web'; renderSnapshot: BattleReportRenderSnapshotV1 | null;
@@ -244,7 +247,7 @@ export class DesktopArenaSession {
     this.completedNarrativeRequestId = typeof saved.output?.completedRequestId === 'string' ? saved.output.completedRequestId : null;
     this.resultMode = saved.output?.executionMode === 'hosted' ? 'hosted' : saved.output?.executionMode === 'direct-remote' ? 'direct-remote' : saved.output?.executionMode === 'direct-local' ? 'direct-local' : undefined;
     const hosted = parseArenaHostedDetails(saved.output?.hosted, typeof saved.output?.hostedGenerationId === 'string' ? saved.output.hostedGenerationId : null);
-    this.publish({ roleUpdates: { status: 'restored', message: '本机草稿中的签名字段未经本机验证；恢复不会自动同步角色。', items: [] }, hosted, hostedGenerationId: typeof saved.output?.hostedGenerationId === 'string' ? saved.output.hostedGenerationId : null, draft: { ...saved.draft, ...(this.narrativeDrafts.getState().drafts.length ? { narrativeDrafts: this.narrativeDrafts.getState().drafts } : {}), scenario: { ...saved.draft.scenario, isPreset: false }, combatants: saved.draft.combatants.map(item => ({ ...clearDesktopArenaSource(item), isValid: false })) }, pendingRestore: false, restored: true, generation: null, draftSaved: true,
+    this.publish({ failureDiagnostic: parseArenaFailureDiagnostic(saved.output?.failureDiagnostic), roleUpdates: { status: 'restored', message: '本机草稿中的签名字段未经本机验证；恢复不会自动同步角色。', items: [] }, hosted, hostedGenerationId: typeof saved.output?.hostedGenerationId === 'string' ? saved.output.hostedGenerationId : null, draft: { ...saved.draft, ...(this.narrativeDrafts.getState().drafts.length ? { narrativeDrafts: this.narrativeDrafts.getState().drafts } : {}), scenario: { ...saved.draft.scenario, isPreset: false }, combatants: saved.draft.combatants.map(item => ({ ...clearDesktopArenaSource(item), isValid: false })) }, pendingRestore: false, restored: true, generation: null, draftSaved: true,
       rawText: String(saved.output?.rawText ?? ''), markdown: String(saved.output?.markdown ?? ''), reasoning: String(saved.output?.reasoning ?? ''),
       resultFormat: saved.output?.reportFormat === 'web' ? 'web' : 'markdown', renderSnapshot: parseBattleReportRenderSnapshotV1(saved.output?.renderSnapshot),
       activeGenerationMode: saved.output?.generationMode === 'stream' ? 'stream' : 'non-stream', phase: saved.output?.phase as ArenaSessionPhase ?? 'idle', report: hosted?.companion ? projectArenaCompanionReportForView(hosted.companion) : null, candidates: null,
@@ -254,7 +257,7 @@ export class DesktopArenaSession {
     if (this.isBusy()) return;
     try { this.preserveLegacyNarrativeDrafts(); this.roleContext = null; this.roleCandidates = null; this.dependencies.storage.removeItem(this.draftKey); this.pending = null; this.draftBlocked = false; this.dirty = false; this.completedNarrativeRequestId = null;
       this.narrativeDrafts.clearCandidate();
-      this.publish({ roleUpdates: { status: 'idle', message: null, items: [] }, hosted: null, hostedGenerationId: null, draft: { ...createInitialArenaDraft(), ...(this.narrativeDrafts.getState().drafts.length ? { narrativeDrafts: this.narrativeDrafts.getState().drafts } : {}) }, generation: null, pendingRestore: false, draftSaved: true, draftError: null, rawText: '', markdown: '', reasoning: '', report: null, resultFormat: 'markdown', renderSnapshot: null, phase: 'idle', candidates: null, message: null, saveError: null, saveStatus: 'idle', narrativeDraftCandidate: null, narrativeDraftStatus: 'idle' });
+      this.publish({ failureDiagnostic: null, roleUpdates: { status: 'idle', message: null, items: [] }, hosted: null, hostedGenerationId: null, draft: { ...createInitialArenaDraft(), ...(this.narrativeDrafts.getState().drafts.length ? { narrativeDrafts: this.narrativeDrafts.getState().drafts } : {}) }, generation: null, pendingRestore: false, draftSaved: true, draftError: null, rawText: '', markdown: '', reasoning: '', report: null, resultFormat: 'markdown', renderSnapshot: null, phase: 'idle', candidates: null, message: null, saveError: null, saveStatus: 'idle', narrativeDraftCandidate: null, narrativeDraftStatus: 'idle' });
     } catch { this.publish({ draftError: '清除失败，旧草稿仍受保护。' }); }
   }
   retryDraftSave() {
@@ -262,7 +265,7 @@ export class DesktopArenaSession {
     if (this.disposed || this.draftBlocked || this.state.pendingRestore) return;
     try { this.preserveLegacyNarrativeDrafts(); const { draft, rawText, markdown, reasoning, phase } = this.state;
       const inputDraft = { ...draft }; delete inputDraft.narrativeDrafts;
-      const raw = JSON.stringify({ version: 1, draft: inputDraft, output: { rawText, markdown, reasoning, hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, executionMode: this.resultMode, generationMode: this.state.activeGenerationMode, phase: phase === 'generating' ? 'cancelled' : phase,
+      const raw = JSON.stringify({ version: 1, draft: inputDraft, output: { rawText, markdown, reasoning, failureDiagnostic: parseArenaFailureDiagnostic(this.state.failureDiagnostic), hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, executionMode: this.resultMode, generationMode: this.state.activeGenerationMode, phase: phase === 'generating' ? 'cancelled' : phase,
         ...(this.completedNarrativeRequestId ? { completedRequestId: this.completedNarrativeRequestId } : {}) } });
       if (raw.length > MAX_DRAFT_CHARACTERS) throw new Error('limit');
       this.dependencies.storage.setItem(this.draftKey, raw); this.publish({ draftSaved: true, draftError: null });
@@ -302,7 +305,7 @@ export class DesktopArenaSession {
     catch { this.controller = null; this.publish({ message: '本地随机判定失败，未开始生成。' }); return; }
     this.resultMode = intent.mode; this.dirty = true;
     this.roleContext = null; this.roleCandidates = null;
-    this.publish({ roleUpdates: { status: 'idle', message: null, items: [] }, hosted: null, hostedGenerationId: null, phase: 'generating', activeGenerationMode: intent.generationMode, generation: { input: frozen, intent: { ...clone(intent), requestId }, scopeKey: scope, adjudicationResults, startedAt: (this.dependencies.now ?? (() => new Date().toISOString()))(), profileId: options.profileId, providerTarget: options.providerTarget ? clone(options.providerTarget) : undefined }, report: null, resultFormat: frozen.reportFormat, renderSnapshot: null, rawText: '', markdown: '', reasoning: '', usage: undefined, candidates: null,
+    this.publish({ failureDiagnostic: null, roleUpdates: { status: 'idle', message: null, items: [] }, hosted: null, hostedGenerationId: null, phase: 'generating', activeGenerationMode: intent.generationMode, generation: { input: frozen, intent: { ...clone(intent), requestId }, scopeKey: scope, adjudicationResults, startedAt: (this.dependencies.now ?? (() => new Date().toISOString()))(), profileId: options.profileId, providerTarget: options.providerTarget ? clone(options.providerTarget) : undefined }, report: null, resultFormat: frozen.reportFormat, renderSnapshot: null, rawText: '', markdown: '', reasoning: '', usage: undefined, candidates: null,
       message: null, restored: false, saveStatus: 'idle', saveError: null, draftSaved: false,
       narrativeDraftCandidate: null, narrativeDraftStatus: 'idle' }); this.retryDraftSave();
     try {
@@ -317,13 +320,13 @@ export class DesktopArenaSession {
       if (controller.signal.aborted || outcome.status === 'cancelled') { this.publish({ phase: 'cancelled', message: '生成已取消，收到的原文仍可导出。' }); return; }
       this.publish({ rawText: outcome.rawText, markdown: outcome.markdown, reasoning: outcome.reasoning, usage: outcome.usage, draftSaved: false });
       if (outcome.status !== 'completed') {
-        this.publish({ phase: 'failed', message: outcome.message });
+        this.publish({ phase: 'failed', message: outcome.message, failureDiagnostic: parseArenaFailureDiagnostic(outcome.failureDiagnostic ?? { source: 'client', stage: 'native-stream', code: outcome.code }) });
         this.offerNarrativeDraft(requestId, intent.mode, outcome.rawText, outcome.draftCompletion ?? null, frozen, scope, epoch, archiveScope, automatic); return;
       }
       if (outcome.terminal?.status !== 'completed' || outcome.terminal.finishReason !== 'stop') throw new Error('战报未以正常终态完成，原文已保留。');
       this.markNarrativeCompleted(requestId, archiveScope);
       this.complete(frozen, outcome, (this.dependencies.now ?? (() => new Date().toISOString()))());
-    } catch (cause) { if (this.current(scope, epoch)) this.publish({ phase: controller.signal.aborted ? 'cancelled' : 'failed', message: cause instanceof Error ? cause.message : '生成失败，原文保留。' }); }
+    } catch (cause) { if (this.current(scope, epoch)) this.publish({ phase: controller.signal.aborted ? 'cancelled' : 'failed', failureDiagnostic: controller.signal.aborted ? null : { source: 'client', stage: 'session', code: 'unclassified' }, message: cause instanceof Error ? cause.message : '生成失败，原文保留。' }); }
     finally { if (this.controller === controller) this.controller = null; if (!this.disposed) this.retryDraftSave(); }
   }
   async generateHosted(options: Pick<DesktopAiExecutionOptions, 'invoke'>, input: ArenaDraft,
@@ -347,7 +350,7 @@ export class DesktopArenaSession {
     this.roleContext = null; this.roleCandidates = null;
     this.controller = controller; this.resultMode = 'hosted'; this.hostedResultScope = scope; this.dirty = true;
     const requestId = intent?.requestId ?? pointer!.requestId;
-    this.publish({ roleUpdates: { status: 'idle', message: null, items: [] }, phase: 'generating', activeGenerationMode: intent?.generationMode ?? (pointer && pointer.version !== 1 ? pointer.delivery : 'stream'), hosted: null, hostedGenerationId: null,
+    this.publish({ failureDiagnostic: null, roleUpdates: { status: 'idle', message: null, items: [] }, phase: 'generating', activeGenerationMode: intent?.generationMode ?? (pointer && pointer.version !== 1 ? pointer.delivery : 'stream'), hosted: null, hostedGenerationId: null,
       generation: frozen && intent ? { input: frozen, intent, scopeKey: scope, startedAt: (this.dependencies.now ?? (() => new Date().toISOString()))(), adjudicationResults: [], profileId: '', providerTarget: intent.presetConfig ? { kind: 'preset', providerId: intent.presetConfig.providerId } : { kind: 'system' } } : null,
       resultFormat: frozen?.reportFormat ?? pointer!.format, renderSnapshot: null, rawText: '', markdown: '', reasoning: '', report: null, usage: undefined,
       candidates: null, restored: Boolean(pointer), draftSaved: false, message: null, saveStatus: 'idle', saveError: null,
@@ -361,6 +364,7 @@ export class DesktopArenaSession {
     };
     const native = createArenaHostedNativeSettle(options.invoke);
     const nativeOptions = { ...options, invoke: native.invoke };
+    let failureStage: ArenaFailureStage = 'request';
     this.retryDraftSave();
     try {
       const outcome: ArenaHostedOutcome = pointer
@@ -372,7 +376,7 @@ export class DesktopArenaSession {
         hosted: outcome.hosted, hostedGenerationId: outcome.generationId, draftSaved: false });
       if (controller.signal.aborted || outcome.status === 'cancelled') { this.publish({ phase: 'cancelled', message: outcome.status === 'cancelled' ? outcome.message : '停止状态尚未确认，请按原请求恢复。' }); return; }
       if (outcome.status !== 'completed') {
-        this.publish({ phase: 'failed', message: outcome.message });
+        this.publish({ phase: 'failed', message: outcome.message, failureDiagnostic: parseArenaFailureDiagnostic(outcome.hosted.failureDiagnostic) });
         const seal = await native.settleFailed(controller.signal);
         if (!this.current(scope, epoch)) return;
         if (controller.signal.aborted) { this.publish({ phase: 'cancelled' }); return; }
@@ -390,6 +394,7 @@ export class DesktopArenaSession {
       if (!streamCompleted && !jsonCompleted) throw new Error('服务器终态不合法。');
       // Channel delivery is not Native completion, including SSE recovery of an original JSON
       // task. Do not expose history/save/role authority until the final invoke has succeeded.
+      failureStage = 'native-settle';
       const settled = await native.settle(controller.signal);
       if (!this.current(scope, epoch)) return;
       if (settled.status === 'aborted' || controller.signal.aborted) {
@@ -411,7 +416,7 @@ export class DesktopArenaSession {
         if (!pointer && outcome.hosted.outputValidation === 'valid') await this.retryHostedRoleUpdates(options);
         else this.publish({ roleUpdates: { status: 'idle', message: '本次报告已恢复；可显式重试服务器已生成的角色更新。', items: [] } });
       } else this.publish({ roleUpdates: { status: 'unavailable', message: packageFallback ? '缺少有效战报元数据，未应用角色历史或当前状态。Web 包仍可体验和导出。' : '本任务创建时未开启角色写入，保留原角色。', items: [] } });
-    } catch (cause) { if (this.current(scope, epoch)) this.publish({ phase: controller.signal.aborted ? 'cancelled' : 'failed', message: cause instanceof Error ? cause.message : '服务器连接未完成，可恢复原请求。' }); }
+    } catch (cause) { if (this.current(scope, epoch)) this.publish({ phase: controller.signal.aborted ? 'cancelled' : 'failed', failureDiagnostic: controller.signal.aborted ? null : parseArenaFailureDiagnostic({ source: 'server', stage: failureStage, code: cause instanceof ArenaHostedBridgeError ? cause.code : 'unclassified', ...(cause instanceof ArenaHostedBridgeError ? { dispatchState: cause.dispatchState } : {}) }), message: cause instanceof Error ? cause.message : '服务器连接未完成，可恢复原请求。' }); }
     finally { if (this.controller === controller) this.controller = null; if (this.current(scope, epoch)) this.retryDraftSave(); }
   }
   canRetryHostedRoleUpdates = () => !!this.roleContext && this.current(this.roleContext.scope, this.roleContext.epoch)
@@ -523,8 +528,8 @@ export class DesktopArenaSession {
     const pending = this.pending;
     const result = pending ? {
       phase: 'idle', rawText: '', markdown: '', reasoning: '', reportFormat: 'markdown', renderSnapshot: null,
-      hosted: null, report: null, ...pending.output,
-    } : { phase: this.state.phase, roleUpdates: this.state.roleUpdates, hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, rawText: this.state.rawText, markdown: this.state.markdown, reasoning: this.state.reasoning, report: this.state.report, usage: this.state.usage };
+      hosted: null, report: null, ...pending.output, failureDiagnostic: parseArenaFailureDiagnostic(pending.output?.failureDiagnostic),
+    } : { phase: this.state.phase, failureDiagnostic: parseArenaFailureDiagnostic(this.state.failureDiagnostic), roleUpdates: this.state.roleUpdates, hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, rawText: this.state.rawText, markdown: this.state.markdown, reasoning: this.state.reasoning, report: this.state.report, usage: this.state.usage };
     return JSON.stringify({ version: 1, product: this.dependencies.product ?? 'battle', hostedRecovery: this.hostedRecovery.getSnapshot(),
       draft: pending?.exportDraft ?? this.state.draft, generation: pending ? null : this.state.generation, result, candidates: pending ? null : this.state.candidates,
       // Only unreadable, protected originals need a separate raw backup; normal reports are not duplicated.

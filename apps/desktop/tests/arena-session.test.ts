@@ -353,3 +353,22 @@ it.each([
   expect(session.getSnapshot().pendingRestore).toBe(false); expect(session.getSnapshot().draftError).toBeTruthy();
   session.updateDraft(makeDraft()); expect(storage.getItem(ARENA_DRAFT_KEY)).toBe(raw); expect(port.putIfAbsent).not.toHaveBeenCalled(); session.dispose();
 });
+
+
+describe('safe failure evidence survives Arena export and restore', () => {
+  it('preserves the actual Direct failure category without a native message or stale prior failure', async () => {
+    const f = build(), source = makeDraft('daily', 'stream'); f.session.updateDraft(source);
+    await f.session.generate({ ...native(''), invoke: async () => { throw { code: 'missing-secret', message: 'private-key-canary' }; } }, source, intent('stream'));
+    const failure = { source: 'client', stage: 'native-stream', code: 'missing-secret' };
+    expect(f.session.getSnapshot().failureDiagnostic).toEqual(failure);
+    expect(JSON.parse(f.session.exportDocument()).result.failureDiagnostic).toEqual(failure);
+    expect(f.session.exportDocument()).not.toContain('private-key-canary'); f.session.dispose();
+    const reopened = new DesktopArenaSession({ repository: f.port, storage: f.storage, requestId: () => 'new-request' });
+    expect(JSON.parse(reopened.exportDocument()).result.failureDiagnostic).toEqual(failure);
+    reopened.restoreDraft(); reopened.setScope('A');
+    expect(reopened.getSnapshot().failureDiagnostic).toEqual(failure);
+    await reopened.generate(native(valid(true)), reopened.getSnapshot().draft, intent('stream'));
+    expect(reopened.getSnapshot().phase).toBe('completed');
+    expect(JSON.parse(reopened.exportDocument()).result.failureDiagnostic).toBeNull(); reopened.dispose();
+  });
+});

@@ -505,3 +505,24 @@ it('does not publish a late soft-warning timer into a changed owner scope', asyn
     expect(h.controlRequests).toHaveLength(0); expect(h.streamRequests).toHaveLength(1);
   } finally { release.resolve(); await running; vi.useRealTimers(); }
 });
+
+
+describe('streaming Hosted failure evidence', () => {
+  it('keeps the preflight native category before C0 converts its exception', async () => {
+    const { host } = context();
+    const result = await executeArenaHosted({ invoke: async () => { throw { code: 'capability-unavailable', message: 'private-native-message', dispatchState: 'not-dispatched', intentOwnership: 'prior-retained' }; } }, input('daily', 'web'), intent(), host, new AbortController().signal);
+    expect(result.status).toBe('failed');
+    expect(result.hosted.failureDiagnostic).toEqual({ source: 'server', stage: 'create-stream', code: 'capability-unavailable', dispatchState: 'not-dispatched' });
+    expect(result.hosted.responseStatus).toBeNull();
+    expect(JSON.stringify(result)).not.toContain('private-native-message');
+  });
+  it.each(['FORBIDDEN', 'PRIVATE_KEY_CANARY'])('records HTTP rejection with allowlisted code only: %s', async code => {
+    const { host } = context();
+    const h = native([peer => { peer.response({ status: 403, body: { code } }); peer.end(); }]);
+    const result = await execute(h, host, input('daily', 'web'));
+    expect(result.status).toBe('failed');
+    expect(result.hosted.responseStatus).toBe(403);
+    expect(result.hosted.responseError).toEqual({ httpStatus: 403, code: code === 'FORBIDDEN' ? code : 'UNRECOGNIZED_ERROR' });
+    expect(JSON.stringify(result.hosted)).not.toContain('PRIVATE_KEY_CANARY');
+  });
+});

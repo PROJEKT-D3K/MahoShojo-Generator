@@ -102,3 +102,39 @@ describe('Arena recovery controls', () => {
     expect(document.execCommand).not.toHaveBeenCalled(); expect(container.textContent).not.toMatch(/错误摘要已复制|复制失败/);
   });
 });
+
+
+describe('safe native failure category projection', () => {
+  it('includes a Direct category and phase, never arbitrary native fields', () => {
+    const summary = buildArenaSafeDiagnostic({ phase: 'failed', hosted: null, response: null,
+      failureDiagnostic: { source: 'client', stage: 'native-stream', code: 'missing-secret', message: 'private-key-canary', requestId: 'private-request' } });
+    expect(summary).toContain('执行错误码：missing-secret'); expect(summary).toContain('失败阶段：native-stream');
+    expect(summary).not.toContain('private-');
+  });
+  it('redacts code-shaped secrets and invalid stages rather than trusting saved diagnostics', () => {
+    const summary = buildArenaSafeDiagnostic({ phase: 'failed', hosted: null, response: null,
+      failureDiagnostic: { source: 'server', stage: 'create-stream', code: 'PRIVATE_KEY_CANARY', dispatchState: 'not-dispatched' } });
+    expect(summary).toContain('执行错误码：unclassified'); expect(summary).toContain('发出状态：not-dispatched');
+    expect(summary).not.toContain('PRIVATE_KEY_CANARY');
+    expect(buildArenaSafeDiagnostic({ phase: 'failed', hosted: null, response: null,
+      failureDiagnostic: { source: 'client', stage: 'PRIVATE_STAGE', code: 'missing-secret' } })).not.toMatch(/PRIVATE_STAGE|missing-secret/);
+  });
+});
+
+
+it.each(['ipc-receipt-invalid', 'ipc-delivery-timeout', 'ipc-delivery-invalid'])('keeps delivery failure %s distinct from provider failures', code => {
+  const summary = buildArenaSafeDiagnostic({ phase: 'failed', hosted: null, response: null,
+    failureDiagnostic: { source: 'client', stage: 'native-stream', code } });
+  expect(summary).toContain(`执行错误码：${code}`);
+});
+
+
+it('distinguishes an absent response from an HTTP rejection and legacy missing evidence', () => {
+  const hosted = { connectionState: 'failed', serverStatus: null, outputValidation: 'pending' };
+  const summarize = (responseStatus?: number | null) => buildArenaSafeDiagnostic({ phase: 'failed', hosted: { ...hosted, responseStatus }, response: null });
+  expect(summarize(null)).toContain('响应：尚未收到');
+  expect(summarize()).toContain('响应：未记录');
+  expect(summarize(401)).toContain('响应：已收到'); expect(summarize(401)).toContain('HTTP：401');
+  expect(summarize(200)).toContain('HTTP：200');
+  expect(summarize(Number.NaN)).toContain('响应：未记录'); expect(summarize(Number.NaN)).toContain('HTTP：未记录');
+});

@@ -1,3 +1,4 @@
+import { parseArenaFailureDiagnostic } from './failure-diagnostic';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Button } from '@mahoshojo/ui-web/card-library';
 import { copyTextToClipboard } from '@mahoshojo/ui-web/client';
@@ -18,18 +19,26 @@ const serverStatuses = ['reserved', 'running', 'finalizing', 'completed', 'faile
 const outputStatuses = ['pending', 'valid', 'missing-base', 'invalid'];
 export type ArenaSafeDiagnosticInput = {
   phase: string;
+  failureDiagnostic?: unknown;
   location?: 'client' | 'server' | null;
-  hosted: { connectionState: string; serverStatus: string | null; outputValidation: string } | null;
+  hosted: { connectionState: string; serverStatus: string | null; outputValidation: string; responseStatus?: number | null } | null;
   response: { httpStatus: number | null; code: string | null } | null;
 };
 /** Fixed local copy plus explicitly selected, bounded protocol fields; never serialize session/output. */
-export const buildArenaSafeDiagnostic = ({ phase, location, hosted, response }: ArenaSafeDiagnosticInput): string | null => {
+export const buildArenaSafeDiagnostic = ({ phase, location, hosted, response, failureDiagnostic }: ArenaSafeDiagnosticInput): string | null => {
   if (phase !== 'failed' && !response) return null;
-  if (!hosted) return `生成方式：${location === 'client' ? '客户端' : location === 'server' ? '服务器' : '未记录'}\n状态：未完成\n说明：本次生成未完成；此摘要不包含角色正文、账号或连接密钥。`;
-  const httpStatus = response?.httpStatus;
+  const failure = parseArenaFailureDiagnostic(failureDiagnostic);
+  const failureLines = failure ? [`执行错误码：${failure.code}`, `失败阶段：${failure.stage}`,
+    ...(failure.dispatchState ? [`发出状态：${failure.dispatchState}`] : [])] : [];
+  if (!hosted) return [ `生成方式：${(failure?.source ?? location) === 'client' ? '客户端' : (failure?.source ?? location) === 'server' ? '服务器' : '未记录'}`, '状态：未完成', ...failureLines, '说明：本次生成未完成；此摘要不包含角色正文、账号或连接密钥。'].join('\n');
+  const validHttpStatus = (value: unknown): number | null => typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
+  const observedStatus = validHttpStatus(response?.httpStatus) ?? validHttpStatus(hosted.responseStatus);
+  const httpStatus = observedStatus;
   return [
     '生成方式：服务器',
-    `HTTP：${typeof httpStatus === 'number' && Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : '未记录'}`,
+    ...failureLines,
+    `响应：${observedStatus !== null ? '已收到' : hosted.responseStatus === null ? '尚未收到' : '未记录'}`,
+    `HTTP：${httpStatus ?? '未记录'}`,
     `错误码：${sanitizeArenaHostedErrorCode(response?.code) ?? '未记录'}`,
     `连接状态：${Object.hasOwn(connectionLabels, hosted.connectionState) ? hosted.connectionState : 'unknown'}`,
     `任务状态：${serverStatuses.includes(hosted.serverStatus ?? '') ? hosted.serverStatus : '未确认'}`,

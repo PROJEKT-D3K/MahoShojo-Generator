@@ -1,3 +1,4 @@
+import { parseArenaFailureDiagnostic, type ArenaFailureDiagnostic, type ArenaFailureStage } from './failure-diagnostic';
 import { parseGenerationRankingResponse, type GenerationRankingResponse } from '@mahoshojo/contracts/arena-generation-ranking';
 import { ARENA_COMPANION_PROTOCOL_VERSION, ArenaCompanionEnvelopeSchema, type ArenaCompanionEnvelope } from '@mahoshojo/contracts/arena-companion';
 import { DesktopArenaHostedJsonCreateRequestSchema } from '@mahoshojo/contracts/desktop-arena-hosted-json';
@@ -59,7 +60,10 @@ export interface ArenaHostedDetails {
   companion?: ArenaCompanionEnvelope | null;
   companionState?: 'complete' | 'recovered-model-only' | 'unavailable';
   /** Checked transport diagnostics only; never a provider response or completion authority. */
+  /** null means this run has not observed a response; absent means an older unrecorded draft. */
+  responseStatus?: number | null;
   responseError?: { httpStatus: number; code: string | null };
+  failureDiagnostic?: ArenaFailureDiagnostic;
 }
 /** Draft data is public output only; parse it again without restoring execution authority. */
 export const parseArenaHostedDetails = (value: unknown, generationId?: string | null): ArenaHostedDetails | null => {
@@ -83,6 +87,9 @@ export const parseArenaHostedDetails = (value: unknown, generationId?: string | 
       || !(diagnostic.code === null || typeof diagnostic.code === 'string' && /^[A-Z][A-Z0-9_]{1,127}$/u.test(diagnostic.code))) throw new Error('Hosted response diagnostic');
     responseError = { httpStatus: Number(diagnostic.httpStatus), code: sanitizeArenaHostedErrorCode(diagnostic.code) };
   }
+  if (v.responseStatus !== undefined && v.responseStatus !== null
+    && (!Number.isInteger(v.responseStatus) || Number(v.responseStatus) < 100 || Number(v.responseStatus) > 599)) throw new Error('Hosted response status');
+  const failureDiagnostic = parseArenaFailureDiagnostic(v.failureDiagnostic);
   const ranking = parseGenerationRankingResponse(v.ranking);
   const companion = v.companion == null ? null : ArenaCompanionEnvelopeSchema.parse(v.companion);
   const metaEvent = v.metaEvent === null ? null : DesktopArenaHostedSseEventSchema.parse(v.metaEvent);
@@ -95,6 +102,8 @@ export const parseArenaHostedDetails = (value: unknown, generationId?: string | 
     recoveryCredentialState: v.recoveryCredentialState as ArenaHostedDetails['recoveryCredentialState'], metaEvent, terminal,
     outputValidation: v.outputValidation as ArenaHostedDetails['outputValidation'], validationMessage: v.validationMessage, restored: v.restored, softTimeoutWarning: null,
     ...(responseError ? { responseError } : {}),
+    ...(v.responseStatus !== undefined ? { responseStatus: v.responseStatus as number | null } : {}),
+    ...(failureDiagnostic ? { failureDiagnostic } : {}),
     ...(v.delivery ? { delivery: v.delivery as ArenaHostedDetails['delivery'] } : {}),
     ...(v.companionState ? { companionState: v.companionState as ArenaHostedDetails['companionState'], companion } : {}) };
 };
@@ -185,7 +194,7 @@ const runHosted = async (
   let generationId = pointer.generationId ?? null;
   const output = createArenaHostedStreamOutput();
   let details: ArenaHostedDetails = { connectionState: create ? 'connecting' : 'resuming', serverStatus: null, ranking: null, telemetry: null,
-    metadataState: 'missing', headerMeta: null, recoveryCredentialState: 'stored', metaEvent: null, terminal: null,
+    responseStatus: null, metadataState: 'missing', headerMeta: null, recoveryCredentialState: 'stored', metaEvent: null, terminal: null,
     outputValidation: 'pending', validationMessage: null, restored: !create && !automaticRecovery,
     ...(nonStream ? { delivery: 'non-stream', companionState: 'recovered-model-only', companion: null } as const : {}) };
   const partial = (): ArenaHostedPartial => ({ rawText: output.markdown, markdown: output.markdown, reasoning: output.reasoning, usage: output.usage, hosted: { ...details } });
@@ -193,8 +202,18 @@ const runHosted = async (
   const isCurrent = () => context.isCurrent?.() !== false;
   const assertCurrent = () => { if (!isCurrent()) throw new ArenaHostedBridgeError('scope-changed', 'not-dispatched'); };
   const publish = () => { if (isCurrent() && !signal.aborted) onPartial?.(partial()); };
+  const recordFailure = (cause: unknown, stage: ArenaFailureStage) => {
+    details = { ...details, failureDiagnostic: parseArenaFailureDiagnostic({ source: 'server', stage,
+      code: cause instanceof ArenaHostedBridgeError ? cause.code : 'unclassified',
+      ...(cause instanceof ArenaHostedBridgeError ? { dispatchState: cause.dispatchState } : {}),
+    })! };
+  };
   const onResponse = (value: ArenaHostedHandshake) => {
     if (!isCurrent() || signal.aborted) return;
+    details = { ...details, responseStatus: value.status, failureDiagnostic: undefined, responseError: undefined };
+    if (value.status < 200 || value.status >= 300) {
+      details = { ...details, responseError: { httpStatus: value.status, code: sanitizeArenaHostedErrorCode(value.body?.code) } };
+    }
     if (value.generationId) {
       if (generationId && value.generationId !== generationId) throw new Error('conflicting generation');
       generationId = value.generationId;
@@ -208,7 +227,10 @@ const runHosted = async (
   };
   const short = async (request: DesktopArenaHostedControlRequest, operationSignal?: AbortSignal) => {
     assertCurrent(); operationSignal?.throwIfAborted();
-    const reply = await controlArenaHosted(invoke, request); assertCurrent(); operationSignal?.throwIfAborted();
+    let reply;
+    try { reply = await controlArenaHosted(invoke, request); }
+    catch (cause) { recordFailure(cause, request.operation); throw cause; }
+    assertCurrent(); operationSignal?.throwIfAborted();
     if (reply.body.generationRequestId && reply.body.generationRequestId !== pointer.requestId) throw new ArenaHostedBridgeError('protocol');
     if (reply.body.generationId && generationId && reply.body.generationId !== generationId) throw new ArenaHostedBridgeError('protocol');
     if (!signal.aborted) { details = { ...details, recoveryCredentialState: reply.recoveryCredentialState }; publish(); }
@@ -246,6 +268,7 @@ const runHosted = async (
             const response = await openArenaHostedStream(invoke, create, { signal: operationSignal, onResponse, createChannel: context.createChannel });
             context.recovery.settlePrepared(pointer.requestId); return response;
           } catch (cause) {
+            recordFailure(cause, 'create-stream');
             // Only this original create can prove the prewritten new intent never acquired Native ownership.
             if (isCurrent() && cause instanceof ArenaHostedBridgeError && cause.intentOwnership === 'prior-retained' && cause.dispatchState === 'not-dispatched') context.recovery.rollbackPrepared(pointer.requestId);
             else context.recovery.settlePrepared(pointer.requestId);
@@ -258,7 +281,7 @@ const runHosted = async (
         },
         resume: ({ generationId: id, lastEventId, signal: operationSignal }) => { assertCurrent(); return openArenaHostedStream(invoke,
           { operation: 'resume', ...scope, generationId: id, ...(lastEventId ? { after: lastEventId } : {}) },
-          { signal: operationSignal, onResponse, createChannel: context.createChannel }); },
+          { signal: operationSignal, onResponse, createChannel: context.createChannel }).catch(cause => { recordFailure(cause, 'resume'); throw cause; }); },
         cancel: ({ generationId: id, reason, signal: operationSignal }) => short({ operation: 'stop', ...scope,
           ...(id ? { generationId: id } : {}), reason }, operationSignal),
       },
@@ -308,6 +331,7 @@ const runHosted = async (
     return { ...common(), markdown: displayMarkdown, status: 'completed', metaStatus, report, renderSnapshot, canAppendHistory: (Boolean(create) || automaticRecovery) && details.outputValidation === 'valid' };
   } catch (cause) {
     if (signal.aborted) return { ...common(), status: 'cancelled', message: '本机订阅已停止；服务器停止/完成状态尚需按原请求确认。' };
+    if (!details.failureDiagnostic) recordFailure(cause, details.terminal ? 'output' : 'stream');
     return { ...common(), status: 'failed', message: cause instanceof ArenaHostedBridgeError ? cause.message : '连接或战报校验未完成，收到的原文仍可导出或按原请求恢复。' };
   }
 };

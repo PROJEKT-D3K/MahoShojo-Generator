@@ -601,7 +601,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     const after = ordinarySnapshot(), oldStored = JSON.parse(before.advanced!), newStored = JSON.parse(after.advanced!);
     expect(newStored.draft).toEqual({ ...oldStored.draft, settings: { ...oldStored.draft.settings, userGuidance: '房主本地新引导' }, storyLength: 'long', customStoryLength: '', selectedLanguage: other.value });
     // The legacy fixture omits optional output fields; the existing autosave serializes their null defaults.
-    expect(newStored.output).toEqual({ ...oldStored.output, hosted: null, hostedGenerationId: null, renderSnapshot: null }); expect({ ...after, advanced: before.advanced }).toEqual(before);
+    expect(newStored.output).toEqual({ ...oldStored.output, failureDiagnostic: null, hosted: null, hostedGenerationId: null, renderSnapshot: null }); expect({ ...after, advanced: before.advanced }).toEqual(before);
     expect(port.actions.map(value => value.action.kind)).toEqual(['create']);
     expect(room().textContent).toContain(`修订 ${authority.snapshot.revision}`); assertConstrained();
     await click('比较本地与房间设置', room()); await vi.waitFor(async () => { await act(async () => { await Promise.resolve(); }); expect(button('发布已比较的设置', room())).toBeDefined(); });
