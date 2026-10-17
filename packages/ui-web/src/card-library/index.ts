@@ -29,6 +29,7 @@ export {
   mapDataCardSourceMeta,
   mapPublicDataCardRowToBattleSelectionPayload,
   mapPublicDataCardRowToDetailsCard,
+  mapPublicDataCardRowToSourceData,
   normalizePublicVisibilityValue,
 } from './read-mappers';
 export type {

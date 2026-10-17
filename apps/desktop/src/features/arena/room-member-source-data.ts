@@ -6,6 +6,7 @@ import { isBuiltinWebPackageRef } from '@mahoshojo/web-package';
 import { mapPublicDataCardRowToDetailsCard, type CardLibraryHost, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import type { ArenaMemberReferenceRequest } from '@mahoshojo/ui-web/arena-room';
 import type { InvokeFn } from '../../platform/cloud-bridge';
+import { withReadAbort } from '../../platform/abortable-read';
 import { requestCardLibraryRoute } from '../../platform/card-library-bridge';
 import { parseArenaJson } from './input';
 
@@ -47,7 +48,7 @@ export async function readDesktopMemberPublicCard(online: Pick<CardLibraryHost['
 export async function readDesktopMemberRandomCharacter(invoke: InvokeFn, online: Pick<CardLibraryHost['online'], 'fetchPublicCardById'>, signal: AbortSignal, isCurrent: () => boolean = () => true) {
   signal.throwIfAborted();
   if (!isCurrent()) throw new Error('房间来源作用域已改变');
-  const result = await requestCardLibraryRoute(invoke, { routeId: 'random-public-card.query', query: { type: 'character' } });
+  const result = await withReadAbort(requestCardLibraryRoute(invoke, { routeId: 'random-public-card.query', query: { type: 'character' } }), signal);
   signal.throwIfAborted();
   if (!isCurrent()) throw new Error('房间来源作用域已改变');
   const body = record(result.body);

@@ -261,10 +261,10 @@ describe('Desktop /battle journey against loopback fixture', () => {
   });
   it('selects real local and offline public-cache bodies without claiming online authority', async () => {
     const source: LocalCardRecordV1 = { id: 'lc_0123456789abcdef0123456789abcdef', schemaVersion: 1, storageLocation: 'local', cardType: 'character', title: '本地角色', data: { templateId: '通用角色', name: '本地角色', content: '原卡原文', signature: 'source-only' }, contentDigest: `sha256:${'a'.repeat(64)}`, provenance: { kind: 'unsigned', execution: 'imported' }, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' }; docs.set(source.id, source);
-    await mount(); const section = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('📚 角色库'))!; await act(async () => section.click()); await settle();
-    await click('选择本地 / 公开角色'); await vi.waitFor(() => expect(document.body.textContent).toContain('本地角色')); await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="选择本地角色"]')!.click());
+    await mount(); const section = [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('🌐 在线角色库 / 随机匹配'))!; await act(async () => section.click()); await settle();
+    await click('浏览在线角色库'); const localTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(item => item.textContent?.startsWith('本地库'))!; await act(async () => localTab.click()); await vi.waitFor(() => expect(document.body.textContent).toContain('本地角色')); await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="选择本地角色"]')!.click());
     await settle(); expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.combatants[0].data.content).toBe('原卡原文'); expect(docs.get(source.id)).toEqual(source);
-    await click('选择本地 / 公开角色'); const publicTab = [...document.querySelectorAll('button')].find((item) => item.textContent?.startsWith('公开'))!;
+    await click('浏览在线角色库'); const publicTab = [...document.querySelectorAll('button')].find((item) => item.textContent?.startsWith('公开'))!;
     expect(publicTab).toBeTruthy(); await act(async () => publicTab.click()); await settle(); await click('已缓存'); await vi.waitFor(() => expect(document.body.textContent).toContain('缓存角色')); await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="选择缓存角色"]')!.click()); await settle();
     const stored = JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!); expect(stored.draft.combatants).toHaveLength(2); expect(stored.draft.combatants[1]).toMatchObject({ isValid: false, isPreset: false, data: { name: '缓存角色', content: '缓存完整原文' } });
     expect(stored.draft.combatants[1]).not.toHaveProperty('sourceDataCardId'); expect(calls()).toHaveLength(0); expect(docs.size).toBe(1);
@@ -1383,4 +1383,136 @@ it('advanced scenario opens after main removal but leaves manual folding intact 
   expect(scenario()?.getAttribute('aria-expanded')).toBe('false');
   expect(localStorage.getItem('arena.section.scenario.open')).toBe('0');
   expect(JSON.parse(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)!).draft.scenario.content).toBeNull();
+});
+
+describe('Desktop Arena character-library parity', () => {
+  const openLibrarySection = async () => {
+    const section = [...document.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')]
+      .find(item => item.textContent?.includes('🌐 在线角色库 / 随机匹配'));
+    expect(section).toBeTruthy();
+    if (section!.getAttribute('aria-expanded') === 'false') await act(async () => section!.click());
+    await settle();
+  };
+  const tab = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    .find(item => item.textContent?.startsWith(label));
+  const requests = () => mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_card_library_request')
+    .map(([, args]) => args.request as { routeId: string; expectedUserId?: number; query?: Record<string, string> });
+  const publicRow = () => ({ id: 'random-source', name: '随机公开角色', type: 'character', is_public: 1,
+    review_status: 'approved', updated_at: '2026-10-01T00:00:00Z', data: JSON.stringify({ templateId: '通用角色',
+      name: '随机公开角色', content: '完整原件', _cardId: 'source-extension-kept', signature: 'unverified-original' }) });
+  const fixture = (read: (request: { routeId: string; query?: Record<string, string> }) => Promise<unknown> | unknown) => {
+    const native = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((...args) => args[0] === 'cloud_card_library_request' ? read(args[1].request) : native(...args));
+  };
+
+  it.each(['battle', 'arena'] as const)('/%s uses the Web two-button layout and all authenticated library categories', async product => {
+    cloudAccount = { userId: 7, username: 'fixture-user-seven' };
+    fixture(() => ({ status: 200, body: { success: true, cards: [], tags: [], favorites: [], total: 0, nextOffset: null } }));
+    window.location.hash = `#/${product}`; await mount(); await openLibrarySection();
+    expect(button('浏览在线角色库').parentElement?.classList.contains('flex-col')).toBe(product === 'battle');
+    expect(button('随机匹配角色')).toBeTruthy();
+    await click('浏览在线角色库');
+    for (const label of ['我的角色', '本地库', '公开角色', '管理员推荐', '我的收藏']) expect(tab(label), label).toBeTruthy();
+    expect(tab('我的角色')?.getAttribute('aria-selected')).toBe('true');
+    await act(async () => tab('我的角色')!.click()); await settle();
+    expect(requests()).toContainEqual(expect.objectContaining({ routeId: 'data-cards.query', expectedUserId: 7,
+      query: expect.objectContaining({ types: 'character', view: 'summary', offset: '0' }) }));
+    await act(async () => tab('我的收藏')!.click()); await settle();
+    expect(requests()).toContainEqual(expect.objectContaining({ routeId: 'favorites.query', expectedUserId: 7,
+      query: expect.objectContaining({ types: 'character', view: 'summary', offset: '0' }) }));
+    await act(async () => tab('管理员推荐')!.click()); await settle();
+    expect(requests().filter(item => item.routeId === 'public-data-cards.query').at(-1)?.query)
+      .toMatchObject({ type: 'character', view: 'summary', recommendedOnly: '1', offset: '0' });
+    await act(async () => tab('公开角色')!.click()); await settle();
+    expect(requests().filter(item => item.routeId === 'public-data-cards.query').at(-1)?.query).not.toHaveProperty('recommendedOnly');
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    await settle(); expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await click('浏览在线角色库'); expect(tab('管理员推荐')).toBeTruthy();
+    expect(calls()).toHaveLength(0); expect(docs.size).toBe(0);
+  });
+
+  it.each(['battle', 'arena'] as const)('/%s keeps public recommendations and offline local cards available while signed out', async product => {
+    window.location.hash = `#/${product}`; await mount(); await openLibrarySection(); await click('浏览在线角色库');
+    for (const label of ['本地库', '公开角色', '管理员推荐']) expect(tab(label)).toBeTruthy();
+    expect(tab('我的角色')).toBeUndefined(); expect(tab('我的收藏')).toBeUndefined();
+    expect(tab('公开角色')?.getAttribute('aria-selected')).toBe('true');
+    expect(requests().some(item => ['data-cards.query', 'favorites.query'].includes(item.routeId))).toBe(false);
+  });
+
+  it.each(['battle', 'arena'] as const)('/%s random selection is single-flight, freshly read and retains exact source data', async product => {
+    const gate = deferred<void>(); release = () => gate.resolve(); const row = publicRow();
+    const fresh = { ...row, updated_at: '2026-10-02T00:00:00Z', data: JSON.stringify({ ...JSON.parse(row.data), content: '重新读取的完整原件' }) };
+    fixture(async request => {
+      if (request.routeId === 'random-public-card.query') { await gate.promise; return { status: 200, body: { success: true, card: row } }; }
+      if (request.routeId === 'public-data-cards.query' && request.query?.id === row.id) return { status: 200, body: { success: true, card: fresh } };
+      throw new Error(`Unexpected library route: ${request.routeId}`);
+    });
+    window.location.hash = `#/${product}`; await mount(); await openLibrarySection();
+    const random = button('随机匹配角色'); await act(async () => { random.click(); random.click(); }); await settle();
+    expect(button('匹配中...').disabled).toBe(true);
+    expect(requests().filter(item => item.routeId === 'random-public-card.query')).toHaveLength(1);
+    await act(async () => gate.resolve()); await settle();
+    const saved = JSON.parse(localStorage.getItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY)!);
+    expect(saved.draft.combatants).toHaveLength(1);
+    expect(saved.draft.combatants[0]).toMatchObject({ desktopSource: 'online', sourceDataCardId: row.id, isValid: false,
+      isPreset: false, sourceDataCardUpdatedAt: fresh.updated_at, data: JSON.parse(fresh.data) });
+    expect(requests()).toContainEqual({ routeId: 'public-data-cards.query', query: { id: row.id } });
+    expect(button('随机匹配角色').disabled).toBe(false); expect(calls()).toHaveLength(0); expect(docs.size).toBe(0);
+  });
+
+  it.each(['account', 'cancel-and-navigation'] as const)('drops a late random response after %s changes without saving or retrying it', async changeScope => {
+    const gate = deferred<void>(); release = () => gate.resolve();
+    cloudAccount = { userId: 7, username: 'fixture-user-seven' };
+    fixture(async () => { await gate.promise; return { status: 200, body: { success: true, card: publicRow() } }; });
+    const router = await mount(); await openLibrarySection(); await click('随机匹配角色');
+    if (changeScope === 'account') {
+      cloudAccount = { userId: 8, username: 'fixture-user-eight' };
+      await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+    } else {
+      await click('取消生成');
+      expect(button('随机匹配角色').disabled).toBe(false);
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await act(async () => { void router.navigate({ to: '/' }); }); await settle();
+      await vi.waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    }
+    if (changeScope === 'account') expect(button('随机匹配角色').disabled).toBe(false);
+    await act(async () => gate.resolve()); await settle();
+    expect(requests().filter(item => item.routeId === 'random-public-card.query')).toHaveLength(1);
+    expect(requests().some(item => item.routeId === 'public-data-cards.query')).toBe(false);
+    expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY) ?? '{"draft":{"combatants":[]}}').draft.combatants).toHaveLength(0);
+    expect(calls()).toHaveLength(0); expect(docs.size).toBe(0);
+  });
+
+  it('cancels a hanging random read immediately and does not let its late result replace a newer selection', async () => {
+    const old = deferred<void>(); release = () => old.resolve(); let requestCount = 0;
+    const fresh = { ...publicRow(), id: 'new-random-source' };
+    fixture(async request => {
+      if (request.routeId === 'random-public-card.query') {
+        requestCount += 1;
+        if (requestCount === 1) { await old.promise; return { status: 200, body: { success: true, card: publicRow() } }; }
+        return { status: 200, body: { success: true, card: fresh } };
+      }
+      if (request.routeId === 'public-data-cards.query') return { status: 200, body: { success: true, card: fresh } };
+      throw new Error('Unexpected library route');
+    });
+    await mount(); await openLibrarySection(); await click('随机匹配角色'); await click('取消生成');
+    expect(button('随机匹配角色').disabled).toBe(false);
+    await click('随机匹配角色');
+    const saved = localStorage.getItem(ARENA_DRAFT_KEY)!;
+    expect(JSON.parse(saved).draft.combatants[0].sourceDataCardId).toBe('new-random-source');
+    await act(async () => old.resolve()); await settle();
+    expect(localStorage.getItem(ARENA_DRAFT_KEY)).toBe(saved);
+    expect(requestCount).toBe(2);
+    expect(requests().filter(item => item.routeId === 'public-data-cards.query')).toHaveLength(1);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it('leaves the roster intact when no public random character is available', async () => {
+    fixture(() => ({ status: 404, body: { success: false } }));
+    saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿'); await openLibrarySection();
+    await click('随机匹配角色');
+    expect(container.textContent).toContain('暂时没有可随机匹配的公开角色');
+    expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.combatants).toHaveLength(2);
+    expect(button('随机匹配角色').disabled).toBe(false); expect(calls()).toHaveLength(0);
+  });
 });

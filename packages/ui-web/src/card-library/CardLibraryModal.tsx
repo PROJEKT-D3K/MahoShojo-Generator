@@ -1337,7 +1337,7 @@ export function CardLibraryModal({
         ? { selectionId: `local:${cardId}`, storageLocation: 'local' }
         : isCacheRow && cachedResolved?.viaCache !== false
           ? { selectionId: `cache:${cardId}`, storageLocation: 'cache' }
-          : { selectionId: `cloud:${cardId}`, storageLocation: 'cloud', cloudCardId: cardId };
+          : { selectionId: `cloud:${cardId}`, storageLocation: 'cloud', cloudCardId: cardId, cloudCardUpdatedAt: payload._updatedAt };
       selectionContext.rawSourceData = mapPublicDataCardRowToSourceData(full);
 
       if (selectionMode === 'multi') {
@@ -1408,6 +1408,7 @@ export function CardLibraryModal({
             selectionId: `cloud:${cardId}`,
             storageLocation: 'cloud',
             cloudCardId: cardId,
+            cloudCardUpdatedAt: payload._updatedAt,
             rawSourceData: mapPublicDataCardRowToSourceData(card),
           };
 

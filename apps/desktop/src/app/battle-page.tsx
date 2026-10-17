@@ -11,9 +11,9 @@ import { normalizeCustomStoryLength } from '@mahoshojo/domain/story-length';
 import { parseCombatantsFromText } from '@mahoshojo/domain/arena-file-parser';
 import { buildArenaMaterialState, type ArenaMaterialState } from '@mahoshojo/domain/arena-materials';
 import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-operations';
-import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
+import { AdvancedArenaHeaderView, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeaderView, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, ArenaCharacterDatabaseSelector, StoryOptionsPanel, PresetGridPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
 import { ArenaReportFormatSelectorView, BattleReportCard, StreamingBattleReportCard, CombatantUpdatesPresentation } from '@mahoshojo/ui-web/arena-report';
-import { CardLibraryModal, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
+import { CardLibraryModal, mapPublicDataCardRowToSourceData, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { NarrativeHistoryPicker, NarrativeDraftsPanel, NarrativeLegacyDraftsSection } from '@mahoshojo/ui-web/narrative-history';
 import { buildNarrativeDraftArchive, type NarrativeDraft } from '@mahoshojo/domain/narrative-drafts';
 import { AiReasoningPanel, GenerationModeSwitcher, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -24,6 +24,7 @@ import { generationActionClassNames, generationSubmitClassName } from '@mahoshoj
 import { DesktopArenaSession, arenaReadinessMessage, arenaReferenceCount, inheritedArenaAdjudication, type ArenaDraft, type DesktopArenaProduct } from '../features/arena/session';
 import { buildAdjudicationSourceKey } from '@mahoshojo/domain/arena-adjudication-events';
 import { AdvancedArenaControls } from '../features/arena/advanced-controls';
+import { readDesktopMemberRandomCharacter as readDesktopRandomPublicCharacter } from '../features/arena/room-member-source-data';
 import { retainDesktopArenaSelectionSource } from '../features/arena/strict-source';
 import { prepareDesktopStrictDraft } from '../features/arena/strict-preparation';
 import { describeDesktopStrictSetup } from '../features/arena/strict-setup';
@@ -110,6 +111,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const hostedUnavailable = hostedTarget && !cloudState.bootstrapped ? '正在确认本机账号身份，请稍后。' : null;
   const router = useRouter(); const { openFixed, openContent } = useExternalLinks(); const libraryHost = useDesktopCardLibraryHost();
   const [library, setLibrary] = useState<LibraryPurpose | null>(null);
+  const [isMatchingCharacter, setIsMatchingCharacter] = useState(false);
+  const matchingRequest = useRef<symbol | null>(null);
   const [recoveryHint, setRecoveryHint] = useState<{ value: DesktopArenaHostedRecoveryHint; repair: ArenaHostedRecoveryReplacement; epoch: number } | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const diagnosisFlight = useRef<symbol | null>(null);
@@ -142,6 +145,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const providerCredentialIntent = aiStore.getCredentialIntentRevision();
   const scope = JSON.stringify({ account: cloudState.account?.userId ?? null, credentialEpoch: accountCredentialEpoch, strictActive, selection: aiState.selection,
     profiles: aiState.profiles, models: aiState.modelsByProfileId, presets: aiState.presetsByProviderId, overrides: aiState.generationOverrides });
+  useLayoutEffect(() => { matchingRequest.current = null; setIsMatchingCharacter(false); }, [scope]);
+  useEffect(() => () => { matchingRequest.current = null; }, []);
   const strictSnapshotKey = useMemo(() => ({}), [draft, scope, state.phase, state.generation, cloudState.verification, cloudState.authFlow.kind, providerCredentialIntent, strictRevision]);
   const strictSnapshotKeyRef = useRef(strictSnapshotKey); strictSnapshotKeyRef.current = strictSnapshotKey;
   const strictInput = { draft, executionLocation: target.location, modelId: target.modelId, modelUnavailable: !!target.unavailableReason,
@@ -264,16 +269,37 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       return { ...current, materials: [...current.materials, ...items] };
     };
   });
+  const parseSelectedCharacters = async (context: CardLibrarySelectionContext, warnings: string[]) => {
+    const parsed = await parseCharacters(JSON.stringify(context.rawSourceData), warnings);
+    const onlineId = context.storageLocation === 'cloud' && context.cloudCardId?.trim() ? context.cloudCardId.trim() : null;
+    const sourceIdentity = buildAdjudicationSourceKey({ sourceDataCardId: onlineId ?? context.selectionId }) ?? undefined;
+    return (onlineId ? retainDesktopArenaSelectionSource(parsed, context.rawSourceData, { kind: 'online', cardId: onlineId }) : parsed)
+      .map(item => ({ ...item, adjudicationSourceKey: sourceIdentity,
+        ...(onlineId && context.cloudCardUpdatedAt?.trim() ? { sourceDataCardUpdatedAt: context.cloudCardUpdatedAt.trim() } : {}) }));
+  };
+  const randomMatchCharacter = async () => {
+    if (disabled || matchingRequest.current || draft.combatants.length >= limits.maxCombatants) return;
+    const token = Symbol(), epoch = ownerEpoch.current;
+    matchingRequest.current = token; setIsMatchingCharacter(true);
+    try {
+      await performImport(async signal => {
+        // 复用既有公开卡实时读取；本地和缓存正文不能升级为线上引用。
+        const { ref, row } = await readDesktopRandomPublicCharacter(invoke, libraryHost.online, signal, () => epoch === ownerEpoch.current);
+        const warnings: string[] = [];
+        const items = await parseSelectedCharacters({ selectionId: `cloud:${ref.id}`, storageLocation: 'cloud', cloudCardId: ref.id, cloudCardUpdatedAt: ref.versionToken,
+          rawSourceData: mapPublicDataCardRowToSourceData(row) }, warnings);
+        return current => applyCharacters(current, items, warnings);
+      });
+    } catch { /* performImport 已报告当前作用域错误，原草稿保持不变。 */ }
+    finally { if (matchingRequest.current === token) { matchingRequest.current = null; setIsMatchingCharacter(false); } }
+  };
   const chooseCard = (_payload: unknown, context: CardLibrarySelectionContext) => {
     if (!context.rawSourceData || disabled || !library) return;
     const text = JSON.stringify(context.rawSourceData);
     const sourceIdentity = buildAdjudicationSourceKey({ sourceDataCardId: context.cloudCardId ?? context.selectionId }) ?? undefined;
-    const onlineId = context.storageLocation === 'cloud' && context.cloudCardId?.trim() ? context.cloudCardId.trim() : null;
     const action = library === 'character' ? performImport(async () => {
       const warnings: string[] = [];
-      const parsed = await parseCharacters(text, warnings);
-      const items = (onlineId ? retainDesktopArenaSelectionSource(parsed, context.rawSourceData, { kind: 'online', cardId: onlineId }) : parsed)
-        .map(item => ({ ...item, adjudicationSourceKey: sourceIdentity }));
+      const items = await parseSelectedCharacters(context, warnings);
       return (current) => applyCharacters(current, items, warnings);
     }) : library === 'scenario' || library === 'auxScenario' ? loadScenario(async () => text, null, library === 'auxScenario', sourceIdentity) : loadMaterials(async () => [{ text, filename: null }]);
     void action.then(() => setLibrary(null)).catch(() => undefined);
@@ -508,7 +534,14 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         header: <BattleLiteHeaderView logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={300} height={84} alt="魔法少女竞技场" />} description="选择角色，生成属于他们的故事。" helper={product === 'arena' ? '桌面高级单次 · 本机独立工作稿 · 客户端 Direct' : '桌面简洁版 · 本机工作副本 · Direct / 服务器生成'} />,
         rankingLinks: null, pageLinks: product === 'battle' ? <a className="footer-link" href="#/arena" onClick={(event) => { event.preventDefault(); navigateByProductHref(router, '/arena'); }}>高级单次配置</a> : null,
         presets: <PresetGridPicker title="预设角色" presets={PRESET_LIST} currentPage={presetPage} onPageChange={setPresetPage} disabled={disabled} maxSelected={limits.maxCombatants} selectedCountOverride={draft.combatants.length} selectedFilenames={draft.combatants.filter((item) => item.isPreset).map((item) => item.filename)} onToggle={(preset) => togglePreset(preset.filename)} />,
-        database: <button type="button" className={secondary} disabled={disabled} onClick={() => openLibrary('character')}>选择本地 / 公开角色</button>,
+        database: <><ArenaCharacterDatabaseSelector className="!mb-0" title={null} layout={product === 'battle' ? 'column' : 'row'}
+          onOpenCharacterModal={() => openLibrary('character')} onRandomMatchCharacter={() => { void randomMatchCharacter(); }}
+          isAuthenticated={libraryHost.auth.status !== 'unauthenticated'} isGenerating={disabled} isMatching={isMatchingCharacter ? 'character' : null}
+          combatantCount={draft.combatants.length} maxCombatants={limits.maxCombatants}
+          loginLink={<libraryHost.platform.Link href="/character-manager" className="battle-lite-link underline">登录后可访问私有数据卡</libraryHost.platform.Link>} />
+          <div className={product === 'battle' ? 'battle-lite-muted-text mt-2 text-xs' : 'mt-1 text-xs text-gray-600'}>
+            提示：浏览在线角色库可选择公开/私有数据卡；随机匹配仅从公开角色库中抽取。
+          </div></>,
         localImport: <ArenaRosterImportPanel disabled={disabled} limitReached={draft.combatants.length >= limits.maxCombatants} onUpload={uploadCharacters} onPaste={pasteCharacters} onDirtyChange={onRosterDirty} />,
         roster: <ArenaRosterSection model={roster} onDirtyChange={onRosterTeamDirty} />,
         mode: <BattleModeSelector value={draft.battleMode} onChange={(battleMode) => { if (product === 'arena' && draft.battleMode === 'scenario' && battleMode !== 'scenario' && dirtyControls.current.scenario && !window.confirm('切换模式会关闭情景编辑，放弃尚未导入的情景文本？')) return; update({ battleMode }); }} disabled={disabled} />,
@@ -567,7 +600,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       {roomState.memberModel && memberWorkspaceSession ? <DesktopRoomMemberWorkspace owner={roomOwner} model={roomState.memberModel} session={memberWorkspaceSession} languages={languages} /> : null}
       {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained}><ArenaEditorWorkspaceLayout disabled={disabled} sections={buildArenaEditorSections([
         { kind: 'presetCharacters', description: '选择内置角色', defaultOpen: true, content: slots.presets },
-        { kind: 'characterDatabase', title: '📚 角色库', description: '本地、公开或缓存副本', defaultOpen: true, content: slots.database },
+        { kind: 'characterDatabase', description: `当前已选 ${draft.combatants.length}/${limits.maxCombatants}`, defaultOpen: true, content: slots.database },
         { kind: 'localImport', description: '上传或粘贴角色 JSON', defaultOpen: true, keepMounted: true, content: slots.localImport },
         { kind: 'roster', description: `${draft.combatants.length}/32`, defaultOpen: true, keepMounted: true, content: slots.roster },
         { kind: 'battleMode', description: '普通单次故事模式', defaultOpen: true, content: slots.mode },
@@ -580,8 +613,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       ])} /></fieldset>
     </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
       showScenario={draft.battleMode === 'scenario'} hasScenario={!!draft.scenario.content} materialCount={draft.materials.length} referenceItemCount={referenceCount} maxReferenceItems={limits.maxReferenceItemsSanity}
-      copy={{ databaseTitle: '📚 角色库', databaseDescription: '选择本地卡、在线公开卡或已缓存副本', modeDescription: '不同模式决定故事风格', storyOptionsDescription: '设置故事方向、历史读写和 AI 目标' }} slots={slots} />}
-    <CardLibraryModal host={libraryHost} isOpen={library !== null && !roomState.constrained} onClose={() => setLibrary(null)} onSelectCard={chooseCard} selectedType={library === 'material' ? 'all' : library === 'auxScenario' ? 'scenario' : library ?? 'character'} allowedTypes={library === 'material' ? undefined : [library === 'auxScenario' ? 'scenario' : library ?? 'character']} initialTab="local" visibleTabs={['local', 'public']} allowDeckImport={false} titleOverride="选择本地或公开缓存副本" />
+      copy={{ modeDescription: '不同模式决定故事风格', storyOptionsDescription: '设置故事方向、历史读写和 AI 目标' }} slots={slots} />}
+    <CardLibraryModal host={libraryHost} isOpen={library !== null && !roomState.constrained} onClose={() => setLibrary(null)} onSelectCard={chooseCard} selectedType={library === 'material' ? 'all' : library === 'auxScenario' ? 'scenario' : library ?? 'character'} allowedTypes={library === 'material' ? undefined : [library === 'auxScenario' ? 'scenario' : library ?? 'character']} allowDeckImport={false} />
     <NarrativeHistoryPicker isOpen={historyOpen && !roomState.constrained} onClose={() => setHistoryOpen(false)} entries={historySource?.entries ?? []} lastUpdatedAt={historySource?.lastUpdatedAt ?? null} sort={historySort} onSort={setHistorySort}
       readStatus={historySource?.status ?? 'loading'} formatDateTime={(value) => value} sourceHint={historySource?.message ?? '本地库只读引用，源记录保持不变。'}
       onConfirm={(entries) => { update({ historyReferences: entries }); setHistoryOpen(false); }} />

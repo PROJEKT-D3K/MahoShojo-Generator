@@ -360,6 +360,7 @@ test('选中回调携带来源实例上下文（local:<recordId> / cloud:<cardId
   expect(onSelectCard.mock.calls[0]![1]).toMatchObject({
     selectionId: 'local:a', storageLocation: 'local',
   });
+  expect(onSelectCard.mock.calls[0]![1]).not.toHaveProperty('cloudCardUpdatedAt');
 });
 
 test('卡组导入的迟到结果不得写进切换后的账号，且换账号即关闭并重挂载卡组弹窗', async () => {
@@ -579,6 +580,7 @@ test('缓存快照行选择：cache 作用域、无服务器身份、不触发�
   expect(payload._storageLocation).toBe('local');
   expect(payload.codename).toBe('card-c');
   expect(context).toMatchObject({ selectionId: 'cache:card-c', storageLocation: 'cache' });
+  expect(context).not.toHaveProperty('cloudCardUpdatedAt');
   expect(cache.loadCachedCard).toHaveBeenCalledWith('card-c', expect.anything());
   // 降级中不重撞刚失败的在线路径；正文读取走缓存通道。
   expect(online.fetchPublicCardById).not.toHaveBeenCalled();
@@ -872,7 +874,8 @@ test('缓存正文重验证：返回卡 id 与请求不符不得升级为 cloud 
 test('缓存正文重验证：返回卡 id 匹配才升级为 cloud 选择语义', async () => {
   const fetchPublicCardById = vi.fn(async () => ({
     ok: true as const, status: 200,
-    data: { success: true, card: publicCard('card-c') },
+    data: { success: true, card: { ...publicCard('card-c'), updated_at: '2026-10-02T00:00:00Z',
+      data: JSON.stringify({ codename: 'card-c', _updatedAt: 'untrusted-body-version' }) } },
   }));
   const cache = createCachePort([cachedEntry('card-c')]);
   const { onSelectCard } = await renderCacheBrowse(cache, { fetchPublicCardById });
@@ -881,7 +884,7 @@ test('缓存正文重验证：返回卡 id 匹配才升级为 cloud 选择语义
   await settle();
   expect(onSelectCard).toHaveBeenCalledTimes(1);
   const [, context] = onSelectCard.mock.calls[0]! as [unknown, { selectionId: string; cloudCardId: string }];
-  expect(context).toMatchObject({ selectionId: 'cloud:card-c', storageLocation: 'cloud', cloudCardId: 'card-c' });
+  expect(context).toMatchObject({ selectionId: 'cloud:card-c', storageLocation: 'cloud', cloudCardId: 'card-c', cloudCardUpdatedAt: '2026-10-02T00:00:00Z' });
 });
 
 test('缓存通道自身判撤回时同样终止并即时移除行', async () => {

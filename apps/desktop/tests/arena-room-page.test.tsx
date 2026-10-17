@@ -873,7 +873,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
 
   it('requires an explicit canonical-empty choice when the real public selection lacks an observed version', async () => {
     seedOrdinary(savedDraft({ combatants: [] })); await mount(); await click('恢复草稿');
-    await click('选择本地 / 公开角色');
+    await click('浏览在线角色库');
     const tab = buttons().find(item => item.textContent?.startsWith('公开')); expect(tab).toBeTruthy();
     await act(async () => tab!.click());
     const select = document.querySelector<HTMLButtonElement>('[aria-label="选择缺版本在线角色"]'); expect(select).not.toBeNull();
