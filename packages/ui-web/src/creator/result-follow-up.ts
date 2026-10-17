@@ -73,3 +73,10 @@ export function getStructuredCreatorResultFollowUp(
     portraitPrompt: buildMagicalGirlPortraitPrompt(result),
   };
 }
+
+export type CreatorResultKind = StructuredCreatorTemplateId | 'general' | 'general-scenario';
+
+export function getCreatorResultBattleLinkText(resultKind: CreatorResultKind): string {
+  if (resultKind === 'general-scenario') return '前往竞技场，试试把这个情景投入故事吧！→';
+  return getStructuredCreatorResultFollowUp(resultKind === 'canshou' ? 'canshou' : 'magical-girl', null).battleLinkText;
+}

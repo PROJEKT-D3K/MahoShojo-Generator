@@ -189,6 +189,40 @@ afterEach(async () => {
 });
 
 describe('Web CreatorPage 高级语言与预设加载', () => {
+  it.each([
+    ['magical-girl', '魔法少女（结构化）'], ['canshou', '残兽（结构化）'],
+    ['general', '通用角色卡（Markdown）'], ['general-scenario', '通用情景卡（Markdown）'],
+  ] as const)('keeps %s follow-up controls bound to the completed result across template changes', async (kind, templateLabel) => {
+    const structured = kind === 'magical-girl' || kind === 'canshou';
+    window.localStorage.setItem(DETAILS_PREFERENCE_KEY, JSON.stringify({ generationMode: structured ? 'non-stream' : 'stream' }));
+    const generated = { codename: '旧角色', name: '旧残兽', appearance: {}, magicConstruct: { basicAbilities: [] },
+      wonderlandRule: {}, blooming: { evolvedAbilities: [] }, analysis: { coreTraits: [], background: {} } };
+    const request = vi.fn((input: unknown) => {
+      const url = String(input);
+      if (url.includes('/api/creator/generate')) return Promise.resolve(structured
+        ? jsonResponse(generated) : new Response('# 旧结果\n\n原始正文', { headers: { 'Content-Type': 'text/plain' } }));
+      if (url === '/questionnaires/presets/mg-default.json') return Promise.resolve(jsonResponse({ ...DEFAULT_QUESTIONNAIRE, nativeAllowed: false }));
+      return fetchMock(input);
+    });
+    vi.stubGlobal('fetch', request);
+    await mountPage(); await startQuestionnaire();
+    await clickButton(templateLabel);
+    await clickButton('还没想好', 400); await clickButton('还没想好', 400);
+    const checkResultControls = () => {
+      expect(container.querySelector('[aria-label="继续创作"] a[href="/battle"]')?.textContent).toContain(
+        kind === 'general-scenario' ? '把这个情景投入故事' : kind === 'canshou' ? '让它大闹一场' : '让她大闹一场');
+      expect(container.textContent!.includes('设定长图保存方式')).toBe(structured);
+      expect([...container.querySelectorAll('button')].some(button => button.textContent!.includes('设定说明'))).toBe(kind === 'magical-girl');
+    };
+    checkResultControls();
+    await clickButton(structured ? (kind === 'canshou' ? '魔法少女（结构化）' : '残兽（结构化）')
+      : (kind === 'general' ? '通用情景卡（Markdown）' : '通用角色卡（Markdown）'));
+    checkResultControls();
+    await clickButton('高级生成'); await clickButton(structured ? '流式' : '非流式');
+    checkResultControls();
+    expect(request.mock.calls.filter(([input]) => String(input).includes('/api/creator/generate'))).toHaveLength(1);
+  });
+
   it('keeps the shared language disclosure before generation settings and persists its value and expansion', async () => {
     await mountPage();
     await clickButton('高级生成');

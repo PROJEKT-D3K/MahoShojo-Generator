@@ -66,11 +66,7 @@ import {
   AiReasoningPanel,
   TokenIndicator,
   AnswerReviewList,
-  APP_FIELD_GUIDE_THEME,
-  APP_SAVE_PREFERENCES_THEME,
   BulkAnswerTools,
-  DetailsFieldGuidePanel,
-  DetailsSavePreferencesPanel,
   GenerationModeSwitcher,
   JsonSizeIndicator,
   QuestionnaireAnswerExportPanel,
@@ -96,6 +92,8 @@ import {
   BuildSummaryPanel,
   CREATOR_PAGE_COPY,
   CreatorResultStageContent,
+  CreatorResultPreferences,
+  CreatorResultFollowUp,
   CreatorStructuredResultCard,
   CreatorWorkbenchPage,
   FreeformBriefPanel,
@@ -1234,8 +1232,10 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
         {state.saveStatus === 'saved' && <p role="status">已保存到本地卡库。</p>}
         {state.saveStatus === 'already-present' && <p role="status">本地卡库已存在相同内容，原记录保持不变。</p>}
         {state.saveError && <p role="alert">{state.saveError}</p>}
-        <DetailsSavePreferencesPanel
-          theme={APP_SAVE_PREFERENCES_THEME}
+        <CreatorResultPreferences
+          resultKind={state.cardKind}
+          showDetails={showDetails}
+          onToggleDetails={() => updateDraft({ showDetails: !showDetails })}
           imageSaveMode={imageSaveMode}
           onImageSaveModeChange={(next) => updateDraft({ imageSaveMode: next })}
           recommendedImageMode={recommendedImageMode}
@@ -1243,11 +1243,6 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
           onJsonSaveModeChange={(next) => updateDraft({ jsonSaveMode: next })}
           recommendedJsonMode={recommendedJsonMode}
           footerNote="切换保存方式不会丢失生成结果。"
-        />
-        <DetailsFieldGuidePanel
-          theme={APP_FIELD_GUIDE_THEME}
-          expanded={showDetails}
-          onToggle={() => updateDraft({ showDetails: !showDetails })}
         />
         <section aria-label="保存原始数据" className="rounded-lg border border-(--app-border) p-4">
           <h3 className="text-lg font-medium">保存设定文件</h3>
@@ -1268,13 +1263,14 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
             warningText="⚠️ 接近本地卡单条上限（4 MiB），保存到本地卡库可能失败，请先精简数据。"
           />
         </section>
-        <section aria-label="继续创作" className="rounded-lg border border-(--app-border) p-4">
-          <p className="text-sm text-(--app-text-muted)">保存好你的设定文件了吗？可以继续修改问卷与规则后重新生成，或前往本地卡库查看已保存的数据卡。</p>
-          <div className="mt-3 flex flex-wrap gap-2">
+        {state.cardKind && <CreatorResultFollowUp
+          resultKind={state.cardKind}
+          renderBattleLink={({ href, ...props }) => <Link to={href} {...props} />}
+          additionalActions={<>
             <button className={actionClass} disabled={!canGenerateNow} onClick={() => generate()}>重新生成</button>
             <Link to="/local-library" className={actionClass}>前往本地卡库</Link>
-          </div>
-        </section>
+          </>}
+        />}
       </>}
     </div>
   );

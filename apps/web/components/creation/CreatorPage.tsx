@@ -74,6 +74,8 @@ import {
   BuildSummaryPanel,
   CreatorQuestionnaireSidebarPanel,
   CreatorResultStageContent,
+  CreatorResultPreferences,
+  CreatorResultFollowUp,
   CreatorStructuredResultCard,
   CreatorWorkbenchPage,
   FreeformBriefPanel,
@@ -407,7 +409,6 @@ export const CreatorPage: React.FC = () => {
   const [selectedLanguage, setSelectedLanguage] = useState('zh-CN');
   const recommendedImageMode: ImageSaveMode = recommendedSaveModes(deviceType === 'mobile').imageSaveMode;
   const recommendedJsonMode: JsonSaveMode = recommendedSaveModes(deviceType === 'mobile').jsonSaveMode;
-  const preferenceButtonClass = (active: boolean) => `flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${active ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm' : 'border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600'}`;
   const clearTransitionTimers = useCallback(() => {
     if (transitionTimerRef.current) {
       clearTimeout(transitionTimerRef.current);
@@ -2793,14 +2794,10 @@ export const CreatorPage: React.FC = () => {
                         data={streamedGeneralCard}
                         warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。"
                       />
-                      <div className="mt-2 pt-6 border-t border-gray-200">
-                        <p className="text-sm text-gray-600 mb-2">保存好你的档案了吗？</p>
-                        <Link href="/battle" className="footer-link text-lg text-purple-600">
-                          {streamedGeneralCard.templateId === GENERAL_SCENARIO_TEMPLATE_ID
-                            ? '前往竞技场，试试把这个情景投入故事吧！→'
-                            : '前往竞技场，让她大闹一场！→'}
-                        </Link>
-                      </div>
+                      <CreatorResultFollowUp
+                        resultKind={streamedGeneralCard.templateId === GENERAL_SCENARIO_TEMPLATE_ID ? 'general-scenario' : 'general'}
+                        renderBattleLink={(props) => <Link {...props} />}
+                      />
                     </div>
                   </div>
                   {streamedGeneralCard.templateId !== GENERAL_SCENARIO_TEMPLATE_ID && (
@@ -2838,106 +2835,17 @@ export const CreatorPage: React.FC = () => {
                   compact
                 />
               )}
-              <div className="card" style={{ marginTop: '1rem' }}>
-                <div className="space-y-5 text-left">
-                  <div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium text-blue-900">设定长图保存方式</span>
-                      <span className="text-xs text-gray-500">推荐：{recommendedImageMode === 'download' ? '一键下载' : '长按保存弹窗'}</span>
-                    </div>
-                    <div className="flex flex-col sm:flex-row gap-2 mt-2">
-                      <button
-                        type="button"
-                        className={preferenceButtonClass(imageSaveMode === 'download')}
-                        onClick={() => setImageSaveMode('download')}
-                      >
-                        一键下载长图
-                        {recommendedImageMode === 'download' && (
-                          <span className="ml-2 inline-flex items-center rounded-full bg-indigo-100 px-2 text-[10px] font-semibold text-indigo-600">推荐</span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className={preferenceButtonClass(imageSaveMode === 'modal')}
-                        onClick={() => setImageSaveMode('modal')}
-                      >
-                        长按保存弹窗
-                        {recommendedImageMode === 'modal' && (
-                          <span className="ml-2 inline-flex items-center rounded-full bg-indigo-100 px-2 text-[10px] font-semibold text-indigo-600">推荐</span>
-                        )}
-                      </button>
-                    </div>
-                    <p className="mt-2 text-xs text-gray-500">若当前浏览器不支持下载，可切换为长按模式，系统会弹出预览供保存。</p>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium text-blue-900">设定文件保存方式</span>
-                      <span className="text-xs text-gray-500">推荐：{recommendedJsonMode === 'download' ? '直接下载 JSON' : '复制原始数据'}</span>
-                    </div>
-                    <div className="flex flex-col sm:flex-row gap-2 mt-2">
-                      <button
-                        type="button"
-                        className={preferenceButtonClass(jsonSaveMode === 'download')}
-                        onClick={() => setJsonSaveMode('download')}
-                      >
-                        直接下载 JSON
-                        {recommendedJsonMode === 'download' && (
-                          <span className="ml-2 inline-flex items-center rounded-full bg-indigo-100 px-2 text-[10px] font-semibold text-indigo-600">推荐</span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className={preferenceButtonClass(jsonSaveMode === 'text')}
-                        onClick={() => setJsonSaveMode('text')}
-                      >
-                        复制原始数据
-                        {recommendedJsonMode === 'text' && (
-                          <span className="ml-2 inline-flex items-center rounded-full bg-indigo-100 px-2 text-[10px] font-semibold text-indigo-600">推荐</span>
-                        )}
-                      </button>
-                    </div>
-                    <p className="mt-2 text-xs text-gray-500">两种方式可随时切换，移动端也可尝试直接下载，桌面端亦能复制备用。</p>
-                  </div>
-
-                  <p className="text-xs text-gray-400 text-center">提示：偏好设置已保存到浏览器，刷新后仍会保留；切换不会丢失生成结果。</p>
-                </div>
-              </div>
-              {nonStreamStructuredTemplate === 'magical-girl' && (
-                <div className="card" style={{ marginTop: '1rem' }}>
-                  <div className="text-center">
-                    <button
-                      onClick={() => setShowDetails(!showDetails)}
-                      className="text-lg font-medium text-blue-900 hover:text-blue-700 transition-colors duration-200"
-                      style={{ background: 'none', border: 'none', cursor: 'pointer' }}
-                    >
-                      {showDetails ? '点击收起设定说明' : '点击展开设定说明'} {showDetails ? '▼' : '▶'}
-                    </button>
-                    {showDetails && (
-                      <div className="text-left" style={{ marginTop: '1rem' }}>
-                        <div className="mb-4">
-                          <h4 className="font-medium text-blue-800 mb-2">1. 魔力构装（简称魔装）</h4>
-                          <p className="text-sm text-gray-700 leading-relaxed">
-                            魔法少女的本相魔力所孕育的能力具现，是魔法少女能力体系的基础。一般呈现为魔法少女在现实生活中接触过，在冥冥之中与其命运关联或映射的物体，并且与魔法少女特色能力相关。例如，泡泡机形态的魔装可以使魔法少女制造魔法泡泡，而这些泡泡可以拥有产生幻象、缓冲防护、束缚困敌等能力。这部分的内容需包含魔装的名字（通常为2字词），魔装的形态，魔装的基本能力。
-                          </p>
-                        </div>
-                        <div className="mb-4">
-                          <h4 className="font-medium text-blue-800 mb-2">2. 奇境规则</h4>
-                          <p className="text-sm text-gray-700 leading-relaxed">
-                            魔法少女的本相灵魂所孕育的能力，是魔装能力的一体两面。奇境是魔装能力在规则层面上的升华，体现为与魔装相关的规则领域，而规则的倾向则会根据魔法少女的倾向而有不同的发展。例如，泡泡机形态的魔装升华而来的奇境规则可以是倾向于守护的&ldquo;戳破泡泡的东西将会立即无效化&rdquo;，也可以是倾向于进攻的&ldquo;沾到身上的泡泡被戳破会立即遭受伤害&rdquo;。
-                          </p>
-                        </div>
-                        <div className="mb-4">
-                          <h4 className="font-medium text-blue-800 mb-2">3. 繁开</h4>
-                          <p className="text-sm text-gray-700 leading-relaxed">
-                            是魔法少女魔装能力的二段进化与解放，无论是作为魔法少女的魔力衣装还是魔装的武器外形都会发生改变。需包含繁开状态魔装名（需要包含原魔装名的每个字），繁开后的进化能力，繁开后的魔装形态，繁开后的魔法少女衣装样式（在通常变身外观上的升级与改变）。
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+              <CreatorResultPreferences
+                resultKind={nonStreamStructuredTemplate}
+                imageSaveMode={imageSaveMode}
+                onImageSaveModeChange={setImageSaveMode}
+                recommendedImageMode={recommendedImageMode}
+                jsonSaveMode={jsonSaveMode}
+                onJsonSaveModeChange={setJsonSaveMode}
+                recommendedJsonMode={recommendedJsonMode}
+                showDetails={showDetails}
+                onToggleDetails={() => setShowDetails(!showDetails)}
+              />
 
               {/* 保存原始数据按钮 */}
               <div className="card" style={{ marginTop: '1rem' }}>
@@ -2966,15 +2874,10 @@ export const CreatorPage: React.FC = () => {
                       warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。"
                     />
                   )}
-                  {/* 新增：前往竞技场的入口 */}
-                  <div className="mt-2 pt-6 border-t border-gray-200">
-                    <p className="text-sm text-gray-600 mb-2">
-                      保存好你的设定文件了吗？
-                    </p>
-                    <Link href="/battle" className="footer-link text-lg text-blue-600">
-                      {nonStreamResultFollowUp?.battleLinkText ?? '前往竞技场，开始战斗！→'}
-                    </Link>
-                  </div>
+                  {nonStreamStructuredTemplate && <CreatorResultFollowUp
+                    resultKind={nonStreamStructuredTemplate}
+                    renderBattleLink={(props) => <Link {...props} />}
+                  />}
                 </div>
               </div>
 

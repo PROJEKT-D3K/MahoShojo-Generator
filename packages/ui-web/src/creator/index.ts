@@ -18,3 +18,5 @@ export * from './field-translations';
 export * from './page-copy';
 export * from './workbench';
 export * from './result-follow-up';
+export * from './CreatorResultPreferences';
+export * from './CreatorResultFollowUp';

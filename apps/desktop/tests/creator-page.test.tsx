@@ -163,6 +163,35 @@ const mount = async () => {
 };
 
 describe('Desktop /creator workbench (native adapter mock)', () => {
+  it.each(['magical-girl', 'canshou', 'general', 'general-scenario'] as const)('keeps %s result controls tied to the retained result after changing the input template', async (cardKind) => {
+    const result = cardKind === 'magical-girl' ? card
+      : cardKind === 'canshou' ? { name: '旧残兽', appearance: '烟雾', coreConcept: '', coreEmotion: '', evolutionStage: '', materialAndSkin: '', featuresAndAppendages: '', attackMethod: '', specialAbility: '', origin: '', birthEnvironment: '', researcherNotes: '' }
+        : cardKind === 'general-scenario' ? { templateId: '通用情景', title: '旧情景', content: '# 情景正文' }
+          : { templateId: '通用角色', name: '旧角色', content: '# 角色正文' };
+    mocks.execute.mockResolvedValue(completed('direct-local', { card: result, cardKind }));
+    window.localStorage.setItem(CREATOR_DRAFT_KEY, JSON.stringify(draft()));
+    const router = await mount(); await click('生成数据卡');
+    const checkResultControls = () => {
+      const structured = cardKind === 'magical-girl' || cardKind === 'canshou';
+      expect(container.textContent!.includes('设定长图保存方式')).toBe(structured);
+      expect([...container.querySelectorAll('button')].some(item => item.textContent!.includes('设定说明'))).toBe(cardKind === 'magical-girl');
+      const followUp = container.querySelector('[aria-label="继续创作"]')!;
+      expect(followUp.querySelector('a[href$="/battle"]')?.textContent).toContain(
+        cardKind === 'general-scenario' ? '把这个情景投入故事' : cardKind === 'canshou' ? '让它大闹一场' : '让她大闹一场');
+      expect(followUp.querySelector('a[href$="/local-library"]')?.textContent).toBe('前往本地卡库');
+    };
+    checkResultControls();
+    await clickText('残兽（结构化）');
+    checkResultControls();
+    await click('高级生成'); await click('流式');
+    checkResultControls();
+    await act(async () => container.querySelector<HTMLAnchorElement>('[aria-label="继续创作"] a[href$="/battle"]')!.click());
+    await settle();
+    expect(router.state.location.pathname).toBe('/battle');
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+
   it('starts with language collapsed before execution settings and preserves a missing-catalog draft language', async () => {
     window.localStorage.setItem(CREATOR_DRAFT_KEY, JSON.stringify(draft({ language: 'custom-language' })));
     await mount();
@@ -646,14 +675,14 @@ describe('Desktop /creator workbench (native adapter mock)', () => {
     expect(container.textContent).toContain('已保存到本地卡库。');
     const remove = vi.spyOn(Storage.prototype, 'removeItem');
     const write = vi.spyOn(Storage.prototype, 'setItem');
-    await act(async () => { void router.navigate({ to: '/' }); });
+    await act(async () => { container.querySelector<HTMLAnchorElement>('[aria-label="继续创作"] a[href$="/battle"]')!.click(); });
     await settle();
     expect(router.state.location.pathname).toBe('/creator');
     expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('确认放弃本页未保存的内容并离开'));
     vi.mocked(window.confirm).mockReturnValue(true);
-    await act(async () => { void router.navigate({ to: '/' }); });
+    await act(async () => { container.querySelector<HTMLAnchorElement>('[aria-label="继续创作"] a[href$="/battle"]')!.click(); });
     await settle();
-    expect(router.state.location.pathname).toBe('/');
+    expect(router.state.location.pathname).toBe('/battle');
     expect(window.localStorage.getItem(CREATOR_DRAFT_KEY)).toBe('{broken');
     expect(remove.mock.calls.some(([key]) => key === CREATOR_DRAFT_KEY)).toBe(false);
     expect(write.mock.calls.some(([key]) => key === CREATOR_DRAFT_KEY)).toBe(false);
