@@ -5,10 +5,12 @@ import {
   CrowdReviewForbiddenError,
   CrowdReviewNotFoundError,
   CrowdReviewServiceUnavailableError,
+  CrowdReviewUnprocessableError,
 } from '@/lib/crowd-review/service';
 import { createCrowdReviewCurrentAssignHandler } from '@/app/api/crowd-review/current/assign/handler';
 import { createCrowdReviewCurrentHandler } from '@/app/api/crowd-review/current/handler';
 import { createCrowdReviewCurrentSubmitHandler } from '@/app/api/crowd-review/current/submit/handler';
+import { createCrowdReviewCurrentViewDetailHandler } from '@/app/api/crowd-review/current/view-detail/handler';
 import { createCrowdReviewHistoryHandler } from '@/app/api/crowd-review/history/handler';
 import { createCrowdReviewSummaryHandler } from '@/app/api/crowd-review/summary/handler';
 
@@ -79,6 +81,7 @@ describe('crowd review API', () => {
           assignmentStatus: 'assigned',
           assignedAt: '2026-04-08T12:00:00.000Z',
           expiresAt: '2026-04-08T12:30:00.000Z',
+          detailViewedAt: null,
           caseId: 'round-1',
           reportCaseId: 'case-1',
           targetEntityType: 'data_card',
@@ -204,6 +207,77 @@ describe('crowd review API', () => {
     );
 
     expect(response.status).toBe(409);
+  });
+
+  test('POST /api/crowd-review/current/submit returns 422 when review gate is not satisfied', async () => {
+    const handler = createCrowdReviewCurrentSubmitHandler({
+      requireAuthUser: async () => auth,
+      getDb: () => ({ db: true }),
+      submitCrowdReviewDecision: async () => {
+        throw new CrowdReviewUnprocessableError('提交前请先打开「查看卡片详情」阅读案件材料');
+      },
+    });
+
+    const response = await handler(
+      new Request('https://example.test/api/crowd-review/current/submit', {
+        method: 'POST',
+        body: JSON.stringify({ assignmentId: 'assignment-1', decision: 'violation', note: null }),
+      }),
+    );
+
+    expect(response.status).toBe(422);
+  });
+
+  test('POST /api/crowd-review/current/view-detail stamps the detail view time', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const handler = createCrowdReviewCurrentViewDetailHandler({
+      requireAuthUser: async () => auth,
+      getDb: () => ({ db: true }),
+      markCrowdReviewDetailViewed: async (input) => {
+        calls.push(input as unknown as Record<string, unknown>);
+        return { assignmentId: input.assignmentId, detailViewedAt: '2026-04-08T12:00:10.000Z' };
+      },
+    });
+
+    const response = await handler(
+      new Request('https://example.test/api/crowd-review/current/view-detail', {
+        method: 'POST',
+        body: JSON.stringify({ assignmentId: 'assignment-1' }),
+      }),
+    );
+    const payload = await jsonBody<any>(response);
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({ assignmentId: 'assignment-1', detailViewedAt: '2026-04-08T12:00:10.000Z' });
+    expect(calls).toEqual([
+      expect.objectContaining({ userId: 7, assignmentId: 'assignment-1' }),
+    ]);
+  });
+
+  test('POST /api/crowd-review/current/view-detail returns 400 without assignmentId and 404 for unknown assignment', async () => {
+    const handler = createCrowdReviewCurrentViewDetailHandler({
+      requireAuthUser: async () => auth,
+      getDb: () => ({ db: true }),
+      markCrowdReviewDetailViewed: async () => {
+        throw new CrowdReviewNotFoundError('当前派单不存在');
+      },
+    });
+
+    const badRequest = await handler(
+      new Request('https://example.test/api/crowd-review/current/view-detail', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(badRequest.status).toBe(400);
+
+    const notFound = await handler(
+      new Request('https://example.test/api/crowd-review/current/view-detail', {
+        method: 'POST',
+        body: JSON.stringify({ assignmentId: 'missing' }),
+      }),
+    );
+    expect(notFound.status).toBe(404);
   });
 
   test('GET /api/crowd-review/history returns inspector-only history rows', async () => {

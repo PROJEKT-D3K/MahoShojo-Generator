@@ -14,6 +14,7 @@ import {
   listAssignableCases,
   listCrowdReviewHistoryByInspector,
   listActionableAssignmentsByInspector,
+  markAssignmentDetailViewed,
   updateAssignmentPostVoteSummary,
   upsertCrowdReviewInspectorState,
 } from '@/lib/db/repositories/crowd-review';
@@ -116,6 +117,7 @@ describe('crowd review repository', () => {
         decision_note TEXT,
         post_vote_summary_json TEXT NOT NULL DEFAULT '{}',
         post_vote_summary_seen_at TEXT,
+        detail_viewed_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -821,5 +823,90 @@ describe('crowd review repository', () => {
     const cases = await listAssignableCases(db, 7);
 
     expect(cases.map((row) => row.reportCaseId)).toEqual(['case-1']);
+  });
+
+  test('markAssignmentDetailViewed 只在 assigned 派单上记录首次浏览时间', async () => {
+    const now = '2026-04-08T10:30:00.000Z';
+    await createCrowdReviewRound(db, {
+      id: 'round-view', reportCaseId: 'case-1', status: 'active', openedAt: now,
+      deadlineAt: '2026-04-08T11:30:00.000Z', extensionCount: 0, minValidVotes: 3,
+      resultCode: null, resultSummaryJson: '{}', now,
+    });
+    await createCrowdReviewAssignment(db, {
+      id: 'assignment-view', crowdReviewRoundId: 'round-view', inspectorUserId: 7,
+      status: 'assigned', assignedAt: now, expiresAt: '2026-04-08T11:00:00.000Z',
+      completedAt: null, decision: null, decisionNote: null, postVoteSummaryJson: '{}',
+      postVoteSummarySeenAt: null, now,
+    });
+
+    const first = await markAssignmentDetailViewed(db, {
+      assignmentId: 'assignment-view',
+      userId: 7,
+      now: '2026-04-08T10:31:00.000Z',
+    });
+    const second = await markAssignmentDetailViewed(db, {
+      assignmentId: 'assignment-view',
+      userId: 7,
+      now: '2026-04-08T10:32:00.000Z',
+    });
+    const foreign = await markAssignmentDetailViewed(db, {
+      assignmentId: 'assignment-view',
+      userId: 8,
+      now: '2026-04-08T10:32:00.000Z',
+    });
+
+    expect(first).toBe('2026-04-08T10:31:00.000Z');
+    expect(second).toBe('2026-04-08T10:31:00.000Z');
+    expect(foreign).toBeNull();
+
+    exec(`UPDATE crowd_review_assignments SET status = 'voted' WHERE id = 'assignment-view'`);
+    const afterVote = await markAssignmentDetailViewed(db, {
+      assignmentId: 'assignment-view',
+      userId: 7,
+      now: '2026-04-08T10:33:00.000Z',
+    });
+    expect(afterVote).toBeNull();
+    expect(
+      sqlite.prepare(`SELECT detail_viewed_at AS v FROM crowd_review_assignments WHERE id = 'assignment-view'`).get(),
+    ).toEqual({ v: '2026-04-08T10:31:00.000Z' });
+  });
+
+  test('listAssignableCases 返回轮次席位占用，已过期末完结派单不再占位', async () => {
+    const now = '2026-04-08T10:30:00.000Z';
+    exec(`
+      INSERT INTO data_cards (id, user_id, type, name, data, is_public, review_status)
+      VALUES ('card-1', 2, 'character', '测试卡', '{}', 1, 'approved');
+      INSERT INTO reports (id, case_id, reporter_user_id, status, created_at)
+      VALUES ('report-1', 'case-1', 8, 'active', '2026-04-08T10:00:00.000Z');
+    `);
+    await createCrowdReviewRound(db, {
+      id: 'round-potential', reportCaseId: 'case-1', status: 'active', openedAt: now,
+      deadlineAt: '2026-04-08T11:30:00.000Z', extensionCount: 0, minValidVotes: 3,
+      resultCode: null, resultSummaryJson: '{}', now,
+    });
+    for (const [id, inspector, status, decision] of [
+      ['a1', 3, 'voted', 'violation'],
+      ['a2', 4, 'assigned', null],
+      ['a3', 5, 'abstained', 'abstain'],
+      ['a4', 6, 'expired', null],
+    ] as const) {
+      await createCrowdReviewAssignment(db, {
+        id, crowdReviewRoundId: 'round-potential', inspectorUserId: inspector,
+        status, assignedAt: now, expiresAt: '2026-04-08T11:00:00.000Z',
+        completedAt: status === 'assigned' ? null : now, decision, decisionNote: null,
+        postVoteSummaryJson: '{}', postVoteSummarySeenAt: null, now,
+      });
+    }
+
+    const cases = await listAssignableCases(db, 7);
+
+    expect(cases).toHaveLength(1);
+    expect(cases[0]).toMatchObject({
+      reportCaseId: 'case-1',
+      existingRoundId: 'round-potential',
+      existingRoundStatus: 'active',
+      existingRoundMinValidVotes: 3,
+      existingRoundVotePotential: 2,
+    });
   });
 });

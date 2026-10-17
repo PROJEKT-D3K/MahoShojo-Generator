@@ -53,6 +53,7 @@ export type CrowdReviewAssignmentRow = {
   decisionNote: string | null;
   postVoteSummaryJson: string;
   postVoteSummarySeenAt: string | null;
+  detailViewedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -92,6 +93,7 @@ export type CreateCrowdReviewAssignmentInput = {
   decisionNote: string | null;
   postVoteSummaryJson: string;
   postVoteSummarySeenAt: string | null;
+  detailViewedAt?: string | null;
   now: string;
 };
 
@@ -358,12 +360,35 @@ export async function createCrowdReviewAssignment(
       decisionNote: input.decisionNote,
       postVoteSummaryJson: input.postVoteSummaryJson,
       postVoteSummarySeenAt: input.postVoteSummarySeenAt,
+      detailViewedAt: input.detailViewedAt ?? null,
       createdAt: input.now,
       updatedAt: input.now,
     })
     .returning();
 
   return rows[0]!;
+}
+
+export async function markAssignmentDetailViewed(
+  db: AppDrizzleDb,
+  input: { assignmentId: string; userId: number; now: string },
+): Promise<string | null> {
+  const rows = await db
+    .update(crowdReviewAssignments)
+    .set({
+      detailViewedAt: sql`COALESCE(${crowdReviewAssignments.detailViewedAt}, ${input.now})`,
+      updatedAt: input.now,
+    })
+    .where(
+      and(
+        eq(crowdReviewAssignments.id, input.assignmentId),
+        eq(crowdReviewAssignments.inspectorUserId, input.userId),
+        eq(crowdReviewAssignments.status, 'assigned'),
+      ),
+    )
+    .returning({ detailViewedAt: crowdReviewAssignments.detailViewedAt });
+
+  return rows[0]?.detailViewedAt ?? null;
 }
 
 export async function getActiveAssignmentByInspector(
@@ -383,6 +408,7 @@ export async function getActiveAssignmentByInspector(
       decisionNote: crowdReviewAssignments.decisionNote,
       postVoteSummaryJson: crowdReviewAssignments.postVoteSummaryJson,
       postVoteSummarySeenAt: crowdReviewAssignments.postVoteSummarySeenAt,
+      detailViewedAt: crowdReviewAssignments.detailViewedAt,
       createdAt: crowdReviewAssignments.createdAt,
       updatedAt: crowdReviewAssignments.updatedAt,
     })
@@ -595,7 +621,12 @@ export async function listCrowdReviewHistoryByInspector(
 }
 
 // 消息角标只读取是否有待办，不加载案件正文，也不触发过期结算。
-export async function getCrowdReviewPendingFlags(db: AppDrizzleDb, userId: number, now: string) {
+export async function getCrowdReviewPendingFlags(
+  db: AppDrizzleDb,
+  userId: number,
+  now: string,
+  extensionExtraTarget = 2,
+) {
   const row = await db.get<{ current: number; assignable: number }>(sql`
     SELECT EXISTS (
       SELECT 1 FROM crowd_review_assignments a
@@ -609,7 +640,10 @@ export async function getCrowdReviewPendingFlags(db: AppDrizzleDb, userId: numbe
         AND r.status IN ('pending_dispatch', 'active', 'waiting_more_votes')
       WHERE c.status IN ('open', 'under_review') AND c.target_user_id <> ${userId}
         AND d.is_public = 1 AND d.review_status = 'approved' AND d.deleted_at IS NULL
-        AND (r.id IS NULL OR r.deadline_at > ${now})
+        AND (r.id IS NULL OR (r.deadline_at > ${now}
+          AND (SELECT COUNT(*) FROM crowd_review_assignments a
+            WHERE a.crowd_review_round_id = r.id AND a.status IN ('assigned','voted'))
+            < r.min_valid_votes + CASE WHEN r.status = 'waiting_more_votes' THEN ${extensionExtraTarget} ELSE 0 END))
         AND EXISTS (SELECT 1 FROM reports p WHERE p.case_id = c.id AND p.status = 'active')
         AND NOT EXISTS (
           SELECT 1 FROM reports p WHERE p.case_id = c.id AND p.status = 'active' AND p.reporter_user_id = ${userId}
@@ -636,6 +670,9 @@ export async function listAssignableCases(
     reporterUserIds: number[];
     assignedInspectorUserIds: number[];
     existingRoundId: string | null;
+    existingRoundStatus: string | null;
+    existingRoundMinValidVotes: number | null;
+    existingRoundVotePotential: number | null;
   }>
 > {
   void userId;
@@ -668,6 +705,9 @@ export async function listAssignableCases(
     reporterUserIds: number[];
     assignedInspectorUserIds: number[];
     existingRoundId: string | null;
+    existingRoundStatus: string | null;
+    existingRoundMinValidVotes: number | null;
+    existingRoundVotePotential: number | null;
   }> = [];
 
   for (const row of caseRows) {
@@ -688,10 +728,19 @@ export async function listAssignableCases(
 
     const assignmentRows = activeRound
       ? await db
-          .select({ inspectorUserId: crowdReviewAssignments.inspectorUserId })
+          .select({
+            inspectorUserId: crowdReviewAssignments.inspectorUserId,
+            status: crowdReviewAssignments.status,
+          })
           .from(crowdReviewAssignments)
           .where(eq(crowdReviewAssignments.crowdReviewRoundId, activeRound.id))
       : [];
+
+    // 席位占用 = 已投有效票（status='voted'）+ 尚未完结的在办派单（status='assigned'）。
+    // 弃权、过期、撤销不再占用席位，可继续派发补位。
+    const votePotential = assignmentRows.filter(
+      (item) => item.status === 'assigned' || item.status === 'voted',
+    ).length;
 
     candidates.push({
       reportCaseId: row.id,
@@ -700,6 +749,9 @@ export async function listAssignableCases(
       reporterUserIds: activeReporterRows.map((item) => item.reporterUserId),
       assignedInspectorUserIds: assignmentRows.map((item) => item.inspectorUserId),
       existingRoundId: activeRound?.id ?? null,
+      existingRoundStatus: activeRound?.status ?? null,
+      existingRoundMinValidVotes: activeRound?.minValidVotes ?? null,
+      existingRoundVotePotential: activeRound ? votePotential : null,
     });
   }
 
@@ -734,6 +786,7 @@ export async function listActionableAssignmentsByInspector(
       decisionNote: crowdReviewAssignments.decisionNote,
       postVoteSummaryJson: crowdReviewAssignments.postVoteSummaryJson,
       postVoteSummarySeenAt: crowdReviewAssignments.postVoteSummarySeenAt,
+      detailViewedAt: crowdReviewAssignments.detailViewedAt,
       createdAt: crowdReviewAssignments.createdAt,
       updatedAt: crowdReviewAssignments.updatedAt,
     })

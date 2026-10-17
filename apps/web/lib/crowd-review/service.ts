@@ -6,6 +6,7 @@ import { countUserBadgesByBadgeId } from '@/lib/db/repositories/badges';
 import {
   createCrowdReviewAssignment as createCrowdReviewAssignmentRow,
   createCrowdReviewRound as createCrowdReviewRoundRow,
+  markAssignmentDetailViewed as markAssignmentDetailViewedRow,
   finalizeAssignment as finalizeAssignmentRow,
   getActiveAssignmentByInspector as getActiveAssignmentByInspectorRow,
   getCrowdReviewPendingFlags,
@@ -42,6 +43,7 @@ import type {
   CrowdReviewPostVoteSummaryDto,
   CrowdReviewReportReferenceItemDto,
   CrowdReviewSummaryDto,
+  MarkCrowdReviewDetailViewedResult,
   SubmitCrowdReviewDecisionResult,
 } from '@/lib/crowd-review/types';
 import type {
@@ -57,6 +59,12 @@ export const CROWD_REVIEW_INSPECTOR_BADGE_ID = 'crowd_review_inspector' as const
 const ROUND_EXTENSION_MS = 60 * 60 * 1000;
 const ACTIVE_ROUND_STATUSES = ['pending_dispatch', 'active', 'waiting_more_votes'] as const;
 const REPORT_CASE_RESOLUTION_NOTIFY_ATTEMPTS = 2;
+// 有效票双方票差不超过该值视为「接近票型」，不直接结案而是延期补派。
+const CLOSE_VOTE_MARGIN = 1;
+// 延期轮次需要更多新票来打破僵局，席位上限在最低有效票基础上额外放宽。
+const EXTENSION_EXTRA_ASSIGNMENT_TARGET = 2;
+// 巡查使打开目标卡详情后需经过的最短审议时长，防止未阅读即秒投。
+const MIN_REVIEW_AFTER_DETAIL_MS = 15_000;
 
 type CrowdReviewCaseCandidate = {
   reportCaseId: string;
@@ -65,6 +73,9 @@ type CrowdReviewCaseCandidate = {
   reporterUserIds: number[];
   assignedInspectorUserIds: number[];
   existingRoundId: string | null;
+  existingRoundStatus?: string | null;
+  existingRoundMinValidVotes?: number | null;
+  existingRoundVotePotential?: number | null;
 };
 
 type ServiceAssignmentRow = CrowdReviewAssignmentRow & {
@@ -129,6 +140,10 @@ type CrowdReviewServiceRepo = {
       now: string;
     },
   ) => Promise<boolean>;
+  markAssignmentDetailViewed: (
+    db: AppDrizzleDb,
+    input: { assignmentId: string; userId: number; now: string },
+  ) => Promise<string | null>;
   updateRound: (
     db: AppDrizzleDb,
     input: {
@@ -202,6 +217,13 @@ export class CrowdReviewConflictError extends Error {
   }
 }
 
+export class CrowdReviewUnprocessableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CrowdReviewUnprocessableError';
+  }
+}
+
 const requireDb = (db: AppDrizzleDb | null): AppDrizzleDb => {
   if (!db) {
     throw new CrowdReviewServiceUnavailableError('众查服务当前不可用');
@@ -244,9 +266,13 @@ const buildPostVoteSummary = (input: {
   } else if (input.resultCode === 'no_violation') {
     parts.push('当前轮次已形成“支持不违规”结果。');
   } else if (input.resultCode === 'escalated') {
-    parts.push('当前轮次因平票已升级为管理员处理。');
+    parts.push('当前轮次票型持续接近，已升级为管理员处理。');
   } else if (input.roundStatus === 'waiting_more_votes') {
-    parts.push('当前轮次暂时平票，系统将延长一次并继续等待更多结果。');
+    parts.push(
+      input.validViolationVotes === input.validNoViolationVotes
+        ? '当前轮次暂时平票，系统将延长一次并继续等待更多结果。'
+        : '当前轮次有效票差过小，系统将延长一次并继续等待更多结果。',
+    );
   } else {
     parts.push('你的处理结果已记录，当前轮次仍在等待更多结果。');
   }
@@ -329,7 +355,7 @@ const deriveRoundSummary = (
     };
   }
 
-  if (violationVotes === noViolationVotes) {
+  if (Math.abs(violationVotes - noViolationVotes) <= CLOSE_VOTE_MARGIN) {
     if (round.extensionCount < 1) {
       return {
         summary: buildPostVoteSummary({
@@ -381,6 +407,7 @@ const mapAssignmentToCurrentCase = (
   assignmentStatus: row.status,
   assignedAt: row.assignedAt,
   expiresAt: row.expiresAt,
+  detailViewedAt: row.detailViewedAt ?? null,
   caseId: row.crowdReviewRoundId,
   reportCaseId: row.reportCaseId ?? fallback?.reportCaseId ?? '',
   targetEntityType: 'data_card',
@@ -401,7 +428,10 @@ const mapAssignmentToCurrentCase = (
     references: row.referenceSummary ?? fallback?.reportSummary?.references ?? [],
     referenceItems: row.referenceItems ?? fallback?.reportSummary?.referenceItems ?? [],
   },
-  ruleHints: fallback?.ruleHints ?? ['投票前不会展示票况'],
+  ruleHints: fallback?.ruleHints ?? [
+    '投票前不会展示票况',
+    '提交违规/不违规判定前，需先打开「查看卡片详情」并停留阅读片刻',
+  ],
   availableDecisions: ['violation', 'no_violation', 'abstain'],
   postVoteSummary: parseSummaryJson(row.postVoteSummaryJson) ?? fallback?.postVoteSummary ?? null,
 });
@@ -418,6 +448,16 @@ const buildIneligibleSummary = (
   entryUrl: CROWD_REVIEW_ENTRY_URL,
 });
 
+const roundAssignmentTarget = (candidate: CrowdReviewCaseCandidate): number =>
+  (candidate.existingRoundMinValidVotes ?? 0) +
+  (candidate.existingRoundStatus === 'waiting_more_votes' ? EXTENSION_EXTRA_ASSIGNMENT_TARGET : 0);
+
+// 已有轮次仍在补票窗口内时才继续派发；席位已满（在办+已投达到目标）的轮次不再产生无效派单。
+const needsMoreAssignments = (candidate: CrowdReviewCaseCandidate): boolean =>
+  candidate.existingRoundId == null ||
+  candidate.existingRoundStatus == null ||
+  (candidate.existingRoundVotePotential ?? 0) < roundAssignmentTarget(candidate);
+
 const selectAssignableCase = (
   candidates: CrowdReviewCaseCandidate[],
   userId: number,
@@ -426,7 +466,8 @@ const selectAssignableCase = (
     (candidate) =>
       !candidate.reporterUserIds.includes(userId) &&
       candidate.targetUserId !== userId &&
-      !candidate.assignedInspectorUserIds.includes(userId),
+      !candidate.assignedInspectorUserIds.includes(userId) &&
+      needsMoreAssignments(candidate),
   ) ?? null;
 
 const isFinalAssignmentStatus = (status: string): status is 'voted' | 'abstained' | 'expired' | 'revoked' =>
@@ -694,6 +735,7 @@ const createRuntimeRepo = (): CrowdReviewServiceRepo => ({
   },
   finalizeAssignment: (db, input) => finalizeAssignmentRow(db, input),
   updateAssignmentPostVoteSummary: (db, input) => updateAssignmentPostVoteSummaryRow(db, input),
+  markAssignmentDetailViewed: (db, input) => markAssignmentDetailViewedRow(db, input),
   updateRound: (db, input) => updateRoundRow(db, input),
   updateReportCaseResolution: async (db, input) => {
     const native = (db as AppDrizzleDb & { $client: AdminDatabase }).$client;
@@ -996,7 +1038,7 @@ const createCrowdReviewService = (deps: CrowdReviewServiceDeps) => {
           eligible: true,
           inspectorStatus: 'active',
           statusReason: null,
-          ...await deps.repo.getPendingFlags(db, input.userId, deps.now()),
+          ...await deps.repo.getPendingFlags(db, input.userId, deps.now(), EXTENSION_EXTRA_ASSIGNMENT_TARGET),
           entryUrl: CROWD_REVIEW_ENTRY_URL,
         };
       }
@@ -1090,6 +1132,7 @@ const createCrowdReviewService = (deps: CrowdReviewServiceDeps) => {
             decisionNote: null,
             postVoteSummaryJson: '{}',
             postVoteSummarySeenAt: null,
+            detailViewedAt: null,
             now: deps.now(),
           });
           return { assignment, createdNewAssignment: true };
@@ -1114,7 +1157,10 @@ const createCrowdReviewService = (deps: CrowdReviewServiceDeps) => {
           targetEntityId: selected.targetEntityId,
           targetSnapshot: null,
           reportSummary: { reasonLabels: [], details: [], references: [] },
-          ruleHints: ['投票前不会展示票况'],
+          ruleHints: [
+            '投票前不会展示票况',
+            '提交违规/不违规判定前，需先打开「查看卡片详情」并停留阅读片刻',
+          ],
           postVoteSummary: null,
         }),
       };
@@ -1138,6 +1184,45 @@ const createCrowdReviewService = (deps: CrowdReviewServiceDeps) => {
 
       const latestCompleted = await deps.repo.getLatestCompletedAssignmentByInspector(db, input.userId);
       return latestCompleted ? await mapReplayAssignmentToCurrentCase(db, latestCompleted) : null;
+    },
+
+    async markCrowdReviewDetailViewed(input: {
+      db: AppDrizzleDb | null;
+      userId: number;
+      assignmentId: string;
+    }): Promise<MarkCrowdReviewDetailViewedResult> {
+      const db = requireDb(input.db);
+      await advanceExpiredState(db);
+      const eligibility = await ensureEligibility(db, input.userId);
+      if (!eligibility.eligible) {
+        throw new CrowdReviewForbiddenError(eligibility.summary?.statusReason ?? '当前不可参与众查');
+      }
+
+      const assignment = await deps.repo.getAssignmentByIdForInspector(db, {
+        assignmentId: input.assignmentId,
+        userId: input.userId,
+      });
+      if (!assignment) {
+        throw new CrowdReviewNotFoundError('当前派单不存在');
+      }
+
+      if (isFinalAssignmentStatus(assignment.status)) {
+        return {
+          assignmentId: assignment.id,
+          detailViewedAt: assignment.detailViewedAt ?? null,
+        };
+      }
+
+      const detailViewedAt = await deps.repo.markAssignmentDetailViewed(db, {
+        assignmentId: assignment.id,
+        userId: input.userId,
+        now: deps.now(),
+      });
+      if (!detailViewedAt) {
+        throw new CrowdReviewConflictError('派单状态已变化，请刷新后重试');
+      }
+
+      return { assignmentId: assignment.id, detailViewedAt };
     },
 
     async submitCrowdReviewDecision(input: {
@@ -1222,6 +1307,18 @@ const createCrowdReviewService = (deps: CrowdReviewServiceDeps) => {
           postVoteSummary: revokedSummary,
           idempotentReplay: false,
         };
+      }
+
+      // 判定类提交要求先打开卡片详情并经过最短审议时长；弃权豁免但同样不计票向。
+      if (input.decision !== 'abstain') {
+        const detailViewedAt = assignment.detailViewedAt ?? null;
+        if (detailViewedAt == null) {
+          throw new CrowdReviewUnprocessableError('提交前请先打开「查看卡片详情」阅读案件材料');
+        }
+        const elapsedMs = new Date(now).getTime() - new Date(detailViewedAt).getTime();
+        if (!Number.isFinite(elapsedMs) || elapsedMs < MIN_REVIEW_AFTER_DETAIL_MS) {
+          throw new CrowdReviewUnprocessableError('请先仔细阅读卡片详情，稍候再提交处理结论');
+        }
       }
 
       const nextStatus = input.decision === 'abstain' ? 'abstained' : 'voted';
@@ -1349,6 +1446,8 @@ export function createCrowdReviewServiceForTests(
       finalizeAssignment: deps.repo?.finalizeAssignment ?? (async () => missing('finalizeAssignment')),
       updateAssignmentPostVoteSummary:
         deps.repo?.updateAssignmentPostVoteSummary ?? (async () => missing('updateAssignmentPostVoteSummary')),
+      markAssignmentDetailViewed:
+        deps.repo?.markAssignmentDetailViewed ?? (async () => missing('markAssignmentDetailViewed')),
       updateRound: deps.repo?.updateRound ?? (async () => missing('updateRound')),
       updateReportCaseResolution:
         deps.repo?.updateReportCaseResolution ?? (async () => missing('updateReportCaseResolution')),
@@ -1393,6 +1492,14 @@ export async function getCrowdReviewCurrentCase(input: {
   userId: number;
 }): Promise<CrowdReviewCurrentCaseDto | null> {
   return defaultService.getCrowdReviewCurrentCase(input);
+}
+
+export async function markCrowdReviewDetailViewed(input: {
+  db: AppDrizzleDb | null;
+  userId: number;
+  assignmentId: string;
+}): Promise<MarkCrowdReviewDetailViewedResult> {
+  return defaultService.markCrowdReviewDetailViewed(input);
 }
 
 export async function submitCrowdReviewDecision(input: {

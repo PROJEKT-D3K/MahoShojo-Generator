@@ -15,6 +15,7 @@ describe('crowd review schema contract', () => {
     expect(crowdReviewRounds.minValidVotes.name).toBe('min_valid_votes');
     expect(crowdReviewAssignments.inspectorUserId.name).toBe('inspector_user_id');
     expect(crowdReviewAssignments.postVoteSummarySeenAt.name).toBe('post_vote_summary_seen_at');
+    expect(crowdReviewAssignments.detailViewedAt.name).toBe('detail_viewed_at');
     expect(inspectorDisciplineEvents.eventType.name).toBe('event_type');
   });
 });

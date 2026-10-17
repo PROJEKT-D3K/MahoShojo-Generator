@@ -34,6 +34,7 @@ export type CrowdReviewCurrentCaseDto = {
   assignmentStatus: CrowdReviewAssignmentStatus;
   assignedAt: string;
   expiresAt: string;
+  detailViewedAt: string | null;
   caseId: string;
   reportCaseId: string;
   targetEntityType: 'data_card';
@@ -81,4 +82,9 @@ export type SubmitCrowdReviewDecisionResult = {
 export type AssignCurrentCaseResult = {
   createdNewAssignment: boolean;
   currentCase: CrowdReviewCurrentCaseDto;
+};
+
+export type MarkCrowdReviewDetailViewedResult = {
+  assignmentId: string;
+  detailViewedAt: string | null;
 };

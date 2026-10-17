@@ -4,7 +4,9 @@ import {
   applyCrowdReviewRoundResultToReportCase,
   createCrowdReviewServiceForTests,
   CrowdReviewConflictError,
+  CrowdReviewNotFoundError,
   CrowdReviewServiceUnavailableError,
+  CrowdReviewUnprocessableError,
   getCrowdReviewSummary,
 } from '@/lib/crowd-review/service';
 
@@ -15,6 +17,7 @@ const makeCurrentCase = (overrides: Record<string, unknown> = {}) => ({
   assignmentStatus: 'assigned',
   assignedAt: '2026-04-08T11:30:00.000Z',
   expiresAt: '2026-04-08T12:30:00.000Z',
+  detailViewedAt: null,
   caseId: 'round-1',
   reportCaseId: 'case-1',
   targetEntityType: 'data_card',
@@ -43,6 +46,7 @@ const makeAssignmentRow = (overrides: Record<string, unknown> = {}) => ({
   decisionNote: null,
   postVoteSummaryJson: '{}',
   postVoteSummarySeenAt: null,
+  detailViewedAt: '2026-04-08T11:30:10.000Z',
   createdAt: '2026-04-08T11:30:00.000Z',
   updatedAt: '2026-04-08T11:30:00.000Z',
   reportCaseId: 'case-1',
@@ -106,6 +110,7 @@ const buildService = (
       listAssignmentsByRound: async () => [],
       finalizeAssignment: async () => true,
       updateAssignmentPostVoteSummary: async () => true,
+      markAssignmentDetailViewed: async () => now,
       updateRound: async () => true,
       updateReportCaseResolution: async () => true,
       listCrowdReviewHistoryByInspector: async () => [],
@@ -133,6 +138,7 @@ const buildService = (
       listAssignmentsByRound: async () => [],
       finalizeAssignment: async () => true,
       updateAssignmentPostVoteSummary: async () => true,
+      markAssignmentDetailViewed: async () => now,
       updateRound: async () => true,
       updateReportCaseResolution: async () => true,
       listCrowdReviewHistoryByInspector: async () => [],
@@ -1611,5 +1617,334 @@ describe('crowd review service', () => {
     ).rejects.toThrow('persistent notify failure');
 
     expect(attempts).toBe(2);
+  });
+
+  test('submit rejects a deciding vote before the card detail has been viewed', async () => {
+    let finalizeCalls = 0;
+    const service = buildService({
+      repo: {
+        getAssignmentByIdForInspector: async () => makeAssignmentRow({ detailViewedAt: null }),
+        finalizeAssignment: async () => {
+          finalizeCalls += 1;
+          return true;
+        },
+      },
+    });
+
+    await expect(
+      service.submitCrowdReviewDecision({
+        db: {} as never,
+        userId: 7,
+        assignmentId: 'assignment-1',
+        decision: 'violation',
+        note: null,
+      }),
+    ).rejects.toBeInstanceOf(CrowdReviewUnprocessableError);
+    expect(finalizeCalls).toBe(0);
+  });
+
+  test('submit rejects a deciding vote within the minimum review window', async () => {
+    const service = buildService({
+      repo: {
+        getAssignmentByIdForInspector: async () =>
+          makeAssignmentRow({ detailViewedAt: '2026-04-08T11:59:50.000Z' }),
+      },
+    });
+
+    await expect(
+      service.submitCrowdReviewDecision({
+        db: {} as never,
+        userId: 7,
+        assignmentId: 'assignment-1',
+        decision: 'no_violation',
+        note: null,
+      }),
+    ).rejects.toBeInstanceOf(CrowdReviewUnprocessableError);
+  });
+
+  test('abstain does not require a prior detail view', async () => {
+    const service = buildService({
+      repo: {
+        getAssignmentByIdForInspector: async () => makeAssignmentRow({ detailViewedAt: null }),
+        getRoundById: async () => makeRoundRow({ deadlineAt: '2026-04-08T13:00:00.000Z' }),
+        listAssignmentsByRound: async () => [
+          makeAssignmentRow({ id: 'assignment-1', status: 'abstained', decision: 'abstain' }),
+        ],
+        finalizeAssignment: async () => true,
+      },
+    });
+
+    const result = await service.submitCrowdReviewDecision({
+      db: {} as never,
+      userId: 7,
+      assignmentId: 'assignment-1',
+      decision: 'abstain',
+      note: null,
+    });
+
+    expect(result.assignmentStatus).toBe('abstained');
+    expect(result.idempotentReplay).toBe(false);
+  });
+
+  test('close margin after deadline extends the round once instead of concluding', async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const service = buildService({
+      repo: {
+        getAssignmentByIdForInspector: async () => makeAssignmentRow(),
+        getRoundById: async () => makeRoundRow(),
+        listAssignmentsByRound: async () => [
+          makeAssignmentRow({ id: 'assignment-1', status: 'voted', decision: 'violation' }),
+          makeAssignmentRow({ id: 'assignment-2', status: 'voted', decision: 'violation', inspectorUserId: 8 }),
+          makeAssignmentRow({ id: 'assignment-3', status: 'voted', decision: 'no_violation', inspectorUserId: 9 }),
+        ],
+        finalizeAssignment: async () => true,
+        updateRound: async (_db, input) => {
+          writes.push(input);
+          return true;
+        },
+      },
+    });
+
+    const result = await service.submitCrowdReviewDecision({
+      db: {} as never,
+      userId: 7,
+      assignmentId: 'assignment-1',
+      decision: 'violation',
+      note: null,
+    });
+
+    expect(result.postVoteSummary.roundStatus).toBe('waiting_more_votes');
+    expect(writes).toContainEqual(
+      expect.objectContaining({
+        status: 'waiting_more_votes',
+        extensionCount: 1,
+        deadlineAt: '2026-04-08T12:59:00.000Z',
+        resultCode: null,
+      }),
+    );
+    expect(writes).not.toContainEqual(expect.objectContaining({ status: 'concluded' }));
+  });
+
+  test('close margin after the extension escalates to admin review', async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const service = buildService({
+      repo: {
+        getAssignmentByIdForInspector: async () => makeAssignmentRow(),
+        getRoundById: async () => makeRoundRow({ status: 'waiting_more_votes', extensionCount: 1 }),
+        listAssignmentsByRound: async () => [
+          makeAssignmentRow({ id: 'assignment-1', status: 'voted', decision: 'violation' }),
+          makeAssignmentRow({ id: 'assignment-2', status: 'voted', decision: 'violation', inspectorUserId: 8 }),
+          makeAssignmentRow({ id: 'assignment-3', status: 'voted', decision: 'no_violation', inspectorUserId: 9 }),
+        ],
+        finalizeAssignment: async () => true,
+        updateRound: async (_db, input) => {
+          writes.push(input);
+          return true;
+        },
+        updateReportCaseResolution: async (_db, input) => {
+          writes.push({ type: 'reportCase', ...input });
+          return true;
+        },
+      },
+    });
+
+    await service.submitCrowdReviewDecision({
+      db: {} as never,
+      userId: 7,
+      assignmentId: 'assignment-1',
+      decision: 'violation',
+      note: null,
+    });
+
+    expect(writes).toContainEqual(expect.objectContaining({ status: 'escalated', resultCode: 'escalated' }));
+    expect(writes).toContainEqual(
+      expect.objectContaining({ type: 'reportCase', status: 'under_review', resolutionCode: null }),
+    );
+  });
+
+  test('decisive margin after deadline still concludes normally', async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const service = buildService({
+      repo: {
+        getAssignmentByIdForInspector: async () => makeAssignmentRow(),
+        getRoundById: async () => makeRoundRow(),
+        listAssignmentsByRound: async () => [
+          makeAssignmentRow({ id: 'assignment-1', status: 'voted', decision: 'violation' }),
+          makeAssignmentRow({ id: 'assignment-2', status: 'voted', decision: 'violation', inspectorUserId: 8 }),
+        ],
+        finalizeAssignment: async () => true,
+        updateRound: async (_db, input) => {
+          writes.push(input);
+          return true;
+        },
+        updateReportCaseResolution: async () => true,
+      },
+    });
+
+    await service.submitCrowdReviewDecision({
+      db: {} as never,
+      userId: 7,
+      assignmentId: 'assignment-1',
+      decision: 'violation',
+      note: null,
+    });
+
+    expect(writes).toContainEqual(
+      expect.objectContaining({ status: 'concluded', resultCode: 'violation' }),
+    );
+  });
+
+  test('assign skips cases whose active round already filled its assignment seats', async () => {
+    const service = buildService({
+      repo: {
+        listAssignableCases: async () => [
+          {
+            reportCaseId: 'case-full',
+            targetEntityId: 'card-f',
+            targetUserId: 11,
+            reporterUserIds: [10],
+            assignedInspectorUserIds: [1, 2, 3],
+            existingRoundId: 'round-full',
+            existingRoundStatus: 'active',
+            existingRoundMinValidVotes: 3,
+            existingRoundVotePotential: 3,
+          },
+          {
+            reportCaseId: 'case-open',
+            targetEntityId: 'card-o',
+            targetUserId: 12,
+            reporterUserIds: [10],
+            assignedInspectorUserIds: [],
+            existingRoundId: null,
+          },
+        ],
+        createCrowdReviewRound: async (db, input) => makeRoundRow({ id: input.id, reportCaseId: input.reportCaseId }),
+        createCrowdReviewAssignment: async (db, input) =>
+          makeAssignmentRow({ id: input.id, crowdReviewRoundId: input.crowdReviewRoundId, reportCaseId: 'case-open' }),
+      },
+    });
+
+    const result = await service.assignCrowdReviewCurrentCase({ db: {} as never, userId: 7 });
+
+    expect(result.createdNewAssignment).toBe(true);
+    expect(result.currentCase.reportCaseId).toBe('case-open');
+  });
+
+  test('assign reports no work when the only candidate round is saturated', async () => {
+    const service = buildService({
+      repo: {
+        listAssignableCases: async () => [
+          {
+            reportCaseId: 'case-full',
+            targetEntityId: 'card-f',
+            targetUserId: 11,
+            reporterUserIds: [10],
+            assignedInspectorUserIds: [1, 2, 3],
+            existingRoundId: 'round-full',
+            existingRoundStatus: 'active',
+            existingRoundMinValidVotes: 3,
+            existingRoundVotePotential: 3,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      service.assignCrowdReviewCurrentCase({ db: {} as never, userId: 7 }),
+    ).rejects.toBeInstanceOf(CrowdReviewNotFoundError);
+  });
+
+  test('assign keeps dispatching into a waiting_more_votes round within the extended target', async () => {
+    let assignmentRoundId: string | null = null;
+    const service = buildService({
+      repo: {
+        listAssignableCases: async () => [
+          {
+            reportCaseId: 'case-waiting',
+            targetEntityId: 'card-w',
+            targetUserId: 12,
+            reporterUserIds: [10],
+            assignedInspectorUserIds: [1, 2, 3],
+            existingRoundId: 'round-waiting',
+            existingRoundStatus: 'waiting_more_votes',
+            existingRoundMinValidVotes: 3,
+            existingRoundVotePotential: 3,
+          },
+        ],
+        createCrowdReviewAssignment: async (_db, input) => {
+          assignmentRoundId = input.crowdReviewRoundId;
+          return makeAssignmentRow({
+            id: input.id,
+            crowdReviewRoundId: input.crowdReviewRoundId,
+            reportCaseId: 'case-waiting',
+          });
+        },
+      },
+    });
+
+    const result = await service.assignCrowdReviewCurrentCase({ db: {} as never, userId: 7 });
+
+    expect(result.createdNewAssignment).toBe(true);
+    expect(assignmentRoundId).toBe('round-waiting');
+  });
+
+  test('markCrowdReviewDetailViewed stamps the first detail view on an assigned row', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const service = buildService({
+      repo: {
+        markAssignmentDetailViewed: async (_db, input) => {
+          calls.push(input);
+          return input.now;
+        },
+      },
+    });
+
+    const result = await service.markCrowdReviewDetailViewed({
+      db: {} as never,
+      userId: 7,
+      assignmentId: 'assignment-1',
+    });
+
+    expect(result).toEqual({ assignmentId: 'assignment-1', detailViewedAt: now });
+    expect(calls).toHaveLength(1);
+  });
+
+  test('markCrowdReviewDetailViewed is idempotent for finalized assignments', async () => {
+    let markCalls = 0;
+    const service = buildService({
+      repo: {
+        getAssignmentByIdForInspector: async () =>
+          makeAssignmentRow({ status: 'voted', decision: 'violation', completedAt: now, detailViewedAt: '2026-04-08T11:45:00.000Z' }),
+        markAssignmentDetailViewed: async () => {
+          markCalls += 1;
+          return now;
+        },
+      },
+    });
+
+    const result = await service.markCrowdReviewDetailViewed({
+      db: {} as never,
+      userId: 7,
+      assignmentId: 'assignment-1',
+    });
+
+    expect(result.detailViewedAt).toBe('2026-04-08T11:45:00.000Z');
+    expect(markCalls).toBe(0);
+  });
+
+  test('markCrowdReviewDetailViewed rejects unknown assignments', async () => {
+    const service = buildService({
+      repo: {
+        getAssignmentByIdForInspector: async () => null,
+      },
+    });
+
+    await expect(
+      service.markCrowdReviewDetailViewed({
+        db: {} as never,
+        userId: 7,
+        assignmentId: 'missing',
+      }),
+    ).rejects.toBeInstanceOf(CrowdReviewNotFoundError);
   });
 });

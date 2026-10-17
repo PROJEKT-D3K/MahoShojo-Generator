@@ -363,6 +363,7 @@ export const crowdReviewAssignments = sqliteTable(
     decisionNote: text('decision_note'),
     postVoteSummaryJson: text('post_vote_summary_json').notNull().default('{}'),
     postVoteSummarySeenAt: text('post_vote_summary_seen_at'),
+    detailViewedAt: text('detail_viewed_at'),
     createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text('updated_at').notNull().default(sql`CURRENT_TIMESTAMP`),
   },

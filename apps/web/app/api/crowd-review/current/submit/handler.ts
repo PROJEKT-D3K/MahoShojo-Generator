@@ -3,6 +3,7 @@ import {
   CrowdReviewForbiddenError,
   CrowdReviewNotFoundError,
   CrowdReviewServiceUnavailableError,
+  CrowdReviewUnprocessableError,
   submitCrowdReviewDecision,
 } from '@/lib/crowd-review/service';
 import { json, readJson, requireAuthUser, withApiErrorBoundary } from '@/lib/api/server';
@@ -36,6 +37,9 @@ const toErrorResponse = (error: unknown): Response | null => {
   }
   if (error instanceof CrowdReviewConflictError) {
     return json({ error: error.message }, { status: 409 });
+  }
+  if (error instanceof CrowdReviewUnprocessableError) {
+    return json({ error: error.message }, { status: 422 });
   }
   if (error instanceof CrowdReviewServiceUnavailableError) {
     return json({ error: error.message }, { status: 503 });

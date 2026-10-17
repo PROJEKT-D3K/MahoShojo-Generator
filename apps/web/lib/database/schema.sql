@@ -453,6 +453,7 @@ CREATE TABLE IF NOT EXISTS crowd_review_assignments (
   decision_note TEXT,
   post_vote_summary_json TEXT NOT NULL DEFAULT '{}',
   post_vote_summary_seen_at TEXT,
+  detail_viewed_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (crowd_review_round_id) REFERENCES crowd_review_rounds(id) ON DELETE CASCADE,
