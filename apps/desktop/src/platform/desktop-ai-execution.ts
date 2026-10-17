@@ -63,8 +63,10 @@ export const createDesktopAiExecutionPort = (
       request,
       (event) => {
         cancellation.observe(event);
+        if (signal.aborted) return;
         queued.push(event);
       },
+      signal,
     ).catch((cause: unknown) => {
       failure = cause;
     });
@@ -130,9 +132,11 @@ export const createDesktopAiExecutionPort = (
         request,
         (event) => {
           cancellation.observe(event);
+          if (signal.aborted) return;
           queue.push(event);
           wake();
         },
+        signal,
       )
         .catch((cause: unknown) => {
           failure = cause;

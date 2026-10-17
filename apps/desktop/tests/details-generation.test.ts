@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { createMagicalGirlDetailsGenerationConfig, type MagicalGirlDetailsGenerationInput } from '@mahoshojo/ai-core/magical-girl-details-generation';
@@ -23,7 +24,7 @@ const generated = {
 const harness = (text = JSON.stringify(generated), finishReason: 'stop' | 'length' = 'stop', status: 'completed' | 'failed' = 'completed') => {
   let sent: AiExecutionRequest | undefined;
   let deliver: (() => void) | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command !== STREAM_DIRECT_AI_COMMAND) throw new Error('unexpected command');
     sent = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
@@ -38,7 +39,7 @@ const harness = (text = JSON.stringify(generated), finishReason: 'stop' | 'lengt
         resolve();
       };
     });
-  });
+  }));
   return { options: { invoke, profileId: 'saved-profile', createChannel: () => ({}) }, invoke, get request() { return sent; }, finish: () => deliver?.() };
 };
 
@@ -107,12 +108,12 @@ describe('Desktop Details generation seam', () => {
     let finish: (() => void) | undefined;
     let fail: (() => void) | undefined;
     const identity = { requestId: intent.requestId, contractVersion: 1 as const, mode: intent.mode };
-    const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+    const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
       if (command === CANCEL_DIRECT_AI_COMMAND) { finish?.(); return true; }
       send = (args!.onEvent as { onmessage: (event: AiStreamEvent) => void }).onmessage;
       send({ type: 'started', ...identity, sequence: 0 });
       await new Promise<void>((resolve, reject) => { finish = resolve; fail = () => reject(new Error('lost connection')); });
-    });
+    }));
     const onPartialText = vi.fn();
     const pending = executeDetailsGeneration({ invoke, profileId: 'saved-profile', createChannel: () => ({}) }, input, intent, controller.signal, onPartialText);
     send!({ type: 'text-delta', ...identity, sequence: 1, delta: '已收到的部分角色正文' });

@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseArenaHostedDetails } from '../src/features/arena/hosted';
@@ -30,7 +31,7 @@ function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feed
   const session = new DesktopArenaSession({ product, repository, storage: saved, now: () => now, requestId: () => feedback.nativeEvents?.[0]?.requestId ?? 'hosted-session-1', random,
     hostedTestPorts: { createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: 0 } }); session.setScope('actor-A:target-A'); session.setNarrativeDraftScope('account:A'); session.narrativeDrafts.setAutoRetain(true);
   const operations: DesktopArenaHostedOperation[] = [];
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') { release?.(); return; }
     const request = args!.request as DesktopArenaHostedOperation; operations.push(request);
     if (request.operation === 'lookup-request' || request.operation === 'stop') return { status: request.operation === 'stop' ? 202 : 200,
@@ -50,7 +51,7 @@ function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feed
       ? `id: 2-0\nevent: error\ndata: ${JSON.stringify({ status: 'failed', code: feedback.failureCode })}\n\n`
       : 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); send({ kind: 'stream-end' });
     if (feedback.rejectAfterDone) throw new Error('late-native-secret-canary');
-  });
+  }));
   return { session, saved, records, repository, invoke, operations, random, setHold: () => { hold = true; }, failSave: () => { failSave = true; }, recoverSave: () => { failSave = false; } };
 }
 

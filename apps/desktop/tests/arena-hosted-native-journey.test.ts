@@ -1,5 +1,7 @@
-/** Opt-in integration: Renderer adapter -> real Rust HTTP/Channel -> real companion/runtime.
- * Only account storage, provider output and finalization are synthetic. No public AI requests. */
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
+/** Opt-in integration: Renderer adapter/settle -> real Rust HTTP pipe -> real companion/runtime.
+ * Auth, safety, service persistence, provider output and finalization are synthetic. The pipe
+ * synthesizes IPC receipts; actual Tauri command macros are tested separately. No WebView or public AI. */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createServer } from 'node:http';
@@ -9,6 +11,7 @@ import { executeArenaHosted, type ArenaHostedContext } from '../src/features/are
 import { createInitialArenaDraft, buildDesktopArenaInput } from '../src/features/arena/session';
 import { DesktopArenaHostedRecovery } from '../src/features/arena/hosted-recovery';
 import type { InvokeFn } from '../src/platform/cloud-bridge';
+import { createArenaHostedNativeSettle } from '../src/platform/arena-hosted-settle';
 import { createArenaCompanionService } from '@mahoshojo/hosted-runtime/arena-companion';
 import { createArenaGenerationRuntime, ARENA_GENERATION_MATERIALIZATION_VERSION, buildArenaGenerationPrompt } from '@mahoshojo/hosted-runtime/arena-generation';
 import type { ArenaGenerationService, GenerationStreamEvent } from '@mahoshojo/hosted-api/arena-generation/service';
@@ -31,7 +34,8 @@ async function fixture(failure?: { status: number; code: string; unboundTerminal
     generate: async ({ payload }) => {
       generated++;
       const mode = (payload.__arenaServerContextV1 as { deliveryMode: string }).deliveryMode;
-      const source = mode === 'non-stream' ? JSON.stringify(report) : '# 闭环战报\n\n合成服务正文\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"闭环战报","winner":"甲"},"impacts":[]} -->';
+      const source = payload.reportFormat === 'web' ? '<!doctype html><html><head><title>闭环战报</title></head><body>合成服务正文</body></html>\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"闭环战报","winner":"甲"},"impacts":[]} -->'
+        : mode === 'non-stream' ? JSON.stringify(report) : '# 闭环战报\n\n合成服务正文\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"闭环战报","winner":"甲"},"impacts":[]} -->';
       return { body: new Response(source).body!, telemetry: { model: 'synthetic-model', usage: { promptTokens: 7, completionTokens: 11, totalTokens: 18 } }, finishReason: 'stop' };
     },
     finalize: async () => ({ resultRef: null, ranking: null }),
@@ -140,13 +144,14 @@ async function fixture(failure?: { status: number; code: string; unboundTerminal
     });
   });
   void closed.catch(() => undefined);
-  const invoke: InvokeFn = (command, args) => new Promise((resolve, reject) => {
+  // The Rust pipe bypasses the Tauri command wrapper; add only the fixture IPC receipt.
+  const invoke: InvokeFn = withFixtureStreamReceipt((command: string, args?: Record<string, unknown>) => new Promise((resolve, reject) => {
     if (fatalError || exited) { reject(fatalError ?? new Error('Native journey already exited')); return; }
     const id = ++serial, frame = JSON.stringify({ id, command, request: args?.request });
     const timer = setTimeout(() => fail(new Error('Native journey command timed out')), 5000);
     pending.set(id, { resolve, reject, timer, channel: args?.onEvent as { onmessage: (value: unknown) => void } });
     child.stdin.write(frame + '\n');
-  });
+  }));
   child.stdin.on('error', fail);
   const timer = setTimeout(() => fail(new Error('Native journey ready timed out')), 10000);
   const stopServer = async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); };
@@ -165,9 +170,9 @@ function context(product: 'battle' | 'arena'): ArenaHostedContext {
     recovery: new DesktopArenaHostedRecovery({ getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); }, removeItem: key => { values.delete(key); } }, product),
     createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: 0 };
 }
-function input() {
+function input(reportFormat: 'markdown' | 'web' = 'markdown') {
   const draft = createInitialArenaDraft();
-  return buildDesktopArenaInput({ ...draft, combatants: ['甲', '乙'].map(name => ({ type: 'general-character', data: { name, content: '合成角色' }, isValid: false, isPreset: false, filename: `${name}.json` })) });
+  return buildDesktopArenaInput({ ...draft, reportFormat, combatants: ['甲', '乙'].map(name => ({ type: 'general-character', data: { name, content: '合成角色' }, isValid: false, isPreset: false, filename: `${name}.json` })) });
 }
 describe('Native hosted journey harness failures', () => {
   it('fails closed and cleans up when the configured binary cannot start', async () => {
@@ -208,10 +213,12 @@ describe.skipIf(!binary)('real Native hosted battle journey', () => {
 
   for (const product of ['battle', 'arena'] as const) for (const generationMode of ['non-stream', 'stream'] as const) for (const funding of ['system', 'preset'] as const) {
     it(`${product} ${generationMode} ${funding} preserves the actual request and verified result`, async () => {
-      const f = await fixture(), host = context(product);
+      const f = await fixture(), host = context(product), native = createArenaHostedNativeSettle(f.invoke);
+      const controller = new AbortController();
       try {
-        const result = await executeArenaHosted({ invoke: f.invoke }, input(), { requestId: 'synthetic-native-journey', mode: 'hosted', generationMode, modelId: funding === 'system' ? 'default' : 'deepseek-chat',
-          ...(funding === 'system' ? { systemConfig: {} } : { presetConfig: { providerId: 'deepseek', modelId: 'deepseek-chat' } }) }, host, new AbortController().signal);
+        const result = await executeArenaHosted({ invoke: native.invoke }, input(), { requestId: 'synthetic-native-journey', mode: 'hosted', generationMode, modelId: funding === 'system' ? 'default' : 'deepseek-chat',
+          ...(funding === 'system' ? { systemConfig: {} } : { presetConfig: { providerId: 'deepseek', modelId: 'deepseek-chat' } }) }, host, controller.signal);
+        expect(await native.settle(controller.signal)).toEqual({ status: 'succeeded' });
         expect(result.status, JSON.stringify(result)).toBe('completed'); expect(result.markdown).toContain('合成服务正文');
         expect(host.recovery.getSnapshot().pointer?.state).toBe('completed');
         expect(f.generated()).toBe(1);
@@ -222,6 +229,27 @@ describe.skipIf(!binary)('real Native hosted battle journey', () => {
       } finally { await f.close(); }
     });
   }
+  it.each(['system', 'preset'] as const)('completes free-Web streaming through real Native and runtime using %s funding', async funding => {
+    const f = await fixture(), host = context('battle'), native = createArenaHostedNativeSettle(f.invoke);
+    const controller = new AbortController();
+    try {
+      const result = await executeArenaHosted({ invoke: native.invoke }, input('web'), {
+        requestId: 'synthetic-web-native', mode: 'hosted', generationMode: 'stream', modelId: funding === 'system' ? 'default' : 'deepseek-chat',
+        ...(funding === 'system' ? { systemConfig: {} } : { presetConfig: { providerId: 'deepseek', modelId: 'deepseek-chat' } }),
+      }, host, controller.signal);
+      expect(await native.settle(controller.signal)).toEqual({ status: 'succeeded' });
+      expect(result).toMatchObject({ status: 'completed', renderSnapshot: { version: 1, reportFormat: 'web' },
+        hosted: { responseStatus: 200, outputValidation: 'valid', serverStatus: 'completed' } });
+      expect(result.markdown).toContain('<!doctype html>'); expect(result.markdown).toContain('合成服务正文');
+      expect(result.markdown).not.toContain('MAHOSHOJO_ARENA_META');
+      expect(host.recovery.getSnapshot().pointer).toMatchObject({ state: 'completed', format: 'web' });
+      const posts = f.requests.filter(request => request.method === 'POST'); expect(posts).toHaveLength(1);
+      expect(posts[0].body).toMatchObject({ reportFormat: 'web', writeArenaHistory: true, writeCurrentState: true });
+      expect(posts[0].body?.customProvider).toEqual(funding === 'system' ? undefined : { providerId: 'deepseek', apiKey: 'SYNTHETIC-PROVIDER-KEY-CANARY', modelId: 'deepseek-chat' });
+      expect(posts[0].body).not.toHaveProperty('webPackageRef'); expect(f.generated()).toBe(1);
+    } finally { await f.close(); }
+  });
+
   it.each([[401, 'UNAUTHORIZED'], [429, 'RATE_LIMITED'], [502, 'ARENA_PROVIDER_UNAVAILABLE'], [502, 'ACCOUNT_PRIVATE_CANARY_123']])('shows checked HTTP %s / %s without exposing server diagnostics or retrying', async (status, code) => {
     const f = await fixture({ status: status as number, code: code as string }), host = context('battle');
     try {

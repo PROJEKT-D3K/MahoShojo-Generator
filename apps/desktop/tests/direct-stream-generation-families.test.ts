@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { buildMagicalGirlDetailsStreamPrompt } from '@mahoshojo/ai-core/magical-girl-details-generation';
 import { buildCanshouStreamPrompt } from '@mahoshojo/ai-core/canshou-generation';
@@ -130,13 +131,13 @@ const harness = () => {
   let request: AiExecutionRequest | undefined;
   let emit: ((event: AiStreamEvent) => void) | undefined;
   let release: (() => void) | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     expect(command).toBe(STREAM_DIRECT_AI_COMMAND);
     request = AiExecutionRequestSchema.parse(args!.request);
     emit = (args!.onEvent as { onmessage(event: AiStreamEvent): void }).onmessage;
     emit({ ...identity(), type: 'started', sequence: 0 });
     await new Promise<void>((resolve) => { release = resolve; });
-  });
+  }));
   const identity = () => ({ requestId: request!.requestId, contractVersion: 1 as const, mode: request!.mode });
   return {
     options: { invoke, profileId: 'saved-profile', createChannel: () => ({}) },

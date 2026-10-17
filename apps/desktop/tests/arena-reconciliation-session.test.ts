@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 /** Real session + Hosted adapters + role bridge, using synthetic Native-shaped IPC; no production credentials. */
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
@@ -20,7 +21,7 @@ function fixture(product: 'battle' | 'arena' = 'battle', delivery: 'stream' | 'n
     hostedTestPorts: { createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: recoverFirstCreate ? 2 : 0 } }); session.setScope('account-A:epoch-1');
   const draft: ArenaDraft = { ...initial, generationMode: delivery, battleMode: 'daily', combatants: [{ type: 'general-character', isValid: true, isPreset: false, filename: '甲.json', data: structuredClone(card) }] };
   const requests: Record<string, any>[] = []; let writes = { writeArenaHistory: false, writeCurrentState: false };
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') { release?.(); return; }
     const request = args!.request as Record<string, any>; requests.push(request);
     if (request.operation === 'lookup-request') return { status: 200, recoveryCredentialState: 'stored', body: { generationId, generationRequestId: requestId, status: 'completed' } };
@@ -55,7 +56,7 @@ function fixture(product: 'battle' | 'arena' = 'battle', delivery: 'stream' | 'n
     else if (streamFault === 'malformed') send({ kind: 'invalid-ipc' });
     else if (streamFault === 'duplicate-end') send({ kind: 'stream-end' });
     if (generationFailure) throw new Error('late Native failure');
-  });
+  }));
   const run = async (input = draft, account = false, preset = false) => { session.updateDraft(input); await session.generateHosted({ invoke }, input,
     { mode: 'hosted', generationMode: delivery, modelId: 'default', ...(preset ? { presetConfig: { providerId: 'openai', modelId: 'gpt-4o' } } : { systemConfig: {} }) },
     account ? { kind: 'account', expectedUserId: 123 } : { kind: 'anonymous' }); };

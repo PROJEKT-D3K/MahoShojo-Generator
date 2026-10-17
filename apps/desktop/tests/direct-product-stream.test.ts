@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { FREE_GENERATION_SCHEMAS } from '@mahoshojo/ai-core/free-generation';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
@@ -19,13 +20,13 @@ const deferred = () => { let resolve!: () => void; const promise = new Promise<v
 const setup = () => {
   const ready = deferred(); const end = deferred();
   let request!: AiExecutionRequest; let send!: (event: AiStreamEvent) => void;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === CANCEL_DIRECT_AI_COMMAND) { end.resolve(); return; }
     expect(command).toBe(STREAM_DIRECT_AI_COMMAND);
     request = args!.request as AiExecutionRequest;
     send = (args!.onEvent as { onmessage: typeof send }).onmessage;
     ready.resolve(); await end.promise;
-  });
+  }));
   let seq = 0;
   const emit = (event: Record<string, unknown>) => send({ requestId: request.requestId, contractVersion: 1, mode: request.mode, sequence: seq++, ...event } as AiStreamEvent);
   return { invoke, ready, end, emit, get request() { return request; }, options: { invoke, profileId: 'p', createChannel: () => ({}) } };

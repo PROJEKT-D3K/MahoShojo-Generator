@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DesktopArenaHostedStoryCreateRequestSchema, DesktopArenaHostedStoryRecoveryPointerSchema,
@@ -36,7 +37,7 @@ interface Peer {
 function native(steps: Array<(peer: Peer) => void | Promise<void>>,
   control: (request: DesktopArenaHostedControlRequest) => DesktopArenaHostedControlResponse | Promise<DesktopArenaHostedControlResponse> = () => lookup()) {
   const streams: Request[] = [], controls: DesktopArenaHostedControlRequest[] = [];
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') return;
     if (command === 'arena_hosted_control') {
       const request = DesktopArenaHostedControlRequestSchema.parse(args?.request); controls.push(request); return control(request);
@@ -54,7 +55,7 @@ function native(steps: Array<(peer: Peer) => void | Promise<void>>,
       end: () => send({ kind: 'stream-end' }),
     };
     const step = steps[streams.length - 1]; if (!step) throw new Error('unexpected stream'); await step(peer);
-  });
+  }));
   return { invoke, streams, controls };
 }
 const complete = (peer: Peer) => {

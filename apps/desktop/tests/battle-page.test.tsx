@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 /** Real Desktop route/shared views/session/B1 adapter; simulated IPC and loopback fixture, not OS/Tauri acceptance. */
 import { TextEncoder as NodeTextEncoder } from 'node:util';
 import { act as reactAct, StrictMode } from 'react';
@@ -102,7 +103,7 @@ beforeEach((context) => {
   hostedStory = new HostedStoryFixture(); hostedCapabilityAvailable = true; cloudAccount = null;
   mocks.profile.mockResolvedValue({ id: 'loopback', name: 'Loopback', adapter: 'openai-compatible', baseUrl: endpoint.replace('/chat/completions', ''), modelId: 'fixture-model' });
   mocks.listen.mockImplementation(async () => { activeCloseHandles += 1; return vi.fn(() => { activeCloseHandles -= 1; }); }); mocks.download.mockResolvedValue(undefined);
-  mocks.invoke.mockImplementation(async (command: string, raw?: Record<string, unknown> | Uint8Array, options?: { headers: Record<string, string> }) => {
+  mocks.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, raw?: Record<string, unknown> | Uint8Array, options?: { headers: Record<string, string> }) => {
     // Pending discovery is separate; the Direct record fixture must not swallow it.
     if (pendingCommands.has(command)) return hostedStory.invoke(command, raw, options);
     if (storyBranch?.handles(command, raw, options)) return storyBranch.invoke(command, raw, options);
@@ -143,7 +144,7 @@ beforeEach((context) => {
     if (command === 'has_provider_secret') return true;
     if (command === 'cloud_card_library_request') return { status: 200, body: { success: true, cards: [], tags: [], total: 0 } };
     return undefined;
-  });
+  }));
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input); if (url.startsWith('http://127.0.0.1:')) return nativeFetch(input, init);
     if (url === '/languages.json') return new Response(JSON.stringify([{ code: 'zh-CN', name: '简体中文' }]));

@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { DesktopAiConfigStore, DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
 import { parseDesktopAiConfigOverlay, serializeDesktopAiConfigOverlay, resolveDesktopAiTarget } from '../src/features/ai-config/desktop-ai-config';
@@ -231,7 +232,7 @@ describe('AIP credential preparation', () => {
 });
 
 it('sends only a validated stable target, never a renderer endpoint or key, to the target command', async () => {
-  const invoke = vi.fn<(command: string, args?: Record<string, unknown>) => Promise<unknown>>(async () => undefined);
+  const invoke = vi.fn<(command: string, args?: Record<string, unknown>) => Promise<unknown>>(withFixtureStreamReceipt(async () => undefined));
   await openDirectAiStream({ invoke, profileId: '', providerTarget: { kind: 'preset', providerId: 'deepseek' }, createChannel: () => ({}) }, {
     requestId: 'aip-target', contractVersion: 1, mode: 'direct-remote', messages: [{ role: 'user', content: 'test' }], modelId: 'deepseek-chat', responseFormat: 'text',
   }, () => undefined);

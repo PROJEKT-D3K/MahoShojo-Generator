@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './stream-receipt-fixture';
 /** Test-only transport. It runs real Rust/SQLite/Direct HTTP with an owned synthetic library.
  * Missing MAHO_TEA_JOURNEY_BINARY may be an explicit named skip in the caller; a configured
  * invalid binary or failed ready handshake is always a failure, never an automatic skip. */
@@ -137,14 +138,15 @@ export async function startMagicTeaPartyJourneyProbe(options: MagicTeaPartyJourn
       child.stdin.write(frame + '\n');
     });
   };
-  const invoke: DesktopAiExecutionOptions['invoke'] = (command, args = {}) => {
+  // The pipe calls Rust directly and bypasses the Tauri command receipt layer.
+  const invoke: DesktopAiExecutionOptions['invoke'] = withFixtureStreamReceipt((command: string, args: Record<string, unknown> = {}) => {
     if (!COMMANDS.has(command)) return Promise.reject(new Error('Native Tea journey command is outside the closed test allowlist'));
     if (command !== 'stream_direct_ai') return call(command, args);
     const channel = args.onEvent;
     if (!channel || typeof channel !== 'object') return Promise.reject(new Error('Native Tea journey stream requires a Channel'));
     const wire = { ...args }; delete wire.onEvent;
     return call(command, wire, channel as DirectAiChannel);
-  };
+  });
   try { await ready; } catch (error) { kill(new Error('Native Tea journey did not establish its ready handshake')); await closed.catch(() => {}); throw error; }
   return {
     root, invoke, aiOptions: { invoke, profileId: 'tea-loopback', createChannel: () => ({}) }, events, trace,

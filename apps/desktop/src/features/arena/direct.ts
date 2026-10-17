@@ -89,6 +89,7 @@ const isOrdinaryMetadataFailure = (candidate: string): boolean => {
 // Native and provider messages may contain private upstream values. Keep only
 // recognized codes, and render local explanations rather than those messages.
 const directFailureMessages = {
+  'native-invoke-rejected': '本机原生调用被拒绝，尚无具体分类，请完整退出并确认界面与桌面程序来自同一版本。',
   'ipc-receipt-invalid': '桌面界面与原生程序的流式交付协议不匹配，请完全退出并更新桌面程序后再试。',
   'ipc-delivery-timeout': '桌面程序未能交付全部生成数据，请保留当前内容并重新打开程序。',
   'ipc-delivery-invalid': '桌面程序的生成数据交付不符合协议，请保留当前内容并更新程序。',

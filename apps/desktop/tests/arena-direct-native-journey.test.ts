@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { AiExecutionRequest, AiExecutionErrorCode } from '@mahoshojo/contracts/ai-execution';
@@ -97,6 +98,36 @@ describe('Arena page owners through real Native Direct loopback', () => {
     }, 30_000,
   );
 
+  it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('completes and restores free-Web streaming through real Native HTTP without replay', async () => {
+    const probe = await startMagicTeaPartyJourneyProbe(), disk = storage();
+    const owner = new DesktopArenaSession({ storage: disk, repository: {} as CardRepository });
+    owner.setScope('local:battle');
+    const html = '<!doctype html><html><head><title>合成网页</title></head><body>' + '合成网页正文🌸。'.repeat(1000) + '</body></html>';
+    const raw = html + '\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"网页战报","winner":"甲"},"impacts":[]} -->';
+    try {
+      const input = { ...draft('classic', 'stream'), reportFormat: 'web' as const };
+      owner.updateDraft(input);
+      await probe.control('checkpoint', { action: 'model', chunks: [raw.slice(0, 23), raw.slice(23)], deferred: false });
+      await owner.generate(probe.aiOptions, input, { mode: 'direct-local', generationMode: 'stream', modelId: 'synthetic-web' });
+      expect(owner.getSnapshot()).toMatchObject({ phase: 'completed', rawText: raw, resultFormat: 'web',
+        renderSnapshot: { version: 1, reportFormat: 'web' }, report: { headline: '网页战报', officialReport: { winner: '甲' } } });
+      expect(owner.getSnapshot().markdown).toContain(html);
+      const observed = await probe.control('requestCount') as { count: number; active: number; requests: Array<Record<string, unknown>> };
+      expect(observed).toMatchObject({ count: 1, active: 0 });
+      expect(observed.requests[0]).toMatchObject({ stream: true, model: 'synthetic-web' });
+      expect(JSON.stringify(observed.requests[0]?.messages)).toContain('完整 HTML');
+      expect(observed.requests[0]).not.toHaveProperty('response_format');
+      expect(JSON.parse(owner.exportDocument()).result.renderSnapshot).toEqual({ version: 1, reportFormat: 'web' });
+      owner.dispose();
+      const reopened = new DesktopArenaSession({ storage: disk, repository: {} as CardRepository });
+      try {
+        reopened.restoreDraft();
+        expect(reopened.getSnapshot()).toMatchObject({ phase: 'completed', restored: true, rawText: raw, resultFormat: 'web', renderSnapshot: { version: 1, reportFormat: 'web' } });
+        expect(await probe.control('requestCount')).toMatchObject({ count: 1, active: 0 });
+      } finally { reopened.dispose(); }
+    } finally { owner.dispose(); await probe.close(); }
+  }, 20_000);
+
   it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('retains invalid structured output and can generate again without replaying it', async () => {
     const probe = await startMagicTeaPartyJourneyProbe();
     let serial = 0;
@@ -159,6 +190,14 @@ describe('Arena Direct safe failure diagnostics', () => {
   const intent = { requestId: 'safe-error', mode: 'direct-local' as const, generationMode: 'stream' as const, modelId: 'synthetic' };
   const context = { scopeKey: 'local:battle', reporterInfo: { name: '记者', publication: '速报' }, adjudicationResults: [] };
 
+  it('retains only the opaque native invoke category and stage', async () => {
+    const invoke = vi.fn(async () => { throw 'PRIVATE-MACRO-ERROR-CANARY'; });
+    const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, draft('classic', 'stream'), intent, context, new AbortController().signal);
+    expect(outcome).toMatchObject({ status: 'failed', code: 'native-invoke-rejected', rawText: '',
+      failureDiagnostic: { source: 'client', stage: 'native-stream', code: 'native-invoke-rejected' } });
+    expect(JSON.stringify(outcome)).not.toContain('PRIVATE'); expect(invoke).toHaveBeenCalledOnce();
+  });
+
   it.each(['profile-not-found', 'profile-rejected', 'missing-secret', 'unsupported-request', 'upstream-unavailable', 'upstream-rejected', 'stream-protocol', 'failed', 'internal-error'])(
     'preserves the recognized %s code without exposing the Native error message', async code => {
       const invoke = vi.fn(async () => { throw { code, message: 'PRIVATE-UPSTREAM-VALUE', extra: 'PRIVATE-EXTRA' }; });
@@ -183,7 +222,7 @@ describe('Arena Direct safe failure diagnostics', () => {
   });
 
   it.each(['partial', 'terminal', 'invalid-event'] as const)('keeps failure and protocol precedence after %s delivery', async delivery => {
-    const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+    const invoke = vi.fn(withFixtureStreamReceipt(async (_command: string, args?: Record<string, unknown>) => {
       const request = args!.request as AiExecutionRequest;
       const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
       const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
@@ -193,7 +232,7 @@ describe('Arena Direct safe failure diagnostics', () => {
         result: { ...identity, status: 'completed', finishReason: 'stop', output: { text: '已接受的正文' } } });
       if (delivery === 'invalid-event') channel.onmessage({ ...identity, type: 'text-delta', sequence: 99, delta: '不得接受' });
       throw { code: 'missing-secret', message: 'PRIVATE-UPSTREAM-VALUE' };
-    });
+    }));
     const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, draft('classic', 'stream'), intent, context, new AbortController().signal);
     expect(outcome).toMatchObject({ status: 'failed', rawText: '已接受的正文', code: delivery === 'invalid-event' ? 'invalid-response' : 'missing-secret' });
     expect(outcome).not.toHaveProperty('draftCompletion');
@@ -204,7 +243,7 @@ describe('Arena Direct safe failure diagnostics', () => {
 
   it.each<AiExecutionErrorCode>(['authentication-failed', 'permission-denied', 'rate-limited', 'timeout', 'service-unavailable', 'content-filtered', 'invalid-response', 'output-too-large', 'internal-error'])(
     'explains the validated %s terminal without showing its upstream message or accepting a result', async code => {
-      const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+      const invoke = vi.fn(withFixtureStreamReceipt(async (_command: string, args?: Record<string, unknown>) => {
         const request = args!.request as AiExecutionRequest;
         const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
         const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
@@ -212,7 +251,7 @@ describe('Arena Direct safe failure diagnostics', () => {
         channel.onmessage({ ...identity, type: 'text-delta', sequence: 1, delta: '已接受的正文' });
         channel.onmessage({ ...identity, type: 'result', sequence: 2,
           result: { ...identity, status: 'failed', error: { code, message: 'PRIVATE-UPSTREAM-VALUE' } } });
-      });
+      }));
       const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, draft('classic', 'stream'), intent, context, new AbortController().signal);
       expect(outcome).toMatchObject({ status: 'failed', code, rawText: '已接受的正文' });
       if (outcome.status !== 'failed') throw new Error('expected failed terminal');

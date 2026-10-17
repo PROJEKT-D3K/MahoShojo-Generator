@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './stream-receipt-fixture';
 /** Synthetic model transport and small canonical source records. The producer and
  * storage adapters are production code; this file does not claim real model IO. */
 import { randomUUID } from 'node:crypto';
@@ -52,7 +53,7 @@ export async function installDirectBranchFixture(port: StoryNativePort, fixture:
 export const directBranchText = '# 分支新章\n\n甲与乙在既定边界后走入另一条道路，完整尾文中😀。';
 export function directBranchExecution(options: { rawText?: string; reasoning?: string; usage?: AiExecutionUsage; afterText?: () => Promise<void>; onRequest?: (request: AiExecutionRequest) => Promise<void> } = {}) {
   const requests: AiExecutionRequest[] = [];
-  const invoke = async (command: string, args?: Record<string, unknown>) => {
+  const invoke = withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'cancel_direct_ai') return true;
     if (command !== 'stream_target_ai' && command !== 'stream_direct_ai') throw new Error(`unexpected model command ${command}`);
     const request = args!.request as AiExecutionRequest; requests.push(request); await options.onRequest?.(request);
@@ -66,7 +67,7 @@ export function directBranchExecution(options: { rawText?: string; reasoning?: s
     if (options.usage) onmessage({ ...id, type: 'usage', sequence: sequence++, usage: options.usage });
     await options.afterText?.();
     onmessage({ ...id, type: 'result', sequence: sequence++, result: { ...id, status: 'completed', output: { text, ...(options.reasoning ? { reasoning: options.reasoning } : {}) }, finishReason: 'stop', resolvedModelId: 'synthetic-branch-model', ...(options.usage ? { usage: options.usage } : {}) } });
-  };
+  });
   const target: StoryExecutionTarget = { options: { invoke, profileId: 'current-profile', providerTarget: { kind: 'custom', profileId: 'current-profile' }, createChannel: () => ({}) }, intent: { mode: 'direct-local', modelId: 'selected-model' } };
   const prepare: PrepareStoryExecution = async run => run(target);
   return { requests, invoke, target, prepare };

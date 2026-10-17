@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -26,7 +27,7 @@ const repository = () => {
 };
 const direct = () => {
   const text = JSON.stringify({ updatedCharacterData: { name: card.name, content: card.content }, sublimationEvent: { title: '成长', impact: '变得勇敢' } });
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     expect(command).toBe(STREAM_DIRECT_AI_COMMAND);
     const request = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
@@ -34,7 +35,7 @@ const direct = () => {
     channel.onmessage({ ...identity, sequence: 0, type: 'started' });
     channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: text });
     channel.onmessage({ ...identity, sequence: 2, type: 'result', result: { ...identity, status: 'completed', finishReason: 'stop', output: { text } } });
-  });
+  }));
   return { invoke, profileId: 'profile-test', createChannel: () => ({}) };
 };
 const hosted = (signed = true) => ({
@@ -179,7 +180,7 @@ describe('Sublimation generic session journey with real executor and fake IPC', 
 
   it('cancel preserves consumed stream text, sends exactly one native cancel, and discards late completion', async () => {
     let release: (() => void) | undefined;
-    const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+    const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
       if (command === CANCEL_DIRECT_AI_COMMAND) { release?.(); return true; }
       const request = args!.request as AiExecutionRequest;
       const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
@@ -188,7 +189,7 @@ describe('Sublimation generic session journey with real executor and fake IPC', 
       channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: '# 部分正文' });
       await new Promise<void>((resolve) => { release = resolve; });
       channel.onmessage({ ...identity, sequence: 2, type: 'result', result: { ...identity, status: 'completed', finishReason: 'stop', output: { text: '# 迟到结果' } } });
-    });
+    }));
     const session = new SublimationSession({ storage: storage(), repository: repository().port, initialDraft: draft(), requestId: () => 'cancel-1' });
     const pending = session.generate({ invoke, profileId: 'p', createChannel: () => ({}) }, buildSublimationInput(draft()), { mode: 'direct-local', generationMode: 'stream' });
     await vi.waitFor(() => expect(session.getSnapshot().rawText).toBe('# 部分正文'));

@@ -122,7 +122,7 @@ describe('safe native failure category projection', () => {
 });
 
 
-it.each(['ipc-receipt-invalid', 'ipc-delivery-timeout', 'ipc-delivery-invalid'])('keeps delivery failure %s distinct from provider failures', code => {
+it.each(['native-invoke-rejected', 'ipc-receipt-invalid', 'ipc-delivery-timeout', 'ipc-delivery-invalid'])('keeps delivery failure %s distinct from provider failures', code => {
   const summary = buildArenaSafeDiagnostic({ phase: 'failed', hosted: null, response: null,
     failureDiagnostic: { source: 'client', stage: 'native-stream', code } });
   expect(summary).toContain(`执行错误码：${code}`);

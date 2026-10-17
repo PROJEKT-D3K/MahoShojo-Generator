@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 /** Real router/shared DOM/session/Hosted adapter/C0/bridge → synthetic IPC → loopback HTTP.
  * Not Rust, real Tauri, OS credential, production account or model acceptance. */
 import { ArenaReconciliationRequestSchema } from '@mahoshojo/contracts/arena-reconciliation';
@@ -141,7 +142,7 @@ beforeEach(() => {
   companion = null; rankingFeedback = undefined; roleRequests = []; streamRequests = []; controlRequests = []; httpRequests = []; docs = new Map(); released = []; pendingNative = new Set(); configure(); resetDesktopCloudSessionStoreForTests();
   mocks.hint.mockReset().mockImplementation(async (product: Product) => ({ product, state: 'none' }));
   mocks.listen.mockImplementation(async () => { activeCloseHandles += 1; return vi.fn(() => { activeCloseHandles -= 1; }); }); mocks.download.mockResolvedValue(undefined);
-  mocks.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+  mocks.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'list_provider_profile_ids') return [];
     if (command === 'has_provider_secret') return true;
     if (command === 'cloud_cached_account') return accountId === null ? null : { account: { userId: accountId, username: 'synthetic-account' } };
@@ -215,7 +216,7 @@ beforeEach(() => {
     }
     if (/^(stream_target_ai|stream_direct_ai|stream_hosted_ai|hosted_ai_request|begin_web_package_instance|open_web_package_instance)$/.test(command)) throw new Error(`Forbidden alternative execution: ${command}`);
     return undefined;
-  });
+  }));
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input); if (url === '/languages.json') return new Response(JSON.stringify([{ code: 'zh-CN', name: '简体中文' }]));
     if (url.startsWith('/presets/') || url.startsWith('/scenario-presets/') || url.startsWith('/questionnaires/')) return new Response(readFileSync(resolve(process.cwd(), '../../content', url.slice(1)), 'utf8'));

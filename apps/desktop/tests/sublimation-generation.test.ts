@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest, AiExecutionResult } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -24,7 +25,7 @@ const input = (patch: Partial<SublimationGenerationInput> = {}): SublimationGene
 const aiResult = { updatedCharacterData: { name: '夜雨「新生」', content: '全新设定', current_state: { summary: '振作' } }, sublimationEvent: { title: '新生', impact: '跨越过去' } };
 const directHarness = (text: string, finishReason: 'stop' | 'length' = 'stop') => {
   let sent: AiExecutionRequest | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command !== STREAM_DIRECT_AI_COMMAND) throw new Error(`unexpected command: ${command}`);
     sent = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
@@ -33,7 +34,7 @@ const directHarness = (text: string, finishReason: 'stop' | 'length' = 'stop') =
     channel.onmessage({ type: 'text-delta', ...identity, sequence: 1, delta: text });
     const result: AiExecutionResult = { ...identity, status: 'completed', output: { text }, finishReason };
     channel.onmessage({ type: 'result', ...identity, sequence: 2, result });
-  });
+  }));
   return { invoke, options: { invoke, profileId: 'test-profile', createChannel: () => ({}) }, get request() { return sent; } };
 };
 const runDirect = (value = input(), text = JSON.stringify(aiResult)) => {
@@ -221,14 +222,14 @@ it('permits a complete hosted source above the old 256 KiB budget without trunca
 
 it('direct stream transport failure retains accepted partial text with the family error', async () => {
   let fail: (() => void) | undefined;
-  const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (_command: string, args?: Record<string, unknown>) => {
     const request = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
     const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
     channel.onmessage({ ...identity, sequence: 0, type: 'started' });
     channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: '# 半截输出' });
     await new Promise<void>((_resolve, reject) => { fail = () => reject(new Error('lost')); });
-  });
+  }));
   let partial = '';
   const result = executeSublimationGeneration({ invoke, profileId: 'p', createChannel: () => ({}) }, input(), { requestId: 'lost-stream', mode: 'direct-local', generationMode: 'stream' }, new AbortController().signal, (text) => { partial = text; });
   await vi.waitFor(() => expect(partial).toBe('# 半截输出'));

@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest, AiExecutionResult } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -64,7 +65,7 @@ const magicalGirlCard = {
 
 const directHarness = (text: string) => {
   let sent: AiExecutionRequest | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command !== STREAM_DIRECT_AI_COMMAND) throw new Error(`unexpected command: ${command}`);
     sent = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
@@ -72,7 +73,7 @@ const directHarness = (text: string) => {
     channel.onmessage({ type: 'started', ...identity, sequence: 0 });
     const result: AiExecutionResult = { ...identity, status: 'completed', output: { text }, finishReason: 'stop' };
     channel.onmessage({ type: 'result', ...identity, sequence: 1, result });
-  });
+  }));
   return { invoke, options: { invoke, profileId: 'p', createChannel: () => ({}) }, get request() { return sent; } };
 };
 

@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import * as arenaCore from '@mahoshojo/ai-core/arena-generation';
 import { appendNarrativeHistoryEntry } from '@mahoshojo/domain/narrative-history-operations';
@@ -25,7 +26,7 @@ const report = { headline: '相遇', article: { body: '重逢后的故事', anal
 const streamText = '# 相遇\n\n重逢后的故事\n\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"相遇","winner":"甲"},"impacts":[{"characterName":"甲","impact":"信任","currentStateSummary":"平静"}]} -->\n<!-- MAHOSHOJO_TELEMETRY_META {"aiModel":"untrusted-model","usage":{"totalTokens":999999}} -->';
 const harness = (text = streamText, configure?: (events: AiStreamEvent[], request: AiExecutionRequest) => AiStreamEvent[]) => {
   let sent: AiExecutionRequest | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'cancel_direct_ai') return true;
     if (!['stream_direct_ai', 'stream_target_ai'].includes(command)) throw new Error('unexpected project/Hosted request');
     sent = args!.request as AiExecutionRequest;
@@ -36,7 +37,7 @@ const harness = (text = streamText, configure?: (events: AiStreamEvent[], reques
     events.push({ ...identity, type: 'usage', sequence: events.length, usage: { inputTokens: 10, outputTokens: 20, reasoningTokens: 3, totalTokens: 30 } });
     events.push({ ...identity, type: 'result', sequence: events.length, result: { ...identity, status: 'completed', output: { text, reasoning: '独立推理' }, finishReason: 'stop', resolvedModelId: 'actual-model', usage: { totalTokens: 30 } } });
     for (const event of configure?.(events, sent) ?? events) onmessage(event);
-  });
+  }));
   return { options: { invoke, profileId: 'custom-1', createChannel: () => ({}) }, invoke, get request() { return sent; } };
 };
 

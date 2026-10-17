@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { MAGICAL_GIRL_GENERATION_CONFIG } from '@mahoshojo/ai-core/name-generation';
 import { buildStructuredJsonInstructionFromZodSchema } from '@mahoshojo/ai-core/structured-json';
@@ -16,7 +17,7 @@ const input = { realName: '  小满🌸  ', language: '日本語' };
 const intent: NameGenerationIntent = { requestId: 'name-1', mode: 'direct-local', generationMode: 'non-stream', modelId: 'test-model' };
 function nativeHarness(text: string, gate?: Promise<void>) {
   let sent: AiExecutionRequest | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === CANCEL_DIRECT_AI_COMMAND) return true;
     if (command !== STREAM_DIRECT_AI_COMMAND) throw new Error(command);
     sent = args!.request as AiExecutionRequest;
@@ -26,7 +27,7 @@ function nativeHarness(text: string, gate?: Promise<void>) {
     channel.onmessage({ type: 'text-delta', ...identity, sequence: 1, delta: text });
     if (gate) await gate;
     channel.onmessage({ type: 'result', ...identity, sequence: 2, result: { ...identity, status: 'completed', finishReason: 'stop', output: { text } } });
-  });
+  }));
   return { invoke, options: { invoke, profileId: 'profile', createChannel: () => ({}) }, request: () => sent! };
 }
 

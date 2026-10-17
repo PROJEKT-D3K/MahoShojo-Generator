@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
@@ -34,7 +35,7 @@ const intent = (generationMode: ArenaDraft['generationMode'] = 'non-stream') => 
 const valid = (stream: boolean, text = '两位角色共同踏上旅途。') => stream ? `# 新旅途\n\n${text}\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"新旅途","winner":"甲"},"impacts":[{"characterName":"甲","impact":"互相信任","currentStateSummary":"平静"}]} -->`
   : JSON.stringify({ headline: '新旅途', article: { body: text, analysis: '彼此理解' }, officialReport: { winner: '甲', conclusion: '合作' }, impacts: [{ characterName: '甲', impact: '互相信任', currentStateSummary: '平静' }] });
 const native = (text: string, finishReason = 'stop', wait?: Promise<void>) => {
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'cancel_direct_ai') return;
     const request = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage(event: AiStreamEvent): void };
@@ -46,7 +47,7 @@ const native = (text: string, finishReason = 'stop', wait?: Promise<void>) => {
     if (wait) await wait;
     if (finishReason === 'EOF') return;
     channel.onmessage({ ...identity, sequence: sequence++, type: 'result', result: { ...identity, status: 'completed', finishReason: finishReason as 'stop', output: { text, reasoning: '独立思考' } } });
-  });
+  }));
   return { invoke, profileId: 'loopback-profile', createChannel: () => ({}) };
 };
 const build = () => { const repo = repository(), storage = memory(); const session = new DesktopArenaSession({ repository: repo.port, storage, requestId: () => 'arena-fixed', now: () => '2026-10-09T23:00:00.000Z' }); session.setScope('account-A:target-A'); session.setNarrativeDraftScope('account:A'); session.narrativeDrafts.setAutoRetain(true); return { session, storage, ...repo }; };

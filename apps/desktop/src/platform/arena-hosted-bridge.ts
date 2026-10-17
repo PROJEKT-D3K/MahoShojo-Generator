@@ -25,6 +25,7 @@ import {
 import type { InvokeFn } from './cloud-bridge';
 import { SafeJsonValueSchema } from '@mahoshojo/contracts/json-value';
 import { compareGenerationSseIds } from '@mahoshojo/hosted-api/arena-generation/sse';
+import { invokeWithChannelDelivery, NativeChannelDeliveryError } from './native-channel-delivery';
 
 export const ARENA_HOSTED_STREAM_COMMAND = 'arena_hosted_stream';
 export const ARENA_HOSTED_CONTROL_COMMAND = 'arena_hosted_control';
@@ -45,23 +46,28 @@ export class ArenaHostedBridgeError extends Error {
       'recovery-unavailable': '原恢复凭据不可用，不能换身份恢复该请求。',
       'recovery-expired': '原恢复凭据已到期，不能重新创建原请求。',
       protocol: '服务器生成返回了不符合协议的数据，已保留收到的正文。',
+      'native-invoke-rejected': '本机原生调用被拒绝，无法取得具体分类。请完整退出并确认界面与桌面程序来自同一版本；发出状态仍未知，请保留原请求。',
+      'ipc-receipt-invalid': '桌面界面与原生程序的流协议不匹配，请完整重启或重新安装同一版本客户端；不要重发原生成请求。',
+      'ipc-delivery-invalid': '本机流消息与原生完成回执不一致，已保留收到的正文。',
+      'ipc-delivery-timeout': '原生操作已结束，但本机流消息未完整送达；请按原请求恢复，不要重新创建。',
     };
     super(messages[code] ?? '服务器连接或协议失败，已保留收到的正文。');
     this.name = 'ArenaHostedBridgeError';
   }
 }
 export const normalizeArenaHostedBridgeFailure = (cause: unknown): ArenaHostedBridgeError => {
+  if (cause instanceof NativeChannelDeliveryError) return new ArenaHostedBridgeError(cause.code);
   const parsed = DesktopArenaHostedErrorSchema.safeParse(cause);
   return parsed.success ? new ArenaHostedBridgeError(parsed.data.code, parsed.data.dispatchState, parsed.data.intentOwnership) : new ArenaHostedBridgeError('transport');
 };
 // The Native completion fence captures this check from the exact invocation arguments. Response
 // consumption can end at C0's done event, so reader completion cannot stand in for IPC framing.
-const streamCompletionChecks = new WeakMap<object, () => ArenaHostedBridgeError | null>();
+const streamCompletionChecks = new WeakMap<object, () => Promise<ArenaHostedBridgeError | null>>();
 export type ArenaHostedFailedStreamSeal = { requestId: string; code: string };
-const failedStreamChecks = new WeakMap<object, () => ArenaHostedFailedStreamSeal | null>();
-export const getArenaHostedFailedStreamCheck = (args: unknown): (() => ArenaHostedFailedStreamSeal | null) | undefined =>
+const failedStreamChecks = new WeakMap<object, () => Promise<ArenaHostedFailedStreamSeal | null>>();
+export const getArenaHostedFailedStreamCheck = (args: unknown): (() => Promise<ArenaHostedFailedStreamSeal | null>) | undefined =>
   args !== null && typeof args === 'object' ? failedStreamChecks.get(args) : undefined;
-export const getArenaHostedStreamCompletionCheck = (args: unknown): (() => ArenaHostedBridgeError | null) | undefined =>
+export const getArenaHostedStreamCompletionCheck = (args: unknown): (() => Promise<ArenaHostedBridgeError | null>) | undefined =>
   args !== null && typeof args === 'object' ? streamCompletionChecks.get(args) : undefined;
 const abortError = () => new DOMException('已停止本机订阅；服务器终态仍需确认。', 'AbortError');
 
@@ -133,12 +139,20 @@ export const openArenaHostedStream = (
   });
   const channel = options.createChannel?.() ?? new Channel<unknown>();
   const invocationArgs = { request, onEvent: channel };
-  streamCompletionChecks.set(invocationArgs, () => completionError ?? (nativeSettled && responded && channelEnded && (!acceptsSse || completedTerminal)
-    ? null : new ArenaHostedBridgeError('protocol')));
+  let delivery: Promise<void>;
+  streamCompletionChecks.set(invocationArgs, async () => {
+    await delivery;
+    return completionError ?? (nativeSettled && responded && channelEnded
+      && (!acceptsSse || completedTerminal && terminalCount === 1 && !eventAfterTerminal)
+      ? null : new ArenaHostedBridgeError('protocol'));
+  });
   // Failure retention has its own seal; the success completion fence intentionally rejects it.
-  failedStreamChecks.set(invocationArgs, () => nativeSettled && responded && acceptsSse && channelEnded
-    && !completionError && failureEvidenceSafe && !eventAfterTerminal && terminalCount === 1 && failedCode
-    ? { requestId: request.requestId, code: failedCode } : null);
+  failedStreamChecks.set(invocationArgs, async () => {
+    await delivery;
+    return nativeSettled && responded && acceptsSse && channelEnded
+      && !completionError && failureEvidenceSafe && !eventAfterTerminal && terminalCount === 1 && failedCode
+      ? { requestId: request.requestId, code: failedCode } : null;
+  });
   channel.onmessage = (raw) => {
     if (nativeSettled || completionError) return;
     if (channelEnded) { detach(); finish(new ArenaHostedBridgeError('protocol')); return; }
@@ -201,7 +215,7 @@ export const openArenaHostedStream = (
   };
   options.signal?.addEventListener('abort', onAbort, { once: true });
   if (options.signal?.aborted) { onAbort(); return result; }
-  void invoke(ARENA_HOSTED_STREAM_COMMAND, invocationArgs).then(
+  delivery = invokeWithChannelDelivery(invoke, ARENA_HOSTED_STREAM_COMMAND, invocationArgs, request.requestId, options.signal).then(
     () => { nativeSettled = true; if (!channelEnded) finish(new ArenaHostedBridgeError('protocol')); },
     (cause: unknown) => { nativeSettled = true; finish(normalizeArenaHostedBridgeFailure(cause)); },
   );

@@ -19,7 +19,8 @@ import {
 import { exceedsUtf8ByteLimit } from '@mahoshojo/domain/data-card-size';
 import type { JsonValue } from '@mahoshojo/contracts/json-value';
 import type { UserGenerationOverrides } from '@mahoshojo/ai-core/generation-settings';
-import { collectAiStreamResult, looksLikeTrivialEmptyOutput, type AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
+import { AiStreamProtocolError, collectAiStreamResult, looksLikeTrivialEmptyOutput, type AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
+import { desktopChannelDeliveryFailure } from '../../platform/direct-ai-bridge';
 
 import {
   createDesktopAiExecutionPort,
@@ -237,16 +238,19 @@ export const executeDirectGeneration = async <
     responseFormat: 'text',
   };
   let partialText = '';
+  let deliveryFailure: ReturnType<typeof desktopChannelDeliveryFailure>;
   const port = createDesktopAiExecutionPort(options);
   const source = async function* (): AsyncGenerator<AiStreamEvent> {
-    for await (const event of port.stream(request, signal)) {
-      yield event;
-      // collectAiStreamResult 接受该事件（身份、顺序及资源上限）后才保留正文。
-      if (event.type === 'text-delta') {
-        partialText += event.delta;
-        onPartialText?.(partialText);
+    try {
+      for await (const event of port.stream(request, signal)) {
+        yield event;
+        // collectAiStreamResult 接受该事件（身份、顺序及资源上限）后才保留正文。
+        if (event.type === 'text-delta') {
+          partialText += event.delta;
+          onPartialText?.(partialText);
+        }
       }
-    }
+    } catch (cause) { deliveryFailure = desktopChannelDeliveryFailure(cause); throw cause; }
   };
   let result: AiExecutionResult;
   try {
@@ -254,6 +258,9 @@ export const executeDirectGeneration = async <
   } catch (cause) {
     if (signal.aborted) {
       return { status: 'cancelled', mode: intent.mode, reason: 'aborted', rawText: partialText };
+    }
+    if (deliveryFailure && cause instanceof AiStreamProtocolError && cause.code === 'source-failed') {
+      return { status: 'failed', mode: intent.mode, rawText: partialText, code: deliveryFailure.code, message: deliveryFailure.message };
     }
     throw family.createError(partialText, cause);
   }

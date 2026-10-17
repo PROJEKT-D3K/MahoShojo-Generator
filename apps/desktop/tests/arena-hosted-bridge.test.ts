@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { DesktopArenaHostedStreamRequestSchema, parseDesktopArenaHostedSseBlock } from '@mahoshojo/contracts/desktop-arena-hosted';
 import { readFileSync } from 'node:fs';
@@ -19,7 +20,7 @@ function harness() {
   const channel: ArenaHostedChannel = { onmessage: () => undefined };
   let resolve!: () => void, reject!: (value: unknown) => void;
   const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
-  const invoke = vi.fn(async (command: string) => command === ARENA_HOSTED_STREAM_COMMAND ? pending : undefined);
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string) => command === ARENA_HOSTED_STREAM_COMMAND ? pending : undefined));
   const start = (signal?: AbortSignal) => openArenaHostedStream(invoke, request, { signal, createChannel: () => channel });
   const send = (sequence: number, value: Record<string, unknown>) => channel.onmessage({ requestId: request.requestId, sequence, ...value });
   return { invoke, start, send, resolve, reject, channel };
@@ -120,10 +121,10 @@ it.skipIf(!nativeChannelFixture)('consumes the unchanged real Rust HTTP-to-Chann
   expect(events[0]).toMatchObject({ kind: 'response', sequence: 0, status: 200 });
   expect(events.at(-1)).toMatchObject({ kind: 'stream-end', sequence: 387 });
   const channel: ArenaHostedChannel = { onmessage: () => undefined };
-  const invoke = vi.fn(async (command: string) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string) => {
     if (command !== ARENA_HOSTED_STREAM_COMMAND) throw new Error('unexpected command');
     for (const event of events) channel.onmessage(event);
-  });
+  }));
   const nativeRequest = { ...request, requestId: events[0]!.requestId };
   const res = await openArenaHostedStream(invoke, DesktopArenaHostedStreamRequestSchema.parse(nativeRequest), { createChannel: () => channel });
   const text = await res.text();
@@ -154,10 +155,10 @@ it.skipIf(!nativeMetaFixture)('preserves the unchanged real Rust HTTP-to-Channel
   const expected = parseDesktopArenaHostedSseBlock(readFileSync(join(dirname(nativeMetaFixture!), 'real-meta.sse'), 'utf8'));
   expect(events).toHaveLength(68);
   const channel: ArenaHostedChannel = { onmessage: () => undefined };
-  const invoke = vi.fn(async (command: string) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string) => {
     if (command !== ARENA_HOSTED_STREAM_COMMAND) throw new Error('unexpected command');
     for (const event of events) channel.onmessage(event);
-  });
+  }));
   const response = await openArenaHostedStream(invoke, DesktopArenaHostedStreamRequestSchema.parse({ ...request, requestId: events[0]!.requestId }), { createChannel: () => channel });
   const text = await response.text(), rawBlocks = text.split('\n\n').filter(Boolean);
   const blocks = rawBlocks.map(block => parseDesktopArenaHostedSseBlock(`${block}\n\n`));

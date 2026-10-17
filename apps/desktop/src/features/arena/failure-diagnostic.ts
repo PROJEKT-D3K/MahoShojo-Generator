@@ -5,10 +5,10 @@ const directCodes = new Set([
   'upstream-rejected', 'stream-protocol', 'cancelled', 'failed', 'invalid-request', 'unsupported-model',
   'authentication-failed', 'permission-denied', 'rate-limited', 'timeout', 'service-unavailable',
   'content-filtered', 'invalid-response', 'output-too-large', 'internal-error', 'invalid-package',
-  'ipc-receipt-invalid', 'ipc-delivery-timeout', 'ipc-delivery-invalid',
+  'native-invoke-rejected', 'ipc-receipt-invalid', 'ipc-delivery-timeout', 'ipc-delivery-invalid',
   'empty-output', 'incomplete-output', 'invalid-output',
 ]);
-const hostedCodes = new Set<string>([...DesktopArenaHostedErrorSchema.shape.code.options, 'protocol', 'transport', 'ipc-receipt-invalid', 'ipc-delivery-timeout', 'ipc-delivery-invalid']);
+const hostedCodes = new Set<string>([...DesktopArenaHostedErrorSchema.shape.code.options, 'protocol', 'transport', 'native-invoke-rejected', 'ipc-receipt-invalid', 'ipc-delivery-timeout', 'ipc-delivery-invalid']);
 const stages = ['request', 'native-stream', 'output', 'create-stream', 'create-json', 'lookup-request', 'resume', 'stop', 'status', 'stream', 'native-settle', 'session'] as const;
 export type ArenaFailureStage = typeof stages[number];
 export interface ArenaFailureDiagnostic {

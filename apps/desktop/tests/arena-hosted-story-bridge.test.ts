@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { DesktopArenaHostedStoryReconcileRequestSchema, type DesktopArenaHostedStoryReconcileRequest } from '@mahoshojo/contracts/desktop-arena-story-transport';
 import { reconcileArenaHostedStory } from '../src/platform/arena-hosted-story-bridge';
@@ -8,7 +9,7 @@ const request = DesktopArenaHostedStoryReconcileRequestSchema.parse({ operation:
 const good = { version: 'arena-reconciliation-v1', generationId, success: true,
   updatedCombatants: [{ combatantIndex: 0, data: { name: '\ud800', signature: 'original' }, isNative: true }], warnings: [] };
 function fixture(body: unknown = good, status = 200, lateFailure = false) {
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') return;
     expect(command).toBe('arena_hosted_stream'); expect(args!.request).toEqual(request);
     expect(args!.request).not.toHaveProperty('combatants'); expect(args!.request).not.toHaveProperty('expectedCombatantCount');
@@ -18,7 +19,7 @@ function fixture(body: unknown = good, status = 200, lateFailure = false) {
       { kind: 'json-fragment', text: JSON.stringify(body), final: true }, { kind: 'json-end' },
     ].forEach((event, sequence) => channel.onmessage({ requestId: request.requestId, sequence, ...event }));
     if (lateFailure) throw { code: 'scope-changed', dispatchState: 'unknown', intentOwnership: 'current-owned', message: 'private-canary' };
-  });
+  }));
   return { invoke, run: () => reconcileArenaHostedStory(invoke, request, { expectedCombatantCount: 1, createChannel: () => ({ onmessage: () => undefined }) }) };
 }
 describe('story reconciliation uses sealed role originals through the existing Native command', () => {

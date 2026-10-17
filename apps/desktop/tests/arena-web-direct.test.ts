@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -24,7 +25,7 @@ const intent = (generationMode: 'stream' | 'non-stream' = 'stream'): ArenaDirect
 const host = (base?: ResolvedWebPackage): ArenaDirectHostContext => ({ scopeKey: 'one', reporterInfo: { name: '记者', publication: '报刊' }, adjudicationResults: [], ...(base ? { resolveWebPackage: async () => base } : {}) });
 const native = (content: string, finishReason: 'stop' | 'length' = 'stop', chunkSize = 19) => {
   let request: AiExecutionRequest | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'cancel_direct_ai') return;
     if (command !== 'stream_direct_ai') throw new Error('unexpected IPC');
     request = args!.request as AiExecutionRequest;
@@ -35,7 +36,7 @@ const native = (content: string, finishReason: 'stop' | 'length' = 'stop', chunk
     emit({ ...identity, type: 'reasoning-delta', sequence: sequence++, delta: '独立推理' });
     for (let offset = 0; offset < content.length; offset += chunkSize) emit({ ...identity, type: 'text-delta', sequence: sequence++, delta: content.slice(offset, offset + chunkSize) });
     emit({ ...identity, type: 'result', sequence, result: { ...identity, status: 'completed', output: { text: content, reasoning: '独立推理' }, finishReason } });
-  });
+  }));
   return { invoke, options: { invoke, profileId: 'profile', createChannel: () => ({}) }, get request() { return request; } };
 };
 const jsonPackage = async () => {

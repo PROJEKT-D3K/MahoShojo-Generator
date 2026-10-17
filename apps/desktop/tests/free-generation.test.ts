@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildFreeStructuredPrompt,
@@ -23,7 +24,7 @@ const input: FreeGenerationInput = {
 
 const directHarness = (text: string) => {
   let sent: AiExecutionRequest | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command !== STREAM_DIRECT_AI_COMMAND) throw new Error(`unexpected command: ${command}`);
     sent = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
@@ -31,7 +32,7 @@ const directHarness = (text: string) => {
     channel.onmessage({ type: 'started', ...identity, sequence: 0 });
     const result: AiExecutionResult = { ...identity, status: 'completed', output: { text }, finishReason: 'stop' };
     channel.onmessage({ type: 'result', ...identity, sequence: 1, result });
-  });
+  }));
   return { invoke, options: { invoke, profileId: 'p', createChannel: () => ({}) }, get request() { return sent; } };
 };
 
@@ -95,11 +96,11 @@ describe('Desktop Free generation seam', () => {
   it('direct 通路断流错误包装为 FreeGenerationError 并保留已收正文', async () => {
     let send: ((event: AiStreamEvent) => void) | undefined;
     let fail: (() => void) | undefined;
-    const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+    const invoke = vi.fn(withFixtureStreamReceipt(async (_command: string, args?: Record<string, unknown>) => {
       send = (args!.onEvent as { onmessage: (event: AiStreamEvent) => void }).onmessage;
       send({ type: 'started', requestId: 'f-3', contractVersion: 1, mode: 'direct-local', sequence: 0 });
       await new Promise<void>((_resolve, reject) => { fail = () => reject(new Error('lost')); });
-    });
+    }));
     const pending = executeFreeGeneration({ invoke, profileId: 'p', createChannel: () => ({}) }, input, { requestId: 'f-3', mode: 'direct-local' }, new AbortController().signal);
     send!({ type: 'text-delta', requestId: 'f-3', contractVersion: 1, mode: 'direct-local', sequence: 1, delta: '半截' });
     fail!();

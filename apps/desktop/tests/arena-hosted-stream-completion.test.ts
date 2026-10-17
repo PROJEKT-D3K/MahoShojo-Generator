@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { DesktopArenaHostedStreamRequestSchema } from '@mahoshojo/contracts/desktop-arena-hosted';
@@ -12,7 +13,7 @@ function harness() {
   let resolve!: () => void, reject!: (error: unknown) => void;
   const invocation = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
   const channel: ArenaHostedChannel = { onmessage: () => undefined };
-  const invoke = vi.fn(async (command: string) => command === ARENA_HOSTED_STREAM_COMMAND ? invocation : undefined);
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string) => command === ARENA_HOSTED_STREAM_COMMAND ? invocation : undefined));
   const native = createArenaHostedNativeSettle(invoke);
   const opened = openArenaHostedStream(native.invoke, request, { createChannel: () => channel });
   let sequence = 0;
@@ -24,6 +25,16 @@ function harness() {
 }
 
 describe('same Native invocation SSE completion proof', () => {
+  it('rejects a completed terminal after a failed terminal even with an exact receipt and cancelled reader', async () => {
+    const h = harness(), response = await h.opened, reader = response.body!.getReader();
+    h.send({ kind: 'sse-fragment', final: true, text: wire('error', { status: 'failed', code: 'AI_STREAM_INCOMPLETE' }) });
+    await reader.read(); await reader.cancel(); reader.releaseLock();
+    h.send({ kind: 'sse-fragment', final: true,
+      text: 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' });
+    h.send({ kind: 'stream-end' }); h.resolve();
+    expect(await h.native.settle()).toMatchObject({ status: 'failed', error: { code: 'protocol' } });
+    expect(await h.native.settleFailed()).toBeNull();
+  });
   it('failure retention uses its own exact failed terminal, stream-end and successful invoke seal', async () => {
     const h = harness(), response = await h.opened;
     h.send({ kind: 'sse-fragment', final: true, text: wire('error', { status: 'failed', code: 'AI_STREAM_INCOMPLETE' }) });

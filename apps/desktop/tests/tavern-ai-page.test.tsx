@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { act, StrictMode, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -278,7 +279,7 @@ describe('Desktop Tavern Direct streaming journey', () => {
     let finish!: () => void;
     let sequence = 0;
     const text = '# 星光\n名字：星光\n\n已收到的正文';
-    mocks.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    mocks.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
       if (command !== 'stream_target_ai') return true;
       request = args!.request as AiExecutionRequest;
       channel = args!.onEvent as typeof channel;
@@ -287,7 +288,7 @@ describe('Desktop Tavern Direct streaming journey', () => {
       channel.onmessage({ ...identity, type: 'reasoning-delta', sequence: sequence++, delta: '独立思考内容' });
       channel.onmessage({ ...identity, type: 'text-delta', sequence: sequence++, delta: text });
       await new Promise<void>(resolve => { finish = resolve; });
-    });
+    }));
     return {
       text, request: () => request,
       finish: async (terminal: 'stop' | 'length' | 'eof') => act(async () => {
@@ -407,12 +408,12 @@ describe('Desktop Tavern Hosted streaming page', () => {
     mocks.execute.mockImplementation((options, input, intent, signal, onPartialText) => actual.executeTavernGeneration({ ...options, createChannel: () => ({}) }, input, intent, signal, onPartialText));
     let channel!: { onmessage(event: unknown): void }; let finish!: () => void;
     const markdown = '# 星光\n完整正文';
-    mocks.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    mocks.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
       if (command !== 'stream_hosted_ai') return true;
       channel = args!.onEvent as typeof channel;
       channel.onmessage({ event: 'markdown', data: { chunk: markdown } });
       await new Promise<void>(resolve => { finish = resolve; });
-    });
+    }));
     return { markdown, emit: (event: unknown) => channel.onmessage(event), finish: async (reason?: string) => {
       await act(async () => { if (reason) channel.onmessage({ event: 'done', data: { ok: true, tavernCompletion: { version: 1, finishReason: reason } } }); finish(); }); await settle();
     } };

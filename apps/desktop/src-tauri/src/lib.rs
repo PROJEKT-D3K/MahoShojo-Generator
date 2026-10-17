@@ -33,6 +33,9 @@ mod config;
 mod export;
 mod external_link;
 mod gc;
+mod ipc_stream;
+#[cfg(test)]
+mod ipc_stream_tests;
 mod library;
 mod local_card;
 #[cfg(test)]
@@ -203,7 +206,9 @@ async fn stream_direct_ai(
     profile_id: String,
     request: ai::AiExecutionRequest,
     on_event: tauri::ipc::Channel<ai::AiStreamEvent>,
-) -> Result<(), ai::DirectAiError> {
+) -> Result<ipc_stream::StreamCompletionReceipt, ai::DirectAiError> {
+    let request_id = request.request_id.clone();
+    let on_event = ipc_stream::CountingEventSink::new(on_event);
     ai::stream_direct_ai(
         &profile_id,
         request,
@@ -212,7 +217,8 @@ async fn stream_direct_ai(
         &registry,
         &on_event,
     )
-    .await
+    .await?;
+    Ok(on_event.receipt(request_id))
 }
 
 /// Presets are resolved from the native trusted catalog; no renderer URL or Key is accepted.
@@ -224,7 +230,9 @@ async fn stream_target_ai(
     target: provider_target::ProviderTarget,
     request: ai::AiExecutionRequest,
     on_event: tauri::ipc::Channel<ai::AiStreamEvent>,
-) -> Result<(), ai::DirectAiError> {
+) -> Result<ipc_stream::StreamCompletionReceipt, ai::DirectAiError> {
+    let request_id = request.request_id.clone();
+    let on_event = ipc_stream::CountingEventSink::new(on_event);
     ai::stream_target_ai(
         target,
         request,
@@ -233,7 +241,8 @@ async fn stream_target_ai(
         &registry,
         &on_event,
     )
-    .await
+    .await?;
+    Ok(on_event.receipt(request_id))
 }
 
 /// 取消一次在途的 Direct 生成。
@@ -1646,8 +1655,11 @@ async fn arena_hosted_stream(
     secrets: State<'_, SharedSecretStore>,
     request: arena_hosted::ArenaRequest,
     on_event: tauri::ipc::Channel<arena_hosted::ChannelEvent>,
-) -> Result<(), arena_hosted::ArenaError> {
-    arena_hosted::stream(&arena, &cloud, secrets.inner().as_ref(), request, &on_event).await
+) -> Result<ipc_stream::StreamCompletionReceipt, arena_hosted::ArenaError> {
+    let request_id = request.request_id().to_string();
+    let on_event = ipc_stream::CountingEventSink::new(on_event);
+    arena_hosted::stream(&arena, &cloud, secrets.inner().as_ref(), request, &on_event).await?;
+    Ok(on_event.receipt(request_id))
 }
 
 #[tauri::command]

@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 const ranking = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/arena-generation-ranking.json', import.meta.url), 'utf8'));
@@ -73,7 +74,7 @@ interface Peer {
 type StreamStep = (peer: Peer) => void | Promise<void>;
 function native(streams: StreamStep[], control: (request: DesktopArenaHostedControlRequest, index: number) => DesktopArenaHostedControlResponse | Promise<DesktopArenaHostedControlResponse> = () => lookupReply()) {
   const streamRequests: DesktopArenaHostedStreamRequest[] = [], controlRequests: DesktopArenaHostedControlRequest[] = [], peers: Peer[] = [];
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === ARENA_HOSTED_DETACH_COMMAND) return;
     if (command === ARENA_HOSTED_CONTROL_COMMAND) {
       const request = DesktopArenaHostedControlRequestSchema.parse(args?.request); controlRequests.push(request);
@@ -96,7 +97,7 @@ function native(streams: StreamStep[], control: (request: DesktopArenaHostedCont
     peers.push(peer); const step = streams[streamRequests.length - 1];
     if (!step) throw new Error('Unexpected extra create/resume');
     await step(peer);
-  });
+  }));
   return { invoke, streamRequests, controlRequests, peers };
 }
 const complete = (text = source, extra: Record<string, unknown> = {}): StreamStep => peer => {
@@ -120,6 +121,17 @@ async function packageBase(target = 'data/report.json', mediaType = 'application
 const combinations = (['classic', 'kizuna', 'daily', 'scenario'] as const).flatMap(mode => (['markdown', 'web'] as const).map(format => ({ mode, format })));
 
 describe('Desktop Hosted adapter through real C0 and Native bridge', () => {
+  it('keeps opaque invoke failure unknown without creating again or exposing its text', async () => {
+    const { host } = context({ maxReconnectAttempts: 0 });
+    const h = native([() => { throw 'PRIVATE-MACRO-ERROR-CANARY'; }], () => lookupReply(404));
+    const result = await execute(h, host);
+    expect(result).toMatchObject({ status: 'failed', rawText: '', hosted: { responseStatus: null,
+      failureDiagnostic: { source: 'server', stage: 'create-stream', code: 'native-invoke-rejected', dispatchState: 'unknown' } } });
+    expect(host.recovery.getSnapshot().pointer?.state).toBe('unknown');
+    expect(h.streamRequests.map(value => value.operation)).toEqual(['create-stream']);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE');
+  });
+
   it.each([ranking, { ...ranking, participants: [] },
     { success: true, generationId, state: 'pending', message: '等待' },
     { success: false, generationId, error: '读取失败' }, null,

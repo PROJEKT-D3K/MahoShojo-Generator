@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
@@ -20,7 +21,7 @@ function fixture(values = new Map<string, string>(), value = full) {
   const initial = createInitialArenaDraft(); const draft = { ...initial, battleMode: 'daily' as const, generationMode: 'non-stream' as const,
     settings: { ...initial.settings, writeNarrativeHistory: true, writeArenaHistory: false, writeCurrentState: false }, combatants: [{ type: 'general-character' as const, isValid: true, isPreset: false, filename: '甲.json', data: { name: '甲', content: '原角色', signature: 'original-signature' } }] };
   const operations: Record<string, unknown>[] = [];
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') return;
     const request = args!.request as Record<string, unknown>; operations.push(request);
     if (request.operation === 'lookup-request') return { status: 200, body: { generationId: id, generationRequestId: requestId, status: 'completed' }, recoveryCredentialState: 'stored' };
@@ -36,7 +37,7 @@ function fixture(values = new Map<string, string>(), value = full) {
       send({ kind: 'sse-fragment', final: true, text: `id: 1-0\nevent: markdown\ndata: ${JSON.stringify({ chunk: JSON.stringify({ headline: report.headline, article: report.article, officialReport: report.officialReport }) })}\n\n` });
       send({ kind: 'sse-fragment', final: true, text: 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); send({ kind: 'stream-end' });
     } else throw new Error('unexpected operation');
-  });
+  }));
   return { session, storage, values, records, repository, invoke, operations, draft, setFail: (value: boolean) => { fail = value; } };
 }
 describe('complete JSON in the shared Arena session', () => {

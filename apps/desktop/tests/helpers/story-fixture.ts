@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './stream-receipt-fixture';
 import { createHash, webcrypto } from 'node:crypto';
 import { vi } from 'vitest';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
@@ -112,7 +113,7 @@ export class StoryFixturePort implements StoryNativePort {
 
 export const storyExecution = (rawText?: string, beforeTerminal?: () => Promise<void>) => {
   const requests: AiExecutionRequest[] = [];
-  const invoke = vi.fn(async (command:string,args?:Record<string,unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command:string,args?:Record<string,unknown>) => {
     if(command==='cancel_direct_ai')return true;
     if(command!=='stream_target_ai'&&command!=='stream_direct_ai')throw new Error(`unexpected ${command}`);
     const request=args!.request as AiExecutionRequest; requests.push(request);
@@ -123,7 +124,7 @@ export const storyExecution = (rawText?: string, beforeTerminal?: () => Promise<
     for(let offset=0;offset<content.length;offset+=16000)onmessage({...id,type:'text-delta',sequence:sequence++,delta:content.slice(offset,offset+16000)});
     await beforeTerminal?.();
     onmessage({...id,type:'result',sequence:sequence++,result:{...id,status:'completed',output:{text:content},finishReason:'stop',resolvedModelId:'actual-model'}});
-  });
+  }));
   const prepare:PrepareStoryExecution=async(run)=>run({options:{invoke,profileId:'current-profile',providerTarget:{kind:'custom',profileId:'current-profile'},createChannel:()=>({})},intent:{mode:'direct-local',modelId:'selected-model'}});
   return {requests,invoke,prepare};
 };

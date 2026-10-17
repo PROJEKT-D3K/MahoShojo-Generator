@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { ARENA_COMPANION_PROTOCOL_VERSION, ArenaCompanionEnvelopeSchema, type ArenaCompanionEnvelope } from '@mahoshojo/contracts/arena-companion';
 import { DesktopArenaHostedJsonCreateRequestSchema, DesktopArenaHostedRecoveryPointerV2Schema } from '@mahoshojo/contracts/desktop-arena-hosted-json';
@@ -37,7 +38,7 @@ const intent: ArenaHostedIntent = { requestId, mode: 'hosted', generationMode: '
 function native(options: { hold?: boolean; fail?: unknown; reply?: ArenaCompanionEnvelope; lookupStatus?: number; status?: number; rejectAfterDelivery?: boolean; raw?: string; restored?: boolean; omitResponseRequestId?: boolean } = {}) {
   const operations: Record<string, unknown>[] = []; let release!: () => void, started!: () => void;
   const ready = new Promise<void>(yes => { started = yes; }); const held = new Promise<void>(yes => { release = yes; });
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') return;
     const request = args!.request as Record<string, unknown>; operations.push(request);
     if (request.operation === 'lookup-request' || request.operation === 'stop') {
@@ -62,7 +63,7 @@ function native(options: { hold?: boolean; fail?: unknown; reply?: ArenaCompanio
     const data = { status: 'completed', markdown: JSON.stringify(model), reasoning: '', lastEventId: '1-0', updatedAt: now, telemetry: null };
     send({ kind: 'sse-fragment', final: true, text: `id: 1-0\nevent: snapshot\ndata: ${JSON.stringify(data)}\n\n` });
     send({ kind: 'sse-fragment', final: true, text: 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); send({ kind: 'stream-end' });
-  });
+  }));
   return { invoke, operations, ready, release };
 }
 const run = (n: ReturnType<typeof native>, c = context(), signal = new AbortController().signal, onPartial?: (value: ArenaHostedPartial) => void) => executeArenaHosted({ invoke: n.invoke }, input(), intent, c.host, signal, onPartial);

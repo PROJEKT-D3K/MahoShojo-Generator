@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { buildMagicTeaPartyHistory } from '@mahoshojo/ai-core/magic-tea-party';
 import { describe, expect, it, vi } from 'vitest';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -16,7 +17,7 @@ const harness = () => {
   let messages: TeaMessageDocument[] = []; let drop: string | null = null; let fail: string | null = null;
   let output = '{"type":"narration","text":"星光😀"}\n';
   let count = 0; let sequence = 0; const receipts = new Map<string, TeaWriteResponse['result']>();
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
     if (command === 'read_magic_tea_party') {
       const request = (args?.request as { request: Record<string, unknown> }).request;
       if (request.action === 'list') return { version: 1, result: { action: 'list', catalogRevision: 1, rows: [], nextCursor: null } };
@@ -57,7 +58,7 @@ const harness = () => {
     }
     if (command === 'cancel_direct_ai') return;
     throw new Error('unexpected command');
-  });
+  }));
   const owner = new DesktopTeaSession(createIpcTeaNativePort(invoke), () => `id-${++sequence}`, () => 10);
   return { owner, invoke, get record() { return record; }, get messages() { return messages; }, count: () => count, output: (text: string) => { output = text; }, drop: (action: string) => { drop = action; }, fail: (action: string) => { fail = action; }, options: { invoke, profileId: 'tea-loopback', createChannel: () => ({}) } };
 };
@@ -114,13 +115,13 @@ describe('text Tea owner save and generation identity', () => {
     const h = harness(); await h.owner.select('s'); const old = [{ id: 'old', text: '保留旧选项' }]; await h.owner.update({ lastChoices: old });
     const raw = '{"type":"choices","items":[{"id":"prefix","text":"前缀选项"}]}';
     const original = h.invoke.getMockImplementation()!; let calls = 0;
-    h.invoke.mockImplementation(async (command, args) => {
+    h.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
       if (command !== 'stream_direct_ai') return original(command, args);
       calls += 1; const request = args?.request as { requestId: string; contractVersion: 1; mode: 'direct-local' };
       const channel = args?.onEvent as { onmessage: (_event: AiStreamEvent) => void }; const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
       channel.onmessage({ ...identity, sequence: 0, type: 'started' }); channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: raw });
       channel.onmessage({ ...identity, sequence: 2, type: 'text-delta', delta: 'x'.repeat(1_000_001) });
-    });
+    }));
     await h.owner.start(target, h.options, () => true, { kind: 'choices' });
     expect(calls).toBe(1); expect(h.record?.session.lastChoices).toEqual(old);
     expect(h.messages.at(-1)).toMatchObject({ status: 'error', choices: [], meta: { completion: 'failed', choicesValid: false, rawOutput: raw } });
@@ -738,7 +739,7 @@ it.each(['编辑后的手工摘要', ''])( 'retains a new manual summary draft %
 it('separates a manual summary draft export from an automatic raw prefix during an unknown finish', async () => {
   const h = await automaticHarness(); await h.owner.update({ summary: '原摘要' });
   const original = h.invoke.getMockImplementation()!; let release!: () => void;
-  h.invoke.mockImplementation(async (command, args) => {
+  h.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'stream_direct_ai' && h.count() === 1) {
       const request = args?.request as { requestId: string; contractVersion: 1; mode: 'direct-local' };
       const channel = args?.onEvent as { onmessage: (_event: AiStreamEvent) => void };
@@ -748,7 +749,7 @@ it('separates a manual summary draft export from an automatic raw prefix during 
       await new Promise<void>(resolve => { release = resolve; }); return;
     }
     return original(command, args);
-  });
+  }));
   const running = h.owner.start(target, h.options, () => true, { kind: 'continue' });
   await vi.waitFor(() => expect(h.owner.getSnapshot().rawUnsaved).toBe('自动模型前缀'));
   h.drop('finish-generation'); h.owner.stageSummary('用户手工稿');

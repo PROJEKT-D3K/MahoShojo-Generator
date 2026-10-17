@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { ARENA_COMPANION_PROTOCOL_VERSION, ArenaCompanionEnvelopeSchema } from '@mahoshojo/contracts/arena-companion';
@@ -29,7 +30,7 @@ function harness() {
   const channel: ArenaHostedChannel = { onmessage: () => undefined };
   let resolve!: () => void, reject!: (value: unknown) => void;
   const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
-  const invoke = vi.fn(async (command: string) => command === ARENA_HOSTED_STREAM_COMMAND ? pending : undefined);
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string) => command === ARENA_HOSTED_STREAM_COMMAND ? pending : undefined));
   const onResponse = vi.fn(), onDelivered = vi.fn();
   const start = (signal?: AbortSignal) => openArenaHostedJson(invoke, request, { signal, onResponse, onDelivered, createChannel: () => channel });
   const send = (sequence: number, value: Record<string, unknown>) => channel.onmessage({ requestId: request.requestId, sequence, ...value });

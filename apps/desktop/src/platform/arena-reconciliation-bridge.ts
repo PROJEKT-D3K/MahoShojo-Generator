@@ -7,6 +7,7 @@ import { DesktopArenaHostedJsonChannelEventSchema } from '@mahoshojo/contracts/d
 import { ARENA_HOSTED_STREAM_COMMAND, ArenaHostedBridgeError, detachArenaHosted, normalizeArenaHostedBridgeFailure, type ArenaHostedChannel } from './arena-hosted-bridge';
 import type { DesktopArenaHostedStoryReconcileRequest } from '@mahoshojo/contracts/desktop-arena-story-transport';
 import type { InvokeFn } from './cloud-bridge';
+import { invokeWithChannelDelivery } from './native-channel-delivery';
 
 export interface ArenaReconciliationChannelOptions { signal?: AbortSignal; createChannel?: () => ArenaHostedChannel }
 
@@ -73,7 +74,7 @@ export const receiveArenaReconciliationChannel = (
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) { abort(); return; }
     try {
-      void invoke(ARENA_HOSTED_STREAM_COMMAND, { request, onEvent: channel }).then(
+      void invokeWithChannelDelivery(invoke, ARENA_HOSTED_STREAM_COMMAND, { request, onEvent: channel }, request.requestId, options.signal).then(
         () => { nativeSettled = true; if (!ended) finish(channelEnded ? undefined : new ArenaHostedBridgeError('protocol')); },
         (cause: unknown) => { nativeSettled = true; if (!ended) finish(normalizeArenaHostedBridgeFailure(cause)); },
       );

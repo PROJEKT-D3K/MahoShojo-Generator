@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './stream-receipt-fixture';
 import { createHash } from 'node:crypto';
 import { vi } from 'vitest';
 import {
@@ -84,7 +85,7 @@ export class HostedStoryFixture {
   private exportJob: { token: string; source: StoryPendingExportSource; bytes: Uint8Array; offset: number } | null = null;
   private serial = 0;
 
-  readonly invoke = vi.fn(async (command: string, raw?: Record<string, unknown> | Uint8Array, options?: { headers: Record<string, string> }): Promise<unknown> => {
+  readonly invoke = vi.fn(withFixtureStreamReceipt(async (command: string, raw?: Record<string, unknown> | Uint8Array, options?: { headers: Record<string, string> }): Promise<unknown> => {
     const args = raw as Record<string, unknown>, headers = options?.headers ?? {};
     this.trace.push(command);
     switch (command) {
@@ -196,7 +197,7 @@ export class HostedStoryFixture {
       case 'arena_hosted_detach': return;
       default: return this.recordInvoke.invoke(command, raw, options);
     }
-  });
+  }));
   readonly port = createIpcStoryPendingPort(this.invoke);
   readonly sink = createIpcStoryPendingExportPort(this.invoke);
   private exact(key: StoryPendingKey): Sealed {

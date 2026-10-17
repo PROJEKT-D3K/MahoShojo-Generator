@@ -5,6 +5,7 @@ import { AiExecutionRequestSchema, type AiExecutionRequest } from '@mahoshojo/co
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 
 import { DesktopBridgeError } from './desktop-bridge';
+import { invokeWithChannelDelivery, NativeChannelDeliveryError } from './native-channel-delivery';
 
 /**
  * `AiExecutionPort` 的桌面实现。
@@ -29,6 +30,13 @@ export class DesktopAiError extends Error {
     this.code = code;
   }
 }
+
+/** Closed local diagnostics only; never expose an arbitrary Native/provider message. */
+export const desktopChannelDeliveryFailure = (cause: unknown): NativeChannelDeliveryError | undefined => {
+  if (cause instanceof DesktopAiError && (cause.code === 'native-invoke-rejected' || cause.code === 'ipc-receipt-invalid'
+    || cause.code === 'ipc-delivery-invalid' || cause.code === 'ipc-delivery-timeout')) return new NativeChannelDeliveryError(cause.code);
+  return undefined;
+};
 
 interface InvokeFn {
   (command: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -76,6 +84,7 @@ export const openDirectAiStream = (
   options: DesktopAiExecutionOptions,
   request: AiExecutionRequest,
   onEvent: (event: AiStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> => {
   // 校验并复制完整 DTO；不能把业务请求缩减为事件身份，否则 native 无法反序列化。
   const parsedRequest = AiExecutionRequestSchema.parse(request);
@@ -84,13 +93,11 @@ export const openDirectAiStream = (
 
   const command = options.providerTarget ? STREAM_TARGET_AI_COMMAND : STREAM_DIRECT_AI_COMMAND;
   const selection = options.providerTarget ? { target: ProviderTargetSchema.parse(options.providerTarget) } : { profileId: options.profileId };
-  return options
-    .invoke(command, {
+  return invokeWithChannelDelivery(options.invoke, command, {
       ...selection,
       request: parsedRequest,
       onEvent: channel,
-    })
-    .then(() => undefined)
+    }, parsedRequest.requestId, signal, (event) => { if (event.type === 'started') onEvent(event); })
     .catch((cause: unknown) => {
       throw toAiError(command, cause);
     });

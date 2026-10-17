@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
@@ -54,7 +55,7 @@ beforeEach(() => {
   mocks.profiles.mockResolvedValue({ id: 'local', name: '本地模型', adapter: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', modelId: 'model' });
   mocks.listen.mockImplementation(async () => vi.fn()); mocks.copy.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: mocks.copy } });
-  mocks.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+  mocks.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'list_local_cards') {
       const query = args!.request as { cardTypes: string[] };
       if (query.cardTypes.includes('history') && failHistory) throw new Error('disk unavailable');
@@ -91,7 +92,7 @@ beforeEach(() => {
       channel.onmessage({ type: 'result', ...identity, sequence: 2, result: { ...identity, status: 'completed', output: { text }, finishReason: 'stop' } }); return;
     }
     return undefined;
-  });
+  }));
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [{ code: 'zh-CN', name: '简体中文' }] })));
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {}); HTMLElement.prototype.scrollIntoView = vi.fn(); vi.spyOn(window, 'confirm').mockReturnValue(false);
   HTMLDialogElement.prototype.showModal = function () { this.open = true; }; HTMLDialogElement.prototype.close = function () { this.open = false; };

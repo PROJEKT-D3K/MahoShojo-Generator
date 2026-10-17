@@ -12,6 +12,7 @@ import {
   normalizeArenaHostedBridgeFailure, type ArenaHostedChannel,
 } from './arena-hosted-bridge';
 import type { InvokeFn } from './cloud-bridge';
+import { invokeWithChannelDelivery } from './native-channel-delivery';
 
 export type ArenaHostedJsonHandshake = Extract<DesktopArenaHostedJsonChannelEvent, { kind: 'json-response' }>;
 export interface ArenaHostedJsonReply {
@@ -101,7 +102,7 @@ export const openArenaHostedJson = (
   options.signal?.addEventListener('abort', onAbort, { once: true });
   if (options.signal?.aborted) { onAbort(); return result; }
   try {
-    void invoke(ARENA_HOSTED_STREAM_COMMAND, { request, onEvent: channel }).then(
+    void invokeWithChannelDelivery(invoke, ARENA_HOSTED_STREAM_COMMAND, { request, onEvent: channel }, request.requestId, options.signal).then(
       () => { if (!ended) finish(delivered ? undefined : new ArenaHostedBridgeError('protocol')); },
       (cause: unknown) => { if (!ended) finish(normalizeArenaHostedBridgeFailure(cause)); },
     );

@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './stream-receipt-fixture';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -31,7 +32,7 @@ export const consumeArenaCompanionNativeFixture = async (path: string) => {
         const request = DesktopArenaHostedJsonCreateRequestSchema.parse({ operation: 'create-json', product: 'battle', requestId: event.requestId,
           actor: { kind: 'anonymous' }, body: { mode: 'daily', reportFormat: 'web', combatants: [{ type: 'general-character', data: { name: 'synthetic fixture' } }],
             writeArenaHistory: false, writeCurrentState: false, arenaFreeRankingEnabled: false } });
-        observed = openArenaHostedJson(async command => { invokeCount += 1; if (command !== 'arena_hosted_stream') throw new Error('fixture unexpectedly detached'); await nativeDone; }, request,
+        observed = openArenaHostedJson(withFixtureStreamReceipt(async (command: string) => { invokeCount += 1; if (command !== 'arena_hosted_stream') throw new Error('fixture unexpectedly detached'); await nativeDone; }), request,
           { createChannel: () => channel }).then(reply => ({ reply }), error => ({ error }));
       }
       if (event.kind === 'json-fragment' && typeof event.text === 'string') {

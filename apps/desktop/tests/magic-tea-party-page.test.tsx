@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { webcrypto } from 'node:crypto';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -35,7 +36,7 @@ beforeEach(() => {
   document = null; revision = 1; messages = []; streams = 0;
   streamOutput = '{"type":"narration","text":"共源茶会正文😀"}\n';
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5, selection: { executionPreference: 'client', clientTarget: { kind: 'custom', profileId: profile.id }, serverTarget: { kind: 'system' }, systemModelId: 'default' }, hiddenPresetIds: [], modelsByProfileId: {}, presetsByProviderId: {} }));
-  native.invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+  native.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args: Record<string, unknown> = {}) => {
     if (command === 'list_provider_profile_ids') return [profile.id];
     if (command === 'get_provider_profile') return JSON.stringify(profile);
     if (command === 'has_provider_secret') return true;
@@ -69,7 +70,7 @@ beforeEach(() => {
       channel.onmessage({ ...identity, sequence: 2, type: 'result', result: { ...identity, status: 'completed', output: { text }, finishReason: 'stop' } }); return;
     }
     throw new Error(`Unconfigured native boundary ${command}`);
-  });
+  }));
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (input === '/announcements.json' && init?.credentials === 'omit' && init.redirect === 'error') return new Response('[]', { status: 200 });
     throw new Error('Tea must not use renderer network');

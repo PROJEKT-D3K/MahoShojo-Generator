@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { reconcileArenaHosted } from '../src/platform/arena-reconciliation-bridge';
 const generationId = `arena_${'a'.repeat(64)}`;
@@ -5,12 +6,12 @@ const scope = { product: 'battle' as const, requestId: 'role-bridge-123', actor:
 const payload = { generationId, combatants: [{ type: 'general-character', data: { name: '甲' } }] };
 const good = { version: 'arena-reconciliation-v1', generationId, success: true, updatedCombatants: [{ combatantIndex: 0, data: { name: '甲', signature: 'synthetic' }, isNative: true }], warnings: [] };
 function fixture(events: Record<string, unknown>[], response: unknown = good) {
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === 'arena_hosted_detach') return;
     expect(args!.request).toEqual({ ...scope, operation: 'reconcile', ...payload });
     const channel = args!.onEvent as { onmessage(event: unknown): void };
     events.forEach((event, sequence) => channel.onmessage({ requestId: scope.requestId, sequence, ...event, ...(event.kind === 'json-fragment' && !('text' in event) ? { text: JSON.stringify(response) } : {}) }));
-  });
+  }));
   return { invoke, run: () => reconcileArenaHosted(invoke, scope, payload, { createChannel: () => ({ onmessage: () => undefined }) }) };
 }
 const handshake = { kind: 'json-response', status: 200, generationId, generationRequestId: scope.requestId, recoveryCredentialState: 'stored' };
@@ -49,11 +50,11 @@ describe('narrow Native role response assembly', () => {
   it.each(['scope-changed', 'detached', 'transport'])('rejects Native %s after a complete JSON envelope instead of trusting stale signatures', async code => {
     let fail!: (_cause: unknown) => void;
     const invocation = new Promise<void>((_resolve, reject) => { fail = reject; });
-    const invoke = vi.fn((_command: string, args?: Record<string, unknown>) => {
+    const invoke = vi.fn(withFixtureStreamReceipt((_command: string, args?: Record<string, unknown>) => {
       const channel = args!.onEvent as { onmessage(event: unknown): void };
       [handshake, { ...fragment, text: JSON.stringify(good) }, end].forEach((event, sequence) => channel.onmessage({ requestId: scope.requestId, sequence, ...event }));
       return invocation;
-    });
+    }));
     const running = reconcileArenaHosted(invoke, scope, payload, { createChannel: () => ({ onmessage: () => undefined }) });
     fail({ code, message: 'private-canary', dispatchState: 'possibly-dispatched', intentOwnership: 'current-owned' });
     await expect(running).rejects.toBeInstanceOf(Error);

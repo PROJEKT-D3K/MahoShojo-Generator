@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
@@ -27,7 +28,7 @@ describe('Desktop Hosted package metadata fallback session', () => {
         settings: { ...initial.settings, writeArenaHistory: true, writeCurrentState: true, writeNarrativeHistory: true },
         combatants: [{ type: 'general-character' as const, isPreset: false, isValid: true, filename: '甲.json', data: { name: '甲', content: '原始角色', signature: 'original-signature' } }] };
       const operations: string[] = [];
-      const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+      const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
         if (command === 'arena_hosted_detach') return;
         const request = args!.request as { operation: string }; operations.push(request.operation);
         const channel = args!.onEvent as { onmessage(value: unknown): void }; let sequence = 0;
@@ -47,7 +48,7 @@ describe('Desktop Hosted package metadata fallback session', () => {
           send({ kind: 'json-response', status: 200, generationId, generationRequestId: requestId, recoveryCredentialState: 'stored' });
           send({ kind: 'json-fragment', text: JSON.stringify(envelope), final: true }); send({ kind: 'json-end' });
         } else throw new Error(`Unexpected automatic operation: ${request.operation}`);
-      });
+      }));
       session.updateDraft(draft);
       await session.generateHosted({ invoke }, draft, { mode: 'hosted', generationMode: delivery, modelId: 'default', systemConfig: {} }, { kind: 'anonymous' });
       expect(session.getSnapshot()).toMatchObject({ phase: 'completed', markdown: source, report: { headline: '', officialReport: { winner: '' } },

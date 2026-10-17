@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildUnsignedCanshouCard,
@@ -53,7 +54,7 @@ const intent = { requestId: 'canshou-test', mode: 'direct-local' as const };
 const harness = (text = JSON.stringify(generated), finishReason: 'stop' | 'length' = 'stop', status: 'completed' | 'failed' = 'completed') => {
   let sent: AiExecutionRequest | undefined;
   let deliver: (() => void) | undefined;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command !== STREAM_DIRECT_AI_COMMAND) throw new Error('unexpected command');
     sent = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage: (event: AiStreamEvent) => void };
@@ -68,7 +69,7 @@ const harness = (text = JSON.stringify(generated), finishReason: 'stop' | 'lengt
         resolve();
       };
     });
-  });
+  }));
   return { options: { invoke, profileId: 'saved-profile', createChannel: () => ({}) }, invoke, get request() { return sent; }, finish: () => deliver?.() };
 };
 

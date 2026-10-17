@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { tavernModelResult } from './tavern-character-fixtures';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
@@ -109,13 +110,13 @@ it.each(['magical-girl', 'canshou'] as const)('restores and saves %s as an unsig
 function nativeStream() {
   let request!: AiExecutionRequest; let send!: (event: AiStreamEvent) => void; let finish!: () => void;
   const done = new Promise<void>(resolve => { finish = resolve; });
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === CANCEL_DIRECT_AI_COMMAND) { finish(); return; }
     expect(command).toBe(STREAM_DIRECT_AI_COMMAND);
     request = args!.request as AiExecutionRequest;
     send = (args!.onEvent as { onmessage: typeof send }).onmessage;
     await done;
-  });
+  }));
   let sequence = 0;
   const identity = () => ({ requestId: request.requestId, contractVersion: 1 as const, mode: request.mode });
   const emit = (event: Record<string, unknown>) => send({ ...identity(), sequence: sequence++, ...event } as AiStreamEvent);

@@ -213,6 +213,10 @@ where
         .map_err(serde::de::Error::custom)
 }
 impl ArenaRequest {
+    pub(crate) fn request_id(&self) -> &str {
+        self.scope().1
+    }
+
     fn scope(&self) -> (Product, &str, &Actor) {
         match self {
             Self::CreateStream {

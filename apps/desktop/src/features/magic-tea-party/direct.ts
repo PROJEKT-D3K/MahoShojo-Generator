@@ -4,13 +4,14 @@ import {
   estimateMagicTeaPartyTokens, getMagicTeaPartyPreset, projectMagicTeaPartyChoices,
   resolveMagicTeaPartyMessageCharLimit, resolveMagicTeaPartyTokenBudget, selectMagicTeaPartyHistoryPositions,
 } from '@mahoshojo/ai-core/magic-tea-party';
-import { collectAiStreamResult, type AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
+import { AiStreamProtocolError, collectAiStreamResult, type AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { pickMagicTeaPartyRequestSettings } from '@mahoshojo/domain/magic-tea-party/import-plan';
 import type { MagicTeaPartyHistoryMessage, MagicTeaPartyMessage, MagicTeaPartySession, MagicTeaPartyPreferences } from '@mahoshojo/domain/magic-tea-party/types';
 import type { TeaReadResponse, TeaMessageDocument, TeaSessionDocument } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import { AiExecutionRequestSchema, type AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { TeaNativePort } from '../../platform/magic-tea-party-native';
 import { createDesktopAiExecutionPort, type DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
+import { desktopChannelDeliveryFailure } from '../../platform/direct-ai-bridge';
 import type { ResolvedDesktopAiTarget } from '../ai-config/desktop-ai-config';
 
 export const isTeaScalarText = (value: string): boolean => {
@@ -135,23 +136,28 @@ export type TeaDirectOutcome = { completion: 'provider' | 'stopped' | 'failed'; 
 export async function executeTeaDirect(options: DesktopAiExecutionOptions, request: AiExecutionRequest, signal: AbortSignal,
   onAccepted: (_text: string, _reasoning: string) => void): Promise<TeaDirectOutcome> {
   let rawText = ''; let reasoning = '';
+  let deliveryFailure: ReturnType<typeof desktopChannelDeliveryFailure>;
   const port = createDesktopAiExecutionPort(options);
   const source = async function* (): AsyncGenerator<AiStreamEvent> {
-    for await (const event of port.stream(request, signal)) {
-      yield event;
-      if (signal.aborted) return;
-      if (event.type === 'text-delta') rawText += event.delta;
-      if (event.type === 'reasoning-delta') reasoning += event.delta;
-      onAccepted(rawText, reasoning);
-    }
+    try {
+      for await (const event of port.stream(request, signal)) {
+        yield event;
+        if (signal.aborted) return;
+        if (event.type === 'text-delta') rawText += event.delta;
+        if (event.type === 'reasoning-delta') reasoning += event.delta;
+        onAccepted(rawText, reasoning);
+      }
+    } catch (cause) { deliveryFailure = desktopChannelDeliveryFailure(cause); throw cause; }
   };
   try {
     const result = await collectAiStreamResult(request, source());
     if (signal.aborted || result.status === 'cancelled') return { completion: 'stopped', rawText, reasoning };
     if (result.status !== 'completed' || result.finishReason !== 'stop') return { completion: 'failed', rawText, reasoning, message: '模型未正常完成，已保留收到的正文' };
     return { completion: 'provider', rawText: result.output.text ?? rawText, reasoning: result.output.reasoning ?? reasoning };
-  } catch {
-    return { completion: signal.aborted ? 'stopped' : 'failed', rawText, reasoning, message: '生成连接或输出预算未通过，已保留收到的正文' };
+  } catch (cause) {
+    return { completion: signal.aborted ? 'stopped' : 'failed', rawText, reasoning,
+      message: deliveryFailure && cause instanceof AiStreamProtocolError && cause.code === 'source-failed'
+        ? deliveryFailure.message : '生成连接或输出预算未通过，已保留收到的正文' };
   }
 }
 export const teaTerminalMessage = (placeholder: TeaMessageDocument, outcome: TeaDirectOutcome, format: 'jsonl' | 'markdown', kind: 'chat' | 'choices' | 'summary' = 'chat'): TeaMessageDocument => {

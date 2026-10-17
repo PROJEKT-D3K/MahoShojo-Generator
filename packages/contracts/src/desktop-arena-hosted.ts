@@ -238,6 +238,7 @@ export const parseDesktopArenaHostedSseBlock = (block: string): DesktopArenaHost
 /** Safe Native failure evidence; only unknown may enter C0 first-response recovery. */
 export const DesktopArenaHostedErrorSchema = z.object({
   code: z.enum(['invalid-request', 'invalid-response', 'storage-unavailable', 'scope-changed', 'network-error',
+    'native-invoke-rejected', 'ipc-receipt-invalid', 'ipc-delivery-invalid', 'ipc-delivery-timeout',
     'capability-unavailable', 'reconciliation-capability-unavailable', 'reconciliation-output-too-large', 'create-already-attempted', 'recovery-conflict', 'recovery-unavailable', 'recovery-expired',
     'generation-unavailable', 'resume-cursor-mismatch', 'subscription-in-progress', 'output-too-large', 'stream-truncated', 'detached']),
   message: z.string().min(1).max(512), dispatchState: z.enum(['not-dispatched', 'unknown']),

@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 /** Real near-12MiB producer and synthetic 16MiB transport → Rust/IPC → production TS bridge. */
 import { createReadStream, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -29,7 +30,7 @@ async function consume(path: string) {
       if (!line.trim()) continue; const event = JSON.parse(line) as Record<string, unknown>;
       if (!observed) {
         if (typeof event.requestId !== 'string') throw new Error('Native fixture lacks request identity'); requestId = event.requestId;
-        observed = reconcileArenaHosted(async command => { invokeCount += 1; if (command !== 'arena_hosted_stream') throw new Error('unexpected detach'); await nativeDone; },
+        observed = reconcileArenaHosted(withFixtureStreamReceipt(async (command: string) => { invokeCount += 1; if (command !== 'arena_hosted_stream') throw new Error('unexpected detach'); await nativeDone; }),
           { product: 'battle', requestId, actor: { kind: 'anonymous' } },
           { generationId, combatants: [{ type: 'general-character', data: { name: 'capacity' } }] }, { createChannel: () => channel })
           .then(reply => ({ reply }), error => ({ error }));

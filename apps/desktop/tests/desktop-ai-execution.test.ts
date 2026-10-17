@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
@@ -52,7 +53,7 @@ const createHarness = () => {
   let failWith: (() => void) | undefined;
   let commandArguments: Record<string, unknown> | undefined;
 
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command === STREAM_DIRECT_AI_COMMAND) {
       commandArguments = args;
       const passed = (args as { onEvent: { onmessage?: (event: AiStreamEvent) => void } }).onEvent;
@@ -64,7 +65,7 @@ const createHarness = () => {
       return undefined;
     }
     return undefined;
-  });
+  }));
 
   const options = { invoke, createChannel, profileId: 'p1' };
 

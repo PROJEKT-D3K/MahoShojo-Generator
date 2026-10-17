@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import * as teaCore from '@mahoshojo/ai-core/magic-tea-party';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
@@ -90,12 +91,12 @@ describe('Desktop Tea actual shared prompt and Direct bridge', () => {
   it('uses the actual Native stream adapter and retains accepted Unicode prefixes after protocol failure', async () => {
     const request = { requestId: 'request', contractVersion: 1 as const, mode: 'direct-local' as const, messages: [{ role: 'user' as const, content: 'synthetic' }] };
     const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
-    const invoke = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+    const invoke = vi.fn(withFixtureStreamReceipt(async (_command: string, args?: Record<string, unknown>) => {
       const channel = args?.onEvent as { onmessage: (_event: AiStreamEvent) => void };
       channel.onmessage({ ...identity, sequence: 0, type: 'started' });
       channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: '中😀' });
       channel.onmessage({ ...identity, sequence: 7, type: 'text-delta', delta: '不可接受' });
-    });
+    }));
     const progress = vi.fn();
     const outcome = await executeTeaDirect({ invoke, profileId: 'tea-loopback', createChannel: () => ({}) }, request, new AbortController().signal, progress);
     expect(outcome).toMatchObject({ completion: 'failed', rawText: '中😀' });

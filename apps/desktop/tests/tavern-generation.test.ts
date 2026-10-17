@@ -1,3 +1,4 @@
+import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { tavernModelResult } from './tavern-character-fixtures';
 import magicalQuestionnaire from '../../../content/questionnaires/presets/magical-girl-default.json';
@@ -18,7 +19,7 @@ const intent: TavernGenerationIntent = { requestId: 'tavern-1', mode: 'direct-re
 type StreamIdentity = Pick<AiExecutionRequest, 'requestId' | 'contractVersion' | 'mode'>;
 function harness(text: string, tail?: (identity: StreamIdentity, emit: (event: AiStreamEvent) => void) => void | Promise<void>) {
   let request!: AiExecutionRequest;
-  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+  const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
     if (command !== STREAM_DIRECT_AI_COMMAND && command !== STREAM_TARGET_AI_COMMAND) throw new Error(command);
     request = args!.request as AiExecutionRequest;
     const channel = args!.onEvent as { onmessage(event: AiStreamEvent): void };
@@ -27,7 +28,7 @@ function harness(text: string, tail?: (identity: StreamIdentity, emit: (event: A
     if (text) channel.onmessage({ type: 'text-delta', ...identity, sequence: 1, delta: text });
     if (tail) await tail(identity, event => channel.onmessage(event));
     else channel.onmessage({ type: 'result', ...identity, sequence: text ? 2 : 1, result: { ...identity, status: 'completed', finishReason: 'stop', output: { text } } });
-  });
+  }));
   return { invoke, options: { invoke, profileId: 'profile', createChannel: () => ({}) }, request: () => request };
 }
 

@@ -2,6 +2,7 @@ import {
   ARENA_HOSTED_STREAM_COMMAND, getArenaHostedStreamCompletionCheck, getArenaHostedFailedStreamCheck,
   normalizeArenaHostedBridgeFailure, type ArenaHostedBridgeError, type ArenaHostedFailedStreamSeal,
 } from './arena-hosted-bridge';
+import { normalizeNativeInvokeRejection } from './native-channel-delivery';
 import type { InvokeFn } from './cloud-bridge';
 
 export type ArenaHostedNativeSettleResult =
@@ -17,8 +18,8 @@ export const createArenaHostedNativeSettle = (invoke: InvokeFn): {
   settleFailed: (signal?: AbortSignal) => Promise<ArenaHostedFailedStreamSeal | null>;
 } => {
   const pending = new Set<Promise<ArenaHostedNativeSettleResult>>();
-  let latest: { observed: Promise<ArenaHostedNativeSettleResult>; checkCompletion?: () => ArenaHostedBridgeError | null;
-    checkFailed?: () => ArenaHostedFailedStreamSeal | null } | undefined;
+  let latest: { observed: Promise<ArenaHostedNativeSettleResult>; checkCompletion?: () => Promise<ArenaHostedBridgeError | null>;
+    checkFailed?: () => Promise<ArenaHostedFailedStreamSeal | null> } | undefined;
   const trackedInvoke: InvokeFn = (command, args) => {
     const checkCompletion = getArenaHostedStreamCompletionCheck(args);
     let invocation: Promise<unknown>;
@@ -27,7 +28,7 @@ export const createArenaHostedNativeSettle = (invoke: InvokeFn): {
     if (command === ARENA_HOSTED_STREAM_COMMAND) {
       const observed = invocation.then<ArenaHostedNativeSettleResult, ArenaHostedNativeSettleResult>(
         () => ({ status: 'succeeded' }),
-        (cause: unknown) => ({ status: 'failed', error: normalizeArenaHostedBridgeFailure(cause) }),
+        (cause: unknown) => ({ status: 'failed', error: normalizeArenaHostedBridgeFailure(normalizeNativeInvokeRejection(cause)) }),
       );
       latest = { observed, checkCompletion, checkFailed: getArenaHostedFailedStreamCheck(args) }; pending.add(observed);
       void observed.then(() => pending.delete(observed));
@@ -41,7 +42,7 @@ export const createArenaHostedNativeSettle = (invoke: InvokeFn): {
     if (!latest) return { status: 'succeeded' };
     const current = latest, result = await current.observed;
     if (result.status !== 'succeeded') return result;
-    const failure = current.checkCompletion?.();
+    const failure = await current.checkCompletion?.();
     return failure ? { status: 'failed', error: failure } : result;
   };
   return { invoke: trackedInvoke, settleFailed: (signal) => new Promise(resolve => {
