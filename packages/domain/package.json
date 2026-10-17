@@ -192,6 +192,7 @@
       "default": "./src/sublimation.ts"
     },
     "./arena-strict-setup": "./src/arena-strict-setup.ts",
+    "./arena-strict-range": "./src/arena-strict-range.ts",
     "./arena-ranked-model-policy": {
       "types": "./src/arena-ranked-model-policy.ts",
       "import": "./src/arena-ranked-model-policy.ts",

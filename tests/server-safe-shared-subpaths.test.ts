@@ -233,6 +233,24 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     expect(Object.values(bundled.metafile!.outputs).flatMap((output) => output.imports)).toEqual([]);
   });
 
+  it('keeps strict range filtering and server settlement on one pure domain rule', async () => {
+    const root = path.resolve(PACKAGE_ROOT, '../domain');
+    const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+    expect(manifest.exports['./arena-strict-range']).toBe('./src/arena-strict-range.ts');
+    const entry = path.resolve(PACKAGE_ROOT, '../../apps/web/lib/arena/strict-range.ts');
+    const bundled = await build({ entryPoints: [entry], bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true });
+    expect(Object.keys(bundled.metafile!.inputs).map(file => path.resolve(file)).sort()).toEqual([
+      entry, path.join(root, 'src/arena-strict-range.ts'), path.join(root, 'src/arena-tier.ts'),
+    ].sort());
+    expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
+    expect(bundled.outputFiles[0].text).not.toMatch(/\b(?:window|document|localStorage|fetch|WebSocket)\b/u);
+    for (const file of ['components/arena/components/ArenaRankingModal.tsx', 'lib/database/arena-ratings.ts']) {
+      const source = readFileSync(path.resolve(PACKAGE_ROOT, '../../apps/web', file), 'utf8');
+      expect(source).toContain("from '@/lib/arena/strict-range'");
+      expect(source).not.toContain('const STRICT_MAX_ABS_DIFF_BY_TIER');
+    }
+  });
+
   // Web 服务端预设校验与 picker 共用纯 domain 目录；不能误归到 ui-web 的客户端列表。
   for (const name of ['presets', 'scenario-presets']) {
     it(`domain/${name} remains a pure, explicitly exported Web-consumed catalog`, async () => {

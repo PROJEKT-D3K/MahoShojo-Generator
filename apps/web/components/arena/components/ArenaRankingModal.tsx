@@ -8,8 +8,7 @@ import { LeaderboardEntityDetailsModal, type LeaderboardEntityDetailsTarget } fr
 import { TechBadge } from '@/components/ranking/TechBadge';
 import { TierBadge } from '@/components/ranking/TierBadge';
 import { isCanonicalPublicLeaderboardQuery, upsertArenaRankCacheFromLeaderboard } from '@/lib/arena/rank-cache';
-import { computeArenaBaseTier, type ArenaBaseTier } from '@/lib/arena/tier';
-import { shouldEnforceStrictRangeLimit } from '@/lib/arena/strict-range';
+import { getStrictRangeCheckResult } from '@/lib/arena/strict-range';
 import {
   isPublicVisibility,
   mapPublicDataCardRowToBattleSelectionPayload,
@@ -58,38 +57,7 @@ type Tag = {
   isActive: boolean;
 };
 
-type StrictRangeDetails = {
-  ok: boolean;
-  absDiff: number;
-  maxAbsDiff: number;
-  exceededBy: number;
-};
-
 const LEADERBOARD_TOP_RANK_LIMIT = 300;
-
-const STRICT_MAX_ABS_DIFF_BY_TIER: Record<ArenaBaseTier, number> = {
-  '无牌': 2000,
-  '白牌': 1000,
-  '字牌': 900,
-  '花牌': 800,
-  '权杖': 1000,
-};
-
-const getStrictMaxAbsDiffForRatings = (a: { rating: number; games: number }, b: { rating: number; games: number }): number => {
-  const aTier = computeArenaBaseTier(a.rating, a.games);
-  const bTier = computeArenaBaseTier(b.rating, b.games);
-  const pick = a.rating > b.rating ? aTier : b.rating > a.rating ? bTier : (a.games >= b.games ? aTier : bTier);
-  return STRICT_MAX_ABS_DIFF_BY_TIER[pick] ?? 1000;
-};
-
-const computeStrictRangeDetails = (a: { rating: number; games: number }, b: { rating: number; games: number }): StrictRangeDetails => {
-  const absDiff = Math.abs(a.rating - b.rating);
-  const maxAbsDiff = getStrictMaxAbsDiffForRatings(a, b);
-  const shouldCheckRange = shouldEnforceStrictRangeLimit(a, b);
-  if (!shouldCheckRange) return { ok: true, absDiff, maxAbsDiff, exceededBy: 0 };
-  const exceededBy = Math.max(0, absDiff - maxAbsDiff);
-  return { ok: absDiff <= maxAbsDiff, absDiff, maxAbsDiff, exceededBy };
-};
 
 const fetchJson = async <T,>(url: string): Promise<T> => {
   const res = await fetch(url);
@@ -374,8 +342,8 @@ export function ArenaRankingModal(props: { isOpen: boolean; onClose: () => void 
       if (key === pivotKey) return false;
       if (it.entityType === 'preset' || strictRangePivotCandidate.entityType === 'preset') return true;
       if (!pivotRating) return true;
-      const range = computeStrictRangeDetails(pivotRating, { rating: it.rating, games: it.games });
-      return range.ok;
+      const range = getStrictRangeCheckResult(pivotRating, { rating: it.rating, games: it.games });
+      return range == null || range.exceededBy === 0;
     });
   }, [
     items,
@@ -679,7 +647,7 @@ export function ArenaRankingModal(props: { isOpen: boolean; onClose: () => void 
                 title={
                   queue !== 'strict'
                     ? '仅严格天梯可用'
-                    : (!strictRangePivotCandidate ? '需先在参战列表中只保留 1 位参战者作为我方' : '按严格分差规则筛选对手（花牌及以上才启用分差限制）')
+                    : (!strictRangePivotCandidate ? '需先在参战列表中只保留 1 位参战者作为我方' : '按严格分差规则预筛对手（花牌及以上启用分差限制，任一方不足 10 局时上限为 400）')
                 }
               >
                 <input
@@ -691,7 +659,7 @@ export function ArenaRankingModal(props: { isOpen: boolean; onClose: () => void 
                   }}
                   disabled={queue !== 'strict' || !strictRangePivotCandidate}
                 />
-                <span>仅显示严格可计分对手</span>
+                <span>严格分差预筛</span>
               </label>
             </div>
 
@@ -706,6 +674,10 @@ export function ArenaRankingModal(props: { isOpen: boolean; onClose: () => void 
                 {isTagFilterExpanded ? '收起标签' : '展开标签'}
               </button>
             </div>
+          </div>
+
+          <div className="mt-1 text-xs text-gray-500">
+            仅预筛当前页的分差，冷却与每日限额等不在此预判；最终计分仍由服务器判定。
           </div>
 
           <div className="mt-3">
@@ -838,7 +810,7 @@ export function ArenaRankingModal(props: { isOpen: boolean; onClose: () => void 
                 {queue === 'strict' && strictCountableOnly && strictRangePivotCandidate?.entityType === 'data_card' && strictRangePivotFromCurrentPage == null ? (
                   strictRangePivotRatingQuery.isLoading ? (
                     <div className="px-3 py-2 text-xs text-gray-500 border-b">
-                      正在读取我方排位分，用于筛选「严格可计分对手」…
+                      正在读取我方排位分，用于严格分差预筛…
                     </div>
                   ) : strictRangePivotRatingQuery.isError ? (
                     <div className="px-3 py-2 text-xs text-amber-700 bg-amber-50 border-b">
@@ -946,7 +918,7 @@ export function ArenaRankingModal(props: { isOpen: boolean; onClose: () => void 
                       <tr>
                         <td colSpan={9} className="py-6 text-center text-gray-500">
                           {queue === 'strict' && strictCountableOnly && items.length > 0
-                            ? '本页暂无符合严格计分范围的对手，可尝试翻页或调整筛选'
+                            ? '本页暂无符合严格分差预筛的对手，可尝试翻页或调整筛选'
                             : '暂无数据'}
                         </td>
                       </tr>
