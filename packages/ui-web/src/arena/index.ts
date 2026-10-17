@@ -42,3 +42,4 @@ export type { ArenaWebPackageViewHost, WebPackageSavePreferenceProps } from './f
 export { buildArenaEditorSections, type ArenaEditorSectionKind, type ArenaEditorSemanticSection } from './editor-sections';
 
 export { ArenaCharacterDatabaseSelector, type ArenaCharacterDatabaseSelectorProps } from './ArenaCharacterDatabaseSelector';
+export { getArenaCardLibrarySelectionOptions, type ArenaCardLibraryPurpose } from './card-library-selection';

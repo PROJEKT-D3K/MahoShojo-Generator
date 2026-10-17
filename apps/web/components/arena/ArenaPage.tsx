@@ -2,7 +2,7 @@
 
 import { lazy, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { AdvancedArenaPageView } from '@mahoshojo/ui-web/arena';
+import { AdvancedArenaPageView, getArenaCardLibrarySelectionOptions } from '@mahoshojo/ui-web/arena';
 
 import BattleDataModal from '@/components/BattleDataModal';
 import Footer from '@/components/Footer';
@@ -408,7 +408,10 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
             ? '选择辅助情景'
             : (dataModalType === 'material' ? '选择素材' : undefined)
         }
-        selectionMode={dataModalType === 'scenario' ? 'single' : 'multi'}
+        {...getArenaCardLibrarySelectionOptions({
+          purpose: dataModalType, characterCount: combatants.length, characterMaxSelected,
+          auxiliaryScenarioCount: auxScenarios.length, materialCount: materials.length, referenceRemainingCapacity,
+        })}
         selectedSelectionIds={dataModalType === 'character' ? selectedCharacterSelectionIds : undefined}
         selectedCardIds={
           dataModalType === 'character'
@@ -419,20 +422,7 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
                 : (dataModalType === 'material' ? selectedMaterialDataCardIds : selectedScenarioDataCardIds)
             )
         }
-        selectedCountOverride={
-          dataModalType === 'character'
-            ? combatants.length
-            : (dataModalType === 'auxScenario' ? auxScenarios.length : (dataModalType === 'material' ? materials.length : undefined))
-        }
-        maxSelected={
-          dataModalType === 'character'
-            ? characterMaxSelected
-            : (
-              dataModalType === 'auxScenario'
-                ? auxScenarios.length + referenceRemainingCapacity
-                : (dataModalType === 'material' ? materials.length + referenceRemainingCapacity : undefined)
-            )
-        }
+
       />
 
       {selectedCombatant && (

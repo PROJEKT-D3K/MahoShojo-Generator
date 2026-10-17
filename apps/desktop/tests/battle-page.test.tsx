@@ -1587,7 +1587,7 @@ describe('Desktop Arena character-library parity', () => {
     data: { templateId: '通用角色', name: '同名角色', content: title, _cardId: 'body-extension', sourceDataCardId: 'untrusted-body-id',
       adjudicationEvents: [{ id, type: 'binary', description: title, probability: 100 }] }, contentDigest: `sha256:${'a'.repeat(64)}`,
     provenance: { kind: 'unsigned', execution: 'imported' }, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' });
-  const toggleLibraryRow = (name: string, action: '加入' | '移除') => {
+  const toggleLibraryRow = (name: string, action: '加入' | '移除' | '已达到上限') => {
     const card = [...document.querySelectorAll<HTMLElement>('.grid > .relative')].find(row => row.textContent?.includes(name));
     expect(card, name).toBeTruthy();
     const toggle = card!.querySelector<HTMLButtonElement>(`button[aria-label="${action}"]`); expect(toggle, action).toBeTruthy();
@@ -1613,6 +1613,112 @@ describe('Desktop Arena character-library parity', () => {
     expect(read().combatants).toHaveLength(1); expect(read().combatants[0].cardLibrarySelectionId).toBe(`local:${second.id}`);
     if (product === 'arena') expect(read().adjudicationEvents).toEqual([expect.objectContaining({ sourceKey: `library:local:${second.id}`, description: second.title })]);
     expect(docs.get(first.id)).toEqual(first); expect(docs.get(second.id)).toEqual(second); expect(calls()).toHaveLength(0);
+  });
+
+  const openReferenceLibrary = async (purpose: 'auxScenario' | 'material' | 'scenario') => {
+    if (purpose === 'auxScenario') {
+      const disclosure = [...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].find(item => item.textContent?.includes('辅助情景（可选）'))!;
+      if (disclosure.getAttribute('aria-expanded') === 'false') { await act(async () => disclosure.click()); await settle(); }
+    }
+    const label = purpose === 'material' ? '浏览在线数据卡' : '浏览在线情景库';
+    const candidates = [...container.querySelectorAll<HTMLButtonElement>('button')].filter(item => item.textContent === label);
+    expect(candidates.length).toBeGreaterThan(0);
+    await act(async () => candidates[purpose === 'auxScenario' ? 1 : 0]!.click()); await settle();
+  };
+  const localScenario = (id: string, title: string): LocalCardRecordV1 => ({ ...localCharacter(id, title), cardType: 'scenario',
+    data: { templateId: '通用情景', title: '同名情景', content: title,
+      adjudicationEvents: [{ id, type: 'binary', description: title, probability: 100 }] } });
+  const storedReferences = () => JSON.parse(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)!).draft;
+  const prepareReferences = (over: Partial<ArenaDraft> = {}) => {
+    window.location.hash = '#/arena';
+    localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: { ...draft('scenario', 'stream'), scenarioDisplayName: '车站', ...over } }));
+  };
+
+  it.each(['auxScenario', 'material'] as const)('%s continuously selects, reopens with exact row selection, and removes one same-name source', async purpose => {
+    const first = localScenario('lc_11111111111111111111111111111111', '参考来源甲'), second = localScenario('lc_22222222222222222222222222222222', '参考来源乙');
+    docs.set(first.id, first); docs.set(second.id, second); prepareReferences();
+    const router = await mount(); await openReferenceLibrary(purpose); await act(async () => tab('本地库')!.click()); await settle();
+    for (const card of [first, second]) {
+      await act(async () => toggleLibraryRow(card.title, '加入').click()); await settle();
+      expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    }
+    const key = purpose === 'auxScenario' ? 'auxScenarios' : 'materials';
+    expect(storedReferences()[key].map((item: { cardLibrarySelectionId: string }) => item.cardLibrarySelectionId))
+      .toEqual([`local:${first.id}`, `local:${second.id}`]);
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label^="关闭"]')!.click()); await settle();
+    await act(async () => router.navigate({ to: '/' })); await settle();
+    await act(async () => router.navigate({ to: '/arena' })); await settle();
+    await openReferenceLibrary(purpose); await act(async () => tab('本地库')!.click()); await settle();
+    expect(toggleLibraryRow(second.title, '移除')).toBeTruthy();
+    await act(async () => toggleLibraryRow(first.title, '移除').click()); await settle();
+    expect(storedReferences()[key]).toHaveLength(1);
+    expect(storedReferences()[key][0].cardLibrarySelectionId).toBe(`local:${second.id}`);
+    if (purpose === 'auxScenario') expect(storedReferences().adjudicationEvents).toEqual([
+      expect.objectContaining({ sourceKey: `data_card:local:${second.id}`, description: second.title }),
+    ]);
+    expect(docs.get(first.id)).toEqual(first); expect(calls()).toHaveLength(0);
+  });
+
+  it.each(['auxScenario', 'material'] as const)('%s uses the remaining shared capacity and allows removal at the limit', async purpose => {
+    const first = localScenario('lc_11111111111111111111111111111111', '最后一项'), second = localScenario('lc_22222222222222222222222222222222', '超额项');
+    docs.set(first.id, first); docs.set(second.id, second);
+    prepareReferences({ materials: Array.from({ length: 255 }, (_, index) => ({ id: String(index), name: '原素材', content: {}, fileName: null, sourceKind: 'raw-json', sourceType: 'raw-json', isNative: false })) });
+    await mount(); await openReferenceLibrary(purpose); await act(async () => tab('本地库')!.click()); await settle();
+    await act(async () => toggleLibraryRow(first.title, '加入').click()); await settle();
+    expect(toggleLibraryRow(second.title, '已达到上限').disabled).toBe(true);
+    expect(toggleLibraryRow(first.title, '移除').disabled).toBe(false);
+    await act(async () => toggleLibraryRow(first.title, '移除').click()); await settle();
+    expect(toggleLibraryRow(second.title, '加入').disabled).toBe(false);
+    expect(storedReferences().materials).toHaveLength(255); expect(storedReferences().auxScenarios).toHaveLength(0);
+  });
+
+  it('keeps the main scenario single-select and closes only after successful admission', async () => {
+    const source = localScenario('lc_11111111111111111111111111111111', '新主情景'); docs.set(source.id, source); prepareReferences();
+    await mount(); await openReferenceLibrary('scenario'); await act(async () => tab('本地库')!.click()); await settle();
+    const row = [...document.querySelectorAll<HTMLElement>('.grid > .relative')].find(item => item.textContent?.includes(source.title))!;
+    const select = row.matches('[role="button"][aria-label^="选择"]') ? row : null;
+    expect(select).toBeTruthy(); await act(async () => select.click()); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(storedReferences().scenario.content.content).toBe(source.title);
+    expect(storedReferences().auxScenarios).toHaveLength(0);
+  });
+
+  it.each([['auxScenario', 'close'], ['material', 'close'], ['auxScenario', 'account'], ['material', 'account']] as const)('%s discards a late read after %s changes the picker scope', async (purpose, reason) => {
+    const gate = deferred<void>(); release = () => gate.resolve();
+    const row = { ...publicRow(), type: 'scenario', name: '旧参考', data: JSON.stringify({ templateId: '通用情景', title: '旧参考', content: '旧正文' }) };
+    const { data: _data, ...summary } = row;
+    fixture(async request => {
+      if (request.query?.id === row.id) { await gate.promise; return { status: 200, body: { success: true, card: row } }; }
+      return { status: 200, body: { success: true, cards: [summary], tags: [], total: 1 } };
+    });
+    prepareReferences(); await mount(); await openReferenceLibrary(purpose);
+    await act(async () => toggleLibraryRow(row.name, '加入').click()); await settle();
+    if (reason === 'close') {
+      await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label^="关闭"]')!.click()); await settle();
+      await openReferenceLibrary(purpose);
+    } else {
+      cloudAccount = { userId: 8, username: 'fixture-user-eight' };
+      await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+    }
+    await act(async () => gate.resolve()); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    expect(storedReferences().auxScenarios).toHaveLength(0); expect(storedReferences().materials).toHaveLength(0);
+    expect(requests().some(request => request.routeId === 'data-card-stats.report')).toBe(false);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it.each(['auxScenario', 'material', 'scenario'] as const)('%s keeps a failed selection open without writing inputs or reporting usage', async purpose => {
+    const row = { ...publicRow(), type: 'scenario', name: '损坏参考', data: '{invalid' };
+    fixture(() => ({ status: 200, body: { success: true, cards: [row], tags: [], total: 1 } }));
+    prepareReferences(); await mount(); await openReferenceLibrary(purpose);
+    const before = localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY);
+    const entry = [...document.querySelectorAll<HTMLElement>('.grid > .relative')].find(item => item.textContent?.includes(row.name))!;
+    const select = purpose === 'scenario' ? entry : entry.querySelector<HTMLButtonElement>('button[aria-label="加入"]')!;
+    expect(select).toBeTruthy(); await act(async () => select.click()); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    expect(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)).toBe(before);
+    expect(requests().some(request => request.routeId === 'data-card-stats.report')).toBe(false);
+    expect(calls()).toHaveLength(0);
   });
 
   it('uses the latest roster limit, disables additions at 32 and keeps exact removal available', async () => {

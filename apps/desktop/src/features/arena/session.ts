@@ -46,7 +46,7 @@ export type DesktopArenaProduct = 'battle' | 'arena';
 const MAX_DRAFT_CHARACTERS = 4 * 1024 * 1024;
 const clone = <T,>(value: T): T => structuredClone(value);
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-export type ArenaAuxiliaryScenario = ArenaDirectInput['auxScenarios'][number] & { id?: string; fileName?: string | null; isPreset?: boolean; adjudicationSourceKey?: string };
+export type ArenaAuxiliaryScenario = ArenaDirectInput['auxScenarios'][number] & { id?: string; fileName?: string | null; isPreset?: boolean; adjudicationSourceKey?: string; cardLibrarySelectionId?: string };
 export type ArenaHistoryOriginal = { id: string; name: string; text: string; importedAt: string };
 export type ArenaDraft = Omit<ArenaDirectInput, 'auxScenarios' | 'combatants' | 'scenario'> & { combatants: readonly (ArenaDirectInput['combatants'][number] & { desktopSource?: 'online' | 'preset'; cardLibrarySelectionId?: string })[]; scenario: ArenaDirectInput['scenario'] & { isPreset?: boolean }; generationMode: 'stream' | 'non-stream'; historyReferences: ArenaDirectInput['narrativeHistoryEntries']; auxScenarios: readonly ArenaAuxiliaryScenario[]; selectedQuestionnaires?: QuestionnaireSelection[]; historyOriginals?: ArenaHistoryOriginal[]; historySort?: NarrativeHistorySort; historyUpdatedAt?: string | null; narrativeDrafts?: readonly NarrativeDraft[] };
 const withoutNarrativeDrafts = (draft: ArenaDraft): ArenaDraft => { const next = { ...draft }; delete next.narrativeDrafts; return next; };
@@ -99,8 +99,8 @@ export const validateArenaDraft = (value: unknown, product: DesktopArenaProduct 
       && (item.desktopSource === undefined || item.desktopSource === 'online' || item.desktopSource === 'preset')
       && (item.teamId === undefined || (Number.isSafeInteger(item.teamId) && item.teamId > 0)) && (item.characterGuidance === undefined || typeof item.characterGuidance === 'string'))
     || !draft.teams.every((team) => record(team) && Number.isSafeInteger(team.id) && team.id > 0 && typeof team.name === 'string')
-    || !draft.materials.every((item) => record(item) && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.sourceType === 'string' && typeof item.sourceKind === 'string' && ['wantu-card', 'mahoshojo-data-card', 'raw-json'].includes(item.sourceKind) && Object.prototype.hasOwnProperty.call(item, 'content') && (item.fileName === null || typeof item.fileName === 'string'))
-    || !draft.auxScenarios.every((item) => record(item) && record(item.content) && (item.id === undefined || typeof item.id === 'string') && (item.fileName === undefined || item.fileName === null || typeof item.fileName === 'string') && (item.adjudicationSourceKey === undefined || typeof item.adjudicationSourceKey === 'string') && (item.isPreset === undefined || typeof item.isPreset === 'boolean'))) throw new Error('Arena 草稿资源不合法');
+    || !draft.materials.every((item) => record(item) && (item.cardLibrarySelectionId === undefined || typeof item.cardLibrarySelectionId === 'string' && /^(cloud|local|cache):.+$/.test(item.cardLibrarySelectionId)) && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.sourceType === 'string' && typeof item.sourceKind === 'string' && ['wantu-card', 'mahoshojo-data-card', 'raw-json'].includes(item.sourceKind) && Object.prototype.hasOwnProperty.call(item, 'content') && (item.fileName === null || typeof item.fileName === 'string'))
+    || !draft.auxScenarios.every((item) => record(item) && (item.cardLibrarySelectionId === undefined || typeof item.cardLibrarySelectionId === 'string' && /^(cloud|local|cache):.+$/.test(item.cardLibrarySelectionId)) && record(item.content) && (item.id === undefined || typeof item.id === 'string') && (item.fileName === undefined || item.fileName === null || typeof item.fileName === 'string') && (item.adjudicationSourceKey === undefined || typeof item.adjudicationSourceKey === 'string') && (item.isPreset === undefined || typeof item.isPreset === 'boolean'))) throw new Error('Arena 草稿资源不合法');
   NarrativeHistorySchema.parse({ templateId: 'narrative-history', version: 1, updatedAt: '', entries: draft.narrativeHistoryEntries });
   NarrativeHistorySchema.parse({ templateId: 'narrative-history', version: 1, updatedAt: '', entries: draft.historyReferences });
   if (draft.narrativeDrafts !== undefined && !parseNarrativeDraftArchive(buildNarrativeDraftArchive(draft.narrativeDrafts))) throw new Error('未完成叙事草稿不合法');
@@ -118,7 +118,13 @@ export const inheritedArenaAdjudication = (draft: ArenaDraft, product: DesktopAr
   }
   return { events, skippedLegacy };
 };
-export const buildDesktopArenaInput = (draft: ArenaDraft, product: DesktopArenaProduct = 'battle'): ArenaDirectInput => ({ ...withoutNarrativeDrafts(draft), combatants: draft.combatants.map(projectDesktopArenaCombatant), scenario: { ...draft.scenario, fileName: draft.scenario.isPreset === true ? draft.scenario.fileName : null }, ...(draft.selectedQuestionnaires ? buildArenaQuestionnaireRequest(draft.selectedQuestionnaires) : {}), adjudicationEvents: inheritedArenaAdjudication(draft, product).events, narrativeHistoryEntries: [...draft.historyReferences, ...draft.narrativeHistoryEntries] });
+/** Picker row identities stay in the local draft, outside model/server inputs. */
+const projectArenaLibraryMaterial = (value: unknown): unknown => {
+  if (!record(value)) return value;
+  const { cardLibrarySelectionId: _selectionId, ...material } = value;
+  return material;
+};
+export const buildDesktopArenaInput = (draft: ArenaDraft, product: DesktopArenaProduct = 'battle'): ArenaDirectInput => ({ ...withoutNarrativeDrafts(draft), combatants: draft.combatants.map(projectDesktopArenaCombatant), materials: draft.materials.map(projectArenaLibraryMaterial), scenario: { ...draft.scenario, fileName: draft.scenario.isPreset === true ? draft.scenario.fileName : null }, ...(draft.selectedQuestionnaires ? buildArenaQuestionnaireRequest(draft.selectedQuestionnaires) : {}), adjudicationEvents: inheritedArenaAdjudication(draft, product).events, narrativeHistoryEntries: [...draft.historyReferences, ...draft.narrativeHistoryEntries] });
 export const arenaReferenceCount = (draft: ArenaDraft): number => { const input = buildArenaGenerationInputSnapshot(buildDesktopArenaInput(draft)); return (input.materials?.length ?? 0) + (input.auxScenarios?.length ?? 0) + (input.questionnaires?.length ?? 0) + (input.narrativeHistory?.length ?? 0); };
 export const arenaReadinessMessage = (draft: ArenaDraft, product: DesktopArenaProduct = 'battle'): string | null => {
   const issue = evaluateArenaBasicGenerationReadiness({ battleMode: draft.battleMode, combatantCount: draft.combatants.length, hasScenario: !!draft.scenario.content })[0];
