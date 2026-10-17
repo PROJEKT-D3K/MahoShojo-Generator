@@ -24,7 +24,7 @@ import { DENY_EXTERNAL_MEDIA, MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import { BackHomeLink, ProductFooter } from '@mahoshojo/ui-web/shell';
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
 import { DesktopArenaSession, arenaReadinessMessage, arenaReferenceCount, inheritedArenaAdjudication, type ArenaDraft, type DesktopArenaProduct } from '../features/arena/session';
-import { buildAdjudicationSourceKey } from '@mahoshojo/domain/arena-adjudication-events';
+import { buildAdjudicationSourceKey, getCombatantAdjudicationSourceKey, removeAdjudicationEventsForKeys } from '@mahoshojo/domain/arena-adjudication-events';
 import { AdvancedArenaControls } from '../features/arena/advanced-controls';
 import { readDesktopMemberRandomCharacter as readDesktopRandomPublicCharacter } from '../features/arena/room-member-source-data';
 import { retainDesktopArenaSelectionSource } from '../features/arena/strict-source';
@@ -35,6 +35,7 @@ import { DesktopStrictConfigurationDiagnostics, type DesktopStrictCheckSnapshot 
 import { addAdvancedCombatants, addAdvancedAuxScenario, removeAdvancedCombatants, removeAdvancedAuxScenarios, setAdvancedMainScenario } from '../features/arena/advanced-input';
 import { addArenaCombatants, arenaItemName, fetchArenaPreset, moveArenaItem, parseArenaJson, parseArenaScenario, readArenaFile } from '../features/arena/input';
 import { useArenaPresetDownload } from '../features/arena/use-preset-download';
+import { DesktopArenaRankingModal } from '../features/ranking/arena-ranking-modal';
 import { readSublimationHistorySource, type SublimationHistorySource } from '../features/sublimation/history-source';
 import { useDesktopAiConfig } from '../features/ai-config/use-desktop-ai-config';
 import { resolveDesktopAiTarget, type ResolvedDesktopAiTarget } from '../features/ai-config/desktop-ai-config';
@@ -115,6 +116,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const hostedUnavailable = hostedTarget && !cloudState.bootstrapped ? '正在确认本机账号身份，请稍后。' : null;
   const router = useRouter(); const { openFixed, openContent } = useExternalLinks(); const libraryHost = useDesktopCardLibraryHost();
   const [library, setLibrary] = useState<LibraryPurpose | null>(null);
+  const [rankingOpen, setRankingOpen] = useState(false);
   const [isMatchingCharacter, setIsMatchingCharacter] = useState(false);
   const matchingRequest = useRef<symbol | null>(null);
   const [recoveryHint, setRecoveryHint] = useState<{ value: DesktopArenaHostedRecoveryHint; repair: ArenaHostedRecoveryReplacement; epoch: number } | null>(null);
@@ -252,13 +254,51 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     const warnings: string[] = []; const items = (await Promise.all(Array.from(files).map(async (file) => parseCharacters(await readArenaFile(file, signal), warnings)))).flat();
     return (current) => applyCharacters(current, items, warnings, true);
   });
-  const togglePreset = (filename: string) => {
-    if (disabled || session.isBusy()) return;
-    if (draft.combatants.some((item) => item.isPreset && item.filename === filename)) { update(product === 'arena' ? removeAdvancedCombatants(draft, draft.combatants.flatMap((item, index) => item.isPreset && item.filename === filename ? [index] : [])) : { combatants: draft.combatants.filter((item) => !(item.isPreset && item.filename === filename)) }); return; }
+  const selectPreset = async (filename: string, nextSelected: boolean, selectionSignal?: AbortSignal): Promise<void | false> => {
+    if (disabled || session.isBusy() || selectionSignal?.aborted) return false;
+    const epoch = ownerEpoch.current;
+    const currentSelection = () => epoch === ownerEpoch.current && !selectionSignal?.aborted && !roomOwner.isConstrained();
+    const original = session.getSnapshot().draft;
+    const indices = original.combatants.flatMap((item, index) => item.isPreset && item.filename === filename ? [index] : []);
+    if (!nextSelected) {
+      if (!indices.length) return false;
+      const combatants = original.combatants.filter((_, index) => !indices.includes(index));
+      const retainedKeys = new Set(combatants.map(getCombatantAdjudicationSourceKey));
+      const removedKeys = indices.flatMap(index => {
+        const item = original.combatants[index]!, key = getCombatantAdjudicationSourceKey(item);
+        // A preset's fallback filename is not ownership of a remaining upload's events.
+        const explicitKey = 'adjudicationSourceKey' in item && typeof item.adjudicationSourceKey === 'string' && item.adjudicationSourceKey.trim();
+        return key && (explicitKey || !retainedKeys.has(key)) ? [key] : [];
+      });
+      update({ combatants, ...(product === 'arena' ? { adjudicationEvents: removeAdjudicationEventsForKeys(original.adjudicationEvents, removedKeys) } : {}) });
+      return;
+    }
+    if (indices.length) return false;
     const token = Symbol(); presetSelection.current = token; setLoadingPresetFilename(filename);
-    void performImport(async (signal) => { const warnings: string[] = []; const text = await fetchArenaPreset('character', filename, signal);
-      const items = retainDesktopArenaSelectionSource(await parseCharacters(text, warnings), parseArenaJson(text), { kind: 'preset', filename });
-      return (current) => applyCharacters(current, items, warnings); }).catch(() => undefined).finally(() => { if (presetSelection.current === token) { presetSelection.current = null; setLoadingPresetFilename(null); } });
+    let applied = false;
+    try {
+      await performImport(async signal => {
+        const controller = new AbortController(), abort = () => controller.abort();
+        signal.addEventListener('abort', abort, { once: true }); selectionSignal?.addEventListener('abort', abort, { once: true });
+        try {
+          if (signal.aborted || !currentSelection()) throw new DOMException('Aborted', 'AbortError');
+          const warnings: string[] = [], text = await fetchArenaPreset('character', filename, controller.signal);
+          const items = retainDesktopArenaSelectionSource(await parseCharacters(text, warnings), parseArenaJson(text), { kind: 'preset', filename });
+          return current => {
+            if (signal.aborted || !currentSelection()) throw new DOMException('Aborted', 'AbortError');
+            if (current.combatants.some(item => item.isPreset && item.filename === filename)) return current;
+            const next = applyCharacters(current, items, warnings); applied = true; return next;
+          };
+        } finally { signal.removeEventListener('abort', abort); selectionSignal?.removeEventListener('abort', abort); }
+      });
+    } catch (cause) {
+      if (!currentSelection() || cause instanceof Error && cause.name === 'AbortError') return false;
+      throw cause;
+    } finally { if (presetSelection.current === token) { presetSelection.current = null; setLoadingPresetFilename(null); } }
+    return applied && currentSelection() ? undefined : false;
+  };
+  const togglePreset = (filename: string) => {
+    void selectPreset(filename, !session.getSnapshot().draft.combatants.some(item => item.isPreset && item.filename === filename)).catch(() => undefined);
   };
   const loadScenario = (read: (signal: AbortSignal) => Promise<string>, filename: string | null = null, auxiliary = false, sourceIdentity?: string, isPreset = false) => performImport(async (signal) => {
     const content = parseArenaScenario(await read(signal)); return (current) => {
@@ -305,8 +345,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     } catch { /* performImport 已报告当前作用域错误，原草稿保持不变。 */ }
     finally { if (matchingRequest.current === token) { matchingRequest.current = null; setIsMatchingCharacter(false); } }
   };
-  const toggleCharacterCard = async (_payload: unknown, selected: boolean, context: CardLibrarySelectionContext): Promise<void | false> => {
-    if (library !== 'character' || disabled || context.signal?.aborted) return false;
+  const toggleSelectedCharacter = async (_payload: unknown, selected: boolean, context: CardLibrarySelectionContext): Promise<void | false> => {
+    if (disabled || context.signal?.aborted) return false;
     const epoch = ownerEpoch.current, selectionId = context.rowSelectionId ?? context.selectionId;
     const currentSelection = () => epoch === ownerEpoch.current && !context.signal?.aborted && !roomOwner.isConstrained();
     let applied = false;
@@ -336,6 +376,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     }
     return applied && currentSelection() ? undefined : false;
   };
+  const toggleCharacterCard = (payload: unknown, selected: boolean, context: CardLibrarySelectionContext): Promise<void | false> =>
+    library === 'character' ? toggleSelectedCharacter(payload, selected, context) : Promise.resolve(false);
   const chooseCard = (_payload: unknown, context: CardLibrarySelectionContext) => {
     if (!context.rawSourceData || disabled || !library) return;
     const text = JSON.stringify(context.rawSourceData);
@@ -585,7 +627,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   </section> : null;
   const slots = {
         header: <><BattleLiteHeader Link={libraryHost.platform.Link} draftSharing="independent" illustrationAvailable={false} logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={300} height={84} alt="魔法少女竞技场" />} />{sessionNotice}</>,
-        rankingLinks: <ArenaRankingLinks Link={libraryHost.platform.Link} />,
+        rankingLinks: <ArenaRankingLinks Link={libraryHost.platform.Link} onOpenRankingModal={roomState.constrained ? undefined : () => setRankingOpen(true)} />,
         pageLinks: <ArenaPageLinks Link={libraryHost.platform.Link} variant="lite" />,
         presets: <><CharacterPresetPicker grouped={characterPresets} magicalGirlPage={magicalGirlPage} onMagicalGirlPageChange={setMagicalGirlPage} canshouPage={canshouPage} onCanshouPageChange={setCanshouPage} disabled={disabled} maxSelected={limits.maxCombatants} selectedCountOverride={draft.combatants.length} selectedFilenames={draft.combatants.filter((item) => item.isPreset).map((item) => item.filename)} loadingFilename={state.importing ? loadingPresetFilename : null} onToggle={(preset) => togglePreset(preset.filename)} onDownload={presetDownload.download} downloadDisabled={presetDownload.downloading} />
           {presetDownload.feedback && <p role={presetDownload.feedback.kind === 'error' ? 'alert' : 'status'} className={`mb-4 text-sm ${presetDownload.feedback.kind === 'error' ? 'text-red-600' : 'text-gray-600'}`}>{presetDownload.feedback.message}</p>}</>,
@@ -646,7 +688,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   return <>
     {product === 'arena' ? <AdvancedArenaPageView
       header={<AdvancedArenaHeader Link={libraryHost.platform.Link} draftSharing="independent" illustrationAvailable={false} logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} />}
-      links={<><ArenaRankingLinks Link={libraryHost.platform.Link} /><ArenaPageLinks Link={libraryHost.platform.Link} variant="full" onNavigateExternal={openFixed} /></>} beforeWorkspace={<>{sessionNotice}<DesktopArenaRoomPanel languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
+      links={<><ArenaRankingLinks Link={libraryHost.platform.Link} onOpenRankingModal={roomState.constrained ? undefined : () => setRankingOpen(true)} /><ArenaPageLinks Link={libraryHost.platform.Link} variant="full" onNavigateExternal={openFixed} /></>} beforeWorkspace={<>{sessionNotice}<DesktopArenaRoomPanel languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
       {roomState.memberModel && memberWorkspaceSession ? <DesktopRoomMemberWorkspace owner={roomOwner} model={roomState.memberModel} session={memberWorkspaceSession} languages={languages} /> : null}
       {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained}><ArenaEditorWorkspaceLayout disabled={disabled} sections={buildArenaEditorSections([
         { kind: 'presetCharacters', description: '选择内置角色', defaultOpen: true, content: slots.presets },
@@ -664,6 +706,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
       showScenario={draft.battleMode === 'scenario'} hasScenario={!!draft.scenario.content} materialCount={draft.materials.length} referenceItemCount={referenceCount} maxReferenceItems={limits.maxReferenceItemsSanity}
       copy={{ modeDescription: '不同模式决定故事风格', storyOptionsDescription: '设置故事方向、历史读写和 AI 目标' }} slots={slots} />}
+    <DesktopArenaRankingModal key={scope} isOpen={rankingOpen && !roomState.constrained} onClose={() => setRankingOpen(false)} host={libraryHost}
+      selectionDisabledReason={disabled ? '请先完成当前生成、恢复或导入操作，再调整参战者。' : null} combatants={draft.combatants} maxCombatants={limits.maxCombatants} onToggleCharacter={toggleSelectedCharacter} onTogglePreset={selectPreset} onSelectionError={setError} />
     <CardLibraryModal host={libraryHost} isOpen={library !== null && !roomState.constrained} onClose={() => setLibrary(null)}
       onSelectCard={library === 'character' ? undefined : chooseCard} onToggleCard={library === 'character' ? toggleCharacterCard : undefined}
       selectionMode={library === 'character' ? 'multi' : 'single'}

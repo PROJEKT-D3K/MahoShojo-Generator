@@ -46,7 +46,8 @@ export const getArenaRosterCombatantKey = (combatant: BattleStoreState['combatan
   const libraryId = getCombatantCardLibrarySelectionId(combatant);
   return JSON.stringify(libraryId
     ? ['library', libraryId]
-    : 'id' in combatant ? ['placeholder', combatant.id] : ['file', combatant.filename]);
+    : 'id' in combatant ? ['placeholder', combatant.id]
+      : combatant.isPreset ? ['preset', combatant.filename] : ['file', combatant.filename]);
 };
 
 const matchesLegacyCombatantFilename = (item: BattleStoreState['combatants'][number], identifier: string): boolean =>
@@ -237,9 +238,17 @@ export const useBattleStore = create<BattleStoreState>()(
       removeCombatant: (identifier) =>
         set((state) => {
           const removed = state.combatants.filter(buildCombatantIdentifierMatcher(identifier));
-          const removedKeys = removed.map(getCombatantAdjudicationSourceKey).filter(Boolean);
+          const combatants = state.combatants.filter((item) => !removed.includes(item));
+          const retainedKeys = new Set(combatants.map(getCombatantAdjudicationSourceKey));
+          const removedKeys = removed.flatMap((item) => {
+            const key = getCombatantAdjudicationSourceKey(item);
+            // Typed preset removal must not claim a remaining upload's fallback file source.
+            const retainedPresetFallback = typeof identifier !== 'string' && 'data' in item && item.isPreset
+              && !item.adjudicationSourceKey?.trim() && retainedKeys.has(key);
+            return key && !retainedPresetFallback ? [key] : [];
+          });
           return {
-            combatants: state.combatants.filter((item) => !removed.includes(item)),
+            combatants,
             adjudicationEvents: removedKeys.length > 0
               ? removeAdjudicationEventsForKeys(state.adjudicationEvents, removedKeys)
               : state.adjudicationEvents,

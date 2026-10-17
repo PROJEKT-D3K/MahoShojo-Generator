@@ -65,3 +65,23 @@ describe('recent strict history shared boundary', () => {
     expect(readFileSync(resolve(root, 'packages/ui-web/src/ranking/EntityRatingHistoryButton.tsx'), 'utf8')).not.toMatch(/fetch\(|invoke\(|localStorage|useQuery/);
   });
 });
+
+
+describe('quick ranking shared boundary', () => {
+  it('both arena hosts consume one fast modal with existing fixed readers and no shared IO policy', async () => {
+    for (const file of ['apps/web/components/arena/components/ArenaRankingModal.tsx', 'apps/desktop/src/features/ranking/arena-ranking-modal.tsx']) {
+      const source = readFileSync(resolve(root, file), 'utf8');
+      expect(source).toContain("from '@mahoshojo/ui-web/ranking'");
+      expect(source).toContain('<ArenaRankingModalView');
+      expect(source).not.toContain('STRICT_MAX_ABS_DIFF_BY_TIER');
+    }
+    const entry = resolve(root, 'packages/ui-web/src/ranking/ArenaRankingModalView.tsx');
+    const shared = await build({ entryPoints: [entry], bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true });
+    expect(Object.keys(shared.metafile!.inputs).some(file => /apps\/|hosted-runtime|@tauri|next\//.test(file))).toBe(false);
+    expect(readFileSync(entry, 'utf8')).not.toMatch(/fetch\(|invoke\(|localStorage|authStorage|useQuery/);
+    const desktop = readFileSync(resolve(root, 'apps/desktop/src/features/ranking/arena-ranking-modal.tsx'), 'utf8');
+    expect(desktop).toContain('useRankingQuery={useDesktopRankingQuery}');
+    expect(desktop).toContain('readDesktopMemberPublicCard');
+    expect(desktop).toContain('isDesktopStrictSource');
+  });
+});

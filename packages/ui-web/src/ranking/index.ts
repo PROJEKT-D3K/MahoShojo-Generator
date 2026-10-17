@@ -3,3 +3,4 @@ export { LeaderboardSeasonExtrema } from './LeaderboardSeasonExtrema';
 export { EntityRatingHistoryButton, type EntityRatingHistoryButtonProps } from './EntityRatingHistoryButton';
 export { EntityRatingHistoryModal, type EntityRatingHistoryItem, type EntityRatingHistoryModalProps } from './EntityRatingHistoryModal';
 export { RankingDetailsLoadingModal, type RankingDetailsLoadingModalProps } from './RankingDetailsLoadingModal';
+export { ArenaRankingModalView, type ArenaRankingModalViewProps, type ArenaRankingRosterEntity } from './ArenaRankingModalView';

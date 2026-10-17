@@ -9,6 +9,7 @@ import { createServer, type Server } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PublicRankingItem, PublicRankingRequest } from '@mahoshojo/contracts/public-ranking';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { SCENARIO_PRESET_LIST } from '@mahoshojo/domain/scenario-presets';
@@ -172,7 +173,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
     expect(page().textContent).toContain('插图生成暂未开放');
     expect(page().textContent).not.toContain('共享同一套');
     expect(page().textContent).not.toContain('桌面简洁版 ·');
-    expect(button('快速查看排行榜', page())).toBeUndefined();
+    expect(button('快速查看排行榜', page())).toBeTruthy();
     for (const href of ['/details', '/canshou', '/encyclopedia/arena', '/encyclopedia/guidance', '/ranking']) {
       expect(page().querySelector(`a[href="#${href}"]`), href).not.toBeNull();
     }
@@ -1770,5 +1771,247 @@ describe('session backup feedback in the real route', () => {
     expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).protectedLocalDraft.raw).toBe(original);
     expect(localStorage.getItem(ARENA_DRAFT_KEY)).toBe(original); expect(calls()).toHaveLength(0);
 
+  });
+});
+
+
+describe('Desktop Quick ranking real routes', () => {
+  type LibraryRequest = { routeId: string; query?: Record<string, string>; body?: Record<string, unknown> };
+  const publicRow = (id = 'quick-source') => ({ id, name: '同名排行角色', type: 'character', is_public: 1,
+    review_status: 'approved', updated_at: '2026-10-01T00:00:00Z', data: JSON.stringify({ templateId: '通用角色',
+      name: '同名排行角色', content: '排行榜完整原件', _cardId: 'body-extension', sourceDataCardId: 'untrusted-body-reference',
+      signature: 'unverified-original', opaqueExtension: { nested: ['完整保留', 3] } }) });
+  const rankingItem = (entityId: string, patch: Partial<PublicRankingItem> = {}): PublicRankingItem => ({
+    rank: 1, entityType: 'data_card', entityId, displayName: entityId, authorName: null, rating: 1300, games: 20,
+    wins: 10, losses: 8, draws: 2, tier: '花牌', techScore: null, techLevel: null, isNative: null, tagIds: [], ...patch,
+  });
+  const reads = () => mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_public_ranking_read')
+    .map(([, args]) => args.request as PublicRankingRequest);
+  const requests = () => mocks.invoke.mock.calls.filter(([command]) => command === 'cloud_card_library_request')
+    .map(([, args]) => args.request as LibraryRequest);
+  const usage = () => requests().filter(request => request.routeId === 'data-card-stats.report' && request.body?.type === 'usage');
+  const freshReads = (id: string) => requests().filter(request => request.routeId === 'public-data-cards.query' && request.query?.id === id);
+  const fixture = (options: {
+    items?: PublicRankingItem[] | ((request: Extract<PublicRankingRequest, { kind: 'leaderboard' }>) => PublicRankingItem[]);
+    read?: (request: LibraryRequest) => unknown | Promise<unknown>;
+  } = {}) => {
+    const native = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((...args) => {
+      if (args[0] === 'cloud_public_ranking_read') {
+        const request = args[1].request as PublicRankingRequest;
+        if (request.kind === 'leaderboard') {
+          const values = typeof options.items === 'function' ? options.items(request) : options.items ?? [rankingItem('quick-source')];
+          return { kind: request.kind, data: { success: true, items: values.map((item, index) => ({ ...item, rank: request.offset + index + 1 })) } };
+        }
+        if (request.kind === 'entityRating') return { kind: request.kind, data: { ...rankingFixture.responses.entityRating,
+          entityId: request.entityId, rating: 1300, games: 20 } };
+        if (request.kind === 'tags' || request.kind === 'seasons') return { kind: request.kind, data: rankingFixture.responses[request.kind] };
+        throw new Error(`Unexpected quick ranking kind: ${request.kind}`);
+      }
+      if (args[0] === 'cloud_card_library_request') {
+        const request = args[1].request as LibraryRequest;
+        if (request.routeId === 'data-card-stats.report') return { status: 200, body: { success: true } };
+        if (options.read) return options.read(request);
+        if (request.routeId === 'public-data-cards.query' && request.query?.id) return { status: 200, body: { success: true, card: publicRow(request.query.id) } };
+      }
+      return native(...args);
+    });
+  };
+  const modal = () => [...document.querySelectorAll<HTMLElement>('[role="dialog"]')]
+    .find(node => node.textContent?.includes('排位排行榜（可加入参战）'))!;
+  const row = (name: string) => [...modal().querySelectorAll<HTMLButtonElement>('button[aria-label^="查看角色详情"]')]
+    .find(node => node.getAttribute('aria-label') === `查看角色详情：${name}`)?.closest('tr');
+  const toggle = (name = 'quick-source') => {
+    const result = row(name)?.lastElementChild?.querySelector<HTMLButtonElement>('button'); expect(result, name).toBeTruthy(); return result!;
+  };
+  const prefilter = () => [...modal().querySelectorAll('label')].find(label => label.textContent?.includes('严格分差预筛'))!.querySelector<HTMLInputElement>('input')!;
+  const stored = (product: 'battle' | 'arena' = 'battle'): ArenaDraft => JSON.parse(localStorage.getItem(product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY) ?? '{"draft":{"combatants":[]}}').draft;
+  const clickToggle = async (name = 'quick-source') => { await act(async () => toggle(name).click()); await settle(); };
+  const openRandomSection = async () => {
+    const section = [...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].find(node => node.textContent?.includes('🌐 在线角色库 / 随机匹配'));
+    if (section?.getAttribute('aria-expanded') === 'false') { await act(async () => section.click()); await settle(); }
+  };
+
+  it.each(['battle', 'arena'] as const)('/%s reads anonymously, admits exact public source and removes without rereading or another usage', async product => {
+    fixture(); window.location.hash = `#/${product}`; await mount();
+    const accountReads = () => mocks.invoke.mock.calls.filter(([command]) => ['cloud_auth_status', 'cloud_cached_account'].includes(command)).length;
+    const accountCount = accountReads(); expect(reads()).toHaveLength(0);
+    await click('快速查看排行榜');
+    expect(modal()).toBeTruthy(); expect(accountReads()).toBe(accountCount);
+    expect(reads()).toContainEqual({ kind: 'tags' }); expect(reads()).toContainEqual({ kind: 'seasons' });
+    expect(reads().find(request => request.kind === 'leaderboard')).toMatchObject({ kind: 'leaderboard', offset: 0, limit: 30, filters: { queue: 'strict' } });
+    expect(reads().every(request => ['leaderboard', 'tags', 'seasons'].includes(request.kind))).toBe(true);
+    await clickToggle();
+    expect(stored(product).combatants).toHaveLength(1);
+    expect(stored(product).combatants[0]).toMatchObject({ desktopSource: 'online', sourceDataCardId: 'quick-source', sourceDataCardUpdatedAt: publicRow().updated_at,
+      cardLibrarySelectionId: 'cloud:quick-source', isPreset: false, isValid: false, data: JSON.parse(publicRow().data) });
+    expect(stored(product).combatants[0]).not.toHaveProperty('signal');
+    expect(freshReads('quick-source')).toHaveLength(1);
+    expect(usage()).toEqual([{ routeId: 'data-card-stats.report', body: { cardId: 'quick-source', type: 'usage' } }]);
+    expect(toggle().textContent).toBe('移除/已加入'); await clickToggle();
+    expect(stored(product).combatants).toHaveLength(0); expect(freshReads('quick-source')).toHaveLength(1); expect(usage()).toHaveLength(1);
+    await clickToggle(); expect(stored(product).combatants).toHaveLength(1); expect(freshReads('quick-source')).toHaveLength(2);
+    expect(usage()).toHaveLength(1); expect(calls()).toHaveLength(0); expect(docs.size).toBe(0);
+  });
+
+  it.each(['battle', 'arena'] as const)('/%s toggles packaged presets but explains unavailable presets without fetching them', async product => {
+    const preset = PRESET_LIST[0]!;
+    fixture({ items: [rankingItem(preset.filename, { entityType: 'preset', displayName: '包内预设' }), rankingItem('unknown.json', { entityType: 'preset', displayName: '陌生预设' })] });
+    window.location.hash = `#/${product}`; await mount(); await click('快速查看排行榜');
+    expect(toggle('陌生预设').disabled).toBe(true); expect(row('陌生预设')?.textContent).toContain('此客户端未收录该预设正文');
+    await clickToggle('包内预设');
+    expect(stored(product).combatants).toHaveLength(1);
+    expect(stored(product).combatants[0]).toMatchObject({ filename: preset.filename, desktopSource: 'preset', isPreset: true, isValid: false,
+      data: JSON.parse(readFileSync(resolve(process.cwd(), '../../content/presets', preset.filename), 'utf8')) });
+    expect(prefilter().disabled).toBe(false); await act(async () => prefilter().click()); await settle();
+    expect(reads().some(request => request.kind === 'entityRating')).toBe(false);
+    await act(async () => prefilter().click()); await settle(); await clickToggle('包内预设');
+    expect(stored(product).combatants).toHaveLength(0); expect(usage()).toHaveLength(0);
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('unknown.json'))).toBe(false);
+    expect(requests().some(request => request.routeId === 'public-data-cards.query' && request.query?.id)).toBe(false);
+  });
+
+  it.each([false, true])('/arena preset removal keeps the same-filename upload and cleans only its explicit source (%s)', async explicit => {
+    const preset = PRESET_LIST[0]!, base = draft('daily', 'stream');
+    const upload = { ...base.combatants[0]!, filename: preset.filename, isPreset: false, characterGuidance: '上传行动', adjudicationSourceKey: `file:${preset.filename}` };
+    const event = { id: 'upload-event', description: '上传事件', type: 'binary' as const, probability: 50, sourceKey: `file:${preset.filename}` };
+    const value: ArenaDraft = { ...base, combatants: [upload, ...(explicit ? [{ ...upload, isPreset: true, adjudicationSourceKey: `preset:${preset.filename}` }] : [])],
+      adjudicationEvents: [event, ...(explicit ? [{ ...event, id: 'preset-event', sourceKey: `preset:${preset.filename}` }] : [])] };
+    localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: value }));
+    fixture({ items: [rankingItem(preset.filename, { entityType: 'preset', displayName: '包内预设' })] });
+    window.location.hash = '#/arena'; await mount(); await click('快速查看排行榜');
+    if (!explicit) { await clickToggle('包内预设'); expect(stored('arena').combatants).toHaveLength(2); }
+    await clickToggle('包内预设');
+    expect(stored('arena').combatants).toHaveLength(1);
+    expect(stored('arena').combatants[0]).toMatchObject({ filename: preset.filename, isPreset: false, characterGuidance: '上传行动' });
+    expect(stored('arena').adjudicationEvents).toEqual([event]); expect(usage()).toHaveLength(0);
+  });
+
+  it('uses a freshly selected single online pivot and the real strict data-card IPC for the low-games prefilter', async () => {
+    const opponents = [rankingItem('边界', { rating: 900, games: 5 }), rankingItem('超出', { rating: 899, games: 5 }), rankingItem('例外预设', { entityType: 'preset', rating: 1, games: 1 })];
+    fixture({ items: request => request.filters.minRating === null ? [rankingItem('quick-source'), ...opponents] : opponents });
+    await mount(); await click('快速查看排行榜'); expect(prefilter().disabled).toBe(true); await clickToggle();
+    expect(prefilter().disabled).toBe(false);
+    await change('input[placeholder="如 800"]', '1'); await settle();
+    expect(row('quick-source')).toBeUndefined(); expect(reads().some(request => request.kind === 'entityRating')).toBe(false);
+    await act(async () => prefilter().click()); await settle();
+    const ratings = reads().filter(request => request.kind === 'entityRating');
+    expect(ratings.length).toBeGreaterThan(0);
+    for (const request of ratings) expect(request).toEqual({ kind: 'entityRating', entityType: 'data_card', entityId: 'quick-source' });
+    expect(row('边界')).toBeTruthy(); expect(row('超出')).toBeUndefined(); expect(row('例外预设')).toBeTruthy();
+    expect(modal().textContent).toContain('仅预筛当前页的分差');
+  });
+
+  it.each(['restored-online', 'local', 'cache'] as const)('never upgrades %s fields or cloudRef to a ranking pivot', async source => {
+    const value = draft('daily', 'stream');
+    const marker = source === 'restored-online' ? { desktopSource: 'online' as const, cardLibrarySelectionId: 'cloud:quick-source' }
+      : { cardLibrarySelectionId: `${source}:quick-source` };
+    value.combatants = [{ ...value.combatants[0]!, ...marker, sourceDataCardId: 'quick-source', filename: 'quick-source',
+      data: { ...JSON.parse(publicRow().data), cloudRef: { id: 'quick-source' } } }];
+    saveDraft(value); fixture(); await mount(); await click('快速查看排行榜');
+    expect(prefilter().disabled).toBe(true); expect(reads().some(request => request.kind === 'entityRating')).toBe(false);
+  });
+
+  it.each(['local-cloud-copy', 'cached-public-body'] as const)('does not grant a pivot to a freshly selected %s', async source => {
+    const local: LocalCardRecordV1 = { id: 'lc_33333333333333333333333333333333', schemaVersion: 1, storageLocation: 'local', cardType: 'character', title: '本机云端副本',
+      data: JSON.parse(publicRow().data), contentDigest: `sha256:${'a'.repeat(64)}`, provenance: { kind: 'unsigned', execution: 'downloaded' },
+      cloudRef: { cardId: 'quick-source', copiedAt: '2026-10-01T00:00:00Z' }, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' };
+    docs.set(local.id, local); fixture(); await mount(); await openRandomSection(); await click('浏览在线角色库');
+    if (source === 'local-cloud-copy') {
+      const tab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(node => node.textContent?.startsWith('本地库'))!;
+      await act(async () => tab.click()); await settle();
+    } else {
+      vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+      await click('已缓存');
+    }
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="加入"]')!.click()); await settle();
+    expect(stored().combatants).toHaveLength(1);
+    expect(stored().combatants[0]).not.toHaveProperty('desktopSource');
+    expect(stored().combatants[0]).not.toHaveProperty('sourceDataCardId');
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))); await settle();
+    await click('快速查看排行榜'); expect(prefilter().disabled).toBe(true);
+    expect(reads().some(request => request.kind === 'entityRating')).toBe(false); expect(usage()).toHaveLength(0);
+    expect(docs.get(local.id)).toEqual(local);
+  });
+
+  it('opens the real host details over the quick modal and returns focus one Escape layer at a time', async () => {
+    fixture(); await mount(); const opener = button('快速查看排行榜'); opener.focus(); await click('快速查看排行榜');
+    const detailsOpener = row('quick-source')!.querySelector<HTMLButtonElement>('button[aria-label]')!;
+    detailsOpener.focus(); await act(async () => detailsOpener.click()); await settle();
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
+    const detail = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(node => node !== modal())!;
+    expect(detail.contains(document.activeElement)).toBe(true); expect(detail.textContent).toContain('当前榜单：#1');
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))); await settle();
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(modal()).toBeTruthy(); expect(document.activeElement).toBe(detailsOpener);
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))); await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.activeElement).toBe(opener);
+    expect(stored().combatants).toHaveLength(0); expect(usage()).toHaveLength(0);
+  });
+
+  it.each(['close', 'account'] as const)('drops a late public body after %s without admission or usage', async reason => {
+    const gate = deferred<void>(); release = () => gate.resolve();
+    fixture({ read: async request => {
+      if (request.query?.id === 'quick-source') { await gate.promise; return { status: 200, body: { success: true, card: publicRow() } }; }
+      throw new Error('Unexpected public body request');
+    } });
+    await mount(); await click('快速查看排行榜'); await clickToggle(); expect(toggle().textContent).toBe('处理中...');
+    if (reason === 'close') { await click('关闭', modal()); expect(modal()).toBeUndefined(); }
+    else {
+      cloudAccount = { userId: 8, username: 'fixture-user-eight' };
+      await act(async () => getDesktopCloudSessionStore().refresh()); await settle();
+    }
+    await act(async () => gate.resolve()); await settle();
+    expect(stored().combatants).toHaveLength(0); expect(usage()).toHaveLength(0); expect(freshReads('quick-source')).toHaveLength(1);
+    expect(calls()).toHaveLength(0);
+  });
+
+  it.each(['withdrawn', 'invalid-body'] as const)('does not report usage or alter the roster for a %s public card', async failure => {
+    const row = publicRow();
+    fixture({ read: () => ({ status: 200, body: { success: true, card: failure === 'withdrawn' ? { ...row, review_status: 'pending' } : { ...row, data: '{invalid' } } }) });
+    await mount(); await click('快速查看排行榜'); await clickToggle();
+    expect(stored().combatants).toHaveLength(0); expect(usage()).toHaveLength(0); expect(toggle().textContent).toBe('加入参战');
+    expect(modal().querySelector('[role="alert"]')?.textContent).toContain('失败');
+  });
+
+  it('checks the latest full roster, skips usage for the rejected addition, and still allows exact removal', async () => {
+    const gate = deferred<void>(); release = () => gate.resolve();
+    fixture({ items: [rankingItem('quick-source'), rankingItem('random-source')], read: async request => {
+      if (request.query?.id === 'quick-source') await gate.promise;
+      const id = request.routeId === 'random-public-card.query' ? 'random-source' : request.query?.id ?? 'quick-source';
+      return { status: 200, body: { success: true, card: publicRow(id) } };
+    } });
+    const base = draft('daily', 'stream'); base.combatants = Array.from({ length: 31 }, (_, index) => ({ ...base.combatants[0]!, filename: `原角色${index}` }));
+    saveDraft(base); await mount(); await openRandomSection(); await click('快速查看排行榜'); await clickToggle();
+    await click('随机匹配角色'); expect(stored().combatants).toHaveLength(32);
+    await act(async () => gate.resolve()); await settle();
+    expect(stored().combatants).toHaveLength(32); expect(stored().combatants.some(card => card.sourceDataCardId === 'quick-source')).toBe(false);
+    expect(usage()).toHaveLength(0); expect(document.body.textContent).toContain('角色总数超过 32 位');
+    expect(toggle('random-source').disabled).toBe(false); expect(toggle('random-source').textContent).toBe('移除/已加入');
+    const before = freshReads('random-source').length; await clickToggle('random-source');
+    expect(stored().combatants).toHaveLength(31); expect(freshReads('random-source')).toHaveLength(before); expect(usage()).toHaveLength(0);
+  });
+
+  it('treats an already-added concurrent source as a no-op without usage or duplicate admission', async () => {
+    const gate = deferred<void>(); release = () => gate.resolve(); let publicReads = 0;
+    fixture({ read: async request => {
+      if (request.routeId === 'public-data-cards.query' && ++publicReads === 1) await gate.promise;
+      return { status: 200, body: { success: true, card: publicRow() } };
+    } });
+    await mount(); await openRandomSection(); await click('快速查看排行榜'); await clickToggle(); await click('随机匹配角色');
+    expect(stored().combatants).toHaveLength(1);
+    await act(async () => gate.resolve()); await settle();
+    expect(stored().combatants).toHaveLength(1); expect(usage()).toHaveLength(0);
+    expect(modal().textContent).toContain('未能加入参战'); expect(toggle().textContent).toBe('移除/已加入');
+  });
+
+  it('removes only the exact cloud selection and leaves same-name local/cache/UI-key collisions intact', async () => {
+    const base = draft('daily', 'stream');
+    base.combatants = ['local', 'cache'].map(source => ({ ...base.combatants[0]!, filename: 'quick-source',
+      cardLibrarySelectionId: `${source}:quick-source`, sourceDataCardId: 'quick-source', data: JSON.parse(publicRow().data) }));
+    saveDraft(base); fixture(); await mount(); await click('快速查看排行榜');
+    expect(toggle().textContent).toBe('加入参战'); await clickToggle(); expect(stored().combatants).toHaveLength(3);
+    await clickToggle(); expect(stored().combatants).toHaveLength(2);
+    expect(stored().combatants.map(card => card.cardLibrarySelectionId)).toEqual(['local:quick-source', 'cache:quick-source']);
+    expect(freshReads('quick-source')).toHaveLength(1); expect(usage()).toHaveLength(1);
   });
 });

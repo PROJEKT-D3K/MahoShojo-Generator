@@ -14,20 +14,22 @@ const mocks = vi.hoisted(() => ({
     addCombatant: vi.fn(), removeCombatant: vi.fn(), setError: vi.fn(),
   },
 }));
-vi.mock('@tanstack/react-query', () => ({
-  useQuery: ({ queryKey }: { queryKey: unknown[] }) => ({
-    data: queryKey[0] === 'arenaLeaderboardModal' ? { success: true, items: mocks.items }
-      : queryKey[0] === 'tags' ? { success: true, tags: [] } : undefined,
+vi.mock('@/components/ranking/use-ranking-query', () => ({
+  useWebRankingQuery: ({ request }: { request: { kind: string } }) => ({
+    data: request.kind === 'leaderboard' ? { success: true, items: mocks.items }
+      : request.kind === 'tags' ? { success: true, tags: [] } : undefined,
     isLoading: false, isError: false,
   }),
+  webRankingCache: { isCanonicalQuery: () => false },
 }));
+vi.mock('@/lib/card-library-host', () => ({ useWebCardLibraryHost: () => ({ auth: { userId: null } }) }));
 vi.mock('next/link', () => ({ default: (props: ComponentProps<'a'>) => <a {...props} /> }));
 vi.mock('@/components/ranking/LeaderboardEntityDetailsModal', () => ({ LeaderboardEntityDetailsModal: () => null }));
 vi.mock('@/components/ranking/TechBadge', () => ({ TechBadge: () => null }));
 vi.mock('@/components/ranking/TierBadge', () => ({ TierBadge: () => null }));
-vi.mock('@/components/arena/hooks/useBattleActions', () => ({ useBattleActions: () => ({ handleSelectDataCard: vi.fn() }) }));
+vi.mock('@/components/arena/hooks/useBattleActions', () => ({ useBattleActions: () => ({ handleToggleCombatantDataCard: vi.fn() }) }));
 vi.mock('@/components/arena/hooks/useArenaData', () => ({ usePresetQuery: () => ({ data: [] }) }));
-vi.mock('@/components/arena/stores/useBattleStore', () => ({ useBattleStore: (selector: (state: typeof mocks.state) => unknown) => selector(mocks.state) }));
+vi.mock('@/components/arena/stores/useBattleStore', () => ({ getArenaRosterCombatantKey: vi.fn(), useBattleStore: (selector: (state: typeof mocks.state) => unknown) => selector(mocks.state) }));
 vi.mock('@/lib/arena/rank-cache', () => ({ isCanonicalPublicLeaderboardQuery: () => false, upsertArenaRankCacheFromLeaderboard: vi.fn() }));
 vi.mock('@/lib/data-card-read-mappers', () => ({ isPublicVisibility: vi.fn(), mapPublicDataCardRowToBattleSelectionPayload: vi.fn() }));
 vi.mock('@/lib/localStorage', () => ({ addUsedCard: vi.fn(), isCardUsed: vi.fn() }));
@@ -84,8 +86,8 @@ describe('ArenaRankingModal strict range prefilter', () => {
   it('preserves preset opponents and exempts a preset pivot from the data-card range prefilter', async () => {
     mocks.items.push(item('preset-opponent', 2500, 6, 'preset'));
     await render(); await togglePrefilter(); expect(rowNames()).toEqual(['boundary', 'preset-opponent']);
-    mocks.state.combatants = [{ data: {}, sourceDataCardId: '', filename: 'preset-pivot', isPreset: true }];
-    mocks.items = [item('preset-pivot', 1300, 6, 'preset'), item('too-far', 1750, 8)];
+    mocks.state.combatants = [{ data: {}, sourceDataCardId: '', filename: 'M01_centaurea.json', isPreset: true }];
+    mocks.items = [item('M01_centaurea.json', 1300, 6, 'preset'), item('too-far', 1750, 8)];
     await render(); expect(rowNames()).toEqual(['too-far']);
   });
 

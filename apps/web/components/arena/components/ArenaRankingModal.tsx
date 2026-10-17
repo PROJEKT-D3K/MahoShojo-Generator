@@ -2,963 +2,113 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
-
-import { LeaderboardEntityDetailsModal, type LeaderboardEntityDetailsTarget } from '@/components/ranking/LeaderboardEntityDetailsModal';
-import { TechBadge } from '@/components/ranking/TechBadge';
-import { TierBadge } from '@/components/ranking/TierBadge';
-import { isCanonicalPublicLeaderboardQuery, upsertArenaRankCacheFromLeaderboard } from '@/lib/arena/rank-cache';
-import { getStrictRangeCheckResult } from '@/lib/arena/strict-range';
-import {
-  isPublicVisibility,
-  mapPublicDataCardRowToBattleSelectionPayload,
-} from '@/lib/data-card-read-mappers';
-import { addUsedCard, isCardUsed } from '@/lib/localStorage';
-import { buildTitleDisplay } from '@/lib/text';
-import type { Preset } from '@/lib/presets';
-import type { SeasonsConfig } from '@/lib/seasons';
-import { formatSeasonTitle, getCurrentSeason } from '@/lib/seasons';
-
+import { PRESET_LIST } from '@mahoshojo/domain/presets';
+import { getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
+import type { PublicRankingItem } from '@mahoshojo/contracts/public-ranking';
+import { ArenaRankingModalView, type ArenaRankingRosterEntity, type RankingDetailsTarget } from '@mahoshojo/ui-web/ranking';
+import { isPublicVisibility, mapPublicDataCardRowToBattleSelectionPayload, mapPublicDataCardRowToSourceData, type CardLibraryHost } from '@mahoshojo/ui-web/card-library';
+import { LeaderboardEntityDetailsModal } from '@/components/ranking/LeaderboardEntityDetailsModal';
+import { useWebRankingQuery, webRankingCache } from '@/components/ranking/use-ranking-query';
+import { useWebCardLibraryHost } from '@/lib/card-library-host';
 import { useBattleActions } from '../hooks/useBattleActions';
-import { usePresetQuery } from '../hooks/useArenaData';
-import { useBattleStore } from '../stores/useBattleStore';
-import { BattleStoreState, CombatantData, formatCombatantCount, isCombatantLimitReached, MAX_COMBATANTS } from '../types';
+import { getArenaRosterCombatantKey, useBattleStore } from '../stores/useBattleStore';
+import { type CombatantData, formatCombatantCount, isCombatantLimitReached, MAX_COMBATANTS } from '../types';
 import { validateCanshouData, validateMagicalGirlData } from '../utils/characterValidator';
 
-type Queue = 'strict' | 'free';
-type Sort = 'rating' | 'tech';
+const presets = new Map(PRESET_LIST.map(preset => [preset.filename, preset]));
 
-type ArenaEntity = { entityType: 'data_card' | 'preset'; entityId: string };
-
-type LeaderboardItem = {
-  rank: number;
-  entityType: 'data_card' | 'preset';
-  entityId: string;
-  displayName: string;
-  authorName: string | null;
-  rating: number;
-  games: number;
-  wins: number;
-  losses: number;
-  draws: number;
-  tier: string;
-  techScore: number | null;
-  techLevel: string | null;
-  isNative: boolean | null;
-  tagIds: string[];
-};
-
-type Tag = {
-  id: string;
-  name: string;
-  description: string | null;
-  category: string | null;
-  scope: 'user' | 'system' | 'admin';
-  isActive: boolean;
-};
-
-const LEADERBOARD_TOP_RANK_LIMIT = 300;
-
-const fetchJson = async <T,>(url: string): Promise<T> => {
-  const res = await fetch(url);
-  const json = (await res.json()) as T;
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(json)}`);
-  return json;
-};
-
-const EMPTY_ITEMS: LeaderboardItem[] = [];
+/** UI row keys never grant an online reference; only the host-owned source metadata does. */
+export function projectWebRankingRoster(combatants: readonly unknown[]) {
+  const rankableRosterEntities: ArenaRankingRosterEntity[] = [];
+  const selectedEntityKeys = new Set<string>();
+  for (const value of combatants) {
+    if (!value || typeof value !== 'object' || !('data' in value)) continue;
+    const card = value as CombatantData;
+    if (card.isPreset) {
+      if (presets.has(card.filename)) {
+        rankableRosterEntities.push({ entityType: 'preset', entityId: card.filename });
+        selectedEntityKeys.add(`preset:${card.filename}`);
+      }
+      continue;
+    }
+    const id = card.sourceDataCardId?.trim();
+    const selectionId = getCombatantCardLibrarySelectionId(card);
+    if (!id || selectionId?.startsWith('local:')) continue;
+    rankableRosterEntities.push({ entityType: 'data_card', entityId: id });
+    if (selectionId === `cloud:${id}`) selectedEntityKeys.add(`data_card:${id}`);
+  }
+  return { rankableRosterEntities, selectedEntityKeys };
+}
 
 export function ArenaRankingModal(props: { isOpen: boolean; onClose: () => void }) {
-  const { isOpen, onClose } = props;
-  const { handleSelectDataCard } = useBattleActions();
+  const host = useWebCardLibraryHost();
+  // Changing account invalidates pending reads/admissions without probing an account to browse rankings.
+  return <ArenaRankingScope key={host.auth.userId ?? 'anonymous'} {...props} host={host} />;
+}
 
-  const useBattleSelector = <T,>(selector: (state: BattleStoreState) => T) => useBattleStore(selector);
-  const combatants = useBattleSelector((state) => state.combatants);
-  const addCombatant = useBattleSelector((state) => state.addCombatant);
-  const removeCombatant = useBattleSelector((state) => state.removeCombatant);
-  const setError = useBattleSelector((state) => state.setError);
+function ArenaRankingScope({ isOpen, onClose, host }: { isOpen: boolean; onClose: () => void; host: CardLibraryHost }) {
+  const combatants = useBattleStore(state => state.combatants);
+  const setError = useBattleStore(state => state.setError);
+  const isGenerating = useBattleStore(state => state.isGenerating);
+  const { handleToggleCombatantDataCard } = useBattleActions();
+  const roster = useMemo(() => projectWebRankingRoster(combatants), [combatants]);
+  const [detailsEntity, setDetailsEntity] = useState<RankingDetailsTarget | null>(null);
+  useEffect(() => { if (!isOpen) setDetailsEntity(null); }, [isOpen]);
 
-  const { data: presets } = usePresetQuery();
-
-  const [queue, setQueue] = useState<Queue>('strict');
-  const [sort, setSort] = useState<Sort>('rating');
-  const [includePresets, setIncludePresets] = useState(true);
-  const [strictCountableOnly, setStrictCountableOnly] = useState(false);
-  const [isNative, setIsNative] = useState<'any' | '1' | '0'>('any');
-  const [includeTagIds, setIncludeTagIds] = useState<string[]>([]);
-  const [excludeTagIds, setExcludeTagIds] = useState<string[]>([]);
-  const [isTagFilterExpanded, setIsTagFilterExpanded] = useState(false);
-  const [minRating, setMinRating] = useState('');
-  const [maxRating, setMaxRating] = useState('');
-  const [minGames, setMinGames] = useState('');
-  const [maxGames, setMaxGames] = useState('');
-  const [minTechScore, setMinTechScore] = useState('');
-  const [maxTechScore, setMaxTechScore] = useState('');
-  const [offset, setOffset] = useState(0);
-  const limit = 30;
-  const [addingKey, setAddingKey] = useState<string | null>(null);
-  const [detailsEntity, setDetailsEntity] = useState<LeaderboardEntityDetailsTarget | null>(null);
-
-  const selectedPresetFilenames = useMemo(() => {
-    return new Set(
-      combatants
-        .filter((item): item is CombatantData => 'data' in item && 'filename' in item)
-        .filter((item) => item.isPreset)
-        .map((item) => item.filename),
-    );
-  }, [combatants]);
-
-  const selectedDataCardIds = useMemo(() => {
-    return new Set(
-      combatants
-        .filter((item): item is CombatantData => 'data' in item && 'sourceDataCardId' in item)
-        .map((item) => (typeof item.sourceDataCardId === 'string' ? item.sourceDataCardId : null))
-        .filter((id): id is string => Boolean(id)),
-    );
-  }, [combatants]);
-
-  const rankableRosterEntities = useMemo<ArenaEntity[]>(() => {
-    const list: ArenaEntity[] = [];
-    for (const item of combatants) {
-      if (!item || typeof item !== 'object') continue;
-      if (!('data' in item)) continue;
-      const combatant = item as CombatantData;
-      if (combatant.isPreset) {
-        const id = (combatant.filename ?? '').toString().trim();
-        if (!id) continue;
-        list.push({ entityType: 'preset', entityId: id });
-        continue;
+  const toggleEntity = async (item: PublicRankingItem, nextSelected: boolean, signal: AbortSignal): Promise<void | false> => {
+    if (signal.aborted || useBattleStore.getState().isGenerating) return false;
+    if (item.entityType === 'data_card') {
+      const context = { selectionId: `cloud:${item.entityId}`, rowSelectionId: `cloud:${item.entityId}`, storageLocation: 'cloud' as const, signal };
+      // Removal uses the exact displayed online row, without rereading a withdrawn card.
+      if (!nextSelected) return handleToggleCombatantDataCard(undefined, false, context);
+      const result = await host.online.fetchPublicCardById(item.entityId, signal);
+      signal.throwIfAborted();
+      const body = result.data && typeof result.data === 'object' && !Array.isArray(result.data) ? result.data as Record<string, unknown> : null;
+      const row = body?.card && typeof body.card === 'object' && !Array.isArray(body.card) ? body.card as Record<string, unknown> : null;
+      if (!result.ok || body?.success !== true || !row || row.id !== item.entityId) throw new Error('无法读取当前公开数据卡，请刷新后重试。');
+      if (row.type !== 'character' || !isPublicVisibility(row.is_public) || row.review_status !== 'approved' || row.deleted_at != null || row.storageLocation !== undefined && row.storageLocation !== 'cloud') throw new Error('数据卡已撤回或尚未公开通过审核。');
+      const payload = mapPublicDataCardRowToBattleSelectionPayload(row);
+      const applied = await handleToggleCombatantDataCard(payload, true, { ...context, cloudCardId: item.entityId, cloudCardUpdatedAt: payload._updatedAt, rawSourceData: mapPublicDataCardRowToSourceData(row) });
+      if (applied === false || signal.aborted) return false;
+      if (!host.platform.marks.isUsed(item.entityId)) {
+        void host.online.reportCardStat(item.entityId, 'usage').then(ok => { if (ok) host.platform.marks.markUsed(item.entityId); }).catch(() => undefined);
       }
-      const id = (combatant.sourceDataCardId ?? '').toString().trim();
-      if (!id) continue;
-      list.push({ entityType: 'data_card', entityId: id });
-    }
-    return list;
-  }, [combatants]);
-
-  const strictRangePivotCandidate = useMemo<ArenaEntity | null>(() => {
-    if (queue !== 'strict') return null;
-    if (rankableRosterEntities.length !== 1) return null;
-    return rankableRosterEntities[0] ?? null;
-  }, [queue, rankableRosterEntities]);
-
-  useEffect(() => {
-    if (!strictCountableOnly) return;
-    if (queue !== 'strict' || !strictRangePivotCandidate) {
-      setStrictCountableOnly(false);
-    }
-  }, [queue, strictCountableOnly, strictRangePivotCandidate]);
-
-  const presetByFilename = useMemo(() => {
-    const map = new Map<string, Preset>();
-    (presets ?? []).forEach((preset) => map.set(preset.filename, preset));
-    return map;
-  }, [presets]);
-
-  const tagsQuery = useQuery({
-    queryKey: ['tags'],
-    queryFn: () => fetchJson<{ success: boolean; tags: Tag[] }>('/api/tags'),
-    staleTime: 60_000,
-    enabled: isOpen,
-  });
-
-  const seasonsQuery = useQuery({
-    queryKey: ['seasonsConfig'],
-    queryFn: () => fetchJson<SeasonsConfig>('/config/seasons.json'),
-    staleTime: 60_000,
-    enabled: isOpen,
-  });
-
-  const currentSeason = useMemo(() => getCurrentSeason(seasonsQuery.data), [seasonsQuery.data]);
-
-  const activeTags = useMemo(
-    () => (tagsQuery.data?.tags ?? []).filter((t) => t.isActive),
-    [tagsQuery.data?.tags],
-  );
-
-  const tagById = useMemo(() => {
-    const map = new Map<string, Tag>();
-    for (const tag of activeTags) map.set(tag.id, tag);
-    return map;
-  }, [activeTags]);
-
-  const groupedActiveTags = useMemo(() => {
-    const sorted = activeTags.slice().sort((a, b) => {
-      const category = (a.category ?? '').localeCompare(b.category ?? '', 'zh-CN');
-      if (category !== 0) return category;
-      return a.name.localeCompare(b.name, 'zh-CN');
-    });
-    const map = new Map<string, Tag[]>();
-    for (const tag of sorted) {
-      const key = tag.category ?? '未分类';
-      const list = map.get(key) ?? [];
-      list.push(tag);
-      map.set(key, list);
-    }
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b, 'zh-CN'));
-  }, [activeTags]);
-
-  const selectedTagChips = useMemo(() => {
-    const chips: Array<{ mode: 'include' | 'exclude'; id: string; label: string }> = [];
-    for (const id of includeTagIds) chips.push({ mode: 'include', id, label: tagById.get(id)?.name ?? id });
-    for (const id of excludeTagIds) chips.push({ mode: 'exclude', id, label: tagById.get(id)?.name ?? id });
-    return chips;
-  }, [excludeTagIds, includeTagIds, tagById]);
-
-  const leaderboardQuery = useQuery({
-    queryKey: [
-      'arenaLeaderboardModal',
-      queue,
-      sort,
-      includePresets,
-      isNative,
-      includeTagIds.join(','),
-      excludeTagIds.join(','),
-      minRating,
-      maxRating,
-      minGames,
-      maxGames,
-      minTechScore,
-      maxTechScore,
-      offset,
-    ],
-    queryFn: () => {
-      const params = new URLSearchParams();
-      params.set('queue', queue);
-      params.set('sort', sort);
-      params.set('limit', String(limit));
-      params.set('offset', String(offset));
-      params.set('includePresets', includePresets ? '1' : '0');
-      params.set('isNative', isNative);
-      if (includeTagIds.length > 0) params.set('tagIds', includeTagIds.join(','));
-      if (excludeTagIds.length > 0) params.set('excludeTagIds', excludeTagIds.join(','));
-      if (minRating.trim()) params.set('minRating', minRating.trim());
-      if (maxRating.trim()) params.set('maxRating', maxRating.trim());
-      if (minGames.trim()) params.set('minGames', minGames.trim());
-      if (maxGames.trim()) params.set('maxGames', maxGames.trim());
-      if (minTechScore.trim()) params.set('minTechScore', minTechScore.trim());
-      if (maxTechScore.trim()) params.set('maxTechScore', maxTechScore.trim());
-      return fetchJson<{ success: boolean; items: LeaderboardItem[] }>(`/api/arena/leaderboard?${params.toString()}`);
-    },
-    staleTime: 10_000,
-    enabled: isOpen,
-  });
-
-  const items = leaderboardQuery.data?.items ?? EMPTY_ITEMS;
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (!Array.isArray(items) || items.length === 0) return;
-
-    if (
-      !isCanonicalPublicLeaderboardQuery({
-        sort,
-        order: 'desc',
-        includePresets,
-        isNative,
-        includeTagIds,
-        excludeTagIds,
-        minRating,
-        maxRating,
-        minGames,
-        maxGames,
-        minTechScore,
-        maxTechScore,
-      })
-    ) {
       return;
     }
 
-    upsertArenaRankCacheFromLeaderboard({
-      queue,
-      items,
-      maxRankSeen: offset + items.length,
-    });
-  }, [
-    excludeTagIds,
-    includePresets,
-    includeTagIds,
-    isNative,
-    isOpen,
-    items,
-    maxGames,
-    maxRating,
-    maxTechScore,
-    minGames,
-    minRating,
-    minTechScore,
-    offset,
-    queue,
-    sort,
-  ]);
-
-  const strictRangePivotFromCurrentPage = useMemo<{ rating: number; games: number } | null>(() => {
-    if (queue !== 'strict') return null;
-    if (!strictCountableOnly) return null;
-    if (!strictRangePivotCandidate) return null;
-    const found = items.find((it) => it.entityType === strictRangePivotCandidate.entityType && it.entityId === strictRangePivotCandidate.entityId);
-    if (!found) return null;
-    return { rating: found.rating, games: found.games };
-  }, [items, queue, strictCountableOnly, strictRangePivotCandidate]);
-
-  const strictRangePivotRatingQuery = useQuery({
-    queryKey: [
-      'arenaStrictRangePivotRating',
-      strictRangePivotCandidate?.entityType ?? 'none',
-      strictRangePivotCandidate?.entityId ?? '',
-    ],
-    queryFn: async () => {
-      const pivot = strictRangePivotCandidate;
-      if (!pivot) throw new Error('缺少我方参战者');
-      const params = new URLSearchParams();
-      params.set('queue', 'strict');
-      params.set('entityType', pivot.entityType);
-      params.set('entityId', pivot.entityId);
-      return fetchJson<{ success: true; rating: number; games: number }>(`/api/arena/entity-rating?${params.toString()}`);
-    },
-    staleTime: 30_000,
-    enabled:
-      isOpen &&
-      queue === 'strict' &&
-      strictCountableOnly &&
-      Boolean(strictRangePivotCandidate) &&
-      strictRangePivotCandidate?.entityType === 'data_card' &&
-      strictRangePivotFromCurrentPage == null,
-  });
-
-  const visibleItems = useMemo(() => {
-    if (queue !== 'strict' || !strictCountableOnly) return items;
-    if (!strictRangePivotCandidate) return items;
-
-    const pivotKey = `${strictRangePivotCandidate.entityType}:${strictRangePivotCandidate.entityId}`;
-
-    const pivotRating = strictRangePivotFromCurrentPage
-      ?? (strictRangePivotCandidate.entityType === 'data_card' && strictRangePivotRatingQuery.data
-        ? { rating: strictRangePivotRatingQuery.data.rating, games: strictRangePivotRatingQuery.data.games }
-        : null);
-
-    return items.filter((it) => {
-      const key = `${it.entityType}:${it.entityId}`;
-      if (key === pivotKey) return false;
-      if (it.entityType === 'preset' || strictRangePivotCandidate.entityType === 'preset') return true;
-      if (!pivotRating) return true;
-      const range = getStrictRangeCheckResult(pivotRating, { rating: it.rating, games: it.games });
-      return range == null || range.exceededBy === 0;
-    });
-  }, [
-    items,
-    queue,
-    strictCountableOnly,
-    strictRangePivotCandidate,
-    strictRangePivotFromCurrentPage,
-    strictRangePivotRatingQuery.data,
-  ]);
-
-  const canGoPrev = offset > 0;
-  const canGoNext = items.length >= limit && offset + limit < LEADERBOARD_TOP_RANK_LIMIT;
-
-  const toggleIncludeTag = (tagId: string) => {
-    setOffset(0);
-    setIncludeTagIds((prev) => (prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]));
-  };
-
-  const toggleExcludeTag = (tagId: string) => {
-    setOffset(0);
-    setExcludeTagIds((prev) => (prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]));
-  };
-
-  const handleAddFromLeaderboard = async (item: LeaderboardItem) => {
-    if (addingKey) return;
-
-    const existingCombatantsCount = combatants.filter((c) => 'data' in c).length;
-    if (isCombatantLimitReached(existingCombatantsCount, MAX_COMBATANTS)) {
-      setError(`❌ 最多只能选择 ${MAX_COMBATANTS} 位参战者。`);
+    const current = useBattleStore.getState();
+    const selected = current.combatants.filter((card): card is CombatantData => 'data' in card && card.isPreset && card.filename === item.entityId);
+    if (!nextSelected) {
+      if (!selected.length) return false;
+      // Typed roster refs preserve imported filenames which collide with preset/cloud aliases.
+      selected.forEach(card => current.removeCombatant({ rosterKey: getArenaRosterCombatantKey(card) }));
+      current.setError(null);
       return;
     }
-
-    const key = `${item.entityType}:${item.entityId}`;
-    setAddingKey(key);
-    try {
-      if (item.entityType === 'data_card') {
-        if (selectedDataCardIds.has(item.entityId)) return;
-        const result = await fetchJson<{ success: boolean; card?: Record<string, unknown>; error?: string }>(
-          `/api/public-data-cards?id=${encodeURIComponent(item.entityId)}`,
-        );
-        if (!result.success || !result.card) {
-          throw new Error(result.error ?? '无法读取数据卡');
-        }
-
-        const payload = mapPublicDataCardRowToBattleSelectionPayload(result.card);
-        await handleSelectDataCard(payload);
-
-        // 排行榜入口加入参战时也要计入公开卡片的使用数。
-        // 现有口径：同一浏览器仅记 1 次（localStorage 去重）。
-        const cardId = payload._cardId;
-        const isPublic = isPublicVisibility(payload._isPublic);
-        const wasAdded = Boolean(
-          cardId &&
-          useBattleStore
-            .getState()
-            .combatants.some((c) => 'data' in c && (c as any).sourceDataCardId === cardId),
-        );
-        if (wasAdded && isPublic && !isCardUsed(cardId)) {
-          void (async () => {
-            try {
-              const response = await fetch('/api/data-card-stats', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cardId, type: 'usage' }),
-              });
-
-              if (response.ok) {
-                const json = (await response.json()) as { success?: boolean };
-                if (json.success) addUsedCard(cardId);
-              }
-            } catch (error) {
-              console.error('增加使用次数失败:', error);
-            }
-          })();
-        }
-        return;
-      }
-
-      if (item.entityType === 'preset') {
-        if (selectedPresetFilenames.has(item.entityId)) {
-          removeCombatant(item.entityId);
-          setError(null);
-          return;
-        }
-
-        const preset = presetByFilename.get(item.entityId);
-        const response = await fetch(`/presets/${item.entityId}`);
-        if (!response.ok) {
-          throw new Error('无法加载预设设定文件');
-        }
-        const data = await response.json();
-
-        const validation = preset?.type === 'canshou'
-          ? validateCanshouData(data)
-          : preset?.type === 'magical-girl'
-            ? validateMagicalGirlData(data)
-            : (() => {
-              const asGirl = validateMagicalGirlData(data);
-              if (asGirl.success) return asGirl;
-              return validateCanshouData(data);
-            })();
-
-        if (!validation.success) {
-          throw new Error(validation.errors?.[0] || '格式校验失败');
-        }
-
-        addCombatant({
-          type: preset?.type ?? (typeof (validation.data as any)?.codename === 'string' ? 'magical-girl' : 'canshou'),
-          data: validation.data ?? data,
-          filename: item.entityId,
-          isValid: true,
-          isPreset: true,
-        });
-        setError(null);
-      }
-    } catch (error) {
-      setError(`❌ 加入参战失败：${error instanceof Error ? error.message : '未知错误'}`);
-    } finally {
-      setAddingKey(null);
-    }
+    if (selected.length) return false;
+    const preset = presets.get(item.entityId);
+    if (!preset) throw new Error('此客户端未收录该预设正文。');
+    const response = await fetch(`/presets/${encodeURIComponent(preset.filename)}`, { signal, credentials: 'omit', redirect: 'error' });
+    if (!response.ok) throw new Error('无法加载预设设定文件。');
+    const data: unknown = await response.json();
+    signal.throwIfAborted();
+    const validation = preset.type === 'canshou' ? validateCanshouData(data) : validateMagicalGirlData(data);
+    if (!validation.success) throw new Error(validation.errors?.[0] || '格式校验失败');
+    let committed = false;
+    useBattleStore.setState(state => {
+      if (signal.aborted || state.isGenerating || state.combatants.some(card => 'data' in card && card.isPreset && card.filename === preset.filename)) return state;
+      if (isCombatantLimitReached(state.combatants.length, MAX_COMBATANTS)) return { error: `❌ 最多只能选择 ${MAX_COMBATANTS} 位参战者。` };
+      committed = true;
+      return { combatants: [...state.combatants, { type: preset.type, data: validation.data ?? data, filename: preset.filename, isValid: true, isPreset: true } as CombatantData], error: null };
+    });
+    return committed ? undefined : false;
   };
 
-  if (!isOpen) return null;
-
-  return (
-    <>
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-          <div className="p-5 border-b flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="text-lg font-bold text-gray-800">排位排行榜（可加入参战）</div>
-                {currentSeason ? (
-                  <span className="rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-800 ring-1 ring-purple-200">
-                    当前赛季：{formatSeasonTitle(currentSeason)}
-                  </span>
-                ) : null}
-              </div>
-              <div className="mt-1 text-xs text-gray-500">
-                这里展示公共榜单（公开 + 已审核）与预设。名次仅展示 Top300；未入榜角色不展示名次。点击“加入参战”会把角色加入当前对战阵容。
-              </div>
-            </div>
-            <div className="flex items-center gap-3 text-sm">
-              <Link href="/ranking" className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">
-                打开完整排行榜页
-              </Link>
-              <button
-                onClick={onClose}
-                className="px-3 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50"
-              >
-                关闭
-              </button>
-            </div>
-          </div>
-
-          <div className="p-5 overflow-auto">
-            <div className="grid gap-3 md:grid-cols-6">
-            <label className="text-sm text-gray-700">
-              天梯
-              <select
-                value={queue}
-                onChange={(e) => {
-                  setOffset(0);
-                  setQueue(e.target.value === 'free' ? 'free' : 'strict');
-                }}
-                className="input-field mt-1"
-              >
-                <option value="strict">严格</option>
-                <option value="free">自由</option>
-              </select>
-            </label>
-            <label className="text-sm text-gray-700">
-              排序
-              <select
-                value={sort}
-                onChange={(e) => {
-                  setOffset(0);
-                  setSort(e.target.value === 'tech' ? 'tech' : 'rating');
-                }}
-                className="input-field mt-1"
-              >
-                <option value="rating">排位分</option>
-                <option value="tech">技术值</option>
-              </select>
-            </label>
-            <label className="text-sm text-gray-700">
-              原生性
-              <select
-                value={isNative}
-                onChange={(e) => {
-                  setOffset(0);
-                  const v = e.target.value;
-                  setIsNative(v === '1' ? '1' : v === '0' ? '0' : 'any');
-                }}
-                className="input-field mt-1"
-              >
-                <option value="any">不限</option>
-                <option value="1">原生</option>
-                <option value="0">非原生</option>
-              </select>
-            </label>
-            <label className="text-sm text-gray-700">
-              最低分
-              <input
-                type="number"
-                value={minRating}
-                onChange={(e) => {
-                  setOffset(0);
-                  setMinRating(e.target.value);
-                }}
-                className="input-field mt-1"
-                placeholder="如 800"
-              />
-            </label>
-            <label className="text-sm text-gray-700">
-              最高分
-              <input
-                type="number"
-                value={maxRating}
-                onChange={(e) => {
-                  setOffset(0);
-                  setMaxRating(e.target.value);
-                }}
-                className="input-field mt-1"
-                placeholder="如 1500"
-              />
-            </label>
-            <label className="text-sm text-gray-700">
-              最少对局
-              <input
-                type="number"
-                value={minGames}
-                onChange={(e) => {
-                  setOffset(0);
-                  setMinGames(e.target.value);
-                }}
-                className="input-field mt-1"
-                placeholder="如 5"
-              />
-            </label>
-            <label className="text-sm text-gray-700">
-              最多对局
-              <input
-                type="number"
-                value={maxGames}
-                onChange={(e) => {
-                  setOffset(0);
-                  setMaxGames(e.target.value);
-                }}
-                className="input-field mt-1"
-                placeholder="可留空"
-              />
-            </label>
-            <label className="text-sm text-gray-700">
-              最低技术值
-              <input
-                type="number"
-                value={minTechScore}
-                onChange={(e) => {
-                  setOffset(0);
-                  setMinTechScore(e.target.value);
-                }}
-                className="input-field mt-1"
-                placeholder="0-100"
-              />
-            </label>
-            <label className="text-sm text-gray-700">
-              最高技术值
-              <input
-                type="number"
-                value={maxTechScore}
-                onChange={(e) => {
-                  setOffset(0);
-                  setMaxTechScore(e.target.value);
-                }}
-                className="input-field mt-1"
-                placeholder="0-100"
-              />
-            </label>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex flex-wrap items-center gap-4">
-              <label className="text-sm text-gray-700 flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={includePresets}
-                  onChange={(e) => {
-                    setOffset(0);
-                    setIncludePresets(e.target.checked);
-                  }}
-                />
-                <span>包含预设</span>
-              </label>
-
-              <label
-                className={[
-                  'text-sm text-gray-700 flex items-center gap-2',
-                  (queue !== 'strict' || !strictRangePivotCandidate) ? 'opacity-60' : '',
-                ].join(' ')}
-                title={
-                  queue !== 'strict'
-                    ? '仅严格天梯可用'
-                    : (!strictRangePivotCandidate ? '需先在参战列表中只保留 1 位参战者作为我方' : '按严格分差规则预筛对手（花牌及以上启用分差限制，任一方不足 10 局时上限为 400）')
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={strictCountableOnly}
-                  onChange={(e) => {
-                    setOffset(0);
-                    setStrictCountableOnly(e.target.checked);
-                  }}
-                  disabled={queue !== 'strict' || !strictRangePivotCandidate}
-                />
-                <span>严格分差预筛</span>
-              </label>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="text-xs text-gray-500">标签筛选只作用于数据卡；预设不会被标签包含/排除。</div>
-              <button
-                type="button"
-                onClick={() => setIsTagFilterExpanded((prev) => !prev)}
-                className="text-xs font-medium text-blue-600 hover:underline"
-                aria-expanded={isTagFilterExpanded}
-              >
-                {isTagFilterExpanded ? '收起标签' : '展开标签'}
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-1 text-xs text-gray-500">
-            仅预筛当前页的分差，冷却与每日限额等不在此预判；最终计分仍由服务器判定。
-          </div>
-
-          <div className="mt-3">
-            {!isTagFilterExpanded ? (
-              <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600">
-                  <div>
-                    包含 {includeTagIds.length} · 排除 {excludeTagIds.length}
-                  </div>
-                  {(includeTagIds.length > 0 || excludeTagIds.length > 0) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOffset(0);
-                        setIncludeTagIds([]);
-                        setExcludeTagIds([]);
-                      }}
-                      className="text-xs font-medium text-gray-500 hover:text-gray-700 hover:underline"
-                    >
-                      清空标签
-                    </button>
-                  )}
-                </div>
-
-                {(includeTagIds.length > 0 || excludeTagIds.length > 0) && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {selectedTagChips.slice(0, 12).map((chip) => (
-                      <button
-                        key={`${chip.mode}:${chip.id}`}
-                        type="button"
-                        onClick={() => {
-                          if (chip.mode === 'include') toggleIncludeTag(chip.id);
-                          else toggleExcludeTag(chip.id);
-                        }}
-                        className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                          chip.mode === 'include'
-                            ? 'border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100'
-                            : 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
-                        }`}
-                        title="点击移除"
-                      >
-                        {chip.label}
-                      </button>
-                    ))}
-                    {selectedTagChips.length > 12 && (
-                      <div className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-500">
-                        还有 {selectedTagChips.length - 12} 个…
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : tagsQuery.isLoading ? (
-              <div className="text-sm text-gray-500">正在加载标签库...</div>
-            ) : tagsQuery.isError ? (
-              <div className="text-sm text-red-600">标签库加载失败：{String(tagsQuery.error)}</div>
-            ) : activeTags.length === 0 ? (
-              <div className="text-sm text-gray-500">暂无可用标签</div>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-2">
-                <div>
-                  <div className="text-xs font-semibold text-gray-700 mb-2">包含标签（OR）</div>
-                  <div className="max-h-56 overflow-auto pr-1 space-y-3">
-                    {groupedActiveTags.map(([category, categoryTags]) => (
-                      <div key={`include:${category}`}>
-                        <div className="text-[11px] font-medium text-gray-600">
-                          {category}（{categoryTags.length}）
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {categoryTags.map((tag) => (
-                            <button
-                              key={`include:${tag.id}`}
-                              type="button"
-                              onClick={() => toggleIncludeTag(tag.id)}
-                              className={`px-3 py-1 rounded-full text-xs border transition-colors ${
-                                includeTagIds.includes(tag.id)
-                                  ? 'bg-purple-600 text-white border-purple-600'
-                                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                              }`}
-                              title={tag.description ?? undefined}
-                            >
-                              {tag.name}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs font-semibold text-gray-700 mb-2">排除标签</div>
-                  <div className="max-h-56 overflow-auto pr-1 space-y-3">
-                    {groupedActiveTags.map(([category, categoryTags]) => (
-                      <div key={`exclude:${category}`}>
-                        <div className="text-[11px] font-medium text-gray-600">
-                          {category}（{categoryTags.length}）
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {categoryTags.map((tag) => (
-                            <button
-                              key={`exclude:${tag.id}`}
-                              type="button"
-                              onClick={() => toggleExcludeTag(tag.id)}
-                              className={`px-3 py-1 rounded-full text-xs border transition-colors ${
-                                excludeTagIds.includes(tag.id)
-                                  ? 'bg-red-600 text-white border-red-600'
-                                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                              }`}
-                              title={tag.description ?? undefined}
-                            >
-                              {tag.name}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-5">
-            {leaderboardQuery.isLoading ? (
-              <div className="text-sm text-gray-500">正在加载排行榜...</div>
-            ) : leaderboardQuery.isError ? (
-              <div className="text-sm text-red-600">加载失败：{String(leaderboardQuery.error)}</div>
-            ) : (
-              <div className="overflow-auto rounded-lg border border-gray-200">
-                {queue === 'strict' && strictCountableOnly && strictRangePivotCandidate?.entityType === 'data_card' && strictRangePivotFromCurrentPage == null ? (
-                  strictRangePivotRatingQuery.isLoading ? (
-                    <div className="px-3 py-2 text-xs text-gray-500 border-b">
-                      正在读取我方排位分，用于严格分差预筛…
-                    </div>
-                  ) : strictRangePivotRatingQuery.isError ? (
-                    <div className="px-3 py-2 text-xs text-amber-700 bg-amber-50 border-b">
-                      无法读取我方排位分，已降级为不筛选严格范围：{String(strictRangePivotRatingQuery.error)}
-                    </div>
-                  ) : null
-                ) : null}
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr className="text-left text-gray-600 border-b">
-                      <th className="py-2 px-3">#</th>
-                      <th className="py-2 px-3">角色</th>
-                      <th className="py-2 px-3">段位</th>
-                      <th className="py-2 px-3">分</th>
-                      <th className="py-2 px-3">局</th>
-                      <th className="py-2 px-3">W/L/D</th>
-                      <th className="py-2 px-3">技术</th>
-                      <th className="py-2 px-3">原生</th>
-                      <th className="py-2 px-3">操作</th>
-                    </tr>
-                  </thead>
-		                  <tbody>
-		                    {visibleItems.map((item) => {
-		                      const isSelected =
-		                        item.entityType === 'preset'
-		                          ? selectedPresetFilenames.has(item.entityId)
-		                          : selectedDataCardIds.has(item.entityId);
-	                      const isBusy = addingKey === `${item.entityType}:${item.entityId}`;
-	                      const { display: displayName, full: fullName } = buildTitleDisplay(item.displayName || '未命名');
-	                      const authorName =
-	                        item.entityType === 'preset'
-	                          ? '官方'
-	                          : typeof item.authorName === 'string' && item.authorName.trim()
-	                            ? item.authorName.trim()
-	                            : '未知';
-	                      const nativeBadge = item.isNative == null ? (
-	                        <span className="text-gray-500">-</span>
-	                      ) : item.isNative ? (
-	                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200">
-	                          原生
-	                        </span>
-	                      ) : (
-	                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 ring-1 ring-gray-200">
-	                          非原生
-	                        </span>
-	                      );
-	                      return (
-	                        <tr key={`${item.entityType}:${item.entityId}`} className="border-b last:border-b-0">
-	                          <td className="py-2 px-3 text-gray-500">{item.rank}</td>
-	                          <td className="py-2 px-3">
-	                            <button
-	                              type="button"
-	                              onClick={() => {
-	                                const winRate =
-	                                  item.games > 0 ? Math.round((item.wins / item.games) * 1000) / 10 : null;
-	                                const detailsNotice = `当前榜单：#${item.rank} · 段位 ${item.tier} · 分 ${item.rating} · 局 ${item.games} · W/L/D ${item.wins}/${item.losses}/${item.draws}${winRate == null ? '' : ` · 胜率 ${winRate}%`}`;
-	                                setDetailsEntity({
-	                                  entityType: item.entityType,
-	                                  entityId: item.entityId,
-	                                  displayName: item.displayName,
-	                                  authorName: item.authorName,
-	                                  pendingNotice: detailsNotice,
-	                                });
-	                              }}
-	                              className="block w-full text-left font-medium text-gray-800 hover:underline underline-offset-2"
-	                              aria-label={`查看角色详情：${fullName}`}
-	                              title={fullName}
-	                            >
-	                              {displayName}
-	                            </button>
-	                            <div className="text-xs text-gray-500">
-	                              {item.entityType === 'preset' ? '预设' : '数据卡'} · 作者：{authorName}
-	                            </div>
-	                          </td>
-	                          <td className="py-2 px-3"><TierBadge tier={item.tier} /></td>
-	                          <td className="py-2 px-3 font-mono">{item.rating}</td>
-	                          <td className="py-2 px-3 font-mono">{item.games}</td>
-	                          <td className="py-2 px-3 font-mono">{item.wins}/{item.losses}/{item.draws}</td>
-	                          <td className="py-2 px-3">
-	                            <TechBadge techScore={item.techScore} techLevel={item.techLevel} />
-	                          </td>
-	                          <td className="py-2 px-3">
-	                            {nativeBadge}
-	                          </td>
-	                          <td className="py-2 px-3">
-	                            <button
-	                              onClick={() => void handleAddFromLeaderboard(item)}
-	                              disabled={isBusy || (isSelected && item.entityType === 'data_card')}
-                              className={`px-3 py-1 rounded text-xs border ${
-                                isSelected
-                                  ? item.entityType === 'preset'
-                                    ? 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
-                                    : 'bg-gray-50 border-gray-200 text-gray-500'
-                                  : 'bg-purple-600 border-purple-600 text-white hover:bg-purple-700'
-                              } disabled:opacity-50`}
-                              title={isSelected && item.entityType === 'preset' ? '再次点击可移除预设参战者' : undefined}
-                            >
-                              {isBusy ? '处理中...' : isSelected ? (item.entityType === 'preset' ? '移除/已加入' : '已加入') : '加入参战'}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {visibleItems.length === 0 && (
-                      <tr>
-                        <td colSpan={9} className="py-6 text-center text-gray-500">
-                          {queue === 'strict' && strictCountableOnly && items.length > 0
-                            ? '本页暂无符合严格分差预筛的对手，可尝试翻页或调整筛选'
-                            : '暂无数据'}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-4 flex items-center justify-between gap-3 flex-wrap text-sm">
-            <div className="text-gray-500">
-              已选择参战者：{formatCombatantCount(combatants.filter((c) => 'data' in c).length)}
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setOffset((v) => Math.max(0, v - limit))}
-                disabled={!canGoPrev}
-                className="px-3 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white"
-              >
-                上一页
-              </button>
-              <button
-                onClick={() => setOffset((v) => v + limit)}
-                disabled={!canGoNext}
-                className="px-3 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:hover:bg-white"
-              >
-                下一页
-              </button>
-            </div>
-          </div>
-          </div>
-        </div>
-      </div>
-
-      <LeaderboardEntityDetailsModal
-        isOpen={Boolean(detailsEntity)}
-        onClose={() => setDetailsEntity(null)}
-        entity={detailsEntity}
-      />
-    </>
-  );
+  return <>
+    <ArenaRankingModalView isOpen={isOpen} onClose={onClose} useRankingQuery={useWebRankingQuery} Link={Link} cache={webRankingCache}
+      {...roster} selectionCountLabel={formatCombatantCount(combatants.filter(card => 'data' in card).length)} onToggleEntity={toggleEntity}
+      selectionDisabledReason={isGenerating ? '战报生成中，请稍后调整参战者。' : null} onSelectionError={setError} onOpenEntityDetails={setDetailsEntity}
+      getEntityUnavailableReason={item => item.entityType === 'preset' && !presets.has(item.entityId) ? '此客户端未收录该预设正文' : null} />
+    <LeaderboardEntityDetailsModal isOpen={isOpen && Boolean(detailsEntity)} onClose={() => setDetailsEntity(null)} entity={detailsEntity} />
+  </>;
 }

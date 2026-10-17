@@ -4,8 +4,11 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultFilters, rankingTransportFilters } from '@mahoshojo/domain/public-ranking';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 
+vi.mock('@/lib/card-library-host', () => ({ useWebCardLibraryHost: () => ({ auth: { userId: null } }) }));
+vi.mock('@mahoshojo/domain/presets', () => ({ PRESET_LIST: [{ name: '同名预设', filename: 'shared.json', type: 'magical-girl', description: '合成预设' }] }));
 vi.mock('@/components/arena/hooks/useArenaData', () => ({ usePresetQuery: () => {
   const preset = { name: '同名预设', filename: 'shared.json', type: 'magical-girl', description: '合成预设' };
   return { data: [preset], grouped: { magicalGirl: [preset], canshou: [] }, isLoading: false, error: null };
@@ -14,7 +17,7 @@ vi.mock('@/components/arena/utils/characterValidator', () => ({
   validateMagicalGirlData: (data: unknown) => ({ success: true, data }),
   validateCanshouData: (data: unknown) => ({ success: true, data }),
 }));
-vi.mock('@/components/arena/hooks/useBattleActions', () => ({ useBattleActions: () => ({ handleSelectDataCard: vi.fn() }) }));
+vi.mock('@/components/arena/hooks/useBattleActions', () => ({ useBattleActions: () => ({ handleSelectDataCard: vi.fn(), handleToggleCombatantDataCard: vi.fn() }) }));
 vi.mock('@/components/ranking/LeaderboardEntityDetailsModal', () => ({ LeaderboardEntityDetailsModal: () => null }));
 
 import { PresetSelector } from '@/components/arena/components/PresetSelector';
@@ -29,9 +32,9 @@ beforeEach(() => {
     cardLibrarySelectionId: 'local:separate', isValid: false, isPreset: false,
   }] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  client.setQueryData(['tags'], { success: true, tags: [] });
-  client.setQueryData(['seasonsConfig'], { schemaVersion: 1, seasons: [] });
-  client.setQueryData(['arenaLeaderboardModal', 'strict', 'rating', true, 'any', '', '', '', '', '', '', '', '', 0], {
+  client.setQueryData(['tags', { kind: 'tags' }], { success: true, tags: [] });
+  client.setQueryData(['seasonsConfig', { kind: 'seasons' }], { schemaVersion: 1, seasons: [] });
+  client.setQueryData(['arenaLeaderboard', { kind: 'leaderboard', filters: rankingTransportFilters(defaultFilters), limit: 30, offset: 0 }], {
     success: true, items: [{ rank: 1, entityType: 'preset', entityId: 'shared.json', displayName: '同名预设', authorName: null,
       rating: 1000, games: 3, wins: 2, losses: 1, draws: 0, tier: '无牌', techScore: null, techLevel: null, isNative: true, tagIds: [] }],
   });

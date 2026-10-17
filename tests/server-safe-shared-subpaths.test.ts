@@ -244,11 +244,17 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     ].sort());
     expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
     expect(bundled.outputFiles[0].text).not.toMatch(/\b(?:window|document|localStorage|fetch|WebSocket)\b/u);
-    for (const file of ['components/arena/components/ArenaRankingModal.tsx', 'lib/database/arena-ratings.ts']) {
+    for (const file of ['lib/database/arena-ratings.ts']) {
       const source = readFileSync(path.resolve(PACKAGE_ROOT, '../../apps/web', file), 'utf8');
       expect(source).toContain("from '@/lib/arena/strict-range'");
       expect(source).not.toContain('const STRICT_MAX_ABS_DIFF_BY_TIER');
     }
+    const sharedView = readFileSync(path.join(PACKAGE_ROOT, 'src/ranking/ArenaRankingModalView.tsx'), 'utf8');
+    expect(sharedView).toContain("from '@mahoshojo/domain/arena-strict-range'");
+    expect(sharedView).not.toContain('const STRICT_MAX_ABS_DIFF_BY_TIER');
+    const webAdapter = readFileSync(path.resolve(PACKAGE_ROOT, '../../apps/web/components/arena/components/ArenaRankingModal.tsx'), 'utf8');
+    expect(webAdapter).toContain('<ArenaRankingModalView');
+    expect(webAdapter).not.toContain('getStrictRangeCheckResult');
   });
 
   // Web 服务端预设校验与 picker 共用纯 domain 目录；不能误归到 ui-web 的客户端列表。

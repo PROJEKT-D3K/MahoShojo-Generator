@@ -273,6 +273,22 @@ describe('shared Arena roster section via solo adapter', () => {
     expect(useBattleStore.getState().adjudicationEvents.map((entry) => entry.id)).toEqual(['one']);
   });
 
+  it('预设 typed 引用与同名上传区分，行动、分队与撤选只作用于真实预设', () => {
+    useBattleStore.setState({ combatants: [
+      dataCombatant('same.json', '上传角色'),
+      { ...dataCombatant('same.json', '预设角色'), isPreset: true },
+    ] });
+    const [upload, preset] = useBattleStore.getState().combatants;
+    expect(getArenaRosterCombatantKey(preset)).not.toBe(getArenaRosterCombatantKey(upload));
+    const reference = { rosterKey: getArenaRosterCombatantKey(preset) };
+    useBattleStore.getState().updateCombatantCharacterGuidance(reference, '预设行动');
+    useBattleStore.getState().updateCombatantTeam(reference, 1);
+    expect(useBattleStore.getState().combatants.map(item => ({ guidance: 'data' in item ? item.characterGuidance : undefined, teamId: item.teamId })))
+      .toEqual([{ guidance: undefined, teamId: undefined }, { guidance: '预设行动', teamId: 1 }]);
+    useBattleStore.getState().removeCombatant(reference);
+    expect(useBattleStore.getState().combatants).toMatchObject([{ isPreset: false, filename: 'same.json' }]);
+  });
+
   it('卡库 UI key 与旧上传 filename 相同也只修改/移除命中的卡库行', () => {
     useBattleStore.setState({ combatants: [
       { ...dataCombatant('同名.json', '库角色'), cardLibrarySelectionId: 'local:two', adjudicationSourceKey: 'library:local:two' },
