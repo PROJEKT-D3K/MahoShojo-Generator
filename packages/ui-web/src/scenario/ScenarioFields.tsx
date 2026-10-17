@@ -1,3 +1,4 @@
+import { buttonClassName } from '../card-library/Button';
 import { SCENARIO_QUESTIONS, SCENARIO_OPTIONAL_FIELDS } from './product';
 
 export function ScenarioTitleField({ value, onChange, disabled }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
@@ -17,7 +18,7 @@ export function ScenarioQuestionFields({ answers, onChange }: { answers: Readonl
 
 export function ScenarioBlankFields({ expanded, onToggle, fields, onChange }: { expanded: boolean; onToggle: () => void; fields: readonly string[]; onChange: (field: string) => void }) {
   return <div className="input-group mt-6">
-    <button type="button" onClick={onToggle} className="text-sm font-semibold text-purple-700 hover:underline focus:outline-none">{expanded ? '▼ ' : '▶ '}高级选项：强制留空字段</button>
+    <button type="button" onClick={onToggle} className={buttonClassName({ variant: 'link', size: 'sm', className: 'justify-start px-0 text-left text-sm font-semibold text-purple-700 dark:text-purple-300' })}>{expanded ? '▼ ' : '▶ '}高级选项：强制留空字段</button>
     {expanded && <div className="mt-3 p-4 bg-purple-50 border border-purple-200 rounded-lg">
       <p className="text-xs text-gray-600 mb-3">勾选你希望AI在生成时强制留空的字段，以获得更灵活的情景文件。</p>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

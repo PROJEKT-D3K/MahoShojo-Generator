@@ -194,6 +194,24 @@ const expectSharedOutput = (css: string, artifact: string): void => {
   expect(['white', '#fff', '#ffffff'], artifact).toContain(declarationsFor('.result-card').color);
   expect(declarationsFor('.result-content'), artifact).toMatchObject({ position: 'relative', 'z-index': '1' });
   expect(declarationsFor('.creator-workbench-shell .creator-workbench-sidebar'), artifact).toMatchObject({ position: 'sticky', top: '24px', 'align-self': 'start' });
+
+  // Compact disclosure and recovery actions use Button utilities, including a visible replacement for outline-none.
+  const compactActionDeclarations = (utility: string): Record<string, string> => {
+    const values: Record<string, string> = {};
+    stylesheet.walkRules((rule) => {
+      if (rule.selectors.some((selector) => selector === `.${utility}` || selector.startsWith(`.${utility}:`))) {
+        rule.walkDecls((decl) => { values[decl.prop] = decl.value; });
+      }
+    });
+    return values;
+  };
+  expect(compactActionDeclarations('hover\\:underline')['text-decoration-line'], artifact).toBe('underline');
+  expect(compactActionDeclarations('focus-visible\\:ring-2')['--tw-ring-shadow'], artifact).toContain('2px');
+  expect(compactActionDeclarations('focus-visible\\:ring-2')['box-shadow'], artifact).toContain('var(--tw-ring-shadow)');
+  expect(compactActionDeclarations('focus-visible\\:ring-fuchsia-500')['--tw-ring-color'], artifact).toBe('var(--color-fuchsia-500)');
+  expect(compactActionDeclarations('dark\\:text-purple-300').color, artifact).toBe('var(--color-purple-300)');
+  expect(compactActionDeclarations('disabled\\:cursor-not-allowed').cursor, artifact).toBe('not-allowed');
+  expect(['50%', '.5', '0.5'], artifact).toContain(compactActionDeclarations('disabled\\:opacity-50').opacity);
 };
 
 const compileWebCss = async (): Promise<string> => {

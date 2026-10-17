@@ -1,3 +1,4 @@
+import { buttonClassName } from '../card-library/Button';
 import { useState, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 
 import type { CharacterManagerCapabilities } from './capabilities';
@@ -45,7 +46,7 @@ export function CharacterManagerGuide({
     <div className="mb-6 p-4 bg-gray-100 border border-gray-300 rounded-lg text-sm text-gray-800">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full text-left font-bold text-gray-700 mb-2 focus:outline-none"
+        className={buttonClassName({ variant: 'link', size: 'sm', className: 'mb-2 w-full justify-start px-0 text-left text-sm font-bold text-gray-700 dark:text-gray-200' })}
       >
         {isOpen ? '▼' : '▶'} 使用指南
       </button>

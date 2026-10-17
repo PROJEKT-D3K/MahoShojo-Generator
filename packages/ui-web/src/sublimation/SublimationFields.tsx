@@ -1,3 +1,4 @@
+import { buttonClassName } from '../card-library/Button';
 import type { ReactNode } from 'react';
 import { TARGET_TEMPLATE_OPTIONS, TARGET_TEMPLATE_LABELS, PRESERVABLE_FIELDS_CONFIG, type SupportedTargetTemplate } from './product';
 
@@ -83,7 +84,7 @@ export function SublimationPreserveFields({ expanded, hasSource, disabled, onTog
   const currentFieldsConfig = PRESERVABLE_FIELDS_CONFIG[targetTemplate];
   return (
     <div className="input-group mt-6">
-        <button onClick={onToggle} disabled={disabled} className="text-sm font-semibold text-purple-700 hover:underline focus:outline-none">
+        <button onClick={onToggle} disabled={disabled} className={buttonClassName({ variant: 'link', size: 'sm', className: 'justify-start px-0 text-left text-sm font-semibold text-purple-700 dark:text-purple-300' })}>
             {expanded ? '▼ ' : '▶ '}高级选项：自定义升华范围
         </button>
         {expanded && hasSource && (
