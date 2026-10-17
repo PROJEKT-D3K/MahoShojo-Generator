@@ -16,6 +16,18 @@ export interface AuthData {
   activityToken?: string;
 }
 
+export type OwnedAuthHeaders = Readonly<{
+  identity: AuthIdentity;
+  headers: Readonly<Record<string, string>>;
+}>;
+
+export class AuthIdentityChangedError extends Error {
+  constructor() {
+    super('登录身份已变化，已取消旧请求，请重新操作。');
+    this.name = 'AuthIdentityChangedError';
+  }
+}
+
 // Web Crypto API 加密工具
 class CryptoHelper {
   private async getKey(): Promise<CryptoKey> {
@@ -276,6 +288,29 @@ export const authStorage = {
     if (cachedHeader) return cachedHeader;
     const bootstrapped = await bootstrapAuthFromSession();
     return bootstrapped?.identity.isCurrent() ? readStoredAuthHeader(bootstrapped.auth) : null;
+  },
+
+  // 一次业务请求只读取一份身份；仅本次合法 session bootstrap 可以续到其结果身份。
+  async getOwnedAuthHeaders(identity: AuthIdentity = captureAuthIdentity()): Promise<OwnedAuthHeaders> {
+    if (!identity.isCurrent()) throw new AuthIdentityChangedError();
+    let auth = await this.getAuth();
+    if (!identity.isCurrent()) throw new AuthIdentityChangedError();
+    if (!readStoredAuthHeader(auth)) {
+      const bootstrapped = await bootstrapAuthFromSession();
+      if (bootstrapped) {
+        auth = bootstrapped.auth;
+        identity = bootstrapped.identity;
+      }
+    }
+    if (!identity.isCurrent()) throw new AuthIdentityChangedError();
+    const headers: Record<string, string> = {};
+    const authorization = readStoredAuthHeader(auth);
+    if (authorization) headers.Authorization = authorization;
+    if (auth?.activityToken) headers['x-mahoshojo-activity-token'] = auth.activityToken;
+    if (typeof auth?.userId === 'number' && Number.isSafeInteger(auth.userId) && auth.userId > 0) {
+      headers['x-mahoshojo-user-id'] = String(auth.userId);
+    }
+    return Object.freeze({ identity, headers: Object.freeze(headers) });
   },
 
   // 获取“活跃统计”头（不依赖额外 D1 读取）

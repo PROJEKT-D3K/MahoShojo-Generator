@@ -75,6 +75,8 @@ export type GenerationApiIntentDependencies = {
   fetcher?: GenerationFetch;
   observe?: HostedDrClientTelemetryObserver;
   selectPlacement?: typeof selectHostedDrPlacement;
+  /** 同步的最终派发围栏；抛错表示业务请求尚未发出。 */
+  beforeDispatch?: () => void;
   onSettled?: () => void;
 };
 
@@ -277,7 +279,7 @@ const wrapAmbiguousBodyErrors = (
 
 type PinnedGenerationApiSafeReadDependencies = Pick<
   GenerationApiIntentDependencies,
-  'auth' | 'fetcher' | 'observe'
+  'auth' | 'fetcher' | 'observe' | 'beforeDispatch'
 >;
 
 export const createPinnedGenerationApiSafeReadDispatcher = (
@@ -286,6 +288,7 @@ export const createPinnedGenerationApiSafeReadDispatcher = (
     auth = authStorage,
     fetcher = fetch,
     observe = observeHostedDrClientTelemetry,
+    beforeDispatch,
   }: PinnedGenerationApiSafeReadDependencies = {},
 ): PinnedGenerationApiSafeReadDispatcher => {
   if (!isGenerationApiRoutePin(routePin)) {
@@ -309,6 +312,7 @@ export const createPinnedGenerationApiSafeReadDispatcher = (
       const target = pinnedRoute.placement === 'hono-primary'
         ? `${hostedDrClientRouting.primaryOrigin.replace(/\/+$/u, '')}${input}`
         : input;
+      beforeDispatch?.();
       let response: Response;
       try {
         response = await fetcher(target, {
@@ -332,6 +336,7 @@ export const createGenerationApiIntent = ({
   fetcher = fetch,
   observe = observeHostedDrClientTelemetry,
   selectPlacement = selectHostedDrPlacement,
+  beforeDispatch,
   onSettled,
 }: GenerationApiIntentDependencies = {}): GenerationApiIntent => {
   let consumed = false;
@@ -420,6 +425,8 @@ export const createGenerationApiIntent = ({
       let headers: Headers;
       try {
         headers = await buildGenerationApiHeaders(auth, init.headers);
+        notifyRoutePinSelected();
+        beforeDispatch?.();
       } catch (error) {
         if (decision) {
           emitHostedDrClientTelemetry(
@@ -430,8 +437,6 @@ export const createGenerationApiIntent = ({
         settle();
         throw error;
       }
-      notifyRoutePinSelected();
-
       let response: Response;
       try {
         response = await fetcher(target, {
@@ -478,7 +483,7 @@ export const createGenerationApiIntent = ({
 };
 
 export type GenerationApiIntentLatch = Readonly<{
-  tryAcquire: () => GenerationApiIntent | null;
+  tryAcquire: (_request?: Pick<GenerationApiIntentDependencies, 'auth' | 'beforeDispatch'>) => GenerationApiIntent | null;
 }>;
 
 export const createGenerationApiIntentLatch = (
@@ -486,10 +491,11 @@ export const createGenerationApiIntentLatch = (
 ): GenerationApiIntentLatch => {
   let activeIntent: GenerationApiIntent | null = null;
   return Object.freeze({
-    tryAcquire() {
+    tryAcquire(request = {}) {
       if (activeIntent) return null;
       const intent = createGenerationApiIntent({
         ...dependencies,
+        ...request,
         onSettled: () => {
           if (activeIntent === intent) activeIntent = null;
           dependencies.onSettled?.();

@@ -14,7 +14,16 @@ vi.mock('@/lib/client-route-adapter', () => ({ useClientRouteAdapter: () => ({ p
 vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({ isCooldown: false, startCooldown: mocks.cooldown, remainingTime: 0, otherRemainingTime: 0 }) }));
 vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: mocks.quickCheck }));
 vi.mock('@/lib/shield-word-filter', () => ({ applyShieldWords: mocks.shield }));
-vi.mock('@/lib/auth', () => ({ authStorage: { getAuthHeader: async () => null, getActivityHeaders: async () => ({}) } }));
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/auth')>(),
+  authStorage: {
+    getAuthHeader: async () => null,
+    getActivityHeaders: async () => ({}),
+    getOwnedAuthHeaders: async (identity: import('@/lib/auth-identity').AuthIdentity) => Object.freeze({
+      identity, headers: Object.freeze({}),
+    }),
+  },
+}));
 vi.mock('@/components/arena/hooks/useBattleActions', () => ({ useBattleActions: () => ({ handleResolveRandomPlaceholders: mocks.resolveRandom }) }));
 vi.mock('@/components/arena/hooks/useStreamCombatantUpdater', () => ({ useStreamCombatantUpdater: () => ({ updateFromMarkdown: mocks.updateFromMarkdown, retryGenerationUpdate: vi.fn() }) }));
 vi.mock('@/components/arena/multiplayer/useArenaRoom', () => ({ useArenaRoomContext: () => null }));

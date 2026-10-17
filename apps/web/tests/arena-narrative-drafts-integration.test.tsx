@@ -11,7 +11,16 @@ vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({ isCooldown:
 vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: mocks.quickCheck }));
 vi.mock('@/lib/shield-word-filter', () => ({ applyShieldWords: (text: string) => ({ filteredText: text }) }));
 vi.mock('@/lib/arena/narrative-draft-owner', () => ({ captureNarrativeDraftOwner: () => { const scope = mocks.scope; return { scope: `account:test-${scope}`, isCurrent: () => scope === mocks.scope }; } }));
-vi.mock('@/lib/auth', () => ({ authStorage: { getAuthHeader: async () => null, getActivityHeaders: async () => ({}) } }));
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/auth')>(),
+  authStorage: {
+    getAuthHeader: async () => null,
+    getActivityHeaders: async () => ({}),
+    getOwnedAuthHeaders: async (identity: import('@/lib/auth-identity').AuthIdentity) => Object.freeze({
+      identity, headers: Object.freeze({}),
+    }),
+  },
+}));
 vi.mock('@/components/arena/hooks/useBattleActions', () => ({ useBattleActions: () => ({ handleResolveRandomPlaceholders: async () => {} }) }));
 vi.mock('@/components/arena/hooks/useStreamCombatantUpdater', () => ({ useStreamCombatantUpdater: () => ({ updateFromMarkdown: mocks.update, retryGenerationUpdate: vi.fn() }) }));
 vi.mock('@/lib/arena-room/narrative-history-runtime', async (importOriginal) => ({ ...await importOriginal<typeof import('@/lib/arena-room/narrative-history-runtime')>(), appendArenaNarrativeHistoryResult: mocks.appendHistory }));

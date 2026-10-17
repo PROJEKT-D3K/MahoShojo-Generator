@@ -38,7 +38,8 @@ import {
   STREAM_READ_TOTAL_TIMEOUT_MS,
   StreamReadTimeoutError,
 } from '@/lib/stream/timeout';
-import { authStorage } from '@/lib/auth';
+import { authStorage, AuthIdentityChangedError, type OwnedAuthHeaders } from '@/lib/auth';
+import { captureAuthIdentity } from '@/lib/auth-identity';
 import { secureRandomUUID } from '@/lib/crypto';
 import { normalizeAdjudicationEvents } from '@mahoshojo/domain/adjudicator-normalize';
 import { buildArenaQuestionnaireRequest } from '../utils/questionnaireRequest';
@@ -254,9 +255,11 @@ const checkSensitivePayload = async (
     origin?: string;
     backupItems?: ArrestedBackupDraftItem[];
     onRedirect?: (reason?: string, withBackup?: boolean) => void;
+    canCommit?: () => boolean;
   }
 ): Promise<boolean> => {
   const result = await quickCheck(payload);
+  if (options.canCommit && !options.canCommit()) return false;
   if (!result.hasSensitiveWords) {
     return false;
   }
@@ -480,7 +483,27 @@ export const useBattleEngine = () => {
       return;
     }
 
-    latestResultNavigationRequest = null;
+    const generationRequestId = secureRandomUUID();
+    latestResultNavigationRequest = generationRequestId;
+    const initialRequestIdentity = roomAction.inRoom ? null : captureAuthIdentity();
+    let requestAuth: OwnedAuthHeaders | null = null;
+    const requestAbortController = !roomAction.inRoom && generationMode === 'stream' ? new AbortController() : null;
+    const isLatestRequest = () => latestResultNavigationRequest === generationRequestId;
+    const isRequestIdentityCurrent = () => (requestAuth?.identity ?? initialRequestIdentity)?.isCurrent() ?? true;
+    const canCommit = () => isLatestRequest() && isRequestIdentityCurrent();
+    const ensureRequestIdentityCurrent = () => {
+      if (isRequestIdentityCurrent()) return;
+      // C0 的恢复循环会吞单次读取错误；撤销自身 signal 才会停止旧身份恢复。
+      requestAbortController?.abort('auth-identity-changed');
+      throw new AuthIdentityChangedError();
+    };
+    const beforeDispatch = () => {
+      ensureRequestIdentityCurrent();
+      if (!isLatestRequest() || requestAbortController?.signal.aborted) {
+        requestAbortController?.abort('generation-superseded');
+        throw new DOMException('生成请求已取消', 'AbortError');
+      }
+    };
     useBattleStore.setState({ resultNavigation: null });
     setIsGenerating(true);
     const narrativeDraftOwner = captureNarrativeDraftOwner();
@@ -512,6 +535,7 @@ export const useBattleEngine = () => {
       // 房间房主与单人模式共用随机角色解析；随后的 bundle 对比会把
       // 新角色视为本地草稿，只有权威 revision/提案/冲突门禁均满足时才自动发布。
       await handleResolveRandomPlaceholders();
+      if (!roomAction.inRoom) beforeDispatch();
 
       const freshCombatants = useBattleStore.getState().combatants.filter((item): item is CombatantData => 'data' in item);
 
@@ -530,13 +554,13 @@ export const useBattleEngine = () => {
 
       if (!roomAction.inRoom) {
         for (const payload of sensitiveTargets) {
-          if (payload && (await checkSensitivePayload(payload, { onRedirect: redirectToArrested }))) {
+          if (payload && (await checkSensitivePayload(payload, { onRedirect: redirectToArrested, canCommit }))) {
             return;
           }
         }
       }
 
-      const generationRequestId = secureRandomUUID();
+      if (!roomAction.inRoom) beforeDispatch();
       const { questionnaireSelections, questionnaires } = buildArenaQuestionnaireRequest(selectedQuestionnaires);
       const businessInputSnapshot = roomAction.inRoom ? null : buildArenaGenerationInputSnapshot({
         combatants: freshCombatants,
@@ -578,8 +602,10 @@ export const useBattleEngine = () => {
       if (reportFormat === 'web' && webPackageRef && !isBuiltinWebPackageRef(webPackageRef)) {
         try {
           const base = await resolveWebPackage(webPackageRef);
+          if (!roomAction.inRoom) beforeDispatch();
           webPackagePromptProjection = buildWebPackagePromptProjection(base);
         } catch {
+          if (!canCommit()) return;
           setError('本地 Web 包未加载或已损坏，请重新导入后再生成。');
           return;
         }
@@ -767,7 +793,7 @@ export const useBattleEngine = () => {
           questionnaires ? JSON.stringify(questionnaires) : '',
         ];
         for (const payload of selectedSensitiveTargets) {
-          if (payload && await checkSensitivePayload(payload, { onRedirect: redirectToArrested })) {
+          if (payload && await checkSensitivePayload(payload, { onRedirect: redirectToArrested, canCommit })) {
             return;
           }
         }
@@ -810,7 +836,6 @@ export const useBattleEngine = () => {
       }
       if (!requestBody) throw new Error('无法构造单人生成请求。');
       const resultNavigationRequest = { generationRequestId };
-      latestResultNavigationRequest = generationRequestId;
       let resultNavigationSignal: AbortSignal | undefined;
       let resultNavigationPublished = false;
       const revealGeneratedResult = () => {
@@ -826,10 +851,17 @@ export const useBattleEngine = () => {
       };
 
 
-      const authHeader = await authStorage.getAuthHeader();
-      const baseRequestHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authHeader) baseRequestHeaders.Authorization = authHeader;
-      Object.assign(baseRequestHeaders, await authStorage.getActivityHeaders());
+      requestAuth = await authStorage.getOwnedAuthHeaders(initialRequestIdentity!);
+      beforeDispatch();
+      const ownedHeaders = requestAuth.headers;
+      const frozenAuth = Object.freeze({
+        getAuthHeader: async () => ownedHeaders.Authorization ?? null,
+        getActivityHeaders: async () => Object.fromEntries(
+          Object.entries(ownedHeaders).filter(([name]) => name !== 'Authorization'),
+        ),
+      });
+      const requestDependencies = { auth: frozenAuth, beforeDispatch };
+      const baseRequestHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...ownedHeaders };
       const requestHeaders = Object.fromEntries(
         withArenaGenerationActorToken(baseRequestHeaders).entries(),
       );
@@ -908,7 +940,7 @@ export const useBattleEngine = () => {
       };
 
 	      if (generationMode === 'stream') {
-	        const abortController = new AbortController();
+	        const abortController = requestAbortController!;
 	        sharedGenerationAbortController?.abort(STREAM_ABORT_REASON_USER);
 	        sharedGenerationAbortController = abortController;
           const draftEvidence = createHostedNarrativeDraftEvidence();
@@ -958,13 +990,13 @@ export const useBattleEngine = () => {
                       if (pinnedReadDispatcher?.placement !== routePin.placement) {
                         pinnedReadDispatcher = {
                           placement: routePin.placement,
-                          dispatcher: createPinnedGenerationApiSafeReadDispatcher(routePin),
+                          dispatcher: createPinnedGenerationApiSafeReadDispatcher(routePin, requestDependencies),
                         };
                       }
                       return pinnedReadDispatcher.dispatcher.dispatch(input, init);
                     }
                     if (input === endpoint && (init?.method ?? 'GET').toUpperCase() === 'POST') {
-                      generationIntent ??= generationApiIntentLatch.tryAcquire();
+                      generationIntent ??= generationApiIntentLatch.tryAcquire(requestDependencies);
                       if (!generationIntent) {
                         throw new Error('已有生成请求正在处理中，请勿重复提交。');
                       }
@@ -974,7 +1006,13 @@ export const useBattleEngine = () => {
                       const dispatched = generationIntent.dispatch(input, init);
                       return unsubscribe ? dispatched.finally(unsubscribe) : dispatched;
                     }
-                    return createGenerationApiIntent().dispatch(input, init);
+                    const method = (init?.method ?? 'GET').toUpperCase();
+                    const isCancel = method === 'DELETE' || (method === 'POST' && input.endsWith('/cancel'));
+                    // 明确停止使用独立 signal；即使原流已 abort，也只按原身份发送取消。
+                    return createGenerationApiIntent({
+                      auth: frozenAuth,
+                      beforeDispatch: isCancel ? ensureRequestIdentityCurrent : beforeDispatch,
+                    }).dispatch(input, init);
                   },
                   isInitialCreateOutcomeAmbiguous: (error) => (
                     isGenerationApiClientErrorCode(error, 'AMBIGUOUS_OPERATION_OUTCOME')
@@ -985,6 +1023,7 @@ export const useBattleEngine = () => {
                   onTerminalBoundary: draftEvidence.onTerminalBoundary,
                   onStateChange: (state) => {
                     lastArenaConnectionState = state;
+                    if (!canCommit()) return;
                     setArenaGenerationConnectionState(state);
                     if (isArenaGenerationRecoveryState(state) || state === 'cancelling') {
                       setError(null);
@@ -995,8 +1034,13 @@ export const useBattleEngine = () => {
                   },
                 });
 
+          if (!canCommit()) {
+            await response.body?.cancel('stale generation identity').catch(() => undefined);
+            return;
+          }
           if (!response.ok) {
             const text = await response.text();
+            if (!canCommit()) return;
             let json: any = null;
             try {
               json = JSON.parse(text);
@@ -1144,6 +1188,7 @@ export const useBattleEngine = () => {
 	            idleTimeoutMs: STREAM_READ_IDLE_TIMEOUT_MS,
 	            totalTimeoutMs: STREAM_READ_TOTAL_TIMEOUT_MS,
 	            onSoftTimeout: (event) => {
+	              if (!canCommit()) return;
 	              if (debugSseEnabled) {
 	                console.warn('SSE 调试：读流软超时（仅提示，不切断）', {
 	                  kind: event.kind,
@@ -1246,6 +1291,7 @@ export const useBattleEngine = () => {
             const handleSensitiveIfNeeded = async () => {
               const { slice: sliceToCheck, startIndex: sliceStartIndex } = getIncrementalCheckSlice(accumulatedText);
               const sensitiveCheck = await quickCheck(sliceToCheck);
+              beforeDispatch();
               if (!sensitiveCheck.hasSensitiveWords) return false;
 
               if (streamBackupItems.length > 0) {
@@ -1313,6 +1359,7 @@ export const useBattleEngine = () => {
             };
 
             const handleSseEvent = async (event: string, data: string) => {
+              beforeDispatch();
               let payload: any = null;
               try {
                 payload = data ? JSON.parse(data) : null;
@@ -1514,6 +1561,7 @@ export const useBattleEngine = () => {
 
             while (true) {
               const { value, done } = await readWithTimeout(reader);
+              beforeDispatch();
               if (done) break;
               if (!value) continue;
 
@@ -1587,6 +1635,7 @@ export const useBattleEngine = () => {
 	          } else {
 	            while (true) {
               const { value, done } = await readWithTimeout(reader);
+              beforeDispatch();
               if (done) {
                 break;
               }
@@ -1599,6 +1648,7 @@ export const useBattleEngine = () => {
 
               const { slice: sliceToCheck, startIndex: sliceStartIndex } = getIncrementalCheckSlice(accumulatedText);
               const sensitiveCheck = await quickCheck(sliceToCheck);
+              beforeDispatch();
               if (sensitiveCheck.hasSensitiveWords) {
                 if (streamBackupItems.length > 0) {
                   persistArrestedBackup({
@@ -1652,6 +1702,7 @@ export const useBattleEngine = () => {
 	            }
 	          }
 
+          if (!canCommit()) return;
           const currentDraftScope = draftScopeMounted.current && sharedGenerationAbortController === abortController;
           if (isSseResponse && currentDraftScope && narrativeDraftOwner.isCurrent() && !abortController.signal.aborted && !authoritativeWebContract) {
             const completedRequest = draftEvidence.completedRequest();
@@ -1698,6 +1749,7 @@ export const useBattleEngine = () => {
             try {
               // 先移除并提取系统追加的 telemetry 注释（token/叙事历史读取条数），避免影响后续更新元数据解析。
               const telemetryExtracted = await extractStreamTelemetryMeta(accumulatedText);
+              beforeDispatch();
               if (telemetryExtracted?.meta) {
                 const usage = normalizeUsage(telemetryExtracted.meta.usage ?? null);
                 const narrativeCount =
@@ -1719,6 +1771,7 @@ export const useBattleEngine = () => {
 
               if (allowStreamMeta) {
                 const extracted = await extractStreamUpdateMeta(markdownForUi);
+                beforeDispatch();
                 streamUpdateMeta = extracted?.meta ?? null;
                 if (extracted?.meta && (extracted.meta.report || (extracted.meta.impacts && extracted.meta.impacts.length > 0))) {
                   const impacts = normalizeBattleAiImpacts(extracted.meta.impacts, sanitizeTextByShieldWords);
@@ -1760,6 +1813,7 @@ export const useBattleEngine = () => {
                 }
               }
             } catch (metaError) {
+              if (!canCommit()) return;
               console.warn('解析流式战报元数据失败，将回退到 Markdown 解析更新', metaError);
               if (settings.writeArenaHistory || settings.writeCurrentState) {
                 setStreamUpdateMetaDebug({
@@ -1867,16 +1921,21 @@ export const useBattleEngine = () => {
         }
       }
 
-      const generationIntent = generationApiIntentLatch.tryAcquire();
+      const generationIntent = generationApiIntentLatch.tryAcquire(requestDependencies);
       if (!generationIntent) return;
       const response = await generationIntent.dispatch('/api/generate-battle-story', {
         method: 'POST',
         headers: requestHeaders,
         body: JSON.stringify(requestBody),
       });
+      if (!canCommit()) {
+        await response.body?.cancel('stale generation identity').catch(() => undefined);
+        return;
+      }
       captureArenaGenerationActorToken(response);
       if (!response.ok) {
         const text = await response.text();
+        if (!canCommit()) return;
         let json: any = null;
         try {
           json = JSON.parse(text);
@@ -1897,6 +1956,7 @@ export const useBattleEngine = () => {
       }
 
       const result: BattleApiResponse = await response.json();
+      if (!canCommit()) return;
 
       if (await applyBattleResult(result, 'battle')) {
         return;
@@ -1904,9 +1964,10 @@ export const useBattleEngine = () => {
 
       startCooldown();
 	    } catch (error) {
+          if (!canCommit()) return;
 	      const shouldTreatAsInterrupted = generationMode === 'stream' && isStreamInterruptedError(error);
 	      if (shouldTreatAsInterrupted) {
-          const abortReason = sharedGenerationAbortController?.signal.reason;
+          const abortReason = requestAbortController?.signal.reason;
           if (abortReason === STREAM_ABORT_REASON_USER) {
             setError(arenaGenerationConnectionNotice(lastArenaConnectionState ?? 'unknown')
               ?? '停止请求状态尚未确认；生成可能仍在后台继续，请稍后检查。');
@@ -1920,12 +1981,14 @@ export const useBattleEngine = () => {
 	        setNewsReport(null);
 	      }
 	    } finally {
-          sharedGenerationAbortController = null;
-          setArenaGenerationConnectionState(null);
-	      setArenaRoomGenerationPreflight(null);
-	      setIsGenerating(false);
-	      setIsStreaming(false);
-	      setStreamSoftTimeoutWarning(null);
+          if (sharedGenerationAbortController === requestAbortController) sharedGenerationAbortController = null;
+          if (isLatestRequest()) {
+            setArenaGenerationConnectionState(null);
+            setArenaRoomGenerationPreflight(null);
+            setIsGenerating(false);
+            setIsStreaming(false);
+            setStreamSoftTimeoutWarning(null);
+          }
 	    }
   }, [
     generationApiIntentLatch,
