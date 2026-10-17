@@ -128,12 +128,15 @@ describe('Desktop questionnaire editor real host wiring', () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     const stored = new Map<string, string>();
     const writes: LocalCardRecordV1[] = [];
+    // 显式延迟 ACK，覆盖真实摘要计算/IPC 晚于点击 act 完成的情况。
+    const saveAcks: Array<() => void> = [];
     mocks.invoke.mockReset();
     mocks.invoke.mockImplementation(async (command: string, args: { id?: string; request?: { writeMode: string; document: string } }) => {
       if (command === 'get_local_card') return stored.get(args.id!) ?? null;
       if (command !== 'save_local_card') throw new Error(`Unexpected IPC ${command}`);
       expect(args.request?.writeMode).toBe('insert-if-absent');
       const record = JSON.parse(args.request!.document) as LocalCardRecordV1;
+      await new Promise<void>((resolve) => saveAcks.push(resolve));
       if (stored.has(record.id)) return { id: record.id, alreadyPresent: true };
       writes.push(record); stored.set(record.id, args.request!.document);
       return { id: record.id, alreadyPresent: 'unconfirmed' };
@@ -150,7 +153,11 @@ describe('Desktop questionnaire editor real host wiring', () => {
       await act(async () => button('应用粘贴内容').click());
       const draft = container.querySelector('pre')!.textContent;
       await act(async () => button('另存到本地问卷库').click());
-      await act(async () => { await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('本次写入状态未知')); });
+      await act(async () => {
+        await vi.waitFor(() => expect(saveAcks).toHaveLength(1));
+        saveAcks[0]();
+      });
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain('本次写入状态未知');
       expect(container.querySelector('pre')!.textContent).toBe(draft);
       expect(container.textContent).not.toContain('已另存为本地未签名问卷');
       act(() => expect(mocks.blocker()).toBe(true));
@@ -159,7 +166,11 @@ describe('Desktop questionnaire editor real host wiring', () => {
       expect(writes).toHaveLength(1);
       expect(mocks.invoke.mock.calls.filter(([command]) => command === 'save_local_card')).toHaveLength(1);
       await act(async () => button('另存到本地问卷库').click());
-      await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('相同内容已在本地库，未覆盖已有记录')); });
+      await act(async () => {
+        await vi.waitFor(() => expect(saveAcks).toHaveLength(2));
+        saveAcks[1]();
+      });
+      expect(container.textContent).toContain('相同内容已在本地库，未覆盖已有记录');
       expect(stored.size).toBe(1); expect([...stored.values()][0]).toBe(firstDocument); expect(writes).toHaveLength(1);
       const saves = mocks.invoke.mock.calls.filter(([command]) => command === 'save_local_card');
       expect(saves).toHaveLength(2);
