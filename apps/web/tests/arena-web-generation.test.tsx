@@ -156,7 +156,7 @@ describe('single-player Web generation integration', () => {
     expect(useBattleStore.getState()).toMatchObject({ streamingMarkdown: content, resultWebPackage: artifact, resultWebReady: true, latestAiImpacts: null, updatedCombatants: [], lastGenerationRepairContext: null });
     expect(useBattleStore.getState().combatants).toEqual(original);
     expect(useBattleStore.getState().error).toContain('可体验和导出');
-    expect(mocks.updateFromMarkdown).not.toHaveBeenCalled(); expect(mocks.appendHistory).toHaveBeenCalledExactlyOnceWith({ title: 'Web 战报', contentMarkdown: content, generationId: 'generation-web-test' }); expect(mocks.queryData).not.toHaveBeenCalled();
+    expect(mocks.updateFromMarkdown).not.toHaveBeenCalled(); expect(mocks.appendHistory).toHaveBeenCalledExactlyOnceWith({ title: 'Web 战报', contentMarkdown: content, generationId: 'generation-web-test' }, expect.any(Function)); expect(mocks.queryData).not.toHaveBeenCalled();
     expect(mocks.openStream).toHaveBeenCalledOnce(); expect(mocks.cooldown).toHaveBeenCalledOnce();
   });
 

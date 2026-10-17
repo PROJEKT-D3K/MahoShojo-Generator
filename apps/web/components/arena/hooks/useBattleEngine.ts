@@ -284,6 +284,7 @@ const checkSensitivePayload = async (
 
 export const useBattleEngine = () => {
   const draftScopeMounted = useRef(true);
+  const latestRetryInvocation = useRef<symbol | null>(null);
   useEffect(() => { draftScopeMounted.current = true; return () => { draftScopeMounted.current = false; }; }, []);
   const generationApiIntentLatch = useGenerationApiIntentLatch();
   const queryClient = useQueryClient();
@@ -839,12 +840,12 @@ export const useBattleEngine = () => {
       let resultNavigationSignal: AbortSignal | undefined;
       let resultNavigationPublished = false;
       const revealGeneratedResult = () => {
-        if (generationRequestId !== latestResultNavigationRequest
-          || resultNavigationSignal?.aborted || resultNavigationPublished) return;
+        if (!canCommit() || resultNavigationSignal?.aborted || resultNavigationPublished) return;
         resultNavigationPublished = true;
         useBattleStore.setState({ resultNavigation: { request: resultNavigationRequest, signal: resultNavigationSignal } });
       };
       const publishStreamingPreview = (text: string | null) => {
+        if (!canCommit()) return;
         setStreamingMarkdown(text);
         // HTML/网页包必须等安全的可预览合同就绪；占位与元数据不算正文。
         if (useBattleStore.getState().resultReportFormat !== 'web' && text?.trim()) revealGeneratedResult();
@@ -867,6 +868,7 @@ export const useBattleEngine = () => {
       );
 
       const applyBattleResult = async (result: BattleApiResponse, origin: 'battle' | 'battle-stream') => {
+        if (!canCommit()) return true;
         const packageFallback = result.report.reportFormat === 'web' && Boolean(result.report.webPackage)
           && !hasArenaWebPackageReport({ headline: result.report.headline, winner: result.report.officialReport.winner });
         if (typeof result.generationId === 'string' && result.generationId.trim()) {
@@ -898,11 +900,13 @@ export const useBattleEngine = () => {
             reason: '使用危险符文',
             backupItems,
             onRedirect: redirectToArrested,
+            canCommit,
           })
         ) {
           return true;
         }
 
+        if (!canCommit()) return true;
         const reportWithScenario = projectArenaBattleReport({
           report: result.report, mode: battleMode, scenarioDisplayName,
           adjudicationResults: result.adjudicationResults,
@@ -933,10 +937,10 @@ export const useBattleEngine = () => {
             title: packageFallback ? 'Web 战报' : reportWithScenario.headline,
             contentMarkdown: packageFallback ? reportWithScenario.article.body : toBattleReportMarkdown(reportWithScenario),
             generationId: result.generationId ?? null,
-          });
+          }, canCommit);
         }
 
-        return false;
+        return !canCommit();
       };
 
 	      if (generationMode === 'stream') {
@@ -1881,9 +1885,10 @@ export const useBattleEngine = () => {
                 : extractTitleFromBattleMarkdown(markdownForUi),
               contentMarkdown: markdownForUi,
               generationId: resumableGenerationId ?? null,
-            });
+            }, canCommit);
           }
 
+          if (!canCommit()) return;
           startCooldown();
 
           if (!packageFallback && (settings.writeArenaHistory || settings.writeCurrentState)) {
@@ -1900,8 +1905,10 @@ export const useBattleEngine = () => {
                 shouldUseScenario ? scenario.content : null,
                 metaOverride,
                 resumableGenerationId,
+                { auth: requestAuth, canCommit },
               );
             } catch (updateError) {
+              if (!canCommit()) return;
               const message = updateError instanceof Error ? updateError.message : '发生未知错误，请重试。';
               setError(`⚠️ 流式战报已生成，但角色更新失败：${message}`);
             }
@@ -2076,26 +2083,41 @@ export const useBattleEngine = () => {
       return;
     }
 
+    const invocation = Symbol();
+    latestRetryInvocation.current = invocation;
+    const initialIdentity = captureAuthIdentity();
+    const resultRequest = latestResultNavigationRequest;
+    let retryAuth: OwnedAuthHeaders | null = null;
+    const isLatestInvocation = () => latestRetryInvocation.current === invocation;
+    const canCommit = () => {
+      if (!isLatestInvocation() || latestResultNavigationRequest !== resultRequest
+        || !(retryAuth?.identity ?? initialIdentity).isCurrent()) return false;
+      if (arenaRoomRuntime?.controller.getSnapshot().session) return false;
+      const currentState = useBattleStore.getState();
+      if (currentState.lastGenerationId?.trim() !== lastGenerationId) return false;
+      if (currentState.repairAppliedGenerationId === lastGenerationId) return false;
+      if (!currentState.isCombatantMutationPending) return false;
+      const currentRoster = currentState.combatants.filter(
+        (item): item is CombatantData => 'data' in item,
+      );
+      return currentRoster.length === roster.length
+        && currentRoster.every((combatant, index) => combatant === roster[index]);
+    };
     setIsRedoingUpdates(true);
     setError(null);
     try {
-      await retryGenerationUpdate(lastGenerationId, roster, () => {
-        if (arenaRoomRuntime?.controller.getSnapshot().session) return false;
-        const currentState = useBattleStore.getState();
-        if (currentState.lastGenerationId?.trim() !== lastGenerationId) return false;
-        if (currentState.repairAppliedGenerationId === lastGenerationId) return false;
-        if (!currentState.isCombatantMutationPending) return false;
-        const currentRoster = currentState.combatants.filter(
-          (item): item is CombatantData => 'data' in item,
-        );
-        return currentRoster.length === roster.length
-          && currentRoster.every((combatant, index) => combatant === roster[index]);
-      });
+      retryAuth = await authStorage.getOwnedAuthHeaders(initialIdentity);
+      if (!canCommit()) return;
+      await retryGenerationUpdate(lastGenerationId, roster, canCommit, retryAuth);
     } catch (error) {
-      setError(`⚠️ 重试角色更新失败：${error instanceof Error ? error.message : '发生未知错误，请重试。'}`);
+      if (canCommit()) {
+        setError(`⚠️ 重试角色更新失败：${error instanceof Error ? error.message : '发生未知错误，请重试。'}`);
+      }
     } finally {
-      useBattleStore.getState().endCombatantMutation();
-      setIsRedoingUpdates(false);
+      if (isLatestInvocation()) {
+        useBattleStore.getState().endCombatantMutation();
+        setIsRedoingUpdates(false);
+      }
     }
   }, [
     arenaRoomRuntime,

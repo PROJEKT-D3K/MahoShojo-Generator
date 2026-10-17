@@ -1,10 +1,10 @@
 // components/arena/hooks/useStreamCombatantUpdater.ts
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { getLogger } from '@/lib/logger';
 import { withArenaGenerationActorToken } from '@/lib/arena/resumable-generation-client';
-import { authStorage } from '@/lib/auth';
-import { buildGenerationApiHeaders } from '@/lib/hono-api-client';
+import { authStorage, type OwnedAuthHeaders } from '@/lib/auth';
+import { captureAuthIdentity } from '@/lib/auth-identity';
 import {
   applyArenaReconciliationUpdates,
   buildArenaReconciliationRetryPayload,
@@ -23,6 +23,7 @@ interface UpdateCombatantsPayload {
 
 interface UpdateCombatantsOptions {
   canCommit?: () => boolean;
+  auth?: OwnedAuthHeaders;
 }
 
 /**
@@ -31,6 +32,7 @@ interface UpdateCombatantsOptions {
 export const useStreamCombatantUpdater = () => {
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const latestInvocation = useRef<symbol | null>(null);
 
   const setCombatants = useBattleStore((state: BattleStoreState) => state.setCombatants);
   const setUpdatedCombatants = useBattleStore((state: BattleStoreState) => state.setUpdatedCombatants);
@@ -43,29 +45,51 @@ export const useStreamCombatantUpdater = () => {
    * 2. 接收签名后的数据
    * 3. 更新本地状态
    */
-  const updateCombatants = useCallback(async (
-    payload: UpdateCombatantsPayload,
+  const updateWithPayload = useCallback(async (
+    buildPayload: () => UpdateCombatantsPayload | Promise<UpdateCombatantsPayload>,
     options: UpdateCombatantsOptions = {},
   ) => {
+    const invocation = Symbol();
+    latestInvocation.current = invocation;
+    const initialIdentity = captureAuthIdentity();
+    let auth = options.auth;
+    const isLatestInvocation = () => latestInvocation.current === invocation;
+    const canCommit = () => isLatestInvocation()
+      && (auth?.identity ?? initialIdentity).isCurrent()
+      && (!options.canCommit || options.canCommit());
+    const assertCanCommit = () => {
+      if (!canCommit()) throw new Error('角色更新上下文已变化，已丢弃过期的服务器响应。');
+    };
     setIsUpdating(true);
     setUpdateError(null);
 
     try {
+      assertCanCommit();
+      auth ??= await authStorage.getOwnedAuthHeaders(initialIdentity);
+      assertCanCommit();
+      const payload = await buildPayload();
+      assertCanCommit();
       const submittedSnapshot = JSON.stringify(projectArenaReconciliationCombatants(
         payload.combatants as ArenaReconciliationRetryCombatant[],
       ));
+      const headers = withArenaGenerationActorToken({
+        'Content-Type': 'application/json',
+        ...auth.headers,
+      });
       const execute = async () => {
         const response = await fetch('/api/arena/update-combatants-after-stream', {
           method: 'POST',
-          headers: withArenaGenerationActorToken(await buildGenerationApiHeaders(
-            authStorage,
-            { 'Content-Type': 'application/json' },
-          )),
+          headers,
           body: JSON.stringify(payload),
         });
 
+        if (!canCommit()) {
+          void response.body?.cancel().catch(() => {});
+          assertCanCommit();
+        }
         if (!response.ok) {
           const errorData = await response.json();
+          assertCanCommit();
           const details = Array.isArray(errorData.errors)
             ? errorData.errors.flatMap((value: unknown) => {
               if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
@@ -79,6 +103,7 @@ export const useStreamCombatantUpdater = () => {
           ].join('；'));
         }
         const result = await response.json();
+        assertCanCommit();
         return result;
       };
       const result = await execute();
@@ -87,7 +112,7 @@ export const useStreamCombatantUpdater = () => {
       const currentSnapshot = JSON.stringify(projectArenaReconciliationCombatants(
         currentCombatants.filter((combatant): combatant is CombatantData => 'data' in combatant),
       ));
-      if ((options.canCommit && !options.canCommit()) || currentSnapshot !== submittedSnapshot) {
+      if (!canCommit() || currentSnapshot !== submittedSnapshot) {
         throw new Error('角色更新上下文已变化，已丢弃过期的服务器响应。');
       }
 
@@ -115,13 +140,20 @@ export const useStreamCombatantUpdater = () => {
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '未知错误';
-      log.error('更新角色数据失败', { error: errorMessage });
-      setUpdateError(errorMessage);
+      if (canCommit()) {
+        log.error('更新角色数据失败', { error: errorMessage });
+        setUpdateError(errorMessage);
+      }
       throw error;
     } finally {
-      setIsUpdating(false);
+      if (isLatestInvocation()) setIsUpdating(false);
     }
   }, [setCombatants, setUpdatedCombatants]);
+
+  const updateCombatants = useCallback((
+    payload: UpdateCombatantsPayload,
+    options: UpdateCombatantsOptions = {},
+  ) => updateWithPayload(() => payload, options), [updateWithPayload]);
 
   /** generationId 对应的 report / impacts / 写入策略全部以服务器冻结值为准。 */
   const updateFromMarkdown = useCallback(
@@ -144,13 +176,15 @@ export const useStreamCombatantUpdater = () => {
         }>;
       },
       generationId?: string | null,
+      options: UpdateCombatantsOptions = {},
     ) => {
       if (!generationId) throw new Error('缺少服务器 generationId，无法同步角色状态。');
-      return updateCombatants(
-        await buildArenaReconciliationRetryPayload(generationId, combatants),
+      return updateWithPayload(
+        () => buildArenaReconciliationRetryPayload(generationId, combatants),
+        options,
       );
     },
-    [updateCombatants]
+    [updateWithPayload]
   );
 
   const retryGenerationUpdate = useCallback(
@@ -158,13 +192,14 @@ export const useStreamCombatantUpdater = () => {
       generationId: string,
       combatants: CombatantData[],
       canCommit?: () => boolean,
+      auth?: OwnedAuthHeaders,
     ) => (
-      updateCombatants(
-        await buildArenaReconciliationRetryPayload(generationId, combatants),
-        { canCommit },
+      updateWithPayload(
+        () => buildArenaReconciliationRetryPayload(generationId, combatants),
+        { canCommit, auth },
       )
     ),
-    [updateCombatants]
+    [updateWithPayload]
   );
 
   return {
