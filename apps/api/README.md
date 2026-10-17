@@ -322,3 +322,9 @@ Arena create、lookup、status、resume 与两种 stop 共用实际 actor 认证
 Native 必须在创建及跨重启首次恢复前以不携 Cookie、actor token、Provider Key 的 GET 验证该证据，
 旧服务缺少该字段即不可派发；Next 不声明此能力，也没有兜底创建。此声明不是生成健康保证，
 实际创建仍独立执行 Redis、签名及 durable finalization readiness。本片代码不代表线上部署。
+
+### 本地 generation replay 成本基准
+
+运行 `pnpm --filter @mahoshojo/api benchmark:replay-local /absolute/path/to/redis-server`，使用来自 Redis 官方来源的本地二进制。脚本只启动仅绑定 127.0.0.1 的临时实例，以每次随机认证和进程 PID 校验避免误连，禁用持久化，不读取 `REDIS_URL`，退出时清理合成数据。
+
+输出区分 Redis 脚本 CPU、本地往返、请求协议字节和 state 重写字节；`small-state-control` 仅隔离内嵌 snapshot 的开销，不是可部署 adapter。保留全量 snapshot 的同频上传仍有累计平方成本，不能用小 state 对照的延迟代替完整优化结果。此基准不覆盖生产网络、并发订阅、持久化或副本负载，也不设跨机器耗时门槛。
