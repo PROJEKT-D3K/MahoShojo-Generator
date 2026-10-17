@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { webcrypto } from 'node:crypto';
 import React, { act, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,13 +13,10 @@ vi.mock('@mahoshojo/domain/arena-reconciliation', async (importOriginal) => {
     mocks.buildPayload(...args) ?? actual.buildArenaReconciliationRetryPayload(...args)
   ) };
 });
-vi.mock('@/lib/arena/resumable-generation-client', () => ({
-  withArenaGenerationActorToken: (headers: Record<string, string>) => headers,
-}));
-
 import { useStreamCombatantUpdater } from '@/components/arena/hooks/useStreamCombatantUpdater';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 import { AUTH_STORAGE_KEY, captureAuthIdentity, type AuthIdentity } from '@/lib/auth-identity';
+import { ARENA_GENERATION_ACTOR_TOKEN_HEADER, ARENA_GENERATION_ACTOR_TOKEN_KEY } from '@/lib/arena/resumable-generation-client';
 
 let currentHook: ReturnType<typeof useStreamCombatantUpdater> | null = null;
 
@@ -403,6 +401,47 @@ const successResponse = (marker: string) => new Response(JSON.stringify({
 }), { status: 200 });
 
 describe('reconciliation invocation and auth ownership', () => {
+  it.each(['stored bearer', 'cookie bootstrap', 'owned snapshot'] as const)('%s sends one identity snapshot with the real actor credential', async (source) => {
+    vi.stubGlobal('crypto', webcrypto);
+    const { authStorage } = await vi.importActual<typeof import('@/lib/auth')>('@/lib/auth');
+    authStorage.clearAuth();
+    const owner = { username: 'fixture-owner', userId: 101, authKey: 'synthetic-owner', activityToken: 'synthetic-activity' };
+    if (source !== 'cookie bootstrap') await authStorage.setAuth(owner);
+    const auth = source === 'owned snapshot' ? await authStorage.getOwnedAuthHeaders() : undefined;
+    const readAuth = vi.spyOn(authStorage, 'getAuth');
+    mocks.ownedHeaders.mockImplementation((identity: AuthIdentity) => authStorage.getOwnedAuthHeaders(identity));
+    localStorage.setItem(ARENA_GENERATION_ACTOR_TOKEN_KEY, 'signed.fixture-actor');
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => url === '/api/auth/verify'
+      ? Response.json({ success: true, authSource: 'better-auth-session', authKey: owner.authKey,
+        user: { id: owner.userId, username: owner.username }, activityToken: owner.activityToken })
+      : successResponse('owner'));
+    vi.stubGlobal('fetch', fetchMock);
+    const cleanup = await mountUpdater();
+    try {
+      await act(async () => currentHook!.updateFromMarkdown('', [ownerCombatant], 'daily', {
+        userGuidance: '', writeArenaHistory: true, writeCurrentState: false,
+      }, null, undefined, 'generation-owner', { auth }));
+      const updates = fetchMock.mock.calls.filter(([url]) => url === '/api/arena/update-combatants-after-stream');
+      expect(updates).toHaveLength(1);
+      expect(updates[0]![1]?.method).toBe('POST');
+      expect(Object.fromEntries(new Headers(updates[0]![1]?.headers))).toEqual({
+        authorization: 'Bearer synthetic-owner',
+        'content-type': 'application/json',
+        'x-mahoshojo-activity-token': 'synthetic-activity',
+        'x-mahoshojo-user-id': '101',
+        [ARENA_GENERATION_ACTOR_TOKEN_HEADER.toLowerCase()]: 'signed.fixture-actor',
+      });
+      expect(readAuth).toHaveBeenCalledTimes(source === 'owned snapshot' ? 0 : 1);
+      expect(mocks.ownedHeaders).toHaveBeenCalledTimes(source === 'owned snapshot' ? 0 : 1);
+      expect(fetchMock).toHaveBeenCalledTimes(source === 'cookie bootstrap' ? 2 : 1);
+      expect(useBattleStore.getState().combatants[0]).toMatchObject({ data: { marker: 'owner' } });
+    } finally {
+      readAuth.mockRestore();
+      authStorage.clearAuth();
+      await cleanup();
+    }
+  });
+
   it.each(['success', 'error'] as const)('A 的迟到 %s 不清除 B busy、不写入 error/roster，且释放旧 body', async (kind) => {
     const cleanup = await mountUpdater();
     const responseA = deferred<Response>(), responseB = deferred<Response>();

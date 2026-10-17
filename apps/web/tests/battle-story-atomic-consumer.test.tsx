@@ -426,9 +426,27 @@ async function completeForRoles(markdown = '# 保留正文\n完整结尾') {
 describe('completed story body survives unresolved headerless Web roles', () => {
   it('network failure retains body before role, retries only frozen generation/input and preserves current draft', async () => {
     fixture.state.settings.writeCurrentState = true;
+    localStorage.setItem('mahoshojo_auth', 'stored-A');
+    fixture.authHeader.mockResolvedValue('Bearer credential-A');
+    fixture.activityHeaders.mockResolvedValue({ 'x-mahoshojo-user-id': '1', 'x-mahoshojo-activity-token': 'activity-A' });
+    const dispatch = fixture.dispatch.getMockImplementation()!;
+    fixture.dispatch.mockImplementation(async (...args) => {
+      const response = await dispatch(...args);
+      response.headers.set(actorClient.ARENA_GENERATION_ACTOR_TOKEN_HEADER, 'signed.original-actor');
+      return response;
+    });
     const roles = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementationOnce(roleSuccess);
     vi.stubGlobal('fetch', roles);
     await mount(); const { pending } = await start();
+    const createHeaders = new Headers(fixture.dispatch.mock.calls[0]![1].headers);
+    expect(createHeaders.get('Authorization')).toBe('Bearer credential-A');
+    expect(createHeaders.get('x-mahoshojo-user-id')).toBe('1');
+    expect(createHeaders.get('x-mahoshojo-activity-token')).toBe('activity-A');
+    expect(createHeaders.get('Accept')).toBe('text/event-stream');
+    expect(createHeaders.get(actorClient.ARENA_GENERATION_ACTOR_TOKEN_HEADER)).toBeTruthy();
+    // Later auth reads must not replace the already accepted generation's credentials.
+    fixture.authHeader.mockResolvedValue('Bearer later-credential');
+    fixture.activityHeaders.mockResolvedValue({ 'x-mahoshojo-user-id': '2', 'x-mahoshojo-activity-token': 'later-activity' });
     fixture.state.combatants[0]!.data.codename = '编辑态新名字';
     await completeForRoles();
     expect(session.isGenerating).toBe(false);
@@ -439,11 +457,19 @@ describe('completed story body survives unresolved headerless Web roles', () => 
     expect(fixture.download).toHaveBeenCalledTimes(1);
     const firstBody = roles.mock.calls[0]![1].body;
     expect(JSON.parse(firstBody)).toMatchObject({ generationId: 'generation-original-1', combatants: [{ data: { codename: '测试角色' } }] });
+    const expectedRoleHeaders = new Headers(createHeaders);
+    expectedRoleHeaders.set(actorClient.ARENA_GENERATION_ACTOR_TOKEN_HEADER, 'signed.original-actor');
+    expectedRoleHeaders.delete('Accept');
+    expect(Object.fromEntries(new Headers(roles.mock.calls[0]![1].headers))).toEqual(Object.fromEntries(expectedRoleHeaders));
+    expect(localStorage.getItem(actorClient.ARENA_GENERATION_ACTOR_TOKEN_KEY)).toBe('signed.original-actor');
     await act(async () => { await session.handleStartSession(); await session.handleBranchSession(); });
     const unload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(unload); expect(unload.defaultPrevented).toBe(true);
     await act(async () => { await session.handleRetryStoryRoles(); await pending; });
     expect(roles).toHaveBeenCalledTimes(2);
     expect(roles.mock.calls[1]![1].body).toBe(firstBody);
+    expect(Object.fromEntries(new Headers(roles.mock.calls[1]![1].headers))).toEqual(Object.fromEntries(expectedRoleHeaders));
+    expect(fixture.authHeader).toHaveBeenCalledOnce();
+    expect(fixture.activityHeaders).toHaveBeenCalledExactlyOnceWith({ skipSessionBootstrap: true });
     expect(new Headers(roles.mock.calls[1]![1].headers).has('X-Mahoshojo-Arena-Reconciliation-Protocol')).toBe(false);
     expect(fixture.dispatch).toHaveBeenCalledTimes(1);
     expect(session.pendingRoleOutcome).toBeNull();
