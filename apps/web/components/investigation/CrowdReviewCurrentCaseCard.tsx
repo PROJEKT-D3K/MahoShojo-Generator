@@ -9,6 +9,7 @@ import {
 import { authStorage } from '@/lib/auth';
 import type {
   CrowdReviewCurrentCaseDto,
+  MarkCrowdReviewDetailViewedResult,
   SubmitCrowdReviewDecisionResult,
 } from '@/lib/crowd-review/types';
 
@@ -22,6 +23,8 @@ const DECISION_LABELS: Record<'violation' | 'no_violation' | 'abstain', string> 
   no_violation: '支持不违规',
   abstain: '弃权',
 };
+
+const MIN_REVIEW_AFTER_DETAIL_MS = 15_000;
 
 type DetailsCard = ComponentProps<typeof DataCardDetailsModal>['card'];
 
@@ -53,6 +56,7 @@ export function CrowdReviewCurrentCaseCard({
   const [snapshotDetailsCard, setSnapshotDetailsCard] = useState<DetailsCard | null>(null);
   const [submittingDecision, setSubmittingDecision] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     setCaseState(currentCase);
@@ -60,7 +64,23 @@ export function CrowdReviewCurrentCaseCard({
     setSnapshotDetailsCard(null);
     setError(null);
     setSubmittingDecision(null);
+    setNowMs(Date.now());
   }, [currentCase]);
+
+  const detailViewedAtMs = caseState.detailViewedAt ? new Date(caseState.detailViewedAt).getTime() : null;
+  const decisionReadyAtMs =
+    detailViewedAtMs != null && Number.isFinite(detailViewedAtMs)
+      ? detailViewedAtMs + MIN_REVIEW_AFTER_DETAIL_MS
+      : null;
+  const decisionsLocked = decisionReadyAtMs == null || nowMs < decisionReadyAtMs;
+
+  useEffect(() => {
+    if (decisionReadyAtMs == null || nowMs >= decisionReadyAtMs) {
+      return;
+    }
+    const timer = setTimeout(() => setNowMs(Date.now()), decisionReadyAtMs - nowMs + 50);
+    return () => clearTimeout(timer);
+  }, [decisionReadyAtMs, nowMs]);
 
   const detailsTarget =
     caseState.targetEntityId.trim().length > 0
@@ -73,7 +93,39 @@ export function CrowdReviewCurrentCaseCard({
       : null;
   const snapshotDetailsTarget = buildSnapshotDetailsCard(caseState);
 
+  const markDetailViewed = async () => {
+    try {
+      const response = await authStorage.fetch('/api/crowd-review/current/view-detail', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ assignmentId: caseState.assignmentId }),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | MarkCrowdReviewDetailViewedResult
+        | { error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
+            ? payload.error
+            : '卡片详情浏览记录失败',
+        );
+      }
+
+      if (payload && 'detailViewedAt' in payload && payload.detailViewedAt) {
+        setCaseState((current) => ({ ...current, detailViewedAt: payload.detailViewedAt }));
+        setNowMs(Date.now());
+      }
+    } catch (viewError) {
+      setError(viewError instanceof Error ? viewError.message : '卡片详情浏览记录失败');
+    }
+  };
+
   const openTargetDetails = () => {
+    void markDetailViewed();
     if (snapshotDetailsTarget) {
       setSnapshotDetailsCard(snapshotDetailsTarget);
       setRemoteDetailsTarget(null);
@@ -274,18 +326,27 @@ export function CrowdReviewCurrentCaseCard({
         ) : null}
 
         {showDecisionButtons ? (
-          <div className="mt-5 flex flex-wrap gap-3">
-            {caseState.availableDecisions.map((decision) => (
-              <button
-                key={decision}
-                type="button"
-                onClick={() => void handleSubmitDecision(decision)}
-                disabled={submittingDecision !== null}
-                className="inline-flex rounded-full bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-700 disabled:cursor-wait disabled:opacity-60 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
-              >
-                {submittingDecision === decision ? '提交中…' : DECISION_LABELS[decision]}
-              </button>
-            ))}
+          <div className="mt-5">
+            <div className="flex flex-wrap gap-3">
+              {caseState.availableDecisions.map((decision) => (
+                <button
+                  key={decision}
+                  type="button"
+                  onClick={() => void handleSubmitDecision(decision)}
+                  disabled={submittingDecision !== null || (decision !== 'abstain' && decisionsLocked)}
+                  className="inline-flex rounded-full bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+                >
+                  {submittingDecision === decision ? '提交中…' : DECISION_LABELS[decision]}
+                </button>
+              ))}
+            </div>
+            {decisionsLocked ? (
+              <p className="mt-3 text-xs leading-5 text-gray-500 dark:text-slate-400">
+                {detailViewedAtMs == null
+                  ? '提交违规/不违规判定前，请先打开「查看卡片详情」阅读案件材料。'
+                  : `请继续阅读案件材料，约 ${Math.ceil((decisionReadyAtMs! - nowMs) / 1000)} 秒后可提交判定。`}
+              </p>
+            ) : null}
           </div>
         ) : null}
 

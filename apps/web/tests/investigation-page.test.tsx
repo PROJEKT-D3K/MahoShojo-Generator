@@ -131,6 +131,7 @@ describe('investigation page', () => {
             assignmentStatus: 'assigned',
             assignedAt: '2026-04-08T12:00:00.000Z',
             expiresAt: '2026-04-08T12:30:00.000Z',
+            detailViewedAt: null,
             caseId: 'round-1',
             reportCaseId: 'case-1',
             targetEntityType: 'data_card',
@@ -165,6 +166,7 @@ describe('investigation page', () => {
     expect(html).toContain('弃权');
     expect(html).toContain('查看卡片详情');
     expect(html).toContain('查看引用卡详情');
+    expect(html).toContain('提交违规/不违规判定前，请先打开「查看卡片详情」阅读案件材料');
     expect(html).not.toContain('有效票');
   });
 
@@ -187,6 +189,7 @@ describe('investigation page', () => {
             assignmentStatus: 'voted',
             assignedAt: '2026-04-08T12:00:00.000Z',
             expiresAt: '2026-04-08T12:30:00.000Z',
+            detailViewedAt: '2026-04-08T12:01:00.000Z',
             caseId: 'round-1',
             reportCaseId: 'case-1',
             targetEntityType: 'data_card',
@@ -217,8 +220,8 @@ describe('investigation page', () => {
   });
 
   test('dispatches message-summary invalidation event after crowd-review completion refreshes availability', async () => {
-    const module = await import('@/components/investigation/InvestigationPage');
-    const notify = (module as { notifyMessagesSummaryUpdated?: () => void }).notifyMessagesSummaryUpdated;
+    const mod = await import('@/components/investigation/InvestigationPage');
+    const notify = (mod as { notifyMessagesSummaryUpdated?: () => void }).notifyMessagesSummaryUpdated;
 
     expect(typeof notify).toBe('function');
 
