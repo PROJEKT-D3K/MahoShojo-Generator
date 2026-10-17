@@ -874,10 +874,16 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   it('requires an explicit canonical-empty choice when the real public selection lacks an observed version', async () => {
     seedOrdinary(savedDraft({ combatants: [] })); await mount();
     await click('浏览在线角色库');
-    const tab = buttons().find(item => item.textContent?.startsWith('公开')); expect(tab).toBeTruthy();
+    const library = document.querySelector<HTMLElement>('[role="dialog"][aria-label="选择角色数据卡"]'); expect(library).not.toBeNull();
+    const tab = buttons(library!).find(item => item.textContent?.startsWith('公开')); expect(tab).toBeTruthy();
     await act(async () => tab!.click());
-    const select = document.querySelector<HTMLButtonElement>('[aria-label="选择缺版本在线角色"]'); expect(select).not.toBeNull();
+    const card = [...library!.querySelectorAll<HTMLElement>('.grid > .relative')].find(item => item.querySelector('h4')?.textContent === publicCard.name); expect(card).toBeTruthy();
+    const select = card!.querySelector<HTMLButtonElement>('button[aria-label="加入"]'); expect(select).not.toBeNull();
     await act(async () => select!.click());
+    expect(library!.isConnected).toBe(true);
+    expect(card!.querySelector('button[aria-label="移除"]')).not.toBeNull();
+    await act(async () => library!.querySelector<HTMLButtonElement>('button[aria-label="关闭选择角色数据卡"]')!.click());
+    expect(library!.isConnected).toBe(false);
     const selected = JSON.parse(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)!).draft.combatants.at(-1);
     expect(selected).toMatchObject({ desktopSource: 'online', sourceDataCardId: publicCard.id });
     expect(selected.sourceDataCardUpdatedAt).toBeUndefined();
