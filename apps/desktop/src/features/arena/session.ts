@@ -134,7 +134,7 @@ export class DesktopArenaSession {
   private disposed = false;
   private controller: AbortController | null = null;
   private importController: AbortController | null = null;
-  private pending: { draft: ArenaDraft; output?: Record<string, unknown> } | null = null;
+  private pending: { draft: ArenaDraft; exportDraft: ArenaDraft; output?: Record<string, unknown> } | null = null;
   private draftBlocked = false;
   private dirty = false;
   private draftTimer: ReturnType<typeof setTimeout> | null = null;
@@ -181,7 +181,7 @@ export class DesktopArenaSession {
         if (record(saved.output)) { parseArenaHostedDetails(saved.output.hosted); if (saved.output.hostedGenerationId != null) DesktopArenaHostedGenerationIdSchema.parse(saved.output.hostedGenerationId); }
         if (draft.narrativeDrafts?.length) { this.legacyNarrativeRaw = raw; this.legacyNarrativeSourceKey = this.draftKey; }
         const restoredDraft = { ...draft }; delete restoredDraft.narrativeDrafts;
-        this.pending = { draft: restoredDraft, output: saved.output as Record<string, unknown> | undefined };
+        this.pending = { draft: restoredDraft, exportDraft: saved.draft as ArenaDraft, output: saved.output as Record<string, unknown> | undefined };
         this.state.pendingRestore = true;
       }
     } catch {
@@ -517,6 +517,18 @@ export class DesktopArenaSession {
     } catch (cause) { if (this.current(scope, epoch)) this.publish({ saveStatus: 'failed', saveError: `${cause instanceof Error ? cause.message : '保存失败。'} 完整原文仍在内存，可导出或重试，无需重新生成。` }); return false; }
     finally { this.publish({ saving: false }); }
   }
-  exportDocument() { return JSON.stringify({ version: 1, product: this.dependencies.product ?? 'battle', hostedRecovery: this.hostedRecovery.getSnapshot(), draft: this.state.draft, generation: this.state.generation, result: { phase: this.state.phase, roleUpdates: this.state.roleUpdates, hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, rawText: this.state.rawText, markdown: this.state.markdown, reasoning: this.state.reasoning, report: this.state.report, usage: this.state.usage }, candidates: this.state.candidates }, null, 2); }
+  exportDocument() {
+    // A backup must not depend on whether the page has restored its local draft yet.
+    const pending = this.pending;
+    const result = pending ? {
+      phase: 'idle', rawText: '', markdown: '', reasoning: '', reportFormat: 'markdown', renderSnapshot: null,
+      hosted: null, report: null, ...pending.output,
+    } : { phase: this.state.phase, roleUpdates: this.state.roleUpdates, hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, rawText: this.state.rawText, markdown: this.state.markdown, reasoning: this.state.reasoning, report: this.state.report, usage: this.state.usage };
+    return JSON.stringify({ version: 1, product: this.dependencies.product ?? 'battle', hostedRecovery: this.hostedRecovery.getSnapshot(),
+      draft: pending?.exportDraft ?? this.state.draft, generation: pending ? null : this.state.generation, result, candidates: pending ? null : this.state.candidates,
+      // Only unreadable, protected originals need a separate raw backup; normal reports are not duplicated.
+      ...(this.draftBlocked && this.legacyNarrativeRaw !== null ? { protectedLocalDraft: { format: 'arena-local-draft-raw', raw: this.legacyNarrativeRaw } } : {}),
+    }, null, 2);
+  }
   dispose() { if (this.dirty) this.retryDraftSave(); this.narrativeDraftUnsubscribe?.(); this.narrativeDraftUnsubscribe = null; this.disposed = true; this.epoch += 1; this.roleController?.abort(); this.controller?.abort(ARENA_HOSTED_DETACH); this.importController?.abort(); if (this.draftTimer) clearTimeout(this.draftTimer); this.listeners.clear(); }
 }

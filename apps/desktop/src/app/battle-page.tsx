@@ -625,7 +625,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
 function DesktopArenaHost({ product }: { product: DesktopArenaProduct }) {
   const repository = useMemo(() => new IpcLocalCardRepository((command, args) => invoke(command, args as never)), []);
   const [owners, setOwners] = useState<{ session: DesktopArenaSession; packages: DesktopArenaWebPackages; story: DesktopArenaStorySession } | null>(null);
-  useEffect(() => { const packages = createWebPackages(); const session = new DesktopArenaSession({ product, repository, storage: window.localStorage, resolveWebPackage: packages.resolveExact }); const story = createStorySession(product); setOwners({ session, packages, story }); return () => { session.dispose(); packages.dispose(); story.dispose(); }; }, [repository, product]);
+  useEffect(() => { const packages = createWebPackages(); const session = new DesktopArenaSession({ product, repository, storage: window.localStorage, resolveWebPackage: packages.resolveExact }); session.restoreDraft(); const story = createStorySession(product); setOwners({ session, packages, story }); return () => { session.dispose(); packages.dispose(); story.dispose(); }; }, [repository, product]);
   return owners ? <DesktopBattleForm session={owners.session} webPackages={owners.packages} story={owners.story} repository={repository} product={product} /> : <p role="status">正在读取本机草稿…</p>;
 }
 

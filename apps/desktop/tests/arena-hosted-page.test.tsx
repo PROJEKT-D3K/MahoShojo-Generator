@@ -129,7 +129,7 @@ const draft = (mode: ArenaDraft['battleMode'] = 'daily', format: ArenaDraft['rep
 const saveDraft = (value: ArenaDraft, product: Product = 'battle') => localStorage.setItem(draftKey(product), JSON.stringify({ version: 1, draft: value }));
 const exportResult = async () => { await click('完整导出 JSON'); return JSON.parse(mocks.download.mock.calls.at(-1)![1]); };
 const restoreAndSelectStream = async () => {
-  await click('恢复草稿'); await openSection('⚡ 生成方式');
+  await openSection('⚡ 生成方式');
   expect(button('生成战报')!.disabled).toBe(false); expect(button('非流式')!.disabled).toBe(false); expect(button('非流式')!.getAttribute('aria-pressed')).toBe('true');
   await click('流式'); expect(button('生成战报')!.disabled, container.textContent ?? '').toBe(false);
 };
@@ -296,7 +296,7 @@ describe('Desktop Hosted real-route loopback journey', () => {
   });
 
   it.each(matrix)('/$product $mode $format $delivery account=$account funding=$funding uses controls → create → explicit save → reopen', async ({ product, mode, format, account, funding, delivery }) => {
-    accountId = account ? 42 : null; configure(funding); const original = draft(mode, format); saveDraft(original, product); const router = await mount(product); if (delivery === 'stream') await restoreAndSelectStream(); else { await click('恢复草稿'); await openSection('⚡ 生成方式'); expect(button('非流式')!.getAttribute('aria-pressed')).toBe('true'); }
+    accountId = account ? 42 : null; configure(funding); const original = draft(mode, format); saveDraft(original, product); const router = await mount(product); if (delivery === 'stream') await restoreAndSelectStream(); else { await openSection('⚡ 生成方式'); expect(button('非流式')!.getAttribute('aria-pressed')).toBe('true'); }
     await openSection(product === 'arena' ? '⚙️ 读写设置' : '🧠 故事');
     const writes = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].filter(input => input.closest('label')?.textContent?.includes('战报后写入') && ['历战记录', '当前状态'].includes(input.closest('fieldset')?.querySelector('legend')?.textContent ?? ''));
     expect(writes).toHaveLength(2); for (const input of writes) { expect(input.disabled).toBe(false); expect(input.checked).toBe(false); }
@@ -351,7 +351,7 @@ describe('Desktop Hosted real-route loopback journey', () => {
     }
     expect([...docs.values()][0]).toMatchObject({ cardType: 'history', provenance: { kind: 'unsigned' } });
     vi.mocked(window.confirm).mockReturnValue(true); await act(async () => router.navigate({ to: '/local-library' })); await settle(); expect(window.location.hash).toContain('/local-library');
-    await act(async () => router.navigate({ to: `/${product}` })); await settle(); await click('恢复草稿'); await click('引用本地叙事历史'); await vi.waitFor(() => expect(document.body.textContent).toContain('甲与乙共同守护车站'));
+    await act(async () => router.navigate({ to: `/${product}` })); await settle(); await click('引用本地叙事历史'); await vi.waitFor(() => expect(document.body.textContent).toContain('甲与乙共同守护车站'));
     expect(streamRequests).toHaveLength(1); expect(controlRequests).toHaveLength(0); expect(activeCloseHandles).toBe(1);
   });
 });
@@ -415,7 +415,7 @@ describe('Hosted recovery and interruption ownership through the real route', ()
     expect(httpRequests.some(request => request.path.endsWith('/cancel') || request.method === 'DELETE')).toBe(false);
     await act(async () => { releaseAll(); await Promise.allSettled([...pendingNative]); });
     expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.narrativeHistoryEntries).toEqual([]); expect(docs.size).toBe(0);
-    await act(async () => router.navigate({ to: '/battle' })); await settle(); await click('恢复草稿');
+    await act(async () => router.navigate({ to: '/battle' })); await settle();
     const exported = await exportResult(); expect(exported.result.rawText).toBe(markdown); expect(exported.result.phase).not.toBe('completed'); expect(exported.draft.narrativeHistoryEntries).toEqual([]); expect(activeCloseHandles).toBe(1);
   });
 
@@ -438,7 +438,7 @@ describe('Hosted recovery and interruption ownership through the real route', ()
 
 describe('Hosted non-stream lifecycle through the real route', () => {
   it('stops through original lookup before JSON headers and rejects late full completion', async () => {
-    hold = true; saveDraft(draft()); await mount(); await click('恢复草稿'); await click('生成战报');
+    hold = true; saveDraft(draft()); await mount(); await click('生成战报');
     await vi.waitFor(() => expect(httpRequests.filter(request => request.path === '/api/generate-battle-story')).toHaveLength(1));
     expect(nativeResponseCount).toBe(0); expect(activeCloseHandles).toBe(1);
     await act(async () => { button('请求服务器停止')!.click(); button('请求服务器停止')?.click(); });
@@ -455,10 +455,10 @@ describe('Hosted non-stream lifecycle through the real route', () => {
   });
 
   it('restores checked full JSON from a local draft and exports it after an explicit save failure', async () => {
-    saveDraft(draft()); await mount(); await click('恢复草稿'); await click('生成战报');
+    saveDraft(draft()); await mount(); await click('生成战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     const original = companion;
-    await act(async () => root.unmount()); root = createRoot(container); await mount(); await click('恢复草稿');
+    await act(async () => root.unmount()); root = createRoot(container); await mount();
     expect(container.textContent).toContain('完整非流分析'); expect(container.textContent).toContain('服务端未知类型记录');
     await openSection('⚡ 生成方式'); await click('流式');
     expect(button('流式')!.getAttribute('aria-pressed')).toBe('true');
@@ -474,7 +474,7 @@ describe('Hosted non-stream lifecycle through the real route', () => {
   });
 
   it('reopens a v2 JSON pointer using original structured model replay without claiming the original companion', async () => {
-    accountId = 42; configure('preset'); saveDraft(draft(), 'arena'); await mount('arena'); await click('恢复草稿'); await click('生成战报');
+    accountId = 42; configure('preset'); saveDraft(draft(), 'arena'); await mount('arena'); await click('生成战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     const pointer = DesktopArenaHostedAnyRecoveryPointerSchema.parse(JSON.parse(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.arena)!));
     expect(pointer).toMatchObject({ version: 3, delivery: 'non-stream', actor: { kind: 'account', expectedUserId: 42 } });
@@ -495,7 +495,7 @@ describe('Hosted non-stream lifecycle through the real route', () => {
   });
 
   it('shows a soft warning while still waiting for JSON response headers, then completes that same request', async () => {
-    hold = true; saveDraft(draft()); await mount(); await click('恢复草稿');
+    hold = true; saveDraft(draft()); await mount();
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {
       await act(async () => button('生成战报')!.click());
@@ -528,7 +528,7 @@ describe('Hosted preparation fails closed in the shared route', () => {
   it('late StrictMode close registrations block preparation until ready, then leave exactly one active handle', async () => {
     const registrations: { callback: (event: { preventDefault(): void }) => void; resolve: (release: () => void) => void }[] = [];
     mocks.listen.mockImplementation((callback: (event: { preventDefault(): void }) => void) => new Promise<() => void>(resolve => { registrations.push({ callback, resolve }); }));
-    saveDraft({ ...draft(), generationMode: 'stream' }); await mount(); await click('恢复草稿');
+    saveDraft({ ...draft(), generationMode: 'stream' }); await mount();
     expect(button('生成战报')!.disabled).toBe(true); expect(streamRequests).toHaveLength(0); expect(registrations.length).toBeGreaterThanOrEqual(2);
     const stale = { preventDefault: vi.fn() }; registrations[0]!.callback(stale); expect(stale.preventDefault).toHaveBeenCalledOnce();
     await act(async () => { for (const registration of registrations) { activeCloseHandles += 1; registration.resolve(() => { activeCloseHandles -= 1; }); } }); await settle();
@@ -549,7 +549,7 @@ describe('Read-only Native recovery diagnosis through the real route', () => {
   });
   const preparePage = async (product: Product = 'battle', raw: string | null = corruptRaw) => {
     if (raw !== null) localStorage.setItem(ARENA_HOSTED_RECOVERY_KEYS[product], raw);
-    saveDraft({ ...draft(), generationMode: 'stream' }, product); await mount(product); await click('恢复草稿');
+    saveDraft({ ...draft(), generationMode: 'stream' }, product); await mount(product);
   };
   const expectReadOnly = () => {
     expect(streamRequests).toHaveLength(0); expect(controlRequests).toHaveLength(0); expect(httpRequests).toHaveLength(0);
@@ -663,7 +663,7 @@ describe('Read-only Native recovery diagnosis through the real route', () => {
     expectReadOnly(); expect(window.confirm).not.toHaveBeenCalled(); expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBe(corruptRaw);
     // A clean page can still submit a new intent without fabricating an old request ID; Native owns admission.
     await act(async () => root.unmount()); root = createRoot(container); localStorage.removeItem(ARENA_HOSTED_RECOVERY_KEYS.battle);
-    await mount(); await click('恢复草稿'); await click('检查本机恢复身份'); expectReadOnly(); await click('生成战报');
+    await mount(); await click('检查本机恢复身份'); expectReadOnly(); await click('生成战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     expect(streamRequests).toHaveLength(1); expect(streamRequests[0]).toMatchObject({ operation: 'create-stream', product: 'battle' });
     // Optional undefined fields survive the in-process Zod parse but are absent from the Native JSON payload.
@@ -713,7 +713,7 @@ const roleMatrix = (['battle', 'arena'] as const).flatMap(product => (['stream',
 it.each(roleMatrix)('new /$product $delivery role policy history=$history state=$state shares update presentation and explicit signed saves', async ({ product, delivery, history, state }) => {
   const original = { ...draft(), settings: { ...draft().settings, writeArenaHistory: history, writeCurrentState: state } };
   saveDraft(original, product); await mount(product);
-  if (delivery === 'stream') await restoreAndSelectStream(); else await click('恢复草稿');
+  if (delivery === 'stream') await restoreAndSelectStream();
   await click('生成战报');
   await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); expect(button('生成战报')!.disabled).toBe(false); });
   expect(streamRequests).toHaveLength(1); expect(streamRequests[0]).toMatchObject({ reconciliationVersion: 'arena-reconciliation-v1', body: { writeArenaHistory: history, writeCurrentState: state } });
@@ -765,7 +765,7 @@ describe('Failed narrative drafts through the real Desktop route', () => {
       expect(exported).toMatchObject({ kind: 'arena-narrative-draft-archive', version: 1,
         drafts: [{ markdown, source: 'hosted', completion: { kind: 'server-failed', code: failureCode } }] });
       await act(async () => root.unmount()); root = createRoot(container);
-      await mount(product); await click('恢复草稿'); await openSection('⚙️ 读写设置');
+      await mount(product); await openSection('⚙️ 读写设置');
       expect(container.textContent).toContain('正式 0 条 · 未完成草稿 1 条');
       const archive = container.querySelector('[aria-label="未完成叙事草稿"]')!;
       expect(archive.textContent).toContain('甲与乙共同守护车站');

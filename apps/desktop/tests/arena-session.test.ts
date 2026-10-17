@@ -210,6 +210,28 @@ describe('Desktop Arena independent session', () => {
     const pending = session.save('history'); await vi.waitFor(() => expect(entered).toBe(true)); session.setScope('replacement'); resolve(null);
     expect(await pending).toBe(false); expect(session.getSnapshot().saveStatus).toBe('idle'); expect(session.getSnapshot().saveError).toBeNull(); session.dispose();
   });
+  it.each(['idle', 'completed', 'failed', 'cancelled'] as const)('exports the pending %s draft before restoration without changing storage or granting authority', phase => {
+    const storage = memory(), repo = repository(), draft = makeDraft();
+    const output = { phase, rawText: '完整原始响应', markdown: '# 已保存的正文', reasoning: '完整思考', executionMode: 'hosted', generationMode: 'non-stream', hosted: null, hostedGenerationId: null, extraMetadata: { retained: true } };
+    const raw = JSON.stringify({ version: 1, draft, output }); storage.values.set(ARENA_DRAFT_KEY, raw);
+    const session = new DesktopArenaSession({ storage, repository: repo.port });
+    const exported = JSON.parse(session.exportDocument());
+    expect(exported.draft).toEqual(draft); expect(exported.result).toMatchObject(output);
+    expect(exported.generation).toBeNull(); expect(exported.candidates).toBeNull();
+    expect(exported).not.toHaveProperty('protectedLocalDraft');
+    expect(session.getSnapshot().pendingRestore).toBe(true); expect(storage.getItem(ARENA_DRAFT_KEY)).toBe(raw);
+    session.restoreDraft(); expect(session.isBusy()).toBe(false); expect(session.getSnapshot().phase).toBe(phase);
+    expect(JSON.parse(session.exportDocument()).result).toMatchObject({ phase, rawText: output.rawText, markdown: output.markdown, reasoning: output.reasoning });
+    expect(repo.port.putIfAbsent).not.toHaveBeenCalled(); expect(storage.getItem(ARENA_DRAFT_KEY)).toBe(raw); session.dispose();
+  });
+  it('exports a protected unreadable local draft intact alongside new in-memory work', () => {
+    const storage = memory(), repo = repository(), raw = '{unreadable old draft'; storage.values.set(ARENA_DRAFT_KEY, raw);
+    const session = new DesktopArenaSession({ storage, repository: repo.port }); session.restoreDraft(); session.updateDraft(makeDraft());
+    const exported = JSON.parse(session.exportDocument());
+    expect(exported.protectedLocalDraft).toEqual({ format: 'arena-local-draft-raw', raw });
+    expect(exported.draft.combatants).toHaveLength(2); expect(storage.getItem(ARENA_DRAFT_KEY)).toBe(raw);
+    expect(repo.port.putIfAbsent).not.toHaveBeenCalled(); session.dispose();
+  });
   it('bad draft is protected while memory work continues; explicit restore never replays generation or library effects', async () => {
     const { session, storage, port } = build(); const draft = makeDraft(); session.updateDraft(draft); await session.generate(native(valid(false)), draft, intent()); session.dispose();
     const restored = new DesktopArenaSession({ storage, repository: port }); restored.setScope('restored'); expect(restored.getSnapshot().pendingRestore).toBe(true); restored.restoreDraft();

@@ -287,7 +287,7 @@ const proposalResult = (session: ArenaRoomSessionResponse, status: 'accepted' | 
   sharedConfig: session.snapshot.sharedConfig, snapshot: session.snapshot,
 });
 const beginReview = async (session = reviewSession()) => {
-  seedOrdinary(); await mount(); await click('恢复草稿'); await open();
+  seedOrdinary(); await mount(); await open();
   const creating = await startAction('创建多人房间', 'create');
   await confirmMembership(creating, 'host', session); await publishOnline(session);
   return session;
@@ -357,7 +357,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it('explains invalid and ambiguous pasted invitations without dispatching any Native action', async () => {
-    seedOrdinary(); await mount(); await click('恢复草稿'); await open();
+    seedOrdinary(); await mount(); await open();
     const before = ordinarySnapshot(), location = window.location.href;
     for (const [input, error] of [
       ['邀请里没有可用房间码', '未识别到有效房间码'],
@@ -388,7 +388,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: clipboard });
     try {
-      seedOrdinary(); await mount(); await click('恢复草稿'); await open();
+      seedOrdinary(); await mount(); await open();
       const before = ordinarySnapshot(), location = window.location.href;
       const openWindow = vi.spyOn(window, 'open').mockReturnValue(null);
       await change('#arena-room-join-code', input);
@@ -566,7 +566,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it('keeps the ordinary preference, model, independent drafts and result through lobby cancellation', async () => {
-    seedOrdinary(); await mount(); await click('恢复草稿');
+    seedOrdinary(); await mount();
     expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(reportText);
     const before = ordinarySnapshot(); await open();
     expect(button('生成战报')).toBeTruthy(); expect(ordinarySnapshot()).toEqual(before);
@@ -580,7 +580,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it('edits only four local host story fields while preserving authority and requiring a fresh explicit publish', async () => {
-    const seed = savedDraft(); seedOrdinary({ ...seed, scenario: { ...seed.scenario, isPreset: false } }); await mount(); await click('恢复草稿'); const before = ordinarySnapshot(); await open();
+    const seed = savedDraft(); seedOrdinary({ ...seed, scenario: { ...seed.scenario, isPreset: false } }); await mount(); const before = ordinarySnapshot(); await open();
     const create = await startAction('创建多人房间', 'create'); const authority = await confirmMembership(create, 'host');
     const editor = container.querySelector<HTMLElement>('[aria-label="房主本地故事设置"]')!;
     expect(editor).not.toBeNull(); expect(editor.querySelector('input[name="arena_story_guidance"]')!.matches(':disabled')).toBe(true);
@@ -617,7 +617,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it('keeps received proposals read-only for members and removes them on account retirement without writes', async () => {
-    seedOrdinary(); await mount(); await click('恢复草稿'); const before = ordinarySnapshot(); await open();
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
     await change('#arena-room-join-code', serviceFixture.operations.join.success.result.roomId);
     const joining = await startAction('加入房间', 'join'); const authority = await confirmMembership(joining, 'member');
     await publishOnline(authority);
@@ -642,7 +642,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     const session = reviewSession(), original = structuredClone(session.snapshot.proposals[0]!);
     session.snapshot.proposals.push({ ...structuredClone(original), proposalId: 'legacy/unsafe-proposal' },
       { ...structuredClone(original), proposalId: 'already-terminal', status: 'accepted' });
-    seedOrdinary(); await mount(); await click('恢复草稿'); await open();
+    seedOrdinary(); await mount(); await open();
     const creating = await startAction('创建多人房间', 'create'); await confirmMembership(creating, 'host', session);
     expect(requiredButton('接受所选', proposalCard()).disabled).toBe(true);
     await publishOnline(session);
@@ -771,7 +771,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it('creates as host, waits for HTTP ACK before subscribe and for snapshot plus presence before online, then closes explicitly', async () => {
-    seedOrdinary(); await mount(); await click('恢复草稿'); const before = ordinarySnapshot(); await open();
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
     const operation = await startAction('创建多人房间', 'create'); assertConstrained(); assertNoOnline();
     expect(operation.action).toMatchObject({ kind: 'create', request: { displayName: '普通账号', sharedConfig: { combatants: [{ source: 'host-local' }, { source: 'host-local' }] } } });
     expect(JSON.stringify(operation.action)).not.toContain('完整本机设定');
@@ -804,7 +804,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it('joins as the exact member without uploading the local draft and leaves only after confirmation', async () => {
-    seedOrdinary(); await mount(); await click('恢复草稿'); const before = ordinarySnapshot(); await open();
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
     await change('#arena-room-join-code', serviceFixture.operations.join.success.result.roomId);
     const joining = await startAction('加入房间', 'join');
     expect(joining.action).toEqual({ kind: 'join', roomId: serviceFixture.operations.join.success.result.roomId, request: { displayName: '普通账号' } });
@@ -825,7 +825,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it.each(['host', 'member'] as const)('does not revive a previous %s confirmation after same-account reattachment to the same room epoch', async role => {
-    seedOrdinary(); await mount(); await click('恢复草稿'); const before = ordinarySnapshot(); await open();
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
     const roomId = serviceFixture.operations.join.success.result.roomId;
     await change('#arena-room-join-code', roomId);
     const originalJoin = await startAction('加入房间', 'join');
@@ -872,7 +872,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it('requires an explicit canonical-empty choice when the real public selection lacks an observed version', async () => {
-    seedOrdinary(savedDraft({ combatants: [] })); await mount(); await click('恢复草稿');
+    seedOrdinary(savedDraft({ combatants: [] })); await mount();
     await click('浏览在线角色库');
     const tab = buttons().find(item => item.textContent?.startsWith('公开')); expect(tab).toBeTruthy();
     await act(async () => tab!.click());
@@ -962,7 +962,7 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
   });
 
   it.each(['account', 'document'] as const)('drops a late pulled membership batch after %s retirement without resurrecting UI', async retirement => {
-    seedOrdinary(); const router = await mount(); await click('恢复草稿'); await open();
+    seedOrdinary(); const router = await mount(); await open();
     const joining = await (async () => { await change('#arena-room-join-code', serviceFixture.operations.join.success.result.roomId); return startAction('加入房间', 'join'); })();
     const late = port.queue(responseEvent(joining, sessionFor('member')), { holdPull: true });
     await act(async () => { port.notify(late); await late.pullStarted.promise; });
@@ -1004,7 +1004,7 @@ const editMemberGuidance = async (value: string) => {
   });
 };
 const beginMember = async () => {
-  seedOrdinary(); await mount(); await click('恢复草稿'); const ordinary = ordinarySnapshot(); await open();
+  seedOrdinary(); await mount(); const ordinary = ordinarySnapshot(); await open();
   await change('#arena-room-join-code', serviceFixture.operations.join.success.result.roomId);
   const joining = await startAction('加入房间', 'join'); const session = await confirmMembership(joining, 'member');
   return { session, ordinary };

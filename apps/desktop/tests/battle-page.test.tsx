@@ -159,6 +159,30 @@ afterEach(async () => {
 });
 
 describe('Desktop /battle journey against loopback fixture', () => {
+  it.each(['battle', 'arena'] as const)('/%s reopens its valid local draft automatically without replaying work', async product => {
+    const value = draft('daily', 'non-stream');
+    const key = product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
+    const raw = JSON.stringify({ version: 1, draft: value, output: { phase: 'failed', rawText: '重启前完整原文', markdown: '', reasoning: '保留思考' } });
+    const pointer = DesktopArenaHostedRecoveryPointerSchema.parse({ version: 1, protocolVersion: 'arena-hosted-sse-v1', product,
+      requestId: 'synthetic-restart-request', actor: { kind: 'anonymous' }, bodyHash: 'a'.repeat(64), format: 'markdown', battleMode: 'daily',
+      state: 'unknown', updatedAt: '2026-10-10T05:00:00.000Z' });
+    const pointerRaw = JSON.stringify(pointer); localStorage.setItem(ARENA_HOSTED_RECOVERY_KEYS[product], pointerRaw);
+    localStorage.setItem(key, raw); window.location.hash = `#/${product}`; await mount();
+    expect(container.textContent).toContain('已恢复本机草稿与原文');
+    expect(button('恢复原服务器战报').disabled).toBe(false); expect(button('检查本机恢复身份').disabled).toBe(false);
+    expect(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS[product])).toBe(pointerRaw);
+    expect(button('恢复草稿')).toBeUndefined(); expect(button('生成战报').disabled).toBe(false);
+    expect(document.querySelector<HTMLInputElement>('#arena-story-guidance')?.disabled).toBe(false);
+    expect(calls()).toHaveLength(0); expect(docs.size).toBe(0);
+    expect(mocks.invoke.mock.calls.some(([command]) => ['arena_hosted_stream', 'arena_hosted_control'].includes(command))).toBe(false);
+    expect(localStorage.getItem(key)).toBe(raw);
+    await click('导出当前会话');
+    const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+    expect(exported.draft.combatants).toHaveLength(2); expect(exported.result).toMatchObject({ phase: 'failed', rawText: '重启前完整原文', reasoning: '保留思考' });
+    expect(exported.generation).toBeNull(); expect(exported.candidates).toBeNull();
+    expect(exported.hostedRecovery).toMatchObject({ pointer, pendingRestore: true });
+  });
+
   it.each(['battle', 'arena'])('/%s only reads anonymous seasons after opening configuration diagnostics', async (product) => {
     window.location.hash = `#/${product}`;
     await mount();
@@ -180,7 +204,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
 
   it.each(['classic', 'kizuna', 'daily', 'scenario'] as const)('%s × structured/Markdown route → execution → result → save → local-library reopen', async (mode) => {
     for (const output of ['non-stream', 'stream'] as const) {
-      saveDraft(draft(mode, output)); const router = await mount(); await click('恢复草稿');
+      saveDraft(draft(mode, output)); const router = await mount();
       await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
       expect(received.at(-1)!.requestKind).toBe('arena'); expect(JSON.parse(received.at(-1)!.arenaInputJson!).mode).toBe(mode);
       expect(docs.size).toBe(0); expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(text);
@@ -190,7 +214,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
       await vi.waitFor(() => { expect(docs.size).toBe(3); expect(button('保存叙事历史到本地库').disabled).toBe(false); });
       await click('完整导出 JSON'); expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).result.rawText).toContain('车站重逢');
       await act(async () => router.navigate({ to: '/local-library' })); await settle(); expect(window.location.hash).toContain('/local-library');
-      await act(async () => router.navigate({ to: '/battle' })); await settle(); await click('恢复草稿'); await click('引用本地叙事历史');
+      await act(async () => router.navigate({ to: '/battle' })); await settle(); await click('引用本地叙事历史');
       await vi.waitFor(() => expect(document.body.textContent).toContain('车站重逢')); expect(calls()).toHaveLength(output === 'stream' ? 2 : 1);
       await act(async () => root.unmount()); root = createRoot(container); docs.clear();
     }
@@ -209,7 +233,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
       }
       return result;
     });
-    saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿');
+    saveDraft(draft('daily', 'stream')); await mount();
     await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
     try {
       await click('另存战后角色副本');
@@ -228,7 +252,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
   });
   it.each(['non-stream', 'stream'] as const)('%s result links use the existing confirmation boundary, never native href fallback', async (output) => {
     markdownSuffix = '\n\n[外部说明](https://example.test/report)\n\n[邮件目标](mailto:test@example.test)';
-    saveDraft(draft('daily', output)); await mount(); await click('恢复草稿'); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
+    saveDraft(draft('daily', output)); await mount(); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
     const link = [...document.querySelectorAll('a')].find((item) => item.textContent === '外部说明')!; expect(link).toBeTruthy(); expect(link.hasAttribute('href')).toBe(false);
     await act(async () => link.click()); await settle(); expect(document.body.textContent).toContain('打开外部链接？');
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'open_external_url')).toBe(false);
@@ -239,7 +263,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
   });
   it('preset target uses the explicit target channel with no Hosted or profile fallback', async () => {
     localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5, selection: { executionPreference: 'client', clientTarget: { kind: 'preset', providerId: 'deepseek' }, serverTarget: { kind: 'system' } }, hiddenPresetIds: [], presetsByProviderId: { deepseek: { selectedModelId: 'deepseek-chat', generationOverrides: {} } } }));
-    saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿'); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
+    saveDraft(draft('daily', 'stream')); await mount(); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
     expect(calls()).toHaveLength(1); expect(calls()[0]![0]).toBe('stream_target_ai'); expect(calls()[0]![1]).toMatchObject({ target: { kind: 'preset', providerId: 'deepseek' } });
   });
   it('loads bundled character/scenario presets and uploads materials through the shared controls', async () => {
@@ -270,7 +294,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
     expect(stored.draft.combatants[1]).not.toHaveProperty('sourceDataCardId'); expect(calls()).toHaveLength(0); expect(docs.size).toBe(1);
   });
   it('fails closed if the native close guard cannot register', async () => {
-    mocks.listen.mockRejectedValue(new Error('native unavailable')); saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿');
+    mocks.listen.mockRejectedValue(new Error('native unavailable')); saveDraft(draft('daily', 'stream')); await mount();
     expect(container.textContent).toContain('窗口关闭保护初始化失败'); expect(button('生成战报').disabled).toBe(true); expect(calls()).toHaveLength(0);
     const provider = document.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')!;
     expect(provider.matches(':disabled')).toBe(true); await act(async () => provider.click());
@@ -279,7 +303,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
   });
   it('server non-stream is selectable without dispatching or falling back to Direct', async () => {
     localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'loopback' }, hiddenPresetIds: [] }));
-    saveDraft(draft('daily', 'non-stream')); await mount(); await click('恢复草稿');
+    saveDraft(draft('daily', 'non-stream')); await mount();
     expect(container.textContent).toContain('官方服务器生成'); expect(button('生成战报').disabled).toBe(false);
     expect(document.querySelector<HTMLInputElement>('#arena-story-guidance')?.disabled).toBe(false); expect(calls()).toHaveLength(0);
   });
@@ -335,14 +359,14 @@ describe('Desktop /battle journey against loopback fixture', () => {
     vi.mocked(window.confirm).mockReturnValue(true); await click('取消', editor); await act(async () => { expect(scopeClose().preventDefault).not.toHaveBeenCalled(); });
   });
   it('repeat click dispatches once; native-close cancel refusal and late packet leave zero writes', async () => {
-    hold = true; saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿');
+    hold = true; saveDraft(draft('daily', 'stream')); await mount();
     await act(async () => { button('生成战报').click(); button('生成战报').click(); });
     await vi.waitFor(() => expect(release).toBeTypeOf('function')); expect(calls()).toHaveLength(1); expect(scopeClose().preventDefault).toHaveBeenCalledOnce();
     await click('取消生成'); release!(); await settle(); await vi.waitFor(() => expect(container.textContent).toContain('生成已取消'));
     expect(docs.size).toBe(0); expect(button('另存战后角色副本')).toBeUndefined(); expect(container.textContent).toContain(text);
   });
   it('EOF/failure and disk failure retain full export; retry stores once without replay', async () => {
-    saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿'); eof = true; await click('生成战报');
+    saveDraft(draft('daily', 'stream')); await mount(); eof = true; await click('生成战报');
     await vi.waitFor(() => expect(container.textContent).toContain('生成连接或流协议失败')); expect(docs.size).toBe(0); await click('完整导出 JSON');
     expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).result.rawText).toContain(text);
     eof = false; vi.mocked(window.confirm).mockReturnValue(true); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
@@ -350,7 +374,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
     failSave = false; await click('保存叙事历史到本地库'); await click('保存叙事历史到本地库'); expect(docs.size).toBe(1); expect(calls()).toHaveLength(2);
   });
   it('locks target edits during a pending response, then switching never replays cancelled generation', async () => {
-    hold = true; saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿'); await click('生成战报'); await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    hold = true; saveDraft(draft('daily', 'stream')); await mount(); await click('生成战报'); await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     // Settings UI itself locks edits during generation; test the external store replacement boundary.
     expect(() => getDesktopAiConfigStore().selectExecutionLocation('server')).toThrow('生成期间');
     await click('取消生成'); release!(); await settle();
@@ -360,7 +384,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
     const battleOriginal = JSON.stringify({ version: 1, draft: { ...draft('daily', 'stream'), customStoryLength: '独立简洁稿' } }); localStorage.setItem(ARENA_DRAFT_KEY, battleOriginal);
     for (const output of ['non-stream', 'stream'] as const) {
       localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: { ...draft(mode, output), selectedQuestionnaires: [{ source: 'upload', selectionId: 'lore', questionnaire: { id: 'lore', title: '岛屿设定', kind: 'magical-girl', questions: [], loreMarkdown: '星海岛屿' } }] } }));
-      window.location.hash = '#/arena'; const router = await mount(); await click('恢复草稿'); expect(container.textContent).toContain('桌面高级单次');
+      window.location.hash = '#/arena'; const router = await mount(); expect(container.textContent).toContain('桌面高级单次');
       await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
       expect(JSON.parse(received.at(-1)!.arenaInputJson!)).toMatchObject({ mode, questionnaires: [{ loreMarkdown: '星海岛屿' }] });
       await click('保存叙事历史到本地库'); expect([...docs.values()].some((item) => item.cardType === 'history')).toBe(true);
@@ -370,7 +394,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
   });
   it('advanced real Lore/auxiliary/history controls freeze an edited source-aware request', async () => {
     window.location.hash = '#/arena'; localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('scenario', 'stream') }));
-    await mount(); await click('恢复草稿'); await click('粘贴 JSON'); await change('textarea[placeholder*="问卷 JSON"]', JSON.stringify({ id: 'lore', title: '岛屿', kind: 'magical-girl', questions: [], loreMarkdown: '星海岛屿', adjudicationEvents: [{ type: 'binary', description: 'Lore不得执行', probability: 100 }] })); await click('导入');
+    await mount(); await click('粘贴 JSON'); await change('textarea[placeholder*="问卷 JSON"]', JSON.stringify({ id: 'lore', title: '岛屿', kind: 'magical-girl', questions: [], loreMarkdown: '星海岛屿', adjudicationEvents: [{ type: 'binary', description: 'Lore不得执行', probability: 100 }] })); await click('导入');
     await act(async () => [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('辅助情景（可选）'))!.click()); await settle();
     await click('展开辅助情景粘贴区域'); await change('textarea[placeholder*="辅助情景"]', JSON.stringify({ templateId: '通用情景', title: '暗潮', content: '潮水上涨', adjudicationEvents: [{ id: 'aux-event', type: 'binary', description: '辅助判定', probability: 100 }] }));
     await act(async () => [...document.querySelectorAll('button')].find((item) => item.textContent?.includes('日常模式'))!.click()); await settle();
@@ -447,7 +471,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
   it('advanced shared Lore local/preset controls and manual events freeze only enabled sources', async () => {
     const local: LocalCardRecordV1 = { id: 'lc_abcdef0123456789abcdef0123456789', schemaVersion: 1, storageLocation: 'local', cardType: 'questionnaire', title: '本地设定', data: { id: 'local-lore', title: '本地设定', kind: 'magical-girl', questions: [], loreMarkdown: '本地岛屿', nativeAllowed: true }, contentDigest: `sha256:${'c'.repeat(64)}`, provenance: { kind: 'unsigned', execution: 'imported' }, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' }; docs.set(local.id, local);
     window.location.hash = '#/arena'; localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
-    await mount(); await click('恢复草稿'); await click('选择本地 / 公开设定'); await vi.waitFor(() => expect(document.querySelector('[aria-label="选择本地设定"]')).toBeTruthy());
+    await mount(); await click('选择本地 / 公开设定'); await vi.waitFor(() => expect(document.querySelector('[aria-label="选择本地设定"]')).toBeTruthy());
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="选择本地设定"]')!.click()); await settle();
     const select = [...document.querySelectorAll('select')].find((item) => item.querySelector('option[value="girl-band-taiban-war-1.1"]'))!;
     await act(async () => { select.value = 'girl-band-taiban-war-1.1'; select.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
@@ -471,7 +495,7 @@ describe('Desktop Web source journey with execution closed', () => {
       const key = product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
       localStorage.setItem(key, JSON.stringify({ version: 1, draft: { ...draft(mode, output), reportFormat: 'web' } }));
       window.location.hash = `#/${product}`;
-      const router = await mount(); await click('恢复草稿'); await settle(); await click('生成战报');
+      const router = await mount(); await settle(); await click('生成战报');
       await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
       expect(container.querySelector('[aria-label="Web 战报源码（安全文本）"]')?.textContent).toContain('webShouldNotRun');
       expect(container.querySelector('iframe, script, img[src*="untrusted.invalid"]')).toBeNull();
@@ -483,7 +507,7 @@ describe('Desktop Web source journey with execution closed', () => {
       expect(exported.result.renderSnapshot.reportFormat).toBe('web'); expect(exported.result.rawText).toContain('MAHOSHOJO_ARENA_META'); expect(exported.result.markdown).not.toContain('MAHOSHOJO_ARENA_META');
       await click('保存叙事历史到本地库'); expect([...docs.values()].some((record) => record.cardType === 'history')).toBe(true);
       await act(async () => router.navigate({ to: '/local-library' })); await settle();
-      await act(async () => router.navigate({ to: `/${product}` })); await settle(); await click('恢复草稿');
+      await act(async () => router.navigate({ to: `/${product}` })); await settle();
       expect(container.querySelector('[aria-label="Web 战报源码（安全文本）"]')?.textContent).toContain('webShouldNotRun'); expect(button('运行 Web 战报').disabled).toBe(true);
       await act(async () => root.unmount()); root = createRoot(container); docs.clear();
     }
@@ -492,7 +516,7 @@ describe('Desktop Web source journey with execution closed', () => {
     for (const output of ['stream', 'non-stream'] as const) {
       const key = product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
       localStorage.setItem(key, JSON.stringify({ version: 1, draft: { ...draft(mode, output), reportFormat: 'web' } })); window.location.hash = `#/${product}`;
-      await mount(); await click('恢复草稿'); await settle(); await openGenerationOptions(); await click('选择 Web 包');
+      await mount(); await settle(); await openGenerationOptions(); await click('选择 Web 包');
       const preset = document.querySelector<HTMLButtonElement>('[aria-label="选择 Web 包：竞技场新闻"]');
       expect(preset, document.body.textContent ?? '').toBeTruthy(); await act(async () => preset!.click()); await settle();
       await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
@@ -506,7 +530,7 @@ describe('Desktop Web source journey with execution closed', () => {
   });
   it('imports ZIP with explicit local saving, reopens its exact record, and downloads original bytes', async () => {
     const base = await builtinWebPackageSource.resolve(BUILTIN_WEB_PACKAGE_PRESETS[0]!.packageRef), archive = await packWebPackageZip(base);
-    saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web' }); await mount(); await click('恢复草稿'); await settle(); await openGenerationOptions(); await click('选择 Web 包');
+    saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web' }); await mount(); await settle(); await openGenerationOptions(); await click('选择 Web 包');
     const localTab = [...document.querySelectorAll<HTMLButtonElement>('button')].find((entry) => entry.textContent?.trim().startsWith('本地库'))!; await act(async () => localTab.click()); await settle();
     const checkbox = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((entry) => entry.closest('label')?.textContent?.includes('导入时保存到本地库'))!;
     expect(checkbox).toBeTruthy(); expect(checkbox.checked).toBe(false); await act(async () => checkbox.click());
@@ -515,7 +539,7 @@ describe('Desktop Web source journey with execution closed', () => {
     await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true }))); await vi.waitFor(() => expect(packageDocs.size).toBe(1)); await settle();
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'save_web_package')).toHaveLength(1);
     expect(localStorage.getItem(ARENA_DRAFT_KEY)).toContain(base.ref.digest);
-    await act(async () => root.unmount()); root = createRoot(container); await mount(); await click('恢复草稿'); await settle(); await openGenerationOptions(); await click('更换 Web 包');
+    await act(async () => root.unmount()); root = createRoot(container); await mount(); await settle(); await openGenerationOptions(); await click('更换 Web 包');
     const tab = [...document.querySelectorAll<HTMLButtonElement>('button')].find((entry) => entry.textContent?.trim().startsWith('本地库'))!; await act(async () => tab.click()); await settle();
     const download = document.querySelector<HTMLButtonElement>('[aria-label="下载 Web 包 ZIP：竞技场新闻"]'); expect(download, document.body.textContent ?? '').toBeTruthy(); await act(async () => download!.click());
     await vi.waitFor(() => expect(mocks.downloadBinary).toHaveBeenCalled()); expect(mocks.downloadBinary.mock.calls.at(-1)![1]).toEqual(archive);
@@ -527,7 +551,7 @@ describe('Desktop Web source journey with execution closed', () => {
     { mediaType: 'text/css', generated: 'body { background: url(https://untrusted.invalid/background); }', normalized: 'body { background: url(https://untrusted.invalid/background); }\n' },
   ])('imports and validates $mediaType without evaluating or dropping opaque base resources', async ({ mediaType, generated, normalized }) => {
     const { file, base } = await arenaWebPackageFixture({ mediaType }); webTextOverride = generated + '\n' + webTrailer;
-    saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web' }); await mount(); await click('恢复草稿'); await openGenerationOptions(); await click('选择 Web 包');
+    saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web' }); await mount(); await openGenerationOptions(); await click('选择 Web 包');
     const tab = [...document.querySelectorAll<HTMLButtonElement>('button')].find((entry) => entry.textContent?.trim().startsWith('本地库'))!; await act(async () => tab.click()); await settle();
     const picker = document.querySelector<HTMLInputElement>('input[type="file"][accept*="zip"]')!; Object.defineProperty(picker, 'files', { configurable: true, value: [file] });
     await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true }))); await vi.waitFor(() => expect(localStorage.getItem(ARENA_DRAFT_KEY)).toContain(base.ref.digest)); await settle();
@@ -548,7 +572,7 @@ describe('Desktop Web source journey with execution closed', () => {
 
   it('keeps a failed package save exportable and fences a late file read after target change', async () => {
     const { file, archive, base } = await arenaWebPackageFixture();
-    saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web' }); await mount(); await click('恢复草稿'); await openGenerationOptions(); await click('选择 Web 包');
+    saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web' }); await mount(); await openGenerationOptions(); await click('选择 Web 包');
     const tab = [...document.querySelectorAll<HTMLButtonElement>('button')].find((entry) => entry.textContent?.trim().startsWith('本地库'))!; await act(async () => tab.click()); await settle();
     const checkbox = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((entry) => entry.closest('label')?.textContent?.includes('导入时保存到本地库'))!; await act(async () => checkbox.click()); failSave = true;
     await uploadWebZip(file); await vi.waitFor(() => expect(document.body.textContent).toContain('保存失败')); expect(packageDocs.size).toBe(0);
@@ -567,7 +591,7 @@ describe('Desktop Web source journey with execution closed', () => {
   it.each(['cancel', 'EOF', 'target'] as const)('Web package %s retains partial source with no success artifact, history or duplicate execution', async (ending) => {
     hold = ending !== 'EOF'; eof = ending === 'EOF';
     saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web', webPackageRef: BUILTIN_WEB_PACKAGE_PRESETS[0]!.packageRef });
-    await mount(); await click('恢复草稿'); await act(async () => { button('生成战报').click(); button('生成战报').click(); });
+    await mount(); await act(async () => { button('生成战报').click(); button('生成战报').click(); });
     await vi.waitFor(() => expect(calls()).toHaveLength(1)); await settle();
     if (ending === 'cancel') { await click('取消生成'); release?.(); }
     if (ending === 'target') { expect(() => getDesktopAiConfigStore().selectExecutionLocation('server')).toThrow('生成期间'); await click('取消生成'); release?.(); await vi.waitFor(() => expect(getDesktopAiConfigStore().getSnapshot().generationActive).toBe(false)); await act(async () => getDesktopAiConfigStore().selectExecutionLocation('server')); await settle(); }
@@ -581,10 +605,10 @@ describe('Desktop Web source journey with execution closed', () => {
   it('restores missing exact packages, requires explicit candidate selection, and preserves historical provenance through compatibility', async () => {
     const original = await arenaWebPackageFixture({ version: '1.0.0' }), second = await arenaWebPackageFixture({ version: '2.0.0' }), third = await arenaWebPackageFixture({ version: '3.0.0' });
     webTextOverride = '{"value":3}\n' + webTrailer;
-    saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web' }); await mount(); await click('恢复草稿'); await openGenerationOptions(); await click('选择 Web 包');
+    saveDraft({ ...draft('daily', 'stream'), reportFormat: 'web' }); await mount(); await openGenerationOptions(); await click('选择 Web 包');
     const tab = [...document.querySelectorAll<HTMLButtonElement>('button')].find((entry) => entry.textContent?.trim().startsWith('本地库'))!; await act(async () => tab.click()); await settle();
     await uploadWebZip(original.file); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
-    await act(async () => root.unmount()); root = createRoot(container); await mount(); await click('恢复草稿');
+    await act(async () => root.unmount()); root = createRoot(container); await mount();
     await vi.waitFor(() => expect(document.body.textContent).toContain('revision 不可用'));
     const replayImport = async (file: File) => { const picker = document.querySelector<HTMLInputElement>('[data-testid="arena-web-replay-controls"] input[type="file"]')!; expect(picker).toBeTruthy(); Object.defineProperty(picker, 'files', { configurable: true, value: [file] }); await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true }))); await settle(); };
     await replayImport(wrappedArenaWebPackageFile()); await vi.waitFor(() => expect(document.body.textContent).toContain('可用候选 2.0.0'));
@@ -611,7 +635,7 @@ describe('Desktop two-route continuous story through actual default binder', () 
   it.each(['battle', 'arena'] as const)('%s starts, explicitly continues, reopens the same device story and exports the complete chain', async (product) => {
     const value = draft('daily', 'non-stream');
     window.localStorage.setItem(product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: value }));
-    window.location.hash = `#/${product}`; const router = await mount(); await click('恢复草稿');
+    window.location.hash = `#/${product}`; const router = await mount();
     await click('新建连续战报'); await vi.waitFor(() => expect(storyPort.heads()[0]?.chapterCount).toBe(1)); await settle();
     expect(container.querySelector('[aria-label="连续战报会话"]')?.textContent).toContain('共 1 章');
     expect(JSON.parse(received[0]!.arenaInputJson!).internalGuidance).toContain('首章');
@@ -631,7 +655,7 @@ describe('Desktop two-route continuous story through actual default binder', () 
   it.each(['battle', 'arena'] as const)('%s shared unknown outcome queries only its original receipt and retains exported or cancelled results', async (product) => {
     storyPort.loseEndReply = true; storyPort.hideReceipts = true;
     window.localStorage.setItem(product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
-    window.location.hash = `#/${product}`; const router = await mount(); await click('恢复草稿'); await click('新建连续战报');
+    window.location.hash = `#/${product}`; const router = await mount(); await click('新建连续战报');
     await vi.waitFor(() => expect(container.textContent).toContain('保存状态待确认')); await settle();
     const pending = container.querySelector('[data-story-pending-outcome]')!, original = storyPort.begin.mock.calls[0]![0];
     expect(pending.querySelector('[role="status"][aria-live="polite"]')?.textContent).toContain('保存状态待确认');
@@ -665,7 +689,7 @@ describe('Desktop two-route continuous story through actual default binder', () 
     mocks.invoke.mockImplementation((command, args, options) => command === 'cloud_cached_account' ? bootstrap.promise
       : command === 'has_provider_secret' && holdCredential ? credential.promise : originalInvoke(command, args, options));
     release = () => { bootstrap.resolve(null); credential.resolve(true); };
-    saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿');
+    saveDraft(draft('daily', 'stream')); await mount();
     expect(getDesktopCloudSessionStore().getSnapshot().bootstrapped).toBe(false);
     holdCredential = true;
     await click(flow === 'single' ? '生成战报' : '新建连续战报');
@@ -683,7 +707,7 @@ describe('Desktop two-route continuous story through actual default binder', () 
   });
 
   it('stops a real in-flight Direct chapter, preserves received prose and leaves the stored chain intact', async () => {
-    saveDraft(draft('daily','stream')); await mount(); await click('恢复草稿'); await click('新建连续战报');
+    saveDraft(draft('daily','stream')); await mount(); await click('新建连续战报');
     await vi.waitFor(() => expect(storyPort.heads()[0]?.chapterCount).toBe(1)); await settle();hold = true;
     await click('继续续写'); await vi.waitFor(() => expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain(text));
     await click('停止章节生成'); release?.(); await settle();
@@ -707,7 +731,7 @@ describe('Desktop Hosted story routes through prepared targets and default binde
   const mountProduct = async (product: 'battle' | 'arena') => {
     localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'non-stream') }));
     window.location.hash = `#/${product}`;
-    const router = await mount(); await click('恢复草稿'); return router;
+    const router = await mount(); return router;
   };
   const chooseHosted = async (funding: 'system' | 'preset') => {
     await click('服务器');
@@ -855,7 +879,6 @@ describe('Desktop Hosted story routes through prepared targets and default binde
     vi.mocked(window.confirm).mockReturnValue(true);
     await act(async () => router.navigate({ to: product === 'battle' ? '/arena' : '/battle' })); await settle();
     await act(async () => router.navigate({ to: `/${product}` })); await settle();
-    if (button('恢复草稿')) await click('恢复草稿');
     expect(container.textContent).toContain('此恢复记录属于连续故事');
     await click('读取原件（本地）'); await settle();
   };
@@ -970,7 +993,7 @@ describe('Desktop Direct branch routes through actual default factories', () => 
   const mountBranch = async (product: 'battle' | 'arena' = 'battle') => {
     localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
     window.location.hash = `#/${product}`;
-    const router = await mount(); await click('恢复草稿');
+    const router = await mount();
     await vi.waitFor(() => expect(container.querySelector('[data-story-read-status="loaded"]')).toBeTruthy());
     return router;
   };
@@ -1181,7 +1204,7 @@ describe('Desktop Direct branch routes through actual default factories', () => 
       }
       return original(command, args, options);
     });
-    release = () => gate.resolve(); saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿');
+    release = () => gate.resolve(); saveDraft(draft('daily', 'stream')); await mount();
     const sourceRow = [...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find(node => node.textContent?.startsWith(fixture.head.titlePreview))!;
     expect(sourceRow).toBeTruthy(); await act(async () => sourceRow.click()); await settle();
     expect(reader().getAttribute('data-story-read-status')).toBe('loaded'); expect(button('创建分支').disabled).toBe(false);
@@ -1315,7 +1338,7 @@ describe('Desktop Strict preparation and real dispatch boundary', () => {
       : base(command, args, options));
     const baseFetch = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation((input, init) => String(input) === `/scenario-presets/${filename}` ? gate.promise : baseFetch(input, init));
-    saveDraft(draft('daily', 'non-stream')); await mount(); await click('恢复草稿');
+    saveDraft(draft('daily', 'non-stream')); await mount();
     const details = container.querySelector<HTMLDetailsElement>('details[aria-label="严格排位配置检查"]')!;
     await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); }); await settle();
     await click('一键严格设置并锁定服务器');
@@ -1346,7 +1369,7 @@ describe('Desktop Strict preparation and real dispatch boundary', () => {
     await click('退出严格排位准备');
     const key = ADVANCED_ARENA_DRAFT_KEY, saved = JSON.parse(localStorage.getItem(key)!);
     expect(saved.draft.combatants.every((card: { desktopSource?: string }) => card.desktopSource === 'preset')).toBe(true);
-    await act(async () => root.unmount()); root = createRoot(container); await mount(); await click('恢复草稿');
+    await act(async () => root.unmount()); root = createRoot(container); await mount();
     const details = container.querySelector<HTMLDetailsElement>('details[aria-label="严格排位配置检查"]')!;
     await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); }); await settle();
     expect(container.textContent).toContain('线上角色身份尚未确认'); expect(container.textContent).not.toContain('退出严格排位准备');
@@ -1372,7 +1395,7 @@ it('advanced scenario opens after main removal but leaves manual folding intact 
   window.location.hash = '#/arena';
   localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: { ...draft('scenario', 'stream'), scenarioDisplayName: '车站' } }));
   localStorage.setItem('arena.section.scenario.open', '0');
-  await mount(); await click('恢复草稿');
+  await mount();
   const scenario = () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('🎭 情景设置'));
   expect(scenario()?.getAttribute('aria-expanded')).toBe('false');
   // keepMounted preserves the real clear action even while its section is folded.
@@ -1509,7 +1532,7 @@ describe('Desktop Arena character-library parity', () => {
 
   it('leaves the roster intact when no public random character is available', async () => {
     fixture(() => ({ status: 404, body: { success: false } }));
-    saveDraft(draft('daily', 'stream')); await mount(); await click('恢复草稿'); await openLibrarySection();
+    saveDraft(draft('daily', 'stream')); await mount(); await openLibrarySection();
     await click('随机匹配角色');
     expect(container.textContent).toContain('暂时没有可随机匹配的公开角色');
     expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.combatants).toHaveLength(2);
