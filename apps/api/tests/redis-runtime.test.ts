@@ -207,6 +207,7 @@ describe('RedisRuntime shutdown', () => {
     }>) => void;
     redisClient.eval
       .mockResolvedValueOnce(['events', '[]'])
+      .mockResolvedValueOnce('mahoshojo:gen:v1:req:user:hash:request-1')
       .mockResolvedValueOnce(['1-0'])
       .mockResolvedValueOnce([
         'events',
@@ -245,7 +246,7 @@ describe('RedisRuntime shutdown', () => {
     });
     expect(readSettled).toBe(false);
     expect(redisClient.eval).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.stringContaining('GEN_APPEND_V1'),
       expect.any(Object),
     );
@@ -427,7 +428,7 @@ describe('RedisRuntime shutdown', () => {
     const store = redis.getGenerationReplayStore();
     const baseState = {
       actorHash: 'actor-hash',
-      reservationKey: 'reservation-key',
+      reservationKey: 'mahoshojo:gen:v1:req:user:hash:request-nested-001',
       generationId: 'generation-nested-001',
       generationRequestId: 'request-nested-001',
       payloadHash: 'payload-hash',
@@ -446,25 +447,25 @@ describe('RedisRuntime shutdown', () => {
       terminal: null,
     };
 
-    redisClient.get.mockResolvedValueOnce(JSON.stringify(baseState));
+    redisClient.eval.mockResolvedValueOnce([JSON.stringify(baseState), '']);
     await expect(store.readState({ generationId: baseState.generationId })).resolves.toMatchObject({
       snapshot: { status: 'running', markdown: 'partial' },
       terminal: null,
     });
 
-    redisClient.get.mockResolvedValueOnce(JSON.stringify({
+    redisClient.eval.mockResolvedValueOnce([JSON.stringify({
       ...baseState,
       snapshot: { ...baseState.snapshot, status: 'not-a-generation-status' },
-    }));
+    }), '']);
     await expect(store.readState({ generationId: baseState.generationId }))
       .rejects.toThrow('REDIS_GENERATION_STATE_INVALID');
 
-    redisClient.get.mockResolvedValueOnce(JSON.stringify({
+    redisClient.eval.mockResolvedValueOnce([JSON.stringify({
       ...baseState,
       snapshot: null,
       status: 'completed',
       terminal: { status: 'not-a-terminal-status', resultRef: null },
-    }));
+    }), '']);
     await expect(store.readState({ generationId: baseState.generationId }))
       .rejects.toThrow('REDIS_GENERATION_STATE_INVALID');
   });

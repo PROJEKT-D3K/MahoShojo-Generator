@@ -23,7 +23,7 @@ const redisClient = vi.hoisted(() => ({
   close: vi.fn(async () => undefined),
   connect: vi.fn(async () => undefined),
   destroy: vi.fn(),
-  eval: vi.fn(async () => [1, 60_000]),
+  eval: vi.fn(async (): Promise<unknown> => [1, 60_000]),
   get: vi.fn(async () => null),
   isOpen: true,
   isReady: true,
@@ -137,6 +137,7 @@ describe('G25E-2 Hosted DR fault matrix: Hono/Redis/Gateway/D1', () => {
   });
 
   it('G25E2-REDIS-EMPTY：实际 RedisRuntime 只返回空 replay state，不把空态当成业务事实', async () => {
+    redisClient.eval.mockResolvedValueOnce(['', '']);
     const redis = new RedisRuntime('redis://fault-injection.invalid:6379', true);
     await redis.connect();
 
@@ -145,6 +146,10 @@ describe('G25E-2 Hosted DR fault matrix: Hono/Redis/Gateway/D1', () => {
       generationId: 'generation-empty-001',
       actorKey: 'user:empty-001',
     })).resolves.toBeNull();
+    expect(redisClient.eval).toHaveBeenCalledWith(expect.stringContaining('GEN_READ_STATE'), {
+      keys: ['mahoshojo:gen:v1:generation-empty-001:state', 'mahoshojo:gen:v1:generation-empty-001:snapshot'],
+      arguments: [],
+    });
     await expect(redis.ping()).resolves.toBe(true);
     expect(redis.getStatus()).toMatchObject({ configured: true, connected: true, ready: true });
 

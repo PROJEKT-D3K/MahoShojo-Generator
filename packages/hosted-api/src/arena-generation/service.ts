@@ -1653,6 +1653,9 @@ export const createArenaGenerationService = (
           error: 'Generation terminal content unavailable',
         }, 503);
       }
+      if (error instanceof Error && error.message === 'REDIS_GENERATION_STORAGE_VERSION_INVALID') {
+        return jsonResponse({ code: 'GENERATION_STATE_UNAVAILABLE', error: 'Generation state unavailable' }, 503);
+      }
       const durable = await inspectOwnedFinalization(generationId, actor.actorKey)
         .catch(() => ({ kind: 'not-found' as const }));
       if (durable.kind === 'pending') {
@@ -2221,6 +2224,9 @@ export const createArenaGenerationService = (
             // uncertainty before a body-only durable fallback replaces text.
             const retained = await dependencies.store.readState({ generationId, actorKey }).catch((error) => {
               if (error instanceof Error && error.message === 'REDIS_GENERATION_UNCERTAIN_SNAPSHOT_UNAVAILABLE') throw error;
+              if (error instanceof Error && error.message === 'REDIS_GENERATION_STORAGE_VERSION_INVALID') {
+                throw new Error('GENERATION_STATE_UNAVAILABLE');
+              }
               return null;
             });
             if (retained && await recoverUncertainTerminal(retained)) return;
@@ -3143,6 +3149,11 @@ export const createArenaGenerationService = (
         } catch (error) {
           if (error instanceof Error && error.message === 'REDIS_GENERATION_UNCERTAIN_SNAPSHOT_UNAVAILABLE') {
             return withActorHeaders(createTerminalContentUnavailableResponse(), actor);
+          }
+          if (error instanceof Error && error.message === 'REDIS_GENERATION_STORAGE_VERSION_INVALID') {
+            return withActorHeaders(jsonResponse({
+              code: 'GENERATION_STATE_UNAVAILABLE', error: 'Generation state unavailable',
+            }, 503), actor);
           }
         }
         let durable: Awaited<ReturnType<typeof inspectOwnedFinalization>> = { kind: 'not-found' };

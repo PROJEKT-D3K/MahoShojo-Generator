@@ -8,6 +8,7 @@
     "scripts/verify-room-generation-process-recovery.ts",
     "scripts/verify-room-hardening-faults.ts",
     "scripts/verify-room-hardening-load.ts",
-    "scripts/benchmark-generation-replay-local.ts"
+    "scripts/benchmark-generation-replay-local.ts",
+    "scripts/verify-generation-replay-local.ts"
   ]
 }

@@ -65,12 +65,72 @@ export type RedisGenerationReplayStoreOptions = {
   activeTtlSeconds?: number;
   terminalTtlSeconds?: number;
   maxEvents?: number;
+  /** Phase B opt-in for new reservations only; existing layouts are never migrated. */
+  enableSnapshotSidecar?: boolean;
 };
 
 type StoredGenerationState = Omit<GenerationReplayStoreState, 'actorKey'> & {
   actorHash: string;
   reservationKey: string;
+  storageVersion?: 1 | 2;
+  snapshotMeta?: SnapshotMetadata | null;
 };
+
+type SnapshotMetadata = Pick<GenerationSnapshot, 'status' | 'lastEventId' | 'updatedAt'> & { digest: string };
+
+// All mutation scripts use [state, events, reservation, snapshot]. Identity
+// discovery is only a hint: validate against the current state before any write.
+const STATE_HELPERS = `
+local function validateState(state)
+  if state.storageVersion ~= nil and state.storageVersion ~= 1 and state.storageVersion ~= 2 then
+    error('REDIS_GENERATION_STORAGE_VERSION_INVALID')
+  end
+  if state.reservationKey ~= KEYS[3] then error('REDIS_GENERATION_IDENTITY_CHANGED') end
+  local reservation = redis.call('GET', KEYS[3])
+  if reservation and cjson.decode(reservation).generationId ~= state.generationId then
+    error('REDIS_GENERATION_IDENTITY_CHANGED')
+  end
+end
+local function retain(state, ttl)
+  redis.call('PEXPIRE', KEYS[3], ttl)
+  if state.storageVersion == 2 then
+    redis.call('PEXPIRE', KEYS[2], ttl)
+    redis.call('PEXPIRE', KEYS[4], ttl)
+  end
+end
+`;
+
+const SNAPSHOT_HELPERS = `
+local function saveSnapshot(state, snapshot, encoded, ttl)
+  if state.storageVersion == 2 then
+    state.snapshot = cjson.null
+    state.snapshotMeta = {
+      status = snapshot.status, lastEventId = snapshot.lastEventId,
+      updatedAt = snapshot.updatedAt, digest = redis.sha1hex(encoded)
+    }
+    redis.call('SET', KEYS[4], encoded, 'PX', ttl)
+  else
+    state.snapshot = snapshot
+  end
+end
+`;
+
+const DISCOVER_IDENTITY_SCRIPT = `
+-- GEN_DISCOVER_IDENTITY
+local raw = redis.call('GET', KEYS[1])
+if not raw then return '' end
+local state = cjson.decode(raw)
+if state.storageVersion ~= nil and state.storageVersion ~= 1 and state.storageVersion ~= 2 then
+  return redis.error_reply('REDIS_GENERATION_STORAGE_VERSION_INVALID')
+end
+return state.reservationKey
+`;
+
+// Return raw strings without decoding/re-encoding either body in Redis.
+const READ_STATE_SCRIPT = `
+-- GEN_READ_STATE
+return { redis.call('GET', KEYS[1]) or '', redis.call('GET', KEYS[2]) or '' }
+`;
 
 const RESERVATION_SCRIPT = `
 -- GEN_RESERVE_V1
@@ -89,16 +149,18 @@ end
 if redis.call('EXISTS', KEYS[2]) == 1 then
   return redis.error_reply('GENERATION_ID_CONFLICT')
 end
+redis.call('DEL', KEYS[3])
 redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
 redis.call('SET', KEYS[2], ARGV[4], 'PX', ARGV[3])
 return { 'created', ARGV[5], ARGV[6], ARGV[7] }
 `;
 
-const MARK_RUNNING_SCRIPT = `
+const MARK_RUNNING_SCRIPT = `${STATE_HELPERS}
 -- GEN_MARK_RUNNING_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
 local state = cjson.decode(raw)
+validateState(state)
 if state.producerToken ~= ARGV[1] then return -1 end
 if state.status ~= 'reserved' then return -1 end
 if state.terminal ~= nil and state.terminal ~= cjson.null then return 0 end
@@ -109,22 +171,23 @@ if state.cancelRequested == true then
   state.leaseExpiresAt = ARGV[3]
   if state.cancelReason ~= 'content_policy' then state.cancelReason = 'user' end
   redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
-  redis.call('PEXPIRE', state.reservationKey, ARGV[4])
+  retain(state, ARGV[4])
   return 'cancelled:' .. state.cancelReason
 end
 state.status = 'running'
 state.updatedAt = ARGV[2]
 state.leaseExpiresAt = ARGV[3]
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
-redis.call('PEXPIRE', state.reservationKey, ARGV[4])
+retain(state, ARGV[4])
 return 1
 `;
 
-const CLAIM_FINALIZATION_SCRIPT = `
+const CLAIM_FINALIZATION_SCRIPT = `${STATE_HELPERS}
 -- GEN_CLAIM_FINALIZATION_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 'fenced' end
 local state = cjson.decode(raw)
+validateState(state)
 if state.producerToken ~= ARGV[1] then return 'fenced' end
 if state.terminal ~= nil and state.terminal ~= cjson.null then return 'fenced' end
 if state.status ~= 'running' and state.status ~= 'finalizing' then return 'fenced' end
@@ -144,18 +207,19 @@ if state.cancelRequested == true then
   end
 end
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
-redis.call('PEXPIRE', state.reservationKey, ARGV[4])
+retain(state, ARGV[4])
 if state.cancelRequested == true then
   return 'cancelled:' .. state.cancelReason
 end
 return 'claimed'
 `;
 
-const CLAIM_LEASE_EXPIRY_SCRIPT = `
+const CLAIM_LEASE_EXPIRY_SCRIPT = `${STATE_HELPERS}
 -- GEN_CLAIM_LEASE_EXPIRY_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return { 'not-found', '', '' } end
 local state = cjson.decode(raw)
+validateState(state)
 if state.actorHash ~= ARGV[1] then return { 'forbidden', '', '' } end
 if state.terminal ~= nil and state.terminal ~= cjson.null then
   return { 'terminal:' .. state.terminal.status, '', '' }
@@ -171,7 +235,7 @@ state.status = 'finalizing'
 state.updatedAt = ARGV[2]
 state.leaseExpiresAt = ARGV[4]
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[5])
-redis.call('PEXPIRE', state.reservationKey, ARGV[5])
+retain(state, ARGV[5])
 local intendedTerminal = ''
 if state.intendedTerminal ~= nil and state.intendedTerminal ~= cjson.null then
   intendedTerminal = cjson.encode(state.intendedTerminal)
@@ -181,22 +245,25 @@ if mode == nil or mode == cjson.null then mode = '' end
 return { 'claimed', state.generationRequestId, state.payloadHash, mode, intendedTerminal }
 `;
 
-const RELEASE_RESERVATION_SCRIPT = `
+const RELEASE_RESERVATION_SCRIPT = `${STATE_HELPERS}
 -- GEN_RELEASE_RESERVATION_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
 local state = cjson.decode(raw)
+validateState(state)
 if state.producerToken ~= ARGV[1] or state.status ~= 'reserved' then return 0 end
 redis.call('DEL', KEYS[1])
-redis.call('DEL', state.reservationKey)
+redis.call('DEL', KEYS[3])
+if state.storageVersion == 2 then redis.call('DEL', KEYS[2], KEYS[4]) end
 return 1
 `;
 
-const HEARTBEAT_SCRIPT = `
+const HEARTBEAT_SCRIPT = `${STATE_HELPERS}
 -- GEN_HEARTBEAT_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
 local state = cjson.decode(raw)
+validateState(state)
 if state.producerToken ~= ARGV[1] then return -1 end
 if state.status ~= 'running' and state.status ~= 'finalizing' then return 0 end
 if state.terminal ~= nil and state.terminal ~= cjson.null then return 0 end
@@ -207,18 +274,19 @@ if state.cancelRequested == true and state.cancelReason ~= 'content_policy' then
   state.cancelReason = 'user'
 end
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
-redis.call('PEXPIRE', state.reservationKey, ARGV[4])
+retain(state, ARGV[4])
 if state.cancelRequested == true then
   return 'cancelled:' .. state.cancelReason
 end
 return 1
 `;
 
-const APPEND_SCRIPT = `
+const APPEND_SCRIPT = `${STATE_HELPERS}
 -- GEN_APPEND_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return { 'fenced' } end
 local state = cjson.decode(raw)
+validateState(state)
 if state.producerToken ~= ARGV[1] or (state.status ~= 'running' and state.status ~= 'finalizing') then return { 'fenced' } end
 if state.leaseExpiresAt == nil or state.leaseExpiresAt == cjson.null or state.leaseExpiresAt <= ARGV[5] then return { 'fenced' } end
 local events = cjson.decode(ARGV[2])
@@ -235,15 +303,16 @@ redis.call('PEXPIRE', KEYS[2], ARGV[4])
 if #ids > 0 then state.lastEventId = ids[#ids] end
 state.updatedAt = ARGV[5]
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
-redis.call('PEXPIRE', state.reservationKey, ARGV[4])
+retain(state, ARGV[4])
 return ids
 `;
 
-const SNAPSHOT_SCRIPT = `
+const SNAPSHOT_SCRIPT = `${STATE_HELPERS}${SNAPSHOT_HELPERS}
 -- GEN_SNAPSHOT_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
 local state = cjson.decode(raw)
+validateState(state)
 if state.producerToken ~= ARGV[1] then return -1 end
 if state.leaseExpiresAt == nil or state.leaseExpiresAt == cjson.null or state.leaseExpiresAt <= ARGV[3] then return -1 end
 local snapshot = cjson.decode(ARGV[2])
@@ -255,14 +324,18 @@ elseif terminal ~= nil and terminal ~= cjson.null then
 else
   return -1
 end
-state.snapshot = snapshot
+if state.storageVersion == 2 and snapshot.lastEventId ~= state.lastEventId then
+  return redis.error_reply('REDIS_GENERATION_SNAPSHOT_CURSOR_MISMATCH')
+end
+saveSnapshot(state, snapshot, ARGV[2], ARGV[4])
 state.updatedAt = ARGV[3]
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
-redis.call('PEXPIRE', state.reservationKey, ARGV[4])
+retain(state, ARGV[4])
 return 1
 `;
 
-const TERMINAL_SCRIPT = `
+// GEN_TERMINAL_V2 names the existing terminal protocol revision, not the storage layout.
+const TERMINAL_SCRIPT = `${STATE_HELPERS}${SNAPSHOT_HELPERS}
 -- GEN_TERMINAL_V2
 if ARGV[6] == '' then return redis.error_reply('GENERATION_TERMINAL_EVENT_REQUIRED') end
 if ARGV[7] == '' and ARGV[8] ~= '1' then return redis.error_reply('GENERATION_TERMINAL_SNAPSHOT_DECISION_REQUIRED') end
@@ -270,6 +343,7 @@ if ARGV[7] ~= '' and ARGV[8] == '1' then return redis.error_reply('GENERATION_TE
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
 local state = cjson.decode(raw)
+validateState(state)
 if state.producerToken ~= ARGV[1] then return -1 end
 if state.terminal ~= nil and state.terminal ~= cjson.null then return 0 end
 if state.status ~= 'running' and state.status ~= 'reserved' and state.status ~= 'finalizing' then return -1 end
@@ -290,9 +364,13 @@ redis.call('XTRIM', KEYS[2], 'MAXLEN', ARGV[5])
 state.lastEventId = terminalEventId
 if terminalSnapshot ~= nil then
   terminalSnapshot.lastEventId = terminalEventId
-  state.snapshot = terminalSnapshot
+  saveSnapshot(state, terminalSnapshot, cjson.encode(terminalSnapshot), ARGV[4])
 elseif ARGV[8] == '1' then
   state.snapshot = cjson.null
+  if state.storageVersion == 2 then
+    state.snapshotMeta = cjson.null
+    redis.call('DEL', KEYS[4])
+  end
 end
 state.status = terminal.status
 state.terminal = terminal
@@ -301,15 +379,16 @@ state.leaseExpiresAt = cjson.null
 state.updatedAt = ARGV[3]
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
 redis.call('PEXPIRE', KEYS[2], ARGV[4])
-redis.call('PEXPIRE', state.reservationKey, ARGV[4])
+retain(state, ARGV[4])
 return { 1, terminalEventId }
 `;
 
-const CANCEL_SCRIPT = `
+const CANCEL_SCRIPT = `${STATE_HELPERS}
 -- GEN_CANCEL_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 'not-found' end
 local state = cjson.decode(raw)
+validateState(state)
 if state.actorHash ~= ARGV[1] then return 'forbidden' end
 if state.terminal ~= nil and state.terminal ~= cjson.null then
   return 'terminal:' .. state.terminal.status
@@ -323,7 +402,7 @@ else
 end
 state.updatedAt = ARGV[3]
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
-redis.call('PEXPIRE', state.reservationKey, ARGV[4])
+retain(state, ARGV[4])
 return 'accepted:' .. state.cancelReason
 `;
 
@@ -518,7 +597,7 @@ const cancelReasonFromTaggedResult = (
   return reason;
 };
 
-const parseStoredState = (raw: string): StoredGenerationState => {
+const parseStoredState = (raw: string, sidecar = ''): StoredGenerationState => {
   let parsed: Partial<StoredGenerationState>;
   try {
     const candidate: unknown = JSON.parse(raw);
@@ -526,6 +605,9 @@ const parseStoredState = (raw: string): StoredGenerationState => {
     parsed = candidate as Partial<StoredGenerationState>;
   } catch {
     throw new Error('REDIS_GENERATION_STATE_INVALID');
+  }
+  if (parsed.storageVersion !== undefined && parsed.storageVersion !== 1 && parsed.storageVersion !== 2) {
+    throw new Error('REDIS_GENERATION_STORAGE_VERSION_INVALID');
   }
   // This hint only makes corruption fail more conservatively; it never authorizes a read.
   const invalidEvidence = (code: string): Error => new Error(
@@ -536,6 +618,26 @@ const parseStoredState = (raw: string): StoredGenerationState => {
   let terminal: GenerationTerminal | null;
   try { terminal = parseStoredTerminal(parsed.terminal); } catch {
     throw invalidEvidence('REDIS_GENERATION_STATE_INVALID');
+  }
+  if (parsed.storageVersion === 2) {
+    if (parsed.snapshot !== null || (parsed.snapshotMeta !== null && !isRecord(parsed.snapshotMeta))) {
+      throw invalidEvidence('REDIS_GENERATION_SNAPSHOT_METADATA_INVALID');
+    }
+    if (parsed.snapshotMeta !== null) {
+      const meta = parsed.snapshotMeta!;
+      if (!sidecar || createHash('sha1').update(sidecar).digest('hex') !== meta.digest) {
+        throw invalidEvidence('REDIS_GENERATION_SNAPSHOT_SIDECAR_INVALID');
+      }
+      let snapshot: GenerationSnapshot | null;
+      try { snapshot = parseStoredSnapshot(JSON.parse(sidecar)); } catch {
+        throw invalidEvidence('REDIS_GENERATION_SNAPSHOT_SIDECAR_INVALID');
+      }
+      if (!snapshot || snapshot.status !== meta.status || snapshot.lastEventId !== meta.lastEventId
+        || snapshot.updatedAt !== meta.updatedAt) {
+        throw invalidEvidence('REDIS_GENERATION_SNAPSHOT_METADATA_INVALID');
+      }
+      parsed.snapshot = snapshot;
+    }
   }
   const preparationSeed = parsed.preparationSeed ?? null;
   const preparationVersion = parsed.preparationVersion ?? null;
@@ -694,6 +796,7 @@ export const createRedisGenerationReplayStore = (
   const keyPrefix = environmentPrefix ? `${KEY_PREFIX}:${environmentPrefix}` : KEY_PREFIX;
   const stateKey = (generationId: string): string => `${keyPrefix}:${generationId}:state`;
   const eventsKey = (generationId: string): string => `${keyPrefix}:${generationId}:events`;
+  const snapshotKey = (generationId: string): string => `${keyPrefix}:${generationId}:snapshot`;
   const requestKey = (actorKey: string, generationRequestId: string): string =>
     `${keyPrefix}:req:${actorScope(actorKey)}:${hashKeyPart(actorKey)}:${generationRequestId}`;
   const activeTtlMs = ttlMs(
@@ -709,6 +812,51 @@ export const createRedisGenerationReplayStore = (
     throw new Error('maxEvents 必须是正整数');
   }
 
+  // Bounded cache stores only a key hint, never authorization or storage layout.
+  const identities = new Map<string, string>();
+  const rememberIdentity = (generationId: string, identity: string): void => {
+    if (!identity.startsWith(`${keyPrefix}:req:`)) throw new Error('REDIS_GENERATION_IDENTITY_INVALID');
+    identities.delete(generationId);
+    identities.set(generationId, identity);
+    if (identities.size > 1_024) identities.delete(identities.keys().next().value!);
+  };
+  const mutationKeys = async (generationId: string): Promise<string[]> => {
+    let identity = identities.get(generationId);
+    if (identity) rememberIdentity(generationId, identity);
+    if (!identity) {
+      const discovered = await options.getClient().eval(DISCOVER_IDENTITY_SCRIPT, {
+        keys: [stateKey(generationId)], arguments: [],
+      });
+      if (typeof discovered !== 'string') throw new Error('REDIS_GENERATION_IDENTITY_INVALID');
+      identity = discovered;
+      if (identity) rememberIdentity(generationId, identity);
+    }
+    // A missing state returns before identity validation. This sentinel is never touched.
+    return [stateKey(generationId), eventsKey(generationId), identity || stateKey(generationId), snapshotKey(generationId)];
+  };
+  const mutate = async (generationId: string, script: string, input: { arguments: string[] }): Promise<unknown> => {
+    try {
+      return await options.getClient().eval(script, { keys: await mutationKeys(generationId), ...input });
+    } catch (error) {
+      // A failed command may have executed. Never retry it; only discard the hint.
+      identities.delete(generationId);
+      throw error;
+    }
+  };
+  const readStoredState = async (generationId: string): Promise<StoredGenerationState | null> => {
+    const raw = await options.getClient().eval(READ_STATE_SCRIPT, {
+      keys: [stateKey(generationId), snapshotKey(generationId)], arguments: [],
+    });
+    if (!Array.isArray(raw) || raw.length !== 2 || raw.some((part) => typeof part !== 'string')) {
+      throw new Error('REDIS_GENERATION_STATE_INVALID');
+    }
+    if (!raw[0]) return null;
+    const state = parseStoredState(raw[0], raw[1]);
+    if (state.generationId !== generationId) throw new Error('REDIS_GENERATION_STATE_INVALID');
+    rememberIdentity(generationId, state.reservationKey);
+    return state;
+  };
+
   return Object.freeze({
     async reserve(input) {
       const preparationSeed = input.preparationSeed ?? null;
@@ -723,6 +871,7 @@ export const createRedisGenerationReplayStore = (
       const actorHash = hashKeyPart(input.actorKey);
       const identityKey = requestKey(input.actorKey, input.generationRequestId);
       const storedState: StoredGenerationState = {
+        ...(options.enableSnapshotSidecar ? { storageVersion: 2 as const, snapshotMeta: null } : {}),
         actorHash,
         reservationKey: identityKey,
         generationId: input.generationId,
@@ -749,6 +898,7 @@ export const createRedisGenerationReplayStore = (
         keys: [
           identityKey,
           stateKey(input.generationId),
+          snapshotKey(input.generationId),
         ],
         arguments: [
           input.payloadHash,
@@ -765,12 +915,13 @@ export const createRedisGenerationReplayStore = (
           preparationVersion ?? '',
         ],
       });
-      return parseReservation(raw);
+      const reservation = parseReservation(raw);
+      if (reservation.kind !== 'conflict') rememberIdentity(reservation.generationId, identityKey);
+      return reservation;
     },
 
     async markRunning(input) {
-      const result = await options.getClient().eval(MARK_RUNNING_SCRIPT, {
-        keys: [stateKey(input.generationId)],
+      const result = await mutate(input.generationId, MARK_RUNNING_SCRIPT, {
         arguments: [input.producerToken, input.now, input.leaseExpiresAt, String(activeTtlMs)],
       });
       const cancelReason = cancelReasonFromTaggedResult(result, 'cancelled:');
@@ -786,8 +937,7 @@ export const createRedisGenerationReplayStore = (
     },
 
     async claimFinalization(input) {
-      const result = await options.getClient().eval(CLAIM_FINALIZATION_SCRIPT, {
-        keys: [stateKey(input.generationId)],
+      const result = await mutate(input.generationId, CLAIM_FINALIZATION_SCRIPT, {
         arguments: [
           input.producerToken,
           input.now,
@@ -815,8 +965,7 @@ export const createRedisGenerationReplayStore = (
     },
 
     async claimLeaseExpiry(input) {
-      const result = await options.getClient().eval(CLAIM_LEASE_EXPIRY_SCRIPT, {
-        keys: [stateKey(input.generationId)],
+      const result = await mutate(input.generationId, CLAIM_LEASE_EXPIRY_SCRIPT, {
         arguments: [
           hashKeyPart(input.actorKey),
           input.now,
@@ -860,8 +1009,7 @@ export const createRedisGenerationReplayStore = (
     },
 
     async releaseReservation(input) {
-      const result = await options.getClient().eval(RELEASE_RESERVATION_SCRIPT, {
-        keys: [stateKey(input.generationId)],
+      const result = await mutate(input.generationId, RELEASE_RESERVATION_SCRIPT, {
         arguments: [input.producerToken],
       });
       if (result !== 0 && result !== 1) {
@@ -871,8 +1019,7 @@ export const createRedisGenerationReplayStore = (
     },
 
     async heartbeat(input) {
-      const result = await options.getClient().eval(HEARTBEAT_SCRIPT, {
-        keys: [stateKey(input.generationId)],
+      const result = await mutate(input.generationId, HEARTBEAT_SCRIPT, {
         arguments: [input.producerToken, input.now, input.leaseExpiresAt, String(activeTtlMs)],
       });
       const cancelReason = cancelReasonFromTaggedResult(result, 'cancelled:');
@@ -893,8 +1040,7 @@ export const createRedisGenerationReplayStore = (
         type: event.type,
         dataJson: JSON.stringify(event.data) ?? 'null',
       }));
-      const raw = await options.getClient().eval(APPEND_SCRIPT, {
-        keys: [stateKey(input.generationId), eventsKey(input.generationId)],
+      const raw = await mutate(input.generationId, APPEND_SCRIPT, {
         arguments: [
           input.producerToken,
           JSON.stringify(serializedEvents),
@@ -923,8 +1069,7 @@ export const createRedisGenerationReplayStore = (
     },
 
     async writeSnapshot(input) {
-      const result = await options.getClient().eval(SNAPSHOT_SCRIPT, {
-        keys: [stateKey(input.generationId)],
+      const result = await mutate(input.generationId, SNAPSHOT_SCRIPT, {
         arguments: [
           input.producerToken,
           JSON.stringify(input.snapshot),
@@ -939,8 +1084,7 @@ export const createRedisGenerationReplayStore = (
     },
 
     async readSnapshot(input) {
-      const raw = await options.getClient().get(stateKey(input.generationId));
-      return raw ? parseStoredState(raw).snapshot : null;
+      return (await readStoredState(input.generationId))?.snapshot ?? null;
     },
 
     async readEvent(input) {
@@ -990,8 +1134,7 @@ export const createRedisGenerationReplayStore = (
       ) {
         throw new Error('REDIS_GENERATION_TERMINAL_EVIDENCE_INVALID');
       }
-      const raw = await options.getClient().eval(TERMINAL_SCRIPT, {
-        keys: [stateKey(input.generationId), eventsKey(input.generationId)],
+      const raw = await mutate(input.generationId, TERMINAL_SCRIPT, {
         arguments: [
           input.producerToken,
           JSON.stringify(input.terminal),
@@ -1028,9 +1171,8 @@ export const createRedisGenerationReplayStore = (
     },
 
     async readState(input) {
-      const raw = await options.getClient().get(stateKey(input.generationId));
-      if (!raw) return null;
-      const state = parseStoredState(raw);
+      const state = await readStoredState(input.generationId);
+      if (!state) return null;
       if (input.actorKey && state.actorHash !== hashKeyPart(input.actorKey)) return null;
       return {
         ...state,
@@ -1042,8 +1184,7 @@ export const createRedisGenerationReplayStore = (
       if (!isGenerationCancelReason(input.reason)) {
         throw new Error('REDIS_GENERATION_CANCEL_REASON_INVALID');
       }
-      const raw = await options.getClient().eval(CANCEL_SCRIPT, {
-        keys: [stateKey(input.generationId)],
+      const raw = await mutate(input.generationId, CANCEL_SCRIPT, {
         arguments: [
           hashKeyPart(input.actorKey),
           input.reason,

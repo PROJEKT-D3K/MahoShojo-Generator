@@ -78,7 +78,11 @@ const wrapped: RedisGenerationClient = {
   get: (key) => client.get(key),
   xRead: async () => { throw new Error('基准不运行订阅读取'); },
 };
-const store = createRedisGenerationReplayStore({ getClient: () => wrapped, keyPrefix: 'localbench' });
+const inlineStore = createRedisGenerationReplayStore({ getClient: () => wrapped, keyPrefix: 'localbench' });
+const sidecarStore = createRedisGenerationReplayStore({
+  getClient: () => wrapped, keyPrefix: 'localbench', enableSnapshotSidecar: true,
+});
+let store = inlineStore;
 const stateKey = (id: string): string => `mahoshojo:gen:v1:localbench:${id}:state`;
 const eventKey = (id: string): string => `mahoshojo:gen:v1:localbench:${id}:events`;
 const snapshot = (markdown: string, lastEventId: string | null) => ({
@@ -128,11 +132,12 @@ try {
   for (const transport of ['eval', 'evalsha'] as const) {
     scriptTransport = transport;
     for (const bodyBytes of [0, 64 * 1024, 256 * 1024, 1024 * 1024, 2 * 1024 * 1024 - 1024]) {
-      for (const layout of ['inline', 'small-state-control'] as const) {
-        const generationId = `${transport.padEnd(7, '_')}-${layout}-${bodyBytes}`;
+      for (const layout of ['inline', 'small-state-control', 'sidecar-v2'] as const) {
+        store = layout === 'sidecar-v2' ? sidecarStore : inlineStore;
+        const generationId = `${transport.padEnd(7, '_')}-${layout.padEnd(19, '_')}-${bodyBytes}`;
         await reserve(generationId);
         const value = snapshot('x'.repeat(bodyBytes), null);
-        if (layout === 'inline') {
+        if (layout !== 'small-state-control') {
           assert.equal((await store.writeSnapshot({
             generationId, producerToken: generationId, snapshot: value, now,
           })).owned, true);
@@ -175,59 +180,63 @@ try {
   // Explicit synthetic snapshot policy, driven by virtual 100ms chunk arrival.
   // The measured operation is real, but no sleep or provider/network is modeled.
   for (const chunks of [256, 512]) {
-    for (const transport of ['eval', 'evalsha'] as const) {
-      scriptTransport = transport;
-      const generationId = `growing-${chunks}-${transport.padEnd(7, '_')}`;
-      await reserve(generationId);
-      evalRequestBytes = 0;
-      snapshotArgumentBytes = 0;
-      let markdown = '';
-      let pendingSnapshotBytes = 0;
-      let lastSnapshotMs: number | null = null;
-      let snapshots = 0;
-      let storedSnapshotBytes = 0;
-      let embeddedSnapshotRewriteBytes = 0;
-      let lastEventId: string | null = null;
-      let snapshotCursor: string | null = null;
-      const before = await evalStats();
-      for (let index = 0; index < chunks; index += 1) {
-        markdown += 'x'.repeat(512);
-        const result = await store.appendEvents({
-          generationId, producerToken: generationId, now,
-          events: [{ type: 'markdown', data: { chunk: 'x'.repeat(512) } }],
-        });
-        assert.equal(result.owned, true);
-        lastEventId = result.events.at(-1)!.id;
-        embeddedSnapshotRewriteBytes += storedSnapshotBytes;
-        pendingSnapshotBytes += 512;
-        const virtualMs = index * 100;
-        if (lastSnapshotMs === null || virtualMs - lastSnapshotMs >= 250 || pendingSnapshotBytes >= 4096) {
-          const value = snapshot(markdown, lastEventId);
-          assert.equal((await store.writeSnapshot({
-            generationId, producerToken: generationId, now, snapshot: value,
-          })).owned, true);
-          snapshotCursor = lastEventId;
-          storedSnapshotBytes = Buffer.byteLength(JSON.stringify(value));
-          snapshots += 1;
-          pendingSnapshotBytes = 0;
-          lastSnapshotMs = virtualMs;
+    for (const layout of ['inline', 'sidecar-v2'] as const) {
+      store = layout === 'sidecar-v2' ? sidecarStore : inlineStore;
+      for (const transport of ['eval', 'evalsha'] as const) {
+        scriptTransport = transport;
+        const generationId = `growing-${chunks}-${layout.padEnd(10, '_')}-${transport.padEnd(7, '_')}`;
+        await reserve(generationId);
+        evalRequestBytes = 0;
+        snapshotArgumentBytes = 0;
+        let markdown = '';
+        let pendingSnapshotBytes = 0;
+        let lastSnapshotMs: number | null = null;
+        let snapshots = 0;
+        let storedSnapshotBytes = 0;
+        let embeddedSnapshotRewriteBytes = 0;
+        let lastEventId: string | null = null;
+        let snapshotCursor: string | null = null;
+        const before = await evalStats();
+        for (let index = 0; index < chunks; index += 1) {
+          markdown += 'x'.repeat(512);
+          const result = await store.appendEvents({
+            generationId, producerToken: generationId, now,
+            events: [{ type: 'markdown', data: { chunk: 'x'.repeat(512) } }],
+          });
+          assert.equal(result.owned, true);
+          lastEventId = result.events.at(-1)!.id;
+          if (layout === 'inline') embeddedSnapshotRewriteBytes += storedSnapshotBytes;
+          pendingSnapshotBytes += 512;
+          const virtualMs = index * 100;
+          if (lastSnapshotMs === null || virtualMs - lastSnapshotMs >= 250 || pendingSnapshotBytes >= 4096) {
+            const value = snapshot(markdown, lastEventId);
+            assert.equal((await store.writeSnapshot({
+              generationId, producerToken: generationId, now, snapshot: value,
+            })).owned, true);
+            snapshotCursor = lastEventId;
+            storedSnapshotBytes = Buffer.byteLength(JSON.stringify(value));
+            snapshots += 1;
+            pendingSnapshotBytes = 0;
+            lastSnapshotMs = virtualMs;
+          }
         }
+        const after = await evalStats();
+        const measuredRequestBytes = evalRequestBytes;
+        const readback = await store.readState({ generationId });
+        assert.equal(readback?.lastEventId, lastEventId);
+        assert.equal(readback?.snapshot?.lastEventId, snapshotCursor);
+        assert.ok(markdown.startsWith(readback!.snapshot!.markdown));
+        console.log(JSON.stringify({
+          kind: 'growing-synthetic-policy', transport, layout, chunks, chunkBytes: 512, virtualChunkIntervalMs: 100,
+          snapshotFlushIntervalMs: 250, snapshotFlushBytes: 4096,
+          scope: 'append-and-running-snapshots-only; excludes setup, terminal, subscribers and replies',
+          finalBodyBytes: Buffer.byteLength(markdown), snapshots, evalCalls: after.calls - before.calls,
+          serverEvalTotalUs: after.usec - before.usec, evalRequestBytes: measuredRequestBytes, snapshotArgumentBytes,
+          embeddedSnapshotRewriteBytesEstimate: embeddedSnapshotRewriteBytes,
+          independentSnapshotSameCadenceArgumentBytes: snapshotArgumentBytes,
+          note: '拆key只消除append复制旧snapshot；预算内相同节奏继续发送全量snapshot时，客户端上传字节不下降，仍为平方增长',
+        }));
       }
-      const after = await evalStats();
-      const readback = await store.readState({ generationId });
-      assert.equal(readback?.lastEventId, lastEventId);
-      assert.equal(readback?.snapshot?.lastEventId, snapshotCursor);
-      assert.ok(markdown.startsWith(readback!.snapshot!.markdown));
-      console.log(JSON.stringify({
-        kind: 'growing-synthetic-policy', transport, chunks, chunkBytes: 512, virtualChunkIntervalMs: 100,
-        snapshotFlushIntervalMs: 250, snapshotFlushBytes: 4096,
-        scope: 'append-and-running-snapshots-only; excludes setup, terminal, subscribers and replies',
-        finalBodyBytes: Buffer.byteLength(markdown), snapshots, evalCalls: after.calls - before.calls,
-        serverEvalTotalUs: after.usec - before.usec, evalRequestBytes, snapshotArgumentBytes,
-        embeddedSnapshotRewriteBytesEstimate: embeddedSnapshotRewriteBytes,
-        independentSnapshotSameCadenceArgumentBytes: snapshotArgumentBytes,
-        note: '拆key只消除append复制旧snapshot；相同节奏继续发送全量snapshot时，客户端上传字节不下降，仍为平方增长',
-      }));
     }
   }
 } finally {
