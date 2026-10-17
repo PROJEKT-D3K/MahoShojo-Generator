@@ -11,6 +11,7 @@ import {
 import type { AnnouncementDismissalStore } from '../src/announcement/index';
 import type { Announcement } from '@mahoshojo/contracts/announcements';
 import { ShellEscapeMenu } from '../src/shell/EscapeMenu';
+import { useUnsavedPageGuard } from '../src/client/useUnsavedPageGuard';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -139,21 +140,46 @@ describe('sortAnnouncements', () => {
 describe('AnnouncementCenter', () => {
   it('keeps a rejected lazy markdown chunk local and offers the original content as plain text', async () => {
     const onReload = vi.fn();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const FailedLazyMarkdown = lazy(() => Promise.reject(new Error('markdown chunk failed')));
+    function PageWithDraft() {
+      useUnsavedPageGuard(() => true);
+      return <>
+        <input defaultValue="未保存草稿" />
+        <AnnouncementMarkdownErrorBoundary fallbackContent={'<script>alert(1)</script>\n原文'} onReload={onReload}>
+          <FailedLazyMarkdown />
+        </AnnouncementMarkdownErrorBoundary>
+      </>;
+    }
+    const expectUnloadProtected = () => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    };
 
-    render(
-      <AnnouncementMarkdownErrorBoundary fallbackContent={'<script>alert(1)</script>\n原文'} onReload={onReload}>
-        <FailedLazyMarkdown />
-      </AnnouncementMarkdownErrorBoundary>,
-    );
+    render(<PageWithDraft />);
     await act(async () => { await Promise.resolve(); });
 
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('公告正文加载失败');
     expect(container.querySelector('pre')?.textContent).toBe('<script>alert(1)</script>\n原文');
     expect(container.querySelector('script')).toBeNull();
+    expect(container.textContent).toContain('刷新会中断生成或多人会话');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onReload).not.toHaveBeenCalled();
+    expectUnloadProtected();
     click(container.querySelector('button')!);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('可能丢失尚未保存的输入'));
+    expect(onReload).not.toHaveBeenCalled();
+    expect(container.querySelector('pre')?.textContent).toBe('<script>alert(1)</script>\n原文');
+    expect(container.querySelector('input')?.value).toBe('未保存草稿');
+    expectUnloadProtected();
+    confirm.mockReturnValue(true);
+    click(container.querySelector('button')!);
+    expect(confirm).toHaveBeenCalledTimes(2);
     expect(onReload).toHaveBeenCalledOnce();
+    expectUnloadProtected();
     errorLog.mockRestore();
   });
 

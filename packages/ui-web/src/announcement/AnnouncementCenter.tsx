@@ -42,7 +42,12 @@ export class AnnouncementMarkdownErrorBoundary extends Component<
     return (
       <div className="space-y-3" role="alert">
         <p className="text-sm text-red-700">公告正文加载失败，以下为纯文本内容。可刷新页面后重试。</p>
-        <button type="button" className="rounded border px-3 py-1 text-sm" onClick={this.props.onReload}>
+        <p className="text-sm">刷新会中断生成或多人会话，并可能丢失未保存的输入；请先停止或等待任务完成，并保存、导出所需内容。</p>
+        <button type="button" className="rounded border px-3 py-1 text-sm" onClick={() => {
+          if (window.confirm('刷新会中断正在进行的生成或多人会话，并可能丢失尚未保存的输入。请先停止或等待任务完成，并导出需要保留的内容。确认现在刷新？')) {
+            this.props.onReload();
+          }
+        }}>
           刷新页面重试
         </button>
         <pre className="whitespace-pre-wrap break-words text-sm text-gray-700">{this.props.fallbackContent}</pre>
