@@ -290,14 +290,22 @@ impl RoomHttp {
             }
             url.set_path(&path);
         }
-        if operation == Operation::GenerationRead {
+        if matches!(
+            operation,
+            Operation::GenerationRead | Operation::GenerationCancel
+        ) {
             let room = input.room_id.as_deref().ok_or_else(invalid)?;
             let fields = input.request.as_object().ok_or_else(invalid)?;
             let generation = fields
                 .get("generationId")
                 .and_then(Value::as_str)
                 .ok_or_else(invalid)?;
-            if fields.len() != 1
+            if fields.len()
+                != if operation == Operation::GenerationCancel {
+                    2
+                } else {
+                    1
+                }
                 || !protocol::canonical_path_id(room)
                 || !protocol::canonical_path_id(generation)
             {
@@ -305,8 +313,13 @@ impl RoomHttp {
             }
             let room = utf8_percent_encode(room, CANONICAL_PATH_ENCODE_SET);
             let generation = utf8_percent_encode(generation, CANONICAL_PATH_ENCODE_SET);
+            let suffix = if operation == Operation::GenerationCancel {
+                "/cancel"
+            } else {
+                ""
+            };
             url.set_path(&format!(
-                "/api/arena/rooms/v1/{room}/generations/{generation}"
+                "/api/arena/rooms/v1/{room}/generations/{generation}{suffix}"
             ));
         }
         if operation == Operation::Discover {
@@ -343,7 +356,12 @@ impl RoomHttp {
                     "new"
                 });
             }
-            let envelope = json!({"desktopRoom":metadata,"request":input.request});
+            let body = if operation == Operation::GenerationCancel {
+                json!({"expectedRoomEpoch":input.request["expectedRoomEpoch"]})
+            } else {
+                input.request.clone()
+            };
+            let envelope = json!({"desktopRoom":metadata,"request":body});
             // The protocol checks original compact bytes before any trim/default projection.
             let validated = protocol::validate_service_request(operation, &envelope, owner)?;
             let bytes = serde_json::to_vec(&validated).map_err(|_| invalid())?;

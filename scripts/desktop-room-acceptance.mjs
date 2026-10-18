@@ -19,6 +19,7 @@ const PREFIX = PRODUCTION_ID + '.roomacceptance.';
 // Deliberate harness capabilities, never every operation added to the production registry.
 export const ROOM_ACCEPTANCE_FAULTS = Object.freeze(['create', 'join', 'leave', 'close', 'config', 'config-unsupported', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported']);
 export const ROOM_GENERATION_SCENARIOS = Object.freeze(['seed', 'seed-large', 'delta', 'gap', 'disconnect', 'complete', 'hold-read', 'release-read']);
+export const ROOM_CANCEL_SCENARIOS = Object.freeze([...ROOM_GENERATION_SCENARIOS, 'cancel-wait', 'cancel-complete']);
 const ROOM_OBSERVATION_OPERATIONS = Object.freeze(['discover', 'create', 'join', 'session', 'generationRead', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 const read = file => readFileSync(file, 'utf8');
 const hash = data => createHash('sha256').update(data).digest('hex');
@@ -239,44 +240,46 @@ async function build(stateRoot) {
 }
 
 /** Start only the trusted, fixed mock entry; stdout contains closed, redacted control messages. */
-export function startMock(manifest, selfCheck = false) {
+export function startMock(manifest, selfCheck = false, syntheticCancel = false) {
   const api = path.join(manifest.source, 'apps/api');
   const require = createRequire(path.join(api, 'package.json'));
   const loader = require.resolve('tsx');
-  const child = spawn(process.execPath, ['--import', loader, path.join(api, 'scripts/desktop-room-acceptance-mock.ts'), ...(selfCheck ? ['--self-check'] : []), '--state-root', manifest.stateRoot], {
+  const child = spawn(process.execPath, ['--import', loader, path.join(api, 'scripts/desktop-room-acceptance-mock.ts'), ...(selfCheck ? ['--self-check'] : []), ...(syntheticCancel ? ['--synthetic-cancel'] : []), '--state-root', manifest.stateRoot], {
     cwd: api, env: safeLaunchEnvironment(manifest.instances[0]), stdio: ['pipe', 'pipe', 'pipe'], shell: false,
   });
-  return monitorMock(child, selfCheck);
+  return monitorMock(child, selfCheck, { syntheticCancel });
 }
 
 function exactKeys(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 }
-function checkedSummary(value) {
+function checkedSummary(value, syntheticCancel = false) {
   const keys = ['tlsTrusted', 'tlsNoRootRejected', 'tlsWrongSanRejected', 'authPkceOneUse', 'roomHttp', 'roomWss', 'roomProposals', 'proposalReceiptLoss', 'fixedPublicRefs', 'roomGenerationRead', 'roomGenerationRecovery', 'generationReadOnly'];
-  if (!exactKeys(value, keys) || keys.some(key => value[key] !== true)) fail('invalid self-check result');
-  return Object.fromEntries(keys.map(key => [key, true]));
+  if (syntheticCancel) keys.push('generationCancel');
+  if (!exactKeys(value, keys) || keys.some(key => value[key] !== (key === 'generationReadOnly' ? !syntheticCancel : true))) fail('invalid self-check result');
+  return value;
 }
-function checkedObservations(value) {
+function checkedObservations(value, syntheticCancel = false) {
   const keys = ['id', 'event', 'rooms', 'receipts', 'actors', 'activeConnections', 'authSessions', 'trace', 'generation'];
   if (value.event !== 'observations' || !exactKeys(value, keys) || !['rooms', 'receipts', 'actors', 'activeConnections', 'authSessions'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 256) || !Array.isArray(value.trace) || value.trace.length > 256) fail('invalid observations');
   const counts = ['readRequests', 'readDispatches', 'startRequests', 'cancelRequests', 'modelRequests', 'startDispatches', 'cancelDispatches', 'modelDispatches', 'deltaFrames', 'droppedFrames', 'disconnections'];
   const generation = value.generation;
-  if (!exactKeys(generation, ['fixture', 'readHeld', ...counts])
-    || !['none', 'running', 'completed'].includes(generation.fixture) || typeof generation.readHeld !== 'boolean'
+  if (!exactKeys(generation, ['fixture', 'readHeld', 'cancelEnabled', ...counts])
+    || !['none', 'running', 'completed', ...(syntheticCancel ? ['cancelled'] : [])].includes(generation.fixture) || typeof generation.readHeld !== 'boolean'
     || counts.some(key => !Number.isSafeInteger(generation[key]) || generation[key] < 0 || generation[key] > 65_536)
-    || ['startDispatches', 'cancelDispatches', 'modelDispatches'].some(key => generation[key] !== 0)) fail('invalid generation observations');
+    || generation.cancelEnabled !== syntheticCancel
+    || ['startDispatches', 'modelDispatches', ...(!syntheticCancel ? ['cancelDispatches'] : [])].some(key => generation[key] !== 0)) fail('invalid generation observations');
   for (const event of value.trace) {
     if (event.kind === 'refused' && exactKeys(event, ['kind'])) continue;
     if (event.kind === 'public-card' && exactKeys(event, ['kind', 'operation', 'status']) && ['random', 'read'].includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599) continue;
     if (event.kind === 'ws' && exactKeys(event, ['kind', 'outcome']) && ['accepted', 'rejected'].includes(event.outcome)) continue;
-    if (event.kind === 'room-http' && exactKeys(event, ['kind', 'operation', 'status', 'dropped']) && ROOM_OBSERVATION_OPERATIONS.includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599 && typeof event.dropped === 'boolean') continue;
+    if (event.kind === 'room-http' && exactKeys(event, ['kind', 'operation', 'status', 'dropped']) && [...ROOM_OBSERVATION_OPERATIONS, ...(syntheticCancel ? ['generationCancel'] : [])].includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599 && typeof event.dropped === 'boolean') continue;
     fail('invalid observation event');
   }
   return value;
 }
 
-export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_000, stopTimeoutMs = 3000 } = {}) {
+export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_000, stopTimeoutMs = 3000, syntheticCancel = false } = {}) {
   let nextId = 0, stopped = false, closing, readySeen = false, aborted = false, pendingLineBytes = 0;
   let terminal, finishExit, drainExpired = false;
   const diagnostics = createRoomMockDiagnostics();
@@ -318,7 +321,7 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
       if (value.event === (selfCheck ? 'self-check' : 'ready')) {
         const keys = ['event', 'roomOrigin', 'authOrigin', 'selfCheck', ...(selfCheck ? [] : ['roomAddress'])];
         if (readySeen || !exactKeys(value, keys) || value.roomOrigin !== ENDPOINTS.room || value.authOrigin !== ENDPOINTS.auth || (!selfCheck && (!exactKeys(value.roomAddress, ['host', 'port']) || value.roomAddress.host !== '127.0.0.1' || value.roomAddress.port !== ENDPOINTS.roomPort))) fail('invalid readiness');
-        value.selfCheck = checkedSummary(value.selfCheck);
+        value.selfCheck = checkedSummary(value.selfCheck, syntheticCancel);
         readySeen = true; clearTimeout(timer); readyResolve(value); if (terminal) finishExit(); return;
       }
       const entry = pending.get(value.id);
@@ -326,7 +329,7 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
       if (value.event === 'error' && exactKeys(value, ['id', 'event', 'code']) && value.code === 'ACCEPTANCE_CONTROL_REFUSED') {
         pending.delete(value.id); clearTimeout(entry.timer); entry.reject(new Error('mock control refused')); return;
       }
-      if (entry.command === 'observe') checkedObservations(value);
+      if (entry.command === 'observe') checkedObservations(value, syntheticCancel);
       else if (entry.command === 'stop' && !(value.event === 'stopped' && exactKeys(value, ['id', 'event']))) fail('invalid stop response');
       else if (entry.command === 'arm-fault' && !(value.event === 'armed' && value.operation === entry.operation && exactKeys(value, ['id', 'event', 'operation']))) fail('invalid fault response');
       else if (entry.command === 'generation' && !(value.event === 'generation' && value.scenario === entry.operation && exactKeys(value, ['id', 'event', 'scenario']))) fail('invalid generation response');
@@ -357,8 +360,8 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
   const command = async (command, operation) => {
     if (stopped || terminal || aborted || !readySeen || pending.size) fail('mock unavailable or control already pending');
     if (!['observe', 'stop', 'arm-fault', 'generation'].includes(command)
-      || (command === 'arm-fault' ? !ROOM_ACCEPTANCE_FAULTS.includes(operation)
-        : command === 'generation' ? !ROOM_GENERATION_SCENARIOS.includes(operation) : operation !== undefined)) fail('invalid control command');
+      || (command === 'arm-fault' ? ![...ROOM_ACCEPTANCE_FAULTS, ...(syntheticCancel ? ['generationCancel'] : [])].includes(operation)
+        : command === 'generation' ? !(syntheticCancel ? ROOM_CANCEL_SCENARIOS : ROOM_GENERATION_SCENARIOS).includes(operation) : operation !== undefined)) fail('invalid control command');
     const id = ++nextId;
     return new Promise((resolve, reject) => {
       const entry = { command, operation, resolve, reject, timer: setTimeout(() => { pending.delete(id); reject(failure('mock control timeout')); child.kill(); }, stopTimeoutMs) };
@@ -382,13 +385,13 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
   } };
 }
 
-async function selfCheck(stateRoot) {
-  const manifest = validatePrepared(stateRoot), mock = startMock(manifest, true);
-  try { const result = await mock.ready; const end = await mock.exit; if (end.code !== 0 || end.signal) fail('mock self-check failed'); writeNew(path.join(stateRoot, 'self-check.json'), result); return result; }
+async function selfCheck(stateRoot, syntheticCancel = false) {
+  const manifest = validatePrepared(stateRoot), mock = startMock(manifest, true, syntheticCancel);
+  try { const result = await mock.ready; const end = await mock.exit; if (end.code !== 0 || end.signal) fail('mock self-check failed'); writeNew(path.join(stateRoot, syntheticCancel ? 'self-check-cancel.json' : 'self-check.json'), result); return result; }
   finally { await mock.close(); }
 }
 
-async function launch(stateRoot) {
+async function launch(stateRoot, syntheticCancel = false) {
   const manifest = validatePrepared(stateRoot); verifyBinary(manifest);
   if (process.platform !== 'win32') fail('launch requires Windows');
   if (existsSync(path.join(stateRoot, 'launched.json'))) fail('launch is single-use; preserve evidence and prepare fresh copies');
@@ -396,13 +399,13 @@ async function launch(stateRoot) {
     for (const base of [process.env.APPDATA, process.env.LOCALAPPDATA]) if (!base || existsSync(path.join(base, instance.identifier))) fail('isolated application namespace must be fresh');
     if (readdirSync(instance.webview).length) fail('isolated WebView must be fresh');
   }
-  await runApplicationPair(manifest, startMock(manifest));
+  await runApplicationPair(manifest, startMock(manifest, false, syntheticCancel), { syntheticCancel });
 }
 
 /** Local two-window lifecycle; injectable process ports let tests prove cancellation without a GUI. */
 export async function runApplicationPair(manifest, mock, {
   spawnApp = instance => spawn(binaryPath(instance), [], { cwd: path.join(instance.testTree, 'apps/desktop'), env: launchEnvironment(instance), stdio: 'ignore', shell: false }),
-  inputStream = process.stdin, signals = process, report = value => console.log(value),
+  inputStream = process.stdin, signals = process, report = value => console.log(value), syntheticCancel = false,
 } = {}) {
   const children = [], exits = [];
   let requestedStop = false, readyReceived = false, backendEnded = false;
@@ -419,15 +422,15 @@ export async function runApplicationPair(manifest, mock, {
       children.push(child);
       exits.push(new Promise(resolve => { child.once('error', () => { stop(); resolve({ role: instance.role, code: null, signal: 'spawn-error' }); }); child.once('exit', (code, signal) => { if (code !== 0 || signal) stop(); resolve({ role: instance.role, code, signal }); }); }));
     }
-    report(`Two isolated apps started. Commands: fault ${ROOM_ACCEPTANCE_FAULTS.join('|')}, generation ${ROOM_GENERATION_SCENARIOS.join('|')}, observe, stop. Use synthetic accounts 101 and 202.`);
+    report(`Two isolated apps started. Commands: fault ${[...ROOM_ACCEPTANCE_FAULTS, ...(syntheticCancel ? ['generationCancel'] : [])].join('|')}, generation ${(syntheticCancel ? ROOM_CANCEL_SCENARIOS : ROOM_GENERATION_SCENARIOS).join('|')}, observe, stop. Use synthetic accounts 101 and 202.`);
     let control = Promise.resolve();
     input.on('line', line => { control = control.then(async () => {
       if (line === 'stop') { requested(); return; }
       if (line === 'observe') { report(JSON.stringify(await mock.command('observe'))); return; }
       const operation = line.startsWith('fault ') ? line.slice('fault '.length) : null;
       const scenario = line.startsWith('generation ') ? line.slice('generation '.length) : null;
-      if (ROOM_ACCEPTANCE_FAULTS.includes(operation)) report(JSON.stringify(await mock.command('arm-fault', operation)));
-      else if (ROOM_GENERATION_SCENARIOS.includes(scenario)) report(JSON.stringify(await mock.command('generation', scenario)));
+      if ([...ROOM_ACCEPTANCE_FAULTS, ...(syntheticCancel ? ['generationCancel'] : [])].includes(operation)) report(JSON.stringify(await mock.command('arm-fault', operation)));
+      else if ((syntheticCancel ? ROOM_CANCEL_SCENARIOS : ROOM_GENERATION_SCENARIOS).includes(scenario)) report(JSON.stringify(await mock.command('generation', scenario)));
       else report('Unknown command');
     }).catch(() => report('Mock control failed')); });
     const unexpectedMock = mock.exit.then(() => { backendEnded = true; for (const child of children) if (child.exitCode === null) child.kill(); });
@@ -451,7 +454,7 @@ export function verify(stateRoot, source = sourceRoot) {
 
 export async function main(args) {
   const mode = args.shift();
-  if (!['preflight', 'prepare', 'self-check', 'build', 'launch', 'verify'].includes(mode)) fail('expected preflight, prepare, self-check, build, launch or verify');
+  if (!['preflight', 'prepare', 'self-check', 'self-check-cancel', 'build', 'launch', 'launch-cancel', 'verify'].includes(mode)) fail('expected preflight, prepare, self-check, build, launch or verify');
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
     if (!['--host-tree', '--member-tree', '--state-root'].includes(args[i]) || !args[i + 1] || options[args[i]]) fail('invalid or duplicate option');
@@ -466,6 +469,8 @@ export async function main(args) {
   } else {
     if (Object.keys(options).length !== 1) fail('this command accepts only --state-root');
     const stateRoot = options['--state-root'];
+    if (mode === 'self-check-cancel') console.log(JSON.stringify(await selfCheck(stateRoot, true)));
+    if (mode === 'launch-cancel') await launch(stateRoot, true);
     if (mode === 'self-check') console.log(JSON.stringify(await selfCheck(stateRoot)));
     if (mode === 'build') await build(stateRoot);
     if (mode === 'launch') await launch(stateRoot);

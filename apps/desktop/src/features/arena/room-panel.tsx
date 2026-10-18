@@ -1,8 +1,9 @@
+import { captureArenaRoomGenerationCancelTarget, isArenaRoomGenerationCancelTargetCurrent, type ArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
 import { DesktopRoomGenerationResult } from './room-generation-result';
 import { DesktopRoomProposalReview, DesktopRoomProposalStatus } from './room-proposal-review';
 import { DesktopRoomConfigComparison } from './room-config-comparison';
 import { useMemo, useState, useSyncExternalStore } from 'react';
-import { RoomConfigPublishStatus, RoomProposalReadOnlyList, RoomLobbyContent, RoomMembersView, RoomExitActions, RoomInviteShareButton, useRoomInviteCopy, createRoomInviteScope, projectRoomMembers, type RoomExitConfirmation } from '@mahoshojo/ui-web/arena-room';
+import { RoomGenerationCancelAction, RoomConfigPublishStatus, RoomProposalReadOnlyList, RoomLobbyContent, RoomMembersView, RoomExitActions, RoomInviteShareButton, useRoomInviteCopy, createRoomInviteScope, projectRoomMembers, type RoomExitConfirmation } from '@mahoshojo/ui-web/arena-room';
 import { parseArenaRoomJoinCode } from '@mahoshojo/multiplayer-core/room-join-code';
 import { MAX_ROOM_MEMBERS, type RoomDirectoryVisibility } from '@mahoshojo/contracts/arena-room';
 import { buildArenaRoomInviteText } from '@mahoshojo/multiplayer-core/room-invite';
@@ -25,6 +26,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
   const [joinCodeError, setJoinCodeError] = useState<string | null>(null);
   const joinCodePreview = parseArenaRoomJoinCode(joinCode);
   const [confirmation, setConfirmation] = useState<{ action: RoomExitConfirmation; scope: string; identity: symbol | null } | null>(null);
+  const [cancelConfirmation, setCancelConfirmation] = useState<{ target: ArenaRoomGenerationCancelTarget; identity: symbol } | null>(null);
   const session = state.session;
   const scope = session ? `${session.roomId}\n${session.roomEpoch}\n${session.self.userId}` : '';
   const currentScope = () => { const s = owner.getSnapshot().session; return s ? `${s.roomId}\n${s.roomEpoch}\n${s.self.userId}` : ''; };
@@ -85,7 +87,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">多人房间</h2>
       {!state.opened ? <button type="button" className={secondary} disabled={disabled} onClick={() => { void owner.open(); }}>打开多人大厅</button>
         : <button type="button" className={secondary} onClick={disconnect}>断开本机房间连接</button>}</div>
-    <p className="text-sm">当前桌面阶段支持创建、加入、成员在线状态、退出/关闭，以及房主比较后明确发布配置。支持完整成员提案编辑、提交、撤回与房主逐项审阅。支持读取当前房间战报与实时预览；开始和取消协作生成仍需在 Web 端操作。</p>
+    <p className="text-sm">当前桌面阶段支持创建、加入、成员在线状态、退出/关闭，以及房主比较后明确发布配置。支持完整成员提案编辑、提交、撤回与房主逐项审阅。支持读取当前房间战报与实时预览；房主可停止当前生成；开始协作生成仍需在 Web 端操作。</p>
     {state.constrained ? <p role="status">本次多人会话的有效执行位置：服务器。普通 AI 选择与本机草稿保持不变，退出后恢复普通操作。</p> : null}
     {state.opened ? <>
       <p role="status">{status}</p>
@@ -93,7 +95,12 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
       {state.notice ? <p role="status">{state.notice}</p> : null}
       {state.error ? <p role="alert">{state.error}</p> : null}
       {state.sourceIssues.length ? <div><p>在线来源缺少房间版本时，当前桌面选择路径尚不能补齐；可明确选择空稿房间，原设定保留。</p><ul>{state.sourceIssues.map((issue, index) => <li key={index}>{issue}</li>)}</ul><button type="button" className={secondary} disabled={state.busy || disabled} onClick={() => create(true)}>明确创建空草稿房间</button></div> : null}
-      {pending && pending.operation !== 'config' && !pending.operation.startsWith('proposal') ? <section aria-label="核对未知房间操作"><p>原{pending.operation === 'create' ? '创建' : pending.operation === 'join' ? '加入' : pending.operation === 'leave' ? '退出' : pending.operation === 'close' ? '关闭' : pending.operation === 'proposalSubmit' ? '提案提交' : pending.operation === 'proposalWithdraw' ? '提案撤回' : '提案处理'}操作结果未知。不会自动再次发送。</p><button type="button" className={secondary} disabled={state.busy} onClick={reconcile}>{state.phase === 'unavailable' ? '重新验证窗口与本机原意图' : pending.operation === 'create' ? pending.intentId ? '确认恢复原创建意图' : '读取本机原意图' : '读取房间核对结果'}</button></section> : null}
+      {pending && pending.operation !== 'generationCancel' && pending.operation !== 'config' && !pending.operation.startsWith('proposal') ? <section aria-label="核对未知房间操作"><p>原{pending.operation === 'create' ? '创建' : pending.operation === 'join' ? '加入' : pending.operation === 'leave' ? '退出' : pending.operation === 'close' ? '关闭' : pending.operation === 'proposalSubmit' ? '提案提交' : pending.operation === 'proposalWithdraw' ? '提案撤回' : '提案处理'}操作结果未知。不会自动再次发送。</p><button type="button" className={secondary} disabled={state.busy} onClick={reconcile}>{state.phase === 'unavailable' ? '重新验证窗口与本机原意图' : pending.operation === 'create' ? pending.intentId ? '确认恢复原创建意图' : '读取本机原意图' : '读取房间核对结果'}</button></section> : null}
+      {pending?.operation === 'generationCancel' ? <section aria-label="核对停止生成结果">
+        <p>{owner.cancelTrackingUnavailable() ? '原目标已不可核对，结果未知。新生成或房间换代不能证明原任务已停止。' : '正在核对原生成终态；停止请求不会再次发送。'}</p>
+        <p>断开或刷新不会解除原停止请求的防重发状态，也不会停止服务器生成。</p>
+        <button type="button" className={secondary} disabled={state.busy || state.generationReading} onClick={reconcile}>{state.phase === 'unavailable' ? '重新验证窗口与本机原意图' : '只读核对停止结果'}</button>
+      </section> : null}
       {tracking && tracking.phase !== 'publishing' ? <RoomConfigPublishStatus phase={tracking.phase} observation={tracking.observation} trackingId={tracking.id}
         busy={state.busy || disabled} canEnd={pending?.intentId === tracking.id && state.phase !== 'unavailable'} targetConfig={tracking.target?.request.sharedConfig} authoritySession={session}
         onCheck={() => { void owner.checkConfigPublish(); }} onEnd={() => { void owner.endConfigTracking(tracking.id); }} onRead={() => { void owner.readConfigAfterEnd(); }} /> : null}
@@ -106,6 +113,20 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
         <section aria-label="房间权威设定摘要"><h3>服务器房间设定</h3><p>修订 {session.snapshot.revision} · {session.snapshot.sharedConfig.combatants.length} 位角色 · {session.snapshot.sharedConfig.auxScenarios.length} 个辅助情景 · {session.snapshot.sharedConfig.materials.length} 份素材</p><p>生成状态：{session.snapshot.activeGeneration?.state ?? '无活动生成'}。</p></section>
         <DesktopRoomGenerationResult generation={state.generation} generationKey={`${scope}:${session.snapshot.activeGeneration?.generationId ?? 'none'}:${session.snapshot.activeGeneration?.attempt ?? 0}`}
           onRetry={() => owner.retryGenerationRecovery()} retryDisabled={disabled || state.busy || state.generationReading || state.phase !== 'online' || !state.snapshotReceived || !inviteIdentity} />
+        {session.self.role === 'host' ? <RoomGenerationCancelAction
+          disabled={disabled || owner.cancelGenerationBlockedReason() !== null}
+          confirmation={!!cancelConfirmation && cancelConfirmation.identity === owner.confirmationOwner()
+            && isArenaRoomGenerationCancelTargetCurrent(cancelConfirmation.target, session)}
+          onRequest={() => {
+            const identity = owner.confirmationOwner(), target = captureArenaRoomGenerationCancelTarget(owner.getSnapshot().session);
+            if (!identity || !target || disabled || owner.cancelGenerationBlockedReason() !== null) return;
+            setCancelConfirmation({ target, identity });
+          }}
+          onDismiss={() => setCancelConfirmation(null)}
+          onConfirm={() => {
+            const frozen = cancelConfirmation; setCancelConfirmation(null);
+            if (frozen && !disabled) void owner.cancelGeneration(frozen.target, frozen.identity);
+          }} /> : null}
         {session.self.role === 'host' ? <DesktopRoomProposalReview key={`proposals:${scope}`} owner={owner} session={session} state={state} disabled={disabled} languages={languages} />
           : <RoomProposalReadOnlyList session={session} isLive={state.phase === 'online' && state.snapshotReceived} labels={{ language: code => languages?.find(language => language.code === code)?.name }} />}
         {session.self.role === 'host' ? <DesktopRoomConfigComparison key={`comparison:${scope}`} owner={owner} session={session} draft={draft} isDraftCurrent={isDraftCurrent} languages={languages} disabled={state.busy || disabled || !!pending || !!tracking || proposalBlocked} /> : null}

@@ -97,7 +97,7 @@ describe('closed Native Room IPC', () => {
       expect(batch).toEqual(response.batch);
       if (batch.event.kind !== 'http-result') continue;
       const operation = batch.event.operation;
-      if (operation === 'config' || operation === 'proposalSubmit' || operation === 'proposalWithdraw' || operation === 'proposalResolve') throw new Error('legacy fixture has no expanded operation');
+      if (operation === 'generationCancel' || operation === 'config' || operation === 'proposalSubmit' || operation === 'proposalWithdraw' || operation === 'proposalResolve') throw new Error('legacy fixture has no expanded operation');
       expect(DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].parse(batch.event.response)).toEqual(batch.event.response);
       expect(batch.event.response).toEqual('result' in batch.event.response ? service.operations[operation].success : service.operations[operation].error);
     }

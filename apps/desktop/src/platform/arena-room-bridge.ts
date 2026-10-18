@@ -17,6 +17,7 @@ import { DesktopGenerationReadError, DesktopGenerationReader, type DesktopGenera
 
 export interface ArenaRoomChannel { onmessage: (message: unknown) => void }
 export interface ArenaRoomAcceptance {
+  readonly generationCancel?: { readonly intentId: string; readonly current: boolean };
   readonly signal: AbortSignal;
   /** Recheck immediately before installing state after any await. */
   readonly isCurrent: () => boolean;
@@ -276,7 +277,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       }
       // The receipt is now irreversible. A consumer failure may retire this scope,
       // but must never undo the ACK, retry it, or replay the acknowledged mutation.
-      const acknowledgedContext = { signal: context.signal, isCurrent: () => context.isCurrent() && sameDocument(candidate) };
+      const acknowledgedContext = { signal: context.signal, generationCancel: result.data.generationCancel, isCurrent: () => context.isCurrent() && sameDocument(candidate) };
       try { if (acknowledgedContext.isCurrent()) options.onAcknowledged?.(batch, acknowledgedContext); }
       catch {
         if (acknowledgedContext.isCurrent()) fail(candidate, new ArenaRoomBridgeError('internal-error'));

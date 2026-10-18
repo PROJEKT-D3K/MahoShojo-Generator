@@ -56,3 +56,6 @@ export { RoomGenerationResult } from './RoomGenerationResult';
 export type { RoomGenerationResultProps } from './RoomGenerationResult';
 export type { RoomGenerationPhase, RoomGenerationView } from './generation-view';
 export * from './generation-copy';
+
+export { RoomGenerationCancelAction } from "./RoomGenerationCancelAction";
+export type { RoomGenerationCancelActionProps } from "./RoomGenerationCancelAction";

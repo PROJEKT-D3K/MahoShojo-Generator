@@ -10,7 +10,7 @@ import type { ArenaRoomMembershipService } from '../src/arena-room/room-membersh
 import { ArenaRoomGenerationError } from '../src/arena-room/room-generation-service';
 import type { RoomWebSocketAuthorization, RoomWebSocketPeer } from '../src/arena-room/room-websocket-gateway';
 
-export const ROOM_ACCEPTANCE_GENERATION_SCENARIOS = ['seed', 'seed-large', 'delta', 'gap', 'disconnect', 'complete', 'hold-read', 'release-read'] as const;
+export const ROOM_ACCEPTANCE_GENERATION_SCENARIOS = ['seed', 'seed-large', 'delta', 'gap', 'disconnect', 'complete', 'hold-read', 'release-read', 'cancel-wait', 'cancel-complete'] as const;
 export type RoomAcceptanceGenerationScenario = typeof ROOM_ACCEPTANCE_GENERATION_SCENARIOS[number];
 export const ROOM_ACCEPTANCE_GENERATION_LARGE_BYTES = 1024 * 1024;
 export const ROOM_ACCEPTANCE_GENERATION_TAIL = '\n验收尾标：月光🌙终章';
@@ -18,7 +18,7 @@ export const ROOM_ACCEPTANCE_GENERATION_HOLD_MS = 30_000;
 const MAX_COUNT = 65_536;
 const counters = () => ({ readRequests: 0, readDispatches: 0, startRequests: 0, cancelRequests: 0, modelRequests: 0,
   startDispatches: 0, cancelDispatches: 0, modelDispatches: 0, deltaFrames: 0, droppedFrames: 0, disconnections: 0 });
-export type RoomAcceptanceGenerationObservation = ReturnType<typeof counters> & { fixture: 'none' | 'running' | 'completed'; readHeld: boolean };
+export type RoomAcceptanceGenerationObservation = ReturnType<typeof counters> & { fixture: 'none' | 'running' | 'completed' | 'cancelled'; readHeld: boolean; cancelEnabled: boolean };
 type Fixture = { roomId: string; roomEpoch: string; generationId: string; generationRequestId: string; attempt: number;
   actor: RoomActor; markdown: string; nextChunkSeq: number; completed: boolean; dropSequence: number | null };
 const refuse = (): never => { throw new Error('ACCEPTANCE_CONTROL_REFUSED'); };
@@ -27,10 +27,11 @@ const unavailable = () => new ArenaRoomGenerationError('ROOM_GENERATION_UNAVAILA
 export const createRoomAcceptanceGeneration = (options: {
   states: () => readonly ArenaRoomAuthorityState[];
   memberships: () => Pick<ArenaRoomMembershipService, 'resolveActiveByAccount'>;
+  cancelEnabled?: () => boolean;
 }) => {
   const counts = counters();
   let fixture: Fixture | null = null;
-  let sequence = 0, controlling = false, disposed = false, holdArmed = false;
+  let sequence = 0, controlling = false, disposed = false, holdArmed = false, cancelWait = false, cancelWaiting = false;
   let held: { value: ArenaRoomGenerationViewResponse; resolve(value: ArenaRoomGenerationViewResponse): void;
     reject(error: Error): void; timer: ReturnType<typeof setTimeout> } | null = null;
   const peers = new Set<{ roomId: string; roomEpoch: string | null; peer: RoomWebSocketPeer }>();
@@ -49,7 +50,7 @@ export const createRoomAcceptanceGeneration = (options: {
     generationRequestId: value.generationRequestId, attempt: value.attempt,
     expiresAt: new Date(Date.parse(now) + 60_000).toISOString(),
   });
-  const mirror = async (value: Fixture, target: 'running' | 'completed') => {
+  const mirror = async (value: Fixture, target: 'running' | 'completed' | 'cancelled') => {
     const state = value.actor.getSnapshot(); if (!state) return refuse();
     const now = timestamp(state);
     const result = await value.actor.execute({ authority: publisher(value, now), trustedTime: issueArenaRoomTrustedTime({ now }),
@@ -107,7 +108,7 @@ export const createRoomAcceptanceGeneration = (options: {
     await mirror(value, 'running');
   };
   return {
-    observe: (): RoomAcceptanceGenerationObservation => ({ fixture: fixture ? fixture.completed ? 'completed' : 'running' : 'none', readHeld: held !== null, ...counts }),
+    observe: (): RoomAcceptanceGenerationObservation => ({ fixture: fixture ? fixture.actor.getSnapshot()?.snapshot.activeGeneration?.state === 'cancelled' ? 'cancelled' : fixture.completed ? 'completed' : 'running' : 'none', readHeld: held !== null, cancelEnabled: options.cancelEnabled?.() === true, ...counts }),
     recordRequest(request: Request) {
       const url = new URL(request.url), path = url.pathname;
       if (request.method === 'GET' && /^\/api\/arena\/rooms\/v1\/[^/]+\/generations\/[^/]+$/u.test(path)) bump('readRequests');
@@ -124,10 +125,10 @@ export const createRoomAcceptanceGeneration = (options: {
       if (disposed || !value || !state || state.lifecycle.status !== 'open' || value.roomId !== input.roomId
         || value.roomEpoch !== state.snapshot.roomEpoch || input.generationId !== value.generationId
         || active?.generationId !== value.generationId || active.attempt !== value.attempt) throw new ArenaRoomGenerationError('ROOM_GENERATION_NOT_FOUND');
-      const completed = active.state === 'completed';
+      const completed = active.state === 'completed', cancelled = active.state === 'cancelled';
       const response = ArenaRoomGenerationViewResponseSchema.parse({ protocolVersion: 1, roomId: value.roomId,
-        roomEpoch: value.roomEpoch, generation: active, status: completed ? 'completed' : active.state === 'starting' ? 'reserved' : 'running',
-        markdown: value.markdown, nextChunkSeq: completed ? 0 : value.nextChunkSeq, finalAuthoritative: completed,
+        roomEpoch: value.roomEpoch, generation: active, status: cancelled ? 'cancelled' : completed ? 'completed' : active.state === 'starting' ? 'reserved' : 'running',
+        markdown: value.markdown, nextChunkSeq: completed || cancelled ? 0 : value.nextChunkSeq, finalAuthoritative: completed,
         ...(completed ? { generationRecordId: `acceptance-record-${value.attempt}`, result: { version: 1, format: 'stream-markdown', mode: 'classic' } } : {}) });
       if (held) throw unavailable();
       if (!holdArmed) return response;
@@ -139,6 +140,27 @@ export const createRoomAcceptanceGeneration = (options: {
         }, ROOM_ACCEPTANCE_GENERATION_HOLD_MS) };
         held = slot;
       });
+    },
+    async cancel(input: { roomId: string; generationId: string; accountUserId: number; request: { expectedRoomEpoch: string } }): Promise<ArenaRoomGenerationViewResponse> {
+      if (!options.cancelEnabled?.()) return refuse();
+      const member = await options.memberships().resolveActiveByAccount({ roomId: input.roomId, accountUserId: input.accountUserId });
+      const value = fixture, state = member.actor.getSnapshot();
+      if (member.member.role !== 'host') throw new ArenaRoomGenerationError('ROOM_PERMISSION_DENIED');
+      if (disposed || !value || !state || state.lifecycle.status !== 'open' || value.roomId !== input.roomId
+        || value.roomEpoch !== state.snapshot.roomEpoch || input.request.expectedRoomEpoch !== value.roomEpoch
+        || input.generationId !== value.generationId || state.snapshot.activeGeneration?.generationId !== value.generationId
+        || state.snapshot.activeGeneration.attempt !== value.attempt) throw new ArenaRoomGenerationError('ROOM_GENERATION_NOT_FOUND');
+      bump('cancelDispatches');
+      if (!value.completed) {
+        if (cancelWait) { cancelWait = false; cancelWaiting = true; }
+        else { await mirror(value, 'cancelled'); value.completed = true; }
+      }
+      const active = value.actor.getSnapshot()?.snapshot.activeGeneration;
+      if (!active || disposed) throw unavailable();
+      return ArenaRoomGenerationViewResponseSchema.parse({ protocolVersion: 1, roomId: value.roomId, roomEpoch: value.roomEpoch,
+        generation: active, status: active.state === 'cancelled' ? 'cancelled' : active.state === 'completed' ? 'completed' : 'running',
+        markdown: value.markdown, nextChunkSeq: value.completed ? 0 : value.nextChunkSeq, finalAuthoritative: active.state === 'completed',
+        ...(active.state === 'completed' ? { generationRecordId: `acceptance-record-${value.attempt}`, result: { version: 1, format: 'stream-markdown', mode: 'classic' } } : {}) });
     },
     wrapAuthorization(decision: RoomWebSocketAuthorization): RoomWebSocketAuthorization {
       if (!decision.accepted || !decision.connectionAuthority) return decision;
@@ -167,6 +189,8 @@ export const createRoomAcceptanceGeneration = (options: {
         }
         if (scenario === 'seed' || scenario === 'seed-large') { await seed(scenario === 'seed-large'); return; }
         const { fixture: value } = current();
+        if (scenario === 'cancel-wait') { if (!options.cancelEnabled?.() || value.completed || cancelWait || cancelWaiting) return refuse(); cancelWait = true; return; }
+        if (scenario === 'cancel-complete') { if (!options.cancelEnabled?.() || !cancelWaiting || value.completed) return refuse(); await mirror(value, 'cancelled'); value.completed = true; cancelWaiting = false; return; }
         if (scenario === 'hold-read') {
           if (held || holdArmed) return refuse();
           holdArmed = true; return;

@@ -81,13 +81,21 @@ const small = <T extends z.ZodType>(schema: T) => boundedObject(DESKTOP_ROOM_IPC
 const request = <T extends z.ZodType>(schema: T) => boundedObject(DESKTOP_ROOM_IPC_LIMITS.requestBytes).pipe(schema);
 const LocalIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
 const SequenceSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const DesktopRoomHttpOperationSchema = z.enum(['discover', 'create', 'join', 'session', 'generationRead', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
-export const DesktopRoomMutationOperationSchema = z.enum(['create', 'join', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
+export const DesktopRoomHttpOperationSchema = z.enum(['discover', 'create', 'join', 'session', 'generationRead', 'generationCancel', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
+export const DesktopRoomMutationOperationSchema = z.enum(['create', 'join', 'generationCancel', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 export type DesktopRoomMutationOperation = z.infer<typeof DesktopRoomMutationOperationSchema>;
 export type DesktopRoomHttpOperation = z.infer<typeof DesktopRoomHttpOperationSchema>;
+export const DesktopRoomGenerationTargetSchema = z.object({
+  roomEpoch: OpaqueKeySchema, generationId: DesktopRoomSessionGenerationIdSchema,
+  attempt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict();
 export const DesktopRoomPendingIntentSchema = z.object({
   intentId: LocalIdSchema, operation: DesktopRoomMutationOperationSchema, roomId: OpaqueKeySchema.nullable(),
+  generationTarget: DesktopRoomGenerationTargetSchema.optional(),
 }).strict().superRefine((value, context) => {
+  if ((value.operation === 'generationCancel') !== (value.generationTarget !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'cancel target scope mismatch' });
+  }
   if ((value.operation === 'create') !== (value.roomId === null)) {
     context.addIssue({ code: 'custom', message: 'mutation room scope mismatch' });
   }
@@ -141,6 +149,9 @@ export const DesktopRoomActionSchema = request(z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('session'), roomId: OpaqueKeySchema }).strict(),
   z.object({ kind: z.literal('generation-read'), generationId: DesktopRoomSessionGenerationIdSchema,
     expectedRoomEpoch: OpaqueKeySchema, expectedAttempt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
+  z.object({ kind: z.literal('generation-cancel'), roomId: DesktopRoomSessionRoomIdSchema,
+    generationId: DesktopRoomSessionGenerationIdSchema, expectedRoomEpoch: OpaqueKeySchema,
+    expectedAttempt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
   z.object({ kind: z.literal('config'), roomId: OpaqueKeySchema, request: configRequest }).strict(),
   z.object({ kind: z.literal('end-config-tracking'), intentId: LocalIdSchema }).strict(),
   z.object({ kind: z.literal('proposal-submit'), roomId: DesktopRoomSessionRoomIdSchema, request: proposalSubmitRequest }).strict(),
@@ -160,6 +171,7 @@ export const getDesktopRoomHttpOperation = (action: DesktopRoomHttpAction): Desk
   switch (action.kind) {
     case 'resume-create': return 'create';
     case 'generation-read': return 'generationRead';
+    case 'generation-cancel': return 'generationCancel';
     case 'proposal-submit': return 'proposalSubmit';
     case 'proposal-withdraw': return 'proposalWithdraw';
     case 'proposal-resolve': return 'proposalResolve';
@@ -214,7 +226,7 @@ export type DesktopRoomGenerationFragment = z.infer<typeof DesktopRoomGeneration
 export const DesktopRoomEventSchema = z.union([
   DesktopRoomGenerationDescriptorSchema, DesktopRoomGenerationFragmentSchema,
   httpResult('discover'), httpResult('create'), httpResult('join'), httpResult('session'), httpResult('leave'), httpResult('close'), httpResult('config'),
-  httpResult('proposalSubmit'), httpResult('proposalWithdraw'), httpResult('proposalResolve'),
+  httpResult('generationCancel'), httpResult('proposalSubmit'), httpResult('proposalWithdraw'), httpResult('proposalResolve'),
   z.object({ kind: z.literal('proposal-observation'), intentId: LocalIdSchema, observation: DesktopRoomProposalObservationSchema }).strict(),
   z.object({ kind: z.literal('request-error'), requestId: LocalIdSchema,
     operation: DesktopRoomHttpOperationSchema, error: DesktopRoomErrorSchema }).strict().superRefine((value, context) => {
@@ -227,10 +239,7 @@ export const DesktopRoomEventSchema = z.union([
     state: z.enum(['connecting', 'online', 'offline', 'reconnecting', 'detached', 'closed', 'resync-required', 'backpressure']),
     code: DesktopRoomErrorCodeSchema.optional(),
   }).strict(),
-  z.object({ kind: z.literal('mutation-unknown'), intentId: LocalIdSchema, operation: DesktopRoomMutationOperationSchema, roomId: OpaqueKeySchema.nullable() }).strict()
-    .superRefine((value, context) => {
-      if ((value.operation === 'create') !== (value.roomId === null)) context.addIssue({ code: 'custom', message: 'mutation room scope mismatch' });
-    }),
+  DesktopRoomPendingIntentSchema.safeExtend({ kind: z.literal('mutation-unknown') }),
 ]);
 export const DesktopRoomBatchSchema = boundedObject(DESKTOP_ROOM_IPC_LIMITS.batchBytes).pipe(z.object({
   handle: LocalIdSchema, subscriptionId: LocalIdSchema, batchId: LocalIdSchema, sequence: SequenceSchema,
@@ -268,10 +277,12 @@ export const DesktopRoomPullResponseSchema = boundedObject(DESKTOP_ROOM_IPC_LIMI
 export const DesktopRoomAckResponseSchema = small(z.object({
   kind: z.literal('acknowledged'), handle: LocalIdSchema, subscriptionId: LocalIdSchema,
   batchId: LocalIdSchema, sequence: SequenceSchema, accepted: z.boolean(),
+  /** Only an exact terminal receipt ACK can release this frozen cancellation intent. */
+  generationCancel: z.object({ intentId: LocalIdSchema, current: z.boolean() }).strict().optional(),
   /** Only the first exact final-fragment receipt can grant current-generation completion. */
   generationRead: z.object({ requestId: LocalIdSchema, current: z.boolean() }).strict().optional(),
 }).strict().superRefine((value, context) => {
-  if (!value.accepted && value.generationRead !== undefined) context.addIssue({ code: 'custom', message: 'duplicate ACK cannot grant generation completion' });
+  if (!value.accepted && (value.generationRead !== undefined || value.generationCancel !== undefined)) context.addIssue({ code: 'custom', message: 'duplicate ACK cannot grant generation completion' });
 }));
 export type DesktopRoomAttachRequest = z.infer<typeof DesktopRoomAttachRequestSchema>;
 export type DesktopRoomAttachResponse = z.infer<typeof DesktopRoomAttachResponseSchema>;

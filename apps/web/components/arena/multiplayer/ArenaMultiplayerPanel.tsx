@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
+import { captureArenaRoomGenerationCancelTarget, isArenaRoomGenerationCancelTargetCurrent, type ArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 
 import { ChevronDown } from 'lucide-react';
 
 import { MAX_ROOM_MEMBERS, type RoomDirectoryVisibility } from '@mahoshojo/contracts/arena-room';
-import { RoomLobbyContent, RoomMembersView, RoomExitActions, RoomGenerationResult, RoomInviteShareButton, useRoomInviteCopy, createRoomInviteScope, projectRoomMembers } from '@mahoshojo/ui-web/arena-room';
+import { RoomGenerationCancelAction, RoomLobbyContent, RoomMembersView, RoomExitActions, RoomGenerationResult, RoomInviteShareButton, useRoomInviteCopy, createRoomInviteScope, projectRoomMembers } from '@mahoshojo/ui-web/arena-room';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { useEscapeLayer } from '@mahoshojo/ui-web/modal';
 
@@ -80,7 +81,7 @@ export type ArenaMultiplayerPanelViewProps = {
   readonly onLeave: () => void;
   readonly onClose: () => void;
   readonly onKick?: (targetUserId: string) => void;
-  readonly onCancelGeneration?: () => void;
+  readonly onCancelGeneration?: (target: ArenaRoomGenerationCancelTarget) => void;
   readonly onReconnect: () => void;
   readonly onRetryUnknown: () => void;
   readonly onReset: () => void;
@@ -349,13 +350,12 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
     readonly displayName: string;
   } | null>(null);
   const [managementConfirmation, setManagementConfirmation] = useState<
-    'cancel' | 'close' | 'leave' | null
+    'close' | 'leave' | null
   >(null);
   const panelRef = useRef<HTMLElement>(null);
   const kickConfirmationActionRef = useRef<HTMLButtonElement>(null);
   const kickTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const managementConfirmationActionRef = useRef<HTMLButtonElement>(null);
-  const cancelGenerationTriggerRef = useRef<HTMLButtonElement>(null);
+  const [cancelConfirmation, setCancelConfirmation] = useState<{ target: ArenaRoomGenerationCancelTarget; identity: ReturnType<typeof captureAuthIdentity>; roomToken: unknown } | null>(null);
   const session = state.phase === 'closed' || state.phase === 'replacement'
     ? null
     : state.session;
@@ -381,9 +381,6 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
   useEffect(() => {
     if (kickConfirmation) kickConfirmationActionRef.current?.focus();
   }, [kickConfirmation]);
-  useEffect(() => {
-    if (managementConfirmation) managementConfirmationActionRef.current?.focus();
-  }, [managementConfirmation]);
   const currentStateRef = useRef(state);
   currentStateRef.current = state;
   const authIdentity = useSyncExternalStore(subscribeAuthIdentity, getAuthIdentitySnapshot, getAuthIdentitySnapshot);
@@ -729,7 +726,7 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
 
             <RoomExitActions
               role={session.self.role}
-              confirmation={managementConfirmation === 'cancel' ? null : managementConfirmation}
+              confirmation={managementConfirmation}
               busy={busy}
               onConfirmationChange={(confirmation) => {
                 if (confirmation) setKickConfirmation(null);
@@ -743,50 +740,29 @@ export function ArenaMultiplayerPanelView(props: ArenaMultiplayerPanelViewProps)
                 setRoomOpen(false);
                 props.onLeave();
               }}
-              extraConfirmation={managementConfirmation === 'cancel' ? (
-                <div role="alertdialog" aria-label="确认房间管理动作" className="mt-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-950 dark:border-red-900 dark:bg-red-950/30 dark:text-red-100">
-                  <p>确定停止当前战报生成吗？</p>
-                  <ActionBar className="mt-3">
-                    <button
-                      ref={managementConfirmationActionRef}
-                      type="button"
-                      className={buttonClassName({ variant: 'primary' })}
-                      disabled={busy}
-                      onClick={() => {
-                        setManagementConfirmation(null);
-                        setRoomOpen(false);
-                        props.onCancelGeneration?.();
-                      }}
-                    >
-                      确认停止生成
-                    </button>
-                    <button
-                      type="button"
-                      className={buttonClassName()}
-                      onClick={() => {
-                        setManagementConfirmation(null);
-                        queueMicrotask(() => cancelGenerationTriggerRef.current?.focus());
-                      }}
-                    >
-                      取消
-                    </button>
-                  </ActionBar>
-                </div>
-              ) : null}
-              extraActions={(
-                <button
-                  ref={cancelGenerationTriggerRef}
-                  type="button"
-                  className={buttonClassName()}
-                  disabled={busy || !canCancelGeneration}
-                  onClick={() => {
-                    setKickConfirmation(null);
-                    setManagementConfirmation('cancel');
-                  }}
-                >
-                  停止当前生成
-                </button>
-              )}
+              extraActions={<RoomGenerationCancelAction
+                disabled={busy || !canCancelGeneration || state.managementResultUnknown}
+                confirmation={!!cancelConfirmation && cancelConfirmation.identity.isCurrent()
+                  && cancelConfirmation.roomToken === inviteRoomToken
+                  && isArenaRoomGenerationCancelTargetCurrent(cancelConfirmation.target, session)}
+                onRequest={() => {
+                  const latest = getCurrentState?.() ?? currentStateRef.current;
+                  const target = captureArenaRoomGenerationCancelTarget(latest.session);
+                  if (!target || busy || latest.managementOperation || latest.managementResultUnknown) return;
+                  setKickConfirmation(null); setManagementConfirmation(null);
+                  setCancelConfirmation({ target, identity: captureAuthIdentity(), roomToken: inviteRoomScope.getSnapshot() });
+                }}
+                onDismiss={() => setCancelConfirmation(null)}
+                onConfirm={() => {
+                  const frozen = cancelConfirmation;
+                  setCancelConfirmation(null);
+                  const latest = getCurrentState?.() ?? currentStateRef.current;
+                  if (!frozen || !frozen.identity.isCurrent() || frozen.roomToken !== inviteRoomScope.getSnapshot()
+                    || latest.managementOperation || latest.managementResultUnknown || props.actionPending
+                    || !isArenaRoomGenerationCancelTargetCurrent(frozen.target, latest.session)) return;
+                  setRoomOpen(false); props.onCancelGeneration?.(frozen.target);
+                }} />}
+
             />
           </ArenaRoomDialog>
         </div>
@@ -965,7 +941,7 @@ function ArenaMultiplayerPanelRuntime({
       onLeave={() => { void controller.leave(); }}
       onClose={() => { void controller.close(); }}
       onKick={(targetUserId) => { void controller.kickMember(targetUserId); }}
-      onCancelGeneration={() => { void controller.cancelGeneration(); }}
+      onCancelGeneration={target => { void controller.cancelGeneration(target); }}
       onReconnect={controller.reconnect}
       onRetryUnknown={() => { void controller.retryUnknownOperation(); }}
       onReset={() => {

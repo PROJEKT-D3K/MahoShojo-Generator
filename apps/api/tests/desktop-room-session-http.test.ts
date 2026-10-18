@@ -61,6 +61,13 @@ const operationFixtures = {
   ...fixture.operations,
   ...proposalFixtures,
   generationRead: generationFixture.operation,
+  generationCancel: {
+    method: 'POST', path: `${generationFixture.operation.path}/cancel`,
+    request: { desktopRoom: fixture.operations.join.request.desktopRoom, request: { expectedRoomEpoch: fixtureSession.roomEpoch } },
+    success: { desktopRoom: generationFixture.operation.success.desktopRoom,
+      result: (({ protocolVersion, roomId, roomEpoch, generation, status }) => ({ protocolVersion, roomId, roomEpoch, generation, status }))(generationFixture.operation.success.result) },
+    error: fixture.operations.close.error,
+  },
   config: {
     method: 'POST',
     path: DESKTOP_ROOM_SESSION_OPERATIONS.config.path.replace(':roomId', fixtureSession.roomId),
@@ -96,7 +103,7 @@ const inputFor = (operation: DesktopRoomSessionOperation) => {
   if (operation === 'join') return wrap({ displayName: 'Member' });
   if (operation === 'ticket') return wrap({});
   if (operation === 'config') return wrap(configBody);
-  if (operation === 'leave' || operation === 'close') return wrap({ expectedRoomEpoch: snapshot.roomEpoch });
+  if (operation === 'generationCancel' || operation === 'leave' || operation === 'close') return wrap({ expectedRoomEpoch: snapshot.roomEpoch });
   return undefined;
 };
 const pathFor = (operation: DesktopRoomSessionOperation) => (
@@ -123,7 +130,7 @@ const depsFor = (): ArenaRoomHttpDependencies => ({
     read: vi.fn(async () => ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result, roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch })),
     list: vi.fn(async () => { throw new Error('unexpected generation'); }),
     readHistory: vi.fn(async () => { throw new Error('unexpected generation'); }),
-    cancel: vi.fn(async () => { throw new Error('unexpected generation'); }),
+    cancel: vi.fn(async () => ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result, roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch })),
   },
   configs: { publish: vi.fn(async () => session) },
   rateLimit: vi.fn(async () => allow()),
@@ -157,6 +164,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     vi.mocked(deps.directory.discoverPublic).mockResolvedValue(RoomDirectoryPageSchema.parse(fixture.operations.discover.success.result));
     vi.mocked(deps.websocketAuthority.issue).mockResolvedValue(fixture.operations.ticket.success.result.ticket);
     vi.mocked(deps.generations.read).mockResolvedValue(ArenaRoomGenerationViewResponseSchema.parse(generationFixture.operation.success.result));
+    vi.mocked(deps.generations.cancel).mockResolvedValue(ArenaRoomGenerationViewResponseSchema.parse(generationFixture.operation.success.result));
     vi.mocked(deps.proposals.submit).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalSubmit.success.result));
     vi.mocked(deps.proposals.withdraw).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalWithdraw.success.result));
     vi.mocked(deps.proposals.resolve).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalResolve.success.result));
@@ -847,4 +855,30 @@ describe('Desktop current generation read boundary', () => {
     expect(deps.generations.read).toHaveBeenCalledOnce();
     expect(deps.generations.start).not.toHaveBeenCalled(); expect(deps.generations.cancel).not.toHaveBeenCalled();
   }, 60_000);
+});
+
+describe('Desktop generation cancellation receipt boundary', () => {
+  it('projects the small receipt before serialization while Web retains a large full view', async () => {
+    const deps = depsFor(), app = appFor(deps);
+    const full = ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result,
+      roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, markdown: 'large'.repeat(100_000) });
+    vi.mocked(deps.generations.cancel).mockResolvedValue(full);
+    const desktop = await app.request(pathFor('generationCancel'), requestFor('generationCancel'));
+    expect(desktop.status).toBe(200);
+    const raw = await desktop.text(); expect(Buffer.byteLength(raw)).toBeLessThan(256 * 1024);
+    expect(parseDesktopRoomSessionResponse('generationCancel', JSON.parse(raw), 101)).toHaveProperty('result.status', 'completed');
+    expect(JSON.parse(raw).result).not.toHaveProperty('markdown');
+    expect(deps.generations.cancel).toHaveBeenLastCalledWith(expect.objectContaining({ request: { expectedRoomEpoch: snapshot.roomEpoch } }));
+    const web = await app.request(pathFor('generationCancel'), { method: 'POST', headers: { origin: headers.origin, cookie: headers.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedRoomEpoch: snapshot.roomEpoch }) });
+    expect(web.status).toBe(200); expect((await web.json()).markdown).toBe(full.markdown);
+  });
+  it('keeps failures after entering cancellation business unknown and rejects invalid envelopes before dispatch', async () => {
+    const deps = depsFor(), app = appFor(deps);
+    vi.mocked(deps.generations.cancel).mockRejectedValue(new Error('synthetic lost receipt'));
+    const failed = await app.request(pathFor('generationCancel'), requestFor('generationCancel'));
+    expect((await failed.json()).error.outcome).toBe('unknown');
+    vi.mocked(deps.generations.cancel).mockClear();
+    const rejected = await app.request(pathFor('generationCancel'), { method: 'POST', headers, body: JSON.stringify(wrap({ expectedRoomEpoch: snapshot.roomEpoch, secret: 'never' })) });
+    expect((await rejected.json()).error.outcome).toBe('not-applied'); expect(deps.generations.cancel).not.toHaveBeenCalled();
+  });
 });

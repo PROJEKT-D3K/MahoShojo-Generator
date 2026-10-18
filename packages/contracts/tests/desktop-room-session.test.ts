@@ -28,6 +28,7 @@ import { RoomDirectoryPageSchema } from '../src/room-directory';
 import {
   ARENA_ROOM_HTTP_ROUTES,
   ArenaRoomCreateRequestSchema,
+  ArenaRoomGenerationCancelRequestSchema,
   ArenaRoomEpochMutationRequestSchema,
   ArenaRoomJoinRequestSchema,
   ArenaRoomPublishConfigRequestSchema,
@@ -46,6 +47,13 @@ const operationFixtures = {
   ...fixture.operations,
   ...proposalFixtures,
   generationRead: generationFixture.operation,
+  generationCancel: {
+    method: 'POST', path: `${generationFixture.operation.path}/cancel`,
+    request: { desktopRoom: fixture.operations.join.request.desktopRoom, request: { expectedRoomEpoch: sessionFixture.roomEpoch } },
+    success: { desktopRoom: generationFixture.operation.success.desktopRoom,
+      result: (({ protocolVersion, roomId, roomEpoch, generation, status }) => ({ protocolVersion, roomId, roomEpoch, generation, status }))(generationFixture.operation.success.result) },
+    error: fixture.operations.close.error,
+  },
   config: {
     method: 'POST',
     path: ARENA_ROOM_HTTP_ROUTES.config.replace(':roomId', sessionFixture.roomId),
@@ -67,6 +75,7 @@ const operations = DesktopRoomSessionOperationSchema.options;
 const postOperations = DesktopRoomSessionPostOperationSchema.options;
 const originalRequestSchemas = {
   create: ArenaRoomCreateRequestSchema,
+  generationCancel: ArenaRoomGenerationCancelRequestSchema,
   join: ArenaRoomJoinRequestSchema,
   ticket: ArenaRoomTicketRequestSchema,
   leave: ArenaRoomEpochMutationRequestSchema,

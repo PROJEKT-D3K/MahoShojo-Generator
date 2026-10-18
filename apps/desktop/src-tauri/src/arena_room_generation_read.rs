@@ -9,6 +9,7 @@ const TRANSFER_LIFETIME: Duration = Duration::from_secs(300);
 
 pub(super) struct GenerationCompletion {
     request_id: String,
+    cancel_intent_id: Option<String>,
     receipt: (String, u64),
 }
 
@@ -25,7 +26,7 @@ pub(super) struct GenerationTransfer {
     cancel: CancellationToken,
 }
 
-fn same_generation(left: &Value, right: &Value) -> bool {
+pub(super) fn same_generation(left: &Value, right: &Value) -> bool {
     [
         "generationRequestId",
         "generationId",
@@ -50,7 +51,7 @@ pub(super) fn terminal_barrier(generation: &Value) -> Option<Value> {
     }
     Some(mirror)
 }
-fn terminal(state: &Value) -> bool {
+pub(super) fn terminal(state: &Value) -> bool {
     matches!(state.as_str(), Some("completed" | "failed" | "cancelled"))
 }
 
@@ -78,6 +79,15 @@ impl RoomInstance {
             || !same_generation(generation, &transfer.expected)
         {
             return Err(stale());
+        }
+        if let Some(basis) = inner
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.cancel_basis.as_ref())
+        {
+            if !basis.matches(authority) {
+                return Err(stale());
+            }
         }
         if let Some(response) = &transfer.response {
             if authority
@@ -115,10 +125,7 @@ impl RoomInstance {
             .map_err(|_| RoomError::new("busy", "not-applicable"))?;
         let mut inner = lock(&self.inner);
         let context = self.scope_for(&inner, document, &handle)?;
-        if inner.generation.is_some()
-            || inner.generation_completion.is_some()
-            || inner.pending.is_some()
-        {
+        if inner.generation.is_some() || inner.generation_completion.is_some() {
             return Err(RoomError::new("busy", "not-applicable"));
         }
         let authority = inner
@@ -133,6 +140,13 @@ impl RoomInstance {
             || !protocol::canonical_path_id(&authority.room_id)
         {
             return Err(stale());
+        }
+        if inner.pending.as_ref().is_some_and(|pending| {
+            pending.cancel_basis.as_ref().is_none_or(|basis| {
+                !basis.read_matches(&authority.room_id, &expected_room_epoch, &expected)
+            })
+        }) {
+            return Err(RoomError::new("busy", "not-applicable"));
         }
         let target = GenerationReadTarget {
             room_id: authority.room_id.clone(),
@@ -316,8 +330,22 @@ impl RoomInstance {
         let final_fragment = transfer.final_fragment;
         if transfer.final_fragment {
             if let Some(receipt) = receipt.clone() {
+                let cancel_intent_id = inner
+                    .pending
+                    .as_ref()
+                    .filter(|pending| {
+                        pending.cancel_basis.as_ref().is_some_and(|basis| {
+                            basis.read_matches(
+                                &transfer.target.room_id,
+                                &transfer.target.room_epoch,
+                                &transfer.expected,
+                            )
+                        })
+                    })
+                    .map(|pending| pending.id.clone());
                 inner.generation_completion = Some(GenerationCompletion {
                     request_id: request_id.clone(),
+                    cancel_intent_id,
                     receipt,
                 });
             }
@@ -405,6 +433,42 @@ impl RoomInstance {
             })
     }
 
+    pub(super) fn generation_cancel_ack_intent(
+        inner: &Inner,
+        batch_id: &str,
+        sequence: u64,
+        accepted: bool,
+    ) -> Option<String> {
+        if !accepted {
+            return None;
+        }
+        if let Some(completion) = inner.generation_completion.as_ref().filter(|completion| {
+            completion.receipt.0 == batch_id && completion.receipt.1 == sequence
+        }) {
+            return completion.cancel_intent_id.clone();
+        }
+        let transfer = inner.generation.as_ref().filter(|transfer| {
+            transfer.final_fragment
+                && transfer
+                    .receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.0 == batch_id && receipt.1 == sequence)
+        })?;
+        inner
+            .pending
+            .as_ref()
+            .filter(|pending| {
+                pending.cancel_basis.as_ref().is_some_and(|basis| {
+                    basis.read_matches(
+                        &transfer.target.room_id,
+                        &transfer.target.room_epoch,
+                        &transfer.expected,
+                    )
+                })
+            })
+            .map(|pending| pending.id.clone())
+    }
+
     pub(super) fn acknowledge_generation_locked(
         &self,
         inner: &mut Inner,
@@ -467,12 +531,26 @@ impl RoomInstance {
                 .generation;
             let barrier = terminal(&generation["state"]).then(|| generation.clone());
             if let Some(barrier) = barrier {
+                let settle_cancel = inner
+                    .pending
+                    .as_ref()
+                    .and_then(|pending| pending.cancel_basis.as_ref())
+                    .is_some_and(|basis| {
+                        basis.read_matches(
+                            &transfer.target.room_id,
+                            &transfer.target.room_epoch,
+                            &barrier,
+                        )
+                    });
                 inner
                     .scope
                     .as_mut()
                     .and_then(|scope| scope.session.as_mut())
                     .expect("current authority")
                     .generation_read_terminal = Some(barrier);
+                if settle_cancel {
+                    inner.pending = None;
+                }
             }
             inner.generation = None;
             return Ok(Some(completion));

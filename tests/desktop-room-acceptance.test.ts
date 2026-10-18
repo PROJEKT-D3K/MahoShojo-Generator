@@ -422,7 +422,7 @@ class SyntheticChild extends EventEmitter {
 }
 const selfCheckSummary = { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true, roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: true };
 const readyMessage = () => ({ event: 'ready', roomOrigin: ENDPOINTS.room, authOrigin: ENDPOINTS.auth, roomAddress: { host: '127.0.0.1', port: ENDPOINTS.roomPort }, selfCheck: { ...selfCheckSummary } });
-const generationObservations = () => ({ fixture: 'none', readHeld: false, readRequests: 0, readDispatches: 0,
+const generationObservations = () => ({ fixture: 'none', readHeld: false, cancelEnabled: false, readRequests: 0, readDispatches: 0,
   startRequests: 0, cancelRequests: 0, modelRequests: 0, startDispatches: 0, cancelDispatches: 0,
   modelDispatches: 0, deltaFrames: 0, droppedFrames: 0, disconnections: 0 });
 const observations = (id: unknown) => ({ id, event: 'observations', rooms: 1, receipts: 1, actors: 1, activeConnections: 0, authSessions: 2,
@@ -457,6 +457,18 @@ describe('Room acceptance actual CLI entry with a synthetic mock child', () => {
 });
 
 describe('Room acceptance owned mock supervision without spawning processes', () => {
+  it('requires an explicit synthetic-cancel monitor and keeps the read-only zero-cancel guard', async () => {
+    const child = new SyntheticChild(), mock = monitorMock(child, false, { syntheticCancel: true });
+    child.line({ ...readyMessage(), selfCheck: { ...selfCheckSummary, generationReadOnly: false, generationCancel: true } }); await mock.ready;
+    const armed = mock.command('arm-fault', 'generationCancel'); child.line({ id: 1, event: 'armed', operation: 'generationCancel' }); await armed;
+    const wait = mock.command('generation', 'cancel-wait'); child.line({ id: 2, event: 'generation', scenario: 'cancel-wait' }); await wait;
+    const observe = mock.command('observe'); child.line({ ...observations(3), trace: [{ kind: 'room-http', operation: 'generationCancel', status: 200, dropped: false }], generation: { ...generationObservations(), cancelEnabled: true, fixture: 'cancelled', cancelDispatches: 1 } }); await observe;
+    child.finish(); await mock.exit; await mock.close();
+    const readChild = new SyntheticChild(), read = monitorMock(readChild); readChild.line(readyMessage()); await read.ready;
+    await expect(read.command('generation', 'cancel-wait')).rejects.toThrow(); await expect(read.command('arm-fault', 'generationCancel')).rejects.toThrow();
+    readChild.finish(); await read.exit; await read.close();
+  });
+
   it.each(ROOM_GENERATION_SCENARIOS)('supervises only the fixed generation %s scenario', async scenario => {
     const child = new SyntheticChild(), mock = monitorMock(child);
     child.line(readyMessage()); await mock.ready;

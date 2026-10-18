@@ -29,6 +29,9 @@ use proposal::ProposalBasis;
 #[path = "arena_room_generation_read.rs"]
 mod generation_read;
 use generation_read::{GenerationCompletion, GenerationTransfer};
+#[path = "arena_room_generation_cancel.rs"]
+mod generation_cancel;
+use generation_cancel::CancelBasis;
 
 pub(crate) type Notify = Arc<dyn Fn(String) -> Result<(), RoomError> + Send + Sync>;
 type AccountCheck = Arc<dyn Fn() -> Result<bool, RoomError> + Send + Sync>;
@@ -170,6 +173,7 @@ struct PendingIntent {
     frozen_request: Value,
     config_basis: Option<ConfigBasis>,
     proposal_basis: Option<ProposalBasis>,
+    cancel_basis: Option<CancelBasis>,
     proposal_scope: Option<(DocumentId, String)>,
     account: Arc<AccountAccess>,
     phase: IntentPhase,
@@ -178,7 +182,12 @@ struct PendingIntent {
 
 impl PendingIntent {
     fn public(&self) -> Value {
-        json!({"intentId":self.id,"operation":self.operation.as_str(),"roomId":self.room_id})
+        let mut value =
+            json!({"intentId":self.id,"operation":self.operation.as_str(),"roomId":self.room_id});
+        if let Some(basis) = &self.cancel_basis {
+            value["generationTarget"] = basis.target();
+        }
+        value
     }
 }
 
@@ -600,9 +609,20 @@ impl RoomInstance {
                         return Err(error);
                     }
                 };
-                if accepted
-                    && inner.pending.as_ref().is_some_and(|pending| {
-                        pending.phase == IntentPhase::AwaitingAck
+                let cancel_ack_current = inner
+                    .scope
+                    .as_ref()
+                    .map(|scope| scope.context.clone())
+                    .is_some_and(|context| {
+                        self.current_locked(&inner, &context).is_ok()
+                            && Self::cancel_terminal_current(&inner, &context)
+                    });
+                let matched_intent = inner
+                    .pending
+                    .as_ref()
+                    .filter(|pending| {
+                        accepted
+                            && pending.phase == IntentPhase::AwaitingAck
                             && pending.receipt.as_ref().is_some_and(|receipt| {
                                 receipt.document == document
                                     && receipt.handle == input.handle
@@ -611,9 +631,24 @@ impl RoomInstance {
                                     && receipt.sequence == sequence
                             })
                     })
-                {
-                    inner.pending = None;
+                    .map(|pending| (pending.id.clone(), pending.operation));
+                let mut cancel_completion = None;
+                if let Some((id, operation)) = matched_intent {
+                    if operation == Operation::GenerationCancel {
+                        cancel_completion =
+                            Some(json!({"intentId":id,"current":cancel_ack_current}));
+                        if cancel_ack_current {
+                            inner.pending = None;
+                        } else if let Some(pending) = &mut inner.pending {
+                            pending.phase = IntentPhase::Unknown;
+                            pending.receipt = None;
+                        }
+                    } else {
+                        inner.pending = None;
+                    }
                 }
+                let read_cancel_intent =
+                    Self::generation_cancel_ack_intent(&inner, &batch_id, sequence, accepted);
                 let mut generation_completion = None;
                 if let Some(context) = inner
                     .scope
@@ -638,7 +673,18 @@ impl RoomInstance {
                 let mut reply = json!({"kind":"acknowledged","handle":input.handle,
                     "subscriptionId":subscription_id,"batchId":batch_id,"sequence":sequence,"accepted":accepted});
                 if let Some(completion) = generation_completion {
+                    if let Some(id) = read_cancel_intent {
+                        let settled = completion["current"] == true
+                            && inner
+                                .pending
+                                .as_ref()
+                                .is_none_or(|pending| pending.id != id);
+                        cancel_completion = Some(json!({"intentId":id,"current":settled}));
+                    }
                     reply["generationRead"] = completion;
+                }
+                if let Some(completion) = cancel_completion {
+                    reply["generationCancel"] = completion;
                 }
                 Ok(EngineReply::Small(reply))
             }
@@ -695,7 +741,48 @@ impl RoomInstance {
         } else {
             None
         };
+        let cancel_basis = if let Action::GenerationCancel {
+            room_id,
+            generation_id,
+            expected_room_epoch,
+            expected_attempt,
+        } = &action
+        {
+            if inner
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.socket_cancel.as_ref())
+                .is_none_or(|socket| socket.is_cancelled())
+            {
+                return Err(stale());
+            }
+            Some(CancelBasis::prepare(
+                inner
+                    .scope
+                    .as_ref()
+                    .and_then(|scope| scope.session.as_ref())
+                    .ok_or_else(stale)?,
+                room_id,
+                expected_room_epoch,
+                generation_id,
+                *expected_attempt,
+            )?)
+        } else {
+            None
+        };
         let request = match action {
+            Action::GenerationCancel {
+                room_id,
+                generation_id,
+                expected_room_epoch,
+                ..
+            } => HttpRequest {
+                operation: Operation::GenerationCancel,
+                room_id: Some(room_id),
+                proposal_id: None,
+                request: json!({"generationId":generation_id,"expectedRoomEpoch":expected_room_epoch}),
+                resume_only: false,
+            },
             Action::Discover { query } => HttpRequest {
                 operation: Operation::Discover,
                 room_id: None,
@@ -852,7 +939,10 @@ impl RoomInstance {
             None
         };
         let request_id = random_id()?;
-        let new_intent_id = if request.operation.is_post() {
+        let new_intent_id = if request.operation == Operation::GenerationCancel {
+            // The renderer can bind an early terminal receipt before any unknown event.
+            Some(request_id.clone())
+        } else if request.operation.is_post() {
             Some(resume_id.unwrap_or(random_id()?))
         } else {
             None
@@ -899,6 +989,7 @@ impl RoomInstance {
                 },
                 config_basis,
                 proposal_basis,
+                cancel_basis: cancel_basis.clone(),
                 proposal_scope: is_proposal(request.operation)
                     .then(|| (context.proof.document, context.handle.clone())),
                 account: context.account.clone(),
@@ -909,7 +1000,10 @@ impl RoomInstance {
         } else {
             None
         };
-        if request.operation != Operation::Discover {
+        if !matches!(
+            request.operation,
+            Operation::Discover | Operation::GenerationCancel
+        ) {
             if let Some(scope) = &mut inner.scope {
                 if let Some(socket) = scope.socket_cancel.take() {
                     socket.cancel();
@@ -926,8 +1020,15 @@ impl RoomInstance {
         drop(inner);
         let this = self.clone();
         tokio::spawn(async move {
-            this.run_http(context, request_id, request, intent_id, permit)
-                .await;
+            this.run_http(
+                context,
+                request_id,
+                request,
+                intent_id,
+                cancel_basis,
+                permit,
+            )
+            .await;
         });
         Ok(EngineReply::Small(accepted))
     }
@@ -938,10 +1039,21 @@ impl RoomInstance {
         request_id: String,
         request: HttpRequest,
         intent_id: Option<String>,
+        cancel_basis: Option<CancelBasis>,
         _permit: OwnedSemaphorePermit,
     ) {
         let operation = request.operation;
-        let mut outcome = match self.current(&context) {
+        let preflight = if let Some(basis) = &cancel_basis {
+            self.check_cancel_dispatch(
+                &context,
+                basis,
+                intent_id.as_deref().expect("cancel intent"),
+            )
+        } else {
+            self.current(&context)
+        };
+        let dispatched = preflight.is_ok();
+        let mut outcome = match preflight {
             Ok(()) => {
                 self.http
                     .execute(
@@ -965,7 +1077,12 @@ impl RoomInstance {
         let fresh = self.current(&context);
         if fresh.is_ok() {
             if let Ok(response) = &outcome {
-                if let Err(mut error) = self.install_http(&context, &request, response) {
+                let installed = if let Some(basis) = &cancel_basis {
+                    self.install_cancel_receipt(&context, basis, response)
+                } else {
+                    self.install_http(&context, &request, response)
+                };
+                if let Err(mut error) = installed {
                     let mut inner = lock(&self.inner);
                     if self.identity_current_locked(&inner, &context) {
                         if let Some(session) = inner
@@ -990,6 +1107,12 @@ impl RoomInstance {
                     };
                     outcome = Err(error);
                 }
+            }
+        }
+        if operation == Operation::GenerationCancel && dispatched {
+            if let Err(error) = &mut outcome {
+                // 已进入发送的取消只能由匹配终态收敛；404/权限/网络错误不证明取消结果。
+                error.outcome = "unknown";
             }
         }
         let not_applied = outcome
@@ -1085,6 +1208,34 @@ impl RoomInstance {
                 }
                 return;
             }
+            // Installing authority and enqueueing bytes use different lock sections.
+            // Recheck the exact outgoing witness after intervening WSS/permission changes.
+            if let Ok(response) = &outcome {
+                let checked = if let Some(basis) = &cancel_basis {
+                    Self::cancel_receipt_candidate(&inner, basis, response).map(|_| ())
+                } else if operation == Operation::Session
+                    && inner
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.cancel_basis.is_some())
+                {
+                    Authority::from_session(&response["result"])
+                        .and_then(|candidate| Self::check_cancel_candidate(&inner, &candidate))
+                } else {
+                    Ok(())
+                };
+                if let Err(mut error) = checked {
+                    error.outcome = if operation.is_post() {
+                        "unknown"
+                    } else {
+                        "not-applicable"
+                    };
+                    outcome = Err(error);
+                }
+            }
+            let cancel_response_terminal = outcome
+                .as_ref()
+                .is_ok_and(|response| Self::cancel_response_terminal(&inner, operation, response));
             let event = match &outcome {
                 Ok(response) => {
                     json!({"kind":"http-result","requestId":request_id,"operation":operation.as_str(),"response":response})
@@ -1122,7 +1273,28 @@ impl RoomInstance {
                     .as_ref()
                     .is_some_and(|pending| pending.id == *id)
                 {
-                    if matches!(account_current, Ok(false)) || (not_applied && !request.resume_only)
+                    if operation == Operation::GenerationCancel {
+                        if !dispatched && not_applied {
+                            inner.pending = None;
+                        } else if original_queued
+                            && fresh.is_ok()
+                            && cancel_response_terminal
+                            && Self::cancel_terminal_current(&inner, &context)
+                        {
+                            if let Some(receipt) = receipt.clone() {
+                                Self::receipt_cancel_locked(&mut inner, &context, receipt);
+                            }
+                        } else if inner
+                            .pending
+                            .as_ref()
+                            .is_some_and(|pending| pending.phase != IntentPhase::AwaitingAck)
+                        {
+                            let pending = inner.pending.as_mut().expect("matching cancel");
+                            pending.phase = IntentPhase::Unknown;
+                            pending.receipt = None;
+                        }
+                    } else if matches!(account_current, Ok(false))
+                        || (not_applied && !request.resume_only)
                     {
                         inner.pending = None;
                     } else if unknown || fresh.is_err() || !original_queued || outcome.is_err() {
@@ -1132,7 +1304,7 @@ impl RoomInstance {
                     } else {
                         let pending = inner.pending.as_mut().expect("matching pending");
                         pending.phase = IntentPhase::AwaitingAck;
-                        pending.receipt = receipt;
+                        pending.receipt = receipt.clone();
                     }
                 }
             } else if operation == Operation::Session && fresh.is_ok() && original_queued {
@@ -1143,7 +1315,10 @@ impl RoomInstance {
                 if (absence || outcome.is_ok())
                     && inner.pending.as_ref().is_some_and(|pending| {
                         pending.phase == IntentPhase::Unknown
-                            && !matches!(pending.operation, Operation::Create | Operation::Config)
+                            && !matches!(
+                                pending.operation,
+                                Operation::Create | Operation::Config | Operation::GenerationCancel
+                            )
                             && !is_proposal(pending.operation)
                             && pending.room_id == request.room_id
                             && pending.account.user_id == context.account.user_id
@@ -1152,12 +1327,21 @@ impl RoomInstance {
                 {
                     let pending = inner.pending.as_mut().expect("matched reconciliation");
                     pending.phase = IntentPhase::AwaitingAck;
-                    pending.receipt = receipt;
+                    pending.receipt = receipt.clone();
                     if absence {
                         if let Some(scope) = &mut inner.scope {
                             scope.session = None;
                         }
                     }
+                }
+            }
+            if operation == Operation::Session
+                && fresh.is_ok()
+                && original_queued
+                && cancel_response_terminal
+            {
+                if let Some(receipt) = receipt.clone() {
+                    Self::receipt_cancel_locked(&mut inner, &context, receipt);
                 }
             }
             if operation == Operation::Session
@@ -1195,7 +1379,22 @@ impl RoomInstance {
         };
         if let Some(mut pending) = pending {
             pending["kind"] = json!("mutation-unknown");
-            let _ = self.publish(&context, &pending);
+            if operation == Operation::GenerationCancel {
+                let mut inner = lock(&self.inner);
+                if self.current_locked(&inner, &context).is_ok()
+                    && inner.pending.as_ref().is_some_and(|current| {
+                        current.id == pending["intentId"] && current.phase == IntentPhase::Unknown
+                    })
+                {
+                    if inner.delivery.enqueue(&pending).is_ok() {
+                        let _ = self.notify_identity_locked(&mut inner, &context);
+                    } else {
+                        Self::delivery_failed(&mut inner, &context);
+                    }
+                }
+            } else {
+                let _ = self.publish(&context, &pending);
+            }
         }
     }
 
@@ -1570,6 +1769,7 @@ impl RoomInstance {
                         return Err(RoomError::new("invalid-response", "unknown"));
                     }
                 }
+                Self::check_cancel_candidate(&inner, &authority)?;
                 inner.scope.as_mut().ok_or_else(stale)?.session = Some(authority);
             }
             Operation::ProposalSubmit
@@ -1624,7 +1824,9 @@ impl RoomInstance {
                 inner.scope.as_mut().ok_or_else(stale)?.session = None;
             }
             Operation::Discover => {}
-            Operation::Ticket | Operation::GenerationRead => return Err(invalid()),
+            Operation::Ticket | Operation::GenerationRead | Operation::GenerationCancel => {
+                return Err(invalid())
+            }
         }
         Ok(())
     }
@@ -1992,7 +2194,8 @@ impl RoomInstance {
             .as_mut()
             .and_then(|scope| scope.session.as_mut())
             .ok_or_else(stale)?;
-        let effect = match session.apply(message) {
+        let mut candidate = session.clone();
+        let effect = match candidate.apply(message) {
             Ok(effect) => effect,
             Err(error) => {
                 session.proposals_fresh = false;
@@ -2008,9 +2211,34 @@ impl RoomInstance {
                 return Err(error);
             }
         };
-        let enqueue = inner
-            .delivery
-            .enqueue(&json!({"kind":"socket","message":message}));
+        Self::check_cancel_candidate(&inner, &candidate)?;
+        inner.scope.as_mut().ok_or_else(stale)?.session = Some(candidate);
+        let event = json!({"kind":"socket","message":message});
+        let cancel_witness = matches!(
+            message["type"].as_str(),
+            Some("room.snapshot" | "generation.completed" | "generation.failed")
+        );
+        let enqueue =
+            if cancel_witness && !effect.closed && Self::cancel_terminal_current(&inner, context) {
+                inner
+                    .delivery
+                    .enqueue_receipted(&event)
+                    .map(|(batch_id, sequence)| {
+                        Self::receipt_cancel_locked(
+                            &mut inner,
+                            context,
+                            IntentReceipt {
+                                document: context.proof.document,
+                                handle: context.handle.clone(),
+                                subscription_id: context.subscription_id.clone(),
+                                batch_id,
+                                sequence,
+                            },
+                        );
+                    })
+            } else {
+                inner.delivery.enqueue(&event)
+            };
         if let Err(error) = enqueue {
             Self::delivery_failed(&mut inner, context);
             let _ = self.notify_locked(&mut inner, context);
@@ -2522,6 +2750,9 @@ fn config_intent_equal(left: &Value, right: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod generation_cancel_tests {
+        include!("arena_room_generation_cancel_tests.rs");
+    }
     mod generation_read_tests {
         include!("arena_room_generation_read_tests.rs");
     }
@@ -2712,7 +2943,9 @@ mod tests {
             Operation::ProposalSubmit
             | Operation::ProposalWithdraw
             | Operation::ProposalResolve => panic!("proposal actions use explicit fixtures"),
-            Operation::GenerationRead => panic!("generation actions use explicit fixtures"),
+            Operation::GenerationRead | Operation::GenerationCancel => {
+                panic!("generation actions use explicit fixtures")
+            }
             Operation::Ticket => panic!("ticket is not renderer HTTP"),
         }
     }
@@ -3258,6 +3491,7 @@ mod tests {
                     frozen_request: Value::Null,
                     config_basis: Some(basis),
                     proposal_basis: None,
+                    cancel_basis: None,
                     proposal_scope: None,
                     account: account.access.clone(),
                     phase: IntentPhase::Unknown,
@@ -4083,6 +4317,7 @@ mod tests {
                 room_id: None,
                 config_basis: None,
                 proposal_basis: None,
+                cancel_basis: None,
                 proposal_scope: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
@@ -4126,6 +4361,7 @@ mod tests {
                 room_id: Some(room().into()),
                 config_basis: None,
                 proposal_basis: None,
+                cancel_basis: None,
                 proposal_scope: None,
                 frozen_request: json!({"expectedRoomEpoch":epoch()}),
                 account: account.access,
@@ -4579,6 +4815,7 @@ mod tests {
                 room_id: None,
                 config_basis: None,
                 proposal_basis: None,
+                cancel_basis: None,
                 proposal_scope: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
@@ -4692,6 +4929,7 @@ mod tests {
                 room_id: None,
                 config_basis: None,
                 proposal_basis: None,
+                cancel_basis: None,
                 proposal_scope: None,
                 frozen_request: fixture(Operation::Create, "request")["request"].clone(),
                 account: account.access.clone(),
@@ -5263,6 +5501,7 @@ mod tests {
             frozen_request: Value::Null,
             config_basis: None,
             proposal_basis: Some(basis),
+            cancel_basis: None,
             proposal_scope: Some((context.proof.document, context.handle)),
             account: context.account,
             phase: IntentPhase::Unknown,

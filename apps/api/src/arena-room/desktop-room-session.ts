@@ -241,6 +241,9 @@ export const createDesktopRoomSessionAdapter = (options: {
       const scope = scopes.get(context);
       return scope ? { value: scope.request } : null;
     },
+    generationCancelReceipt(context: RoomContext): boolean {
+      return scopes.get(context)?.operation === 'generationCancel';
+    },
     resumeOnly(context: RoomContext): boolean {
       return scopes.get(context)?.createMode === 'resume-only';
     },

@@ -40,6 +40,7 @@ import {
   type ArenaRoomHttpErrorCode,
   type ArenaRoomLegacyHttpErrorCode,
 } from '@mahoshojo/contracts/arena-room';
+import { DesktopRoomGenerationCancelReceiptSchema } from '@mahoshojo/contracts/desktop-room-session';
 import { ARENA_RESOURCE_BUDGET } from '@mahoshojo/hosted-api/arena-generation/resource-budget';
 
 import type { HonoAppVariables } from '#/middleware/request-metadata';
@@ -1249,14 +1250,20 @@ export const registerArenaRoomHttpRoutes = (
     try {
       const request = parseRequest(
         ArenaRoomGenerationCancelRequestSchema,
-        await readBoundedBody(context.req.raw),
+        await readOperationBody(context),
       );
+      desktopRoomSession.enterBusiness(context);
       const result = await dependencies.generations.cancel({
         roomId,
         generationId,
         accountUserId: authorization.accountUserId,
         request,
       });
+      if (desktopRoomSession.generationCancelReceipt(context)) {
+        // Project before JSON serialization: a terminal report can exceed the small receipt budget.
+        const { protocolVersion, roomId, roomEpoch, generation, status } = result;
+        return context.json(DesktopRoomGenerationCancelReceiptSchema.parse({ protocolVersion, roomId, roomEpoch, generation, status }), 200);
+      }
       return context.json(ArenaRoomGenerationViewResponseSchema.parse(result), 200);
     } catch (error) {
       return mapServiceError(context, error);

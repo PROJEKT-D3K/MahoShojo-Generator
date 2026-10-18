@@ -162,6 +162,8 @@ pub(crate) enum Operation {
     ProposalResolve,
     #[serde(rename = "generationRead")]
     GenerationRead,
+    #[serde(rename = "generationCancel")]
+    GenerationCancel,
 }
 impl Operation {
     pub(crate) fn as_str(self) -> &'static str {
@@ -178,6 +180,7 @@ impl Operation {
             Self::ProposalWithdraw => "proposalWithdraw",
             Self::ProposalResolve => "proposalResolve",
             Self::GenerationRead => "generationRead",
+            Self::GenerationCancel => "generationCancel",
         }
     }
     pub(crate) fn is_post(self) -> bool {
@@ -211,6 +214,12 @@ pub(crate) struct Request {
 }
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
+    GenerationCancel {
+        room_id: String,
+        generation_id: String,
+        expected_room_epoch: String,
+        expected_attempt: u64,
+    },
     GenerationRead {
         generation_id: String,
         expected_room_epoch: String,
@@ -1243,6 +1252,33 @@ fn leave_result(v: &mut Value) -> Check {
     key(&mut v["roomId"])?;
     one_of(&v["outcome"], &["left", "closed"])
 }
+fn generation_cancel_result(v: &mut Value) -> Check {
+    closed(
+        v,
+        &[
+            "protocolVersion",
+            "roomId",
+            "roomEpoch",
+            "generation",
+            "status",
+        ],
+        &[],
+    )?;
+    version(&mut v["protocolVersion"])?;
+    key(&mut v["roomId"])?;
+    key(&mut v["roomEpoch"])?;
+    generation_mirror(&mut v["generation"])?;
+    let expected = match text(&v["status"])? {
+        "reserved" => "starting",
+        "running" | "finalizing" => "running",
+        "producer_lost" | "failed" => "failed",
+        "completed" => "completed",
+        "cancelled" => "cancelled",
+        _ => return Err(()),
+    };
+    literal(&v["generation"]["state"], expected)
+}
+
 fn proposal_result(operation: Operation, v: &mut Value) -> Check {
     closed(
         v,
@@ -1380,7 +1416,10 @@ fn original_request(operation: Operation, v: &mut Value) -> Check {
             closed(v, &[], &["reconnect"])?;
             optional(v, "reconnect", reconnect)
         }
-        Operation::Leave | Operation::Close | Operation::ProposalWithdraw => {
+        Operation::Leave
+        | Operation::Close
+        | Operation::ProposalWithdraw
+        | Operation::GenerationCancel => {
             closed(v, &["expectedRoomEpoch"], &[])?;
             key(&mut v["expectedRoomEpoch"])
         }
@@ -1558,6 +1597,7 @@ pub(crate) fn validate_http_response(
         )?;
         ensure(safe_u64(&value["desktopRoom"]["viewerUserId"])? == expected_user_id)?;
         match operation {
+            Operation::GenerationCancel => generation_cancel_result(&mut value["result"]),
             Operation::GenerationRead => Err(()), // 大原件仅由借用式专用解析器接收
             Operation::Discover => directory_page(&mut value["result"]),
             Operation::Create | Operation::Join | Operation::Session | Operation::Config => {
@@ -1663,6 +1703,29 @@ pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {
         let kind = text(&v["kind"])?.to_owned();
         let get = |v: &Value, name: &str| -> Result<String, ()> { Ok(text(&v[name])?.to_owned()) };
         match kind.as_str() {
+            "generation-cancel" => {
+                closed(
+                    &v,
+                    &[
+                        "kind",
+                        "roomId",
+                        "generationId",
+                        "expectedRoomEpoch",
+                        "expectedAttempt",
+                    ],
+                    &[],
+                )?;
+                desktop_path_id(&v["roomId"])?;
+                desktop_path_id(&v["generationId"])?;
+                key(&mut v["expectedRoomEpoch"])?;
+                integer(&mut v["expectedAttempt"], 1, MAX_SAFE_INTEGER)?;
+                Ok(Action::GenerationCancel {
+                    room_id: get(&v, "roomId")?,
+                    generation_id: get(&v, "generationId")?,
+                    expected_room_epoch: get(&v, "expectedRoomEpoch")?,
+                    expected_attempt: safe_u64(&v["expectedAttempt"])?,
+                })
+            }
             "generation-read" => {
                 closed(
                     &v,

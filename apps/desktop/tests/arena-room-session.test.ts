@@ -1,3 +1,4 @@
+import { captureArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1197,6 +1198,106 @@ describe('Desktop current generation recovery through the Native owner', () => {
     const read = h.plan('generation-read'); await installOnlineSnapshot(h, value);
     await read.entered.promise; read.accept(); return { h, read };
   }
+  const cancelReceipt = (requestId: string, view = running): DesktopRoomEvent => DesktopRoomEventSchema.parse({ kind: 'http-result', requestId, operation: 'generationCancel', response: {
+    desktopRoom: generationFixture.operation.success.desktopRoom,
+    result: (({ protocolVersion, roomId, roomEpoch, generation, status }) => ({ protocolVersion, roomId, roomEpoch, generation, status }))(view),
+  } });
+  it('sends one fixed cancellation, keeps presence/control, and requires final reader ACK to settle a running receipt', async () => {
+    const { h, read } = await start(); await transfer(h, read.requestId, running); await whenState(h.session, state => !state.generationReading);
+    await h.receive(socket('room.presence'));
+    const before = h.session.getSnapshot(), identity = h.session.confirmationOwner()!, target = captureArenaRoomGenerationCancelTarget(before.session)!;
+    const cancel = h.plan('generation-cancel'), cancelling = h.session.cancelGeneration(target, identity);
+    await cancel.entered.promise;
+    await h.session.cancelGeneration(target, identity);
+    expect(h.requests.filter(request => request.kind === 'generation-cancel')).toHaveLength(1);
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'online', snapshotReceived: true, presence: before.presence });
+    expect(h.session.getSnapshot().session?.snapshot.controlSeq).toBe(before.session?.snapshot.controlSeq);
+    cancel.accept(); await cancelling;
+    const recovery = h.plan('generation-read'); await h.receive(cancelReceipt(cancel.requestId));
+    await recovery.entered.promise; recovery.accept();
+    expect(h.session.getSnapshot().unknown).toMatchObject({ operation: 'generationCancel', generationTarget: { generationId: target.generationId } });
+    const raw = JSON.stringify({ ...generationFixture.operation.success, result: completed });
+    await h.receive(DesktopRoomEventSchema.parse({ ...generationFixture.descriptor, requestId: recovery.requestId, byteLength: Buffer.byteLength(raw), digest: createHash('sha256').update(raw).digest('hex') }));
+    const final = h.emit({ kind: 'generation-fragment', requestId: recovery.requestId, offset: 0, text: raw, final: true });
+    await final.ackEntered.promise; expect(h.session.getSnapshot().unknown?.operation).toBe('generationCancel');
+    final.acknowledge({ generationCancel: { intentId: cancel.requestId, current: true } }); await whenState(h.session, state => state.unknown === null);
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'online', generation: { finalAuthoritative: true } });
+    expect(h.subscriptions()).toHaveLength(1);
+  });
+  it('terminal WSS ACK settles without granting full report and a late running cancel receipt cannot resurrect it', async () => {
+    const { h, read } = await start(); await transfer(h, read.requestId, running); await whenState(h.session, state => !state.generationReading);
+    const cancel = h.plan('generation-cancel'); const sending = h.session.cancelGeneration(captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!, h.session.confirmationOwner()!);
+    await cancel.entered.promise; cancel.accept(); await sending;
+    const recovery = h.plan('generation-read');
+    const terminal = h.emit(control('generation.completed', host.snapshot.controlSeq + 1));
+    await terminal.ackEntered.promise; expect(h.session.getSnapshot().unknown).not.toBeNull(); terminal.acknowledge({ generationCancel: { intentId: cancel.requestId, current: true } });
+    await whenState(h.session, state => state.unknown === null); await recovery.entered.promise; recovery.accept();
+    expect(h.session.getSnapshot().generation.finalAuthoritative).toBe(false);
+    await h.receive(cancelReceipt(cancel.requestId)); await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().unknown).toBeNull();
+    await transfer(h, recovery.requestId, completed);
+    expect(h.requests.filter(request => request.kind === 'generation-cancel')).toHaveLength(1);
+  });
+  it('a terminal body with current=false ACK keeps the intent and prevents stale-snapshot cancellation', async () => {
+    const { h, read } = await start(); await transfer(h, read.requestId, running); await whenState(h.session, state => !state.generationReading);
+    const cancel = h.plan('generation-cancel'); const sending = h.session.cancelGeneration(captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!, h.session.confirmationOwner()!);
+    await cancel.entered.promise; cancel.accept(); await sending;
+    const recovery = h.plan('generation-read');
+    const receipt = h.emit(cancelReceipt(cancel.requestId, completed)); await receipt.ackEntered.promise;
+    receipt.acknowledge({ generationCancel: { intentId: cancel.requestId, current: false } });
+    await whenState(h.session, state => !state.busy); await recovery.entered.promise; recovery.accept();
+    expect(h.session.getSnapshot().unknown?.intentId).toBe(cancel.requestId);
+    expect(h.session.cancelGenerationBlockedReason()).not.toBeNull();
+    await transfer(h, recovery.requestId, completed);
+    expect(h.session.getSnapshot().unknown?.intentId).toBe(cancel.requestId);
+  });
+  it.each(['digest', 'schema', 'intent'] as const)('keeps cancel unknown when terminal final ACK has invalid %s proof', async invalid => {
+    const { h, read } = await start(); await transfer(h, read.requestId, running); await whenState(h.session, state => !state.generationReading);
+    const cancel = h.plan('generation-cancel'); const sending = h.session.cancelGeneration(captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!, h.session.confirmationOwner()!);
+    await cancel.entered.promise; cancel.accept(); await sending;
+    const recovery = h.plan('generation-read'); await h.receive(cancelReceipt(cancel.requestId));
+    await recovery.entered.promise; recovery.accept();
+    const raw = JSON.stringify({ ...generationFixture.operation.success, result: invalid === 'schema' ? { ...completed, unexpected: true } : completed });
+    await h.receive(DesktopRoomEventSchema.parse({ ...generationFixture.descriptor, requestId: recovery.requestId, byteLength: Buffer.byteLength(raw),
+      digest: invalid === 'digest' ? '0'.repeat(64) : createHash('sha256').update(raw).digest('hex') }));
+    const final = h.emit({ kind: 'generation-fragment', requestId: recovery.requestId, offset: 0, text: raw, final: true });
+    await final.ackEntered.promise;
+    final.acknowledge({ generationCancel: { intentId: invalid === 'intent' ? 'another-cancel' : cancel.requestId, current: true } });
+    await whenState(h.session, state => !state.generationReading);
+    expect(h.session.getSnapshot().unknown?.intentId).toBe(cancel.requestId);
+    expect(h.requests.filter(request => request.kind === 'generation-cancel')).toHaveLength(1);
+  });
+  it.each(['early-availability', 'after-accepted'] as const)('retired bridge errors clear online proof during cancellation with %s', async timing => {
+    const { h, read } = await start(); await transfer(h, read.requestId, running); await whenState(h.session, state => !state.generationReading);
+    const cancel = h.plan('generation-cancel'); const sending = h.session.cancelGeneration(captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!, h.session.confirmationOwner()!);
+    await cancel.entered.promise;
+    const early = timing === 'early-availability' ? h.emit(cancelReceipt(cancel.requestId)) : null;
+    cancel.accept(); await sending;
+    const receipt = early ?? h.emit(cancelReceipt(cancel.requestId)); await receipt.ackEntered.promise; receipt.acknowledge({ accepted: false });
+    await whenState(h.session, state => state.phase === 'unavailable');
+    expect(h.session.getSnapshot()).toMatchObject({ presence: null, snapshotReceived: false, unknown: { operation: 'generationCancel' } });
+  });
+  it('reattaches a frozen cancel target and does not clear it on a running Session GET', async () => {
+    const h = await harness();
+    const target = { roomEpoch: host.roomEpoch, generationId: running.generation.generationId, attempt: running.generation.attempt };
+    h.setPending({ operation: 'generationCancel', roomId: host.roomId, intentId: 'original-cancel', generationTarget: target });
+    await h.session.open(); const session = h.plan('session'); const checking = h.session.reconcile();
+    await session.entered.promise; session.accept(); await checking;
+    await h.receive(success('session', session.requestId, activeSession())); await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().unknown).toMatchObject({ intentId: 'original-cancel', generationTarget: target });
+    expect(h.requests.map(request => request.kind)).toEqual(['session']);
+  });
+  it('refuses stale confirmation, member cancellation and account/document changes before dispatch', async () => {
+    const { h, read } = await start(); await transfer(h, read.requestId, running); await whenState(h.session, state => !state.generationReading);
+    const target = captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!, identity = h.session.confirmationOwner()!;
+    for (const stale of [{ ...target, generationId: 'old-generation' }, { ...target, attempt: target.attempt + 1 }, { ...target, roomEpoch: 'old-epoch' }]) await h.session.cancelGeneration(stale, identity);
+    h.setNonce('b'.repeat(64)); await h.session.cancelGeneration(target, identity);
+    expect(h.requests.filter(request => request.kind === 'generation-cancel')).toHaveLength(0);
+    const memberValue = activeSession(); memberValue.self = member.self;
+    const other = await start(memberValue); await transfer(other.h, other.read.requestId, running);
+    await other.h.session.cancelGeneration(target, other.h.session.confirmationOwner()!);
+    expect(other.h.requests.filter(request => request.kind === 'generation-cancel')).toHaveLength(0);
+  });
   it.each(['close', 'leave', 'config', 'proposal-resolve'] as const)('keeps the room online when %s is refused admission during a background generation read', async kind => {
     const value = activeSession();
     if (kind === 'leave') value.self = member.self;

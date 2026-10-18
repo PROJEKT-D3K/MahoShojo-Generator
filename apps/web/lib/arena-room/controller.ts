@@ -1,3 +1,4 @@
+import { isArenaRoomGenerationCancelTargetCurrent, type ArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
 import {
   createArenaRoomProposalReconciliationTarget,
   observeArenaRoomProposalReconciliation,
@@ -192,7 +193,7 @@ export type ArenaRoomController = {
   leave(): Promise<void>;
   close(): Promise<void>;
   kickMember(targetUserId: string): Promise<void>;
-  cancelGeneration(): Promise<void>;
+  cancelGeneration(target?: ArenaRoomGenerationCancelTarget): Promise<void>;
   submitProposal(request: ArenaRoomProposalSubmitRequest): Promise<void>;
   resolveProposal(proposalId: string, request: ArenaRoomProposalResolveRequest): Promise<void>;
   withdrawProposal(proposalId: string): Promise<void>;
@@ -2090,11 +2091,12 @@ export const createArenaRoomController = (
     }
   };
 
-  const runCancelGeneration = async (): Promise<void> => {
+  const runCancelGeneration = async (target?: ArenaRoomGenerationCancelTarget): Promise<void> => {
     const current = state.session;
     const active = current?.snapshot.activeGeneration;
     if (
-      !isActive()
+      (target !== undefined && !isArenaRoomGenerationCancelTargetCurrent(target, current))
+      || !isActive()
       || !access.enabled
       || !access.authenticated
       || !current
@@ -3124,8 +3126,8 @@ export const createArenaRoomController = (
       await runKickMember(targetUserId);
     },
 
-    async cancelGeneration() {
-      await runCancelGeneration();
+    async cancelGeneration(target) {
+      await runCancelGeneration(target);
     },
 
     async submitProposal(input) {

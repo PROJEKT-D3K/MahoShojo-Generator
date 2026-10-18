@@ -72,9 +72,9 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const unavailable = (): never => { throw new Error('ACCEPTANCE_UNSUPPORTED'); };
 export type RoomAcceptancePki = { ca: string; cert: string; key: string };
 export type RoomAcceptanceFault = 'create' | 'join' | 'leave' | 'close' | 'config' | 'config-unsupported'
-  | 'proposalSubmit' | 'proposalWithdraw' | 'proposalResolve' | 'proposal-unsupported';
+  | 'proposalSubmit' | 'proposalWithdraw' | 'proposalResolve' | 'proposal-unsupported' | 'generationCancel';
 const faults: readonly string[] = ['create', 'join', 'leave', 'close', 'config', 'config-unsupported',
-  'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported'];
+  'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported', 'generationCancel'];
 export type RoomAcceptanceObservation =
   | { kind: 'room-http'; operation: DesktopRoomSessionOperation; status: number; dropped: boolean }
   | { kind: 'public-card'; operation: 'random' | 'read'; status: number }
@@ -87,6 +87,7 @@ export type RoomAcceptanceRuntime = {
   authAddress: { host: '127.0.0.1'; port: number };
   close(): Promise<void>;
   armFault(operation: RoomAcceptanceFault): void;
+  enableGenerationCancel(): void;
   generation(scenario: RoomAcceptanceGenerationScenario): Promise<void>;
   observations(): { rooms: number; receipts: number; actors: number; activeConnections: number; authSessions: number; trace: RoomAcceptanceObservation[]; generation: RoomAcceptanceGenerationObservation };
 };
@@ -210,7 +211,7 @@ const roomServices = () => {
 
 const operationFor = (request: Request): DesktopRoomSessionOperation | null => {
   const url = new URL(request.url), segments = url.pathname.split('/');
-  for (const operation of ROOM_ACCEPTANCE_OPERATIONS) {
+  for (const operation of [...ROOM_ACCEPTANCE_OPERATIONS, 'generationCancel'] as const) {
     if (operation === 'generationRead' && url.search !== '') continue;
     const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
     const expected = definition.path.split('/');
@@ -246,7 +247,8 @@ export const startRoomAcceptanceMock = async (options: {
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('ACCEPTANCE_PORT_INVALID');
   }
   let services = roomServices();
-  const newGeneration = () => createRoomAcceptanceGeneration({ states: () => [...services.store.states.values()], memberships: () => services.memberships });
+  let cancelEnabled = false;
+  const newGeneration = () => createRoomAcceptanceGeneration({ states: () => [...services.store.states.values()], memberships: () => services.memberships, cancelEnabled: () => cancelEnabled });
   let generation = newGeneration();
   const trace: RoomAcceptanceObservation[] = [];
   const observe = (entry: RoomAcceptanceObservation) => { trace.push(entry); if (trace.length > TRACE_CAPACITY) trace.shift(); };
@@ -271,7 +273,7 @@ export const startRoomAcceptanceMock = async (options: {
   http.use('*', bodyLimit({ maxSize: 65 * 1024 }));
   http.use('*', async (context, next) => {
     context.header('cache-control', 'no-store');
-    if (operationFor(context.req.raw) === null
+    if (operationFor(context.req.raw) === null || (operationFor(context.req.raw) === 'generationCancel' && !cancelEnabled)
       || context.req.header('x-mahoshojo-desktop-room-protocol') !== DESKTOP_ROOM_SESSION_PROTOCOL_VERSION) {
       observe({ kind: 'refused' }); return context.json({ code: 'ACCEPTANCE_ROUTE_REFUSED' }, 404);
     }
@@ -304,7 +306,7 @@ export const startRoomAcceptanceMock = async (options: {
     websocketAuthority: { issue: (input) => services.authority.issue(input) },
     proposals: { submit: (input) => services.proposals.submit(input), resolve: (input) => services.proposals.resolve(input), withdraw: (input) => services.proposals.withdraw(input) },
     generations: { start: async () => generation.refusedDispatch('start'), read: (input) => generation.read(input),
-      list: async () => unavailable(), readHistory: async () => unavailable(), cancel: async () => generation.refusedDispatch('cancel') },
+      list: async () => unavailable(), readHistory: async () => unavailable(), cancel: input => generation.cancel(input) },
     configs: { publish: (input) => services.configs.publish(input) },
     rateLimit: async () => ({ allowed: true, limit: 100, remaining: 99, retryAfterSeconds: 1 }),
   }, { isAllowedOrigin: (origin) => origin === roomOrigin });
@@ -321,7 +323,7 @@ export const startRoomAcceptanceMock = async (options: {
     fetch: async (request, env) => {
       const operation = operationFor(request);
       const result = await dispatch(request, env);
-      if (operation !== null && result instanceof Response) {
+      if (operation !== null && (operation !== 'generationCancel' || cancelEnabled) && result instanceof Response) {
         const dropped = result.ok && armed === operation;
         observe({ kind: 'room-http', operation, status: result.status, dropped });
         if (dropped) { armed = null; env.outgoing.destroy(); }
@@ -438,9 +440,10 @@ export const startRoomAcceptanceMock = async (options: {
     const runtime: RoomAcceptanceRuntime = {
       roomOrigin, authOrigin, roomAddress: { host: '127.0.0.1', port: roomPort }, authAddress: { host: '127.0.0.1', port: authPort }, close,
       armFault(operation) {
-        if (!faults.includes(operation) || armed !== null || closing) throw new Error('ACCEPTANCE_FAULT_INVALID');
+        if (!faults.includes(operation) || (operation === 'generationCancel' && !cancelEnabled) || armed !== null || closing) throw new Error('ACCEPTANCE_FAULT_INVALID');
         armed = operation;
       },
+      enableGenerationCancel: () => { cancelEnabled = true; },
       generation: scenario => generation.control(scenario),
       observations: () => ({ rooms: services.store.states.size, receipts: services.store.receipts.size,
         actors: services.actors.size, activeConnections: websocketServer.clients.size, authSessions: sessions.size, trace: structuredClone(trace), generation: generation.observe() }),
@@ -480,7 +483,7 @@ const probe = (runtime: RoomAcceptanceRuntime, pki: RoomAcceptancePki, endpoint:
   request.end(options.body === undefined ? undefined : typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
 });
 
-export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime, pki: RoomAcceptancePki) => {
+export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime, pki: RoomAcceptancePki, cancelMode = false) => {
   const reset = resetForSelfCheck.get(runtime);
   if (!reset || runtime.observations().trace.length || runtime.observations().authSessions) throw new Error('ACCEPTANCE_SELFCHECK_NOT_PRISTINE');
   resetForSelfCheck.delete(runtime);
@@ -665,12 +668,35 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       && generation.deltaFrames === 3 && generation.droppedFrames === 2 && generation.disconnections === 2
       && generation.startRequests === 1 && generation.cancelRequests === 1 && generation.modelRequests === 1
       && generation.startDispatches === 0 && generation.cancelDispatches === 0 && generation.modelDispatches === 0);
+    if (cancelMode) {
+      runtime.enableGenerationCancel();
+      await runtime.generation('seed-large');
+      const current = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+      const target = current.snapshot.activeGeneration.generationId;
+      await runtime.generation('cancel-wait');
+      const receipt = await roomRequest('generationCancel', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId, '', target);
+      assert(receipt.status === 'running' && !('markdown' in receipt) && !('result' in receipt));
+      assert(Buffer.byteLength(JSON.stringify(receipt)) < 256 * 1024);
+      assert((await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', target)).status === 'running');
+      await runtime.generation('cancel-complete');
+      assert((await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', target)).status === 'cancelled');
+      await runtime.generation('seed');
+      const next = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+      runtime.armFault('generationCancel');
+      const cancelPath = DESKTOP_ROOM_SESSION_OPERATIONS.generationCancel.path.replace(':roomId', created.roomId).replace(':generationId', next.snapshot.activeGeneration.generationId);
+      let lost = false;
+      try { await probe(runtime, pki, cancelPath, { headers: configHeaders, body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: 101 }, request: { expectedRoomEpoch: created.roomEpoch } } }); } catch { lost = true; }
+      assert(lost);
+      assert((await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', next.snapshot.activeGeneration.generationId)).status === 'cancelled');
+      const observed = runtime.observations().generation;
+      assert(observed.cancelEnabled && observed.cancelDispatches === 2 && observed.startDispatches === 0 && observed.modelDispatches === 0);
+    }
     await roomRequest('leave', 202, memberCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     await roomRequest('close', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     assert((await roomRequest('discover', 101, hostCookie)).items.length === 0);
     return { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true,
       roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true,
-      roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: true } as const;
+      roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: !cancelMode, ...(cancelMode ? { generationCancel: true } : {}) } as const;
   } finally {
     await Promise.all(openSockets.map((socket) => new Promise<void>((resolve) => {
       if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }
@@ -684,6 +710,7 @@ let startupStage = 'validate-args';
 const main = async () => {
   const args = process.argv.slice(2);
   const selfCheck = args[0] === '--self-check'; if (selfCheck) args.shift();
+  const cancelMode = args[0] === '--synthetic-cancel'; if (cancelMode) args.shift();
   if (args.length !== 2 || args[0] !== '--state-root' || !path.isAbsolute(args[1]!)) throw new Error('ACCEPTANCE_ARGUMENT_INVALID');
   // State root identifies the enclosing isolated run. Credentials never persist here.
   startupStage = 'load-fixture';
@@ -697,7 +724,7 @@ const main = async () => {
   const stop = async () => { await runtime.close(); process.stdin.pause(); };
   try {
     startupStage = 'self-check';
-    const summary = await selfCheckRoomAcceptanceMock(runtime, pki);
+    const summary = await selfCheckRoomAcceptanceMock(runtime, pki, cancelMode);
     startupStage = 'ready-output';
     if (selfCheck) { emit({ event: 'self-check', roomOrigin: runtime.roomOrigin, authOrigin: runtime.authOrigin, selfCheck: summary }); startupStage = 'cleanup'; await stop(); return; }
     emit({ event: 'ready', roomOrigin: runtime.roomOrigin, authOrigin: runtime.authOrigin, roomAddress: runtime.roomAddress, selfCheck: summary });

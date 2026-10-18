@@ -11,6 +11,8 @@ import {
   ARENA_ROOM_HTTP_ROUTES,
   MAX_ARENA_ROOM_HTTP_TICKET_BYTES,
   ArenaRoomCreateRequestSchema,
+  ArenaRoomGenerationCancelRequestSchema,
+  ArenaRoomGenerationProjectionStatusSchema,
   ArenaRoomEpochMutationRequestSchema,
   ArenaRoomGenerationViewResponseSchema,
   ArenaRoomJoinRequestSchema,
@@ -24,6 +26,7 @@ import {
   ArenaRoomTicketRequestSchema,
   ArenaRoomTicketResponseSchema,
 } from './room-http';
+import { GenerationMirrorSchema } from './protocol';
 import { jsonUtf8ByteLength, utf8ByteLength } from './wire-size';
 
 /** Same-path, fail-closed Native opt-in; unnegotiated Web contracts stay unchanged. */
@@ -47,6 +50,7 @@ export const DESKTOP_ROOM_SESSION_OPERATIONS = Object.freeze({
   join: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.join },
   session: { method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.session },
   generationRead: { method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.generation },
+  generationCancel: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.generationCancel },
   ticket: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.ticket },
   leave: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.leave },
   close: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.close },
@@ -56,9 +60,9 @@ export const DESKTOP_ROOM_SESSION_OPERATIONS = Object.freeze({
   proposalResolve: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.proposalResolve },
 } as const);
 export const DesktopRoomSessionOperationSchema = z.enum([
-  'discover', 'create', 'join', 'session', 'generationRead', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve',
+  'discover', 'create', 'join', 'session', 'generationRead', 'generationCancel', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve',
 ]);
-export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
+export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'generationCancel', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 export type DesktopRoomSessionOperation = z.infer<typeof DesktopRoomSessionOperationSchema>;
 export type DesktopRoomSessionPostOperation = z.infer<typeof DesktopRoomSessionPostOperationSchema>;
 
@@ -132,6 +136,7 @@ export const DesktopRoomSessionCreateRequestSchema = boundedObject(
   request: ArenaRoomCreateRequestSchema,
 }).strict());
 export const DesktopRoomSessionJoinRequestSchema = postRequest(ArenaRoomJoinRequestSchema);
+export const DesktopRoomSessionGenerationCancelRequestSchema = postRequest(ArenaRoomGenerationCancelRequestSchema);
 export const DesktopRoomSessionTicketRequestSchema = postRequest(ArenaRoomTicketRequestSchema);
 export const DesktopRoomSessionLeaveRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);
 export const DesktopRoomSessionCloseRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);
@@ -142,6 +147,7 @@ export const DesktopRoomSessionProposalResolveRequestSchema = postRequest(ArenaR
 export const DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS = Object.freeze({
   create: DesktopRoomSessionCreateRequestSchema,
   join: DesktopRoomSessionJoinRequestSchema,
+  generationCancel: DesktopRoomSessionGenerationCancelRequestSchema,
   ticket: DesktopRoomSessionTicketRequestSchema,
   leave: DesktopRoomSessionLeaveRequestSchema,
   close: DesktopRoomSessionCloseRequestSchema,
@@ -163,6 +169,18 @@ export const DesktopRoomSessionSessionSuccessSchema = successResponse(ArenaRoomS
 export const DesktopRoomSessionGenerationReadSuccessSchema = successResponse(
   ArenaRoomGenerationViewResponseSchema, DESKTOP_ROOM_SESSION_LIMITS.generationResponseBodyBytes,
 );
+/** Bounded cancellation acknowledgement; full reports use the existing generation reader. */
+export const DesktopRoomGenerationCancelReceiptSchema = z.object({
+  protocolVersion: z.literal(1), roomId: DesktopRoomSessionRoomIdSchema, roomEpoch: OpaqueKeySchema,
+  generation: GenerationMirrorSchema, status: ArenaRoomGenerationProjectionStatusSchema,
+}).strict().superRefine((value, context) => {
+  const states = { reserved: 'starting', running: 'running', finalizing: 'running',
+    completed: 'completed', failed: 'failed', producer_lost: 'failed', cancelled: 'cancelled' } as const;
+  if (value.generation.state !== states[value.status]) {
+    context.addIssue({ code: 'custom', path: ['generation', 'state'], message: 'cancel receipt status must match mirror state' });
+  }
+});
+export const DesktopRoomSessionGenerationCancelSuccessSchema = successResponse(DesktopRoomGenerationCancelReceiptSchema);
 // The legacy ticket schema counts UTF-16 units; Native additionally caps raw token bytes.
 const desktopTicketResult = z.custom<z.input<typeof ArenaRoomTicketResponseSchema>>(
   (input) => isBoundedJsonObject(input) && typeof input.ticket === 'string'
@@ -205,6 +223,7 @@ export const DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS = Object.freeze({
   join: DesktopRoomSessionJoinSuccessSchema,
   session: DesktopRoomSessionSessionSuccessSchema,
   generationRead: DesktopRoomSessionGenerationReadSuccessSchema,
+  generationCancel: DesktopRoomSessionGenerationCancelSuccessSchema,
   ticket: DesktopRoomSessionTicketSuccessSchema,
   leave: DesktopRoomSessionLeaveSuccessSchema,
   close: DesktopRoomSessionCloseSuccessSchema,
@@ -282,6 +301,7 @@ export const DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS = Object.freeze({
   join: z.union([DesktopRoomSessionJoinSuccessSchema, postErrorResponse]),
   session: z.union([DesktopRoomSessionSessionSuccessSchema, getErrorResponse]),
   generationRead: z.union([DesktopRoomSessionGenerationReadSuccessSchema, getErrorResponse]),
+  generationCancel: z.union([DesktopRoomSessionGenerationCancelSuccessSchema, postErrorResponse]),
   ticket: z.union([DesktopRoomSessionTicketSuccessSchema, postErrorResponse]),
   leave: z.union([DesktopRoomSessionLeaveSuccessSchema, postErrorResponse]),
   close: z.union([DesktopRoomSessionCloseSuccessSchema, postErrorResponse]),

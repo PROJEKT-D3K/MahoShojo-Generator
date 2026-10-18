@@ -2442,6 +2442,18 @@ describe('Arena Room browser controller', () => {
     h.controller.dispose();
   });
 
+  it('rejects a confirmation captured for an earlier target instead of cancelling the replacement', async () => {
+    const h = createHarness();
+    await h.controller.create({ displayName: '房主', directory: { title: '测试房', visibility: 'public' }, sharedConfig });
+    h.sockets[0]!.open(); sendGenerationControlEvent(h.sockets[0]!, 'generation.started', 1);
+    await vi.waitFor(() => expect(h.controller.getSnapshot().generation.phase).toBe('running'));
+    const session = h.controller.getSnapshot().session!;
+    const target = { roomId: session.roomId, roomEpoch: session.roomEpoch, selfUserId: session.self.userId, generationId: generationMirror.generationId, attempt: generationMirror.attempt };
+    await h.controller.cancelGeneration({ ...target, generationId: 'earlier-generation' });
+    await h.controller.cancelGeneration({ ...target, attempt: target.attempt + 1 });
+    expect(h.client.cancelGeneration).not.toHaveBeenCalled();
+    await h.controller.cancelGeneration(target); expect(h.client.cancelGeneration).toHaveBeenCalledOnce(); h.controller.dispose();
+  });
   it.each(['reserved', 'running', 'finalizing'] as const)(
     '晚到的 %s start POST 不能将已观察终态改回活跃态', async (status) => {
       const h = createHarness();

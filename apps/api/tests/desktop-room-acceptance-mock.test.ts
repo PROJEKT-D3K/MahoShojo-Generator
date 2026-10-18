@@ -712,6 +712,33 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
 });
 
 describe.sequential('Desktop current generation acceptance fixture', () => {
+  it('runs a separately opted-in cancellation self-check with no generation start or model dispatch', async () => {
+    const runtime = await start();
+    expect(await selfCheckRoomAcceptanceMock(runtime, pki, true)).toMatchObject({ generationCancel: true, generationReadOnly: false, roomGenerationRead: true });
+    expect(runtime.observations().generation).toMatchObject({ cancelEnabled: true, cancelDispatches: 0, startDispatches: 0, modelDispatches: 0 });
+  });
+  it('defaults to read-only and separately proves host cancellation, bounded receipt, waiting and terminal GET', async () => {
+    const context = await joinedRoom(), { runtime, host, h, m } = context;
+    await runtime.generation('seed-large');
+    const current = await success(room(runtime, 'session', h, 101, undefined, host.roomId));
+    const generationId = current.snapshot.activeGeneration.generationId;
+    const cancel = (cookie: string, userId: number) => room(runtime, 'generationCancel', cookie, userId, { expectedRoomEpoch: host.roomEpoch }, host.roomId, 'new', '', generationId);
+    await expect(cancel(h, 101)).rejects.toThrow('ROOM_DESKTOP_RESPONSE_INVALID');
+    expect(runtime.observations().generation.cancelDispatches).toBe(0);
+    await expect(runtime.generation('cancel-wait')).rejects.toThrow();
+    runtime.enableGenerationCancel();
+    expect((await cancel(m, 202)).status).toBe(403);
+    expect(runtime.observations().generation.cancelDispatches).toBe(0);
+    await runtime.generation('cancel-wait');
+    const receipt = await success(cancel(h, 101));
+    expect(receipt.status).toBe('running'); expect(receipt).not.toHaveProperty('markdown');
+    expect(Buffer.byteLength(JSON.stringify(receipt))).toBeLessThan(256 * 1024);
+    expect((await success(room(runtime, 'generationRead', h, 101, undefined, host.roomId, 'new', '', generationId))).status).toBe('running');
+    await runtime.generation('cancel-complete');
+    expect(await success(room(runtime, 'generationRead', h, 101, undefined, host.roomId, 'new', '', generationId))).toMatchObject({ status: 'cancelled', finalAuthoritative: false });
+    expect(runtime.observations().generation).toMatchObject({ fixture: 'cancelled', cancelDispatches: 1, startDispatches: 0, modelDispatches: 0 });
+  });
+
   const read = (runtime: RoomAcceptanceRuntime, cookie: string, userId: number, roomId: string, generationId: string) =>
     room(runtime, 'generationRead', cookie, userId, undefined, roomId, 'new', '', generationId);
   const seed = async (context: Awaited<ReturnType<typeof joinedRoom>>, large = false) => {
@@ -719,9 +746,9 @@ describe.sequential('Desktop current generation acceptance fixture', () => {
     return (await success(room(context.runtime, 'session', context.h, 101, undefined, context.host.roomId))).snapshot.activeGeneration.generationId as string;
   };
   it('shares the frozen scenarios and refuses absent, ambiguous, active or cross-room fixture replacement', async () => {
-    expect(ROOM_ACCEPTANCE_GENERATION_SCENARIOS).toEqual(ROOM_GENERATION_SCENARIOS);
+    expect(ROOM_ACCEPTANCE_GENERATION_SCENARIOS).toEqual([...ROOM_GENERATION_SCENARIOS, 'cancel-wait', 'cancel-complete']);
     const runtime = await start();
-    expect(runtime.observations().generation).toEqual({ fixture: 'none', readHeld: false, readRequests: 0, readDispatches: 0,
+    expect(runtime.observations().generation).toEqual({ fixture: 'none', readHeld: false, cancelEnabled: false, readRequests: 0, readDispatches: 0,
       startRequests: 0, cancelRequests: 0, modelRequests: 0, startDispatches: 0, cancelDispatches: 0, modelDispatches: 0,
       deltaFrames: 0, droppedFrames: 0, disconnections: 0 });
     for (const scenario of [...ROOM_ACCEPTANCE_GENERATION_SCENARIOS, 'arbitrary-url']) await expect(runtime.generation(scenario as never)).rejects.toThrow('ACCEPTANCE_CONTROL_REFUSED');
