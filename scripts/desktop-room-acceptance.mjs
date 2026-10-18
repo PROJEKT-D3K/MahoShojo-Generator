@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import readline from 'node:readline';
 import { assertToolVersions, checkPorts, contains, rejectLinks, replaceOnce, safeLaunchEnvironment } from './desktop-acceptance-common.mjs';
+import { createRoomMockDiagnostics, formatRoomMockDiagnostic } from './desktop-room-acceptance-diagnostics.mjs';
 
 const sourceRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const native = 'apps/desktop/src-tauri/src/';
@@ -21,6 +22,9 @@ const ROOM_OBSERVATION_OPERATIONS = Object.freeze(['discover', 'create', 'join',
 const read = file => readFileSync(file, 'utf8');
 const hash = data => createHash('sha256').update(data).digest('hex');
 const fail = message => { throw new Error(message); };
+const mockFailures = new WeakMap();
+export const launcherFailureMessage = error => mockFailures.get(error)
+  ?? 'Room acceptance failed; keep the isolated directory and inspect the bounded stage results.';
 const git = (root, ...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }).trim();
 const gitPaths = (root, ...args) => execFileSync('git', ['-C', root, ...args, '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean).sort();
 const json = value => JSON.stringify(value, null, 2) + '\n';
@@ -267,6 +271,12 @@ function checkedObservations(value) {
 
 export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_000, stopTimeoutMs = 3000 } = {}) {
   let nextId = 0, stopped = false, closing, readySeen = false, aborted = false, pendingLineBytes = 0;
+  let terminal, finishExit, drainExpired = false;
+  const diagnostics = createRoomMockDiagnostics();
+  const failure = message => {
+    const text = message + (terminal ? ` (code=${terminal.code}, signal=${terminal.signal})` : '') + diagnostics.summary();
+    const error = new Error(text); mockFailures.set(error, text); return error;
+  };
   const pending = new Map();
   const lines = readline.createInterface({ input: child.stdout });
   let readyResolve, readyReject;
@@ -288,7 +298,11 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
     pendingLineBytes += bytes.length - start;
     if (pendingLineBytes > 64 * 1024) abort();
   });
-  const timer = setTimeout(() => { readyReject(new Error('mock readiness failed')); child.kill(); }, readinessTimeoutMs);
+  const timer = setTimeout(() => {
+    drainExpired = true;
+    if (terminal) finishExit();
+    else { readyReject(failure('mock readiness failed')); child.kill(); }
+  }, readinessTimeoutMs);
   lines.on('line', line => {
     if (aborted) return;
     try {
@@ -298,7 +312,7 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
         const keys = ['event', 'roomOrigin', 'authOrigin', 'selfCheck', ...(selfCheck ? [] : ['roomAddress'])];
         if (readySeen || !exactKeys(value, keys) || value.roomOrigin !== ENDPOINTS.room || value.authOrigin !== ENDPOINTS.auth || (!selfCheck && (!exactKeys(value.roomAddress, ['host', 'port']) || value.roomAddress.host !== '127.0.0.1' || value.roomAddress.port !== ENDPOINTS.roomPort))) fail('invalid readiness');
         value.selfCheck = checkedSummary(value.selfCheck);
-        readySeen = true; clearTimeout(timer); readyResolve(value); return;
+        readySeen = true; clearTimeout(timer); readyResolve(value); if (terminal) finishExit(); return;
       }
       const entry = pending.get(value.id);
       if (!readySeen || !Number.isSafeInteger(value.id) || !entry) fail('unknown control response');
@@ -311,23 +325,33 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
       pending.delete(value.id); clearTimeout(entry.timer); entry.resolve(value);
     } catch { abort(); }
   });
-  child.stderr.on('data', () => {});
+  child.stderr.on('data', chunk => { if (!stopped) diagnostics.append(chunk); });
   const exit = new Promise(resolve => {
     const finish = (code, signal) => {
       if (stopped) return;
-      stopped = true; clearTimeout(timer); lines.close(); readyReject(new Error(`mock stopped before ready (code=${code}, signal=${signal})`));
-      for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error('mock stopped')); }
-      pending.clear(); resolve({ code, signal });
+      terminal ??= { code, signal };
+      stopped = true; clearTimeout(timer); lines.close(); readyReject(failure('mock stopped before ready'));
+      for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(failure('mock stopped')); }
+      pending.clear(); resolve(terminal);
     };
-    child.once('error', () => finish(null, 'spawn-error'));
-    child.once('exit', finish); child.once('close', finish);
+    finishExit = () => finish(terminal.code, terminal.signal);
+    child.once('error', error => {
+      diagnostics.append(formatRoomMockDiagnostic('spawn', error)); finish(null, 'spawn-error');
+    });
+    child.once('exit', (code, signal) => {
+      terminal ??= { code, signal };
+      // Before readiness, close drains the final stderr line. The original
+      // readiness/stop deadline still settles inherited pipes that never close.
+      if (readySeen || drainExpired || child.stderr.readableEnded) finishExit();
+    });
+    child.once('close', finish);
   });
   const command = async (command, operation) => {
-    if (stopped || aborted || !readySeen || pending.size) fail('mock unavailable or control already pending');
+    if (stopped || terminal || aborted || !readySeen || pending.size) fail('mock unavailable or control already pending');
     if (!['observe', 'stop', 'arm-fault'].includes(command) || (command === 'arm-fault' ? !ROOM_ACCEPTANCE_FAULTS.includes(operation) : operation !== undefined)) fail('invalid control command');
     const id = ++nextId;
     return new Promise((resolve, reject) => {
-      const entry = { command, operation, resolve, reject, timer: setTimeout(() => { pending.delete(id); reject(new Error('mock control timeout')); child.kill(); }, stopTimeoutMs) };
+      const entry = { command, operation, resolve, reject, timer: setTimeout(() => { pending.delete(id); reject(failure('mock control timeout')); child.kill(); }, stopTimeoutMs) };
       pending.set(id, entry);
       child.stdin.write(JSON.stringify({ id, command, ...(operation ? { operation } : {}) }) + '\n', error => {
         if (error && pending.delete(id)) { clearTimeout(entry.timer); reject(new Error('mock control write failed')); child.kill(); }
@@ -340,7 +364,7 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
     if (closing) return closing;
     closing = (async () => {
       if (stopped) return;
-      const timeout = setTimeout(() => child.kill(), stopTimeoutMs);
+      const timeout = setTimeout(() => { drainExpired = true; if (terminal) finishExit(); else child.kill(); }, stopTimeoutMs);
       try { await command('stop').catch(() => {}); await exit; }
       finally { clearTimeout(timeout); }
     })();
@@ -436,4 +460,4 @@ export async function main(args) {
     if (mode === 'verify') console.log(JSON.stringify(verify(stateRoot)));
   }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main(process.argv.slice(2)).catch(() => { console.error('Room acceptance failed; keep the isolated directory and inspect the bounded stage results.'); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main(process.argv.slice(2)).catch(error => { console.error(launcherFailureMessage(error)); process.exitCode = 1; });

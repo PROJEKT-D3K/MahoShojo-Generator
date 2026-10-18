@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import type { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -110,7 +111,113 @@ const closeSocket = (socket: WebSocket) => new Promise<void>((resolve) => {
 });
 const latestPresence = (messages: RoomServerTransportMessage[]) => messages.filter((message) => message.type === 'room.presence').at(-1);
 
+const checkFailedChild = async (stage: string, code: string, options: { args?: string[]; bootstrap?: string } = {}) => {
+  const stateRoot = await mkdtemp(path.join(tmpdir(), 'room-acceptance-failure-'));
+  const api = fileURLToPath(new URL('../', import.meta.url));
+  const require = createRequire(new URL('../package.json', import.meta.url));
+  const child = spawn(process.execPath, [
+    '--import', require.resolve('tsx'),
+    ...(options.bootstrap ? ['--import', `data:text/javascript,${encodeURIComponent(options.bootstrap)}`] : []),
+    path.join(api, 'scripts/desktop-room-acceptance-mock.ts'),
+    ...(options.args ?? ['--self-check', '--state-root', stateRoot]),
+  ], {
+    cwd: api, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
+    env: { ...process.env, NODE_OPTIONS: '', NODE_EXTRA_CA_CERTS: '', NODE_TLS_REJECT_UNAUTHORIZED: '1' },
+  });
+  let stderr = '', stdout = '';
+  child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+  child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+  const monitor = monitorMock(child, true, { readinessTimeoutMs: 10_000 });
+  try {
+    const failure = await monitor.ready.catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toContain(`mock stopped before ready (code=1, signal=null); stage=${stage}, reason=${code}`);
+    expect(failure.stack).not.toContain('PRIVATE-DIAGNOSTIC-CANARY');
+    expect(failure.cause).toBeUndefined();
+    expect(await monitor.exit).toEqual({ code: 1, signal: null });
+    expect(stderr).toContain(`ROOM_ACCEPTANCE_FAILURE stage=${stage} code=${code}\n`);
+    expect(stderr).not.toContain('PRIVATE-DIAGNOSTIC-CANARY'); expect(stdout).toBe('');
+  } finally { await monitor.close(); await rm(stateRoot, { recursive: true, force: true }); }
+};
+
 describe.sequential('Desktop Room acceptance real TLS producer', () => {
+  it('collects a real child final diagnostic from inherited stderr after exit', async () => {
+    const diagnostic = 'ROOM_ACCEPTANCE_FAILURE stage=listen code=EADDRINUSE\n';
+    const writer = `process.stdin.once('data', () => { process.stderr.write(${JSON.stringify(diagnostic)}); process.stdin.destroy(); });`;
+    const child = spawn(process.execPath, ['-e', `
+      require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(writer)}], {
+        stdio: [3, 'ignore', 2],
+      }).unref();
+      process.exitCode = 1;
+    `], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'], shell: false });
+    let exited = false, diagnosticAfterExit = false;
+    child.once('exit', () => { exited = true; (child.stdio[3] as Writable).end('go'); });
+    child.stderr.on('data', chunk => { if (chunk.toString().includes('ROOM_ACCEPTANCE_FAILURE')) diagnosticAfterExit = exited; });
+    const monitor = monitorMock(child, true, { readinessTimeoutMs: 10_000 });
+    try {
+      await expect(monitor.ready).rejects.toThrow('mock stopped before ready (code=1, signal=null); stage=listen, reason=EADDRINUSE');
+      expect(await monitor.exit).toEqual({ code: 1, signal: null }); expect(diagnosticAfterExit).toBe(true);
+    } finally { await monitor.close(); }
+  });
+
+  it('reports invalid child arguments without echoing their private values', async () => {
+    await checkFailedChild('validate-args', 'ACCEPTANCE_ARGUMENT_INVALID', { args: ['PRIVATE-DIAGNOSTIC-CANARY'] });
+  });
+
+  it.each(['missing', 'invalid-json'])('reports a real child %s fixture failure without the original error', async fault => {
+    const bootstrap = `
+      import fs from 'node:fs/promises';
+      import { syncBuiltinESMExports } from 'node:module';
+      const readFile = fs.readFile;
+      fs.readFile = (file, ...args) => {
+        if (file instanceof URL && file.pathname.endsWith('/scripts/fixtures/desktop-room-acceptance-pki.json')) {
+          return ${fault === 'missing'
+            ? "Promise.reject(Object.assign(new Error('PRIVATE-DIAGNOSTIC-CANARY'), { code: 'ENOENT', path: 'PRIVATE-DIAGNOSTIC-CANARY' }))"
+            : "Promise.resolve('PRIVATE-DIAGNOSTIC-CANARY')"};
+        }
+        return readFile(file, ...args);
+      };
+      syncBuiltinESMExports();
+    `;
+    await checkFailedChild('load-fixture', fault === 'missing' ? 'ENOENT' : 'INVALID_JSON', { bootstrap });
+  });
+
+  it('reports an occupied listener from the real child and keeps the owner listener alive', async () => {
+    const blocker = createServer();
+    await new Promise<void>((resolve, reject) => { blocker.once('error', reject); blocker.listen(34443, '127.0.0.1', resolve); });
+    try {
+      await checkFailedChild('listen', 'EADDRINUSE'); expect(blocker.listening).toBe(true);
+    } finally { await new Promise<void>((resolve) => blocker.close(() => resolve())); }
+  });
+
+  it('preserves a safe self-check reason from a real child and discards the private error payload', async () => {
+    await checkFailedChild('self-check', 'ECONNREFUSED', { bootstrap: `
+      import http from 'node:http';
+      import { syncBuiltinESMExports } from 'node:module';
+      http.request = () => { throw Object.assign(new Error('PRIVATE-DIAGNOSTIC-CANARY'), {
+        code: 'ECONNREFUSED', headers: { authorization: 'PRIVATE-DIAGNOSTIC-CANARY' }, body: 'PRIVATE-DIAGNOSTIC-CANARY',
+      }); };
+      syncBuiltinESMExports();
+    ` });
+  });
+
+  it('preserves the probe timeout code through the request error event in a real child', async () => {
+    await checkFailedChild('self-check', 'ACCEPTANCE_PROBE_TIMEOUT', { bootstrap: `
+      import http from 'node:http';
+      import { EventEmitter } from 'node:events';
+      import { syncBuiltinESMExports } from 'node:module';
+      http.request = () => {
+        const request = new EventEmitter();
+        request.end = () => queueMicrotask(() => request.emit('timeout'));
+        request.destroy = error => request.emit('error', Object.assign(error, {
+          headers: { authorization: 'PRIVATE-DIAGNOSTIC-CANARY' }, body: 'PRIVATE-DIAGNOSTIC-CANARY',
+        }));
+        return request;
+      };
+      syncBuiltinESMExports();
+    ` });
+  });
+
   it('real tsx child self-check matches the launcher monitor and exits naturally', async () => {
     const stateRoot = await mkdtemp(path.join(tmpdir(), 'room-acceptance-monitor-'));
     const api = fileURLToPath(new URL('../', import.meta.url));

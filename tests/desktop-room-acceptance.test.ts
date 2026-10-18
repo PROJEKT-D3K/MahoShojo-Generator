@@ -7,10 +7,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
-  buildArguments, ENDPOINTS, instancePaths, launchEnvironment, monitorMock, PATCH_FILES,
+  buildArguments, ENDPOINTS, instancePaths, launchEnvironment, launcherFailureMessage, monitorMock, PATCH_FILES,
   patchSources, preflight, prepare, runApplicationPair, runBuildCopies, validatePki, validatePrepared, verify,
 } from '../scripts/desktop-room-acceptance.mjs';
 import { safeLaunchEnvironment } from '../scripts/desktop-acceptance-common.mjs';
+import { formatRoomMockDiagnostic } from '../scripts/desktop-room-acceptance-diagnostics.mjs';
 
 const faults = vi.hoisted(() => ({ renameCountdown: 0 }));
 vi.mock('node:fs', async (importOriginal) => {
@@ -22,7 +23,7 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 vi.mock('node:child_process', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:child_process')>(),
-  // These contracts may run Git on tiny synthetic checkouts, never apps or builders.
+  // These contracts may run Git and the CLI on tiny synthetic checkouts, never apps or builders.
   spawn: vi.fn(() => { throw new Error('real child processes are forbidden in launcher contracts'); }),
 }));
 
@@ -39,9 +40,9 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, 
 const read = (file: string) => readFileSync(file, 'utf8');
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 const sourcesAt = (tree: string) => Object.fromEntries(PATCH_FILES.map((file: string) => [file, read(path.join(tree, file))]));
-function fixture(parent: string, name: string) {
+function fixture(parent: string, name: string, extra: Record<string, string> = {}) {
   const directory = path.join(parent, name); mkdirSync(directory);
-  for (const [file, source] of Object.entries(original)) {
+  for (const [file, source] of Object.entries({ ...original, ...extra })) {
     mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
     writeFileSync(path.join(directory, file), source);
   }
@@ -52,9 +53,9 @@ function fixture(parent: string, name: string) {
   git(directory, '-c', 'user.name=Contract Test', '-c', 'user.email=contract@example.invalid', 'commit', '-m', 'synthetic Room fixture');
   return directory;
 }
-function checkoutSet() {
+function checkoutSet(extra: Record<string, string> = {}) {
   const parent = temporary();
-  return { parent, source: fixture(parent, 'source'), hostTree: fixture(parent, 'host'), memberTree: fixture(parent, 'member'), stateRoot: path.join(parent, 'state') };
+  return { parent, source: fixture(parent, 'source', extra), hostTree: fixture(parent, 'host', extra), memberTree: fixture(parent, 'member', extra), stateRoot: path.join(parent, 'state') };
 }
 function isolated(role = 'host', character = '1') {
   const parent = temporary();
@@ -411,17 +412,45 @@ class SyntheticChild extends EventEmitter {
   stderr = new PassThrough();
   exitCode: number | null = null;
   commands: Array<Record<string, unknown>> = [];
-  kill = vi.fn(() => { this.emit('exit', null, 'SIGTERM'); return true; });
+  kill = vi.fn(() => { this.emit('exit', null, 'SIGTERM'); this.emit('close', null, 'SIGTERM'); return true; });
   constructor() {
     super();
     this.stdin.on('data', chunk => { for (const line of chunk.toString().trim().split('\n')) this.commands.push(JSON.parse(line)); });
   }
   line(value: unknown) { this.stdout.write(JSON.stringify(value) + '\n'); }
-  finish(code = 0) { this.exitCode = code; this.emit('exit', code, null); }
+  finish(code = 0) { this.exitCode = code; this.emit('exit', code, null); this.emit('close', code, null); }
 }
 const selfCheckSummary = { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true };
 const readyMessage = () => ({ event: 'ready', roomOrigin: ENDPOINTS.room, authOrigin: ENDPOINTS.auth, roomAddress: { host: '127.0.0.1', port: ENDPOINTS.roomPort }, selfCheck: { ...selfCheckSummary } });
 const observations = (id: unknown) => ({ id, event: 'observations', rooms: 1, receipts: 1, actors: 1, activeConnections: 0, authSessions: 2, trace: [{ kind: 'room-http', operation: 'create', status: 200, dropped: false }] });
+
+describe('Room acceptance actual CLI entry with a synthetic mock child', () => {
+  it.each(['failure', 'success'])('preserves safe %s output and exit status at the outermost catch', async outcome => {
+    const ready = { event: 'self-check', roomOrigin: ENDPOINTS.room, authOrigin: ENDPOINTS.auth, selfCheck: selfCheckSummary };
+    const extras = Object.fromEntries([
+      'scripts/desktop-room-acceptance.mjs', 'scripts/desktop-acceptance-common.mjs', 'scripts/desktop-room-acceptance-diagnostics.mjs',
+    ].map(file => [file, read(path.join(root, file))]));
+    extras['apps/api/package.json'] = '{"type":"module"}\n';
+    extras['apps/api/scripts/desktop-room-acceptance-mock.ts'] = outcome === 'failure'
+      ? "process.stderr.write('PRIVATE-CLI-CANARY cookie=PRIVATE-CLI-CANARY\\nROOM_ACCEPTANCE_FAILURE stage=self-check code=ACCEPTANCE_PROBE_TIMEOUT\\n'); process.exitCode = 1;"
+      : `process.stdout.write(${JSON.stringify(JSON.stringify(ready) + '\n')});`;
+    const options = checkoutSet(extras); prepare(await preflight(options));
+    symlinkSync(path.join(root, 'apps/api/node_modules'), path.join(options.source, 'apps/api/node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    const run = () => execFileSync(process.execPath, [path.join(options.source, 'scripts/desktop-room-acceptance.mjs'), 'self-check', '--state-root', options.stateRoot], {
+      cwd: options.source, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000,
+    });
+    if (outcome === 'success') {
+      expect(JSON.parse(run())).toEqual(ready);
+      expect(JSON.parse(read(path.join(options.stateRoot, 'self-check.json')))).toEqual(ready);
+    } else {
+      let failure: unknown;
+      try { run(); } catch (error) { failure = error; }
+      expect(failure).toMatchObject({ status: 1, stdout: '' });
+      expect((failure as { stderr: string }).stderr.trim()).toBe('mock stopped before ready (code=1, signal=null); stage=self-check, reason=ACCEPTANCE_PROBE_TIMEOUT; stderr=unrecognized');
+      expect(existsSync(path.join(options.stateRoot, 'self-check.json'))).toBe(false);
+    }
+  });
+});
 
 describe('Room acceptance owned mock supervision without spawning processes', () => {
   it.each(['config', 'config-unsupported'])('supervises bounded %s fault and config observations', async operation => {
@@ -505,9 +534,10 @@ describe('Room acceptance owned mock supervision without spawning processes', ()
     { event: 'close', code: 1, signal: null },
   ])('reports premature $event code=$code signal=$signal and preserves the first terminal result', async ({ event, code, signal }) => {
     const child = new SyntheticChild(), mock = monitorMock(child);
-    const rejected = expect(mock.ready).rejects.toMatchObject({ message: `mock stopped before ready (code=${code}, signal=${signal})` });
+    const rejected = expect(mock.ready).rejects.toMatchObject({ message: `mock stopped before ready (code=${code}, signal=${signal}); stderr=unrecognized` });
     child.stderr.write('private-canary cookie=private ticket=private\n');
     child.emit(event, code, signal);
+    if (event === 'exit') child.emit('close', 99, 'SIGKILL');
     await rejected;
     await expect(mock.exit).resolves.toEqual({ code, signal });
     child.emit('close', 99, 'SIGKILL');
@@ -522,7 +552,7 @@ describe('Room acceptance owned mock supervision without spawning processes', ()
     child.emit('error', new Error('private-canary cookie=private ticket=private'));
     const error = await failure;
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toBe('mock stopped before ready (code=null, signal=spawn-error)');
+    expect(error.message).toBe('mock stopped before ready (code=null, signal=spawn-error); stage=spawn, reason=UNKNOWN');
     expect(error.stack).not.toMatch(/private-canary|cookie=private|ticket=private/);
     expect(error.cause).toBeUndefined();
     await expect(mock.exit).resolves.toEqual({ code: null, signal: 'spawn-error' });
@@ -530,6 +560,116 @@ describe('Room acceptance owned mock supervision without spawning processes', ()
     await expect(mock.exit).resolves.toEqual({ code: null, signal: 'spawn-error' });
     await mock.close();
     expect(child.commands).toEqual([]); expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('drains a chunked safe failure after exit and keeps only the first diagnostic', async () => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    let settled = false;
+    const failure = mock.ready.catch(error => { settled = true; return error; });
+    child.emit('exit', 1, null); await Promise.resolve(); expect(settled).toBe(false);
+    child.stderr.write('ROOM_ACCEPTANCE_FAILURE stage=load-');
+    child.stderr.write('fixture code=ENOENT\n');
+    child.stderr.write('ROOM_ACCEPTANCE_FAILURE stage=self-check code=UNKNOWN\n');
+    child.emit('close', 99, 'SIGKILL');
+    const error = await failure;
+    expect(error.message).toBe('mock stopped before ready (code=1, signal=null); stage=load-fixture, reason=ENOENT');
+    expect(launcherFailureMessage(error)).toBe(error.message);
+    error.message = 'private-canary';
+    expect(launcherFailureMessage(error)).toBe('mock stopped before ready (code=1, signal=null); stage=load-fixture, reason=ENOENT');
+    await expect(mock.exit).resolves.toEqual({ code: 1, signal: null }); await mock.close();
+  });
+
+  it.each([
+    'ROOM_ACCEPTANCE_FAILURE stage=private-canary code=ENOENT\n',
+    'ROOM_ACCEPTANCE_FAILURE stage=listen code=PRIVATE_CANARY\n',
+    'ROOM_ACCEPTANCE_FAILURE stage=listen code=ENOENT cookie=private-canary\n',
+    'ROOM_ACCEPTANCE_FAILURE stage=listen code=ENOENT\r\n',
+    'ROOM_ACCEPTANCE_FAILURE stage=listen code=ENOENT',
+    'private-canary\u001b[2J\n',
+  ])('discards incomplete, expanded or unapproved stderr line %#', async line => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    const failure = mock.ready.catch(error => error);
+    child.stderr.write(line); child.finish(1);
+    const error = await failure;
+    expect(error.message).toBe('mock stopped before ready (code=1, signal=null); stderr=unrecognized');
+    expect(error.stack).not.toContain('private-canary'); expect(error.cause).toBeUndefined();
+    await mock.exit; await mock.close();
+  });
+
+  it('bounds unterminated stderr by bytes and resumes parsing only at the next line', async () => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    const failure = mock.ready.catch(error => error);
+    child.stderr.write('界'.repeat(85)); child.stderr.write('界');
+    child.stderr.write('private-canary'.repeat(100_000));
+    child.stderr.write('ROOM_ACCEPTANCE_FAILURE stage=listen code=ENOENT\n');
+    child.stderr.write('ROOM_ACCEPTANCE_FAILURE stage=self-check code=ACCEPTANCE_PROBE_TIMEOUT\n');
+    child.finish(1);
+    const error = await failure;
+    expect(error.message).toBe('mock stopped before ready (code=1, signal=null); stage=self-check, reason=ACCEPTANCE_PROBE_TIMEOUT; stderr=truncated');
+    expect(error.stack).not.toContain('private-canary'); expect(error.cause).toBeUndefined();
+    await mock.exit; await mock.close();
+  });
+
+  it.each(['readiness', 'stop'])('keeps the original %s deadline when exit leaves stderr open', async deadline => {
+    vi.useFakeTimers();
+    const child = new SyntheticChild(), mock = monitorMock(child, false, { readinessTimeoutMs: 25, stopTimeoutMs: 10 });
+    const failure = mock.ready.catch(error => error);
+    child.emit('exit', null, 'SIGTERM');
+    child.stderr.write('ROOM_ACCEPTANCE_FAILURE stage=self-check code=ACCEPTANCE_SELFCHECK_WS\n');
+    const closing = deadline === 'stop' ? mock.close() : undefined;
+    await vi.advanceTimersByTimeAsync(deadline === 'stop' ? 10 : 25);
+    expect((await failure).message).toBe('mock stopped before ready (code=null, signal=SIGTERM); stage=self-check, reason=ACCEPTANCE_SELFCHECK_WS');
+    await expect(mock.exit).resolves.toEqual({ code: null, signal: 'SIGTERM' });
+    await closing; await mock.close(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('includes only safe diagnostics in readiness timeouts and spawn errors', async () => {
+    vi.useFakeTimers();
+    const child = new SyntheticChild(), mock = monitorMock(child, false, { readinessTimeoutMs: 25 });
+    const failure = mock.ready.catch(error => error);
+    child.stderr.write('ROOM_ACCEPTANCE_FAILURE stage=self-check code=ACCEPTANCE_PROBE_TIMEOUT\n');
+    await vi.advanceTimersByTimeAsync(25);
+    expect((await failure).message).toBe('mock readiness failed; stage=self-check, reason=ACCEPTANCE_PROBE_TIMEOUT');
+    await mock.exit; await mock.close();
+    const missing = new SyntheticChild(), missingMock = monitorMock(missing);
+    const spawnFailure = missingMock.ready.catch(error => error);
+    missing.emit('error', Object.assign(new Error('private-canary'), { code: 'ENOENT', path: 'private-canary' }));
+    expect((await spawnFailure).message).toBe('mock stopped before ready (code=null, signal=spawn-error); stage=spawn, reason=ENOENT');
+    await missingMock.exit; await missingMock.close(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('settles an exit after the stop deadline without waiting for inherited stderr to close', async () => {
+    vi.useFakeTimers();
+    const child = new SyntheticChild(); child.kill.mockImplementation(() => true);
+    const mock = monitorMock(child, false, { readinessTimeoutMs: 200, stopTimeoutMs: 20 });
+    const failure = mock.ready.catch(error => error);
+    const closing = mock.close();
+    await vi.advanceTimersByTimeAsync(20); expect(child.kill).toHaveBeenCalledOnce();
+    child.stderr.write('ROOM_ACCEPTANCE_FAILURE stage=listen code=EADDRINUSE\n');
+    child.emit('exit', null, 'SIGTERM');
+    await closing;
+    expect((await failure).message).toBe('mock stopped before ready (code=null, signal=SIGTERM); stage=listen, reason=EADDRINUSE');
+    await expect(mock.exit).resolves.toEqual({ code: null, signal: 'SIGTERM' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('formats fixed failure codes without coercing private errors or evaluating getters', () => {
+    const error = Object.assign(new Error('private-canary'), { code: 'EADDRINUSE', path: 'private-canary' });
+    expect(formatRoomMockDiagnostic('listen', error)).toBe('ROOM_ACCEPTANCE_FAILURE stage=listen code=EADDRINUSE\n');
+    expect(formatRoomMockDiagnostic('load-fixture', new SyntaxError('private-canary'))).toBe('ROOM_ACCEPTANCE_FAILURE stage=load-fixture code=INVALID_JSON\n');
+    expect(formatRoomMockDiagnostic('self-check', new Error('ACCEPTANCE_SELFCHECK_WS'))).toBe('ROOM_ACCEPTANCE_FAILURE stage=self-check code=ACCEPTANCE_SELFCHECK_WS\n');
+    const read = vi.fn(() => { throw new Error('private-canary'); });
+    const opaque = { get code() { return read(); }, get message() { return read(); }, toString: read };
+    expect(formatRoomMockDiagnostic('private-canary', opaque)).toBe('ROOM_ACCEPTANCE_FAILURE stage=unknown code=UNKNOWN\n');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('never prints an unbranded dependency error through the CLI failure reporter', () => {
+    const read = vi.fn(() => 'private-canary');
+    for (const error of [new Error('private-canary'), { get message() { return read(); } }, 'private-canary', null]) {
+      expect(launcherFailureMessage(error)).toBe('Room acceptance failed; keep the isolated directory and inspect the bounded stage results.');
+    }
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('settles pending commands on unexpected backend exit and closes idempotently', async () => {

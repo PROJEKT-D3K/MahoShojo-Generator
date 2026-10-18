@@ -10,6 +10,7 @@ import { createAdaptorServer } from '@hono/node-server';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import WebSocket from 'ws';
+import { formatRoomMockDiagnostic, roomMockFailureCode } from '../../../scripts/desktop-room-acceptance-diagnostics.mjs';
 import {
   ARENA_ROOM_PRESENCE_WEBSOCKET_PROTOCOL,
   ArenaRoomSharedConfigSchema,
@@ -433,7 +434,10 @@ export const startRoomAcceptanceMock = async (options: {
       await services.actors.shutdown(); services = roomServices(); sessions.clear(); flows.clear(); grants.clear(); trace.length = 0; armed = null;
     });
     return runtime;
-  } catch { await close(); throw new Error('ACCEPTANCE_BIND_FAILED'); }
+  } catch (error) {
+    await close();
+    throw Object.assign(new Error('ACCEPTANCE_BIND_FAILED'), { code: roomMockFailureCode(error) });
+  }
 };
 
 /** Fixed-destination request helper. Used only by local self-checks, never exposed over stdin. */
@@ -451,7 +455,10 @@ const probe = (runtime: RoomAcceptanceRuntime, pki: RoomAcceptancePki, endpoint:
     response.on('data', (chunk: Buffer) => { body += chunk.toString(); if (body.length > 300_000) request.destroy(new Error('ACCEPTANCE_PROBE_BOUND')); });
     response.once('end', () => resolve({ status: response.statusCode ?? 0, body, headers: response.headers }));
   });
-  request.once('error', () => reject(new Error('ACCEPTANCE_PROBE_FAILED')));
+  request.once('error', (error) => {
+    const code = roomMockFailureCode(error);
+    reject(new Error(code === 'UNKNOWN' ? 'ACCEPTANCE_PROBE_FAILED' : code));
+  });
   request.once('timeout', () => request.destroy(new Error('ACCEPTANCE_PROBE_TIMEOUT')));
   request.end(options.body === undefined ? undefined : typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
 });
@@ -598,12 +605,15 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
   }
 };
 
+let startupStage = 'validate-args';
 const main = async () => {
   const args = process.argv.slice(2);
   const selfCheck = args[0] === '--self-check'; if (selfCheck) args.shift();
   if (args.length !== 2 || args[0] !== '--state-root' || !path.isAbsolute(args[1]!)) throw new Error('ACCEPTANCE_ARGUMENT_INVALID');
   // State root identifies the enclosing isolated run. Credentials never persist here.
+  startupStage = 'load-fixture';
   const pki = JSON.parse(await readFile(new URL('../../../scripts/fixtures/desktop-room-acceptance-pki.json', import.meta.url), 'utf8')) as RoomAcceptancePki;
+  startupStage = 'listen';
   const runtime = await startRoomAcceptanceMock({ pki });
   const emit = (value: unknown) => {
     if (process.stdout.writableLength > 128 * 1024) throw new Error('ACCEPTANCE_OUTPUT_BOUND');
@@ -611,9 +621,12 @@ const main = async () => {
   };
   const stop = async () => { await runtime.close(); process.stdin.pause(); };
   try {
+    startupStage = 'self-check';
     const summary = await selfCheckRoomAcceptanceMock(runtime, pki);
-    if (selfCheck) { emit({ event: 'self-check', roomOrigin: runtime.roomOrigin, authOrigin: runtime.authOrigin, selfCheck: summary }); await stop(); return; }
+    startupStage = 'ready-output';
+    if (selfCheck) { emit({ event: 'self-check', roomOrigin: runtime.roomOrigin, authOrigin: runtime.authOrigin, selfCheck: summary }); startupStage = 'cleanup'; await stop(); return; }
     emit({ event: 'ready', roomOrigin: runtime.roomOrigin, authOrigin: runtime.authOrigin, roomAddress: runtime.roomAddress, selfCheck: summary });
+    startupStage = 'control';
     let pending = ''; let chain = Promise.resolve(); let stopped = false; let queued = 0;
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk: string) => {
@@ -636,14 +649,17 @@ const main = async () => {
             else if (value.command === 'stop' && keys === 'command|id') { stopped = true; await stop(); emit({ id, event: 'stopped' }); }
             else throw new Error('invalid');
           } catch { emit({ id, event: 'error', code: 'ACCEPTANCE_CONTROL_REFUSED' }); }
-        }).catch(async () => { stopped = true; process.exitCode = 1; await stop(); })
+        }).catch(async (error) => {
+          process.stderr.write(formatRoomMockDiagnostic('control', error));
+          stopped = true; process.exitCode = 1; await stop();
+        })
           .finally(() => { queued -= 1; });
       }
     });
     process.stdin.once('end', () => { void chain.then(stop); });
     process.once('SIGTERM', () => { void stop(); }); process.once('SIGINT', () => { void stop(); });
-  } catch { await stop(); throw new Error('ACCEPTANCE_START_FAILED'); }
+  } catch (error) { await stop(); throw error; }
 };
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  void main().catch(() => { process.stderr.write('Room acceptance mock failed\n'); process.exitCode = 1; });
+  void main().catch((error) => { process.stderr.write(formatRoomMockDiagnostic(startupStage, error)); process.exitCode = 1; });
 }
