@@ -1,5 +1,6 @@
 import { z } from './zod';
 
+import { ARENA_COMPANION_JSON_LIMITS } from './arena-companion';
 import { ARENA_ROOM_HTTP_ERROR_CODES } from './arena-error-taxonomy';
 import { JsonValueSchema, SAFE_JSON_VALUE_MAX_DEPTH, type JsonValue } from './json-value';
 import { MAX_CONTROL_FRAME_BYTES } from './limits';
@@ -11,6 +12,7 @@ import {
   MAX_ARENA_ROOM_HTTP_TICKET_BYTES,
   ArenaRoomCreateRequestSchema,
   ArenaRoomEpochMutationRequestSchema,
+  ArenaRoomGenerationViewResponseSchema,
   ArenaRoomJoinRequestSchema,
   ArenaRoomLeaveResponseSchema,
   ArenaRoomPublishConfigRequestSchema,
@@ -32,6 +34,8 @@ export const DESKTOP_ROOM_SESSION_LIMITS = Object.freeze({
   originalRequestBodyBytes: 64 * 1_024,
   requestBodyBytes: 65 * 1_024,
   responseBodyBytes: 256 * 1_024,
+  // Independent transport ceiling, not a bound for every theoretical DTO combination.
+  generationResponseBodyBytes: ARENA_COMPANION_JSON_LIMITS.wireBytes,
   websocketMessageBytes: MAX_CONTROL_FRAME_BYTES,
   maxJsonDepth: SAFE_JSON_VALUE_MAX_DEPTH,
   retryAfterSeconds: 86_400,
@@ -42,6 +46,7 @@ export const DESKTOP_ROOM_SESSION_OPERATIONS = Object.freeze({
   create: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.collection },
   join: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.join },
   session: { method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.session },
+  generationRead: { method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.generation },
   ticket: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.ticket },
   leave: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.leave },
   close: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.close },
@@ -51,13 +56,13 @@ export const DESKTOP_ROOM_SESSION_OPERATIONS = Object.freeze({
   proposalResolve: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.proposalResolve },
 } as const);
 export const DesktopRoomSessionOperationSchema = z.enum([
-  'discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve',
+  'discover', 'create', 'join', 'session', 'generationRead', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve',
 ]);
 export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 export type DesktopRoomSessionOperation = z.infer<typeof DesktopRoomSessionOperationSchema>;
 export type DesktopRoomSessionPostOperation = z.infer<typeof DesktopRoomSessionPostOperationSchema>;
 
-/** Desktop write targets must be canonical single URL segments; legacy IDs remain readable. */
+/** Desktop path targets must be canonical single URL segments; legacy Web IDs stay unchanged. */
 const desktopPathId = (schema: z.ZodType<string, string>) => z.string().refine((value) => {
   const parsed = schema.safeParse(value);
   if (!parsed.success || parsed.data !== value || value === '.' || value === '..' || /[\\/%]/u.test(value)) return false;
@@ -65,6 +70,7 @@ const desktopPathId = (schema: z.ZodType<string, string>) => z.string().refine((
 }).pipe(schema);
 export const DesktopRoomSessionRoomIdSchema = desktopPathId(OpaqueKeySchema);
 export const DesktopRoomSessionProposalIdSchema = desktopPathId(ArenaProposalIdSchema);
+export const DesktopRoomSessionGenerationIdSchema = desktopPathId(OpaqueKeySchema);
 
 export const DesktopRoomSessionUserIdSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 export const DesktopRoomSessionExpectedUserIdHeaderSchema = z.string()
@@ -147,13 +153,16 @@ export const DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS = Object.freeze({
 export type DesktopRoomSessionRequest<Operation extends DesktopRoomSessionPostOperation = DesktopRoomSessionPostOperation> =
   z.infer<(typeof DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS)[Operation]>;
 
-const successResponse = <T extends z.ZodType>(result: T) => boundedObject(
-  DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes,
+const successResponse = <T extends z.ZodType>(result: T, maxBytes = DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes) => boundedObject(
+  maxBytes,
 ).pipe(z.object({ desktopRoom: DesktopRoomSessionResponseMetadataSchema, result }).strict());
 export const DesktopRoomSessionDiscoverSuccessSchema = successResponse(RoomDirectoryPageSchema);
 export const DesktopRoomSessionCreateSuccessSchema = successResponse(ArenaRoomSessionResponseSchema);
 export const DesktopRoomSessionJoinSuccessSchema = successResponse(ArenaRoomSessionResponseSchema);
 export const DesktopRoomSessionSessionSuccessSchema = successResponse(ArenaRoomSessionResponseSchema);
+export const DesktopRoomSessionGenerationReadSuccessSchema = successResponse(
+  ArenaRoomGenerationViewResponseSchema, DESKTOP_ROOM_SESSION_LIMITS.generationResponseBodyBytes,
+);
 // The legacy ticket schema counts UTF-16 units; Native additionally caps raw token bytes.
 const desktopTicketResult = z.custom<z.input<typeof ArenaRoomTicketResponseSchema>>(
   (input) => isBoundedJsonObject(input) && typeof input.ticket === 'string'
@@ -195,6 +204,7 @@ export const DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS = Object.freeze({
   create: DesktopRoomSessionCreateSuccessSchema,
   join: DesktopRoomSessionJoinSuccessSchema,
   session: DesktopRoomSessionSessionSuccessSchema,
+  generationRead: DesktopRoomSessionGenerationReadSuccessSchema,
   ticket: DesktopRoomSessionTicketSuccessSchema,
   leave: DesktopRoomSessionLeaveSuccessSchema,
   close: DesktopRoomSessionCloseSuccessSchema,
@@ -271,6 +281,7 @@ export const DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS = Object.freeze({
   create: z.union([DesktopRoomSessionCreateSuccessSchema, postErrorResponse]),
   join: z.union([DesktopRoomSessionJoinSuccessSchema, postErrorResponse]),
   session: z.union([DesktopRoomSessionSessionSuccessSchema, getErrorResponse]),
+  generationRead: z.union([DesktopRoomSessionGenerationReadSuccessSchema, getErrorResponse]),
   ticket: z.union([DesktopRoomSessionTicketSuccessSchema, postErrorResponse]),
   leave: z.union([DesktopRoomSessionLeaveSuccessSchema, postErrorResponse]),
   close: z.union([DesktopRoomSessionCloseSuccessSchema, postErrorResponse]),
@@ -330,7 +341,9 @@ export const parseDesktopRoomSessionResponse = <Operation extends DesktopRoomSes
   if (!DesktopRoomSessionUserIdSchema.safeParse(expectedUserId).success || !isBoundedJsonObject(raw)) {
     throw new DesktopRoomSessionContractError('ROOM_DESKTOP_RESPONSE_INVALID');
   }
-  if (jsonUtf8ByteLength(raw) > DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes) {
+  const maxBytes = operation === 'generationRead' && !Object.hasOwn(raw, 'error')
+    ? DESKTOP_ROOM_SESSION_LIMITS.generationResponseBodyBytes : DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes;
+  if (jsonUtf8ByteLength(raw) > maxBytes) {
     throw new DesktopRoomSessionContractError('ROOM_DESKTOP_RESPONSE_TOO_LARGE');
   }
   const parsed = DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].safeParse(raw);

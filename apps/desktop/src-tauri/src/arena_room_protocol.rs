@@ -160,6 +160,8 @@ pub(crate) enum Operation {
     ProposalWithdraw,
     #[serde(rename = "proposalResolve")]
     ProposalResolve,
+    #[serde(rename = "generationRead")]
+    GenerationRead,
 }
 impl Operation {
     pub(crate) fn as_str(self) -> &'static str {
@@ -175,10 +177,11 @@ impl Operation {
             Self::ProposalSubmit => "proposalSubmit",
             Self::ProposalWithdraw => "proposalWithdraw",
             Self::ProposalResolve => "proposalResolve",
+            Self::GenerationRead => "generationRead",
         }
     }
     pub(crate) fn is_post(self) -> bool {
-        !matches!(self, Self::Discover | Self::Session)
+        !matches!(self, Self::Discover | Self::Session | Self::GenerationRead)
     }
     fn rejected_outcome(self) -> &'static str {
         if self.is_post() {
@@ -208,6 +211,11 @@ pub(crate) struct Request {
 }
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
+    GenerationRead {
+        generation_id: String,
+        expected_room_epoch: String,
+        expected_attempt: u64,
+    },
     Discover {
         query: Value,
     },
@@ -767,6 +775,10 @@ fn generation_fields(v: &mut Value) -> Check {
     }
     Ok(())
 }
+pub(crate) fn validate_generation_mirror(v: &mut Value) -> Result<(), ()> {
+    generation_mirror(v)
+}
+
 fn generation_mirror(v: &mut Value) -> Check {
     closed(
         v,
@@ -1546,6 +1558,7 @@ pub(crate) fn validate_http_response(
         )?;
         ensure(safe_u64(&value["desktopRoom"]["viewerUserId"])? == expected_user_id)?;
         match operation {
+            Operation::GenerationRead => Err(()), // 大原件仅由借用式专用解析器接收
             Operation::Discover => directory_page(&mut value["result"]),
             Operation::Create | Operation::Join | Operation::Session | Operation::Config => {
                 session(&mut value["result"])
@@ -1650,6 +1663,26 @@ pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {
         let kind = text(&v["kind"])?.to_owned();
         let get = |v: &Value, name: &str| -> Result<String, ()> { Ok(text(&v[name])?.to_owned()) };
         match kind.as_str() {
+            "generation-read" => {
+                closed(
+                    &v,
+                    &[
+                        "kind",
+                        "generationId",
+                        "expectedRoomEpoch",
+                        "expectedAttempt",
+                    ],
+                    &[],
+                )?;
+                desktop_path_id(&v["generationId"])?;
+                key(&mut v["expectedRoomEpoch"])?;
+                integer(&mut v["expectedAttempt"], 1, MAX_SAFE_INTEGER)?;
+                Ok(Action::GenerationRead {
+                    generation_id: get(&v, "generationId")?,
+                    expected_room_epoch: get(&v, "expectedRoomEpoch")?,
+                    expected_attempt: safe_u64(&v["expectedAttempt"])?,
+                })
+            }
             "discover" => {
                 closed(&v, &["kind", "query"], &[])?;
                 Ok(Action::Discover {
@@ -1787,7 +1820,13 @@ pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {
             _ => Err(()),
         }
     };
-    let action = check().map_err(|_| invalid_request())?;
+    let action = check().map_err(|_| {
+        if v["kind"] == "generation-read" {
+            RoomError::new("invalid-request", "not-applicable")
+        } else {
+            invalid_request()
+        }
+    })?;
     Ok(Request {
         handle: handle.as_str().unwrap().to_owned(),
         action,

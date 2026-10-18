@@ -1,0 +1,88 @@
+{
+  "expectedUserId": 42,
+  "operation": {
+    "method": "GET",
+    "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/generations/generation-1",
+    "request": null,
+    "success": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "result": {
+        "protocolVersion": 1,
+        "roomId": "room_01JARENAEXAMPLE",
+        "roomEpoch": "epoch_01JARENA",
+        "generation": {
+          "generationRequestId": "generation-request-1",
+          "generationId": "generation-1",
+          "attempt": 1,
+          "state": "completed",
+          "configRevision": 1,
+          "snapshotDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "collaborativeInfluence": false,
+          "participantUserIds": [
+            42
+          ],
+          "startedAt": "2026-10-12T00:00:00.000Z",
+          "finishedAt": "2026-10-12T00:01:00.000Z"
+        },
+        "status": "completed",
+        "markdown": "# 当前战报😀\n保留原始合法转义",
+        "nextChunkSeq": 2,
+        "finalAuthoritative": true,
+        "generationRecordId": "record-1",
+        "result": {
+          "version": 1,
+          "format": "stream-markdown",
+          "mode": "classic"
+        }
+      }
+    },
+    "error": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "error": {
+        "code": "ROOM_RATE_LIMITED",
+        "message": "房间请求过于频繁，请稍后重试。",
+        "outcome": "not-applicable",
+        "retryAfterSeconds": 3
+      }
+    }
+  },
+  "action": {
+    "kind": "generation-read",
+    "generationId": "generation-1",
+    "expectedRoomEpoch": "epoch_01JARENA",
+    "expectedAttempt": 1
+  },
+  "rawEnvelope": "{\"desktopRoom\":{\"version\":\"desktop-room-session-v1\",\"viewerUserId\":42},\"result\":{\"protocolVersion\":1,\"roomId\":\"room_01JARENAEXAMPLE\",\"roomEpoch\":\"epoch_01JARENA\",\"generation\":{\"generationRequestId\":\"generation-request-1\",\"generationId\":\"generation-1\",\"attempt\":1,\"state\":\"completed\",\"configRevision\":1,\"snapshotDigest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"collaborativeInfluence\":false,\"participantUserIds\":[42],\"startedAt\":\"2026-10-12T00:00:00.000Z\",\"finishedAt\":\"2026-10-12T00:01:00.000Z\"},\"status\":\"completed\",\"markdown\":\"# 当前战报😀\\n保留原始合法转义：\\ud800\",\"nextChunkSeq\":2,\"finalAuthoritative\":true,\"generationRecordId\":\"record-1\",\"result\":{\"version\":1,\"format\":\"stream-markdown\",\"mode\":\"classic\"}}}",
+  "descriptor": {
+    "kind": "generation-descriptor",
+    "requestId": "generation-read-1",
+    "roomId": "room_01JARENAEXAMPLE",
+    "roomEpoch": "epoch_01JARENA",
+    "generationId": "generation-1",
+    "attempt": 1,
+    "byteLength": 761,
+    "digest": "cd898ba3ebcd1160c88d9a90270441792aafbaa2fe410dbf877b16177f3bc7d5"
+  },
+  "fragments": [
+    {
+      "kind": "generation-fragment",
+      "requestId": "generation-read-1",
+      "offset": 0,
+      "text": "{\"desktopRoom\":{\"version\":\"desktop-room-session-v1\",\"viewerUserId\":42},\"result\":{\"protocolVersion\":1,\"roomId\":\"room_01JARENAEXAMPLE\",\"roomEpoch\":\"epoch_01JARENA\",\"generation\":{\"generationRequestId\":\"generation-request-1\",\"generationId\":\"generation-1\",\"attempt\":1,\"state\":\"completed\",\"configRevision\":1,\"snapshotDigest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"collaborativeInfluence\":false,\"participantUserIds\":[42],\"startedAt\":\"2026-10-12T00:00:00.000Z\",\"finishedAt\":\"2026-10-12T00:01:00.000Z\"},\"status\":\"completed\",\"markdown\":\"# 当前战报😀\\n保留原始合法转义：\\ud",
+      "final": false
+    },
+    {
+      "kind": "generation-fragment",
+      "requestId": "generation-read-1",
+      "offset": 613,
+      "text": "800\",\"nextChunkSeq\":2,\"finalAuthoritative\":true,\"generationRecordId\":\"record-1\",\"result\":{\"version\":1,\"format\":\"stream-markdown\",\"mode\":\"classic\"}}}",
+      "final": true
+    }
+  ]
+}

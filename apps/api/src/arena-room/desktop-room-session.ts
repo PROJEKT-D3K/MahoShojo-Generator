@@ -9,6 +9,7 @@ import {
   DesktopRoomSessionErrorResponseSchema,
   DesktopRoomSessionExpectedUserIdHeaderSchema,
   DesktopRoomSessionProposalIdSchema,
+  DesktopRoomSessionGenerationIdSchema,
   DesktopRoomSessionRoomIdSchema,
   parseDesktopRoomSessionRequest,
   type DesktopRoomSessionErrorCode,
@@ -42,10 +43,11 @@ const resolveOperation = (method: string, path: string): DesktopRoomSessionOpera
     if (template.length !== segments.length) continue;
     const matches = template.every((segment, index) => {
       const raw = segments[index]!;
-      if (segment !== ':roomId' && segment !== ':proposalId') return raw === segment;
+      if (segment !== ':roomId' && segment !== ':proposalId' && segment !== ':generationId') return raw === segment;
       try {
         const decoded = decodeURIComponent(raw);
-        const schema = segment === ':proposalId' ? DesktopRoomSessionProposalIdSchema : DesktopRoomSessionRoomIdSchema;
+        const schema = segment === ':proposalId' ? DesktopRoomSessionProposalIdSchema
+          : segment === ':generationId' ? DesktopRoomSessionGenerationIdSchema : DesktopRoomSessionRoomIdSchema;
         const parsed = schema.safeParse(decoded);
         // A single canonical segment only: no slash, backslash, or second decoding layer.
         return parsed.success && encodeURIComponent(parsed.data) === raw;
@@ -90,7 +92,7 @@ export const createDesktopRoomSessionAdapter = (options: {
     return context.json(error, status);
   };
 
-  const readResponse = async (response: Response): Promise<unknown> => {
+  const readResponse = async (response: Response, maxBytes: number): Promise<unknown> => {
     if (!response.body) throw new Error('invalid-response');
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -100,7 +102,7 @@ export const createDesktopRoomSessionAdapter = (options: {
         const chunk = await reader.read();
         if (chunk.done) break;
         total += chunk.value.byteLength;
-        if (total > DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes) {
+        if (total > maxBytes) {
           await reader.cancel();
           throw new Error('response-too-large');
         }
@@ -129,8 +131,10 @@ export const createDesktopRoomSessionAdapter = (options: {
     if (protocol !== DESKTOP_ROOM_SESSION_PROTOCOL_VERSION || !parsedOwner.success) {
       return errorResponse(context, 'ROOM_DESKTOP_PROTOCOL_INVALID', '桌面房间协议协商无效', 400);
     }
-    const operation = resolveOperation(context.req.method, new URL(context.req.url).pathname);
-    if (operation === null) {
+    const url = new URL(context.req.url);
+    const operation = resolveOperation(context.req.method, url.pathname);
+    // Desktop reads only the current projection. History/query variants remain Web-only.
+    if (operation === null || (operation === 'generationRead' && url.search !== '')) {
       return errorResponse(context, 'ROOM_DESKTOP_OPERATION_UNSUPPORTED', '当前桌面房间版本不支持此操作', 400);
     }
     // Header parser is canonical and safe-integer checked; the account remains unverified here.
@@ -160,9 +164,19 @@ export const createDesktopRoomSessionAdapter = (options: {
     scopes.set(context, scope);
     await next();
 
+    const largeGenerationSuccess = operation === 'generationRead' && context.res.status === 200;
+    const successLimit = largeGenerationSuccess
+      ? DESKTOP_ROOM_SESSION_LIMITS.generationResponseBodyBytes : DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes;
+    if (operation === 'generationRead' && context.res.ok && !largeGenerationSuccess) {
+      // Native accepts a current-generation body only with HTTP 200. Do not read
+      // or enlarge an unexpected success status, even if its DTO would be valid.
+      await context.res.body?.cancel().catch(() => undefined);
+      context.res = errorResponse(context, 'ROOM_DESKTOP_RESPONSE_INVALID', '房间响应不符合桌面协议，请先核对操作结果', 502);
+      return;
+    }
     let body: unknown;
     try {
-      body = await readResponse(context.res);
+      body = await readResponse(context.res, successLimit);
     } catch (error) {
       const tooLarge = error instanceof Error && error.message === 'response-too-large';
       context.res = errorResponse(
@@ -200,7 +214,7 @@ export const createDesktopRoomSessionAdapter = (options: {
       desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, viewerUserId: scope.viewerUserId },
       result: body,
     };
-    if (encodedBytes(envelope) > DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes) {
+    if (encodedBytes(envelope) > successLimit) {
       context.res = errorResponse(context, 'ROOM_DESKTOP_RESPONSE_TOO_LARGE', '房间响应超过桌面传输限制，请先核对操作结果', 502);
       return;
     }

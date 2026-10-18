@@ -17,6 +17,7 @@ mod ai_e2e_tests;
 mod announcements;
 mod arena_hosted;
 mod arena_room;
+mod arena_room_generation;
 mod arena_room_http;
 mod arena_room_protocol;
 mod arena_room_socket;

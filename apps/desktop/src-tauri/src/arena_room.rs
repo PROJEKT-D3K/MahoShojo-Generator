@@ -26,6 +26,9 @@ mod capacity_tests;
 #[path = "arena_room_proposal.rs"]
 mod proposal;
 use proposal::ProposalBasis;
+#[path = "arena_room_generation_read.rs"]
+mod generation_read;
+use generation_read::{GenerationCompletion, GenerationTransfer};
 
 pub(crate) type Notify = Arc<dyn Fn(String) -> Result<(), RoomError> + Send + Sync>;
 type AccountCheck = Arc<dyn Fn() -> Result<bool, RoomError> + Send + Sync>;
@@ -184,6 +187,8 @@ struct Inner {
     scope: Option<Scope>,
     pending: Option<PendingIntent>,
     destroyed: bool,
+    generation: Option<GenerationTransfer>,
+    generation_completion: Option<GenerationCompletion>,
 }
 
 pub(crate) struct RoomInstance {
@@ -234,6 +239,8 @@ impl RoomInstance {
                 scope: None,
                 pending: None,
                 destroyed: false,
+                generation: None,
+                generation_completion: None,
             }),
             http,
             http_slot: Arc::new(Semaphore::new(1)),
@@ -259,6 +266,8 @@ impl RoomInstance {
     }
 
     fn retire_locked(inner: &mut Inner) {
+        inner.generation = None;
+        inner.generation_completion = None;
         if let Some(scope) = inner.scope.take() {
             // A retired ACK can prove only discarded bytes were released, not that the
             // current consumer accepted the mutation's result. Keep its original intent.
@@ -528,6 +537,17 @@ impl RoomInstance {
     ) -> Result<EngineReply, RoomError> {
         let ending_proposal = matches!(&input.action, Action::EndProposalTracking { .. });
         match input.action {
+            Action::GenerationRead {
+                generation_id,
+                expected_room_epoch,
+                expected_attempt,
+            } => self.start_generation_read(
+                document,
+                input.handle,
+                generation_id,
+                expected_room_epoch,
+                expected_attempt,
+            ),
             Action::Pull { subscription_id } => {
                 let mut inner = lock(&self.inner);
                 let context = inner.scope.as_ref().ok_or_else(stale)?.context.clone();
@@ -537,7 +557,15 @@ impl RoomInstance {
                 {
                     return Err(stale());
                 }
-                self.current_locked(&inner, &context)?;
+                if inner.generation.is_some() {
+                    self.check_generation_locked(&mut inner, &context)?;
+                    // 异常 reader 退休可能来自 raw 凭据变化；不能据此跳过队首普通正文的原账号围栏。
+                    if inner.generation.is_none() {
+                        self.current_locked(&inner, &context)?;
+                    }
+                } else {
+                    self.current_locked(&inner, &context)?;
+                }
                 let body = inner
                     .delivery
                     .pull(document, &input.handle, &subscription_id)?;
@@ -586,6 +614,7 @@ impl RoomInstance {
                 {
                     inner.pending = None;
                 }
+                let mut generation_completion = None;
                 if let Some(context) = inner
                     .scope
                     .as_ref()
@@ -595,12 +624,23 @@ impl RoomInstance {
                     })
                     .map(|scope| scope.context.clone())
                 {
-                    self.notify_locked(&mut inner, &context)?;
+                    let checked_generation =
+                        Self::generation_ack_matches(&inner, &batch_id, sequence, accepted);
+                    generation_completion = self.acknowledge_generation_locked(
+                        &mut inner, &context, &batch_id, sequence, accepted,
+                    )?;
+                    if checked_generation {
+                        self.notify_identity_locked(&mut inner, &context)?;
+                    } else {
+                        self.notify_locked(&mut inner, &context)?;
+                    }
                 }
-                Ok(EngineReply::Small(
-                    json!({"kind":"acknowledged","handle":input.handle,
-                    "subscriptionId":subscription_id,"batchId":batch_id,"sequence":sequence,"accepted":accepted}),
-                ))
+                let mut reply = json!({"kind":"acknowledged","handle":input.handle,
+                    "subscriptionId":subscription_id,"batchId":batch_id,"sequence":sequence,"accepted":accepted});
+                if let Some(completion) = generation_completion {
+                    reply["generationRead"] = completion;
+                }
+                Ok(EngineReply::Small(reply))
             }
             Action::EndConfigTracking { intent_id } | Action::EndProposalTracking { intent_id } => {
                 let mut inner = lock(&self.inner);
@@ -760,13 +800,22 @@ impl RoomInstance {
                 resume_only: false,
                 proposal_id: None,
             },
-            Action::Pull { .. }
+            Action::GenerationRead { .. }
+            | Action::Pull { .. }
             | Action::Ack { .. }
             | Action::EndConfigTracking { .. }
             | Action::EndProposalTracking { .. } => {
                 return Err(RoomError::new("invalid-request", "not-applied"))
             }
         };
+        if inner.generation.is_some() {
+            self.abort_generation_locked(&mut inner, &context, &stale())?;
+            // descriptor 未 pull 时保留原 HTTP 小终结；消费它以后即可重试普通请求。
+            // 不能把等待这笔精确回执误当 socket 失效，也不再等待整份正文。
+            if inner.delivery.http_terminal_batch().is_some() {
+                return Err(busy());
+            }
+        }
         if request.operation.is_post() && inner.pending.is_some() && resume_id.is_none() {
             return Err(busy());
         }
@@ -1211,6 +1260,26 @@ impl RoomInstance {
             }
             return Err(error);
         }
+        self.revoke_http_auth_current_locked(
+            &mut inner,
+            context,
+            failure,
+            intent_id,
+            resume_only,
+            subscription,
+        )
+    }
+
+    /// 调用方已在同一临界区核验原作用域；generation reader 还须核验自己的 nonce。
+    fn revoke_http_auth_current_locked(
+        &self,
+        inner: &mut Inner,
+        context: &ScopeContext,
+        failure: &RoomError,
+        intent_id: Option<&str>,
+        resume_only: bool,
+        subscription: bool,
+    ) -> Result<(), RoomError> {
         let notify = inner.scope.as_ref().ok_or_else(stale)?.notify.clone();
         // No network await under this lock. The conditional keyring operation and
         // immediate token cancellation are serialized against the watcher retirement.
@@ -1219,7 +1288,7 @@ impl RoomInstance {
             Ok(false) => {
                 // Another raw+epoch already won. Never emit a new-owner authentication
                 // claim or clear that account through this old completion.
-                Self::retire_locked(&mut inner);
+                Self::retire_locked(inner);
                 return Err(stale());
             }
             Ok(true) => {
@@ -1264,12 +1333,12 @@ impl RoomInstance {
         } {
             Ok(notification) => notification,
             Err(error) => {
-                Self::retire_locked(&mut inner);
+                Self::retire_locked(inner);
                 return Err(error);
             }
         };
         let sent = notify(notification);
-        Self::retire_locked(&mut inner);
+        Self::retire_locked(inner);
         sent
     }
 
@@ -1392,7 +1461,7 @@ impl RoomInstance {
         }
         match request.operation {
             Operation::Create | Operation::Join | Operation::Session | Operation::Config => {
-                let authority = Authority::from_session(result)?;
+                let mut authority = Authority::from_session(result)?;
                 if request
                     .room_id
                     .as_deref()
@@ -1421,6 +1490,21 @@ impl RoomInstance {
                                 .ok_or_else(invalid)?,
                             &previous.proposals,
                         )?;
+                    }
+                    if previous.room_id == authority.room_id
+                        && previous.room_epoch == authority.room_epoch
+                    {
+                        authority.generation_read_terminal = previous
+                            .generation_read_terminal
+                            .as_ref()
+                            .filter(|known| {
+                                authority.generation.as_ref().is_some_and(|generation| {
+                                    generation["generationId"] == known["generationId"]
+                                        && generation["attempt"] == known["attempt"]
+                                })
+                            })
+                            .cloned()
+                            .or_else(|| authority.generation_read_terminal.clone());
                     }
                     // Normal recovery may observe a new epoch. Within an epoch,
                     // neither a GET nor a POST may replace newer authority.
@@ -1540,7 +1624,7 @@ impl RoomInstance {
                 inner.scope.as_mut().ok_or_else(stale)?.session = None;
             }
             Operation::Discover => {}
-            Operation::Ticket => return Err(invalid()),
+            Operation::Ticket | Operation::GenerationRead => return Err(invalid()),
         }
         Ok(())
     }
@@ -1912,6 +1996,7 @@ impl RoomInstance {
             Ok(effect) => effect,
             Err(error) => {
                 session.proposals_fresh = false;
+                session.generation_fresh = false;
                 if let Some(basis) = inner
                     .pending
                     .as_mut()
@@ -1919,6 +2004,7 @@ impl RoomInstance {
                 {
                     basis.invalidate_linkage();
                 }
+                let _ = self.abort_generation_locked(&mut inner, context, &error);
                 return Err(error);
             }
         };
@@ -1952,6 +2038,7 @@ impl RoomInstance {
                 .delivery
                 .enqueue(&json!({"kind":"status","state":"offline"}))?;
         }
+        self.check_generation_locked(&mut inner, context)?;
         self.notify_locked(&mut inner, context)?;
         Ok(effect.closed)
     }
@@ -1979,6 +2066,9 @@ struct Authority {
     snapshot_seen: bool,
     presence_seen: bool,
     online: BTreeSet<String>,
+    generation: Option<Value>,
+    generation_fresh: bool,
+    generation_read_terminal: Option<Value>,
 }
 
 fn is_proposal(operation: Operation) -> bool {
@@ -2116,6 +2206,9 @@ impl Authority {
             snapshot_seen: false,
             presence_seen: false,
             online: BTreeSet::new(),
+            generation: None,
+            generation_read_terminal: None,
+            generation_fresh: false,
         };
         authority.replace_snapshot(&session["snapshot"])?;
         Ok(authority)
@@ -2165,6 +2258,25 @@ impl Authority {
         self.revision = revision;
         self.config_digest = Some(digest);
         self.members = members;
+        self.generation = snapshot
+            .get("activeGeneration")
+            .filter(|value| !value.is_null())
+            .cloned();
+        if self.generation_read_terminal.as_ref().is_some_and(|known| {
+            self.generation.as_ref().is_none_or(|generation| {
+                generation["generationId"] != known["generationId"]
+                    || generation["attempt"] != known["attempt"]
+            })
+        }) {
+            self.generation_read_terminal = None;
+        }
+        if self.generation_read_terminal.is_none() {
+            self.generation_read_terminal = self
+                .generation
+                .as_ref()
+                .and_then(generation_read::terminal_barrier);
+        }
+        self.generation_fresh = true;
         self.control_seq = sequence;
         self.online.retain(|id| {
             self.members
@@ -2316,7 +2428,45 @@ impl Authority {
                         .ok_or_else(invalid)?,
                 );
             }
-            "generation.started" | "generation.completed" | "generation.failed" => {}
+            "generation.started" | "generation.completed" | "generation.failed" => {
+                let payload = &message["payload"];
+                let same = self.generation.as_ref().is_some_and(|generation| {
+                    generation["generationId"] == payload["generationId"]
+                        && generation["attempt"] == payload["attempt"]
+                });
+                let started = if same {
+                    self.generation.as_ref().unwrap()["startedAt"].clone()
+                } else {
+                    message["timestamp"].clone()
+                };
+                let mut generation = payload.clone();
+                let fields = generation.as_object_mut().ok_or_else(invalid)?;
+                fields.remove("generationRecordId");
+                fields.remove("errorCode");
+                fields.insert(
+                    "state".into(),
+                    json!(match kind {
+                        "generation.started" => "running",
+                        "generation.completed" => "completed",
+                        _ => "failed",
+                    }),
+                );
+                fields.insert("startedAt".into(), started);
+                if kind != "generation.started" {
+                    fields.insert("finishedAt".into(), message["timestamp"].clone());
+                }
+                protocol::validate_generation_mirror(&mut generation).map_err(|_| invalid())?;
+                if self.generation_read_terminal.as_ref().is_some_and(|known| {
+                    generation["generationId"] != known["generationId"]
+                        || generation["attempt"] != known["attempt"]
+                }) {
+                    self.generation_read_terminal = None;
+                }
+                if self.generation_read_terminal.is_none() {
+                    self.generation_read_terminal = generation_read::terminal_barrier(&generation);
+                }
+                self.generation = Some(generation);
+            }
             _ => return Err(invalid()),
         }
         self.control_seq = sequence;
@@ -2372,6 +2522,12 @@ fn config_intent_equal(left: &Value, right: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod generation_read_tests {
+        include!("arena_room_generation_read_tests.rs");
+    }
+    mod generation_socket_tests {
+        include!("arena_room_generation_socket_tests.rs");
+    }
     use super::*;
     use futures_util::{SinkExt, StreamExt};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -2556,6 +2712,7 @@ mod tests {
             Operation::ProposalSubmit
             | Operation::ProposalWithdraw
             | Operation::ProposalResolve => panic!("proposal actions use explicit fixtures"),
+            Operation::GenerationRead => panic!("generation actions use explicit fixtures"),
             Operation::Ticket => panic!("ticket is not renderer HTTP"),
         }
     }

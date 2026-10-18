@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Hono } from 'hono';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import fixture from '@mahoshojo/contracts/fixtures/desktop-room-session.json';
+import generationFixture from '@mahoshojo/contracts/fixtures/desktop-room-generation-read.json';
 import proposalFixtures from '@mahoshojo/contracts/fixtures/desktop-room-proposals.json';
 import {
   DESKTOP_ROOM_SESSION_LIMITS,
@@ -13,6 +15,7 @@ import {
 } from '@mahoshojo/contracts/desktop-room-session';
 import {
   ArenaRoomCreateRequestSchema,
+  ArenaRoomGenerationViewResponseSchema,
   ArenaRoomProposalMutationResponseSchema,
   ArenaRoomPublishConfigRequestSchema,
   ArenaRoomSessionResponseSchema,
@@ -21,6 +24,8 @@ import {
 } from '@mahoshojo/contracts/arena-room';
 import { createHonoApp } from '#/app';
 import type { HonoServerConfig } from '#/config';
+import type { HonoAppVariables } from '#/middleware/request-metadata';
+import { createDesktopRoomSessionAdapter } from '#/arena-room/desktop-room-session';
 import type { RedisService } from '#/redis/runtime';
 import type { ArenaRoomHttpDependencies } from '#/arena-room/room-http';
 import { ArenaRoomMembershipError } from '#/arena-room/room-membership-service';
@@ -55,6 +60,7 @@ const fixtureSession = fixture.operations.session.success.result;
 const operationFixtures = {
   ...fixture.operations,
   ...proposalFixtures,
+  generationRead: generationFixture.operation,
   config: {
     method: 'POST',
     path: DESKTOP_ROOM_SESSION_OPERATIONS.config.path.replace(':roomId', fixtureSession.roomId),
@@ -94,7 +100,7 @@ const inputFor = (operation: DesktopRoomSessionOperation) => {
   return undefined;
 };
 const pathFor = (operation: DesktopRoomSessionOperation) => (
-  DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', snapshot.roomId).replace(':proposalId', proposalFixtures.proposalSubmit.request.request.proposalId)
+  DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', snapshot.roomId).replace(':proposalId', proposalFixtures.proposalSubmit.request.request.proposalId).replace(':generationId', generationFixture.action.generationId)
 );
 const depsFor = (): ArenaRoomHttpDependencies => ({
   resolveAuthentication: vi.fn(async () => ({ status: 'authenticated' as const, userId: 101 })),
@@ -114,7 +120,7 @@ const depsFor = (): ArenaRoomHttpDependencies => ({
   },
   generations: {
     start: vi.fn(async () => { throw new Error('unexpected generation'); }),
-    read: vi.fn(async () => { throw new Error('unexpected generation'); }),
+    read: vi.fn(async () => ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result, roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch })),
     list: vi.fn(async () => { throw new Error('unexpected generation'); }),
     readHistory: vi.fn(async () => { throw new Error('unexpected generation'); }),
     cancel: vi.fn(async () => { throw new Error('unexpected generation'); }),
@@ -150,6 +156,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     vi.mocked(deps.memberships.leave).mockResolvedValue({ ...current, member: { ...current.member, role: 'member' } });
     vi.mocked(deps.directory.discoverPublic).mockResolvedValue(RoomDirectoryPageSchema.parse(fixture.operations.discover.success.result));
     vi.mocked(deps.websocketAuthority.issue).mockResolvedValue(fixture.operations.ticket.success.result.ticket);
+    vi.mocked(deps.generations.read).mockResolvedValue(ArenaRoomGenerationViewResponseSchema.parse(generationFixture.operation.success.result));
     vi.mocked(deps.proposals.submit).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalSubmit.success.result));
     vi.mocked(deps.proposals.withdraw).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalWithdraw.success.result));
     vi.mocked(deps.proposals.resolve).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalResolve.success.result));
@@ -236,7 +243,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     const body = DesktopRoomSessionErrorResponseSchema.parse(JSON.parse(text));
     expect(body.desktopRoom.viewerUserId).toBeNull();
     expect(body.error.code).toBe('ROOM_DESKTOP_OWNER_MISMATCH');
-    expect(body.error.outcome).toBe(operation === 'discover' || operation === 'session' ? 'not-applicable' : 'not-applied');
+    expect(body.error.outcome).toBe(DESKTOP_ROOM_SESSION_OPERATIONS[operation].method === 'GET' ? 'not-applicable' : 'not-applied');
     expect(text).not.toContain('202');
     expect(deps.rateLimit).not.toHaveBeenCalled();
     assertNoBusiness(deps);
@@ -257,7 +264,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     }
   });
 
-  it.each(['generations', 'generations/generation-1', 'generations/generation-1/history'])('unsupported GET %s refuses before service reads', async (suffix) => {
+  it.each(['generations', 'generations/generation-1/history'])('unsupported GET %s refuses before service reads', async (suffix) => {
     const deps = depsFor();
     const response = await appFor(deps).request(`/api/arena/rooms/v1/room-1/${suffix}`, { headers });
     expect(response.status).toBe(400);
@@ -680,4 +687,164 @@ describe('Desktop proposal ID compatibility', () => {
     expect((await appFor(web).request(pathFor('proposalSubmit'), { method: 'POST', headers: h, body: JSON.stringify(original) })).status).toBe(200);
     expect(web.proposals.submit).toHaveBeenCalledWith(expect.objectContaining({ request: { ...original, proposalId: proposalId.trim() } }));
   });
+});
+
+describe('Desktop current generation read boundary', () => {
+  it('uses the real fixed handler with a complete large view and no start, cancel, list or history work', async () => {
+    const deps = depsFor();
+    const view = ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result,
+      roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, markdown: '界😀\n'.repeat(50_000) + '\ud800' });
+    vi.mocked(deps.generations.read).mockResolvedValue(view);
+    const response = await appFor(deps).request(pathFor('generationRead'), requestFor('generationRead'));
+    expect(response.status).toBe(200);
+    const wire = await response.text();
+    expect(Buffer.byteLength(wire)).toBeGreaterThan(DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes);
+    expect(parseDesktopRoomSessionResponse('generationRead', JSON.parse(wire), 101)).toEqual({
+      desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, viewerUserId: 101 }, result: view,
+    });
+    expect(wire).toContain('\\ud800');
+    expect(deps.generations.read).toHaveBeenCalledExactlyOnceWith({
+      roomId: snapshot.roomId, generationId: generationFixture.action.generationId, accountUserId: 101,
+    });
+    for (const port of [deps.generations.start, deps.generations.cancel, deps.generations.list, deps.generations.readHistory]) {
+      expect(port).not.toHaveBeenCalled();
+    }
+    // Only synthetic ports are installed; there is no provider/model transport in this app.
+    for (const group of [deps.memberships, deps.websocketAuthority, deps.configs, deps.proposals]) {
+      for (const port of Object.values(group)) expect(port).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['?view=history', '?view=current', '?view=', '?x=1', '?view=history&view=current'])('rejects query variant %s before owner or recovery work', async (query) => {
+    const deps = depsFor();
+    const response = await appFor(deps).request(pathFor('generationRead') + query, requestFor('generationRead'));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ desktopRoom: { viewerUserId: null },
+      error: { code: 'ROOM_DESKTOP_OPERATION_UNSUPPORTED', outcome: 'not-applicable' } });
+    expect(deps.resolveAuthentication).not.toHaveBeenCalled();
+    assertNoBusiness(deps);
+  });
+
+  it.each(['a%2Fb', 'a%5Cb', 'a%252Fb', '%67eneration-1', '%20generation-1', 'generation-1%20', 'generation-1%0A'])('rejects noncanonical generation segment %s before reads', async (generationId) => {
+    const deps = depsFor();
+    const response = await appFor(deps).request(`/api/arena/rooms/v1/${snapshot.roomId}/generations/${generationId}`, requestFor('generationRead'));
+    expect(response.status).toBe(400);
+    expect(deps.resolveAuthentication).not.toHaveBeenCalled();
+    assertNoBusiness(deps);
+  });
+
+  it.each(['future', ''])('rejects generation read protocol %s before owner or service entry', async (protocol) => {
+    const deps = depsFor();
+    const response = await appFor(deps).request(pathFor('generationRead'), { headers: {
+      ...headers, 'x-mahoshojo-desktop-room-protocol': protocol,
+    } });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: 'ROOM_DESKTOP_PROTOCOL_INVALID', outcome: 'not-applicable' } });
+    expect(deps.resolveAuthentication).not.toHaveBeenCalled();
+    assertNoBusiness(deps);
+  });
+
+  it('keeps the existing Web history query unchanged and refuses its unwrapped response as Desktop', async () => {
+    const deps = depsFor();
+    const generation = generationFixture.operation.success.result.generation;
+    const history = {
+      protocolVersion: 1 as const, roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch,
+      generation: { generationId: generation.generationId, state: 'completed' as const, configRevision: generation.configRevision,
+        collaborativeInfluence: generation.collaborativeInfluence, startedAt: generation.startedAt, finishedAt: generation.finishedAt },
+      status: 'completed' as const, contentStatus: 'available' as const, markdown: '# Web history',
+      result: ArenaRoomGenerationViewResponseSchema.parse(generationFixture.operation.success.result).result!,
+    };
+    vi.mocked(deps.generations.readHistory).mockResolvedValue(history);
+    const webHeaders = new Headers(headers);
+    webHeaders.delete('x-mahoshojo-desktop-room-protocol'); webHeaders.delete('x-mahoshojo-room-expected-user-id');
+    const response = await appFor(deps).request(pathFor('generationRead') + '?view=history', { headers: webHeaders });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(history);
+    expect(deps.generations.readHistory).toHaveBeenCalledExactlyOnceWith({
+      roomId: snapshot.roomId, generationId: generation.generationId, accountUserId: 101,
+    });
+    expect(deps.generations.read).not.toHaveBeenCalled();
+    expect(() => parseDesktopRoomSessionResponse('generationRead', history, 101)).toThrow('ROOM_DESKTOP_RESPONSE_INVALID');
+  });
+
+  it.each([
+    { status: 201, large: false }, { status: 202, large: false }, { status: 206, large: false },
+    { status: 201, large: true }, { status: 206, large: true },
+  ])('rejects a generation response with status $status and large=$large as a small protocol error', async ({ status, large }) => {
+    const adapter = createDesktopRoomSessionAdapter({
+      readBody: async () => { throw new Error('GET never reads a request body'); },
+      isBodyTooLarge: () => false,
+    });
+    const view = ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result,
+      roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch,
+      markdown: large ? 'x'.repeat(DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes) : '# Report',
+    });
+    const producerWire = JSON.stringify(view);
+    expect(Buffer.byteLength(producerWire) > DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes).toBe(large);
+    const app = new Hono<{ Variables: HonoAppVariables }>();
+    app.use('*', adapter.middleware);
+    app.get(DESKTOP_ROOM_SESSION_OPERATIONS.generationRead.path, (context) => {
+      const failed = adapter.authenticate(context, 101);
+      if (failed) return failed;
+      // Fault injection: a valid current view must not widen the accepted status.
+      return new Response(producerWire, { status, headers: { 'content-type': 'application/json' } });
+    });
+    const response = await app.request(pathFor('generationRead'), requestFor('generationRead'));
+    expect(response.status).toBe(502);
+    const wire = await response.text();
+    expect(Buffer.byteLength(wire)).toBeLessThan(DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes);
+    expect(DesktopRoomSessionErrorResponseSchema.parse(JSON.parse(wire))).toMatchObject({
+      desktopRoom: { viewerUserId: 101 }, error: { code: 'ROOM_DESKTOP_RESPONSE_INVALID', outcome: 'not-applicable' },
+    });
+    expect(wire).not.toContain('"result"');
+  });
+
+  it('retains the small raw receive ceiling for failed generation responses', async () => {
+    const adapter = createDesktopRoomSessionAdapter({
+      readBody: async () => { throw new Error('GET never reads a request body'); },
+      isBodyTooLarge: () => false,
+    });
+    const app = new Hono<{ Variables: HonoAppVariables }>();
+    app.use('*', adapter.middleware);
+    app.get(DESKTOP_ROOM_SESSION_OPERATIONS.generationRead.path, (context) => {
+      const failed = adapter.authenticate(context, 101);
+      if (failed) return failed;
+      // Fault injection at the producer boundary, before error DTO validation.
+      return context.json({ code: 'ROOM_UNAVAILABLE', error: 'x'.repeat(262_144) }, 503);
+    });
+    const response = await app.request(pathFor('generationRead'), requestFor('generationRead'));
+    expect(response.status).toBe(502);
+    const wire = await response.text();
+    expect(Buffer.byteLength(wire)).toBeLessThan(262_144);
+    expect(DesktopRoomSessionErrorResponseSchema.parse(JSON.parse(wire))).toMatchObject({
+      desktopRoom: { viewerUserId: 101 }, error: { code: 'ROOM_DESKTOP_RESPONSE_TOO_LARGE', outcome: 'not-applicable' },
+    });
+  });
+
+  it.each(['raw', 'envelope'] as const)('rejects %s overflow using the generation-only ceiling and a small typed response', async (gate) => {
+    const deps = depsFor();
+    const view = ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result,
+      roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, markdown: '# Report' });
+    view.generation.startedAt = '2026-10-12T00:00:00.0Z';
+    const envelope = { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, viewerUserId: 101 }, result: view };
+    const measured = gate === 'raw' ? view : envelope;
+    const padding = DESKTOP_ROOM_SESSION_LIMITS.generationResponseBodyBytes + 1 - bytes(measured);
+    view.generation.startedAt = `2026-10-12T00:00:00.${'0'.repeat(padding + 1)}Z`;
+    // Legacy timestamp precision is unbounded: this strict DTO demonstrates a theoretical
+    // combination exceeding the independent transport ceiling, not a supported-size promise.
+    expect(ArenaRoomGenerationViewResponseSchema.safeParse(view).success).toBe(true);
+    expect(bytes(measured)).toBe(DESKTOP_ROOM_SESSION_LIMITS.generationResponseBodyBytes + 1);
+    if (gate === 'envelope') expect(bytes(view)).toBeLessThan(DESKTOP_ROOM_SESSION_LIMITS.generationResponseBodyBytes);
+    vi.mocked(deps.generations.read).mockResolvedValue(view);
+    const response = await appFor(deps).request(pathFor('generationRead'), requestFor('generationRead'));
+    expect(response.status).toBe(502);
+    const wire = await response.text();
+    expect(Buffer.byteLength(wire)).toBeLessThan(DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes);
+    expect(DesktopRoomSessionErrorResponseSchema.parse(JSON.parse(wire))).toMatchObject({
+      desktopRoom: { viewerUserId: 101 }, error: { code: 'ROOM_DESKTOP_RESPONSE_TOO_LARGE', outcome: 'not-applicable' },
+    });
+    expect(wire).not.toContain('# Report');
+    expect(deps.generations.read).toHaveBeenCalledOnce();
+    expect(deps.generations.start).not.toHaveBeenCalled(); expect(deps.generations.cancel).not.toHaveBeenCalled();
+  }, 60_000);
 });

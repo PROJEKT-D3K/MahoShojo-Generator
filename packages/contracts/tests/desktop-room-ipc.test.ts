@@ -51,7 +51,7 @@ const configRequest = () => {
 describe('closed Native Room IPC', () => {
   it('pins four commands and complete serialized output budgets', () => {
     expect(Object.values(DESKTOP_ROOM_IPC_COMMANDS)).toEqual(['arena_room_attach', 'arena_room_request', 'arena_room_subscribe', 'arena_room_detach']);
-    expect(DESKTOP_ROOM_IPC_LIMITS).toEqual(fixture.limits);
+    expect(DESKTOP_ROOM_IPC_LIMITS).toEqual({ ...fixture.limits, generationFragmentBytes: 16_384 });
     expect(DesktopRoomAttachRequestSchema.parse(fixture.attachRequest)).toEqual(fixture.attachRequest);
     expect(DesktopRoomAttachResponseSchema.parse(fixture.attach)).toEqual(fixture.attach);
     expect(DesktopRoomSubscribeRequestSchema.parse(fixture.subscribeRequest)).toEqual(fixture.subscribeRequest);

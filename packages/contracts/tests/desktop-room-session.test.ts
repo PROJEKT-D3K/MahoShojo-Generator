@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import fixture from '../fixtures/desktop-room-session.json';
+import generationFixture from '../fixtures/desktop-room-generation-read.json';
 import proposalFixtures from '../fixtures/desktop-room-proposals.json';
 import { ARENA_ROOM_HTTP_ERROR_CODES } from '../src/arena-error-taxonomy';
 import {
@@ -44,6 +45,7 @@ const sessionFixture = fixture.operations.session.success.result;
 const operationFixtures = {
   ...fixture.operations,
   ...proposalFixtures,
+  generationRead: generationFixture.operation,
   config: {
     method: 'POST',
     path: ARENA_ROOM_HTTP_ROUTES.config.replace(':roomId', sessionFixture.roomId),
@@ -114,11 +116,11 @@ const expectCode = (run: () => unknown, code: string) => {
 };
 
 describe('Desktop Native Room session opt-in contract', () => {
-  it('adds only fixed config to the original routes with unchanged version and transport budgets', () => {
+  it('adds only fixed operations with unchanged version and original transport budgets', () => {
     expect(DESKTOP_ROOM_SESSION_PROTOCOL_VERSION).toBe(fixture.protocolVersion);
     expect(DESKTOP_ROOM_SESSION_PROTOCOL_HEADER).toBe('x-mahoshojo-desktop-room-protocol');
     expect(DESKTOP_ROOM_SESSION_EXPECTED_USER_ID_HEADER).toBe('x-mahoshojo-room-expected-user-id');
-    expect(DESKTOP_ROOM_SESSION_LIMITS).toEqual(fixture.limits);
+    expect(DESKTOP_ROOM_SESSION_LIMITS).toEqual({ ...fixture.limits, generationResponseBodyBytes: 76_711_888 });
     expect(Object.keys(DESKTOP_ROOM_SESSION_OPERATIONS)).toEqual(operations);
     expect(DESKTOP_ROOM_SESSION_OPERATIONS.discover).toEqual({ method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.collection });
     expect(DESKTOP_ROOM_SESSION_OPERATIONS.create).toEqual({ method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.collection });
@@ -133,7 +135,7 @@ describe('Desktop Native Room session opt-in contract', () => {
   it.each(operations)('round-trips the shared %s serializer fixture through real schemas', (operation) => {
     const sample = operationFixtures[operation];
     expect(DESKTOP_ROOM_SESSION_OPERATIONS[operation].method).toBe(sample.method);
-    expect(sample.path).toBe(DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', fixture.operations.session.success.result.roomId).replace(':proposalId', proposalFixtures.proposalSubmit.request.request.proposalId));
+    expect(sample.path).toBe(DESKTOP_ROOM_SESSION_OPERATIONS[operation].path.replace(':roomId', fixture.operations.session.success.result.roomId).replace(':proposalId', proposalFixtures.proposalSubmit.request.request.proposalId).replace(':generationId', generationFixture.action.generationId));
     for (const response of [sample.success, sample.error]) {
       expect(DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].parse(response)).toEqual(response);
       expect(parseDesktopRoomSessionResponse(operation, JSON.parse(JSON.stringify(response)), owner)).toEqual(response);

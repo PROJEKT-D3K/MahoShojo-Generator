@@ -443,6 +443,13 @@ struct HttpTerminalReservation {
 /// 每个真实 Webview 独有，父引擎在同一锁内调用。返回 String 是完整 JSON
 /// 输出，平台层必须原样投递。已交框架的通知/正文，不因失败或退休退款。
 /// backpressure 保留 scope 终结入口；不能静默丢帧后继续假装在线。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GenerationReplacement {
+    Replaced,
+    AlreadyPulled,
+    NotCurrent,
+}
+
 pub(crate) struct DeliveryQueue {
     instance: InstanceToken,
     document: Option<DocumentId>,
@@ -917,13 +924,19 @@ impl DeliveryQueue {
         if reservation.sequence.is_some() {
             return Err(error("busy"));
         }
-        if !matches!(
-            event.get("kind").and_then(Value::as_str),
-            Some("http-result" | "request-error")
-        ) || event.get("requestId").and_then(Value::as_str)
-            != Some(reservation.request_id.as_str())
-            || event.get("operation").and_then(Value::as_str)
-                != Some(reservation.operation.as_str())
+        let generation_descriptor = reservation.operation
+            == crate::arena_room_protocol::Operation::GenerationRead
+            && event["kind"] == "generation-descriptor";
+        if (!generation_descriptor
+            && !matches!(
+                event.get("kind").and_then(Value::as_str),
+                Some("http-result" | "request-error")
+            ))
+            || event.get("requestId").and_then(Value::as_str)
+                != Some(reservation.request_id.as_str())
+            || (!generation_descriptor
+                && event.get("operation").and_then(Value::as_str)
+                    != Some(reservation.operation.as_str()))
         {
             return Err(error("invalid-request"));
         }
@@ -1013,6 +1026,125 @@ impl DeliveryQueue {
     /// 普通 WS/status event 必须先通过闭合协议验证。不能动用 HTTP 的终结预留。
     pub(crate) fn enqueue(&mut self, event: &Value) -> Result<(), RoomError> {
         self.enqueue_receipted(event).map(|_| ())
+    }
+
+    /// 仅撤销当前 generation reader 自己的未 pull 批次。通知身份与债务不变，
+    /// 不撤回已交框架正文，也不把旧 scope 的失败写入新 scope。
+    pub(crate) fn replace_generation_error(
+        &mut self,
+        document: DocumentId,
+        handle: &str,
+        subscription_id: &str,
+        receipt: (&str, u64),
+        request_id: &str,
+        failure: &RoomError,
+    ) -> Result<GenerationReplacement, RoomError> {
+        let (batch_id, sequence) = receipt;
+        let Ok(serial) = self.active_scope(document, handle, subscription_id) else {
+            return Ok(GenerationReplacement::NotCurrent);
+        };
+        let scope = self.records.get(&serial).expect("active scope");
+        if scope.batch_id(sequence) != batch_id {
+            return Ok(GenerationReplacement::NotCurrent);
+        }
+        let Some(index) = self
+            .queued
+            .iter()
+            .position(|batch| batch.sequence == sequence && batch.batch_id == batch_id)
+        else {
+            return Ok(
+                if scope
+                    .in_flight
+                    .as_ref()
+                    .is_some_and(|flight| flight.sequence == sequence && flight.body_sent)
+                    || scope.acknowledged_through >= sequence
+                {
+                    GenerationReplacement::AlreadyPulled
+                } else {
+                    GenerationReplacement::NotCurrent
+                },
+            );
+        };
+        // 每个批次至多 256 KiB；这里只核对闭合的小事件身份，不读取完整战报。
+        let old: Value =
+            serde_json::from_str(&self.queued[index].body).map_err(|_| error("internal-error"))?;
+        let event = &old["batch"]["event"];
+        if event["requestId"].as_str() != Some(request_id)
+            || !matches!(
+                event["kind"].as_str(),
+                Some("generation-descriptor" | "generation-fragment")
+            )
+        {
+            return Ok(GenerationReplacement::NotCurrent);
+        }
+        let notification_debt = scope
+            .in_flight
+            .as_ref()
+            .filter(|flight| flight.sequence == sequence && !flight.body_sent)
+            .map_or(0, |flight| flight.bytes);
+        let has_notification = scope
+            .in_flight
+            .as_ref()
+            .is_some_and(|flight| flight.sequence == sequence);
+        let old_bytes = self.queued[index].body.len();
+        let terminal = self.queued[index].http_terminal;
+        let event = serde_json::json!({"kind":"request-error","requestId":request_id,
+            "operation":"generationRead","error":failure});
+        let available = MAX_NATIVE_QUEUED_BYTES
+            .saturating_sub(self.owned_bytes - old_bytes)
+            .saturating_sub(if terminal {
+                self.subscription_reserved_bytes()
+            } else {
+                self.reserved_native_bytes()
+            });
+        let mut replacement = self
+            .serialize_batch(serial, sequence, &event, available)
+            .map_err(|_| {
+                self.latch_backpressure();
+                error("backpressure")
+            })?;
+        replacement.http_terminal = terminal;
+        if terminal {
+            let bytes = (replacement.body.len() + MAX_NOTIFICATION_BYTES)
+                .max(HTTP_TERMINAL_FRAMEWORK_RESERVE)
+                .saturating_sub(notification_debt);
+            if bytes
+                > MAX_DELIVERED_BYTES
+                    .saturating_sub(self.delivered_bytes)
+                    .saturating_sub(self.subscription_reserved_bytes())
+            {
+                return self.backpressure();
+            }
+            let reservation = self
+                .http_terminal
+                .as_mut()
+                .ok_or_else(|| error("internal-error"))?;
+            if reservation.scope != serial
+                || reservation.sequence != Some(sequence)
+                || reservation.operation != crate::arena_room_protocol::Operation::GenerationRead
+                || reservation.request_id != request_id
+            {
+                return Err(error("internal-error"));
+            }
+            reservation.framework_bytes = bytes;
+            reservation.preserve_error = true;
+        } else {
+            let notification = if has_notification {
+                0
+            } else {
+                MAX_NOTIFICATION_BYTES
+            };
+            if replacement.body.len() + notification
+                > MAX_DELIVERED_BYTES
+                    .saturating_sub(self.delivered_bytes)
+                    .saturating_sub(self.reserved_framework_bytes())
+            {
+                return self.backpressure();
+            }
+        }
+        self.owned_bytes = self.owned_bytes - old_bytes + replacement.body.len();
+        self.queued[index] = replacement;
+        Ok(GenerationReplacement::Replaced)
     }
 
     /// Exact identity of this enqueued observation, never a later unrelated batch.
@@ -2912,5 +3044,126 @@ mod tests {
         assert_eq!(code(queue.reserve_subscription_terminal()), "backpressure");
         assert_eq!(queue.delivered_unacked_bytes(), MAX_DELIVERED_BYTES);
         assert_eq!(queue.reserved_framework_bytes(), 0);
+    }
+    #[test]
+    fn generation_replacement_preserves_notification_debt_and_terminal_reserve() {
+        use crate::arena_room_protocol::Operation;
+        let mut queue = new_queue();
+        queue
+            .reserve_http_terminal("read-1", Operation::GenerationRead)
+            .unwrap();
+        queue
+            .finish_http_terminal(&json!({"kind":"generation-descriptor","requestId":"read-1",
+            "roomId":"room","roomEpoch":"epoch","generationId":"generation","attempt":1,
+            "byteLength":100,"digest":"a".repeat(64)}))
+            .unwrap();
+        let (batch, sequence) = queue.http_terminal_batch().unwrap();
+        queue
+            .take_notification(document(), "handle", "subscription")
+            .unwrap();
+        let debt = queue.delivered_unacked_bytes();
+        assert_eq!(
+            queue
+                .replace_generation_error(
+                    document(),
+                    "handle",
+                    "subscription",
+                    (&batch, sequence),
+                    "read-1",
+                    &RoomError::new("scope-changed", "not-applicable")
+                )
+                .unwrap(),
+            GenerationReplacement::Replaced
+        );
+        assert_eq!(queue.delivered_unacked_bytes(), debt);
+        assert!(queue.http_terminal.as_ref().unwrap().preserve_error);
+        let raw = queue
+            .pull(document(), "handle", "subscription")
+            .unwrap()
+            .unwrap();
+        assert!(raw.contains("request-error") && !raw.contains("generation-descriptor"));
+        assert_eq!(queue.delivered_unacked_bytes(), debt + raw.len());
+        assert!(queue
+            .pull(document(), "handle", "subscription")
+            .unwrap()
+            .is_none());
+        assert!(queue
+            .ack(document(), "handle", "subscription", &batch, sequence)
+            .unwrap());
+        assert_eq!(queue.delivered_unacked_bytes(), 0);
+    }
+
+    #[test]
+    fn generation_short_fragment_error_can_grow_without_refunding_or_crossing_scope() {
+        let mut queue = new_queue();
+        let (batch, sequence) = queue
+            .enqueue_receipted(&json!({"kind":"generation-fragment","requestId":"read-1",
+            "offset":16384,"text":"}","final":true}))
+            .unwrap();
+        let before = queue.owned_bytes;
+        queue
+            .take_notification(document(), "handle", "subscription")
+            .unwrap();
+        let debt = queue.delivered_unacked_bytes();
+        assert_eq!(
+            queue
+                .replace_generation_error(
+                    document(),
+                    "handle",
+                    "subscription",
+                    (&batch, sequence),
+                    "read-1",
+                    &RoomError::new("scope-changed", "not-applicable")
+                )
+                .unwrap(),
+            GenerationReplacement::Replaced
+        );
+        assert!(queue.owned_bytes > before);
+        assert_eq!(queue.delivered_unacked_bytes(), debt);
+        let body = queue
+            .pull(document(), "handle", "subscription")
+            .unwrap()
+            .unwrap();
+        assert_eq!(queue.delivered_unacked_bytes(), debt + body.len());
+        assert_eq!(
+            queue
+                .replace_generation_error(
+                    document(),
+                    "handle",
+                    "subscription",
+                    (&batch, sequence),
+                    "read-1",
+                    &RoomError::new("scope-changed", "not-applicable")
+                )
+                .unwrap(),
+            GenerationReplacement::AlreadyPulled
+        );
+        queue.retire();
+        queue
+            .activate(
+                document(),
+                "next".into(),
+                "next-sub".into(),
+                "next-batch".into(),
+            )
+            .unwrap();
+        assert_eq!(
+            queue
+                .replace_generation_error(
+                    document(),
+                    "handle",
+                    "subscription",
+                    (&batch, sequence),
+                    "read-1",
+                    &RoomError::new("scope-changed", "not-applicable")
+                )
+                .unwrap(),
+            GenerationReplacement::NotCurrent
+        );
+        assert_eq!(queue.delivered_unacked_bytes(), debt + body.len());
+        assert!(queue
+            .ack(document(), "handle", "subscription", &batch, sequence)
+            .unwrap());
+        assert_eq!(queue.delivered_unacked_bytes(), 0);
     }
 }
