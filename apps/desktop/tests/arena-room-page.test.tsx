@@ -61,6 +61,7 @@ class RoomNativeFixture {
   readonly order: string[] = [];
   pendingIntent: DesktopRoomAttachResponse['pendingIntent'] = null;
   generationReadCurrent = true;
+  generationStartFence: DesktopRoomAttachResponse['generationStartFence'] = null;
   channel: NativeChannel = {};
   handle = ipcFixture.attach.handle;
   subscriptionId = ipcFixture.attach.subscriptionId;
@@ -86,7 +87,7 @@ class RoomNativeFixture {
       this.attachCount += 1; this.handle = `page-handle-${this.attachCount}`;
       this.subscriptionId = `page-lobby-${this.attachCount}`; this.sequence = 0;
       this.order.push('attach');
-      return { handle: this.handle, subscriptionId: this.subscriptionId, pendingIntent: this.pendingIntent };
+      return { handle: this.handle, subscriptionId: this.subscriptionId, pendingIntent: this.pendingIntent, generationStartBlocked: !!this.generationStartFence, generationStartFence: this.generationStartFence };
     }
     if (command === DESKTOP_ROOM_IPC_COMMANDS.detach) { this.order.push('detach'); return { detached: true }; }
     if (command === DESKTOP_ROOM_IPC_COMMANDS.subscribe) {
@@ -118,6 +119,11 @@ class RoomNativeFixture {
       return { kind: 'acknowledged', handle: envelope.handle, subscriptionId: action.subscriptionId, batchId: action.batchId, sequence: action.sequence, accepted: true,
         ...(event.kind === 'generation-fragment' && event.final ? { generationRead: { requestId: event.requestId, current: this.generationReadCurrent } } : {}) };
     }
+    if (action.kind === 'end-generation-start-tracking') {
+      expect(this.pendingIntent?.intentId).toBe(action.intentId);
+      this.generationStartFence = { roomId: this.pendingIntent!.roomId!, generationRequestId: this.pendingIntent!.generationStart!.generationRequestId }; this.pendingIntent = null;
+      return { kind: 'generation-start-tracking-ended', intentId: action.intentId, ended: true, generationStartBlocked: true, generationStartFence: this.generationStartFence };
+    }
     if (action.kind === 'end-config-tracking' || action.kind === 'end-proposal-tracking') {
       expect(this.pendingIntent?.intentId).toBe(action.intentId); this.pendingIntent = null;
       this.order.push(action.kind);
@@ -137,7 +143,7 @@ class RoomNativeFixture {
     const batch = DesktopRoomBatchSchema.parse({ handle: this.handle, subscriptionId: this.subscriptionId, batchId: `page-batch-${this.attachCount}-${this.subscriptions.length}-${sequence}`, sequence, event });
     if (batch.event.kind === 'mutation-unknown') {
       const { operation, intentId, roomId } = batch.event;
-      this.pendingIntent = { operation, intentId, roomId };
+      this.pendingIntent = { operation, intentId, roomId, ...(batch.event.generationStart ? { generationStart: batch.event.generationStart } : {}), ...(batch.event.generationTarget ? { generationTarget: batch.event.generationTarget } : {}) };
     }
     const delivery = { batch, channel: this.channel, pullStarted: deferred<void>(), ackStarted: deferred<void>(), pullGate: deferred<void>(), ackGate: deferred<void>(), pullReturned: deferred<void>() };
     if (!options.holdPull) delivery.pullGate.resolve();
@@ -195,7 +201,7 @@ const assertConstrained = () => {
   expect(diagnostics).not.toBeNull();
   expect(diagnostics!.closest('[hidden]')).not.toBeNull();
   for (const control of container.querySelectorAll('textarea, [aria-label="API Key"], [role="combobox"]')) {
-    expect(control.closest('[hidden]')).not.toBeNull();
+    if (mocks.owner?.getSnapshot().session?.self.role !== 'host') expect(control.closest('[hidden]')).not.toBeNull();
     expect(control.matches(':disabled')).toBe(true);
   }
   for (const label of ['生成战报', '发布配置', '提交提案', '开始协作生成', '发起生成', '启用严格排位']) expect(button(label, room())).toBeUndefined();
@@ -365,6 +371,38 @@ afterEach(async () => {
 });
 
 describe('Desktop /arena Room journey through the real route and Native bridge', () => {
+  it('shows complete frozen host sources, confirms start, then abandons only local tracking and returns to a usable lobby', async () => {
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
+    const creating = await startAction('创建多人房间', 'create');
+    if (creating.action.kind !== 'create') throw new Error('Expected create');
+    const session = reviewSession(); session.snapshot.sharedConfig = creating.action.request.sharedConfig; session.snapshot.activeGeneration = null;
+    await confirmMembership(creating, 'host', session); await publishOnline(session);
+    const full = room().querySelector<HTMLSelectElement>('[aria-label="选择完整本机来源"]')!;
+    expect(full).not.toBeNull();
+    await act(async () => { full.value = 'combatants'; full.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(room().textContent).toContain('甲完整本机设定'); expect(ordinarySnapshot()).toEqual(before);
+    await click('开始多人生成', room()); expect(room().textContent).toContain('待处理提案');
+    await click('返回检查', room()); expect(port.actions.map(item => item.action.kind)).toEqual(['create']);
+    await click('开始多人生成', room()); const start = await startAction('确认按当前配置开始', 'generation-start');
+    expect(start.action).toMatchObject({ request: { generation: { arenaFreeRankingEnabled: false }, hostLocalPayloads: [{ kind: 'character' }, { kind: 'character' }] } });
+    expect(JSON.stringify(start.action)).toContain('甲完整本机设定'); expect(JSON.stringify(start.action)).not.toContain(profile.baseUrl);
+    if (start.action.kind !== 'generation-start') throw new Error('Expected start');
+    await port.deliver({ kind: 'mutation-unknown', operation: 'generationStart', intentId: start.requestId, roomId: session.roomId,
+      generationStart: { roomEpoch: session.roomEpoch, generationRequestId: start.action.request.generationRequestId, retryable: true } });
+    await port.deliver({ kind: 'request-error', operation: 'generationStart', requestId: start.requestId, error: ipcFixture.error });
+    expect(room().textContent).toContain('原生成请求结果未知');
+    await click('以原请求重试', room()); expect(room().textContent).toContain('可能补执行'); await click('返回检查', room());
+    await click('停止本机跟踪并返回大厅', room()); expect(room().textContent).toContain('不能再以原 ID 重试');
+    await click('确认停止本机跟踪', room());
+    expect(room().textContent).toContain('大厅已就绪'); expect(room().textContent).toContain('未确认生成记录');
+    expect(requiredButton('创建多人房间', room()).disabled).toBe(false); await change('#arena-room-join-code', 'another-room'); expect(requiredButton('加入房间', room()).disabled).toBe(false);
+    const checking = await startAction('只读核对保留记录的原房间', 'session');
+    await confirmMembership(checking, 'host', session); await publishOnline(session);
+    expect(requiredButton('开始多人生成', room()).disabled).toBe(true); expect(requiredButton('关闭房间', room()).disabled).toBe(false);
+    expect(ordinarySnapshot()).toEqual(before); expect(port.actions.map(item => item.action.kind)).toEqual(['create', 'generation-start', 'session']);
+    // Only the one explicitly confirmed Room start crossed Native; no ordinary/provider generation.
+    expect(mocks.invoke.mock.calls.filter(([command]) => /^(direct_|hosted_|generation_)/.test(String(command)))).toEqual([]);
+  });
   it.each(['/arena', '/battle'] as const)('%s exposes only its intended Room entry and never attaches on mount', async path => {
     await mount(path);
     expect(Boolean(button('打开多人大厅'))).toBe(path === '/arena');

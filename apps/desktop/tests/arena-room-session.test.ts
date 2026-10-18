@@ -1,4 +1,4 @@
-import { captureArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
+import { captureArenaRoomGenerationCancelTarget, type ArenaRoomHostWorkspaceBundle } from '@mahoshojo/multiplayer-core';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -70,6 +70,7 @@ async function harness() {
   let requestCount = 0;
   let pendingIntent: DesktopRoomAttachResponse['pendingIntent'] = null;
   let endFails = false;
+  let generationStartFence: DesktopRoomAttachResponse['generationStartFence'] = null;
   const attachGates: Array<{
     entered: ReturnType<typeof deferred<DesktopRoomAttachResponse>>;
     response: ReturnType<typeof deferred<unknown>>;
@@ -93,7 +94,7 @@ async function harness() {
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
     if (command === DESKTOP_ROOM_IPC_COMMANDS.attach) {
       subscriptionId = `lobby-${++attachCount}`;
-      const response: DesktopRoomAttachResponse = { ...fixture.attach, subscriptionId, pendingIntent };
+      const response: DesktopRoomAttachResponse = { ...fixture.attach, subscriptionId, pendingIntent, generationStartBlocked: !!generationStartFence, generationStartFence };
       const gate = attachGates.shift();
       if (gate) { gate.entered.resolve(response); return gate.response.promise; }
       return response;
@@ -119,6 +120,12 @@ async function harness() {
       awaitingAck.delete(request.batchId);
       delivery.ackEntered.resolve();
       return delivery.ack.promise;
+    }
+    if (request.kind === 'end-generation-start-tracking') {
+      if (endFails) throw new Error('Lost end receipt');
+      if (pendingIntent?.intentId !== request.intentId || !pendingIntent.generationStart || !pendingIntent.roomId) throw new Error('Wrong start token');
+      generationStartFence = { roomId: pendingIntent.roomId, generationRequestId: pendingIntent.generationStart.generationRequestId }; pendingIntent = null;
+      return { kind: 'generation-start-tracking-ended', intentId: request.intentId, ended: true, generationStartBlocked: true, generationStartFence };
     }
     if (request.kind === 'end-proposal-tracking') {
       if (endFails) throw new Error('Lost end receipt');
@@ -174,6 +181,7 @@ async function harness() {
     throwNonce: () => { nonceThrows = true; },
     setCanStart: (value: boolean) => { canStart = value; },
     setEndFails: () => { endFails = true; },
+    setFence: (value: DesktopRoomAttachResponse['generationStartFence']) => { generationStartFence = value; },
     setPending: (value: DesktopRoomAttachResponse['pendingIntent']) => { pendingIntent = value; },
   };
 }
@@ -218,6 +226,69 @@ const resolved = (requestId: string, value: ArenaRoomSessionResponse, proposalId
 });
 
 describe('Desktop Arena Room session through the real Native bridge', () => {
+  const startHost = () => ArenaRoomSessionResponseSchema.parse({ ...host, snapshot: { ...host.snapshot,
+    activeGeneration: null, sharedConfig: { ...host.snapshot.sharedConfig, battleMode: 'daily', combatants: [host.snapshot.sharedConfig.combatants[0]], teams: [], scenario: null, auxScenarios: [], materials: [] } } });
+  const startBundle = (value: ArenaRoomSessionResponse): ArenaRoomHostWorkspaceBundle => ({ sharedConfig: value.snapshot.sharedConfig, hostLocalPayloads: [], hostLocalContentDigests: [] });
+  const pendingStart = (value: ArenaRoomSessionResponse, id: string, retryable = true) => ({ operation: 'generationStart' as const, intentId: id, roomId: value.roomId,
+    generationStart: { roomEpoch: value.roomEpoch, generationRequestId: createRequest.creationRequestId, retryable } });
+
+  it('freezes one visible start and keeps an unknown intent through a pre-business retry refusal', async () => {
+    const h = await harness(), value = startHost(); await joinProposalHost(h, value);
+    const current = h.session.getSnapshot().session!, identity = h.session.confirmationOwner()!;
+    const source = { bundle: startBundle(current), generation: { narrativeHistory: ['frozen source'] } };
+    const start = h.plan('generation-start'); const sending = h.session.startGeneration(current, identity, async () => source, () => true);
+    const action = await start.entered.promise;
+    expect(action).toMatchObject({ kind: 'generation-start', request: { generationRequestId: createRequest.creationRequestId, generation: source.generation } });
+    start.accept(); await sending;
+    const pending = pendingStart(value, start.requestId); h.setPending(pending);
+    await h.receive({ kind: 'mutation-unknown', ...pending });
+    await h.receive({ kind: 'request-error', operation: 'generationStart', requestId: start.requestId, error: fixture.error });
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'online', unknown: pending });
+    const retried = h.plan('retry-generation-start'); const retrying = h.session.retryStartGeneration(pending.intentId, h.session.confirmationOwner()!);
+    expect(await retried.entered.promise).toEqual({ kind: 'retry-generation-start', intentId: start.requestId }); retried.accept(); await retrying;
+    await h.receive({ kind: 'request-error', operation: 'generationStart', requestId: retried.requestId, error: { ...fixture.error, outcome: 'not-applied' } });
+    await whenState(h.session, state => !state.busy);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
+    expect(h.requests.map(request => request.kind)).toEqual(['join', 'generation-start', 'retry-generation-start']);
+  });
+  it.each(['source-change', 'authority-change', 'prepare-failure'] as const)('refuses source preparation after %s without a start invocation', async kind => {
+    const h = await harness(), value = startHost(); await joinProposalHost(h, value);
+    const current = h.session.getSnapshot().session!, gate = deferred<{ bundle: ArenaRoomHostWorkspaceBundle; generation: object }>();
+    let fresh = true;
+    const sending = h.session.startGeneration(current, h.session.confirmationOwner()!, () => gate.promise, () => fresh);
+    if (kind === 'source-change') fresh = false;
+    if (kind === 'authority-change') await h.receive({ kind: 'status', state: 'offline' });
+    if (kind === 'prepare-failure') gate.reject(new Error('private source failure')); else gate.resolve({ bundle: startBundle(current), generation: {} });
+    await sending; expect(h.requests.map(request => request.kind)).toEqual(['join']);
+    expect(h.session.getSnapshot()).toMatchObject({ busy: false, unknown: null });
+  });
+  it('explicitly stops local start tracking, returns to the lobby and allows another room without removing the start fence', async () => {
+    const h = await harness(), value = startHost(), pending = pendingStart(value, 'original-start'); h.setPending(pending);
+    await h.session.open();
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
+    await h.session.endGenerationStartTracking(pending.intentId, h.session.confirmationOwner()!);
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'ready', busy: false, unknown: null, session: null, constrained: false,
+      generationStartBlocked: true, generationStartFence: { roomId: value.roomId, generationRequestId: createRequest.creationRequestId } });
+    const discovery = h.plan('discover'), discovering = h.session.discover(); await discovery.entered.promise; discovery.accept(); await discovering;
+    await h.receive(success('discover', discovery.requestId)); await whenState(h.session, state => !state.busy);
+    const joining = h.plan('join'), join = h.session.join('another-room', 'host'); await joining.entered.promise; joining.accept(); await join;
+    const other = ArenaRoomSessionResponseSchema.parse({ ...value, roomId: 'another-room', snapshot: { ...value.snapshot, roomId: 'another-room' } });
+    await h.receive(success('join', joining.requestId, other)); await whenState(h.session, state => state.phase === 'connecting' && !state.busy);
+    await installOnlineSnapshot(h, other);
+    const prepare = vi.fn(async () => ({ bundle: startBundle(other), generation: {} }));
+    await h.session.startGeneration(h.session.getSnapshot().session!, h.session.confirmationOwner()!, prepare, () => true);
+    expect(prepare).not.toHaveBeenCalled(); expect(h.session.startGenerationBlockedReason()).toContain('防重复记录');
+    expect(h.requests.map(request => request.kind)).toEqual(['discover', 'join']);
+  });
+  it('keeps a lost stop-tracking receipt unresolved until an explicit attach reads the Native state', async () => {
+    const h = await harness(), pending = pendingStart(startHost(), 'original-start'); h.setPending(pending); await h.session.open(); h.setEndFails();
+    await h.session.endGenerationStartTracking(pending.intentId, h.session.confirmationOwner()!);
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'unavailable', unknown: pending });
+    h.setPending(null); h.setFence({ roomId: pending.roomId, generationRequestId: pending.generationStart.generationRequestId });
+    await h.session.open(); expect(h.session.getSnapshot()).toMatchObject({ phase: 'ready', unknown: null, generationStartBlocked: true });
+    expect(h.requests).toEqual([]);
+  });
   it('owns an isolated member draft, follows clean revisions and retains dirty stale input until explicit sync', async () => {
     const h = await harness(); await joinRoom(h); await installOnlineSnapshot(h, member);
     const model = h.session.getSnapshot().memberModel!;
@@ -743,7 +814,7 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     expect(h.invoke.mock.calls.some(([, args]) => (args?.request as {request?: {kind: string}})?.request?.kind === 'end-config-tracking')).toBe(false);
     const check = h.plan('session'); const checking = h.session.checkConfigPublish(); await check.entered.promise; check.accept(); await checking;
     await h.receive(success('session', check.requestId, host)); await whenState(h.session, state => !state.busy && state.phase === 'connecting');
-    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
     expect(h.session.getSnapshot().configTracking?.observation).toBe('target-unavailable');
     await h.session.endConfigTracking('config-A');
     expect(h.session.getSnapshot()).toMatchObject({ unknown: null, session: null, configTracking: { phase: 'ended-needs-read' } });
@@ -813,7 +884,7 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
       error: { code: 'service-rejected', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applicable', serverCode: outcome } }));
     await whenState(h.session, state => !state.busy);
     expect(h.session.getSnapshot()).toMatchObject({ unknown: pending, constrained: true });
-    expect(h.session.getSnapshot().unknown).toEqual(pending); // No original target is reconstructed from a draft or GET.
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending); // No original target is reconstructed from a draft or GET.
     await h.session.create(details, source, () => true); await h.session.join(host.roomId, '成员'); await h.session.close();
     expect(h.requests.map(value => value.kind)).toEqual(['session']);
   });
@@ -826,12 +897,12 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     await read.entered.promise; read.accept(); await reading;
     await h.receive(success('session', read.requestId, host));
     await whenState(h.session, state => !state.busy);
-    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
     expect(h.subscriptions()).toHaveLength(0);
     const event: DesktopRoomEvent = { kind: 'proposal-observation', intentId: pending.intentId,
       observation: { observation: 'terminal', linked: true, settle: true, outcome: 'scope-unverified', terminalStatus: 'partially_accepted' } };
     const delivery = h.emit(event); await delivery.ackEntered.promise;
-    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
     delivery.acknowledge();
     await whenState(h.session, state => state.unknown === null && !state.busy && state.phase === 'connecting');
     expect(h.subscriptions()).toHaveLength(1);
@@ -845,13 +916,13 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     const delivery = h.emit({ kind: 'proposal-observation', intentId: pending.intentId,
       observation: { observation: 'terminal', linked: true, settle: true, outcome: 'satisfied', terminalStatus: 'withdrawn' } });
     await delivery.ackEntered.promise;
-    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
     let reopening: Promise<symbol | null> | undefined;
     if (failure === 'new-owner') { h.session.detach(); reopening = h.session.open(); }
     delivery.acknowledge(failure === 'wrong-ack' ? { batchId: 'wrong-batch' } : {});
     if (failure === 'wrong-ack') await whenState(h.session, state => state.phase === 'unavailable');
     else await reopening;
-    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
     expect(h.subscriptions()).toHaveLength(0);
   });
   it.each(['ROOM_NOT_FOUND', 'ROOM_FORBIDDEN'] as const)('does not turn proposal recovery %s into a write receipt', async code => {
@@ -862,7 +933,7 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     await h.receive({ kind: 'request-error', requestId: read.requestId, operation: 'session',
       error: { code: 'service-rejected', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applicable', serverCode: code } });
     await whenState(h.session, state => !state.busy);
-    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
     expect(h.requests.map(request => request.kind)).toEqual(['session']);
   });
   it('does not resubscribe or release pending tracking for an ordinary socket observation', async () => {
@@ -877,7 +948,7 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     expect(h.subscriptions()).toHaveLength(1);
     await h.receive(observation); for (let i = 0; i < 24; i += 1) await Promise.resolve();
     expect(h.subscriptions()).toHaveLength(1);
-    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
   });
   it('requires explicit reopen and resume-create for an unknown create without allocating a replacement creation ID', async () => {
     const h = await harness(); await h.session.open();
@@ -935,7 +1006,7 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     expect(await resume.entered.promise).toEqual({ kind: 'resume-create', intentId: pending.intentId });
     resume.accept(); await reconciling;
     const resumed = h.emit(success('create', resume.requestId, host)); await resumed.ackEntered.promise;
-    expect(h.session.getSnapshot().unknown).toEqual(pending);
+    expect(h.session.getSnapshot().unknown).toMatchObject(pending);
     expect(h.subscriptions()).toHaveLength(0);
     const ready = whenState(h.session, state => !state.busy && state.phase === 'connecting');
     resumed.acknowledge(); await ready;

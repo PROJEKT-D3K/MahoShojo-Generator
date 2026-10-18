@@ -142,8 +142,10 @@ impl RoomInstance {
             return Err(stale());
         }
         if inner.pending.as_ref().is_some_and(|pending| {
-            pending.cancel_basis.as_ref().is_none_or(|basis| {
-                !basis.read_matches(&authority.room_id, &expected_room_epoch, &expected)
+            !pending.cancel_basis.as_ref().is_some_and(|basis| {
+                basis.read_matches(&authority.room_id, &expected_room_epoch, &expected)
+            }) && !pending.start_basis.as_ref().is_some_and(|basis| {
+                basis.read_matches(&authority.room_id, &expected_room_epoch, &expected)
             })
         }) {
             return Err(RoomError::new("busy", "not-applicable"));
@@ -269,6 +271,7 @@ impl RoomInstance {
             return;
         }
         if let Err(error) = &outcome {
+            Self::start_read_not_found(&mut inner, &target, error);
             if error.code == "not-authenticated" {
                 // reader nonce、cancel、原账号与真实 Document 在同一锁区再次确认；
                 // 中途取消的旧 GET 不可清凭据或撤销仍有效的 socket。
@@ -281,6 +284,9 @@ impl RoomInstance {
         match outcome {
             Err(error) => {
                 let _ = self.abort_generation_locked(&mut inner, &context, &error);
+                if Self::publish_start_unknown_locked(&mut inner, &context).is_ok() {
+                    let _ = self.notify_identity_locked(&mut inner, &context);
+                }
             }
             Ok(response) => {
                 let transfer = inner.generation.as_mut().expect("matched reader");

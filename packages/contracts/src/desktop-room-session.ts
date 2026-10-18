@@ -12,6 +12,8 @@ import {
   MAX_ARENA_ROOM_HTTP_TICKET_BYTES,
   ArenaRoomCreateRequestSchema,
   ArenaRoomGenerationCancelRequestSchema,
+  ArenaRoomGenerationStartRequestSchema,
+  MAX_ARENA_ROOM_GENERATION_START_BYTES,
   ArenaRoomGenerationProjectionStatusSchema,
   ArenaRoomEpochMutationRequestSchema,
   ArenaRoomGenerationViewResponseSchema,
@@ -31,11 +33,33 @@ import { jsonUtf8ByteLength, utf8ByteLength } from './wire-size';
 
 /** Same-path, fail-closed Native opt-in; unnegotiated Web contracts stay unchanged. */
 export const DESKTOP_ROOM_SESSION_PROTOCOL_VERSION = 'desktop-room-session-v1' as const;
+/** Desktop-only preparation/request budget. Containers and scalar values count; keys do not. */
+export const DESKTOP_ROOM_START_MAX_NODES = 100_000;
+export const isDesktopRoomStartWithinNodeBudget = (input: unknown): boolean => {
+  let count = 0;
+  const visit = (value: unknown, depth: number): boolean => {
+    if (++count > DESKTOP_ROOM_START_MAX_NODES || depth > SAFE_JSON_VALUE_MAX_DEPTH) return false;
+    if (value === null || typeof value !== 'object') return true;
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) if (!visit(value[index], depth + 1)) return false;
+    } else {
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue;
+        const property = Object.getOwnPropertyDescriptor(value, key);
+        if (!property || property.get || property.set || !visit(property.value, depth + 1)) return false;
+      }
+    }
+    return true;
+  };
+  try { return visit(input, 0); } catch { return false; }
+};
 export const DESKTOP_ROOM_SESSION_PROTOCOL_HEADER = 'x-mahoshojo-desktop-room-protocol' as const;
 export const DESKTOP_ROOM_SESSION_EXPECTED_USER_ID_HEADER = 'x-mahoshojo-room-expected-user-id' as const;
 export const DESKTOP_ROOM_SESSION_LIMITS = Object.freeze({
   originalRequestBodyBytes: 64 * 1_024,
   requestBodyBytes: 65 * 1_024,
+  generationStartOriginalBytes: MAX_ARENA_ROOM_GENERATION_START_BYTES,
+  generationStartRequestBytes: MAX_ARENA_ROOM_GENERATION_START_BYTES + 1_024,
   responseBodyBytes: 256 * 1_024,
   // Independent transport ceiling, not a bound for every theoretical DTO combination.
   generationResponseBodyBytes: ARENA_COMPANION_JSON_LIMITS.wireBytes,
@@ -50,6 +74,7 @@ export const DESKTOP_ROOM_SESSION_OPERATIONS = Object.freeze({
   join: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.join },
   session: { method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.session },
   generationRead: { method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.generation },
+  generationStart: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.generations },
   generationCancel: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.generationCancel },
   ticket: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.ticket },
   leave: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.leave },
@@ -60,9 +85,9 @@ export const DESKTOP_ROOM_SESSION_OPERATIONS = Object.freeze({
   proposalResolve: { method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.proposalResolve },
 } as const);
 export const DesktopRoomSessionOperationSchema = z.enum([
-  'discover', 'create', 'join', 'session', 'generationRead', 'generationCancel', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve',
+  'discover', 'create', 'join', 'session', 'generationRead', 'generationStart', 'generationCancel', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve',
 ]);
-export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'generationCancel', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
+export const DesktopRoomSessionPostOperationSchema = z.enum(['create', 'join', 'generationStart', 'generationCancel', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 export type DesktopRoomSessionOperation = z.infer<typeof DesktopRoomSessionOperationSchema>;
 export type DesktopRoomSessionPostOperation = z.infer<typeof DesktopRoomSessionPostOperationSchema>;
 
@@ -118,10 +143,10 @@ const isBoundedJsonObject = (input: unknown): input is Record<string, JsonValue>
   return true;
 };
 
-const boundedObject = (maxBytes: number, checkOriginalRequest = false) => z.custom<unknown>(
+const boundedObject = (maxBytes: number, checkOriginalRequest = false, originalMaxBytes = DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes) => z.custom<unknown>(
   (input) => isBoundedJsonObject(input)
     && jsonUtf8ByteLength(input) <= maxBytes
-    && (!checkOriginalRequest || jsonUtf8ByteLength(input.request) <= DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes),
+    && (!checkOriginalRequest || jsonUtf8ByteLength(input.request) <= originalMaxBytes),
   { message: 'must be a bounded plain JSON object within the Desktop wire budget' },
 );
 const postRequest = <T extends z.ZodType>(request: T) => boundedObject(
@@ -136,6 +161,16 @@ export const DesktopRoomSessionCreateRequestSchema = boundedObject(
   request: ArenaRoomCreateRequestSchema,
 }).strict());
 export const DesktopRoomSessionJoinRequestSchema = postRequest(ArenaRoomJoinRequestSchema);
+/** First Desktop start capability is server system-default only. */
+export const DesktopRoomGenerationStartRequestSchema = z.custom<z.input<typeof ArenaRoomGenerationStartRequestSchema>>(
+  isDesktopRoomStartWithinNodeBudget, { message: 'Desktop room start material is too complex' },
+).pipe(ArenaRoomGenerationStartRequestSchema.refine(
+  (value) => !Object.hasOwn(value.generation, 'customProvider') && value.generation.isDowngrade !== true && value.generation.arenaFreeRankingEnabled !== true,
+  { message: 'Desktop room start uses the server system default' },
+));
+export const DesktopRoomSessionGenerationStartRequestSchema = boundedObject(
+  DESKTOP_ROOM_SESSION_LIMITS.generationStartRequestBytes, true, DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes,
+).pipe(z.object({ desktopRoom: DesktopRoomSessionRequestMetadataSchema, request: DesktopRoomGenerationStartRequestSchema }).strict());
 export const DesktopRoomSessionGenerationCancelRequestSchema = postRequest(ArenaRoomGenerationCancelRequestSchema);
 export const DesktopRoomSessionTicketRequestSchema = postRequest(ArenaRoomTicketRequestSchema);
 export const DesktopRoomSessionLeaveRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);
@@ -147,6 +182,7 @@ export const DesktopRoomSessionProposalResolveRequestSchema = postRequest(ArenaR
 export const DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS = Object.freeze({
   create: DesktopRoomSessionCreateRequestSchema,
   join: DesktopRoomSessionJoinRequestSchema,
+  generationStart: DesktopRoomSessionGenerationStartRequestSchema,
   generationCancel: DesktopRoomSessionGenerationCancelRequestSchema,
   ticket: DesktopRoomSessionTicketRequestSchema,
   leave: DesktopRoomSessionLeaveRequestSchema,
@@ -180,6 +216,8 @@ export const DesktopRoomGenerationCancelReceiptSchema = z.object({
     context.addIssue({ code: 'custom', path: ['generation', 'state'], message: 'cancel receipt status must match mirror state' });
   }
 });
+export const DesktopRoomGenerationStartReceiptSchema = DesktopRoomGenerationCancelReceiptSchema;
+export const DesktopRoomSessionGenerationStartSuccessSchema = successResponse(DesktopRoomGenerationStartReceiptSchema);
 export const DesktopRoomSessionGenerationCancelSuccessSchema = successResponse(DesktopRoomGenerationCancelReceiptSchema);
 // The legacy ticket schema counts UTF-16 units; Native additionally caps raw token bytes.
 const desktopTicketResult = z.custom<z.input<typeof ArenaRoomTicketResponseSchema>>(
@@ -223,6 +261,7 @@ export const DESKTOP_ROOM_SESSION_SUCCESS_RESPONSE_SCHEMAS = Object.freeze({
   join: DesktopRoomSessionJoinSuccessSchema,
   session: DesktopRoomSessionSessionSuccessSchema,
   generationRead: DesktopRoomSessionGenerationReadSuccessSchema,
+  generationStart: DesktopRoomSessionGenerationStartSuccessSchema,
   generationCancel: DesktopRoomSessionGenerationCancelSuccessSchema,
   ticket: DesktopRoomSessionTicketSuccessSchema,
   leave: DesktopRoomSessionLeaveSuccessSchema,
@@ -301,6 +340,7 @@ export const DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS = Object.freeze({
   join: z.union([DesktopRoomSessionJoinSuccessSchema, postErrorResponse]),
   session: z.union([DesktopRoomSessionSessionSuccessSchema, getErrorResponse]),
   generationRead: z.union([DesktopRoomSessionGenerationReadSuccessSchema, getErrorResponse]),
+  generationStart: z.union([DesktopRoomSessionGenerationStartSuccessSchema, postErrorResponse]),
   generationCancel: z.union([DesktopRoomSessionGenerationCancelSuccessSchema, postErrorResponse]),
   ticket: z.union([DesktopRoomSessionTicketSuccessSchema, postErrorResponse]),
   leave: z.union([DesktopRoomSessionLeaveSuccessSchema, postErrorResponse]),
@@ -324,7 +364,7 @@ export class DesktopRoomSessionContractError extends Error {
   }
 }
 
-/** The HTTP adapter must separately enforce the actual raw 65 KiB body before JSON decoding. */
+/** The HTTP adapter separately enforces the operation's raw body budget before JSON decoding. */
 export const parseDesktopRoomSessionRequest = <Operation extends DesktopRoomSessionPostOperation>(
   operation: Operation,
   raw: unknown,
@@ -333,12 +373,16 @@ export const parseDesktopRoomSessionRequest = <Operation extends DesktopRoomSess
   if (!DesktopRoomSessionPostOperationSchema.safeParse(operation).success) {
     throw new DesktopRoomSessionContractError('ROOM_DESKTOP_OPERATION_UNSUPPORTED');
   }
+  if (operation === 'generationStart' && !isDesktopRoomStartWithinNodeBudget((raw as { request?: unknown } | null)?.request)) {
+    throw new DesktopRoomSessionContractError('ROOM_DESKTOP_PROTOCOL_INVALID');
+  }
   if (!DesktopRoomSessionUserIdSchema.safeParse(expectedUserId).success || !isBoundedJsonObject(raw)
     || !isBoundedJsonObject(raw.request)) {
     throw new DesktopRoomSessionContractError('ROOM_DESKTOP_PROTOCOL_INVALID');
   }
-  if (jsonUtf8ByteLength(raw) > DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes
-    || jsonUtf8ByteLength(raw.request) > DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes) {
+  const start = operation === 'generationStart';
+  if (jsonUtf8ByteLength(raw) > (start ? DESKTOP_ROOM_SESSION_LIMITS.generationStartRequestBytes : DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes)
+    || jsonUtf8ByteLength(raw.request) > (start ? DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes : DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes)) {
     throw new DesktopRoomSessionContractError('ROOM_PAYLOAD_TOO_LARGE');
   }
   const parsed = DESKTOP_ROOM_SESSION_POST_REQUEST_SCHEMAS[operation].safeParse(raw);

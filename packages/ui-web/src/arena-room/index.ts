@@ -59,3 +59,5 @@ export * from './generation-copy';
 
 export { RoomGenerationCancelAction } from "./RoomGenerationCancelAction";
 export type { RoomGenerationCancelActionProps } from "./RoomGenerationCancelAction";
+
+export { RoomGenerationStartConfirmButton, RoomGenerationPendingProposalsWarning } from './RoomGenerationStartAction';

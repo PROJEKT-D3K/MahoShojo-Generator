@@ -342,7 +342,6 @@ pub(crate) async fn attach(
 }
 
 pub(crate) fn request(webview: Webview, request: Value) -> Result<Response, RoomError> {
-    let request = protocol::parse_request(&request)?;
     let current = marker(&webview, false)?;
     let document = current
         .room
@@ -350,7 +349,7 @@ pub(crate) fn request(webview: Webview, request: Value) -> Result<Response, Room
         .lock()
         .map_err(|_| unavailable())?
         .current_document(current.room.instance_token())?;
-    response(current.room.request(document, request)?)
+    response(current.room.request_owned(document, request)?)
 }
 pub(crate) fn subscribe(webview: Webview, request: Value) -> Result<Response, RoomError> {
     let request = protocol::parse_subscribe(&request)?;

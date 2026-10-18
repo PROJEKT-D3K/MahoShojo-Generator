@@ -1,3 +1,4 @@
+import startFixture from '@mahoshojo/contracts/fixtures/desktop-room-generation-start.json';
 import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -61,6 +62,7 @@ const operationFixtures = {
   ...fixture.operations,
   ...proposalFixtures,
   generationRead: generationFixture.operation,
+  generationStart: startFixture.operation,
   generationCancel: {
     method: 'POST', path: `${generationFixture.operation.path}/cancel`,
     request: { desktopRoom: fixture.operations.join.request.desktopRoom, request: { expectedRoomEpoch: fixtureSession.roomEpoch } },
@@ -102,6 +104,7 @@ const inputFor = (operation: DesktopRoomSessionOperation) => {
   if (operation === 'create') return wrap(createBody, 'new');
   if (operation === 'join') return wrap({ displayName: 'Member' });
   if (operation === 'ticket') return wrap({});
+  if (operation === 'generationStart') return wrap({ ...startFixture.action.request, expectedRoomEpoch: snapshot.roomEpoch, expectedRevision: snapshot.revision, expectedControlSeq: snapshot.controlSeq, sharedConfig: snapshot.sharedConfig });
   if (operation === 'config') return wrap(configBody);
   if (operation === 'generationCancel' || operation === 'leave' || operation === 'close') return wrap({ expectedRoomEpoch: snapshot.roomEpoch });
   return undefined;
@@ -126,7 +129,7 @@ const depsFor = (): ArenaRoomHttpDependencies => ({
     withdraw: vi.fn(async () => ({ ...ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalWithdraw.success.result), roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, controlSeq: snapshot.controlSeq, revision: snapshot.revision })),
   },
   generations: {
-    start: vi.fn(async () => { throw new Error('unexpected generation'); }),
+    start: vi.fn(async () => ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result, roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch })),
     read: vi.fn(async () => ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result, roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch })),
     list: vi.fn(async () => { throw new Error('unexpected generation'); }),
     readHistory: vi.fn(async () => { throw new Error('unexpected generation'); }),
@@ -164,6 +167,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     vi.mocked(deps.directory.discoverPublic).mockResolvedValue(RoomDirectoryPageSchema.parse(fixture.operations.discover.success.result));
     vi.mocked(deps.websocketAuthority.issue).mockResolvedValue(fixture.operations.ticket.success.result.ticket);
     vi.mocked(deps.generations.read).mockResolvedValue(ArenaRoomGenerationViewResponseSchema.parse(generationFixture.operation.success.result));
+    vi.mocked(deps.generations.start).mockResolvedValue(ArenaRoomGenerationViewResponseSchema.parse(generationFixture.operation.success.result));
     vi.mocked(deps.generations.cancel).mockResolvedValue(ArenaRoomGenerationViewResponseSchema.parse(generationFixture.operation.success.result));
     vi.mocked(deps.proposals.submit).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalSubmit.success.result));
     vi.mocked(deps.proposals.withdraw).mockResolvedValue(ArenaRoomProposalMutationResponseSchema.parse(proposalFixtures.proposalWithdraw.success.result));
@@ -172,7 +176,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
       method: sample.method, headers: { ...headers, ...fixture.headers },
       ...(sample.request === null ? {} : { body: JSON.stringify(sample.request) }),
     });
-    expect(response.status).toBe(operation === 'create' ? 201 : 200);
+    expect(response.status).toBe(operation === 'create' ? 201 : operation === 'generationStart' ? 202 : 200);
     const text = await response.text();
     expect(text).toBe(JSON.stringify(sample.success));
     expect(parseDesktopRoomSessionResponse(operation, JSON.parse(text), fixture.expectedUserId)).toEqual(sample.success);
@@ -224,7 +228,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
   it.each(operations)('%s uses paired numeric owner and the original operation response', async (operation) => {
     const deps = depsFor();
     const response = await appFor(deps).request(pathFor(operation), requestFor(operation));
-    expect(response.status).toBe(operation === 'create' ? 201 : 200);
+    expect(response.status).toBe(operation === 'create' ? 201 : operation === 'generationStart' ? 202 : 200);
     const text = await response.text();
     const body = JSON.parse(text);
     expect(text).toBe(JSON.stringify(body));
@@ -233,7 +237,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(deps.resolveAuthentication).toHaveBeenCalledOnce();
     expect(deps.rateLimit).toHaveBeenCalledWith(expect.objectContaining({ operation: operation === 'config' ? 'configPublish' : operation, accountUserId: 101 }));
-    if (operation === 'config') expect(deps.configs.publish).toHaveBeenCalledWith({ roomId: snapshot.roomId, accountUserId: 101, request: configBody });
+  if (operation === 'config') expect(deps.configs.publish).toHaveBeenCalledWith({ roomId: snapshot.roomId, accountUserId: 101, request: configBody });
     if (operation === 'create') {
       expect(deps.memberships.create).toHaveBeenCalledWith({ accountUserId: 101, requireExistingCreationReceipt: false, ...createBody });
     }
@@ -258,7 +262,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
   });
 
   it.each([
-    'members/member-1/kick', 'generations', 'generations/generation-1/cancel',
+    'members/member-1/kick', 'generations/generation-1/cancel',
   ])('unsupported POST %s rejects any negotiation marker instead of legacy fallback', async (suffix) => {
     for (const markers of [headers, { ...headers, 'x-mahoshojo-desktop-room-protocol': '' }, { ...headers, 'x-mahoshojo-room-expected-user-id': '' }]) {
       const deps = depsFor();
@@ -441,7 +445,7 @@ describe('Desktop opt-in through the existing Room HTTP producer', () => {
       method: DESKTOP_ROOM_SESSION_OPERATIONS[operation].method, headers: h,
       ...(wrapped ? { body: JSON.stringify(wrapped.request) } : {}),
     });
-    expect(response.status).toBe(operation === 'create' ? 201 : 200);
+    expect(response.status).toBe(operation === 'create' ? 201 : operation === 'generationStart' ? 202 : 200);
     const body = await response.json();
     expect(body).not.toHaveProperty('desktopRoom');
     if (operation === 'discover') expect(body).toEqual({ items: [], nextCursor: null });
@@ -880,5 +884,42 @@ describe('Desktop generation cancellation receipt boundary', () => {
     vi.mocked(deps.generations.cancel).mockClear();
     const rejected = await app.request(pathFor('generationCancel'), { method: 'POST', headers, body: JSON.stringify(wrap({ expectedRoomEpoch: snapshot.roomEpoch, secret: 'never' })) });
     expect((await rejected.json()).error.outcome).toBe('not-applied'); expect(deps.generations.cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe('Desktop generation start receipt boundary', () => {
+  it('projects before serialization, preserves the Web full response and marks business failures unknown', async () => {
+    const deps = depsFor(), app = appFor(deps);
+    const full = ArenaRoomGenerationViewResponseSchema.parse({ ...generationFixture.operation.success.result,
+      roomId: snapshot.roomId, roomEpoch: snapshot.roomEpoch, markdown: 'large'.repeat(100_000) });
+    vi.mocked(deps.generations.start).mockResolvedValue(full);
+    const desktop = await app.request(pathFor('generationStart'), requestFor('generationStart'));
+    expect(desktop.status).toBe(202); const raw = await desktop.text();
+    expect(Buffer.byteLength(raw)).toBeLessThan(262_144); expect(JSON.parse(raw).result).not.toHaveProperty('markdown');
+    const web = await app.request(pathFor('generationStart'), { method: 'POST', headers: { origin: headers.origin, cookie: headers.cookie, 'content-type': 'application/json' }, body: JSON.stringify(inputFor('generationStart')!.request) });
+    expect(web.status).toBe(202); expect((await web.json()).markdown).toBe(full.markdown);
+    vi.mocked(deps.generations.start).mockRejectedValue(new Error('synthetic failure'));
+    const failed = await app.request(pathFor('generationStart'), requestFor('generationStart'));
+    expect((await failed.json()).error.outcome).toBe('unknown');
+  });
+  it('bounds the original full DTO before business and rejects all renderer provider injection', async () => {
+    const deps = depsFor(), app = appFor(deps);
+    const original = startFixture.action.request;
+    for (const generation of [{ ...original.generation, isDowngrade: true }, { ...original.generation, arenaFreeRankingEnabled: true }, { ...original.generation, customProvider: {} }, { ...original.generation, systemConfig: {} }, { narrativeHistory: 'x'.repeat(12 * 1024 * 1024) }]) {
+      const response = await app.request(pathFor('generationStart'), { method: 'POST', headers, body: JSON.stringify(wrap({ ...original, generation })) });
+      expect(response.status).toBeGreaterThanOrEqual(400); expect((await response.json()).error.outcome).toBe('not-applied');
+    }
+    expect(deps.generations.start).not.toHaveBeenCalled();
+  });
+  it.each([200, 201, 206])('rejects a small start receipt with non-202 status %s after business', async status => {
+    const adapter = createDesktopRoomSessionAdapter({ readBody: async () => inputFor('generationStart'), isBodyTooLarge: () => false });
+    const app = new Hono<{ Variables: HonoAppVariables }>(); app.use('*', adapter.middleware);
+    app.post(DESKTOP_ROOM_SESSION_OPERATIONS.generationStart.path, context => {
+      const failed = adapter.authenticate(context, 101); if (failed) return failed;
+      adapter.enterBusiness(context);
+      return new Response(JSON.stringify(startFixture.operation.success.result), { status, headers: { 'content-type': 'application/json' } });
+    });
+    const response = await app.request(pathFor('generationStart'), requestFor('generationStart'));
+    expect(response.status).toBe(502); expect((await response.json()).error).toMatchObject({ outcome: 'unknown', code: 'ROOM_DESKTOP_RESPONSE_INVALID' });
   });
 });

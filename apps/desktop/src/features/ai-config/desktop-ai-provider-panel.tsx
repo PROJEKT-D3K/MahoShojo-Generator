@@ -102,7 +102,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
       store.selectExecutionLocation(location);
       closeEditing();
     })} />
-    {executionConstraint ? <p role="status" className="text-xs">{executionConstraint.reason} 退出严格排位准备后可调整 AI 配置。</p> : null}
+    {executionConstraint ? <p role="status" className="text-xs">{executionConstraint.reason} 退出当前受限玩法后可调整 AI 配置。</p> : null}
     {controlsSlot}
     <fieldset disabled={!!serverUnavailableReason && target.location === 'server'} className="min-w-0 border-0 p-0">
     <AiProviderSelectorForm

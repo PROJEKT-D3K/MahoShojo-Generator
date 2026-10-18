@@ -21,9 +21,11 @@ export type ArenaEditorWorkspaceSection = {
 const ArenaEditorSection = ({
   section,
   globallyDisabled,
+  preview,
 }: {
   readonly section: ArenaEditorWorkspaceSection;
   readonly globallyDisabled: boolean;
+  readonly preview: boolean;
 }) => {
   return (
     <CollapsibleSection
@@ -35,7 +37,7 @@ const ArenaEditorSection = ({
       autoOpen={section.autoOpen}
       disabled={section.disabled ?? globallyDisabled}
       keepMounted={section.keepMounted}
-      collapsible={section.collapsible}
+      collapsible={preview ? false : section.collapsible}
       storageKey={section.storageKey}
     >
       {section.content}
@@ -46,9 +48,11 @@ const ArenaEditorSection = ({
 export function ArenaEditorWorkspaceLayout({
   sections,
   disabled = false,
+  preview = false,
 }: {
   readonly sections: readonly ArenaEditorWorkspaceSection[];
   readonly disabled?: boolean;
+  readonly preview?: boolean;
 }) {
   const left = sections.filter((section) => section.column === 'left');
   const right = sections.filter((section) => section.column === 'right');
@@ -56,12 +60,12 @@ export function ArenaEditorWorkspaceLayout({
     <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(340px,440px)_minmax(0,1fr)] xl:items-start">
       <div className="min-w-0 space-y-4">
         {left.map((section) => (
-          <ArenaEditorSection key={section.kind} section={section} globallyDisabled={disabled} />
+          <ArenaEditorSection key={section.kind} section={section} globallyDisabled={disabled} preview={preview} />
         ))}
       </div>
       <div className="min-w-0 space-y-4">
         {right.map((section) => (
-          <ArenaEditorSection key={section.kind} section={section} globallyDisabled={disabled} />
+          <ArenaEditorSection key={section.kind} section={section} globallyDisabled={disabled} preview={preview} />
         ))}
       </div>
     </div>

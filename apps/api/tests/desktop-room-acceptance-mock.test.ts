@@ -221,15 +221,15 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     ` });
   });
 
-  it('real tsx child self-check matches the launcher monitor and exits naturally', async () => {
+  it.each([false, true])('real tsx child self-check matches launcher monitor (synthetic start=%s)', async syntheticStart => {
     const stateRoot = await mkdtemp(path.join(tmpdir(), 'room-acceptance-monitor-'));
     const api = fileURLToPath(new URL('../', import.meta.url));
     const require = createRequire(new URL('../package.json', import.meta.url));
-    const child = spawn(process.execPath, ['--import', require.resolve('tsx'), path.join(api, 'scripts/desktop-room-acceptance-mock.ts'), '--self-check', '--state-root', stateRoot], {
+    const child = spawn(process.execPath, ['--import', require.resolve('tsx'), path.join(api, 'scripts/desktop-room-acceptance-mock.ts'), '--self-check', ...(syntheticStart ? ['--synthetic-start'] : []), '--state-root', stateRoot], {
       cwd: api, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
       env: { ...process.env, NODE_OPTIONS: '', NODE_EXTRA_CA_CERTS: '', NODE_TLS_REJECT_UNAUTHORIZED: '1' },
     });
-    const monitor = monitorMock(child, true, { readinessTimeoutMs: 10_000 });
+    const monitor = monitorMock(child, true, { readinessTimeoutMs: 10_000, syntheticStart });
     try {
       expect(await monitor.ready).toMatchObject({ event: 'self-check', roomOrigin: 'https://room.acceptance.invalid:34443', authOrigin: 'http://127.0.0.1:34080',
         selfCheck: { roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true } });
@@ -242,6 +242,12 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     expect(runtime.observations()).toMatchObject({ rooms: 0, receipts: 0, actors: 0, authSessions: 0, trace: [] });
     await expect(selfCheckRoomAcceptanceMock(runtime, pki)).rejects.toThrow('ACCEPTANCE_SELFCHECK_NOT_PRISTINE');
     const cookie = await login(runtime, 101); await success(room(runtime, 'create', cookie, 101, creation()));
+  });
+
+  it('runs the real generation service with reservation-only, explicit original retry and synthetic producer', async () => {
+    const runtime = await start();
+    expect(await selfCheckRoomAcceptanceMock(runtime, pki, false, true)).toMatchObject({ generationStart: true, syntheticProducer: true, generationCancel: true, generationReadOnly: false });
+    expect(runtime.observations()).toMatchObject({ rooms: 0, receipts: 0, actors: 0, authSessions: 0, generation: { modelDispatches: 0 } });
   });
 
   it('trusts only the supplied fixture root and exact SAN over real HTTPS', async () => {

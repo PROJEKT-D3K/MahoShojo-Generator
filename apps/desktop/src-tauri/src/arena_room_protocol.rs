@@ -16,6 +16,9 @@ pub(crate) const PRESENCE_PROTOCOL: &str = "mahoshojo.arena-room.presence.v1";
 pub(crate) const MAX_ORIGINAL_REQUEST_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_REQUEST_BYTES: usize = 65 * 1024;
 pub(crate) const MAX_IPC_REQUEST_BYTES: usize = 67 * 1024;
+pub(crate) const MAX_START_ORIGINAL_REQUEST_BYTES: usize = 12 * 1024 * 1024;
+pub(crate) const MAX_START_REQUEST_BYTES: usize = MAX_START_ORIGINAL_REQUEST_BYTES + 1024;
+pub(crate) const MAX_START_IPC_REQUEST_BYTES: usize = MAX_START_ORIGINAL_REQUEST_BYTES + 3 * 1024;
 pub(crate) const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_WEBSOCKET_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_TICKET_BYTES: usize = 4096;
@@ -23,6 +26,8 @@ pub(crate) const MAX_JSON_DEPTH: usize = 64;
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 const ERROR_CODES: &[&str] = &[
+    "input-too-complex",
+    "input-too-large",
     "invalid-request",
     "invalid-response",
     "not-authenticated",
@@ -164,6 +169,8 @@ pub(crate) enum Operation {
     GenerationRead,
     #[serde(rename = "generationCancel")]
     GenerationCancel,
+    #[serde(rename = "generationStart")]
+    GenerationStart,
 }
 impl Operation {
     pub(crate) fn as_str(self) -> &'static str {
@@ -181,6 +188,7 @@ impl Operation {
             Self::ProposalResolve => "proposalResolve",
             Self::GenerationRead => "generationRead",
             Self::GenerationCancel => "generationCancel",
+            Self::GenerationStart => "generationStart",
         }
     }
     pub(crate) fn is_post(self) -> bool {
@@ -214,6 +222,12 @@ pub(crate) struct Request {
 }
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
+    EndGenerationStartTracking {
+        intent_id: String,
+    },
+    RetryGenerationStart {
+        intent_id: String,
+    },
     GenerationCancel {
         room_id: String,
         generation_id: String,
@@ -476,38 +490,42 @@ fn unique_strings(v: &Value) -> Check {
     Ok(())
 }
 fn byte_len(v: &Value) -> Result<usize, ()> {
-    serde_json::to_vec(v).map(|v| v.len()).map_err(|_| ())
+    json_size(v, usize::MAX)
 }
 /// Object-only, JS-safe and depth bounded, before any trimming/defaulting.
 fn bounded(v: &Value, maximum: usize) -> Check {
     ensure(v.is_object())?;
-    let mut stack = vec![(v, 0usize)];
-    while let Some((value, depth)) = stack.pop() {
+    fn visit(value: &Value, depth: usize) -> Check {
         match value {
-            Value::Object(o) => {
+            Value::Object(fields) => {
                 ensure(depth <= MAX_JSON_DEPTH)?;
-                for (k, child) in o {
+                for (key, child) in fields {
                     ensure(!matches!(
-                        k.as_str(),
+                        key.as_str(),
                         "__proto__" | "prototype" | "constructor"
                     ))?;
-                    stack.push((child, depth + 1));
+                    visit(child, depth + 1)?;
                 }
             }
-            Value::Array(a) => {
+            Value::Array(items) => {
                 ensure(depth <= MAX_JSON_DEPTH)?;
-                for child in a {
-                    stack.push((child, depth + 1));
+                for child in items {
+                    visit(child, depth + 1)?;
                 }
             }
-            Value::Number(n) => {
-                let n = n.as_f64().ok_or(())?;
-                ensure(n.is_finite() && (n.fract() != 0.0 || n.abs() <= MAX_SAFE_INTEGER as f64))?;
+            Value::Number(number) => {
+                let number = number.as_f64().ok_or(())?;
+                ensure(
+                    number.is_finite()
+                        && (number.fract() != 0.0 || number.abs() <= MAX_SAFE_INTEGER as f64),
+                )?;
             }
             _ => {}
         }
+        Ok(())
     }
-    ensure(byte_len(v)? <= maximum)
+    visit(v, 0)?;
+    json_size(v, maximum).map(|_| ())
 }
 fn decode(raw: &[u8], maximum: usize, outcome: &'static str) -> Result<Value, RoomError> {
     if raw.len() > maximum {
@@ -1583,6 +1601,8 @@ pub(crate) fn validate_http_response(
             status
                 == if operation == Operation::Create {
                     201
+                } else if operation == Operation::GenerationStart {
+                    202
                 } else {
                     200
                 },
@@ -1597,7 +1617,9 @@ pub(crate) fn validate_http_response(
         )?;
         ensure(safe_u64(&value["desktopRoom"]["viewerUserId"])? == expected_user_id)?;
         match operation {
-            Operation::GenerationCancel => generation_cancel_result(&mut value["result"]),
+            Operation::GenerationCancel | Operation::GenerationStart => {
+                generation_cancel_result(&mut value["result"])
+            }
             Operation::GenerationRead => Err(()), // 大原件仅由借用式专用解析器接收
             Operation::Discover => directory_page(&mut value["result"]),
             Operation::Create | Operation::Join | Operation::Session | Operation::Config => {
@@ -1692,6 +1714,203 @@ pub(crate) fn parse_detach(raw: &Value) -> Result<String, RoomError> {
     id(&mut handle, 1).map_err(|_| invalid_request())?;
     Ok(handle.as_str().unwrap().to_owned())
 }
+/// A bounded serializer counts the complete JSON without allocating another full wire.
+fn json_size<T: Serialize>(value: &T, limit: usize) -> Result<usize, ()> {
+    struct Counter {
+        size: usize,
+        limit: usize,
+    }
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.size = self
+                .size
+                .checked_add(bytes.len())
+                .filter(|size| *size <= self.limit)
+                .ok_or_else(|| std::io::Error::other("JSON budget"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter { size: 0, limit };
+    serde_json::to_writer(&mut counter, value).map_err(|_| ())?;
+    Ok(counter.size)
+}
+
+/// The only large-input parser. Move the DTO; never use generic Action's clone path.
+pub(crate) struct GenerationStartInput {
+    pub(crate) handle: String,
+    pub(crate) room_id: String,
+    pub(crate) request: Value,
+}
+pub(crate) const MAX_START_JSON_NODES: usize = 100_000;
+const MAX_START_VALUE_NODES: usize = 10_000;
+// Counts the original DTO root, every container and scalar, never keys. No
+// breadth-sized temporary stack/children array is allocated for dense input.
+fn start_nodes(value: &Value, mut limit: usize) -> Result<(), RoomError> {
+    fn visit(value: &Value, depth: usize, remaining: &mut usize) -> Result<(), RoomError> {
+        if depth > 64 {
+            return Err(invalid_request());
+        }
+        if *remaining == 0 {
+            return Err(RoomError::new("input-too-complex", "not-applied"));
+        }
+        *remaining -= 1;
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    visit(value, depth + 1, remaining)?;
+                }
+            }
+            Value::Object(values) => {
+                for value in values.values() {
+                    visit(value, depth + 1, remaining)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    visit(value, 0, &mut limit)
+}
+fn start_complexity(value: &Value) -> Result<(), RoomError> {
+    start_nodes(value, MAX_START_JSON_NODES)?;
+    if let Some(payloads) = value["hostLocalPayloads"].as_array() {
+        for entry in payloads {
+            start_nodes(&entry["payload"], MAX_START_VALUE_NODES)?;
+        }
+    }
+    for field in [
+        "narrativeHistory",
+        "adjudicationEvents",
+        "questionnaireSelections",
+        "questionnaires",
+    ] {
+        if let Some(value) = value["generation"].get(field) {
+            start_nodes(value, MAX_START_VALUE_NODES)?;
+        }
+    }
+    Ok(())
+}
+pub(crate) fn parse_generation_start_owned(
+    mut raw: Value,
+) -> Result<GenerationStartInput, RoomError> {
+    #[derive(Serialize)]
+    struct Invoke<'a> {
+        request: &'a Value,
+    }
+    start_complexity(&raw["request"]["request"])?;
+    json_size(&Invoke { request: &raw }, MAX_START_IPC_REQUEST_BYTES)
+        .map_err(|_| invalid_request())?;
+    bounded(&raw, MAX_START_IPC_REQUEST_BYTES).map_err(|_| invalid_request())?;
+    let mut validate = || -> Check {
+        closed(&raw, &["handle", "request"], &[])?;
+        id(&mut raw["handle"], 1)?;
+        let action = &mut raw["request"];
+        closed(action, &["kind", "roomId", "request"], &[])?;
+        literal(&action["kind"], "generation-start")?;
+        desktop_path_id(&action["roomId"])?;
+        generation_start_request(&mut action["request"])
+    };
+    validate().map_err(|_| invalid_request())?;
+    let handle = raw["handle"].as_str().unwrap().to_owned();
+    let room_id = raw["request"]["roomId"].as_str().unwrap().to_owned();
+    let request = raw["request"]
+        .as_object_mut()
+        .unwrap()
+        .remove("request")
+        .unwrap();
+    Ok(GenerationStartInput {
+        handle,
+        room_id,
+        request,
+    })
+}
+fn generation_start_request(value: &mut Value) -> Check {
+    bounded(value, MAX_START_ORIGINAL_REQUEST_BYTES)?;
+    closed(
+        value,
+        &[
+            "expectedRoomEpoch",
+            "expectedRevision",
+            "expectedControlSeq",
+            "generationRequestId",
+            "sharedConfig",
+            "hostLocalPayloads",
+            "generation",
+        ],
+        &[],
+    )?;
+    key(&mut value["expectedRoomEpoch"])?;
+    integer(&mut value["expectedRevision"], 0, MAX_SAFE_INTEGER)?;
+    integer(&mut value["expectedControlSeq"], 0, MAX_SAFE_INTEGER)?;
+    id(&mut value["generationRequestId"], 8)?;
+    shared_config(&mut value["sharedConfig"])?;
+    array(&mut value["hostLocalPayloads"], 0, 289, |entry| {
+        closed(entry, &["key", "kind", "payload"], &[])?;
+        stable_key(&mut entry["key"])?;
+        ensure(text(&entry["key"])?.starts_with("host-local:"))?;
+        one_of(&entry["kind"], &["character", "scenario", "material"])?;
+        ensure(entry["payload"].is_object())
+    })?;
+    unique_field(&value["hostLocalPayloads"], "key")?;
+    closed(
+        &value["generation"],
+        &[],
+        &[
+            "arenaFreeRankingEnabled",
+            "isDowngrade",
+            "narrativeHistory",
+            "adjudicationEvents",
+            "questionnaireSelections",
+            "questionnaires",
+        ],
+    )?;
+    for field in ["arenaFreeRankingEnabled", "isDowngrade"] {
+        if has(&value["generation"], field) {
+            ensure(value["generation"][field] == false)?;
+        }
+    }
+    // Safe free JSON runtime inputs are frozen without silently dropping narrative settings.
+    bounded(value, MAX_START_ORIGINAL_REQUEST_BYTES)
+}
+pub(crate) fn freeze_generation_start(
+    request: Value,
+    owner: u64,
+) -> Result<std::sync::Arc<Vec<u8>>, RoomError> {
+    if owner == 0 || owner > MAX_SAFE_INTEGER {
+        return Err(invalid_request());
+    }
+    // Final DTO after normalization and any future trusted injection must fit this same gate.
+    start_complexity(&request)?;
+    bounded(&request, MAX_START_ORIGINAL_REQUEST_BYTES).map_err(|_| invalid_request())?;
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Metadata {
+        version: &'static str,
+        expected_user_id: u64,
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Envelope {
+        desktop_room: Metadata,
+        request: Value,
+    }
+    let envelope = Envelope {
+        desktop_room: Metadata {
+            version: PROTOCOL_VERSION,
+            expected_user_id: owner,
+        },
+        request,
+    };
+    let size = json_size(&envelope, MAX_START_REQUEST_BYTES).map_err(|_| invalid_request())?;
+    let mut bytes = Vec::with_capacity(size);
+    serde_json::to_writer(&mut bytes, &envelope).map_err(|_| invalid_request())?;
+    // envelope (and its sole AST) is dropped here. Only this frozen wire survives.
+    Ok(std::sync::Arc::new(bytes))
+}
+
 pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {
     bounded(raw, MAX_IPC_REQUEST_BYTES)
         .and_then(|_| closed(raw, &["handle", "request"], &[]))
@@ -1703,6 +1922,20 @@ pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {
         let kind = text(&v["kind"])?.to_owned();
         let get = |v: &Value, name: &str| -> Result<String, ()> { Ok(text(&v[name])?.to_owned()) };
         match kind.as_str() {
+            "end-generation-start-tracking" => {
+                closed(&v, &["kind", "intentId"], &[])?;
+                id(&mut v["intentId"], 1)?;
+                Ok(Action::EndGenerationStartTracking {
+                    intent_id: get(&v, "intentId")?,
+                })
+            }
+            "retry-generation-start" => {
+                closed(&v, &["kind", "intentId"], &[])?;
+                id(&mut v["intentId"], 1)?;
+                Ok(Action::RetryGenerationStart {
+                    intent_id: get(&v, "intentId")?,
+                })
+            }
             "generation-cancel" => {
                 closed(
                     &v,
@@ -2949,5 +3182,49 @@ mod tests {
                 assert_eq!(error.outcome, operation.rejected_outcome());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod start_budget_tests {
+    use super::*;
+    #[test]
+    fn complete_start_invoke_wrapper_is_counted_at_the_exact_boundary() {
+        #[derive(Serialize)]
+        struct Invoke<'a> {
+            request: &'a Value,
+        }
+        let empty = json!({"padding":""});
+        let overhead = json_size(&Invoke { request: &empty }, usize::MAX).unwrap();
+        let mut value = json!({"padding":"a".repeat(MAX_START_IPC_REQUEST_BYTES-overhead)});
+        assert_eq!(
+            json_size(&Invoke { request: &value }, MAX_START_IPC_REQUEST_BYTES).unwrap(),
+            MAX_START_IPC_REQUEST_BYTES
+        );
+        value["padding"] = json!(format!("{}a", value["padding"].as_str().unwrap()));
+        assert!(json_size(&value, MAX_START_IPC_REQUEST_BYTES).is_ok());
+        assert!(json_size(&Invoke { request: &value }, MAX_START_IPC_REQUEST_BYTES).is_err());
+    }
+    #[test]
+    fn start_http_counter_and_other_operation_budgets_stay_distinct() {
+        let mut value = json!({"padding":""});
+        let overhead = json_size(&value, usize::MAX).unwrap();
+        value["padding"] = json!("a".repeat(MAX_START_REQUEST_BYTES - overhead));
+        assert_eq!(
+            json_size(&value, MAX_START_REQUEST_BYTES).unwrap(),
+            MAX_START_REQUEST_BYTES
+        );
+        value["padding"] = json!(format!("{}a", value["padding"].as_str().unwrap()));
+        assert!(json_size(&value, MAX_START_REQUEST_BYTES).is_err());
+        assert_eq!(
+            (
+                MAX_ORIGINAL_REQUEST_BYTES,
+                MAX_REQUEST_BYTES,
+                MAX_IPC_REQUEST_BYTES
+            ),
+            (64 * 1024, 65 * 1024, 67 * 1024)
+        );
+        let oversized = json!({"handle":"handle","request":{"kind":"discover","query":{"cursor":"x".repeat(MAX_IPC_REQUEST_BYTES)}}});
+        assert!(parse_request(&oversized).is_err());
     }
 }

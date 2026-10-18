@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { SCENARIO_PRESET_LIST } from '@mahoshojo/domain/scenario-presets';
 import { BUILTIN_ARENA_NEWS_PACKAGE_REF } from '@mahoshojo/web-package';
-import { prepareDesktopRoomSource } from '../src/features/arena/room-source';
+import { prepareDesktopRoomSource, prepareDesktopRoomStartSource } from '../src/features/arena/room-source';
+import { matchArenaRoomVisibleStartBundle } from '@mahoshojo/multiplayer-core';
 import { createInitialArenaDraft, type ArenaDraft } from '../src/features/arena/session';
+import { desktopRoomStartSourceBudget } from '../src/features/arena/room-source-budget';
+import { DESKTOP_ROOM_SESSION_LIMITS } from '@mahoshojo/contracts/desktop-room-session';
 import { clearDesktopArenaSource } from '../src/features/arena/strict-source';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), Channel: class {} }));
@@ -38,6 +41,42 @@ const freezeDeep = <T,>(value: T): T => {
 const digest = (canonical: string) => `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 
 describe('Desktop Room current-source adapter', () => {
+  it('freezes complete local source before the first asynchronous hash, with no provider selection', async () => {
+    const input = draft({ battleMode: 'daily', combatants: [local()], materials: [material('full')] });
+    const preparing = prepareDesktopRoomStartSource(input);
+    (input.combatants[0]!.data as Record<string, unknown>).content = 'CHANGED-AFTER-CONFIRM';
+    const frozen = await preparing;
+    const wire = JSON.stringify(frozen);
+    expect(wire).toContain('private-local-body'); expect(wire).toContain('private-material-body'); expect(wire).not.toContain('CHANGED-AFTER-CONFIRM');
+    expect(frozen.generation).toMatchObject({ arenaFreeRankingEnabled: false });
+    expect(frozen.generation).not.toHaveProperty('customProvider'); expect(frozen.generation).not.toHaveProperty('systemConfig');
+    expect(matchArenaRoomVisibleStartBundle(frozen.bundle.sharedConfig, frozen.bundle)).not.toBeNull();
+    const changed = await prepareDesktopRoomStartSource(input);
+    expect(matchArenaRoomVisibleStartBundle(frozen.bundle.sharedConfig, changed.bundle)).toBeNull();
+    expect(matchArenaRoomVisibleStartBundle(frozen.bundle.sharedConfig, { ...frozen.bundle, hostLocalPayloads: [] })).toBeNull();
+  });
+  it('rejects overly complex preparation before cloning or hashing the draft', async () => {
+    const input = draft({ combatants: [local({ data: { name: 'dense', values: Array(100_001).fill(null) } })] });
+    const clone = vi.spyOn(globalThis, 'structuredClone'), hash = vi.spyOn(crypto.subtle, 'digest');
+    await expect(prepareDesktopRoomStartSource(input)).rejects.toThrow('room-source-too-complex');
+    expect(clone).not.toHaveBeenCalled(); expect(hash).not.toHaveBeenCalled();
+  });
+  it('rejects oversized single-string source before any clone, serialization or hash', async () => {
+    const input = draft({ combatants: [local({ data: { name: 'large', content: 'x'.repeat(DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes) } })] });
+    const clone = vi.spyOn(globalThis, 'structuredClone'), hash = vi.spyOn(crypto.subtle, 'digest'), stringify = vi.spyOn(JSON, 'stringify');
+    await expect(prepareDesktopRoomStartSource(input)).rejects.toThrow('room-source-too-large');
+    expect(clone).not.toHaveBeenCalled(); expect(hash).not.toHaveBeenCalled(); expect(stringify).not.toHaveBeenCalled();
+  });
+  it('counts compact UTF-8 bytes exactly including keys, escapes and lone surrogates', () => {
+    for (const special of ['normal', '中文🌙', '\ud800\n\b\t\f\r\u0000\"\\']) {
+      const value = { [special]: special, omitted: undefined, array: [undefined, -0, Infinity, true, null], fill: '' };
+      const base = new TextEncoder().encode(JSON.stringify(value)).length;
+      value.fill = 'x'.repeat(DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes - base);
+      expect(desktopRoomStartSourceBudget(value)).toBeNull();
+      value.fill += 'x';
+      expect(desktopRoomStartSourceBudget(value)).toBe('bytes');
+    }
+  });
   it('shares a current online selection only with its actually observed version', async () => {
     const input = freezeDeep(draft({ combatants: [online({
       sourceDataCardId: ' online-card ', sourceDataCardUpdatedAt: ' observed-version ',

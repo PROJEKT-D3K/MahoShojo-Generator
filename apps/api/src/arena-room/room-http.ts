@@ -40,7 +40,7 @@ import {
   type ArenaRoomHttpErrorCode,
   type ArenaRoomLegacyHttpErrorCode,
 } from '@mahoshojo/contracts/arena-room';
-import { DesktopRoomGenerationCancelReceiptSchema } from '@mahoshojo/contracts/desktop-room-session';
+import { DesktopRoomGenerationCancelReceiptSchema, DesktopRoomGenerationStartReceiptSchema } from '@mahoshojo/contracts/desktop-room-session';
 import { ARENA_RESOURCE_BUDGET } from '@mahoshojo/hosted-api/arena-generation/resource-budget';
 
 import type { HonoAppVariables } from '#/middleware/request-metadata';
@@ -1167,15 +1167,21 @@ export const registerArenaRoomHttpRoutes = (
       });
       const request = parseRequest(
         ArenaRoomGenerationStartRequestSchema,
-        await readBoundedBody(context.req.raw, MAX_ARENA_ROOM_GENERATION_START_BYTES),
+        await readOperationBody(context, MAX_ARENA_ROOM_GENERATION_START_BYTES),
         'generation',
       );
+      desktopRoomSession.enterBusiness(context);
       const view = await dependencies.generations.start({
         roomId,
         accountUserId: authorization.accountUserId,
         request,
         sourceRequest,
       });
+      if (desktopRoomSession.generationStartReceipt(context)) {
+        // The start acknowledgement never serializes a possibly large existing report.
+        const { protocolVersion, roomId, roomEpoch, generation, status } = view;
+        return context.json(DesktopRoomGenerationStartReceiptSchema.parse({ protocolVersion, roomId, roomEpoch, generation, status }), 202);
+      }
       return context.json(ArenaRoomGenerationViewResponseSchema.parse(view), 202);
     } catch (error) {
       return mapServiceError(context, error);

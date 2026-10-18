@@ -1,4 +1,5 @@
 import { captureArenaRoomGenerationCancelTarget, isArenaRoomGenerationCancelTargetCurrent, type ArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
+import { DesktopRoomGenerationStart, DesktopRoomStartTracking } from './room-generation-start';
 import { DesktopRoomGenerationResult } from './room-generation-result';
 import { DesktopRoomProposalReview, DesktopRoomProposalStatus } from './room-proposal-review';
 import { DesktopRoomConfigComparison } from './room-config-comparison';
@@ -87,7 +88,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">多人房间</h2>
       {!state.opened ? <button type="button" className={secondary} disabled={disabled} onClick={() => { void owner.open(); }}>打开多人大厅</button>
         : <button type="button" className={secondary} onClick={disconnect}>断开本机房间连接</button>}</div>
-    <p className="text-sm">当前桌面阶段支持创建、加入、成员在线状态、退出/关闭，以及房主比较后明确发布配置。支持完整成员提案编辑、提交、撤回与房主逐项审阅。支持读取当前房间战报与实时预览；房主可停止当前生成；开始协作生成仍需在 Web 端操作。</p>
+    <p className="text-sm">支持创建、加入、成员在线状态、退出/关闭，以及房主比较后明确发布配置。成员可编辑、提交、撤回提案，房主逐项审阅。房主可用服务器系统默认开始生成、读取实时战报并停止已启动的当前任务；尚未确认启动的占位只能核对或显式重试。房间 BYOK 尚未开放。</p>
     {state.constrained ? <p role="status">本次多人会话的有效执行位置：服务器。普通 AI 选择与本机草稿保持不变，退出后恢复普通操作。</p> : null}
     {state.opened ? <>
       <p role="status">{status}</p>
@@ -95,7 +96,9 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
       {state.notice ? <p role="status">{state.notice}</p> : null}
       {state.error ? <p role="alert">{state.error}</p> : null}
       {state.sourceIssues.length ? <div><p>在线来源缺少房间版本时，当前桌面选择路径尚不能补齐；可明确选择空稿房间，原设定保留。</p><ul>{state.sourceIssues.map((issue, index) => <li key={index}>{issue}</li>)}</ul><button type="button" className={secondary} disabled={state.busy || disabled} onClick={() => create(true)}>明确创建空草稿房间</button></div> : null}
-      {pending && pending.operation !== 'generationCancel' && pending.operation !== 'config' && !pending.operation.startsWith('proposal') ? <section aria-label="核对未知房间操作"><p>原{pending.operation === 'create' ? '创建' : pending.operation === 'join' ? '加入' : pending.operation === 'leave' ? '退出' : pending.operation === 'close' ? '关闭' : pending.operation === 'proposalSubmit' ? '提案提交' : pending.operation === 'proposalWithdraw' ? '提案撤回' : '提案处理'}操作结果未知。不会自动再次发送。</p><button type="button" className={secondary} disabled={state.busy} onClick={reconcile}>{state.phase === 'unavailable' ? '重新验证窗口与本机原意图' : pending.operation === 'create' ? pending.intentId ? '确认恢复原创建意图' : '读取本机原意图' : '读取房间核对结果'}</button></section> : null}
+      {pending && pending.operation !== 'generationStart' && pending.operation !== 'generationCancel' && pending.operation !== 'config' && !pending.operation.startsWith('proposal') ? <section aria-label="核对未知房间操作"><p>原{pending.operation === 'create' ? '创建' : pending.operation === 'join' ? '加入' : pending.operation === 'leave' ? '退出' : pending.operation === 'close' ? '关闭' : pending.operation === 'proposalSubmit' ? '提案提交' : pending.operation === 'proposalWithdraw' ? '提案撤回' : '提案处理'}操作结果未知。不会自动再次发送。</p><button type="button" className={secondary} disabled={state.busy} onClick={reconcile}>{state.phase === 'unavailable' ? '重新验证窗口与本机原意图' : pending.operation === 'create' ? pending.intentId ? '确认恢复原创建意图' : '读取本机原意图' : '读取房间核对结果'}</button></section> : null}
+      {pending?.operation === 'generationStart' && !session ? <section><p>原生成结果未知，当前房间不可核对。不会重新拼接材料或另开新任务。</p><button type="button" disabled={state.busy} onClick={reconcile}>只读核对原房间</button></section> : null}
+      <DesktopRoomStartTracking owner={owner} state={state} disabled={disabled} />
       {pending?.operation === 'generationCancel' ? <section aria-label="核对停止生成结果">
         <p>{owner.cancelTrackingUnavailable() ? '原目标已不可核对，结果未知。新生成或房间换代不能证明原任务已停止。' : '正在核对原生成终态；停止请求不会再次发送。'}</p>
         <p>断开或刷新不会解除原停止请求的防重发状态，也不会停止服务器生成。</p>
@@ -113,6 +116,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
         <section aria-label="房间权威设定摘要"><h3>服务器房间设定</h3><p>修订 {session.snapshot.revision} · {session.snapshot.sharedConfig.combatants.length} 位角色 · {session.snapshot.sharedConfig.auxScenarios.length} 个辅助情景 · {session.snapshot.sharedConfig.materials.length} 份素材</p><p>生成状态：{session.snapshot.activeGeneration?.state ?? '无活动生成'}。</p></section>
         <DesktopRoomGenerationResult generation={state.generation} generationKey={`${scope}:${session.snapshot.activeGeneration?.generationId ?? 'none'}:${session.snapshot.activeGeneration?.attempt ?? 0}`}
           onRetry={() => owner.retryGenerationRecovery()} retryDisabled={disabled || state.busy || state.generationReading || state.phase !== 'online' || !state.snapshotReceived || !inviteIdentity} />
+        {session.self.role === 'host' ? <DesktopRoomGenerationStart owner={owner} state={state} draft={draft} isDraftCurrent={isDraftCurrent} disabled={disabled} /> : null}
         {session.self.role === 'host' ? <RoomGenerationCancelAction
           disabled={disabled || owner.cancelGenerationBlockedReason() !== null}
           confirmation={!!cancelConfirmation && cancelConfirmation.identity === owner.confirmationOwner()

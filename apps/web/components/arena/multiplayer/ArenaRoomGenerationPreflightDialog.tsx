@@ -1,5 +1,6 @@
 'use client';
 
+import { RoomGenerationStartConfirmButton, RoomGenerationPendingProposalsWarning } from '@mahoshojo/ui-web/arena-room';
 import { BaseModal } from '@/components/shared/BaseModal';
 import { buttonClassName } from '@/components/shared/ui/Button';
 import type { ArenaRoomHostWorkspaceDirtyReason } from '@/lib/arena-room/host-workspace';
@@ -68,24 +69,13 @@ export function ArenaRoomGenerationPreflightDialog({
             </>
           ) : null}
           {!dirty && canConfirmStart ? (
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'primary' })}
-              disabled={busy}
-              onClick={() => onChoice('confirm-start')}
-            >
-              确认按当前配置开始
-            </button>
+            <RoomGenerationStartConfirmButton disabled={busy} onConfirm={() => onChoice('confirm-start')} />
           ) : null}
         </div>
       )}
     >
       <div className="space-y-3 text-sm text-gray-700">
-        {pendingProposalCount > 0 ? (
-          <p className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 font-medium text-red-900" role="alert">
-            当前还有 {pendingProposalCount} 个待处理提案；继续生成不会应用这些提案。
-          </p>
-        ) : null}
+        <RoomGenerationPendingProposalsWarning count={pendingProposalCount} />
         {dirty ? (
           <>
             <p>检测到未发布的本地修改，需要先决定用哪份配置开始生成。</p>

@@ -11,6 +11,7 @@ import {
 
 const fixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-ipc.json', import.meta.url), 'utf8'));
 const generationFixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-generation-read.json', import.meta.url), 'utf8'));
+const startFixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-generation-start.json', import.meta.url), 'utf8'));
 const tick = async () => { for (let i = 0; i < 24; i += 1) await Promise.resolve(); };
 const deferred = <T>() => {
   let resolve!: (value: T) => void, reject!: (cause: unknown) => void;
@@ -71,6 +72,57 @@ function harness(accept?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance
     maximumActive: () => maximumActive,
   };
 }
+
+describe('Native single heavy start admission', () => {
+  it('reserves before source preparation and refuses repeated factories and reads', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const source = deferred<typeof startFixture.action>();
+    const first = h.bridge.generationStart(() => source.promise);
+    const repeated = vi.fn(async () => startFixture.action);
+    for (let i = 0; i < 16; i += 1) await expect(h.bridge.generationStart(repeated)).rejects.toMatchObject({ code: 'busy', outcome: 'not-applied' });
+    await expect(h.bridge.generationRead(generationFixture.descriptor)).rejects.toMatchObject({ code: 'busy' });
+    expect(repeated).not.toHaveBeenCalled(); expect(h.actions()).toEqual([]);
+    source.resolve(startFixture.action); await first;
+    expect(h.actions()).toEqual(['generation-start']);
+    await expect(h.bridge.request(startFixture.action)).rejects.toMatchObject({ code: 'invalid-request' });
+    h.bridge.detach();
+  });
+  it('retains the heavy slot through retirement until the actual invocation settles', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const original = h.invoke.getMockImplementation()!, gate = deferred<unknown>(), entered = deferred<void>();
+    h.invoke.mockImplementation((command, args) => {
+      if ((args?.request as { request?: { kind: string } } | undefined)?.request?.kind === 'generation-start') { entered.resolve(); return gate.promise; }
+      return original(command, args);
+    });
+    const sent = h.bridge.generationStart(async () => startFixture.action).catch(error => error); await entered.promise;
+    h.bridge.detach(); const reattach = h.start();
+    const prepare = vi.fn(async () => startFixture.action);
+    await expect(h.bridge.generationStart(prepare)).rejects.toMatchObject({ code: 'busy' }); expect(prepare).not.toHaveBeenCalled();
+    gate.resolve(fixture.accepted); expect(await sent).toMatchObject({ code: 'scope-changed', outcome: 'unknown' });
+    await reattach; h.bridge.detach();
+  });
+  it('source preparation failures never dispatch and release admission without becoming unknown', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    await expect(h.bridge.generationStart(async () => { throw new Error('private draft'); })).rejects.toMatchObject({ outcome: 'not-applied' });
+    expect(h.actions()).toEqual([]);
+    await h.bridge.generationStart(async () => startFixture.action); expect(h.actions()).toEqual(['generation-start']); h.bridge.detach();
+  });
+  it('retains Document-wide admission across two separate mounted bridge instances', async () => {
+    const old = harness(), next = harness();
+    for (const h of [old, next]) { h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start(); }
+    const gate = deferred<unknown>(), entered = deferred<void>(), original = old.invoke.getMockImplementation()!;
+    old.invoke.mockImplementation((command, args) => {
+      if ((args?.request as { request?: { kind: string } } | undefined)?.request?.kind === 'generation-start') { entered.resolve(); return gate.promise; }
+      return original(command, args);
+    });
+    const sent = old.bridge.generationStart(async () => startFixture.action).catch(error => error); await entered.promise; old.bridge.detach();
+    const prepare = vi.fn(async () => startFixture.action);
+    for (let i = 0; i < 16; i += 1) await expect(next.bridge.generationStart(prepare)).rejects.toMatchObject({ code: 'busy' });
+    expect(prepare).not.toHaveBeenCalled(); expect(next.actions()).toEqual([]);
+    gate.resolve(fixture.accepted); expect(await sent).toMatchObject({ code: 'scope-changed' });
+    await next.bridge.generationStart(prepare); expect(prepare).toHaveBeenCalledOnce(); next.bridge.detach();
+  });
+});
 
 describe('Native current generation descriptor/fragment reader', () => {
   const identity = generationFixture.descriptor;
@@ -774,7 +826,7 @@ it.skipIf(!nativeGenerationOutput)('replays actual Native HTTP envelope bytes, d
   let index = 0;
   const consumed: DesktopRoomBatch[] = [], errors: ArenaRoomBridgeError[] = [];
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
-    if (command === DESKTOP_ROOM_IPC_COMMANDS.attach) return { handle: native.accepted.handle, subscriptionId: native.accepted.subscriptionId, pendingIntent: null };
+    if (command === DESKTOP_ROOM_IPC_COMMANDS.attach) return { handle: native.accepted.handle, subscriptionId: native.accepted.subscriptionId, pendingIntent: null, generationStartBlocked: false, generationStartFence: null };
     if (command === DESKTOP_ROOM_IPC_COMMANDS.detach) return { detached: true };
     const value = args!.request as { request: { kind: string; batchId?: string; sequence?: number } };
     if (value.request.kind === 'generation-read') return native.accepted;

@@ -129,7 +129,10 @@ impl RoomHttp {
             "not-applicable"
         };
         // The complete report must never enter the generic Value response path.
-        if operation == Operation::GenerationRead {
+        if matches!(
+            operation,
+            Operation::GenerationRead | Operation::GenerationStart
+        ) {
             return Err(RoomError::new("invalid-request", not_sent));
         }
         if cancel.is_cancelled() {
@@ -153,6 +156,56 @@ impl RoomHttp {
             return Err(RoomError::new("scope-changed", unknown));
         }
         result
+    }
+
+    /// The caller owns the shared physical HTTP permit and the immutable original wire.
+    /// reqwest receives at most one send copy, bounded by that same permit until completion.
+    pub(crate) async fn execute_generation_start(
+        &self,
+        room: &str,
+        wire: &std::sync::Arc<Vec<u8>>,
+        owner: u64,
+        cookie: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Value, RoomError> {
+        let invalid = || RoomError::new("invalid-request", "not-applied");
+        if !protocol::canonical_path_id(room)
+            || owner == 0
+            || owner > MAX_SAFE_INTEGER
+            || cookie.is_empty()
+            || cookie.len() > 16 * 1024
+            || wire.len() > protocol::MAX_START_REQUEST_BYTES
+        {
+            return Err(invalid());
+        }
+        if cancel.is_cancelled() {
+            return Err(RoomError::new("scope-changed", "not-applied"));
+        }
+        let room = utf8_percent_encode(room, CANONICAL_PATH_ENCODE_SET);
+        let mut url = self.origin.clone();
+        url.set_path(&format!("/api/arena/rooms/v1/{room}/generations"));
+        let mut credential = header::HeaderValue::from_str(cookie).map_err(|_| invalid())?;
+        credential.set_sensitive(true);
+        let request = self
+            .client
+            .post(url)
+            .header(header::ORIGIN, &self.caller)
+            .header(header::COOKIE, credential)
+            .header(header::ACCEPT, "application/json; arena-error-taxonomy=2")
+            .header(header::ACCEPT_ENCODING, "identity")
+            .header(PROTOCOL_HEADER, PROTOCOL_VERSION)
+            .header(EXPECTED_USER_ID_HEADER, format!("v1:{owner}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(wire.as_ref().clone())
+            .build()
+            .map_err(|_| invalid())?;
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(RoomError::new("scope-changed", "unknown")),
+            result = tokio::time::timeout(HTTP_DEADLINE, self.receive(request, Operation::GenerationStart, owner)) => {
+                result.unwrap_or_else(|_| Err(RoomError::new("network-error", "unknown")))
+            }
+        }
     }
 
     pub(crate) async fn execute_generation_read(

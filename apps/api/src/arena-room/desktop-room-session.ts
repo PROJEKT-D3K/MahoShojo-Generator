@@ -134,7 +134,7 @@ export const createDesktopRoomSessionAdapter = (options: {
     const url = new URL(context.req.url);
     const operation = resolveOperation(context.req.method, url.pathname);
     // Desktop reads only the current projection. History/query variants remain Web-only.
-    if (operation === null || (operation === 'generationRead' && url.search !== '')) {
+    if (operation === null || (['generationRead', 'generationStart'].includes(operation) && url.search !== '')) {
       return errorResponse(context, 'ROOM_DESKTOP_OPERATION_UNSUPPORTED', '当前桌面房间版本不支持此操作', 400);
     }
     // Header parser is canonical and safe-integer checked; the account remains unverified here.
@@ -143,7 +143,8 @@ export const createDesktopRoomSessionAdapter = (options: {
     let createMode: 'new' | 'resume-only' | undefined;
     if (context.req.method === 'POST') {
       try {
-        const body = await options.readBody(context.req.raw, DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes);
+        const body = await options.readBody(context.req.raw, operation === 'generationStart'
+          ? DESKTOP_ROOM_SESSION_LIMITS.generationStartRequestBytes : DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes);
         const envelope = parseDesktopRoomSessionRequest(
           operation as DesktopRoomSessionPostOperation, body, expectedUserId,
         );
@@ -167,7 +168,8 @@ export const createDesktopRoomSessionAdapter = (options: {
     const largeGenerationSuccess = operation === 'generationRead' && context.res.status === 200;
     const successLimit = largeGenerationSuccess
       ? DESKTOP_ROOM_SESSION_LIMITS.generationResponseBodyBytes : DESKTOP_ROOM_SESSION_LIMITS.responseBodyBytes;
-    if (operation === 'generationRead' && context.res.ok && !largeGenerationSuccess) {
+    if (context.res.ok && ((operation === 'generationRead' && !largeGenerationSuccess)
+      || (operation === 'generationStart' && context.res.status !== 202))) {
       // Native accepts a current-generation body only with HTTP 200. Do not read
       // or enlarge an unexpected success status, even if its DTO would be valid.
       await context.res.body?.cancel().catch(() => undefined);
@@ -240,6 +242,9 @@ export const createDesktopRoomSessionAdapter = (options: {
     requestBody(context: RoomContext): { readonly value: unknown } | null {
       const scope = scopes.get(context);
       return scope ? { value: scope.request } : null;
+    },
+    generationStartReceipt(context: RoomContext): boolean {
+      return scopes.get(context)?.operation === 'generationStart';
     },
     generationCancelReceipt(context: RoomContext): boolean {
       return scopes.get(context)?.operation === 'generationCancel';

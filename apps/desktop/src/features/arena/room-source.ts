@@ -1,12 +1,18 @@
-import { StoryLengthSchema, type ArenaRoomSharedConfig } from '@mahoshojo/contracts/arena-room';
+import { ArenaRoomHostRuntimeGenerationSchema, StoryLengthSchema, type ArenaRoomSharedConfig } from '@mahoshojo/contracts/arena-room';
 import {
   createArenaRoomSourceProjector,
+  type ArenaRoomHostWorkspaceBundle,
   type ArenaRoomSourceCombatant,
   type ArenaRoomSourceMaterial,
   type ArenaRoomSourceState,
 } from '@mahoshojo/multiplayer-core';
 import { isBuiltinWebPackageRef } from '@mahoshojo/web-package';
 
+import { buildArenaGenerationInputSnapshot } from '@mahoshojo/ai-core/arena-generation';
+import { desktopRoomStartSourceBudget } from './room-source-budget';
+export class DesktopRoomStartComplexityError extends Error {}
+export class DesktopRoomStartCapacityError extends Error {}
+import { buildDesktopArenaInput } from './session';
 import type { ArenaDraft } from './session';
 import { projectDesktopArenaCombatant } from './strict-source';
 
@@ -46,12 +52,12 @@ const materialSource = (value: unknown): ArenaRoomSourceMaterial => {
   return { id: material.id, name: material.name, fileName: material.fileName, content: material.content };
 };
 
-/** Only existing Room fields cross this boundary. Lore, adjudication, history
- * bodies and provider settings stay in the local draft; no protocol is invented. */
-export async function prepareDesktopRoomSource(draft: ArenaDraft, empty = false): Promise<
-  { ok: true; sharedConfig: ArenaRoomSharedConfig } | { ok: false; issues: readonly string[] }
+/** Build the existing Room projection and complete local bundle. Creation and
+ * configuration expose only the projection; explicit start owns the full bundle. */
+async function prepareDesktopRoomBundle(draft: ArenaDraft, empty = false): Promise<
+  { ok: true; sharedConfig: ArenaRoomSharedConfig; bundle: ArenaRoomHostWorkspaceBundle } | { ok: false; issues: readonly string[] }
 > {
-  if (empty) return { ok: true, sharedConfig: projector.createArenaRoomCanonicalEmptyDraftBundle().sharedConfig };
+  if (empty) { const bundle = projector.createArenaRoomCanonicalEmptyDraftBundle(); return { ok: true, sharedConfig: bundle.sharedConfig, bundle }; }
   try {
     const source: ArenaRoomSourceState = {
       battleMode: draft.battleMode,
@@ -90,9 +96,41 @@ export async function prepareDesktopRoomSource(draft: ArenaDraft, empty = false)
     };
     const result = await projector.tryBuildArenaRoomHostWorkspaceBundleFromBattleState(source);
     return result.ok
-      ? { ok: true, sharedConfig: result.bundle.sharedConfig }
+      ? { ok: true, sharedConfig: result.bundle.sharedConfig, bundle: result.bundle }
       : { ok: false, issues: result.issues.map(issue => `${issue.target}：${issue.message}${issue.action}`) };
   } catch {
     return { ok: false, issues: ['当前设定不符合多人房间共享格式，请检查或重新选择来源后重试。'] };
   }
+}
+
+/** Same snapshot builder as ordinary Arena; only request-scoped runtime fields escape. */
+export const prepareDesktopRoomGenerationRuntime = (draft: ArenaDraft) => {
+  const input = buildArenaGenerationInputSnapshot(buildDesktopArenaInput(draft, 'arena'));
+  return ArenaRoomHostRuntimeGenerationSchema.parse({
+    arenaFreeRankingEnabled: false,
+    ...(input.narrativeHistory === undefined ? {} : { narrativeHistory: input.narrativeHistory }),
+    ...(input.adjudicationEvents === undefined ? {} : { adjudicationEvents: input.adjudicationEvents }),
+    ...(input.questionnaireSelections === undefined ? {} : { questionnaireSelections: input.questionnaireSelections }),
+    ...(input.questionnaires === undefined ? {} : { questionnaires: input.questionnaires }),
+  });
+};
+
+/** Creation/configuration retain their projection-only boundary. */
+export async function prepareDesktopRoomSource(draft: ArenaDraft, empty = false): Promise<
+  { ok: true; sharedConfig: ArenaRoomSharedConfig } | { ok: false; issues: readonly string[] }
+> {
+  const source = await prepareDesktopRoomBundle(draft, empty);
+  return source.ok ? { ok: true, sharedConfig: source.sharedConfig } : source;
+}
+
+/** One complete local snapshot is captured before the first hash await. */
+export async function prepareDesktopRoomStartSource(draft: ArenaDraft) {
+  const budget = desktopRoomStartSourceBudget(draft);
+  if (budget === 'complexity') throw new DesktopRoomStartComplexityError('room-source-too-complex');
+  if (budget === 'bytes') throw new DesktopRoomStartCapacityError('room-source-too-large');
+  const frozen = structuredClone(draft);
+  const generation = prepareDesktopRoomGenerationRuntime(frozen);
+  const source = await prepareDesktopRoomBundle(frozen);
+  if (!source.ok) throw new Error('room-source-unavailable');
+  return { bundle: source.bundle, generation };
 }

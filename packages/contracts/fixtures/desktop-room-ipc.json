@@ -19,7 +19,9 @@
   "attach": {
     "handle": "room-handle-fixture",
     "subscriptionId": "room-subscription-fixture",
-    "pendingIntent": null
+    "pendingIntent": null,
+    "generationStartBlocked": false,
+    "generationStartFence": null
   },
   "subscribeRequest": {
     "handle": "room-handle-fixture",

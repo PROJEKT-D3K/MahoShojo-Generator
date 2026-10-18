@@ -1,3 +1,4 @@
+import startFixture from '../fixtures/desktop-room-generation-start.json';
 import { describe, expect, it } from 'vitest';
 
 import fixture from '../fixtures/desktop-room-session.json';
@@ -29,6 +30,7 @@ import {
   ARENA_ROOM_HTTP_ROUTES,
   ArenaRoomCreateRequestSchema,
   ArenaRoomGenerationCancelRequestSchema,
+  ArenaRoomGenerationStartRequestSchema,
   ArenaRoomEpochMutationRequestSchema,
   ArenaRoomJoinRequestSchema,
   ArenaRoomPublishConfigRequestSchema,
@@ -47,6 +49,7 @@ const operationFixtures = {
   ...fixture.operations,
   ...proposalFixtures,
   generationRead: generationFixture.operation,
+  generationStart: startFixture.operation,
   generationCancel: {
     method: 'POST', path: `${generationFixture.operation.path}/cancel`,
     request: { desktopRoom: fixture.operations.join.request.desktopRoom, request: { expectedRoomEpoch: sessionFixture.roomEpoch } },
@@ -76,6 +79,7 @@ const postOperations = DesktopRoomSessionPostOperationSchema.options;
 const originalRequestSchemas = {
   create: ArenaRoomCreateRequestSchema,
   generationCancel: ArenaRoomGenerationCancelRequestSchema,
+  generationStart: ArenaRoomGenerationStartRequestSchema,
   join: ArenaRoomJoinRequestSchema,
   ticket: ArenaRoomTicketRequestSchema,
   leave: ArenaRoomEpochMutationRequestSchema,
@@ -129,7 +133,7 @@ describe('Desktop Native Room session opt-in contract', () => {
     expect(DESKTOP_ROOM_SESSION_PROTOCOL_VERSION).toBe(fixture.protocolVersion);
     expect(DESKTOP_ROOM_SESSION_PROTOCOL_HEADER).toBe('x-mahoshojo-desktop-room-protocol');
     expect(DESKTOP_ROOM_SESSION_EXPECTED_USER_ID_HEADER).toBe('x-mahoshojo-room-expected-user-id');
-    expect(DESKTOP_ROOM_SESSION_LIMITS).toEqual({ ...fixture.limits, generationResponseBodyBytes: 76_711_888 });
+    expect(DESKTOP_ROOM_SESSION_LIMITS).toEqual({ ...fixture.limits, generationResponseBodyBytes: 76_711_888, generationStartOriginalBytes: 12 * 1024 * 1024, generationStartRequestBytes: 12 * 1024 * 1024 + 1024 });
     expect(Object.keys(DESKTOP_ROOM_SESSION_OPERATIONS)).toEqual(operations);
     expect(DESKTOP_ROOM_SESSION_OPERATIONS.discover).toEqual({ method: 'GET', path: ARENA_ROOM_HTTP_ROUTES.collection });
     expect(DESKTOP_ROOM_SESSION_OPERATIONS.create).toEqual({ method: 'POST', path: ARENA_ROOM_HTTP_ROUTES.collection });

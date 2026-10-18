@@ -51,7 +51,7 @@ const configRequest = () => {
 describe('closed Native Room IPC', () => {
   it('pins four commands and complete serialized output budgets', () => {
     expect(Object.values(DESKTOP_ROOM_IPC_COMMANDS)).toEqual(['arena_room_attach', 'arena_room_request', 'arena_room_subscribe', 'arena_room_detach']);
-    expect(DESKTOP_ROOM_IPC_LIMITS).toEqual({ ...fixture.limits, generationFragmentBytes: 16_384 });
+    expect(DESKTOP_ROOM_IPC_LIMITS).toEqual({ ...fixture.limits, generationStartRequestBytes: 12 * 1024 * 1024 + 3 * 1024, generationFragmentBytes: 16_384 });
     expect(DesktopRoomAttachRequestSchema.parse(fixture.attachRequest)).toEqual(fixture.attachRequest);
     expect(DesktopRoomAttachResponseSchema.parse(fixture.attach)).toEqual(fixture.attach);
     expect(DesktopRoomSubscribeRequestSchema.parse(fixture.subscribeRequest)).toEqual(fixture.subscribeRequest);
@@ -97,7 +97,7 @@ describe('closed Native Room IPC', () => {
       expect(batch).toEqual(response.batch);
       if (batch.event.kind !== 'http-result') continue;
       const operation = batch.event.operation;
-      if (operation === 'generationCancel' || operation === 'config' || operation === 'proposalSubmit' || operation === 'proposalWithdraw' || operation === 'proposalResolve') throw new Error('legacy fixture has no expanded operation');
+      if (operation === 'generationStart' || operation === 'generationCancel' || operation === 'config' || operation === 'proposalSubmit' || operation === 'proposalWithdraw' || operation === 'proposalResolve') throw new Error('legacy fixture has no expanded operation');
       expect(DESKTOP_ROOM_SESSION_RESPONSE_SCHEMAS[operation].parse(batch.event.response)).toEqual(batch.event.response);
       expect(batch.event.response).toEqual('result' in batch.event.response ? service.operations[operation].success : service.operations[operation].error);
     }

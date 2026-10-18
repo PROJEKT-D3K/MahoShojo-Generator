@@ -1,3 +1,4 @@
+import { createRoomAcceptanceStart, ROOM_ACCEPTANCE_START_SCENARIOS, type RoomAcceptanceStartScenario } from './desktop-room-acceptance-start';
 /** Local acceptance only. Real Room authorities; synthetic accounts and bounded memory storage. */
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -60,7 +61,7 @@ export const ROOM_ACCEPTANCE_PUBLIC_CHARACTER = Object.freeze({
   id: 'acceptance-public-character-1', type: 'character', name: 'Synthetic public character',
   description: 'Local acceptance fixture only', author: 'Synthetic fixture', user_id: 101,
   is_public: 1, review_status: 'approved', deleted_at: null, updated_at: '2026-01-01T00:00:00.000Z',
-  data: JSON.stringify({ name: 'Synthetic public character', description: 'A synthetic character for local Room acceptance.' }),
+  data: JSON.stringify({ name: 'Synthetic public character', content: 'A synthetic character for local Room acceptance.' }),
 });
 const CAPACITY = 64;
 const TRACE_CAPACITY = 256;
@@ -72,9 +73,9 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const unavailable = (): never => { throw new Error('ACCEPTANCE_UNSUPPORTED'); };
 export type RoomAcceptancePki = { ca: string; cert: string; key: string };
 export type RoomAcceptanceFault = 'create' | 'join' | 'leave' | 'close' | 'config' | 'config-unsupported'
-  | 'proposalSubmit' | 'proposalWithdraw' | 'proposalResolve' | 'proposal-unsupported' | 'generationCancel';
+  | 'proposalSubmit' | 'proposalWithdraw' | 'proposalResolve' | 'proposal-unsupported' | 'generationCancel' | 'generationStart';
 const faults: readonly string[] = ['create', 'join', 'leave', 'close', 'config', 'config-unsupported',
-  'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported', 'generationCancel'];
+  'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported', 'generationCancel', 'generationStart'];
 export type RoomAcceptanceObservation =
   | { kind: 'room-http'; operation: DesktopRoomSessionOperation; status: number; dropped: boolean }
   | { kind: 'public-card'; operation: 'random' | 'read'; status: number }
@@ -88,8 +89,9 @@ export type RoomAcceptanceRuntime = {
   close(): Promise<void>;
   armFault(operation: RoomAcceptanceFault): void;
   enableGenerationCancel(): void;
-  generation(scenario: RoomAcceptanceGenerationScenario): Promise<void>;
-  observations(): { rooms: number; receipts: number; actors: number; activeConnections: number; authSessions: number; trace: RoomAcceptanceObservation[]; generation: RoomAcceptanceGenerationObservation };
+  enableGenerationStart(): void;
+  generation(scenario: RoomAcceptanceGenerationScenario | RoomAcceptanceStartScenario): Promise<void>;
+  observations(): { rooms: number; receipts: number; actors: number; activeConnections: number; authSessions: number; trace: RoomAcceptanceObservation[]; generation: RoomAcceptanceGenerationObservation & Partial<ReturnType<ReturnType<typeof createRoomAcceptanceStart>['observe']>> };
 };
 
 /** Checkpoint, receipt and directory writes are one synchronous CAS transaction. */
@@ -211,8 +213,8 @@ const roomServices = () => {
 
 const operationFor = (request: Request): DesktopRoomSessionOperation | null => {
   const url = new URL(request.url), segments = url.pathname.split('/');
-  for (const operation of [...ROOM_ACCEPTANCE_OPERATIONS, 'generationCancel'] as const) {
-    if (operation === 'generationRead' && url.search !== '') continue;
+  for (const operation of [...ROOM_ACCEPTANCE_OPERATIONS, 'generationCancel', 'generationStart'] as const) {
+    if ((operation === 'generationRead' || operation === 'generationStart') && url.search !== '') continue;
     const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
     const expected = definition.path.split('/');
     if (request.method !== definition.method || expected.length !== segments.length) continue;
@@ -248,6 +250,8 @@ export const startRoomAcceptanceMock = async (options: {
   }
   let services = roomServices();
   let cancelEnabled = false;
+  let starter: ReturnType<typeof createRoomAcceptanceStart> | null = null;
+  const newStarter = () => createRoomAcceptanceStart({ memberships: services.memberships, publicCharacter: ROOM_ACCEPTANCE_PUBLIC_CHARACTER });
   const newGeneration = () => createRoomAcceptanceGeneration({ states: () => [...services.store.states.values()], memberships: () => services.memberships, cancelEnabled: () => cancelEnabled });
   let generation = newGeneration();
   const trace: RoomAcceptanceObservation[] = [];
@@ -270,10 +274,10 @@ export const startRoomAcceptanceMock = async (options: {
   const http = new Hono<{ Variables: HonoAppVariables }>();
   http.onError(() => Response.json({ error: 'Acceptance request failed' }, { status: 503 }));
   http.use('*', async (context, next) => { generation.recordRequest(context.req.raw); await next(); });
-  http.use('*', bodyLimit({ maxSize: 65 * 1024 }));
+  http.use('*', (context, next) => bodyLimit({ maxSize: starter && operationFor(context.req.raw) === 'generationStart' ? 12 * 1024 * 1024 + 1024 : 65 * 1024 })(context, next));
   http.use('*', async (context, next) => {
     context.header('cache-control', 'no-store');
-    if (operationFor(context.req.raw) === null || (operationFor(context.req.raw) === 'generationCancel' && !cancelEnabled)
+    if (operationFor(context.req.raw) === null || (operationFor(context.req.raw) === 'generationCancel' && !cancelEnabled) || (operationFor(context.req.raw) === 'generationStart' && !starter)
       || context.req.header('x-mahoshojo-desktop-room-protocol') !== DESKTOP_ROOM_SESSION_PROTOCOL_VERSION) {
       observe({ kind: 'refused' }); return context.json({ code: 'ACCEPTANCE_ROUTE_REFUSED' }, 404);
     }
@@ -305,8 +309,8 @@ export const startRoomAcceptanceMock = async (options: {
     directory: { discoverPublic: (input) => services.directory.discoverPublic(input) },
     websocketAuthority: { issue: (input) => services.authority.issue(input) },
     proposals: { submit: (input) => services.proposals.submit(input), resolve: (input) => services.proposals.resolve(input), withdraw: (input) => services.proposals.withdraw(input) },
-    generations: { start: async () => generation.refusedDispatch('start'), read: (input) => generation.read(input),
-      list: async () => unavailable(), readHistory: async () => unavailable(), cancel: input => generation.cancel(input) },
+    generations: { start: input => starter ? starter.service.start(input) : Promise.resolve(generation.refusedDispatch('start')), read: input => starter ? starter.service.read(input) : generation.read(input),
+      list: async () => unavailable(), readHistory: async () => unavailable(), cancel: input => starter ? starter.service.cancel(input) : generation.cancel(input) },
     configs: { publish: (input) => services.configs.publish(input) },
     rateLimit: async () => ({ allowed: true, limit: 100, remaining: 99, retryAfterSeconds: 1 }),
   }, { isAllowedOrigin: (origin) => origin === roomOrigin });
@@ -323,7 +327,7 @@ export const startRoomAcceptanceMock = async (options: {
     fetch: async (request, env) => {
       const operation = operationFor(request);
       const result = await dispatch(request, env);
-      if (operation !== null && (operation !== 'generationCancel' || cancelEnabled) && result instanceof Response) {
+      if (operation !== null && (operation !== 'generationCancel' || cancelEnabled) && (operation !== 'generationStart' || starter) && result instanceof Response) {
         const dropped = result.ok && armed === operation;
         observe({ kind: 'room-http', operation, status: result.status, dropped });
         if (dropped) { armed = null; env.outgoing.destroy(); }
@@ -416,7 +420,7 @@ export const startRoomAcceptanceMock = async (options: {
   }
   let closing: Promise<void> | null = null;
   const close = () => closing ??= (async () => {
-    generation.dispose();
+    generation.dispose(); starter?.dispose();
     gateway?.forceClose();
     for (const socket of websocketServer.clients) socket.terminate();
     for (const socket of sockets) socket.destroy();
@@ -440,18 +444,23 @@ export const startRoomAcceptanceMock = async (options: {
     const runtime: RoomAcceptanceRuntime = {
       roomOrigin, authOrigin, roomAddress: { host: '127.0.0.1', port: roomPort }, authAddress: { host: '127.0.0.1', port: authPort }, close,
       armFault(operation) {
-        if (!faults.includes(operation) || (operation === 'generationCancel' && !cancelEnabled) || armed !== null || closing) throw new Error('ACCEPTANCE_FAULT_INVALID');
+        if (!faults.includes(operation) || (operation === 'generationCancel' && !cancelEnabled) || (operation === 'generationStart' && !starter) || armed !== null || closing) throw new Error('ACCEPTANCE_FAULT_INVALID');
         armed = operation;
       },
       enableGenerationCancel: () => { cancelEnabled = true; },
-      generation: scenario => generation.control(scenario),
+      enableGenerationStart: () => { if (starter) throw new Error('ACCEPTANCE_ALREADY_ENABLED'); cancelEnabled = true; starter = newStarter(); },
+      generation: async scenario => {
+        if (ROOM_ACCEPTANCE_START_SCENARIOS.includes(scenario as RoomAcceptanceStartScenario)) { if (!starter) throw new Error('ACCEPTANCE_START_DISABLED'); starter.control(scenario as RoomAcceptanceStartScenario); return; }
+        if (starter) throw new Error('ACCEPTANCE_USE_START_SCENARIOS');
+        await generation.control(scenario as RoomAcceptanceGenerationScenario);
+      },
       observations: () => ({ rooms: services.store.states.size, receipts: services.store.receipts.size,
-        actors: services.actors.size, activeConnections: websocketServer.clients.size, authSessions: sessions.size, trace: structuredClone(trace), generation: generation.observe() }),
+        actors: services.actors.size, activeConnections: websocketServer.clients.size, authSessions: sessions.size, trace: structuredClone(trace), generation: { ...generation.observe(), ...(starter ? starter.observe() : {}) } }),
     };
     resetForSelfCheck.set(runtime, async () => {
-      generation.dispose();
+      generation.dispose(); starter?.dispose();
       await services.actors.shutdown(); services = roomServices(); sessions.clear(); flows.clear(); grants.clear(); trace.length = 0; armed = null;
-      generation = newGeneration();
+      generation = newGeneration(); if (starter) starter = newStarter();
     });
     return runtime;
   } catch (error) {
@@ -483,7 +492,7 @@ const probe = (runtime: RoomAcceptanceRuntime, pki: RoomAcceptancePki, endpoint:
   request.end(options.body === undefined ? undefined : typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
 });
 
-export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime, pki: RoomAcceptancePki, cancelMode = false) => {
+export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime, pki: RoomAcceptancePki, cancelMode = false, startMode = false) => {
   const reset = resetForSelfCheck.get(runtime);
   if (!reset || runtime.observations().trace.length || runtime.observations().authSessions) throw new Error('ACCEPTANCE_SELFCHECK_NOT_PRISTINE');
   resetForSelfCheck.delete(runtime);
@@ -522,7 +531,7 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
         ...(definition.method === 'POST' ? { body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: userId, ...(operation === 'create' ? { createMode: 'new' } : {}) }, request } } : {}),
       });
       const parsed = parseDesktopRoomSessionResponse(operation, JSON.parse(response.body), userId);
-      assert(response.status === (operation === 'create' ? 201 : 200) && 'result' in parsed); return JSON.parse(response.body).result;
+      assert(response.status === (operation === 'create' ? 201 : operation === 'generationStart' ? 202 : 200) && 'result' in parsed); return JSON.parse(response.body).result;
     };
     const config = ArenaRoomSharedConfigSchema.parse({ battleMode: 'classic', combatants: [], teams: [], scenario: null, auxScenarios: [], materials: [], userGuidance: '', storyLength: 'standard', customStoryLength: null, selectedLanguage: 'zh-CN', historySettings: { readArenaHistory: true, readArenaHistoryLimit: 3, isArenaHistoryUnlimited: false, writeArenaHistory: true, readCurrentState: true, writeCurrentState: true, readNarrativeHistory: false, readNarrativeHistoryLimit: 10, isNarrativeHistoryUnlimited: false, writeNarrativeHistory: false } });
     const created = await roomRequest('create', 101, hostCookie, { creationRequestId: 'acceptance-self-check', displayName: 'Synthetic 101', directory: { title: 'Self check', visibility: 'public' }, sharedConfig: config });
@@ -668,7 +677,7 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       && generation.deltaFrames === 3 && generation.droppedFrames === 2 && generation.disconnections === 2
       && generation.startRequests === 1 && generation.cancelRequests === 1 && generation.modelRequests === 1
       && generation.startDispatches === 0 && generation.cancelDispatches === 0 && generation.modelDispatches === 0);
-    if (cancelMode) {
+    if (cancelMode && !startMode) {
       runtime.enableGenerationCancel();
       await runtime.generation('seed-large');
       const current = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
@@ -691,12 +700,74 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       const observed = runtime.observations().generation;
       assert(observed.cancelEnabled && observed.cancelDispatches === 2 && observed.startDispatches === 0 && observed.modelDispatches === 0);
     }
+    if (startMode) {
+      runtime.enableGenerationStart();
+      const before = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+      // A genuine host-local payload crosses the Desktop envelope and real materializer.
+      // This body is larger than the old 64 KiB request lane, but contains no account/model data.
+      const payload = { content: '完整合成本机正文🌙'.repeat(6000), name: 'Synthetic local character', templateId: '通用角色' };
+      const contentVersion = `sha256:${createHash('sha256').update(JSON.stringify(payload)).digest('hex')}`;
+      const localKey = 'host-local:character:acceptance-start';
+      await roomRequest('config', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch, expectedRevision: before.snapshot.revision,
+        expectedControlSeq: before.snapshot.controlSeq, sharedConfig: { ...before.snapshot.sharedConfig, battleMode: 'daily', teams: [],
+          combatants: [{ key: localKey, source: 'host-local', type: 'general-character', displayName: payload.name, contentVersion }] } }, created.roomId);
+      const ready = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+      const original = { expectedRoomEpoch: created.roomEpoch, expectedRevision: ready.snapshot.revision, expectedControlSeq: ready.snapshot.controlSeq,
+        generationRequestId: 'synthetic-start-reservation-1', sharedConfig: ready.snapshot.sharedConfig,
+        hostLocalPayloads: [{ key: localKey, kind: 'character', payload }], generation: {} };
+      const invalidPayloads = [[], [{ ...original.hostLocalPayloads[0]!, key: 'host-local:wrong' }],
+        [...original.hostLocalPayloads, { ...original.hostLocalPayloads[0]!, key: 'host-local:extra' }],
+        [{ ...original.hostLocalPayloads[0]!, kind: 'scenario' }],
+        [{ ...original.hostLocalPayloads[0]!, payload: { ...payload, content: 'changed after freeze' } }]];
+      for (let index = 0; index < invalidPayloads.length; index += 1) {
+        let refused = false;
+        try { await roomRequest('generationStart', 101, hostCookie, { ...original, generationRequestId: `invalid-local-${index}`, hostLocalPayloads: invalidPayloads[index] }, created.roomId); } catch { refused = true; }
+        assert(refused && runtime.observations().generation.startReservations === 0 && runtime.observations().generation.syntheticProducers === 0);
+      }
+      await runtime.generation('start-reserve-only');
+      let reservationOnly = false;
+      try { await roomRequest('generationStart', 101, hostCookie, original, created.roomId); } catch { reservationOnly = true; }
+      const reserved = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+      assert(reservationOnly && reserved.snapshot.activeGeneration.state === 'starting'
+        && reserved.snapshot.activeGeneration.generationRequestId === original.generationRequestId
+        && runtime.observations().generation.syntheticProducers === 0);
+      const target = reserved.snapshot.activeGeneration.generationId;
+      const missingPath = DESKTOP_ROOM_SESSION_OPERATIONS.generationRead.path.replace(':roomId', created.roomId).replace(':generationId', target);
+      const missing = await probe(runtime, pki, missingPath, { headers: configHeaders });
+      assert(missing.status === 404 && JSON.parse(missing.body).error.code === 'ROOM_NOT_FOUND');
+      await runtime.generation('start-unavailable');
+      let unavailable = false;
+      try { await roomRequest('generationStart', 101, hostCookie, original, created.roomId); } catch { unavailable = true; }
+      assert(unavailable && runtime.observations().generation.syntheticProducers === 0);
+      await runtime.generation('start-available'); await runtime.generation('start-large');
+      runtime.armFault('generationStart');
+      let lost = false;
+      try { await roomRequest('generationStart', 101, hostCookie, original, created.roomId); } catch { lost = true; }
+      assert(lost);
+      const retry = await roomRequest('generationStart', 101, hostCookie, original, created.roomId);
+      assert(retry.generation.generationId === target && !('markdown' in retry) && !('result' in retry));
+      assert(runtime.observations().generation.syntheticProducers === 1 && runtime.observations().generation.startPortCalls === 2);
+      await runtime.generation('start-delta');
+      await until(() => [...generationMessages.values()].some(messages => messages.some(message => message.type === 'story.delta' && message.generationId === target)));
+      await runtime.generation('start-complete');
+      await until(() => [...generationMessages.values()].some(messages => messages.some(message => message.type === 'generation.completed' && message.payload.generationId === target)));
+      const finalStart = await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', target);
+      assert(finalStart.finalAuthoritative && Buffer.byteLength(finalStart.markdown) > ROOM_ACCEPTANCE_GENERATION_LARGE_BYTES);
+      const repeat = await roomRequest('generationStart', 101, hostCookie, original, created.roomId);
+      assert(repeat.status === 'completed' && !('markdown' in repeat) && runtime.observations().generation.syntheticProducers === 1);
+      const next = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+      const second = { ...original, generationRequestId: 'synthetic-start-cancel-2', expectedControlSeq: next.snapshot.controlSeq };
+      const started = await roomRequest('generationStart', 101, hostCookie, second, created.roomId);
+      await roomRequest('generationCancel', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId, '', started.generation.generationId);
+      const stopped = await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', started.generation.generationId);
+      assert(stopped.status === 'cancelled' && runtime.observations().generation.modelDispatches === 0);
+    }
     await roomRequest('leave', 202, memberCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     await roomRequest('close', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     assert((await roomRequest('discover', 101, hostCookie)).items.length === 0);
     return { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true,
       roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true,
-      roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: !cancelMode, ...(cancelMode ? { generationCancel: true } : {}) } as const;
+      roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: !cancelMode && !startMode, ...((cancelMode || startMode) ? { generationCancel: true } : {}), ...(startMode ? { generationStart: true, syntheticProducer: true } : {}) } as const;
   } finally {
     await Promise.all(openSockets.map((socket) => new Promise<void>((resolve) => {
       if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }
@@ -710,6 +781,7 @@ let startupStage = 'validate-args';
 const main = async () => {
   const args = process.argv.slice(2);
   const selfCheck = args[0] === '--self-check'; if (selfCheck) args.shift();
+  const startMode = args[0] === '--synthetic-start'; if (startMode) args.shift();
   const cancelMode = args[0] === '--synthetic-cancel'; if (cancelMode) args.shift();
   if (args.length !== 2 || args[0] !== '--state-root' || !path.isAbsolute(args[1]!)) throw new Error('ACCEPTANCE_ARGUMENT_INVALID');
   // State root identifies the enclosing isolated run. Credentials never persist here.
@@ -724,7 +796,7 @@ const main = async () => {
   const stop = async () => { await runtime.close(); process.stdin.pause(); };
   try {
     startupStage = 'self-check';
-    const summary = await selfCheckRoomAcceptanceMock(runtime, pki, cancelMode);
+    const summary = await selfCheckRoomAcceptanceMock(runtime, pki, cancelMode, startMode);
     startupStage = 'ready-output';
     if (selfCheck) { emit({ event: 'self-check', roomOrigin: runtime.roomOrigin, authOrigin: runtime.authOrigin, selfCheck: summary }); startupStage = 'cleanup'; await stop(); return; }
     emit({ event: 'ready', roomOrigin: runtime.roomOrigin, authOrigin: runtime.authOrigin, roomAddress: runtime.roomAddress, selfCheck: summary });
@@ -748,7 +820,7 @@ const main = async () => {
             if (value.command === 'arm-fault' && keys === 'command|id|operation') {
               runtime.armFault(value.operation as RoomAcceptanceFault); emit({ id, event: 'armed', operation: value.operation });
             } else if (value.command === 'generation' && keys === 'command|id|scenario') {
-              await runtime.generation(value.scenario as RoomAcceptanceGenerationScenario); emit({ id, event: 'generation', scenario: value.scenario });
+              await runtime.generation(value.scenario as RoomAcceptanceGenerationScenario | RoomAcceptanceStartScenario); emit({ id, event: 'generation', scenario: value.scenario });
             } else if (value.command === 'observe' && keys === 'command|id') emit({ id, event: 'observations', ...runtime.observations() });
             else if (value.command === 'stop' && keys === 'command|id') { stopped = true; await stop(); emit({ id, event: 'stopped' }); }
             else throw new Error('invalid');

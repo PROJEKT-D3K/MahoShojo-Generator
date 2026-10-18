@@ -137,6 +137,38 @@ const expectedLocalKinds = (
   return expected;
 };
 
+/** Prove that the visible payloads, rather than a hidden room-only draft, match authority.
+ * Digests must be produced from these exact payloads by the source projector.
+ * Validation has transient schema copies; the returned inputs retain original references. */
+export const matchArenaRoomVisibleStartBundle = (
+  authority: ArenaRoomSharedConfig,
+  bundle: ArenaRoomHostWorkspaceBundle,
+): ArenaRoomGenerationStartInputs | null => {
+  if (!sameConfig(authority, bundle.sharedConfig)) return null;
+  const expected = expectedLocalKinds(authority);
+  if (!expected || expected.size !== bundle.hostLocalPayloads.length
+    || expected.size !== bundle.hostLocalContentDigests.length) return null;
+  const versions = new Map<string, string>();
+  for (const entry of [...authority.combatants, ...(authority.scenario ? [authority.scenario] : []), ...authority.auxScenarios, ...authority.materials]) {
+    if ('source' in entry) {
+      if (!entry.contentVersion || versions.has(entry.key)) return null;
+      versions.set(entry.key, entry.contentVersion);
+    }
+  }
+  const seen = new Set<string>(), digests = new Map<string, string>();
+  for (const entry of bundle.hostLocalContentDigests) {
+    if (digests.has(entry.key) || !/^sha256:[0-9a-f]{64}$/u.test(entry.digest)
+      || versions.get(entry.key) !== entry.digest) return null;
+    digests.set(entry.key, entry.digest);
+  }
+  for (const entry of bundle.hostLocalPayloads) {
+    if (seen.has(entry.key) || expected.get(entry.key) !== entry.kind || !digests.has(entry.key)
+      || !ArenaRoomHostLocalPayloadSchema.safeParse(entry).success) return null;
+    seen.add(entry.key);
+  }
+  return { sharedConfig: authority, hostLocalPayloads: bundle.hostLocalPayloads };
+};
+
 const selectExactPayloads = (
   config: ArenaRoomSharedConfig,
   payloads: readonly ArenaRoomHostLocalPayload[],
@@ -264,7 +296,7 @@ export const createArenaRoomHostWorkspace = (): ArenaRoomHostWorkspace => {
         ))
       );
 
-      if (configMatches && currentRoomPayloads && contentMatches) {
+      if (configMatches && currentRoomPayloads && contentMatches && matchArenaRoomVisibleStartBundle(authority.sharedConfig, bundle)) {
         return Object.freeze({
           kind: 'clean' as const,
           start: startInputs(authority.sharedConfig, currentRoomPayloads),

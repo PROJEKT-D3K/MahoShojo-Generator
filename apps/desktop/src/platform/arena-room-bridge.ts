@@ -1,10 +1,11 @@
+import { isDesktopRoomStartWithinNodeBudget } from '@mahoshojo/contracts/desktop-room-session';
 import { Channel } from '@tauri-apps/api/core';
 import {
   DESKTOP_ROOM_ERROR_MESSAGE, DESKTOP_ROOM_IPC_COMMANDS, DESKTOP_ROOM_IPC_LIMITS,
   DesktopRoomAckResponseSchema, DesktopRoomActionSchema, DesktopRoomAcceptedResponseSchema,
   DesktopRoomAttachRequestSchema, DesktopRoomAttachResponseSchema,
-  DesktopRoomDetachResponseSchema, DesktopRoomConfigTrackingEndedSchema, DesktopRoomProposalTrackingEndedSchema, DesktopRoomErrorSchema, DesktopRoomNotificationSchema,
-  DesktopRoomPullResponseSchema, DesktopRoomRequestSchema,
+  DesktopRoomGenerationStartTrackingEndedSchema, DesktopRoomDetachResponseSchema, DesktopRoomConfigTrackingEndedSchema, DesktopRoomProposalTrackingEndedSchema, DesktopRoomErrorSchema, DesktopRoomNotificationSchema,
+  DesktopRoomPullResponseSchema, DesktopRoomRequestSchema, DesktopRoomStartInvokeSchema,
   DesktopRoomSubscribeRequestSchema, DesktopRoomSubscribeResponseSchema,
   parseDesktopRoomBatch, getDesktopRoomHttpOperation,
   type DesktopRoomAttachResponse, type DesktopRoomBatch, type DesktopRoomError,
@@ -17,6 +18,8 @@ import { DesktopGenerationReadError, DesktopGenerationReader, type DesktopGenera
 
 export interface ArenaRoomChannel { onmessage: (message: unknown) => void }
 export interface ArenaRoomAcceptance {
+  readonly generationStartFence?: { readonly roomId: string; readonly generationRequestId: string; readonly cleared: true };
+  readonly generationStart?: { readonly intentId: string; readonly current: boolean };
   readonly generationCancel?: { readonly intentId: string; readonly current: boolean };
   readonly signal: AbortSignal;
   /** Recheck immediately before installing state after any await. */
@@ -82,6 +85,9 @@ type GenerationRead = {
 };
 const GENERATION_READ_HTTP_TIMEOUT_MS = 20_000;
 const GENERATION_READ_IDLE_TIMEOUT_MS = 30_000;
+// Module lifetime is the actual renderer Document, not a mounted page/Room owner.
+// Retiring or replacing a bridge must not admit another large Tauri argument.
+let documentStartAdmission: symbol | null = null;
 const GENERATION_READ_DEADLINE_MS = 5 * 60_000;
 
 /** Native-only transport. No fetch, WebSocket, implicit attach or mutation retry. */
@@ -91,9 +97,11 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
   type Invocation = { command: string; args: Record<string, unknown>; valid?: () => boolean; resolve: (value: unknown) => void; reject: (error: unknown) => void };
   const pending: Invocation[] = [];
   let invoking = false;
+  let largeStart: Invocation | undefined;
   const drain = () => {
-    if (invoking || !pending.length) return;
-    const next = pending.shift()!;
+    if (invoking || (!pending.length && !largeStart)) return;
+    const next = pending.shift() ?? largeStart!;
+    if (next === largeStart) largeStart = undefined;
     invoking = true;
     void Promise.resolve().then(() => {
       if (next.valid && !next.valid()) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
@@ -277,7 +285,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       }
       // The receipt is now irreversible. A consumer failure may retire this scope,
       // but must never undo the ACK, retry it, or replay the acknowledged mutation.
-      const acknowledgedContext = { signal: context.signal, generationCancel: result.data.generationCancel, isCurrent: () => context.isCurrent() && sameDocument(candidate) };
+      const acknowledgedContext = { signal: context.signal, generationStartFence: result.data.generationStartFence, generationStart: result.data.generationStart, generationCancel: result.data.generationCancel, isCurrent: () => context.isCurrent() && sameDocument(candidate) };
       try { if (acknowledgedContext.isCurrent()) options.onAcknowledged?.(batch, acknowledgedContext); }
       catch {
         if (acknowledgedContext.isCurrent()) fail(candidate, new ArenaRoomBridgeError('internal-error'));
@@ -347,7 +355,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
   };
   const endTracking = async <T extends { intentId: string }>(
     intentId: string,
-    kind: 'end-config-tracking' | 'end-proposal-tracking',
+    kind: 'end-config-tracking' | 'end-proposal-tracking' | 'end-generation-start-tracking',
     schema: { safeParse: (input: unknown) => { success: true; data: T } | { success: false } },
   ): Promise<T> => {
     const candidate = scope;
@@ -404,9 +412,10 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       return result.data;
     },
     async request(raw: DesktopRoomHttpAction) {
+      if (raw.kind === 'generation-start') throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
       const candidate = scope;
       const action = DesktopRoomActionSchema.safeParse(raw);
-      if (!action.success || action.data.kind === 'ack' || action.data.kind === 'pull' || action.data.kind === 'generation-read' || action.data.kind === 'end-config-tracking' || action.data.kind === 'end-proposal-tracking') throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
+      if (!action.success || action.data.kind === 'generation-start' || action.data.kind === 'ack' || action.data.kind === 'pull' || action.data.kind === 'generation-read' || action.data.kind === 'end-generation-start-tracking' || action.data.kind === 'end-config-tracking' || action.data.kind === 'end-proposal-tracking') throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
       if (!candidate?.handle || !candidate.subscriptionId || !current(candidate)) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
       const delivery = candidate.delivery;
       const outcome = action.data.kind === 'discover' || action.data.kind === 'session' ? 'not-applicable' : 'unknown';
@@ -431,11 +440,41 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       if (!result.success || result.data.handle !== candidate.handle || result.data.subscriptionId !== candidate.subscriptionId) throw new ArenaRoomBridgeError('invalid-response', outcome);
       return result.data;
     },
+    /** Reserve before source hashing. Only one heavy argument survives across scope retirement. */
+    async generationStart(prepare: () => Promise<Extract<DesktopRoomHttpAction, { kind: 'generation-start' }>>) {
+      const candidate = scope;
+      if (documentStartAdmission !== null || candidate?.read) throw new ArenaRoomBridgeError('busy', 'not-applied');
+      if (!candidate?.handle || !candidate.subscriptionId || !current(candidate) || !sameDocument(candidate)) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
+      const admission = Symbol(); documentStartAdmission = admission;
+      const delivery = candidate.delivery;
+      let dispatched = false;
+      const valid = () => current(candidate, delivery) && sameDocument(candidate);
+      try {
+        let action = await prepare();
+        if (!isDesktopRoomStartWithinNodeBudget(action.request)) throw new ArenaRoomBridgeError('input-too-complex', 'not-applied');
+        if (!valid()) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
+        // Validate the full Tauri envelope once; do not retain a parsed copy alongside it.
+        let args: Record<string, unknown> | undefined = { request: { handle: candidate.handle, request: action } };
+        if (!DesktopRoomStartInvokeSchema.safeParse(args).success) throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
+        const response = await new Promise<unknown>((resolve, reject) => {
+          largeStart = { command: DESKTOP_ROOM_IPC_COMMANDS.request, args: args!, valid: () => { if (!valid()) return false; dispatched = true; return true; }, resolve, reject };
+          drain();
+        });
+        args = undefined;
+        // No source is kept for retries. Native alone retains the frozen wire.
+        action = undefined as never;
+        if (!valid()) throw new ArenaRoomBridgeError('scope-changed', 'unknown');
+        const result = DesktopRoomAcceptedResponseSchema.safeParse(response);
+        if (!result.success || result.data.handle !== candidate.handle || result.data.subscriptionId !== candidate.subscriptionId) throw new ArenaRoomBridgeError('invalid-response', 'unknown');
+        return result.data;
+      } catch (cause) { throw normalizeArenaRoomFailure(cause, dispatched ? 'unknown' : 'not-applied'); }
+      finally { if (documentStartAdmission === admission) documentStartAdmission = null; }
+    },
     /** Independent read lane: no subscription replacement or control/config mutation. */
     generationRead(identity: DesktopGenerationIdentity): Promise<ArenaRoomGenerationViewResponse> {
       const candidate = scope;
       if (!candidate?.handle || !candidate.subscriptionId || !current(candidate) || !sameDocument(candidate)) return Promise.reject(new ArenaRoomBridgeError('scope-changed'));
-      if (candidate.read) return Promise.reject(new ArenaRoomBridgeError('busy'));
+      if (candidate.read || documentStartAdmission !== null) return Promise.reject(new ArenaRoomBridgeError('busy'));
       const action = DesktopRoomActionSchema.safeParse({ kind: 'generation-read', generationId: identity.generationId,
         expectedRoomEpoch: identity.roomEpoch, expectedAttempt: identity.attempt });
       if (!action.success) return Promise.reject(new ArenaRoomBridgeError('invalid-request', 'not-applied'));
@@ -458,6 +497,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
         }, cause => { if (candidate.read === read) clearRead(candidate, normalizeArenaRoomFailure(cause)); });
       });
     },
+    endGenerationStartTracking: (intentId: string) => endTracking(intentId, 'end-generation-start-tracking', DesktopRoomGenerationStartTrackingEndedSchema),
     endConfigTracking: (intentId: string) => endTracking(intentId, 'end-config-tracking', DesktopRoomConfigTrackingEndedSchema),
     endProposalTracking: (intentId: string) => endTracking(intentId, 'end-proposal-tracking', DesktopRoomProposalTrackingEndedSchema),
     async subscribe(roomId: string, expectedRoomEpoch: string) {

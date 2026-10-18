@@ -110,8 +110,9 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const strictCheckRef = useRef<DesktopStrictCheckSnapshot | null>(null);
   const checkedStrict = useCallback((snapshot: DesktopStrictCheckSnapshot | null) => { strictCheckRef.current = snapshot; setStrictCheck(snapshot); }, []);
   const strictPreparation = useRef<{ token: symbol; controller: AbortController } | null>(null);
-  const effectiveSelection = strictActive ? { ...aiState.selection, executionPreference: 'server' as const } : aiState.selection;
-  const target = resolveDesktopAiTarget(effectiveSelection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId);
+  const roomHostPreview = roomState.constrained && roomState.session?.self.role === 'host';
+  const effectiveSelection = (strictActive || roomHostPreview) ? { ...aiState.selection, executionPreference: 'server' as const } : aiState.selection;
+  const target = resolveDesktopAiTarget(effectiveSelection, aiState.profiles, aiState.generationOverrides, aiState.modelsByProfileId, aiState.presetsByProviderId, roomHostPreview ? 'fixed-default' : undefined);
   const readStrictTargetIdentity = () => { const state = aiStore.getSnapshot(); return strictTargetIdentity(resolveDesktopAiTarget({ ...state.selection, executionPreference: 'server' }, state.profiles, state.generationOverrides, state.modelsByProfileId, state.presetsByProviderId)); };
   const hostedTarget = target.location === 'server';
   const hostedUnavailable = hostedTarget && !cloudState.bootstrapped ? '正在确认本机账号身份，请稍后。' : null;
@@ -678,12 +679,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           {product === 'battle' ? settings : null}
           <p className="text-xs">{product === 'arena' ? '手动及角色、主辅情景' : '角色与主情景继承'} {inheritedAdjudication.events.length} {hostedTarget ? '个随机判定由服务器在创建时执行，本机不会重掷；素材内判定不执行。' : '个随机判定每次生成只在本机掷骰一次，非服务器权威；素材内判定不执行。'}</p>
           {inheritedAdjudication.skippedLegacy ? <p role="status">{inheritedAdjudication.skippedLegacy} 个旧版随机事件格式不受支持，保留原字段但不执行。</p> : null}
-          <fieldset disabled={!guard.ready} className="min-w-0"><DesktopAiProviderPanel executionConstraint={strictActive ? { location: 'server', reason: '严格排位准备已将本次执行锁定为服务器，普通偏好及配置保持不变。' } : undefined} generationMode={draft.generationMode} onDirtyChange={onAiDirty} showConnectionTest={false} copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请配置客户端连接。', serverFootnote: 'Arena 服务器支持流式或完整非流式报告；恢复与停止沿原请求，角色更新使用本次创建时冻结的选择。', payloadNoun: '角色与故事设定' }} /></fieldset>
+          <fieldset disabled={!guard.ready} className="min-w-0"><DesktopAiProviderPanel serverPolicy={roomHostPreview ? 'fixed-default' : undefined} executionConstraint={roomHostPreview ? { location: 'server', reason: '本房间使用服务器系统默认，普通模型及参数保持不变。房间战报按实时共享协议读取。' } : strictActive ? { location: 'server', reason: '严格排位准备已将本次执行锁定为服务器，普通偏好及配置保持不变。' } : undefined} generationMode={draft.generationMode} onDirtyChange={onAiDirty} showConnectionTest={false} copy={{ serverOutput: { stream: '', nonStream: '' }, emptyProfilesHint: '请配置客户端连接。', serverFootnote: 'Arena 服务器支持流式或完整非流式报告；恢复与停止沿原请求，角色更新使用本次创建时冻结的选择。', payloadNoun: '角色与故事设定' }} /></fieldset>
           {hostedTarget ? <p role="status">官方服务器生成。创建前验证所选交付协议与原账号；不会自动改为客户端执行。符合服务器规则的对局可能计入严格排位，是否计分以服务器结算为准。</p> : null}
-          <DesktopStrictConfigurationDiagnostics key={product} {...strictInput} journey={{ active: strictActive, disabled: disabled || aiState.savingConnection || aiState.savingCredential || aiState.deletingConnection, snapshotKey: strictSnapshotKey, target, expectedUserId: cloudState.account?.userId ?? null,
+          <div hidden={roomHostPreview}><DesktopStrictConfigurationDiagnostics key={product} {...strictInput} journey={{ active: strictActive, disabled: disabled || aiState.savingConnection || aiState.savingCredential || aiState.deletingConnection, snapshotKey: strictSnapshotKey, target, expectedUserId: cloudState.account?.userId ?? null,
             isCurrent: key => readStrictTargetIdentity() === strictTargetIdentity(target) && key === strictSnapshotKeyRef.current && strictActiveRef.current && session.getSnapshot().draft === draft && cloudStore.getSnapshot().verification === 'verified'
               && aiStore.getCredentialIntentRevision() === providerCredentialIntent && cloudStore.getCredentialEpoch() === accountCredentialEpoch && cloudStore.getSnapshot().authFlow.kind === 'idle' && cloudStore.getSnapshot().account?.userId === cloudState.account?.userId,
-            prepare: prepareStrict, exit: exitStrict, invalidate: invalidateStrict, checked: checkedStrict }} />
+            prepare: prepareStrict, exit: exitStrict, invalidate: invalidateStrict, checked: checkedStrict }} /></div>
         </>,
         generationMode: <>
           <ArenaReportFormatSelectorView value={draft.reportFormat} disabled={disabled} onChange={(reportFormat) => update({ reportFormat })} webDescription="生成网页或包目标源码；本片仅验证、保存与导出，隔离运行待 D4 验收。" />
@@ -713,7 +714,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       header={<AdvancedArenaHeader Link={libraryHost.platform.Link} draftSharing="independent" illustrationAvailable={false} logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} />}
       links={<><ArenaRankingLinks Link={libraryHost.platform.Link} onOpenRankingModal={roomState.constrained ? undefined : () => setRankingOpen(true)} /><ArenaPageLinks Link={libraryHost.platform.Link} variant="full" onNavigateExternal={openFixed} /></>} beforeWorkspace={<>{sessionNotice}<DesktopArenaRoomPanel languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
       {roomState.memberModel && memberWorkspaceSession ? <DesktopRoomMemberWorkspace owner={roomOwner} model={roomState.memberModel} session={memberWorkspaceSession} languages={languages} /> : null}
-      {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained}><ArenaEditorWorkspaceLayout disabled={disabled} sections={buildArenaEditorSections([
+      {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained && !roomHostPreview}><ArenaEditorWorkspaceLayout preview={roomHostPreview} disabled={disabled} sections={buildArenaEditorSections([
         { kind: 'presetCharacters', description: '选择内置角色', defaultOpen: true, content: slots.presets },
         { kind: 'characterDatabase', description: `当前已选 ${draft.combatants.length}/${limits.maxCombatants}`, defaultOpen: true, content: slots.database },
         { kind: 'localImport', description: '上传或粘贴角色 JSON', defaultOpen: true, keepMounted: true, content: slots.localImport },
@@ -724,7 +725,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         { kind: 'settings', description: '角色工作副本与叙事历史', defaultOpen: false, keepMounted: true, content: settings },
         { kind: 'story', description: '辅助设定、活动历史编辑与 AI 目标', defaultOpen: true, keepMounted: true, content: slots.storyOptions },
         { kind: 'generationMode', description: 'Markdown 或 Web 源码；流式/非流式', defaultOpen: true, content: slots.generationMode },
-        { kind: 'generationActions', description: '一次冻结，一个请求', collapsible: false, content: slots.actions },
+        { kind: 'generationActions', description: '一次冻结，一个请求', collapsible: false, content: <div hidden={roomState.constrained}>{slots.actions}</div> },
       ])} /></fieldset>
     </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
       showScenario={draft.battleMode === 'scenario'} hasScenario={!!draft.scenario.content} materialCount={draft.materials.length} referenceItemCount={referenceCount} maxReferenceItems={limits.maxReferenceItemsSanity}

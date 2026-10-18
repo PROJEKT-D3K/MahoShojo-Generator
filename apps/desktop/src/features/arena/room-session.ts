@@ -1,15 +1,16 @@
-import { isArenaRoomGenerationCancelTargetCurrent, type ArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
+import { evaluateArenaGenerationReadiness, matchArenaRoomVisibleStartBundle, type ArenaRoomHostWorkspaceBundle, isArenaRoomGenerationCancelTargetCurrent, type ArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
 import { createArenaMemberProposalModel, type ArenaMemberProposalModel } from '@mahoshojo/multiplayer-core/member-proposal';
 import { observeArenaRoomConfigPublish, validateProposalChanges, type ArenaRoomConfigPublishTarget, type ArenaRoomConfigPublishObservation, type ArenaRoomProposalReconciliationObservation } from '@mahoshojo/multiplayer-core';
 import { ArenaProposalSchema, ArenaRoomProposalResolveRequestSchema, ArenaRoomProposalSubmitRequestSchema, ArenaRoomPublishConfigRequestSchema, ArenaRoomSessionResponseSchema, jsonUtf8ByteLength, type ArenaProposal, type ArenaRoomProposalResolveRequest, type ArenaRoomProposalSubmitRequest, type ArenaRoomCreateRequest, type ArenaRoomSessionResponse, type ArenaRoomSharedConfig, type RoomDirectoryEntry, type RoomDirectoryVisibility, type RoomPresenceSnapshot, type RoomServerTransportMessage } from '@mahoshojo/contracts/arena-room';
-import { DesktopRoomSessionRoomIdSchema } from '@mahoshojo/contracts/desktop-room-session';
+import { DesktopRoomSessionRoomIdSchema, isDesktopRoomStartWithinNodeBudget } from '@mahoshojo/contracts/desktop-room-session';
+import { DesktopRoomStartCapacityError, DesktopRoomStartComplexityError } from './room-source';
 import { DesktopRoomActionSchema, DESKTOP_ROOM_IPC_LIMITS, getDesktopRoomHttpOperation, type DesktopRoomMutationOperation, type DesktopRoomBatch, type DesktopRoomHttpAction, type DesktopRoomHttpOperation } from '@mahoshojo/contracts/desktop-room-ipc';
 import { ArenaRoomBridgeError, createArenaRoomBridge, type ArenaRoomAcceptance, type ArenaRoomChannel } from '../../platform/arena-room-bridge';
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import type { DesktopCloudSessionStore } from '../account/cloud-session-store';
 import { GenerationStoryBuffer } from '@mahoshojo/multiplayer-core/generation-story-buffer';
 import type { RoomGenerationView } from '@mahoshojo/ui-web/arena-room';
-import type { ArenaRoomGenerationViewResponse, StoryDeltaEvent } from '@mahoshojo/contracts/arena-room';
+import type { ArenaRoomGenerationStartRequest, ArenaRoomGenerationViewResponse, StoryDeltaEvent } from '@mahoshojo/contracts/arena-room';
 import type { DesktopGenerationIdentity } from '../../platform/arena-room-generation-reader';
 
 export type DesktopRoomGenerationView = RoomGenerationView & { readonly result: ArenaRoomGenerationViewResponse['result'] | null };
@@ -18,7 +19,7 @@ const generationKey = (identity: DesktopGenerationIdentity) => JSON.stringify([i
 const terminalGeneration = (state: string) => ['completed', 'failed', 'cancelled', 'producer_lost'].includes(state);
 type GenerationFlight = { owner: Owner; key: string; rerun: boolean; promise: Promise<void>; cancelReceipt?: { intentId: string; current: boolean } };
 
-export type RoomUnknownIntent = { operation: DesktopRoomMutationOperation; roomId: string | null; intentId: string | null; generationTarget?: { roomEpoch: string; generationId: string; attempt: number } };
+export type RoomUnknownIntent = { operation: DesktopRoomMutationOperation; roomId: string | null; intentId: string | null; generationTarget?: { roomEpoch: string; generationId: string; attempt: number }; generationStart?: { roomEpoch: string; generationRequestId: string; retryable: boolean } };
 export type DesktopConfigTracking = { id: string; roomId: string; phase: 'publishing' | 'unknown' | 'ended-needs-read'; target: ArenaRoomConfigPublishTarget | null; observation: ArenaRoomConfigPublishObservation };
 type ProposalAction = Extract<DesktopRoomHttpAction, { kind: 'proposal-submit' | 'proposal-withdraw' | 'proposal-resolve' }>;
 export type DesktopProposalTracking = { id: string | null; roomId: string; proposalId: string | null; operation: 'proposalSubmit' | 'proposalWithdraw' | 'proposalResolve'; phase: 'resolving' | 'unknown' | 'settled' | 'ended-needs-read'; observation: ArenaRoomProposalReconciliationObservation | null; intent?: ProposalAction | null };
@@ -30,10 +31,11 @@ export interface DesktopRoomState {
   configTracking: DesktopConfigTracking | null; proposalTracking: DesktopProposalTracking | null;
   memberModel: ArenaMemberProposalModel | null;
   generation: DesktopRoomGenerationView; generationReading: boolean;
+  generationStartBlocked: boolean; generationStartFence: { roomId: string; generationRequestId: string } | null;
   unknown: RoomUnknownIntent | null; error: string | null; notice: string | null;
   sourceIssues: readonly string[];
 }
-const initial = (): DesktopRoomState => ({ opened: false, busy: false, constrained: false, phase: 'detached', session: null, presence: null, snapshotReceived: false, rooms: [], nextCursor: null, unknown: null, error: null, notice: null, sourceIssues: [], configTracking: null, proposalTracking: null, memberModel: null, generation: emptyGeneration(), generationReading: false });
+const initial = (): DesktopRoomState => ({ opened: false, busy: false, constrained: false, phase: 'detached', session: null, presence: null, snapshotReceived: false, rooms: [], nextCursor: null, unknown: null, error: null, notice: null, sourceIssues: [], configTracking: null, proposalTracking: null, memberModel: null, generation: emptyGeneration(), generationReading: false, generationStartBlocked: false, generationStartFence: null });
 const staleView: DesktopRoomState = { ...initial(), error: '账号或页面身份已变化，请重新打开多人房间。' };
 export interface DesktopRoomDeps {
   invoke: InvokeFn;
@@ -45,7 +47,7 @@ export interface DesktopRoomDeps {
 }
 export type DesktopRoomSource = { ok: true; sharedConfig: ArenaRoomSharedConfig } | { ok: false; issues: readonly string[] };
 type Owner = { userId: number; epoch: number; nonce: string; token: symbol };
-type Flight = { action: DesktopRoomHttpAction; operation: DesktopRoomHttpOperation; requestId: string | null; accepted: boolean; acknowledged: boolean; result: 'success' | 'error' | null; subscribe: boolean; settlesUnknown: boolean; knownNotApplied: boolean };
+type Flight = { newStart?: boolean; action: DesktopRoomHttpAction; operation: DesktopRoomHttpOperation; requestId: string | null; accepted: boolean; acknowledged: boolean; result: 'success' | 'error' | null; subscribe: boolean; settlesUnknown: boolean; knownNotApplied: boolean };
 // Remounts share the explicit intent counter within this actual Document. Reload
 // receives a different immutable nonce; no handle or credential is persisted.
 let lastDocument: string | undefined; let attachIntent = 0;
@@ -71,7 +73,7 @@ const freezeIntent = <T>(value: T): T => {
   if (value && typeof value === 'object') { Object.values(value).forEach(freezeIntent); Object.freeze(value); }
   return value;
 };
-const requiresTrackedObservation = (operation: string | undefined) => operation === 'generationCancel' || operation === 'config' || isProposalOperation(operation);
+const requiresTrackedObservation = (operation: string | undefined) => operation === 'generationStart' || operation === 'generationCancel' || operation === 'config' || isProposalOperation(operation);
 const isMutation = (action: DesktopRoomHttpAction) => action.kind !== 'discover' && action.kind !== 'session' && action.kind !== 'generation-read';
 const unknownFor = (action: DesktopRoomHttpAction): RoomUnknownIntent | null => {
   if (action.kind === 'generation-cancel') return { operation: 'generationCancel', roomId: action.roomId, intentId: null, generationTarget: { roomEpoch: action.expectedRoomEpoch, generationId: action.generationId, attempt: action.expectedAttempt } };
@@ -81,9 +83,11 @@ const unknownFor = (action: DesktopRoomHttpAction): RoomUnknownIntent | null => 
   return null;
 };
 export const describeDesktopRoomError = (error: ArenaRoomBridgeError): string => {
+  if (error.code === 'input-too-large') return '本机材料超过 12 MiB 来源上限，请减少材料后重试。普通草稿不会被截断。';
+  if (error.code === 'input-too-complex') return '本机材料结构过于复杂，请减少嵌套或条目后重试。材料不会被截断。';
   if (error.code === 'not-authenticated') return '当前房间登录已失效，请重新验证账号后打开房间。';
   if (error.code === 'storage-unavailable') return '本机登录信息暂不可读取。房间已断开，请修复后明确恢复；未确认的操作仍可能已发生。';
-  if (error.code === 'backpressure') return '房间消费容量已用尽。请关闭并重新打开应用窗口；刷新页面不会清除未确认的投递。';
+  if (error.code === 'backpressure') return '房间消费容量已用尽。请保留未确认操作，不要据此重新发送；已有生成请只读核对或明确停止本机跟踪。关闭应用不代表服务器操作未发生；刷新页面也不会清除未确认的投递。';
   if (error.code === 'busy') return '上一项房间操作尚未结束，请稍后明确重试。';
   if (error.code === 'scope-changed') return '房间、账号或页面已变化，旧操作不再应用。';
   if (error.serverCode === 'ROOM_DESKTOP_OPERATION_UNSUPPORTED') return '服务器不支持此桌面操作，请更新服务端后再明确重试。';
@@ -103,6 +107,7 @@ export class DesktopArenaRoomSession {
   private memberAuthority: ArenaRoomSessionResponse | null = null;
   private proposalRecoveryIntent: string | null = null;
   private generationIdentity: string | null = null;
+  private startSettledIntent: string | null = null;
   private cancelTerminalKey: string | null = null;
   private generationFlight: GenerationFlight | null = null;
   private generationStories = new GenerationStoryBuffer();
@@ -181,6 +186,12 @@ export class DesktopArenaRoomSession {
   private generationCurrent(owner: Owner, key: string): boolean {
     return this.current(owner) && this.generationIdentity === key && this.currentGeneration() !== null;
   }
+  private pendingStartIdentity(): DesktopGenerationIdentity | null {
+    const pending = this.state.unknown, session = this.state.session, mirror = session?.snapshot.activeGeneration;
+    return pending?.operation === 'generationStart' && pending.generationStart && session && mirror
+      && pending.roomId === session.roomId && pending.generationStart.roomEpoch === session.roomEpoch
+      && pending.generationStart.generationRequestId === mirror.generationRequestId ? this.currentGeneration() : null;
+  }
   private pendingCancelIdentity(): DesktopGenerationIdentity | null {
     const pending = this.state.unknown;
     return pending?.operation === 'generationCancel' && pending.roomId && pending.generationTarget
@@ -192,6 +203,98 @@ export class DesktopArenaRoomSession {
     this.cancelTerminalKey = generationKey(target);
     if (this.flight?.operation === 'generationCancel') this.flight.settlesUnknown = true;
     this.publish({ unknown: null, notice: '已核对原生成已结束；这不证明由停止请求造成。完整战报仍由读取确认。' });
+  }
+  startGenerationBlockedReason = (): string | null => {
+    const state = this.state, session = state.session;
+    if (state.generationStartBlocked) return '本窗口仍保留未确认生成的防重复记录，暂不能开始新生成；只读、退出和其它房间操作仍可用。';
+    if (!this.current() || state.phase !== 'online' || !state.snapshotReceived) return '等待当前连接的完整房间快照。';
+    if (state.busy || this.flight || state.generationReading || state.unknown || state.configTracking || blocksProposalTracking(state.proposalTracking)
+      || this.deps.canStart?.() === false) return '上一项操作尚未结束，请先核对。';
+    if (!session || session.self.role !== 'host' || session.self.membershipState !== 'active') return '只有当前房主可以开始生成。';
+    if (session.snapshot.activeGeneration && !terminalGeneration(session.snapshot.activeGeneration.state)) return '当前生成尚未结束。';
+    const readiness = evaluateArenaGenerationReadiness(session.snapshot.sharedConfig);
+    return readiness.ready ? null : readiness.issues.map(issue => issue.userAction).join(' ');
+  };
+  async endGenerationStartTracking(intentId: string, identity: symbol): Promise<void> {
+    const pending = this.state.unknown, owner = this.owner;
+    if (this.confirmationOwner() !== identity || this.state.busy || this.state.generationReading
+      || pending?.operation !== 'generationStart' || pending.intentId !== intentId) return;
+    this.flight = null;
+    this.publish({ busy: true });
+    try {
+      const ended = await this.bridge.endGenerationStartTracking(intentId);
+      if (!this.current(owner) || this.state.unknown?.intentId !== intentId) return;
+      this.publish({ busy: false, unknown: null, session: null, presence: null, snapshotReceived: false,
+        generationStartBlocked: ended.generationStartBlocked, generationStartFence: ended.generationStartFence,
+        constrained: false, phase: 'ready', error: null });
+      await this.open();
+      if (this.current()) this.publish({ notice: '已停止本机跟踪并销毁原材料与重试许可。服务器任务不会取消；防重复记录仍保留，可在大厅换房或只读核对原房间。' });
+    } catch {
+      if (this.current(owner)) this.publish({ busy: false, phase: 'unavailable',
+        error: '停止本机跟踪的回执未确认，请重新验证本机状态；不会重新发送生成。' });
+    }
+  }
+  checkGenerationStartFence = () => {
+    const fence = this.state.generationStartFence;
+    return fence && !this.state.busy && !this.state.unknown && (!this.state.session || this.state.session.roomId === fence.roomId)
+      ? this.dispatch({ kind: 'session', roomId: fence.roomId }) : Promise.resolve();
+  };
+  /** Source preparation and the first large invoke share one bridge-owned admission slot. */
+  async startGeneration(session: ArenaRoomSessionResponse, identity: symbol,
+    prepare: () => Promise<{ bundle: ArenaRoomHostWorkspaceBundle; generation: ArenaRoomGenerationStartRequest['generation'] }>,
+    sourceCurrent: () => boolean): Promise<void> {
+    if (this.confirmationOwner() !== identity || this.state.session !== session || this.startGenerationBlockedReason() || !sourceCurrent()) return;
+    const owner = this.owner, generationRequestId = this.deps.randomId?.() ?? crypto.randomUUID();
+    const flight: Flight = { newStart: true, action: { kind: 'retry-generation-start', intentId: 'pending-start' }, operation: 'generationStart',
+      requestId: null, accepted: false, acknowledged: false, result: null, subscribe: false, settlesUnknown: false, knownNotApplied: false };
+    this.flight = flight; this.startSettledIntent = null;
+    this.publish({ busy: true, error: null, sourceIssues: [], notice: '正在冻结眼前配置与完整来源。',
+      unknown: { operation: 'generationStart', roomId: session.roomId, intentId: null,
+        generationStart: { roomEpoch: session.roomEpoch, generationRequestId, retryable: false } } });
+    let prepared = false;
+    try {
+      const accepted = await this.bridge.generationStart(async () => {
+        const input = await prepare().catch(cause => {
+          if (cause instanceof DesktopRoomStartCapacityError) throw new ArenaRoomBridgeError('input-too-large', 'not-applied');
+          if (cause instanceof DesktopRoomStartComplexityError) throw new ArenaRoomBridgeError('input-too-complex', 'not-applied');
+          throw cause;
+        });
+        if (!this.current(owner) || this.state.session !== session || this.state.phase !== 'online' || !this.state.snapshotReceived
+          || !sourceCurrent() || this.deps.canStart?.() === false) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
+        const matched = matchArenaRoomVisibleStartBundle(session.snapshot.sharedConfig, input.bundle);
+        if (!matched) { this.publish({ error: '眼前设置或本地正文与房间尚未落定一致。请先比较并明确发布当前设置，再重新开始。' }); throw new ArenaRoomBridgeError('invalid-request', 'not-applied'); }
+        const request = {
+          expectedRoomEpoch: session.roomEpoch, expectedRevision: session.snapshot.revision, expectedControlSeq: session.snapshot.controlSeq,
+          generationRequestId, sharedConfig: matched.sharedConfig, hostLocalPayloads: [...matched.hostLocalPayloads], generation: input.generation,
+        };
+        if (!isDesktopRoomStartWithinNodeBudget(request)) throw new ArenaRoomBridgeError('input-too-complex', 'not-applied');
+        prepared = true;
+        return { kind: 'generation-start', roomId: session.roomId, request };
+      });
+      if (!this.current(owner) || this.flight !== flight) return;
+      if (flight.requestId && flight.requestId !== accepted.requestId) throw new ArenaRoomBridgeError('invalid-response', 'unknown');
+      flight.requestId = accepted.requestId; flight.accepted = true;
+      if (this.state.unknown?.operation === 'generationStart' && this.state.unknown.intentId === null) this.publish({ unknown: { ...this.state.unknown, intentId: accepted.requestId } });
+      this.finishFlight(flight);
+    } catch (cause) {
+      if (!this.current(owner) || this.flight !== flight) return;
+      const error = cause instanceof ArenaRoomBridgeError ? cause : new ArenaRoomBridgeError(cause instanceof DesktopRoomStartComplexityError ? 'input-too-complex' : 'invalid-request', prepared ? 'unknown' : 'not-applied');
+      if (error.outcome === 'not-applied') {
+        this.flight = null; this.publish({ busy: false, unknown: null, error: this.state.error ?? describeDesktopRoomError(error) });
+      } else this.failed(error);
+    }
+  }
+  retryStartGeneration = (intentId: string, identity: symbol): Promise<void> => {
+    const pending = this.state.unknown;
+    if (this.confirmationOwner() !== identity || pending?.operation !== 'generationStart' || pending.intentId !== intentId
+      || !pending.generationStart?.retryable || this.state.busy || this.state.phase !== 'online' || !this.state.snapshotReceived) return Promise.resolve();
+    return this.dispatch({ kind: 'retry-generation-start', intentId });
+  };
+  private settleStart(receipt: ArenaRoomAcceptance['generationStart']): void {
+    if (!receipt?.current || (this.state.unknown?.intentId !== null ? this.state.unknown?.intentId !== receipt.intentId : this.flight?.operation !== 'generationStart')) return;
+    this.startSettledIntent = receipt.intentId;
+    if (this.flight?.operation === 'generationStart') this.flight.settlesUnknown = true;
+    this.publish({ unknown: null, notice: '原生成已建立。等待当前房间权威状态后，可继续读取或停止该任务。' });
   }
   cancelGenerationBlockedReason = (): string | null => {
     if (!this.current() || this.state.phase !== 'online' || !this.state.snapshotReceived) return '等待当前连接的完整房间快照。';
@@ -217,7 +320,8 @@ export class DesktopArenaRoomSession {
   private requestGenerationRecovery(reason: 'baseline' | 'reconnect' | 'gap' | 'terminal' | 'manual', rerun = false): Promise<void> {
     const identity = this.currentGeneration(), owner = this.owner;
     if (!owner || !identity || !this.current(owner) || !this.state.snapshotReceived || this.state.phase !== 'online') return Promise.resolve();
-    if (this.state.unknown && (!this.pendingCancelIdentity() || generationKey(this.pendingCancelIdentity()!) !== generationKey(identity))) return Promise.resolve();
+    const pendingTarget = this.pendingCancelIdentity() ?? this.pendingStartIdentity();
+    if (this.state.unknown && (!pendingTarget || generationKey(pendingTarget) !== generationKey(identity))) return Promise.resolve();
     if (reason === 'manual' && this.state.busy) return Promise.resolve();
     const key = generationKey(identity);
     if (reason !== 'manual' && (this.generationStableFailure || this.state.generation.finalAuthoritative)) return Promise.resolve();
@@ -355,6 +459,7 @@ export class DesktopArenaRoomSession {
         : !unknown && previousProposalTracking && previousProposalTracking.phase !== 'settled'
           ? { ...previousProposalTracking, phase: 'ended-needs-read', proposalId: null, observation: null } : null;
       this.publish({ busy: false, phase: previousSession ? 'offline' : 'ready', session: previousSession, memberModel, unknown, configTracking, proposalTracking,
+        generationStartBlocked: attached.generationStartBlocked, generationStartFence: attached.generationStartFence,
         constrained: !!unknown || !!previousSession || !!configTracking || blocksProposalTracking(proposalTracking), notice: unknown ? '发现本机尚未确认的原操作，请明确核对；不会自动重发。' : null }, !!memberModel);
       return owner.token;
     } catch (cause) { if (this.current(owner)) this.failed(cause instanceof ArenaRoomBridgeError ? cause : new ArenaRoomBridgeError('internal-error')); }
@@ -554,6 +659,7 @@ export class DesktopArenaRoomSession {
     const pending = this.state.unknown;
     if (this.state.phase === 'unavailable') return this.open();
     if (!pending) return Promise.resolve();
+    if (pending.operation === 'generationStart' && this.state.phase === 'online' && this.state.snapshotReceived && this.pendingStartIdentity()) return this.retryGenerationRecovery();
     if (pending.operation === 'generationCancel' && this.state.phase === 'online' && this.state.snapshotReceived && !this.cancelTrackingUnavailable()) return this.retryGenerationRecovery();
     if (pending.operation === 'create') return pending.intentId ? this.dispatch({ kind: 'resume-create', intentId: pending.intentId }) : this.open();
     return pending.roomId ? this.dispatch({ kind: 'session', roomId: pending.roomId }) : Promise.resolve();
@@ -573,7 +679,7 @@ export class DesktopArenaRoomSession {
     if (!this.current() || this.state.busy || this.flight) return;
     if (this.state.proposalTracking?.phase === 'resolving' && action !== this.state.proposalTracking.intent && action.kind !== 'proposal-resolve') return;
     if ((this.state.configTracking?.phase === 'ended-needs-read' || this.state.proposalTracking?.phase === 'ended-needs-read') && action.kind !== 'session') return;
-    if (this.state.unknown && !['session', 'resume-create'].includes(action.kind)) return;
+    if (this.state.unknown && !['session', 'resume-create', 'retry-generation-start'].includes(action.kind)) return;
     if (this.state.unknown?.operation === 'create' && action.kind !== 'resume-create') return;
     const owner = this.owner;
     const flight: Flight = { action, operation: getDesktopRoomHttpOperation(action), requestId: null, accepted: false, acknowledged: false, result: null, subscribe: false, settlesUnknown: false, knownNotApplied: false };
@@ -581,7 +687,7 @@ export class DesktopArenaRoomSession {
     this.flight = flight;
     this.publish({ busy: true, error: null, constrained: this.state.constrained || isMutation(action),
       ...(action.kind === 'session' ? { presence: null, snapshotReceived: false } : {}),
-      ...(isMutation(action) && action.kind !== 'generation-cancel' ? { presence: null, ...(this.state.proposalTracking?.phase === 'settled' ? { proposalTracking: null } : {}) } : {}) });
+      ...(isMutation(action) && action.kind !== 'generation-cancel' && action.kind !== 'retry-generation-start' ? { presence: null, ...(this.state.proposalTracking?.phase === 'settled' ? { proposalTracking: null } : {}) } : {}) });
     if (action.kind === 'generation-cancel') { this.cancelTerminalKey = null; this.publish({ unknown: unknownFor(action), notice: '正在发送一次停止请求。' }); }
     const dispatchAuthorityVersion = this.authorityVersion;
     try {
@@ -632,6 +738,12 @@ export class DesktopArenaRoomSession {
           if ('roomId' in flight.action && 'roomId' in event.response.result && event.response.result.roomId !== flight.action.roomId) return false;
           flight.result = 'success';
           if (event.operation === 'discover') this.publish({ rooms: event.response.result.items, nextCursor: event.response.result.nextCursor });
+          else if (event.operation === 'generationStart') {
+            const pending = this.state.unknown, result = event.response.result;
+            if (!flight.settlesUnknown && (pending?.operation !== 'generationStart' || pending.roomId !== result.roomId
+              || pending.generationStart?.roomEpoch !== result.roomEpoch || pending.generationStart.generationRequestId !== result.generation.generationRequestId)) return false;
+            // Receipt binds the request; it cannot advance the room control cursor.
+          }
           else if (event.operation === 'generationCancel') {
             if (flight.action.kind !== 'generation-cancel') return false;
             const result = event.response.result, target = flight.action;
@@ -670,6 +782,7 @@ export class DesktopArenaRoomSession {
         }
       }
     } else if (event.kind === 'mutation-unknown') {
+      if (event.operation === 'generationStart' && event.intentId === this.startSettledIntent) return true;
       if (event.operation === 'generationCancel' && event.roomId && event.generationTarget
         && this.cancelTerminalKey === generationKey({ roomId: event.roomId, ...event.generationTarget })) return true;
       if (event.operation === 'config' && event.roomId) this.publish({ configTracking: { id: event.intentId, roomId: event.roomId, phase: 'unknown', target: this.state.configTracking?.target ?? null, observation: this.state.configTracking?.observation ?? 'target-unavailable' } });
@@ -693,7 +806,12 @@ export class DesktopArenaRoomSession {
   }
   private acknowledged(batch: DesktopRoomBatch, context: ArenaRoomAcceptance) {
     if (!context.isCurrent() || !this.current()) return;
+    const cleared = context.generationStartFence, fence = this.state.generationStartFence;
+    if (cleared && fence && cleared.roomId === fence.roomId && cleared.generationRequestId === fence.generationRequestId) {
+      this.publish({ generationStartBlocked: false, generationStartFence: null, notice: '已取得原请求或原房间结束的权威证据，防重复记录已解除；这不证明任务被取消。' });
+    }
     const event = batch.event;
+    this.settleStart(context.generationStart);
     if (event.kind === 'generation-fragment' && event.final && this.generationFlight) {
       this.generationFlight.cancelReceipt = context.generationCancel;
       return;
@@ -746,13 +864,14 @@ export class DesktopArenaRoomSession {
   private finishFlight(flight: Flight) {
     if (this.flight !== flight || !flight.accepted || !flight.acknowledged || !this.current()) return;
     this.flight = null;
-    const settled = flight.settlesUnknown || flight.result === 'success' && flight.operation !== 'discover' && flight.operation !== 'generationCancel'
+    const settled = flight.settlesUnknown || flight.result === 'success' && flight.operation !== 'discover' && flight.operation !== 'generationCancel' && flight.operation !== 'generationStart'
       && (flight.operation !== 'session' || (this.state.unknown?.operation !== 'create' && !requiresTrackedObservation(this.state.unknown?.operation)));
     if (settled) this.publish({ unknown: null });
     if (flight.result === 'success' && (flight.operation === 'config' || (flight.operation === 'session' && this.state.configTracking?.phase === 'ended-needs-read'))) this.publish({ configTracking: null });
     if (flight.result === 'success' && isProposalOperation(flight.operation) && this.state.proposalTracking) this.publish({ proposalTracking: { ...this.state.proposalTracking, phase: 'settled', observation: null } });
     if (flight.result === 'success' && flight.operation === 'session' && this.state.proposalTracking?.phase === 'ended-needs-read') this.publish({ proposalTracking: null });
     this.publish({ busy: false, constrained: this.state.session !== null || this.state.unknown !== null || this.state.configTracking !== null || blocksProposalTracking(this.state.proposalTracking) });
+    if (flight.operation === 'generationStart') void this.requestGenerationRecovery('baseline');
     if (flight.operation === 'generationCancel' && this.state.unknown?.operation === 'generationCancel') void this.requestGenerationRecovery('baseline');
     if (flight.operation === 'generationCancel' && flight.settlesUnknown) void this.requestGenerationRecovery('terminal');
     if (flight.subscribe && this.state.session) void this.startSubscription();
@@ -771,7 +890,7 @@ export class DesktopArenaRoomSession {
     if (isProposalOperation(flight?.operation) && this.state.proposalTracking) this.publish({ proposalTracking: error.outcome === 'not-applied' ? null : { ...this.state.proposalTracking, phase: 'unknown' } });
     if (flight?.operation === 'session' && this.state.configTracking?.phase === 'unknown') this.publish({ configTracking: { ...this.state.configTracking, observation: 'authority-unavailable' } });
     if (ended && flight && this.state.unknown?.operation !== 'create' && !requiresTrackedObservation(this.state.unknown?.operation)) flight.settlesUnknown = true;
-    this.publish({ error: describeDesktopRoomError(error), unknown: flight?.operation === 'generationCancel' && error.outcome === 'not-applied' ? null : unknown,
+    this.publish({ error: describeDesktopRoomError(error), unknown: (flight?.operation === 'generationCancel' || flight?.newStart) && error.outcome === 'not-applied' ? null : unknown,
       ...(ended ? { session: null, presence: null, snapshotReceived: false, phase: 'closed' as const } : {}) }, ended);
   }
   private failed(error: ArenaRoomBridgeError, retired = false) {

@@ -457,6 +457,23 @@ describe('Room acceptance actual CLI entry with a synthetic mock child', () => {
 });
 
 describe('Room acceptance owned mock supervision without spawning processes', () => {
+  it('permits synthetic starts only in the explicit start mode and never permits model dispatches', async () => {
+    const child = new SyntheticChild(), mock = monitorMock(child, false, { syntheticStart: true });
+    child.line({ ...readyMessage(), selfCheck: { ...selfCheckSummary, generationReadOnly: false, generationCancel: true, generationStart: true, syntheticProducer: true } }); await mock.ready;
+    const armed = mock.command('arm-fault', 'generationStart'); child.line({ id: 1, event: 'armed', operation: 'generationStart' }); await armed;
+    const observed = mock.command('observe');
+    const value = { ...observations(2), generation: { ...generationObservations(), cancelEnabled: true, startEnabled: true, startDispatches: 3, startPortCalls: 2, syntheticProducers: 1, startReservations: 1 },
+      trace: [{ kind: 'room-http', operation: 'generationStart', status: 202, dropped: true }] };
+    child.line(value); await expect(observed).resolves.toEqual(value);
+    const invalid = mock.command('observe'); child.line({ ...value, id: 3, generation: { ...value.generation, modelDispatches: 1 } });
+    await expect(invalid).rejects.toThrow('invalid mock response'); await mock.exit; await mock.close();
+    for (const syntheticCancel of [false, true]) {
+      const other = new SyntheticChild(), closed = monitorMock(other, false, { syntheticCancel });
+      other.line({ ...readyMessage(), selfCheck: { ...selfCheckSummary, ...(syntheticCancel ? { generationReadOnly: false, generationCancel: true } : {}) } }); await closed.ready;
+      await expect(closed.command('arm-fault', 'generationStart')).rejects.toThrow(); await expect(closed.command('generation', 'start-large')).rejects.toThrow();
+      other.finish(); await closed.exit; await closed.close();
+    }
+  });
   it('requires an explicit synthetic-cancel monitor and keeps the read-only zero-cancel guard', async () => {
     const child = new SyntheticChild(), mock = monitorMock(child, false, { syntheticCancel: true });
     child.line({ ...readyMessage(), selfCheck: { ...selfCheckSummary, generationReadOnly: false, generationCancel: true } }); await mock.ready;
