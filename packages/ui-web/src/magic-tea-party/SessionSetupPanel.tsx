@@ -19,6 +19,7 @@ export type MagicTeaPartySessionSetupPanelProps = {
   onDirtyChange?: (dirty: boolean) => void;
   playerOptions: MagicTeaPartyPlayerOption[];
   onOpenRoleModal: () => void;
+  onEditRole?: (roleId: string, trigger: HTMLButtonElement) => void;
   onOpenScenarioModal: () => void;
   onUploadRoles: (event: ChangeEvent<HTMLInputElement>) => void;
   onUploadScenarios: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -263,7 +264,8 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
             ) : (
               roles.map((role) => (
                 <span key={role.id} className="inline-flex items-center gap-2 rounded-full bg-pink-50 px-3 py-1 text-xs text-pink-800">
-                  {role.name}
+                  {props.onEditRole ? <button type="button" className="hover:underline" disabled={!canEdit}
+                    onClick={event => { if (canEdit) props.onEditRole?.(role.id, event.currentTarget); }} aria-label={`编辑角色：${role.name}`}>{role.name} · 编辑</button> : role.name}
                   <button
                     type="button"
                     className="text-pink-700 hover:text-pink-900"

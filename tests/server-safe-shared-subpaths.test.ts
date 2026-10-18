@@ -361,6 +361,17 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
     expect(findHookCalls(result.outputFiles[0].text)).toEqual([]);
   });
 
+  it('keeps the Tea role editor projection pure behind its explicit domain export', async () => {
+    const root = path.resolve(PACKAGE_ROOT, '../domain');
+    const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+    expect(manifest.exports['./magic-tea-party/role-editor']).toBe('./src/magic-tea-party/role-editor.ts');
+    const result = await build({ entryPoints: [path.join(root, 'src/magic-tea-party/role-editor.ts')], bundle: true,
+      platform: 'node', format: 'esm', write: false, metafile: true, logLevel: 'silent' });
+    const files = Object.keys(result.metafile!.inputs);
+    expect(files.some(file => file.includes('/apps/') || file.includes('/ui-web/'))).toBe(false);
+    expect(findHookCalls(result.outputFiles[0].text)).toEqual([]);
+  });
+
   it('keeps the battle report text leaf free of view hooks', () => {
     const graph = collectModuleGraph(path.join(SRC, 'arena-report/text.ts'));
     expect(graph.length).toBeGreaterThan(1);

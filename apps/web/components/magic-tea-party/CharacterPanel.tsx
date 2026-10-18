@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+
+import { MagicTeaPartyRoleEditor } from '@mahoshojo/ui-web/magic-tea-party';
+import { applyMagicTeaPartyRoleDraft, sameMagicTeaPartyRoleSource, type MagicTeaPartyRoleDraft } from '@mahoshojo/domain/magic-tea-party/role-editor';
 
 import DecksModal from '@/components/DecksModal';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import { buildSafeFileName } from '@/lib/client/fileName';
 import { dataCardApi, deckApi } from '@/lib/auth';
-import { inferTemplate } from '@/lib/data-card-converter';
 import { mapPublicDataCardRowToBattleSelectionPayload } from '@/lib/data-card-read-mappers';
 import type { MagicTeaPartyRole, MagicTeaPartySession } from '@/lib/magic-tea-party/types';
 import { buildTitleDisplay } from '@/lib/text';
@@ -12,8 +14,10 @@ import type { ArenaHistory, ArenaHistoryEntry, CharacterCurrentState } from '@/t
 
 type MagicTeaPartyCharacterPanelProps = {
   activeSession: MagicTeaPartySession | null;
+  disabled?: boolean;
   roles: MagicTeaPartyRole[];
   isAuthenticated: boolean;
+  onSaveRole: (source: MagicTeaPartyRole, next: MagicTeaPartyRole) => Promise<boolean>;
   onUpdateRoles: (roles: MagicTeaPartyRole[]) => void;
   onUpdatePlayerRole: (roleId: string | null) => void;
   onToggleRoleCard: (payload: unknown, nextSelected: boolean) => void | Promise<void>;
@@ -95,20 +99,16 @@ const getBadgeClassName = (tone: 'pink' | 'gray' | 'amber' | 'blue') => {
 };
 
 export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelProps) {
-  const { activeSession, roles, isAuthenticated, onUpdateRoles, onUpdatePlayerRole, onToggleRoleCard } = props;
+  const { activeSession, roles, isAuthenticated, onSaveRole, onUpdateRoles, onUpdatePlayerRole, onToggleRoleCard } = props;
   const [showDecksModal, setShowDecksModal] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'edit' | 'history' | 'cloud'>('overview');
-  const [draftName, setDraftName] = useState('');
-  const [draftNotes, setDraftNotes] = useState('');
-  const [draftCurrentState, setDraftCurrentState] = useState('');
   const [draftCardText, setDraftCardText] = useState('');
   const [showRawEditor, setShowRawEditor] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
-  const [editNotice, setEditNotice] = useState<string | null>(null);
+  const [rawSourceChanged, setRawSourceChanged] = useState(false);
   const [draggingRoleId, setDraggingRoleId] = useState<string | null>(null);
   const [cloudName, setCloudName] = useState('');
   const [cloudDescription, setCloudDescription] = useState('');
@@ -117,6 +117,10 @@ export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelPr
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [cloudNotice, setCloudNotice] = useState<string | null>(null);
 
+  const scopeKey = JSON.stringify([activeSession?.id, activeSession?.createdAt, selectedRoleId]);
+  const editScope = useRef({ key: scopeKey });
+  const hostDraftSource = useRef<{ key: string; role: MagicTeaPartyRole | null }>({ key: '', role: null });
+  if (editScope.current.key !== scopeKey) editScope.current = { key: scopeKey };
   const playerRoleId = activeSession?.playerRoleId ?? null;
   const roleCount = roles.length;
   const selectedRole = roles.find((role) => role.id === selectedRoleId) ?? null;
@@ -185,20 +189,14 @@ export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelPr
 
   const resetRoleDraft = useCallback(
     (role: MagicTeaPartyRole | null) => {
+      setRawSourceChanged(false);
       if (!role) {
-        setDraftName('');
-        setDraftNotes('');
-        setDraftCurrentState('');
         setDraftCardText('');
         setCloudName('');
         setCloudDescription('');
         setCloudIsPublic(false);
         return;
       }
-      setDraftName(role.name ?? '');
-      setDraftNotes(role.notes ?? '');
-      const currentState = readCurrentState(role);
-      setDraftCurrentState(currentState?.summary ?? '');
       setDraftCardText(JSON.stringify(role.card ?? {}, null, 2));
       setCloudName(role.name ?? '');
       setCloudDescription(
@@ -209,57 +207,21 @@ export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelPr
     []
   );
 
-  const handleSaveRole = useCallback(() => {
-    if (!selectedRole) return;
-    const trimmedName = draftName.trim();
-    if (!trimmedName) {
-      setEditError('角色名称不能为空。');
-      return;
-    }
-    let nextCard: Record<string, unknown> = safeCloneCard(selectedRole.card);
+  const handleSaveRole = useCallback(async (source: MagicTeaPartyRole, draft: MagicTeaPartyRoleDraft) => {
+    const scope = editScope.current;
+    let card = source.card;
     if (showRawEditor) {
       try {
-        nextCard = JSON.parse(draftCardText || '{}') as Record<string, unknown>;
-      } catch {
-        setEditError('角色卡 JSON 解析失败，请检查格式。');
-        return;
-      }
+        const parsed: unknown = JSON.parse(draftCardText || '{}');
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+        card = parsed as Record<string, unknown>;
+      } catch { throw new Error('角色卡 JSON 解析失败，请检查格式。'); }
     }
-
-    const template = inferTemplate(nextCard);
-    if (template === 'magical-girl') {
-      nextCard.codename = trimmedName;
-    } else {
-      nextCard.name = trimmedName;
-    }
-
-    if (draftCurrentState.trim()) {
-      const currentState = (nextCard.current_state && typeof nextCard.current_state === 'object'
-        ? { ...(nextCard.current_state as Record<string, unknown>) }
-        : {}) as Record<string, unknown>;
-      currentState.summary = draftCurrentState.trim();
-      currentState.updated_at = new Date().toISOString();
-      nextCard.current_state = currentState;
-    } else if (nextCard.current_state && typeof nextCard.current_state === 'object') {
-      const currentState = { ...(nextCard.current_state as Record<string, unknown>) };
-      currentState.summary = '';
-      nextCard.current_state = currentState;
-    }
-
-    const nextRole: MagicTeaPartyRole = {
-      ...selectedRole,
-      name: trimmedName,
-      notes: draftNotes.trim() ? draftNotes.trim() : undefined,
-      card: nextCard,
-      template:
-        template === 'magical-girl' || template === 'canshou' || template === 'general' ? template : selectedRole.template,
-    };
-
-    const nextRoles = roles.map((role) => (role.id === selectedRole.id ? nextRole : role));
-    onUpdateRoles(nextRoles);
-    setEditError(null);
-    setEditNotice('角色修改已保存到本地会话。');
-  }, [draftCardText, draftCurrentState, draftName, draftNotes, onUpdateRoles, roles, selectedRole, showRawEditor]);
+    const next = applyMagicTeaPartyRoleDraft({ ...source, card }, draft, new Date().toISOString());
+    if (!await onSaveRole(source, next)) return null;
+    if (editScope.current === scope) { setDraftCardText(JSON.stringify(next.card, null, 2)); setRawSourceChanged(false); }
+    return next;
+  }, [draftCardText, onSaveRole, showRawEditor]);
 
   const handleSaveToCloud = useCallback(
     async (mode: 'create' | 'replace') => {
@@ -372,14 +334,23 @@ export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelPr
   }, [roles, selectedRoleId]);
 
   useEffect(() => {
-    resetRoleDraft(selectedRole);
-    setEditError(null);
-    setEditNotice(null);
+    const previous = hostDraftSource.current;
+    const sameSelection = previous.key === scopeKey;
+    if (sameSelection && sameMagicTeaPartyRoleSource(previous.role, selectedRole)) return;
+    hostDraftSource.current = { key: scopeKey, role: selectedRole };
+    const rawDirty = sameSelection && showRawEditor && previous.role
+      && draftCardText !== JSON.stringify(previous.role.card ?? {}, null, 2);
+    if (rawDirty) setRawSourceChanged(true);
+    else resetRoleDraft(selectedRole);
     setCloudError(null);
     setCloudNotice(null);
+  }, [resetRoleDraft, selectedRole, scopeKey, showRawEditor, draftCardText]);
+
+  useEffect(() => {
+    // Replacing the committed role refreshes host-only fields, but is not a selection change.
     setActiveTab('overview');
     setShowRawEditor(false);
-  }, [resetRoleDraft, selectedRole]);
+  }, [selectedRoleId, activeSession?.id, activeSession?.createdAt]);
 
   return (
     <div className="rounded-xl border border-pink-100 bg-white p-4 space-y-3">
@@ -437,7 +408,7 @@ export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelPr
                 {roleCards.map((role, index) => {
                   const badges = buildRoleBadges(role);
                   const currentState = readCurrentState(role);
-                  return (
+                              return (
                     <div
                       key={role.id}
                       className={`cursor-pointer rounded-lg border px-3 py-2 transition ${
@@ -456,7 +427,7 @@ export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelPr
                             ≡
                           </span>
                           <div>
-                            <div className="text-sm font-semibold text-gray-800">{role.displayName}</div>
+                            <button type="button" className="text-left text-sm font-semibold text-gray-800" aria-pressed={selectedRoleId === role.id} onClick={() => setSelectedRoleId(role.id)}>{role.displayName}</button>
                             <div className="mt-1 flex flex-wrap gap-1">
                               {badges.map((badge) => (
                                 <span
@@ -579,81 +550,6 @@ export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelPr
                       </div>
                     ) : null}
 
-                    {activeTab === 'edit' ? (
-                      <div className="space-y-3">
-                        {editNotice ? <div className="text-xs text-emerald-600">{editNotice}</div> : null}
-                        {editError ? <div className="text-xs text-red-600">{editError}</div> : null}
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-600">角色名称</label>
-                            <input
-                              className="input-field"
-                              value={draftName}
-                              onChange={(event) => setDraftName(event.target.value)}
-                              disabled={!activeSession}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-600">角色备注</label>
-                            <input
-                              className="input-field"
-                              value={draftNotes}
-                              onChange={(event) => setDraftNotes(event.target.value)}
-                              placeholder="可选"
-                              disabled={!activeSession}
-                            />
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold text-gray-600">当前状态摘要</label>
-                          <textarea
-                            className="input-field h-24 resize-y"
-                            value={draftCurrentState}
-                            onChange={(event) => setDraftCurrentState(event.target.value)}
-                            placeholder="更新角色当前状态摘要"
-                            disabled={!activeSession}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-gray-500">高级：直接编辑角色卡 JSON。</span>
-                          <button
-                            type="button"
-                            className="text-xs text-pink-700 hover:underline"
-                            onClick={() => setShowRawEditor((prev) => !prev)}
-                            disabled={!activeSession}
-                          >
-                            {showRawEditor ? '收起 JSON 编辑' : '编辑角色卡 JSON'}
-                          </button>
-                        </div>
-                        {showRawEditor ? (
-                          <textarea
-                            className="input-field h-48 resize-y font-mono text-[11px]"
-                            value={draftCardText}
-                            onChange={(event) => setDraftCardText(event.target.value)}
-                            disabled={!activeSession}
-                          />
-                        ) : null}
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            className="rounded-lg bg-pink-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-pink-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            onClick={handleSaveRole}
-                            disabled={!activeSession}
-                          >
-                            保存修改
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50"
-                            onClick={() => resetRoleDraft(selectedRole)}
-                            disabled={!activeSession}
-                          >
-                            重置
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-
                     {activeTab === 'history' ? (
                       <div className="space-y-2 text-xs text-gray-600">
                         {readArenaHistoryEntries(selectedRole).length === 0 ? (
@@ -753,6 +649,21 @@ export function MagicTeaPartyCharacterPanel(props: MagicTeaPartyCharacterPanelPr
           )}
         </>
       )}
+
+      <MagicTeaPartyRoleEditor scope={JSON.stringify([activeSession?.id, activeSession?.createdAt])} role={selectedRole} allowDiscardAll
+        hidden={collapsed || activeTab !== 'edit'} disabled={props.disabled}
+        onSave={handleSaveRole} onReset={() => resetRoleDraft(selectedRole)}
+        additionalDirty={Boolean(showRawEditor && selectedRole && draftCardText !== JSON.stringify(selectedRole.card ?? {}, null, 2))}>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-gray-500">高级：直接编辑角色卡 JSON。</span>
+          <button type="button" className="text-xs text-pink-700 hover:underline" onClick={() => setShowRawEditor(previous => !previous)}>
+            {showRawEditor ? '收起 JSON 编辑' : '编辑角色卡 JSON'}
+          </button>
+        </div>
+        {rawSourceChanged ? <div role="alert" className="text-xs text-amber-700">角色来源已变化，JSON 草稿已保留；保存仍会核对原角色，请先复制草稿或重置到最新角色。</div> : null}
+        {showRawEditor ? <textarea aria-label="角色卡 JSON" className="input-field h-48 resize-y font-mono text-[11px]"
+          value={draftCardText} onChange={event => setDraftCardText(event.target.value)} /> : null}
+      </MagicTeaPartyRoleEditor>
 
       <DecksModal
         isOpen={showDecksModal}

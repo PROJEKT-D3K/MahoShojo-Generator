@@ -12,3 +12,5 @@ export { useChatAutoScroll, type UseChatAutoScrollOptions } from './useChatAutoS
 export { MagicTeaPartySummaryBody, type MagicTeaPartySummaryBodyProps } from './SummaryPanel';
 
 export { useSessionSidebarPreference, MAGIC_TEA_PARTY_SIDEBAR_PREFERENCE_KEY } from './useSessionSidebarPreference';
+
+export { MagicTeaPartyRoleEditor, type MagicTeaPartyRoleEditorProps } from './RoleEditor';

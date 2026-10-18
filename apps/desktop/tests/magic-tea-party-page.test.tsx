@@ -350,3 +350,123 @@ it('restores sidebar folding and persists toggles without mutating tea sessions'
   expect(recent()?.textContent).toContain('收起');
   expect(native.invoke.mock.calls.some(([command]) => command === 'mutate_magic_tea_party')).toBe(false);
 });
+
+it('edits a session role through the shared form and actual owner/bridge receipt, then reloads the saved source', async () => {
+  await mount(); await click('新建会话');
+  const card = { templateId: '通用角色', name: '星見', content: '完整设定', extension: { keep: ['😀', 7] },
+    current_state: { summary: '旧状态', fields: [{ id: 'hp', label: '生命', type: 'number', value: 4 }], extra: { untouched: true } } };
+  await change('textarea[placeholder^="粘贴角色"]', JSON.stringify(card)); await click('导入');
+  const openEditor = () => act(async () => container.querySelector<HTMLButtonElement>('button[aria-label^="编辑角色："]')!.click());
+  await openEditor(); expect(window.document.activeElement?.textContent).toBe('会话角色编辑');
+  await change('input[aria-label="角色名称"]', '新星見'); await change('input[aria-label="角色备注"]', '会话备注');
+  await change('textarea[aria-label="当前状态摘要"]', '新状态');
+  const original = native.invoke.getMockImplementation()!; let release!: () => void; let updates = 0;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === 'mutate_magic_tea_party' && TeaWriteRequestSchema.parse(args.request).request.action === 'update') {
+      updates += 1; await new Promise<void>(resolve => { release = resolve; });
+    }
+    return original(command, args);
+  });
+  await act(async () => { button('保存修改').click(); button('保存修改').click(); });
+  expect(updates).toBe(1); expect(document!.roles[0]!.name).toBe('星見'); expect(container.textContent).not.toContain('角色修改已保存');
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="角色名称"]')!.matches(':disabled')).toBe(true);
+  await act(async () => release());
+  expect(container.textContent).toContain('角色修改已保存到本地会话');
+  expect(document!.roles[0]).toMatchObject({ name: '新星見', notes: '会话备注', card: { ...card, name: '新星見', current_state: { ...card.current_state, summary: '新状态' } } });
+  expect(streams).toBe(0);
+  await click('收起角色编辑'); expect(window.document.activeElement?.getAttribute('aria-label')).toBe('编辑角色：新星見');
+  await act(async () => root.unmount()); root = createRoot(container); native.invoke.mockImplementation(original);
+  await mount(); await openSession('新茶会'); await openEditor();
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="角色名称"]')!.value).toBe('新星見');
+  expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="当前状态摘要"]')!.value).toBe('新状态');
+  expect(document!.roles[0]!.card.extension).toEqual(card.extension); expect(streams).toBe(0);
+});
+
+it('keeps a failed role draft, fences navigation, and retries only the original local write', async () => {
+  const router = await mount(); await click('新建会话');
+  await change('textarea[placeholder^="粘贴角色"]', JSON.stringify({ templateId: '通用角色', name: '原名', content: '完整设定' })); await click('导入');
+  await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label^="编辑角色："]')!.click());
+  await change('input[aria-label="角色名称"]', '失败保稿');
+  await act(async () => { void router.navigate({ to: '/settings' }); });
+  expect(container.textContent).toContain('茶会仍有生成、未保存输入');
+  const original = native.invoke.getMockImplementation()!; let fail = true;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === 'mutate_magic_tea_party' && fail) { fail = false; throw { code: 'tea-io', message: 'Local tea storage did not complete; retain the input or unsaved result', writeEvidence: 'not-written' }; }
+    return original(command, args);
+  });
+  await click('保存修改'); expect(container.querySelector<HTMLInputElement>('input[aria-label="角色名称"]')!.value).toBe('失败保稿');
+  expect(container.textContent).toContain('保存未完成'); expect(document!.roles[0]!.name).toBe('原名');
+  await click('重试原保存'); expect(document!.roles[0]!.name).toBe('失败保稿'); expect(streams).toBe(0);
+  await click('重置'); expect(container.querySelector<HTMLInputElement>('input[aria-label="角色名称"]')!.value).toBe('失败保稿');
+  await act(async () => { await router.navigate({ to: '/settings' }); }); expect(container.textContent).toContain('设置');
+});
+
+it.each(['role', 'session'] as const)('keeps an orphaned role draft after deleting its %s and releases departure only after confirmed discard', async target => {
+  const router = await mount(); await click('新建会话');
+  await change('textarea[placeholder^="粘贴角色"]', JSON.stringify({ templateId: '通用角色', name: '待移除角色', content: '原设定' }));
+  await click('导入');
+  await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label^="编辑角色："]')!.click());
+  await change('input[aria-label="角色名称"]', '仍需保留的未保存角色稿');
+  if (target === 'role') {
+    const roleChip = container.querySelector<HTMLButtonElement>('button[aria-label^="编辑角色："]')!.parentElement!;
+    await act(async () => [...roleChip.querySelectorAll('button')].find(node => node.textContent?.trim() === '×')!.click());
+    expect(document?.roles).toEqual([]);
+  } else {
+    await click('删除'); await click('确认删除'); expect(document).toBeNull();
+  }
+  expect(container.textContent).toContain('有未保存的角色修改');
+  const discard = button('放弃全部角色草稿');
+  expect(discard.closest('[hidden]')).toBeNull(); expect(discard.matches(':disabled')).toBe(false);
+  const writes = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  await act(async () => { void router.navigate({ to: '/settings' }); });
+  expect(router.state.location.pathname).toBe('/magic-tea-party');
+  expect(container.textContent).toContain('茶会仍有生成、未保存输入');
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  await click('放弃全部角色草稿'); expect(confirm).toHaveBeenCalledOnce();
+  expect(button('放弃全部角色草稿').closest('[hidden]')).toBeNull();
+  await act(async () => { void router.navigate({ to: '/settings' }); });
+  expect(router.state.location.pathname).toBe('/magic-tea-party');
+  const stillProtected = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(stillProtected); expect(stillProtected.defaultPrevented).toBe(true);
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(writes);
+  confirm.mockReturnValue(true); await click('放弃全部角色草稿'); expect(confirm).toHaveBeenCalledTimes(2);
+  const released = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(released); expect(released.defaultPrevented).toBe(false);
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(writes);
+  expect(streams).toBe(0);
+  await act(async () => { await router.navigate({ to: '/settings' }); });
+  expect(container.querySelector('[data-testid="page-settings"]')).toBeTruthy();
+});
+
+it('keeps successful role receipts across name-only and cleared-notes saves using the owner normalized JSON snapshot', async () => {
+  const router = await mount(); await click('新建会话');
+  await change('textarea[placeholder^="粘贴角色"]', JSON.stringify({ templateId: '通用角色', name: '原始角色', content: '原设定', extension: { keep: ['原件'] } }));
+  await click('导入');
+  await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label^="编辑角色："]')!.click());
+  const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  const scenarios = [
+    { name: '只改名称', notes: '', expectedNotes: undefined },
+    { name: '第二次名称', notes: '临时备注', expectedNotes: '临时备注' },
+    { name: '清空备注后名称', notes: '   ', expectedNotes: undefined },
+    { name: '继续只改名称', notes: '', expectedNotes: undefined },
+  ];
+  for (const scenario of scenarios) {
+    await change('input[aria-label="角色名称"]', scenario.name);
+    await change('input[aria-label="角色备注"]', scenario.notes);
+    await click('保存修改');
+    const saved = document!.roles[0]!;
+    expect(saved.name).toBe(scenario.name);
+    expect(saved.notes).toBe(scenario.expectedNotes);
+    expect(Object.hasOwn(saved, 'notes')).toBe(scenario.expectedNotes !== undefined);
+    expect(saved.card.extension).toEqual({ keep: ['原件'] });
+    const editor = container.querySelector('form[aria-label="会话角色基础编辑"]')!;
+    expect(editor.querySelector('[role="status"]')?.textContent).toBe('角色修改已保存到本地会话。');
+    expect(editor.querySelector('[role="alert"]')).toBeNull();
+    expect(button('保存修改').disabled).toBe(true);
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="角色名称"]')!.value).toBe(scenario.name);
+  }
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before + scenarios.length);
+  expect(streams).toBe(0);
+  await act(async () => { await router.navigate({ to: '/settings' }); });
+  expect(container.querySelector('[data-testid="page-settings"]')).toBeTruthy();
+});

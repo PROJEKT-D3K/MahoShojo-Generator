@@ -6,8 +6,9 @@ import { MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import {
   useSessionSidebarPreference, MagicTeaPartyPageView, MagicTeaPartyHero, MagicTeaPartySessionList, MagicTeaPartySessionSetupPanel,
   MagicTeaPartyOutputPreferencesPanel, MagicTeaPartyTransferPanel, MagicTeaPartyChatTimeline,
-  MagicTeaPartyChatComposer, MagicTeaPartyChatMessage, MagicTeaPartySummaryBody,
+  MagicTeaPartyChatComposer, MagicTeaPartyChatMessage, MagicTeaPartySummaryBody, MagicTeaPartyRoleEditor,
 } from '@mahoshojo/ui-web/magic-tea-party';
+import { applyMagicTeaPartyRoleDraft, sameMagicTeaPartyRoleSource } from '@mahoshojo/domain/magic-tea-party/role-editor';
 import { DesktopTeaSession, type DesktopTeaIntent } from '../features/magic-tea-party/session';
 import { TEA_PREFERENCES, teaMessageView, teaSessionView } from '../features/magic-tea-party/direct';
 import { parseDesktopTeaRoles, parseDesktopTeaScenarios } from '../features/magic-tea-party/source';
@@ -33,7 +34,12 @@ export default function MagicTeaPartyPage() {
   const preparing = useRef(false); const [preparingView, setPreparingView] = useState(false); const pasteDirty = useRef(false);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; incarnation: number; instance: string; revision: number } | null>(null);
   const mounted = useRef(true);
-  const guard = useLeaveGuard(() => owner.isBusy() || importRunning.current || providerDirty || preparing.current || pasteDirty.current,
+  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
+  const [roleHasDraft, setRoleHasDraft] = useState(false);
+  const roleDirty = useRef(false); const roleSaving = useRef(false);
+  const roleTrigger = useRef<HTMLButtonElement | null>(null); const roleHeading = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => { if (editingRoleId) roleHeading.current?.focus(); }, [editingRoleId]);
+  const guard = useLeaveGuard(() => owner.isBusy() || importRunning.current || providerDirty || preparing.current || pasteDirty.current || roleDirty.current || roleSaving.current,
     '茶会仍有生成、未保存输入或待核对保存，请先停止并保存，或明确放弃易失结果后离开');
   useEffect(() => {
     mounted.current = true; owner.activate(); void owner.refreshDirectory();
@@ -41,6 +47,7 @@ export default function MagicTeaPartyPage() {
   }, [owner, aiStore]);
   const session = state.record ? teaSessionView({ ...state.record.session, ...(state.titleDraft === null ? {} : { title: state.titleDraft }),
     settings: { ...state.record.session.settings, ...(state.nameDraft === null ? {} : { userDisplayName: state.nameDraft }) } }) : null;
+  const editingRole = session?.roles.find(role => role.id === editingRoleId) ?? null;
   const disabled = !guard.ready || state.busy || state.pending !== 'none' || importBusy || preparingView;
   const run = (work: () => Promise<unknown>) => { void work().catch(error => owner.report(error)); };
   const renderScope = `${state.incarnation}:${state.record?.session.id ?? ''}`;
@@ -142,10 +149,33 @@ export default function MagicTeaPartyPage() {
       onUploadScenarios={event => run(() => importFiles(Array.from(event.target.files ?? []), 'scenario'))}
       onDropRoles={files => run(() => importFiles(files, 'character'))} onDropScenarios={files => run(() => importFiles(files, 'scenario'))}
       onImportRolesText={text => importCards(text, 'character')} onImportScenariosText={text => importCards(text, 'scenario')}
+      onEditRole={(id, trigger) => { if (!disabled) { roleTrigger.current = trigger; setEditingRoleId(id); } }}
       onUpdateRoles={roles => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ roles })); }} onUpdateScenarios={(scenario, auxScenarios) => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ scenario, auxScenarios })); }}
       onUpdatePlayerRole={playerRoleId => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ playerRoleId })); }} onUpdateTitle={title => { if (currentScope() === renderScope && !disabled) owner.stageTitle(title); }}
       onLockTitle={() => run(() => owner.update({ titleMeta: { source: 'manual' } }))} onCreateSession={() => run(owner.create)} />}
     beforeChat={<>
+      {roleHasDraft && !editingRole ? <p role="status" className="text-xs text-amber-700">有未保存的角色修改，重新打开对应角色可继续编辑。</p> : null}
+      <section hidden={!editingRole && !roleHasDraft} className="rounded-xl border border-pink-100 bg-white p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2"><h2 ref={roleHeading} tabIndex={-1} className="text-sm font-semibold text-gray-800">会话角色编辑</h2>
+          <button type="button" className="text-xs text-pink-700 hover:underline" disabled={state.busy} onClick={() => { setEditingRoleId(null); roleTrigger.current?.focus(); }}>收起角色编辑</button></div>
+        <MagicTeaPartyRoleEditor scope={JSON.stringify([session?.id, state.record?.instance])}
+          role={editingRole} disabled={disabled} allowDiscardAll
+          onDirtyChange={dirty => { roleDirty.current = dirty; setRoleHasDraft(dirty); }} onBusyChange={busy => { roleSaving.current = busy; }}
+          onSave={async (source, draft) => {
+            if (disabled || currentScope() !== renderScope) return null;
+            const latest = owner.getSnapshot().record;
+            const matches = latest?.session.roles.filter(item => item.id === source.id) ?? [];
+            if (!latest || matches.length !== 1 || !sameMagicTeaPartyRoleSource(matches[0], source)) throw new Error('角色已变化，请保留草稿并重置到最新角色后再编辑。');
+            const next = applyMagicTeaPartyRoleDraft(source, draft, new Date().toISOString());
+            if (!await owner.update({ roles: latest.session.roles.map(item => item.id === source.id ? next : item) })) return null;
+            const saved = owner.getSnapshot().record;
+            const savedRoles = saved?.session.roles.filter(item => item.id === source.id) ?? [];
+            if (currentScope() !== renderScope || !saved || saved.instance !== latest.instance || saved.revision !== latest.revision + 1 || savedRoles.length !== 1) {
+              throw new Error('角色保存已确认，但重新读取未完成；草稿已保留，请刷新会话后核对。');
+            }
+            return savedRoles[0];
+          }} />
+      </section>
       <MagicTeaPartySummaryBody active={Boolean(session)} summary={state.summaryDraft ?? session?.summary ?? ''} updatedAt={session?.summaryMeta?.updatedAt}
         disabled={disabled} isSummarizing={state.generationKind === 'summary' && state.generating} hasMessages={state.messages.length > 0}
         editingDisabled={disabled && !state.isAutoSummarizing}

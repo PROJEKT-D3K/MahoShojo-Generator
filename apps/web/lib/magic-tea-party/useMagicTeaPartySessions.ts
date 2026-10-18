@@ -1,3 +1,4 @@
+import { sameMagicTeaPartyRoleSource } from '@mahoshojo/domain/magic-tea-party/role-editor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, Dispatch, SetStateAction } from 'react';
 
@@ -23,13 +24,15 @@ import {
   normalizeTavernCardPayload,
 } from '@/lib/magic-tea-party/tavern-import';
 import {
+  compareAndReplaceMagicTeaPartyRole,
   deleteMagicTeaPartySession,
   getMagicTeaPartySession,
   listMagicTeaPartyMessages,
   listMagicTeaPartySessions,
   putMagicTeaPartyMessage,
   putMagicTeaPartySession,
-  putMagicTeaPartySessionKeepingSummary,
+  putMagicTeaPartySessionPreservingRoles,
+  type MagicTeaPartySessionWriteOptions,
   setMagicTeaPartyAutoSummaryEnabled,
   putMagicTeaPartyTachieAsset,
   putMagicTeaPartyTachieBlob,
@@ -285,7 +288,7 @@ export type UseMagicTeaPartySessionsResult = {
   setMessages: Dispatch<SetStateAction<MagicTeaPartyMessage[]>>;
   preferences: MagicTeaPartyPreferences;
   applyPreferencePatch: (patch: Partial<MagicTeaPartyPreferences>) => void;
-  persistSession: (session: MagicTeaPartySession, options?: { preserveSummary?: boolean }) => Promise<void>;
+  persistSession: (session: MagicTeaPartySession, options?: MagicTeaPartySessionWriteOptions) => Promise<void>;
   acceptCommittedSummary: (session: MagicTeaPartySession) => void;
   createSession: (presetId?: MagicTeaPartyPresetId | null) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
@@ -295,6 +298,7 @@ export type UseMagicTeaPartySessionsResult = {
   handleSessionImported: (sessionId: string) => Promise<void>;
   applyPreset: (presetId: MagicTeaPartyPresetId) => void;
   updateActiveSessionSettings: (patch: Partial<MagicTeaPartySession['settings']>) => Promise<void>;
+  saveActiveSessionRole: (source: MagicTeaPartyRole, next: MagicTeaPartyRole) => Promise<boolean>;
   updateActiveSessionRoles: (roles: MagicTeaPartyRole[]) => Promise<void>;
   updateActiveSessionScenarios: (scenario: MagicTeaPartyScenario | undefined, aux: MagicTeaPartyScenario[]) => Promise<void>;
   onToggleRoleCard: (payload: any, nextSelected: boolean) => Promise<void>;
@@ -326,6 +330,8 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
   const [preferences, setPreferences] = useState(() => DEFAULT_MAGIC_TEA_PARTY_PREFERENCES);
   const activeSessionLoadRevisionRef = useRef(0);
   const activeSessionIdRef = useRef(activeSessionId);
+  const roleSaveAlive = useRef(false);
+  useEffect(() => { roleSaveAlive.current = true; return () => { roleSaveAlive.current = false; }; }, []);
   activeSessionIdRef.current = activeSessionId;
 
   useEffect(() => {
@@ -343,6 +349,45 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
       return next;
     });
   }, [username]);
+
+  const sessionWrites = useRef(new Map<string, Promise<void>>());
+  // Serialize transaction receipts and their UI adoption, not input editing. A delayed old
+  // receipt must be adopted before a later role write can commit in this page owner.
+  const enqueueSessionWrite = useCallback(<T,>(session: MagicTeaPartySession, work: () => Promise<T>): Promise<T> => {
+    const key = JSON.stringify([session.id, session.createdAt]);
+    const result = (sessionWrites.current.get(key) ?? Promise.resolve()).then(work);
+    const tail = result.then(() => undefined, () => undefined);
+    sessionWrites.current.set(key, tail);
+    void tail.then(() => { if (sessionWrites.current.get(key) === tail) sessionWrites.current.delete(key); });
+    return result;
+  }, []);
+
+  const persistSession = useCallback(async (next: MagicTeaPartySession, options?: MagicTeaPartySessionWriteOptions) => {
+    const loadRevision = activeSessionLoadRevisionRef.current;
+    const isCurrent = () => roleSaveAlive.current && loadRevision === activeSessionLoadRevisionRef.current
+      && isMagicTeaPartySessionCurrent(activeSessionIdRef.current, next.id);
+    // Keep controlled non-role inputs responsive. Roles are adopted only from a completed transaction.
+    if (!options?.preserveSummary) {
+      if (isCurrent()) setActiveSession(current => current?.id === next.id && current.createdAt === next.createdAt ? { ...next, roles: current.roles } : current);
+      setSessions(current => sortSessionsByUpdatedAtDesc(current.map(item => item.id === next.id && item.createdAt === next.createdAt
+        ? { ...next, roles: item.roles } : item)));
+    }
+    return enqueueSessionWrite(next, async () => {
+      const committed = await putMagicTeaPartySessionPreservingRoles(next, options);
+      const merge = (current: MagicTeaPartySession) => {
+        if (current.id !== committed.id || current.createdAt !== committed.createdAt) return current;
+        // IndexedDB clones records. Reuse unchanged roles so unrelated input saves do not
+        // reset host-only editors that are observing a selected role.
+        const stableRoles = committed.roles.map(role => current.roles.find(item => sameMagicTeaPartyRoleSource(item, role)) ?? role);
+        const roles = stableRoles.length === current.roles.length && stableRoles.every((role, index) => role === current.roles[index])
+          ? current.roles : stableRoles;
+        return options?.preserveSummary ? { ...committed, roles }
+          : { ...current, roles, updatedAt: Math.max(current.updatedAt, committed.updatedAt) };
+      };
+      if (isCurrent()) setActiveSession(current => current ? merge(current) : current);
+      setSessions(current => sortSessionsByUpdatedAtDesc(current.map(merge)));
+    });
+  }, [enqueueSessionWrite]);
 
   const refreshSessions = useCallback(async (): Promise<MagicTeaPartySession[]> => {
     const limit = Math.max(50, preferences.maxSessions);
@@ -467,17 +512,13 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
             },
             updatedAt: Date.now(),
           };
-          await putMagicTeaPartySession(updatedSession);
-          if (
-            loadRevision !== activeSessionLoadRevisionRef.current
-            || !isMagicTeaPartySessionCurrent(activeSessionIdRef.current, sessionId)
-          ) return;
-          setActiveSession(updatedSession);
-          setSessions((prev) => sortSessionsByUpdatedAtDesc([updatedSession, ...prev.filter((item) => item.id !== updatedSession.id)]));
+          if (loadRevision !== activeSessionLoadRevisionRef.current
+            || !isMagicTeaPartySessionCurrent(activeSessionIdRef.current, sessionId)) return;
+          await persistSession(updatedSession);
         }
       }
     }
-  }, []);
+  }, [persistSession]);
 
   useEffect(() => {
     let canceled = false;
@@ -516,16 +557,6 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
       onGlobalError?.(message);
     });
   }, [activeSessionId, onGlobalError, refreshActiveSession]);
-
-  const persistSession = useCallback(async (next: MagicTeaPartySession, options?: { preserveSummary?: boolean }) => {
-    if (options?.preserveSummary) next = await putMagicTeaPartySessionKeepingSummary(next);
-    // 先同步更新 React 状态，避免受控输入在异步落盘后重放 value 导致光标跳到末尾。
-    if (isMagicTeaPartySessionCurrent(activeSessionIdRef.current, next.id)) {
-      setActiveSession(next);
-    }
-    setSessions((prev) => sortSessionsByUpdatedAtDesc([next, ...prev.filter((item) => item.id !== next.id)]));
-    if (!options?.preserveSummary) await putMagicTeaPartySession(next);
-  }, []);
 
   const acceptCommittedSummary = useCallback((committed: MagicTeaPartySession) => {
     const merge = (current: MagicTeaPartySession): MagicTeaPartySession => ({ ...current,
@@ -670,18 +701,9 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         });
       }
       if (nextUpdates.length === 0) return;
-      await Promise.all(nextUpdates.map((session) => putMagicTeaPartySession(session)));
-      setSessions((prev) => {
-        const nextMap = new Map(nextUpdates.map((session) => [session.id, session]));
-        const merged = prev.map((session) => nextMap.get(session.id) ?? session);
-        return sortSessionsByUpdatedAtDesc(merged);
-      });
-      if (activeSession && nextUpdates.some((session) => session.id === activeSession.id)) {
-        const updated = nextUpdates.find((session) => session.id === activeSession.id) ?? activeSession;
-        setActiveSession(updated);
-      }
+      await Promise.all(nextUpdates.map(session => persistSession(session)));
     },
-    [activeSession, sessions]
+    [activeSession, sessions, persistSession]
   );
 
   const reorderPinnedSessions = useCallback(
@@ -705,18 +727,9 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         });
       });
       if (updates.length === 0) return;
-      await Promise.all(updates.map((session) => putMagicTeaPartySession(session)));
-      setSessions((prev) => {
-        const updateMap = new Map(updates.map((session) => [session.id, session]));
-        const merged = prev.map((session) => updateMap.get(session.id) ?? session);
-        return sortSessionsByUpdatedAtDesc(merged);
-      });
-      if (activeSession && updates.some((session) => session.id === activeSession.id)) {
-        const updated = updates.find((session) => session.id === activeSession.id) ?? activeSession;
-        setActiveSession(updated);
-      }
+      await Promise.all(updates.map(session => persistSession(session)));
     },
-    [activeSession, sessions]
+    [sessions, persistSession]
   );
 
   const updateActiveSessionSettings = useCallback(
@@ -742,11 +755,32 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
     [activeSession, acceptCommittedSummary, persistSession]
   );
 
+  const roleSaveRevision = activeSessionLoadRevisionRef.current;
+  const saveActiveSessionRole = useCallback(async (source: MagicTeaPartyRole, next: MagicTeaPartyRole): Promise<boolean> => {
+    const session = activeSession;
+    const isCurrent = () => Boolean(roleSaveAlive.current && session && activeSessionIdRef.current === session.id
+      && activeSessionLoadRevisionRef.current === roleSaveRevision);
+    if (!session || !isCurrent()) return false;
+    return enqueueSessionWrite(session, async () => {
+      const committed = await compareAndReplaceMagicTeaPartyRole({ sessionId: session.id, createdAt: session.createdAt, source, next, isCurrent });
+      if (!committed || !isCurrent()) return false;
+      const merge = (current: MagicTeaPartySession): MagicTeaPartySession => {
+        if (current.id !== session.id || current.createdAt !== session.createdAt) return current;
+        const role = current.roles.find(item => item.id === source.id);
+        if (!sameMagicTeaPartyRoleSource(role, source) && !sameMagicTeaPartyRoleSource(role, next)) return current;
+        return { ...current, roles: current.roles.map(item => item.id === source.id ? next : item), updatedAt: Math.max(current.updatedAt, committed.updatedAt) };
+      };
+      setActiveSession(current => current && isCurrent() ? merge(current) : current);
+      setSessions(current => sortSessionsByUpdatedAtDesc(current.map(merge)));
+      return true;
+    });
+  }, [activeSession, roleSaveRevision, enqueueSessionWrite]);
+
   const updateActiveSessionRoles = useCallback(
     async (nextRoles: MagicTeaPartyRole[]) => {
       if (!activeSession) return;
       const next: MagicTeaPartySession = { ...activeSession, roles: nextRoles, updatedAt: Date.now() };
-      await persistSession(next);
+      await persistSession(next, { sourceRoles: activeSession.roles });
     },
     [activeSession, persistSession]
   );
@@ -1408,13 +1442,12 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         updatedAt: now,
       };
 
-      await putMagicTeaPartySession(nextParentSession);
-      setSessions((prev) => sortSessionsByUpdatedAtDesc([nextParentSession, ...prev.filter((item) => item.id !== nextParentSession.id)]));
+      await persistSession(nextParentSession);
       setActiveSessionId(parentId);
       writeLocalStorageString(STORAGE_RECENT_SESSION, parentId);
       return parentId;
     },
-    [activeSession, onGlobalError, sessions]
+    [activeSession, onGlobalError, sessions, persistSession]
   );
 
   return {
@@ -1436,6 +1469,7 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
     handleSessionImported,
     applyPreset,
     updateActiveSessionSettings,
+    saveActiveSessionRole,
     updateActiveSessionRoles,
     updateActiveSessionScenarios,
     onToggleRoleCard,

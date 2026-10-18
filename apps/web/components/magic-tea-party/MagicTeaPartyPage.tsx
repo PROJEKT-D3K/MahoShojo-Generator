@@ -82,6 +82,7 @@ export function MagicTeaPartyPage() {
     applyPreset,
     updateActiveSessionSettings,
     updateActiveSessionRoles,
+    saveActiveSessionRole,
     updateActiveSessionScenarios,
     onToggleRoleCard,
     onToggleScenarioCard,
@@ -567,7 +568,7 @@ export function MagicTeaPartyPage() {
         updateSnapshot,
         updatedAt: now,
       };
-      await persistSession(nextSession, { preserveSummary: true });
+      await persistSession(nextSession, { preserveSummary: true, sourceRoles: rolesBefore });
       setUpdateDrafts(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : '写入失败';
@@ -591,7 +592,7 @@ export function MagicTeaPartyPage() {
       updateSnapshot: { ...snapshot, revertedAt: now },
       updatedAt: now,
     };
-    await persistSession(nextSession);
+    await persistSession(nextSession, { sourceRoles: activeSession.roles });
   };
 
   const handleGenerateUpdateDrafts = async () => {
@@ -864,6 +865,8 @@ export function MagicTeaPartyPage() {
           />
 
           <MagicTeaPartyCharacterPanel
+            onSaveRole={saveActiveSessionRole}
+            disabled={isGenerating || isSummarizing || isGeneratingUpdates || isApplyingUpdates}
             activeSession={activeSession}
             roles={activeSession?.roles ?? []}
             isAuthenticated={Boolean(user?.id)}

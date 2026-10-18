@@ -1,4 +1,5 @@
-import type { MagicTeaPartyMessage, MagicTeaPartySession, MagicTeaPartyTachieAsset } from '@/lib/magic-tea-party/types';
+import { sameMagicTeaPartyRoleSource } from '@mahoshojo/domain/magic-tea-party/role-editor';
+import type { MagicTeaPartyRole, MagicTeaPartyMessage, MagicTeaPartySession, MagicTeaPartyTachieAsset } from '@/lib/magic-tea-party/types';
 
 const DB_NAME = 'magic-tea-party:v1';
 const LEGACY_DB_NAME = 'magic-tavern:v1';
@@ -226,40 +227,126 @@ export const putMagicTeaPartySession = async (session: MagicTeaPartySession): Pr
   });
 };
 
+/** Replace one frozen role in the latest session, acknowledging only the completed transaction. */
+export const compareAndReplaceMagicTeaPartyRole = async (params: {
+  sessionId: string;
+  createdAt: number;
+  source: MagicTeaPartyRole;
+  next: MagicTeaPartyRole;
+  isCurrent: () => boolean;
+}): Promise<MagicTeaPartySession | null> => {
+  const { sessionId, createdAt, isCurrent } = params;
+  const source = structuredClone(params.source);
+  const next = structuredClone(params.next);
+  const db = await openMagicTeaPartyDb();
+  if (!isCurrent() || source.id !== next.id) return null;
+  return await new Promise((resolve, reject) => {
+    const tx = db.transaction(['sessions'], 'readwrite');
+    let committed: MagicTeaPartySession | null = null;
+    tx.oncomplete = () => resolve(committed);
+    tx.onabort = () => reject(tx.error ?? new Error('保存角色失败，草稿已保留。'));
+    tx.onerror = () => reject(tx.error ?? new Error('保存角色失败，草稿已保留。'));
+    const store = tx.objectStore('sessions');
+    const request = store.get(sessionId);
+    request.onsuccess = () => {
+      const current = request.result as MagicTeaPartySession | undefined;
+      const matches = current?.roles.filter(role => role.id === source.id) ?? [];
+      if (!isCurrent() || !current || current.createdAt !== createdAt || matches.length !== 1
+        || !sameMagicTeaPartyRoleSource(matches[0], source)) return;
+      committed = { ...current, roles: current.roles.map(role => role.id === source.id ? next : role), updatedAt: Date.now() };
+      store.put(committed);
+    };
+  });
+};
+
 const summarySettingKeys = [
   'autoSummaryEnabled', 'providerId', 'modelId', 'language', 'userDisplayName', 'contextWindowTokens',
   'responseReserveTokens', 'maxContextMessages', 'summaryTriggerRatio', 'summaryMaxTokens', 'summaryMinGapMessages',
   'enableSummary',
 ] as const;
 
-/** Original-turn bookkeeping must not restore summary state captured before another tab's edit. */
-export const putMagicTeaPartySessionKeepingSummary = async (session: MagicTeaPartySession): Promise<MagicTeaPartySession> => {
+export type MagicTeaPartySessionWriteOptions = {
+  preserveSummary?: boolean;
+  /** Only explicit role-list mutations may replace roles; unchanged entries keep their latest value. */
+  sourceRoles?: MagicTeaPartyRole[];
+};
+
+const mergeRoleChanges = (current: MagicTeaPartyRole[], source: MagicTeaPartyRole[] | undefined, next: MagicTeaPartyRole[]): MagicTeaPartyRole[] => {
+  if (!source) return current;
+  const unique = (roles: MagicTeaPartyRole[]) => new Map(roles.map(role => [role.id, role]));
+  const currentMap = unique(current); const sourceMap = unique(source); const nextMap = unique(next);
+  const conflict = () => new Error('角色已变化，未保存过时修改；请重新加载后再试。');
+  if (currentMap.size !== current.length || sourceMap.size !== source.length || nextMap.size !== next.length) throw conflict();
+  for (const role of source) {
+    const replacement = nextMap.get(role.id);
+    if (sameMagicTeaPartyRoleSource(role, replacement)) continue;
+    const latest = currentMap.get(role.id);
+    if (!latest && !replacement) continue;
+    if (!sameMagicTeaPartyRoleSource(role, latest)) throw conflict();
+  }
+  const merged: MagicTeaPartyRole[] = [];
+  for (const role of next) {
+    const original = sourceMap.get(role.id);
+    if (!original) {
+      if (currentMap.has(role.id)) throw conflict();
+      merged.push(role);
+    } else if (sameMagicTeaPartyRoleSource(original, role)) {
+      const latest = currentMap.get(role.id);
+      if (latest) merged.push(latest); // An unchanged stale entry cannot resurrect a removed role.
+    } else merged.push(role);
+  }
+  const retainedSourceIds = source.filter(role => nextMap.has(role.id)).map(role => role.id);
+  const retainedNextIds = next.filter(role => sourceMap.has(role.id)).map(role => role.id);
+  const reordered = retainedSourceIds.some((id, index) => id !== retainedNextIds[index]);
+  if (reordered) return [...merged, ...current.filter(role => !sourceMap.has(role.id) && !nextMap.has(role.id))];
+  const mergedMap = unique(merged);
+  return [...current.flatMap(role => {
+    if (!sourceMap.has(role.id)) return [role];
+    const replacement = mergedMap.get(role.id);
+    return replacement ? [replacement] : [];
+  }), ...merged.filter(role => !currentMap.has(role.id))];
+};
+
+/** Existing-session writes do not own roles unless they explicitly supply a source→next role-list change. */
+export const putMagicTeaPartySessionPreservingRoles = async (
+  session: MagicTeaPartySession, options: MagicTeaPartySessionWriteOptions = {},
+): Promise<MagicTeaPartySession> => {
+  session = structuredClone(session);
+  const sourceRoles = options.sourceRoles ? structuredClone(options.sourceRoles) : undefined;
+  const preserveSummary = options.preserveSummary;
   const db = await openMagicTeaPartyDb();
   return await new Promise((resolve, reject) => {
     const tx = db.transaction(['sessions'], 'readwrite');
     let next = session;
-    let missing = false;
+    let failure: unknown;
     tx.oncomplete = () => resolve(next);
-    tx.onabort = () => reject(tx.error ?? new Error(missing ? '会话已删除，未保存过时结果' : '保存会话失败'));
-    tx.onerror = () => reject(tx.error ?? new Error('保存会话失败'));
+    tx.onabort = () => reject(failure ?? tx.error ?? new Error('保存会话失败'));
+    tx.onerror = () => reject(failure ?? tx.error ?? new Error('保存会话失败'));
     const store = tx.objectStore('sessions');
     const request = store.get(session.id);
     request.onsuccess = () => {
-      const current = request.result as MagicTeaPartySession | undefined;
-      if (!current) { missing = true; tx.abort(); return; }
-      if (current) {
-        const settings = { ...session.settings };
-        for (const key of summarySettingKeys) Object.assign(settings, { [key]: current.settings[key] });
-        settings.outputPlan = current.settings.outputPlan
-          ? { ...(settings.outputPlan ?? current.settings.outputPlan), summary: current.settings.outputPlan.summary }
-          : undefined;
-        next = { ...session, settings, summary: current.summary, summarySections: current.summarySections,
-          summaryMeta: current.summaryMeta, autoSummaryState: current.autoSummaryState };
-      }
-      store.put(next);
+      try {
+        const current = request.result as MagicTeaPartySession | undefined;
+        if (!current || current.createdAt !== session.createdAt) throw new Error('会话已删除或替换，未保存过时结果');
+        next = { ...session, roles: mergeRoleChanges(current.roles, sourceRoles, session.roles), updatedAt: Math.max(current.updatedAt, session.updatedAt) };
+        if (preserveSummary) {
+          const settings = { ...session.settings };
+          for (const key of summarySettingKeys) Object.assign(settings, { [key]: current.settings[key] });
+          settings.outputPlan = current.settings.outputPlan
+            ? { ...(settings.outputPlan ?? current.settings.outputPlan), summary: current.settings.outputPlan.summary }
+            : undefined;
+          next = { ...next, settings, summary: current.summary, summarySections: current.summarySections,
+            summaryMeta: current.summaryMeta, autoSummaryState: current.autoSummaryState };
+        }
+        store.put(next);
+      } catch (error) { failure = error; tx.abort(); }
     };
   });
 };
+
+/** Original-turn bookkeeping must not restore summary or roles captured before another edit. */
+export const putMagicTeaPartySessionKeepingSummary = (session: MagicTeaPartySession): Promise<MagicTeaPartySession> =>
+  putMagicTeaPartySessionPreservingRoles(session, { preserveSummary: true });
 
 /** Explicit opt-in only changes this setting, preserving any other tab's latest summary. */
 export const setMagicTeaPartyAutoSummaryEnabled = async (sessionId: string, enabled: boolean): Promise<MagicTeaPartySession | null> => {
