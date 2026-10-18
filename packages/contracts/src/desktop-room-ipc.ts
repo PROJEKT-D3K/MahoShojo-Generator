@@ -9,7 +9,7 @@ import {
   DesktopRoomSessionRoomIdSchema,
   DesktopRoomSessionProposalIdSchema,
   DesktopRoomSessionGenerationIdSchema,
-  DesktopRoomGenerationStartRequestSchema,
+  DesktopRoomGenerationStartRequestSchema, DesktopRoomPresetConfigSchema,
   parseDesktopRoomSessionResponse,
 } from './desktop-room-session';
 import { JsonValueSchema, type JsonValue } from './json-value';
@@ -32,6 +32,7 @@ export const DESKTOP_ROOM_IPC_LIMITS = Object.freeze({
   batchBytes: 256 * 1_024,
   notificationBytes: 1_024,
   smallResponseBytes: 1_024,
+  generationStartRecoveryBytes: 8 * 1_024,
   nativeQueueBytes: 256 * 1_024,
   generationFragmentBytes: 16 * 1_024,
   frameworkUnackedBytes: 1_024 * 1_024,
@@ -94,7 +95,7 @@ export const DesktopRoomGenerationTargetSchema = z.object({
 export const DesktopRoomPendingIntentSchema = z.object({
   intentId: LocalIdSchema, operation: DesktopRoomMutationOperationSchema, roomId: OpaqueKeySchema.nullable(),
   generationTarget: DesktopRoomGenerationTargetSchema.optional(),
-  generationStart: z.object({ roomEpoch: OpaqueKeySchema, generationRequestId: OpaqueKeySchema, retryable: z.boolean() }).strict().optional(),
+  generationStart: z.object({ roomEpoch: OpaqueKeySchema, generationRequestId: OpaqueKeySchema, retryable: z.boolean(), presetConfig: DesktopRoomPresetConfigSchema.optional() }).strict().optional(),
 }).strict().superRefine((value, context) => {
   if ((value.operation === 'generationCancel' && value.generationTarget === undefined)
     || (value.generationTarget !== undefined && value.operation !== 'generationCancel' && value.operation !== 'generationStart')) {
@@ -129,7 +130,12 @@ export const DesktopRoomAttachRequestSchema = request(z.object({
   expectedUserId: DesktopRoomSessionUserIdSchema,
 }).strict());
 export const DesktopRoomGenerationStartFenceSchema = z.object({ roomId: OpaqueKeySchema, generationRequestId: OpaqueKeySchema }).strict();
-export const DesktopRoomAttachResponseSchema = small(z.object({
+const attachBudget = (input: unknown) => {
+  const value = input as { pendingIntent?: { operation?: unknown }; generationStartFence?: unknown } | null;
+  return value?.pendingIntent?.operation === 'generationStart' || value?.generationStartFence != null
+    ? DESKTOP_ROOM_IPC_LIMITS.generationStartRecoveryBytes : DESKTOP_ROOM_IPC_LIMITS.smallResponseBytes;
+};
+export const DesktopRoomAttachResponseSchema = z.custom<unknown>(input => boundedObject(attachBudget(input)).safeParse(input).success).pipe(z.object({
   handle: LocalIdSchema, subscriptionId: LocalIdSchema, pendingIntent: DesktopRoomPendingIntentSchema.nullable(),
   generationStartBlocked: z.boolean(), generationStartFence: DesktopRoomGenerationStartFenceSchema.nullable(),
 }).strict());
@@ -152,7 +158,8 @@ const proposalWithdrawRequest = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.origin
 const proposalResolveRequest = boundedObject(DESKTOP_ROOM_SESSION_LIMITS.originalRequestBodyBytes).pipe(ArenaRoomProposalResolveRequestSchema);
 const actionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('generation-start'), roomId: DesktopRoomSessionRoomIdSchema,
-    request: boundedObject(DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes).pipe(DesktopRoomGenerationStartRequestSchema) }).strict(),
+    request: boundedObject(DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes).pipe(DesktopRoomGenerationStartRequestSchema),
+    presetConfig: DesktopRoomPresetConfigSchema.optional() }).strict(),
   z.object({ kind: z.literal('retry-generation-start'), intentId: LocalIdSchema }).strict(),
   z.object({ kind: z.literal('discover'), query: RoomDirectoryPageQuerySchema }).strict(),
   z.object({ kind: z.literal('create'), request: createRequest }).strict(),
@@ -184,7 +191,8 @@ const startBudget = (input: unknown, nested = false): number => {
 const startNodes = (input: unknown, nested = false): boolean => {
   const action = nested ? (input as { request?: unknown } | null)?.request : input;
   return (action as { kind?: unknown } | null)?.kind !== 'generation-start'
-    || isDesktopRoomStartWithinNodeBudget((action as { request?: unknown }).request);
+    || (isDesktopRoomStartWithinNodeBudget((action as { request?: unknown }).request)
+      && (!Object.hasOwn(action as object, 'presetConfig') || DesktopRoomPresetConfigSchema.safeParse((action as { presetConfig?: unknown }).presetConfig).success));
 };
 export const DesktopRoomActionSchema = z.custom<unknown>(input => startNodes(input) && boundedObject(startBudget(input)).safeParse(input).success).pipe(actionSchema);
 export const DesktopRoomRequestSchema = z.custom<unknown>(input => startNodes(input, true) && boundedObject(startBudget(input, true)).safeParse(input).success)
@@ -346,4 +354,4 @@ export const DesktopRoomConfigTrackingEndedSchema = small(z.object({ kind: z.lit
 /** Ends local proposal tracking only; it does not cancel the server operation. */
 export const DesktopRoomProposalTrackingEndedSchema = small(z.object({ kind: z.literal('proposal-tracking-ended'), intentId: LocalIdSchema, ended: z.literal(true) }).strict());
 
-export const DesktopRoomGenerationStartTrackingEndedSchema = small(z.object({ kind: z.literal('generation-start-tracking-ended'), intentId: LocalIdSchema, ended: z.literal(true), generationStartBlocked: z.literal(true), generationStartFence: DesktopRoomGenerationStartFenceSchema }).strict());
+export const DesktopRoomGenerationStartTrackingEndedSchema = boundedObject(DESKTOP_ROOM_IPC_LIMITS.generationStartRecoveryBytes).pipe(z.object({ kind: z.literal('generation-start-tracking-ended'), intentId: LocalIdSchema, ended: z.literal(true), generationStartBlocked: z.literal(true), generationStartFence: DesktopRoomGenerationStartFenceSchema }).strict());

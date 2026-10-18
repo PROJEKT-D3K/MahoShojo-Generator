@@ -1,3 +1,4 @@
+import { DesktopRoomInjectedProviderSchema } from '@mahoshojo/contracts/desktop-room-session';
 /** Synthetic producer beneath the real Room service/materializer/publisher. No model service or transport. */
 import { canonicalizeNodeArenaGenerationSemanticPayload, deriveArenaGenerationId } from '@mahoshojo/hosted-runtime/arena-generation';
 import type { ArenaGenerationOwnedProjection } from '@mahoshojo/hosted-api/arena-generation/service';
@@ -9,6 +10,8 @@ import { createArenaRoomGenerationPresetResolver } from '../src/arena-room/room-
 import type { ArenaRoomMembershipService } from '../src/arena-room/room-membership-service';
 import { ROOM_ACCEPTANCE_GENERATION_LARGE_BYTES, ROOM_ACCEPTANCE_GENERATION_TAIL } from './desktop-room-acceptance-generation';
 
+// Public, deliberately non-working fixture value. Never accept a real provider Key in the synthetic producer.
+export const ROOM_ACCEPTANCE_BYOK_KEY = 'maho-room-synthetic-byok-key';
 export const ROOM_ACCEPTANCE_START_SCENARIOS = ['start-reserve-only', 'start-unavailable', 'start-available', 'start-large', 'start-delta', 'start-complete', 'start-cancel-wait', 'start-cancel-complete'] as const;
 export type RoomAcceptanceStartScenario = typeof ROOM_ACCEPTANCE_START_SCENARIOS[number];
 type RecordState = { roomId: string; projection: ArenaGenerationOwnedProjection; sequence: number;
@@ -23,7 +26,7 @@ export const createRoomAcceptanceStart = (options: {
   const reservations = new Set<string>();
   const records = new Map<string, RecordState>();
   let latest: RecordState | null = null, reserveOnly = false, unavailable = false, large = false, cancelWait = false, cancelPending = false, disposed = false;
-  const counts = { startDispatches: 0, cancelDispatches: 0, readDispatches: 0, startPortCalls: 0, syntheticProducers: 0, startReservations: 0 };
+  const counts = { startDispatches: 0, cancelDispatches: 0, readDispatches: 0, startPortCalls: 0, syntheticProducers: 0, startReservations: 0, byokStartPortCalls: 0 };
   const bump = (key: keyof typeof counts) => { if (counts[key] >= 65_536) refuse(); counts[key] += 1; };
   const key = (roomId: string, generationId: string) => JSON.stringify([roomId, generationId]);
   const get = (roomId: string, generationId: string) => records.get(key(roomId, generationId));
@@ -64,7 +67,12 @@ export const createRoomAcceptanceStart = (options: {
       bump('startPortCalls');
       const reservation = key(input.roomId, input.generationRequestId);
       if (!reservations.has(reservation)) { if (reservations.size >= 64) return refuse(); reservations.add(reservation); bump('startReservations'); }
-      if (disposed || Object.hasOwn(input.payload, 'customProvider')) return refuse();
+      if (disposed) return refuse();
+      if (Object.hasOwn(input.payload, 'customProvider')) {
+        const provider = DesktopRoomInjectedProviderSchema.safeParse(input.payload.customProvider);
+        if (!provider.success || provider.data.apiKey !== ROOM_ACCEPTANCE_BYOK_KEY) return refuse();
+        bump('byokStartPortCalls');
+      }
       if (reserveOnly) { reserveOnly = false; throw new Error('SYNTHETIC_RESERVATION_ONLY'); }
       const generationId = await port.deriveGenerationId(input), existing = get(input.roomId, generationId);
       if (existing) return { kind: 'subscribed', subscription: subscription(existing) };

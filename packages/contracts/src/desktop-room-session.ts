@@ -1,4 +1,6 @@
 import { z } from './zod';
+import { DesktopHostedGenerationOverridesSchema, DesktopHostedPresetConfigSchema } from './desktop-cloud';
+import { ProviderModelIdSchema, ProviderPresetIdSchema } from './provider-target';
 
 import { ARENA_COMPANION_JSON_LIMITS } from './arena-companion';
 import { ARENA_ROOM_HTTP_ERROR_CODES } from './arena-error-taxonomy';
@@ -161,16 +163,43 @@ export const DesktopRoomSessionCreateRequestSchema = boundedObject(
   request: ArenaRoomCreateRequestSchema,
 }).strict());
 export const DesktopRoomSessionJoinRequestSchema = postRequest(ArenaRoomJoinRequestSchema);
-/** First Desktop start capability is server system-default only. */
-export const DesktopRoomGenerationStartRequestSchema = z.custom<z.input<typeof ArenaRoomGenerationStartRequestSchema>>(
+const rawRoomPresetConfigSchema = DesktopHostedPresetConfigSchema.extend({
+  modelId: z.string().max(10 * 1_024),
+});
+/** Non-secret room selection; count the original UTF-8 JSON before model trim. */
+export const DesktopRoomPresetConfigSchema = z.custom<z.input<typeof rawRoomPresetConfigSchema>>(
+  input => rawRoomPresetConfigSchema.safeParse(input).success && jsonUtf8ByteLength(input) <= 10 * 1_024,
+  { message: 'Desktop room provider selection exceeds its small input budget' },
+).pipe(DesktopHostedPresetConfigSchema).refine(
+  value => value.providerId !== 'system' && value.modelId !== '__custom_model_id__',
+  { message: 'Select a catalog provider and an actual model ID' },
+);
+/** Only the trusted Native host can construct this outbound provider. Never use for IPC input. */
+export const DesktopRoomInjectedProviderSchema = z.object({
+  providerId: ProviderPresetIdSchema.refine(value => value !== 'system'),
+  modelId: ProviderModelIdSchema.refine(value => value !== '__custom_model_id__'),
+  apiKey: z.string().max(8 * 1_024).refine(value => value.trim().length > 0 && utf8ByteLength(value) <= 8 * 1_024),
+  generationOverrides: DesktopHostedGenerationOverridesSchema.optional(),
+}).strict();
+const desktopRoomStartBusinessSchema = z.custom<z.input<typeof ArenaRoomGenerationStartRequestSchema>>(
   isDesktopRoomStartWithinNodeBudget, { message: 'Desktop room start material is too complex' },
 ).pipe(ArenaRoomGenerationStartRequestSchema.refine(
-  (value) => !Object.hasOwn(value.generation, 'customProvider') && value.generation.isDowngrade !== true && value.generation.arenaFreeRankingEnabled !== true,
-  { message: 'Desktop room start uses the server system default' },
+  value => value.generation.isDowngrade !== true && value.generation.arenaFreeRankingEnabled !== true,
+  { message: 'Desktop room start cannot change ranking or downgrade policy' },
 ));
+/** Renderer business input remains secret-free; funding selection is an IPC-only sibling. */
+export const DesktopRoomGenerationStartRequestSchema = desktopRoomStartBusinessSchema.refine(
+  value => !Object.hasOwn(value.generation, 'customProvider'),
+  { message: 'Desktop room provider credentials must be injected by Native' },
+);
+/** API-only consumer; a strict provider still goes through normal service catalog and host checks. */
+export const DesktopRoomGenerationStartWireRequestSchema = desktopRoomStartBusinessSchema.refine(
+  value => !Object.hasOwn(value.generation, 'customProvider') || DesktopRoomInjectedProviderSchema.safeParse(value.generation.customProvider).success,
+  { message: 'Desktop room injected provider is invalid' },
+);
 export const DesktopRoomSessionGenerationStartRequestSchema = boundedObject(
   DESKTOP_ROOM_SESSION_LIMITS.generationStartRequestBytes, true, DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes,
-).pipe(z.object({ desktopRoom: DesktopRoomSessionRequestMetadataSchema, request: DesktopRoomGenerationStartRequestSchema }).strict());
+).pipe(z.object({ desktopRoom: DesktopRoomSessionRequestMetadataSchema, request: DesktopRoomGenerationStartWireRequestSchema }).strict());
 export const DesktopRoomSessionGenerationCancelRequestSchema = postRequest(ArenaRoomGenerationCancelRequestSchema);
 export const DesktopRoomSessionTicketRequestSchema = postRequest(ArenaRoomTicketRequestSchema);
 export const DesktopRoomSessionLeaveRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);

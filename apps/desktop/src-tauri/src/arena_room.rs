@@ -84,13 +84,15 @@ pub(crate) enum EngineReply {
 }
 
 pub(crate) struct RoomState {
+    secrets: crate::secret::SharedSecretStore,
     http: Arc<RoomHttp>,
     instances: Mutex<HashMap<InstanceToken, Weak<RoomInstance>>>,
 }
 
 impl RoomState {
-    pub(crate) fn new() -> Result<Self, RoomError> {
+    pub(crate) fn new(secrets: crate::secret::SharedSecretStore) -> Result<Self, RoomError> {
         Ok(Self {
+            secrets,
             http: Arc::new(RoomHttp::new()?),
             instances: Mutex::new(HashMap::new()),
         })
@@ -106,7 +108,11 @@ impl RoomState {
             return instance;
         }
         instances.retain(|_, instance| instance.strong_count() > 0);
-        let instance = Arc::new(RoomInstance::new(token, self.http.clone()));
+        let instance = Arc::new(RoomInstance::new(
+            token,
+            self.http.clone(),
+            self.secrets.clone(),
+        ));
         instances.insert(token, Arc::downgrade(&instance));
         instance
     }
@@ -218,6 +224,7 @@ struct Inner {
 }
 
 pub(crate) struct RoomInstance {
+    secrets: crate::secret::SharedSecretStore,
     token: InstanceToken,
     pub(crate) document: Mutex<DocumentState>,
     inner: Mutex<Inner>,
@@ -256,8 +263,13 @@ pub(crate) fn random_id() -> Result<String, RoomError> {
 }
 
 impl RoomInstance {
-    fn new(token: InstanceToken, http: Arc<RoomHttp>) -> Self {
+    fn new(
+        token: InstanceToken,
+        http: Arc<RoomHttp>,
+        secrets: crate::secret::SharedSecretStore,
+    ) -> Self {
         Self {
+            secrets,
             token,
             document: Mutex::new(DocumentState::new(token)),
             inner: Mutex::new(Inner {
@@ -1174,11 +1186,13 @@ impl RoomInstance {
         } else {
             None
         };
+        let mut provider_storage_failure = false;
         let preflight = if operation == Operation::GenerationStart {
             self.check_start_dispatch(
                 &context,
                 intent_id.as_deref().expect("start intent"),
                 request.resume_only,
+                &mut provider_storage_failure,
             )
         } else if let Some(basis) = &cancel_basis {
             self.check_cancel_dispatch(
@@ -1305,7 +1319,9 @@ impl RoomInstance {
                 outcome
                     .as_ref()
                     .err()
-                    .filter(|error| error.code == "storage-unavailable")
+                    .filter(|error| {
+                        error.code == "storage-unavailable" && !provider_storage_failure
+                    })
                     .cloned()
             });
         let pending = {
@@ -3379,8 +3395,11 @@ mod tests {
         address: std::net::SocketAddr,
         socket: Option<std::net::SocketAddr>,
     ) -> Arc<RoomInstance> {
-        let mut instance =
-            RoomInstance::new(InstanceToken::new(1), Arc::new(RoomHttp::loopback(address)));
+        let mut instance = RoomInstance::new(
+            InstanceToken::new(1),
+            Arc::new(RoomHttp::loopback(address)),
+            Arc::new(crate::hosted_preset::tests::SyntheticStore::default()),
+        );
         instance.test_socket = socket;
         instance.page_finished().unwrap();
         Arc::new(instance)

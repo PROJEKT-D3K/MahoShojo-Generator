@@ -37,6 +37,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use crate::hosted_preset::de_optional_non_null;
+pub use crate::hosted_preset::HostedPresetConfig as CloudHostedPresetConfig;
 use crate::secret::{SecretStore, SecretStoreError};
 
 /// 项目服务的固定生产 origin。renderer 与本模块内任何命令都不能改写它。
@@ -1866,10 +1868,8 @@ fn hosted_body_max_bytes(route_id: &str) -> usize {
 /// `systemConfig.generationOverrides` 序列化后的字节上限：合法覆盖只有
 /// `maxOutputTokens`/`temperature`/`thinking` 三个字段，规范化后不过百余字节——
 /// 给嵌套余量到 8 KiB，超出即视为非法载荷而非「宽松的透传」。
+#[cfg(test)]
 const HOSTED_GENERATION_OVERRIDES_MAX_BYTES: usize = 8 * 1024;
-/// `generationOverrides.maxOutputTokens` 上限：与 ai-core
-/// `MAX_CUSTOM_PROVIDER_OUTPUT_TOKENS` / wire schema `1_000_000` 同源。
-const HOSTED_GENERATION_OVERRIDE_MAX_OUTPUT_TOKENS: u64 = 1_000_000;
 /// hosted SSE 单帧上限：帧超过即视为上游协议异常。
 const HOSTED_SSE_MAX_FRAME_BYTES: usize = 512 * 1024;
 /// hosted SSE 待解析缓冲上限（未闭合残帧不得无限堆积）。
@@ -1897,28 +1897,6 @@ pub struct HostedSseEvent {
 /// hosted「使用系统默认配置」通道的非秘密偏好（D5.1-AIP-r1）。
 /// 不含任何凭据字段：`providerId`/`apiKey`/`secretRef` 之类由
 /// `deny_unknown_fields` 直接拒绝——它们不是可选，是不存在。
-/// optional 字段的显式 `null` 拒绝：契约 `.optional()` 只接受「字段缺省」，
-/// 而 serde 的 Option 语义会把 `null` 折叠成缺省无法区分——字段存在时统一
-/// 走本 helper，null 按类型错误拒绝，其余值照常反序列化。
-fn de_optional_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::de::DeserializeOwned,
-{
-    let value = serde_json::Value::deserialize(deserializer).map_err(serde::de::Error::custom)?;
-    if value.is_null() {
-        return Err(serde::de::Error::custom(
-            "字段不得为 null（缺省与 null 语义不同）",
-        ));
-    }
-    serde_json::from_value(value)
-        .map(Some)
-        .map_err(serde::de::Error::custom)
-}
-
-/// hosted「使用系统默认配置」通道的非秘密偏好（D5.1-AIP-r1）。
-/// 不含任何凭据字段：`providerId`/`apiKey`/`secretRef` 之类由
-/// `deny_unknown_fields` 直接拒绝——它们不是可选，是不存在。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudHostedSystemConfig {
@@ -1927,16 +1905,6 @@ pub struct CloudHostedSystemConfig {
     pub model_id: Option<String>,
     /// 逐模型生成覆盖（`UserGenerationOverrides` wire 形状；结构、字段类型、
     /// 范围与大小在 `normalize_hosted_generation_overrides` 独立受检）。
-    #[serde(default, deserialize_with = "de_optional_non_null")]
-    pub generation_overrides: Option<serde_json::Value>,
-}
-
-/// 服务器 BYOK 的公开选择。固定目录身份，不接受 URL 或秘密引用。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CloudHostedPresetConfig {
-    pub provider_id: String,
-    pub model_id: String,
     #[serde(default, deserialize_with = "de_optional_non_null")]
     pub generation_overrides: Option<serde_json::Value>,
 }
@@ -1958,121 +1926,21 @@ fn invalid_request(message: impl Into<String>) -> CloudError {
     CloudError::new(CloudErrorCode::InvalidRequest, message)
 }
 
-/// `generationOverrides` 的严格受检（D5.1-AIP-r1-r1）：与
-/// `DesktopHostedGenerationOverridesSchema` / `UserGenerationOverridesSchema`
-/// 同语义——strict 对象、字段类型/范围受检、显式 null 与缺省不同待遇、
-/// 原始值大小有界。native 不依赖 renderer schema，独立 fail-closed。
-///
-/// 返回 `Ok(None)` 表示「无实质覆盖」（空对象 / 全字段缺省），与 Web
-/// `hasMeaningfulGenerationOverrides` 折叠语义一致；注入值按规范字段重建，
-/// renderer 输入本身不透传。
 fn normalize_hosted_generation_overrides(
     value: &serde_json::Value,
 ) -> Result<Option<serde_json::Value>, CloudError> {
-    // 原始载荷大小有界：严格校验之前先拒绝巨型嵌套。
-    let size = serde_json::to_vec(value)
-        .map_err(|_| invalid_request("generationOverrides 无法序列化"))?
-        .len();
-    if size > HOSTED_GENERATION_OVERRIDES_MAX_BYTES {
-        return Err(invalid_request("generationOverrides 超出大小上限"));
-    }
-    let serde_json::Value::Object(map) = value else {
-        return Err(invalid_request("generationOverrides 必须是 JSON 对象"));
-    };
-    let mut normalized = serde_json::Map::new();
-    for (key, field) in map {
-        match key.as_str() {
-            "maxOutputTokens" => {
-                // 契约要求 1..=1_000_000 的整数。`as_f64` + fract==0 与 zod
-                // `int()` 同语义：`5e5`/`500000.0` 这类整数值浮点字面量也
-                // 算整数；NaN/±inf 在 JSON 中不存在，无需另行排除。
-                let tokens = field.as_f64().filter(|f| f.fract() == 0.0);
-                match tokens {
-                    Some(t)
-                        if (1.0..=HOSTED_GENERATION_OVERRIDE_MAX_OUTPUT_TOKENS as f64)
-                            .contains(&t) =>
-                    {
-                        normalized
-                            .insert("maxOutputTokens".to_string(), serde_json::json!(t as u64));
-                    }
-                    _ => {
-                        return Err(invalid_request(
-                            "generationOverrides.maxOutputTokens 必须是 1..=1_000_000 的整数",
-                        ))
-                    }
-                }
-            }
-            "temperature" => match field.as_f64() {
-                // 契约 `finite().min(0)`：上限由服务端按模型能力裁决，native 不硬编码。
-                Some(temperature) if temperature.is_finite() && temperature >= 0.0 => {
-                    normalized.insert("temperature".to_string(), serde_json::json!(temperature));
-                }
-                _ => {
-                    return Err(invalid_request(
-                        "generationOverrides.temperature 必须是不小于 0 的有限数字",
-                    ))
-                }
-            },
-            "thinking" => {
-                normalized.insert(
-                    "thinking".to_string(),
-                    normalize_hosted_thinking_override(field)?,
-                );
-            }
-            _ => {
-                return Err(invalid_request("generationOverrides 含未知字段"));
-            }
-        }
-    }
-    Ok(if normalized.is_empty() {
-        None
-    } else {
-        Some(serde_json::Value::Object(normalized))
-    })
+    crate::hosted_preset::normalize_hosted_generation_overrides(value)
+        .map_err(map_hosted_preset_error)
 }
 
-/// `thinking` 子对象的严格受检：与 `DesktopHostedThinkingOverrideSchema`
-/// 同语义——strict 对象、`mode` 必填且只能为 `default`/`disabled`/`enabled`、
-/// `effort` 仅在 `mode=enabled` 时可携带已知档位（显式 null 按类型错误拒绝）。
-fn normalize_hosted_thinking_override(
-    value: &serde_json::Value,
-) -> Result<serde_json::Value, CloudError> {
-    let serde_json::Value::Object(map) = value else {
-        return Err(invalid_request(
-            "generationOverrides.thinking 必须是 JSON 对象",
-        ));
-    };
-    for key in map.keys() {
-        if key != "mode" && key != "effort" {
-            return Err(invalid_request("generationOverrides.thinking 含未知字段"));
+fn map_hosted_preset_error(error: crate::hosted_preset::HostedPresetError) -> CloudError {
+    use crate::hosted_preset::HostedPresetError;
+    match error {
+        HostedPresetError::StorageUnavailable => {
+            CloudError::new(CloudErrorCode::StorageUnavailable, "无法读取供应商安全凭据")
         }
+        _ => invalid_request("服务器 BYOK 供应商、模型、参数或已保存凭据不可用"),
     }
-    // 缺省、null、非字符串、未知枚举值统一按非法 mode 拒绝。
-    let mode = match map.get("mode").and_then(serde_json::Value::as_str) {
-        Some(mode @ ("default" | "disabled" | "enabled")) => mode,
-        _ => return Err(invalid_request("generationOverrides.thinking.mode 非法")),
-    };
-    let effort = match map.get("effort") {
-        None => None,
-        Some(effort_value) => match effort_value.as_str() {
-            Some(effort @ ("minimal" | "low" | "medium" | "high" | "xhigh" | "max")) => {
-                Some(effort)
-            }
-            _ => return Err(invalid_request("generationOverrides.thinking.effort 非法")),
-        },
-    };
-    // zod union：`effort` 只存在于 mode=enabled 变体；default/disabled 携带
-    // effort（含显式 null）即 strict 失败。
-    if mode != "enabled" && effort.is_some() {
-        return Err(invalid_request(
-            "generationOverrides.thinking.effort 仅在 mode=enabled 时允许",
-        ));
-    }
-    let mut normalized = serde_json::json!({ "mode": mode });
-    if let Some(effort) = effort {
-        normalized["effort"] = serde_json::json!(effort);
-    }
-    Ok(normalized)
 }
 
 /// ECMAScript String.prototype.trim：BOM 是空白，NEL 不是；长度另以 UTF-16 计。
@@ -2353,26 +2221,9 @@ fn inject_hosted_preset(
     secrets: &dyn SecretStore,
 ) -> Result<(), CloudError> {
     let Some(config) = config else { return Ok(()) };
-    let model_id =
-        crate::provider_target::resolve_preset_model_id(&config.provider_id, &config.model_id)
-            .map_err(|_| invalid_request("服务器 BYOK 供应商或模型不可用"))?;
-    let secret_ref = crate::provider_target::preset_secret_ref(&config.provider_id)
-        .map_err(|_| invalid_request("服务器 BYOK 供应商不可用"))?;
-    let key = secrets
-        .resolve(&secret_ref)
-        .map_err(|_| CloudError::new(CloudErrorCode::StorageUnavailable, "无法读取供应商安全凭据"))?
-        .filter(|key| !key.trim().is_empty())
-        .ok_or_else(|| invalid_request("请先填写供应商 API Key"))?;
-    let mut provider = serde_json::json!({
-        "providerId": config.provider_id,
-        "modelId": model_id,
-        "apiKey": key.trim(),
-    });
-    if let Some(overrides) = &config.generation_overrides {
-        if let Some(normalized) = normalize_hosted_generation_overrides(overrides)? {
-            provider["generationOverrides"] = normalized;
-        }
-    }
+    let prepared =
+        crate::hosted_preset::PreparedPreset::validate(config).map_err(map_hosted_preset_error)?;
+    let (provider, _guard) = prepared.resolve(secrets).map_err(map_hosted_preset_error)?;
     body["customProvider"] = provider;
     Ok(())
 }
@@ -4366,6 +4217,8 @@ pub async fn cloud_messages_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hosted_preset::de_optional_non_null;
+    pub use crate::hosted_preset::HostedPresetConfig as CloudHostedPresetConfig;
     use crate::secret::{SecretStore, SecretStoreError};
     use std::collections::BTreeMap;
 

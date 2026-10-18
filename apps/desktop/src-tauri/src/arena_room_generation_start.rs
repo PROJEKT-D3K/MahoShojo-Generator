@@ -1,6 +1,17 @@
-//! 固定 system-default 启动：唯一冻结 wire、原 Document/凭据围栏与显式同意图重试。
+//! 固定 system-default/catalog BYOK 启动：唯一冻结 wire、原 Document/凭据围栏与显式同意图重试。
 use super::*;
 use generation_read::{same_generation, terminal};
+
+fn map_preset_error(error: crate::hosted_preset::HostedPresetError) -> RoomError {
+    use crate::hosted_preset::HostedPresetError;
+    match error {
+        HostedPresetError::StorageUnavailable => {
+            RoomError::new("storage-unavailable", "not-applied")
+        }
+        HostedPresetError::CredentialChanged => stale(),
+        _ => RoomError::new("invalid-request", "not-applied"),
+    }
+}
 
 pub(super) struct StartBasis {
     room_id: String,
@@ -15,6 +26,8 @@ pub(super) struct StartBasis {
     generation: Option<Value>,
     read_not_found: bool,
     wire: Option<Arc<Vec<u8>>>,
+    key_guard: Option<crate::hosted_preset::PresetKeyGuard>,
+    preset_config: Option<Value>,
 }
 impl StartBasis {
     fn prepare(
@@ -43,6 +56,8 @@ impl StartBasis {
             generation: None,
             read_not_found: false,
             wire: None,
+            key_guard: None,
+            preset_config: None,
         };
         basis.first_dispatch(authority)?;
         let config = &request["sharedConfig"];
@@ -203,7 +218,11 @@ impl StartBasis {
         Ok(())
     }
     pub(super) fn public(&self, phase: IntentPhase) -> Value {
-        json!({"roomEpoch":self.room_epoch,"generationRequestId":self.request_id,"retryable":phase == IntentPhase::Unknown && self.retry_ready()})
+        let mut value = json!({"roomEpoch":self.room_epoch,"generationRequestId":self.request_id,"retryable":phase == IntentPhase::Unknown && self.retry_ready()});
+        if let Some(config) = &self.preset_config {
+            value["presetConfig"] = config.clone();
+        }
+        value
     }
     pub(super) fn target(&self) -> Option<Value> {
         self.generation.as_ref().map(|generation| json!({"roomEpoch":self.room_epoch,"generationId":generation["generationId"],"attempt":generation["attempt"]}))
@@ -222,8 +241,13 @@ impl StartBasis {
             .as_ref()
             .map(|wire| (Arc::downgrade(wire), wire.len(), Arc::strong_count(wire)))
     }
+    #[cfg(test)]
+    pub(super) fn has_key_guard(&self) -> bool {
+        self.key_guard.is_some()
+    }
     pub(super) fn revoke(&mut self) {
         self.wire = None;
+        self.key_guard = None;
         self.read_not_found = false;
     }
 }
@@ -254,7 +278,7 @@ impl RoomInstance {
                 return Err(busy());
             }
         }
-        let input = protocol::parse_generation_start_owned(raw)?;
+        let mut input = protocol::parse_generation_start_owned(raw)?;
         let mut inner = lock(&self.inner);
         let context = self.scope_for(&inner, document, &input.handle)?;
         if inner.start_fence.is_some()
@@ -279,6 +303,14 @@ impl RoomInstance {
             &input.room_id,
             &input.request,
         )?;
+        if let Some(preset) = input.preset {
+            basis.preset_config = Some(preset.public_config());
+            let (provider, guard) = preset
+                .resolve(self.secrets.as_ref())
+                .map_err(map_preset_error)?;
+            input.request["generation"]["customProvider"] = provider;
+            basis.key_guard = Some(guard);
+        }
         let wire = protocol::freeze_generation_start(input.request, context.account.user_id)?;
         basis.wire = Some(wire.clone());
         let request_id = random_id()?;
@@ -412,8 +444,9 @@ impl RoomInstance {
         context: &ScopeContext,
         intent: &str,
         retry: bool,
+        provider_storage_failure: &mut bool,
     ) -> Result<(), RoomError> {
-        let inner = lock(&self.inner);
+        let mut inner = lock(&self.inner);
         self.current_locked(&inner, context)?;
         let pending = inner
             .pending
@@ -439,10 +472,28 @@ impl RoomInstance {
             return Err(stale());
         }
         if retry {
-            basis.retry_dispatch(scope.session.as_ref().ok_or_else(stale)?)
+            basis.retry_dispatch(scope.session.as_ref().ok_or_else(stale)?)?;
         } else {
-            basis.first_dispatch(scope.session.as_ref().ok_or_else(stale)?)
+            basis.first_dispatch(scope.session.as_ref().ok_or_else(stale)?)?;
         }
+        if let Some(guard) = &basis.key_guard {
+            if let Err(error) = guard.check(self.secrets.as_ref()) {
+                *provider_storage_failure =
+                    error == crate::hosted_preset::HostedPresetError::StorageUnavailable;
+                if !*provider_storage_failure {
+                    inner
+                        .pending
+                        .as_mut()
+                        .unwrap()
+                        .start_basis
+                        .as_mut()
+                        .unwrap()
+                        .revoke();
+                }
+                return Err(map_preset_error(error));
+            }
+        }
+        Ok(())
     }
     pub(super) fn check_start_candidate(
         inner: &Inner,
@@ -686,6 +737,7 @@ impl RoomInstance {
         let mut pending = inner.pending.take().expect("start reservation");
         let mut basis = pending.start_basis.take().expect("start basis");
         basis.revoke();
+        basis.preset_config = None;
         inner.start_fence = Some(StartTombstone {
             basis,
             receipt: None,
@@ -725,8 +777,9 @@ impl RoomInstance {
             return Err(stale());
         }
         Self::retire_start_locked(&mut inner);
-        Ok(EngineReply::Small(
-            json!({"kind":"generation-start-tracking-ended","intentId":intent_id,"ended":true,"generationStartBlocked":true,"generationStartFence":Self::start_fence_public(&inner, context.account.user_id)}),
+        let ended = json!({"kind":"generation-start-tracking-ended","intentId":intent_id,"ended":true,"generationStartBlocked":true,"generationStartFence":Self::start_fence_public(&inner, context.account.user_id)});
+        Ok(EngineReply::Json(
+            protocol::encode_start_tracking_ended_response(&ended)?,
         ))
     }
     pub(super) fn fail_start_fence_receipt(inner: &mut Inner, context: &ScopeContext) {

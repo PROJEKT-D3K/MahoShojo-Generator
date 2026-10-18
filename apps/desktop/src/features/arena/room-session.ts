@@ -1,3 +1,5 @@
+import { DesktopRoomPresetConfigSchema } from '@mahoshojo/contracts/desktop-room-session';
+import type { DesktopHostedPresetConfig } from '@mahoshojo/contracts/desktop-cloud';
 import { evaluateArenaGenerationReadiness, matchArenaRoomVisibleStartBundle, type ArenaRoomHostWorkspaceBundle, isArenaRoomGenerationCancelTargetCurrent, type ArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
 import { createArenaMemberProposalModel, type ArenaMemberProposalModel } from '@mahoshojo/multiplayer-core/member-proposal';
 import { observeArenaRoomConfigPublish, validateProposalChanges, type ArenaRoomConfigPublishTarget, type ArenaRoomConfigPublishObservation, type ArenaRoomProposalReconciliationObservation } from '@mahoshojo/multiplayer-core';
@@ -19,7 +21,7 @@ const generationKey = (identity: DesktopGenerationIdentity) => JSON.stringify([i
 const terminalGeneration = (state: string) => ['completed', 'failed', 'cancelled', 'producer_lost'].includes(state);
 type GenerationFlight = { owner: Owner; key: string; rerun: boolean; promise: Promise<void>; cancelReceipt?: { intentId: string; current: boolean } };
 
-export type RoomUnknownIntent = { operation: DesktopRoomMutationOperation; roomId: string | null; intentId: string | null; generationTarget?: { roomEpoch: string; generationId: string; attempt: number }; generationStart?: { roomEpoch: string; generationRequestId: string; retryable: boolean } };
+export type RoomUnknownIntent = { operation: DesktopRoomMutationOperation; roomId: string | null; intentId: string | null; generationTarget?: { roomEpoch: string; generationId: string; attempt: number }; generationStart?: { roomEpoch: string; generationRequestId: string; retryable: boolean; presetConfig?: DesktopHostedPresetConfig } };
 export type DesktopConfigTracking = { id: string; roomId: string; phase: 'publishing' | 'unknown' | 'ended-needs-read'; target: ArenaRoomConfigPublishTarget | null; observation: ArenaRoomConfigPublishObservation };
 type ProposalAction = Extract<DesktopRoomHttpAction, { kind: 'proposal-submit' | 'proposal-withdraw' | 'proposal-resolve' }>;
 export type DesktopProposalTracking = { id: string | null; roomId: string; proposalId: string | null; operation: 'proposalSubmit' | 'proposalWithdraw' | 'proposalResolve'; phase: 'resolving' | 'unknown' | 'settled' | 'ended-needs-read'; observation: ArenaRoomProposalReconciliationObservation | null; intent?: ProposalAction | null };
@@ -86,7 +88,7 @@ export const describeDesktopRoomError = (error: ArenaRoomBridgeError): string =>
   if (error.code === 'input-too-large') return '本机材料超过 12 MiB 来源上限，请减少材料后重试。普通草稿不会被截断。';
   if (error.code === 'input-too-complex') return '本机材料结构过于复杂，请减少嵌套或条目后重试。材料不会被截断。';
   if (error.code === 'not-authenticated') return '当前房间登录已失效，请重新验证账号后打开房间。';
-  if (error.code === 'storage-unavailable') return '本机登录信息暂不可读取。房间已断开，请修复后明确恢复；未确认的操作仍可能已发生。';
+  if (error.code === 'storage-unavailable') return '本机凭据信息暂不可读取。请恢复后按当前状态明确核对或重试；未确认的操作仍可能已发生。';
   if (error.code === 'backpressure') return '房间消费容量已用尽。请保留未确认操作，不要据此重新发送；已有生成请只读核对或明确停止本机跟踪。关闭应用不代表服务器操作未发生；刷新页面也不会清除未确认的投递。';
   if (error.code === 'busy') return '上一项房间操作尚未结束，请稍后明确重试。';
   if (error.code === 'scope-changed') return '房间、账号或页面已变化，旧操作不再应用。';
@@ -98,7 +100,7 @@ export const describeDesktopRoomError = (error: ArenaRoomBridgeError): string =>
 };
 
 /** Page-owned read model for the fixed Native session transport. No networking,
- * automatic mutation retry, persistence or provider configuration. */
+ * automatic mutation retry or persistent provider configuration. */
 export class DesktopArenaRoomSession {
   private state = initial(); private readonly listeners = new Set<() => void>();
   private owner: Owner | null = null; private flight: Flight | null = null;
@@ -242,7 +244,10 @@ export class DesktopArenaRoomSession {
   /** Source preparation and the first large invoke share one bridge-owned admission slot. */
   async startGeneration(session: ArenaRoomSessionResponse, identity: symbol,
     prepare: () => Promise<{ bundle: ArenaRoomHostWorkspaceBundle; generation: ArenaRoomGenerationStartRequest['generation'] }>,
-    sourceCurrent: () => boolean): Promise<void> {
+    sourceCurrent: () => boolean, presetConfig?: DesktopHostedPresetConfig): Promise<void> {
+    const parsedFunding = presetConfig === undefined ? null : DesktopRoomPresetConfigSchema.safeParse(presetConfig);
+    if (parsedFunding && !parsedFunding.success) return;
+    const frozenPreset = parsedFunding?.data ? JSON.parse(JSON.stringify(parsedFunding.data)) as DesktopHostedPresetConfig : undefined;
     if (this.confirmationOwner() !== identity || this.state.session !== session || this.startGenerationBlockedReason() || !sourceCurrent()) return;
     const owner = this.owner, generationRequestId = this.deps.randomId?.() ?? crypto.randomUUID();
     const flight: Flight = { newStart: true, action: { kind: 'retry-generation-start', intentId: 'pending-start' }, operation: 'generationStart',
@@ -250,7 +255,7 @@ export class DesktopArenaRoomSession {
     this.flight = flight; this.startSettledIntent = null;
     this.publish({ busy: true, error: null, sourceIssues: [], notice: '正在冻结眼前配置与完整来源。',
       unknown: { operation: 'generationStart', roomId: session.roomId, intentId: null,
-        generationStart: { roomEpoch: session.roomEpoch, generationRequestId, retryable: false } } });
+        generationStart: { roomEpoch: session.roomEpoch, generationRequestId, retryable: false, ...(frozenPreset ? { presetConfig: frozenPreset } : {}) } } });
     let prepared = false;
     try {
       const accepted = await this.bridge.generationStart(async () => {
@@ -269,7 +274,7 @@ export class DesktopArenaRoomSession {
         };
         if (!isDesktopRoomStartWithinNodeBudget(request)) throw new ArenaRoomBridgeError('input-too-complex', 'not-applied');
         prepared = true;
-        return { kind: 'generation-start', roomId: session.roomId, request };
+        return { kind: 'generation-start', roomId: session.roomId, request, ...(frozenPreset ? { presetConfig: frozenPreset } : {}) };
       });
       if (!this.current(owner) || this.flight !== flight) return;
       if (flight.requestId && flight.requestId !== accepted.requestId) throw new ArenaRoomBridgeError('invalid-response', 'unknown');

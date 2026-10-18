@@ -336,9 +336,10 @@ pub(crate) async fn attach(
         let message: Value = serde_json::from_str(&raw).map_err(|_| unavailable())?;
         on_event.send(message).map_err(|_| unavailable())
     });
-    response(EngineReply::Small(
-        current.room.finish_attach(proof, access, notify)?,
-    ))
+    let attached = current.room.finish_attach(proof, access, notify)?;
+    response(EngineReply::Json(protocol::encode_attach_response(
+        &attached,
+    )?))
 }
 
 pub(crate) fn request(webview: Webview, request: Value) -> Result<Response, RoomError> {

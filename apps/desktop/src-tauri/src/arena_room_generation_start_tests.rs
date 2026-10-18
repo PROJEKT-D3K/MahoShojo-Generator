@@ -1016,13 +1016,13 @@ fn end_tracking(attached: &Attached) -> Value {
         .as_str()
         .unwrap()
         .to_owned();
-    let EngineReply::Small(result) = attached
+    let EngineReply::Json(result) = attached
         .request(Action::EndGenerationStartTracking { intent_id: id })
         .unwrap()
     else {
         panic!()
     };
-    result
+    serde_json::from_str(&result).unwrap()
 }
 fn other_owner(epoch: u64) -> Arc<AccountAccess> {
     Arc::new(AccountAccess::new(
@@ -1406,4 +1406,8 @@ fn start_combined_exact_byte_and_node_limits_keep_one_owned_wire() {
         RoomError::new("input-too-large", "not-applied").code,
         "input-too-large"
     );
+}
+
+mod byok_tests {
+    include!("arena_room_generation_byok_tests.rs");
 }

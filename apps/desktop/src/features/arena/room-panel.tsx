@@ -116,7 +116,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
         <section aria-label="房间权威设定摘要"><h3>服务器房间设定</h3><p>修订 {session.snapshot.revision} · {session.snapshot.sharedConfig.combatants.length} 位角色 · {session.snapshot.sharedConfig.auxScenarios.length} 个辅助情景 · {session.snapshot.sharedConfig.materials.length} 份素材</p><p>生成状态：{session.snapshot.activeGeneration?.state ?? '无活动生成'}。</p></section>
         <DesktopRoomGenerationResult generation={state.generation} generationKey={`${scope}:${session.snapshot.activeGeneration?.generationId ?? 'none'}:${session.snapshot.activeGeneration?.attempt ?? 0}`}
           onRetry={() => owner.retryGenerationRecovery()} retryDisabled={disabled || state.busy || state.generationReading || state.phase !== 'online' || !state.snapshotReceived || !inviteIdentity} />
-        {session.self.role === 'host' ? <DesktopRoomGenerationStart owner={owner} state={state} draft={draft} isDraftCurrent={isDraftCurrent} disabled={disabled} /> : null}
+        {session.self.role === 'host' ? <DesktopRoomGenerationStart key={`start:${scope}`} owner={owner} state={state} draft={draft} isDraftCurrent={isDraftCurrent} disabled={disabled} /> : null}
         {session.self.role === 'host' ? <RoomGenerationCancelAction
           disabled={disabled || owner.cancelGenerationBlockedReason() !== null}
           confirmation={!!cancelConfirmation && cancelConfirmation.identity === owner.confirmationOwner()

@@ -1,4 +1,4 @@
-import { createRoomAcceptanceStart, ROOM_ACCEPTANCE_START_SCENARIOS, type RoomAcceptanceStartScenario } from './desktop-room-acceptance-start';
+import { ROOM_ACCEPTANCE_BYOK_KEY, createRoomAcceptanceStart, ROOM_ACCEPTANCE_START_SCENARIOS, type RoomAcceptanceStartScenario } from './desktop-room-acceptance-start';
 /** Local acceptance only. Real Room authorities; synthetic accounts and bounded memory storage. */
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -761,6 +761,20 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       await roomRequest('generationCancel', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId, '', started.generation.generationId);
       const stopped = await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', started.generation.generationId);
       assert(stopped.status === 'cancelled' && runtime.observations().generation.modelDispatches === 0);
+      const afterCancel = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+      const byok = { ...original, generationRequestId: 'synthetic-catalog-byok', expectedRevision: afterCancel.snapshot.revision,
+        expectedControlSeq: afterCancel.snapshot.controlSeq, generation: { customProvider: { providerId: 'deepseek', modelId: 'deepseek-v4-flash', apiKey: ROOM_ACCEPTANCE_BYOK_KEY, generationOverrides: { temperature: 0.5 } } } };
+      runtime.armFault('generationStart');
+      let byokLost = false; try { await roomRequest('generationStart', 101, hostCookie, byok, created.roomId); } catch { byokLost = true; }
+      assert(byokLost);
+      const byokReceipt = await roomRequest('generationStart', 101, hostCookie, byok, created.roomId);
+      assert(byokReceipt.generation.generationRequestId === byok.generationRequestId && runtime.observations().generation.byokStartPortCalls === 1
+        && runtime.observations().generation.syntheticProducers === 3);
+      const byokSession = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+      assert(!JSON.stringify([byokReceipt, byokSession, runtime.observations()]).includes(ROOM_ACCEPTANCE_BYOK_KEY));
+      await runtime.generation('start-complete');
+      const byokReport = await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', byokReceipt.generation.generationId);
+      assert(byokReport.status === 'completed' && !JSON.stringify(byokReport).includes(ROOM_ACCEPTANCE_BYOK_KEY));
     }
     await roomRequest('leave', 202, memberCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     await roomRequest('close', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);

@@ -11,6 +11,7 @@ import {
   DESKTOP_ROOM_SESSION_OPERATIONS,
   DESKTOP_ROOM_SESSION_PROTOCOL_VERSION,
   DesktopRoomSessionErrorResponseSchema,
+  DesktopRoomGenerationStartRequestSchema,
   parseDesktopRoomSessionResponse,
   type DesktopRoomSessionOperation,
 } from '@mahoshojo/contracts/desktop-room-session';
@@ -902,12 +903,27 @@ describe('Desktop generation start receipt boundary', () => {
     const failed = await app.request(pathFor('generationStart'), requestFor('generationStart'));
     expect((await failed.json()).error.outcome).toBe('unknown');
   });
-  it('bounds the original full DTO before business and rejects all renderer provider injection', async () => {
+  it('bounds the original full DTO before business and rejects malformed provider wire', async () => {
     const deps = depsFor(), app = appFor(deps);
     const original = startFixture.action.request;
     for (const generation of [{ ...original.generation, isDowngrade: true }, { ...original.generation, arenaFreeRankingEnabled: true }, { ...original.generation, customProvider: {} }, { ...original.generation, systemConfig: {} }, { narrativeHistory: 'x'.repeat(12 * 1024 * 1024) }]) {
       const response = await app.request(pathFor('generationStart'), { method: 'POST', headers, body: JSON.stringify(wrap({ ...original, generation })) });
       expect(response.status).toBeGreaterThanOrEqual(400); expect((await response.json()).error.outcome).toBe('not-applied');
+    }
+    expect(deps.generations.start).not.toHaveBeenCalled();
+  });
+  it('accepts the narrow injected provider only after normal owner checks and keeps receipts secret-free', async () => {
+    const deps = depsFor(), app = appFor(deps);
+    const provider = { providerId: 'deepseek', modelId: 'deepseek-v4-flash', apiKey: 'synthetic-api-wire-canary', generationOverrides: { temperature: 0.5 } };
+    const original = DesktopRoomGenerationStartRequestSchema.parse(inputFor('generationStart')!.request);
+    const wire = wrap({ ...original, generation: { customProvider: provider } });
+    const response = await app.request(pathFor('generationStart'), { method: 'POST', headers, body: JSON.stringify(wire) });
+    expect(response.status).toBe(202); const raw = await response.text(); expect(raw).not.toContain(provider.apiKey);
+    expect(deps.generations.start).toHaveBeenCalledWith(expect.objectContaining({ request: expect.objectContaining({ generation: { customProvider: provider } }) }));
+    vi.mocked(deps.generations.start).mockClear();
+    for (const extra of [{ apiKey: '' }, { secretRef: 'forbidden' }, { headers: {} }, { baseUrl: 'https://invalid.example' }, { maxOutputTokens: 2 }, { providerId: 'system' }]) {
+      const rejected = await app.request(pathFor('generationStart'), { method: 'POST', headers, body: JSON.stringify(wrap({ ...original, generation: { customProvider: { ...provider, ...extra } } })) });
+      expect(rejected.status).toBeGreaterThanOrEqual(400); expect((await rejected.json()).error.outcome).toBe('not-applied');
     }
     expect(deps.generations.start).not.toHaveBeenCalled();
   });

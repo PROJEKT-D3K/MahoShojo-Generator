@@ -34,6 +34,7 @@ mod config;
 mod export;
 mod external_link;
 mod gc;
+mod hosted_preset;
 mod ipc_stream;
 #[cfg(test)]
 mod ipc_stream_tests;
@@ -1969,7 +1970,8 @@ pub fn run() {
     };
     boot_mark("process-start");
 
-    let rooms = match arena_room::RoomState::new() {
+    let secrets = default_secret_store();
+    let rooms = match arena_room::RoomState::new(secrets.clone()) {
         Ok(rooms) => std::sync::Arc::new(rooms),
         Err(_) => {
             eprintln!("mahoshojo: 无法初始化多人房间通路");
@@ -1980,7 +1982,7 @@ pub fn run() {
         .manage(rooms)
         .append_invoke_initialization_script(arena_room_tauri::DOCUMENT_SCRIPT)
         .on_page_load(|webview, payload| arena_room_tauri::page_load(webview, payload.event()))
-        .manage(default_secret_store())
+        .manage(secrets)
         .manage(ai::RequestRegistry::default())
         .manage(config::ConfigState::default())
         .manage(PendingRestore::default())

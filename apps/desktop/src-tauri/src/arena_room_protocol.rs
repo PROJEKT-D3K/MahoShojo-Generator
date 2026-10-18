@@ -19,6 +19,8 @@ pub(crate) const MAX_IPC_REQUEST_BYTES: usize = 67 * 1024;
 pub(crate) const MAX_START_ORIGINAL_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 pub(crate) const MAX_START_REQUEST_BYTES: usize = MAX_START_ORIGINAL_REQUEST_BYTES + 1024;
 pub(crate) const MAX_START_IPC_REQUEST_BYTES: usize = MAX_START_ORIGINAL_REQUEST_BYTES + 3 * 1024;
+// Only start recovery projections need the larger bounded receipt.
+pub(crate) const MAX_START_RECOVERY_RESPONSE_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_WEBSOCKET_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_TICKET_BYTES: usize = 4096;
@@ -1740,6 +1742,7 @@ fn json_size<T: Serialize>(value: &T, limit: usize) -> Result<usize, ()> {
 
 /// The only large-input parser. Move the DTO; never use generic Action's clone path.
 pub(crate) struct GenerationStartInput {
+    pub(crate) preset: Option<crate::hosted_preset::PreparedPreset>,
     pub(crate) handle: String,
     pub(crate) room_id: String,
     pub(crate) request: Value,
@@ -1800,6 +1803,22 @@ pub(crate) fn parse_generation_start_owned(
     struct Invoke<'a> {
         request: &'a Value,
     }
+    // Reject selection siblings before walking/serializing the large business DTO.
+    let preset = raw["request"]
+        .get("presetConfig")
+        .map(|value| {
+            start_nodes(value, 128)?;
+            bounded(value, 10 * 1024).map_err(|_| invalid_request())?;
+            let config: crate::hosted_preset::HostedPresetConfig =
+                serde_json::from_value(value.clone()).map_err(|_| invalid_request())?;
+            if crate::provider_target::normalize_model_id(&config.model_id)
+                .is_ok_and(|id| id == "__custom_model_id__")
+            {
+                return Err(invalid_request());
+            }
+            crate::hosted_preset::PreparedPreset::validate(&config).map_err(|_| invalid_request())
+        })
+        .transpose()?;
     start_complexity(&raw["request"]["request"])?;
     json_size(&Invoke { request: &raw }, MAX_START_IPC_REQUEST_BYTES)
         .map_err(|_| invalid_request())?;
@@ -1808,7 +1827,7 @@ pub(crate) fn parse_generation_start_owned(
         closed(&raw, &["handle", "request"], &[])?;
         id(&mut raw["handle"], 1)?;
         let action = &mut raw["request"];
-        closed(action, &["kind", "roomId", "request"], &[])?;
+        closed(action, &["kind", "roomId", "request"], &["presetConfig"])?;
         literal(&action["kind"], "generation-start")?;
         desktop_path_id(&action["roomId"])?;
         generation_start_request(&mut action["request"])
@@ -1822,6 +1841,7 @@ pub(crate) fn parse_generation_start_owned(
         .remove("request")
         .unwrap();
     Ok(GenerationStartInput {
+        preset,
         handle,
         room_id,
         request,
@@ -1909,6 +1929,30 @@ pub(crate) fn freeze_generation_start(
     serde_json::to_writer(&mut bytes, &envelope).map_err(|_| invalid_request())?;
     // envelope (and its sole AST) is dropped here. Only this frozen wire survives.
     Ok(std::sync::Arc::new(bytes))
+}
+
+/// Serialize only the trusted start recovery attach projection with its larger budget.
+/// Ordinary attach, ACK, pull and other small command replies keep their existing gates.
+pub(crate) fn encode_attach_response(value: &Value) -> Result<String, RoomError> {
+    let start_recovery = value["pendingIntent"]["operation"] == "generationStart"
+        || value
+            .get("generationStartFence")
+            .is_some_and(|fence| !fence.is_null());
+    let maximum = if start_recovery {
+        MAX_START_RECOVERY_RESPONSE_BYTES
+    } else {
+        1024
+    };
+    encode_small_projection(value, maximum)
+}
+
+pub(crate) fn encode_start_tracking_ended_response(value: &Value) -> Result<String, RoomError> {
+    encode_small_projection(value, MAX_START_RECOVERY_RESPONSE_BYTES)
+}
+
+fn encode_small_projection(value: &Value, maximum: usize) -> Result<String, RoomError> {
+    json_size(value, maximum).map_err(|_| RoomError::new("internal-error", "not-applicable"))?;
+    serde_json::to_string(value).map_err(|_| RoomError::new("internal-error", "not-applicable"))
 }
 
 pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {

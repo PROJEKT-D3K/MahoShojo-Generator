@@ -82,9 +82,11 @@ describe('disposable Room acceptance source adapter', () => {
     for (const marker of ['acceptance_context.config().identifier', 'secret::SECRET_STORE_SERVICE', 'MAHOSHOJO_ROOM_ACCEPTANCE', 'WEBVIEW2_USER_DATA_FOLDER']) {
       expect(lib.indexOf(marker)).toBeGreaterThan(-1);
       expect(lib.indexOf(marker)).toBeLessThan(lib.indexOf('tauri::Builder::default()'));
-      expect(lib.indexOf(marker)).toBeLessThan(lib.indexOf('.manage(default_secret_store())'));
+      expect(lib.indexOf(marker)).toBeLessThan(lib.indexOf('let secrets = default_secret_store();'));
     }
     expect(lib.indexOf('assert!(data_root.ends_with(')).toBeLessThan(lib.indexOf('maintenance::InstanceGuard::acquire(&data_root)'));
+    expect(lib).toContain('arena_room::RoomState::new(secrets.clone())');
+    expect(lib).toContain('.manage(secrets)');
     expect(lib).toContain(JSON.stringify(instance.webview));
     expect(sourcesAt(root)).toEqual(original);
   });
@@ -462,7 +464,7 @@ describe('Room acceptance owned mock supervision without spawning processes', ()
     child.line({ ...readyMessage(), selfCheck: { ...selfCheckSummary, generationReadOnly: false, generationCancel: true, generationStart: true, syntheticProducer: true } }); await mock.ready;
     const armed = mock.command('arm-fault', 'generationStart'); child.line({ id: 1, event: 'armed', operation: 'generationStart' }); await armed;
     const observed = mock.command('observe');
-    const value = { ...observations(2), generation: { ...generationObservations(), cancelEnabled: true, startEnabled: true, startDispatches: 3, startPortCalls: 2, syntheticProducers: 1, startReservations: 1 },
+    const value = { ...observations(2), generation: { ...generationObservations(), cancelEnabled: true, startEnabled: true, startDispatches: 3, startPortCalls: 2, syntheticProducers: 1, startReservations: 1, byokStartPortCalls: 0 },
       trace: [{ kind: 'room-http', operation: 'generationStart', status: 202, dropped: true }] };
     child.line(value); await expect(observed).resolves.toEqual(value);
     const invalid = mock.command('observe'); child.line({ ...value, id: 3, generation: { ...value.generation, modelDispatches: 1 } });

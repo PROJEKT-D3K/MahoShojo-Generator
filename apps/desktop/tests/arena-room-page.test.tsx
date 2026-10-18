@@ -201,6 +201,7 @@ const assertConstrained = () => {
   expect(diagnostics).not.toBeNull();
   expect(diagnostics!.closest('[hidden]')).not.toBeNull();
   for (const control of container.querySelectorAll('textarea, [aria-label="API Key"], [role="combobox"]')) {
+    if (control.closest('[aria-label="本次房间服务器生成选择"]')) continue;
     if (mocks.owner?.getSnapshot().session?.self.role !== 'host') expect(control.closest('[hidden]')).not.toBeNull();
     expect(control.matches(':disabled')).toBe(true);
   }
@@ -371,6 +372,74 @@ afterEach(async () => {
 });
 
 describe('Desktop /arena Room journey through the real route and Native bridge', () => {
+  it('uses shared room BYOK controls, requires saved Key, freezes confirmation and retries only the original intent', async () => {
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
+    const creating = await startAction('创建多人房间', 'create');
+    if (creating.action.kind !== 'create') throw new Error('Expected create');
+    const session = reviewSession(); session.snapshot.sharedConfig = creating.action.request.sharedConfig; session.snapshot.activeGeneration = null;
+    await confirmMembership(creating, 'host', session); await publishOnline(session);
+    const funding = () => room().querySelector<HTMLElement>('[aria-label="本次房间服务器生成选择"]')!;
+    const selectProvider = async (name: string) => {
+      await act(async () => funding().querySelector<HTMLButtonElement>('[role="combobox"]')!.click());
+      const option = [...funding().querySelectorAll<HTMLButtonElement>('[role="option"]')].find(node => node.querySelector('span')?.textContent === name);
+      expect(option).toBeTruthy(); await act(async () => option!.click());
+    };
+    expect(funding().textContent).toContain('服务器系统默认');
+    await selectProvider('DeepSeek');
+    expect(funding().textContent).toContain('服务器 BYOK');
+    const store = getDesktopAiConfigStore();
+    await act(async () => store.setPresetKeyDraft('deepseek', 'synthetic-unsaved-key'));
+    expect(requiredButton('开始多人生成', room()).disabled).toBe(true);
+    expect(funding().textContent).toContain('尚未保存');
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'set_provider_secret')).toBe(false);
+    await act(async () => store.setPresetKeyDraft('deepseek', ''));
+    expect(requiredButton('开始多人生成', room()).disabled).toBe(false);
+    await click('开始多人生成', room()); expect(room().querySelector('[aria-label="确认多人生成配置"]')).not.toBeNull();
+    await selectProvider('服务器系统默认'); expect(room().querySelector('[aria-label="确认多人生成配置"]')).toBeNull();
+    await selectProvider('DeepSeek');
+    await act(async () => funding().querySelectorAll<HTMLButtonElement>('[role="combobox"]')[1]!.click());
+    await click('自定义模型 ID', funding());
+    await change('[aria-label="本次房间服务器生成选择"] [aria-label="自定义模型 ID"]', 'my-room-model');
+    expect(funding().querySelectorAll('[role="combobox"]')[1]!.textContent).toContain('my-room-model');
+    await act(async () => buttons(funding()).find(node => node.textContent?.includes('高级生成设置'))!.click());
+    await change('[aria-label="本次房间服务器生成选择"] input[inputmode="numeric"]', '128');
+    await change('[aria-label="本次房间服务器生成选择"] input[inputmode="decimal"]', '0.5');
+    await change('[aria-label="本次房间服务器生成选择"] input[inputmode="numeric"]', '');
+    await click('开始多人生成', room()); const start = await startAction('确认按当前配置开始', 'generation-start');
+    if (start.action.kind !== 'generation-start' || !start.action.presetConfig) throw new Error('Expected BYOK start');
+    expect(start.action.presetConfig).toMatchObject({ providerId: 'deepseek', modelId: 'my-room-model', generationOverrides: { temperature: 0.5 } });
+    expect(start.action.request.generation).not.toHaveProperty('customProvider');
+    expect(JSON.stringify(start.action)).not.toMatch(/synthetic-unsaved-key|secretRef|apiKey|baseUrl/);
+    const pending = { operation: 'generationStart', intentId: start.requestId, roomId: session.roomId,
+      generationStart: { roomEpoch: session.roomEpoch, generationRequestId: start.action.request.generationRequestId, retryable: true, presetConfig: start.action.presetConfig } };
+    await port.deliver({ kind: 'mutation-unknown', ...pending });
+    await port.deliver({ kind: 'request-error', operation: 'generationStart', requestId: start.requestId, error: ipcFixture.error });
+    await act(async () => store.setPresetKeyDraft('deepseek', 'synthetic-new-draft-not-used'));
+    expect(room().textContent).toContain('原请求使用：服务器 BYOK');
+    expect(funding()).toBeNull();
+    await click('以原请求重试', room()); const retry = await startAction('确认以原请求重试', 'retry-generation-start');
+    expect(retry.action).toEqual({ kind: 'retry-generation-start', intentId: start.requestId });
+    expect(store.getPresetKeyDraft('deepseek')).toBe('synthetic-new-draft-not-used');
+    expect(ordinarySnapshot()).toEqual(before);
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'set_provider_secret')).toBe(false);
+    assertNoExecution();
+  });
+
+  it('keeps the ordinary manual model input mounted through Room BYOK mode and exit', async () => {
+    seedOrdinary(); await mount();
+    const ordinaryCombos = [...container.querySelectorAll<HTMLButtonElement>('[role="combobox"]')];
+    expect(ordinaryCombos.length).toBeGreaterThanOrEqual(2);
+    await act(async () => ordinaryCombos[1]!.click()); await click('自定义模型 ID');
+    await change('[aria-label="自定义模型 ID"]', 'ordinary-temporary-model');
+    const input = container.querySelector<HTMLInputElement>('[aria-label="自定义模型 ID"]')!;
+    const before = ordinarySnapshot(); await open(); const creating = await startAction('创建多人房间', 'create');
+    const session = sessionFor('host'); await confirmMembership(creating, 'host', session); await publishOnline(session);
+    expect(container.querySelector('[aria-label="自定义模型 ID"]')).toBe(input);
+    expect(input.closest('[hidden]')).not.toBeNull(); expect(input.value).toBe('ordinary-temporary-model');
+    vi.mocked(window.confirm).mockReturnValueOnce(true); await click('断开本机房间连接', room());
+    expect(container.querySelector('[aria-label="自定义模型 ID"]')).toBe(input); expect(input.closest('[hidden]')).toBeNull();
+    expect(input.value).toBe('ordinary-temporary-model'); expect(ordinarySnapshot()).toEqual(before); assertNoExecution();
+  });
   it('shows complete frozen host sources, confirms start, then abandons only local tracking and returns to a usable lobby', async () => {
     seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
     const creating = await startAction('创建多人房间', 'create');

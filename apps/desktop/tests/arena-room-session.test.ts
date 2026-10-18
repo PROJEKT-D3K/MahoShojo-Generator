@@ -252,6 +252,17 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     expect(h.session.getSnapshot().unknown).toMatchObject(pending);
     expect(h.requests.map(request => request.kind)).toEqual(['join', 'generation-start', 'retry-generation-start']);
   });
+  it('freezes a bounded non-secret BYOK selection before source preparation awaits', async () => {
+    const h = await harness(), value = startHost(); await joinProposalHost(h, value);
+    const current = h.session.getSnapshot().session!, gate = deferred<{ bundle: ArenaRoomHostWorkspaceBundle; generation: object }>();
+    const presetConfig = { providerId: 'deepseek', modelId: 'deepseek-v4-flash', generationOverrides: { temperature: 0.5 } };
+    const start = h.plan('generation-start');
+    const sending = h.session.startGeneration(current, h.session.confirmationOwner()!, () => gate.promise, () => true, presetConfig);
+    presetConfig.modelId = 'changed'; presetConfig.generationOverrides.temperature = 1;
+    gate.resolve({ bundle: startBundle(current), generation: {} });
+    expect(await start.entered.promise).toMatchObject({ presetConfig: { providerId: 'deepseek', modelId: 'deepseek-v4-flash', generationOverrides: { temperature: 0.5 } } });
+    start.accept(); await sending;
+  });
   it.each(['source-change', 'authority-change', 'prepare-failure'] as const)('refuses source preparation after %s without a start invocation', async kind => {
     const h = await harness(), value = startHost(); await joinProposalHost(h, value);
     const current = h.session.getSnapshot().session!, gate = deferred<{ bundle: ArenaRoomHostWorkspaceBundle; generation: object }>();

@@ -265,7 +265,7 @@ function checkedObservations(value, syntheticCancel = false, syntheticStart = fa
   const keys = ['id', 'event', 'rooms', 'receipts', 'actors', 'activeConnections', 'authSessions', 'trace', 'generation'];
   if (value.event !== 'observations' || !exactKeys(value, keys) || !['rooms', 'receipts', 'actors', 'activeConnections', 'authSessions'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 256) || !Array.isArray(value.trace) || value.trace.length > 256) fail('invalid observations');
   const counts = ['readRequests', 'readDispatches', 'startRequests', 'cancelRequests', 'modelRequests', 'startDispatches', 'cancelDispatches', 'modelDispatches', 'deltaFrames', 'droppedFrames', 'disconnections'];
-  if (syntheticStart) counts.push('startPortCalls', 'syntheticProducers', 'startReservations');
+  if (syntheticStart) counts.push('startPortCalls', 'syntheticProducers', 'startReservations', 'byokStartPortCalls');
   const generation = value.generation;
   if (!exactKeys(generation, ['fixture', 'readHeld', 'cancelEnabled', ...(syntheticStart ? ['startEnabled'] : []), ...counts])
     || !['none', 'running', 'completed', ...((syntheticCancel || syntheticStart) ? ['cancelled'] : [])].includes(generation.fixture) || typeof generation.readHeld !== 'boolean'
