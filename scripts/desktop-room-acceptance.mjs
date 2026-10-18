@@ -18,7 +18,8 @@ const PRODUCTION_ID = 'me.colanns.mahoshojo.desktop';
 const PREFIX = PRODUCTION_ID + '.roomacceptance.';
 // Deliberate harness capabilities, never every operation added to the production registry.
 export const ROOM_ACCEPTANCE_FAULTS = Object.freeze(['create', 'join', 'leave', 'close', 'config', 'config-unsupported', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported']);
-const ROOM_OBSERVATION_OPERATIONS = Object.freeze(['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
+export const ROOM_GENERATION_SCENARIOS = Object.freeze(['seed', 'seed-large', 'delta', 'gap', 'disconnect', 'complete', 'hold-read', 'release-read']);
+const ROOM_OBSERVATION_OPERATIONS = Object.freeze(['discover', 'create', 'join', 'session', 'generationRead', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 const read = file => readFileSync(file, 'utf8');
 const hash = data => createHash('sha256').update(data).digest('hex');
 const fail = message => { throw new Error(message); };
@@ -252,13 +253,19 @@ function exactKeys(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 }
 function checkedSummary(value) {
-  const keys = ['tlsTrusted', 'tlsNoRootRejected', 'tlsWrongSanRejected', 'authPkceOneUse', 'roomHttp', 'roomWss', 'roomProposals', 'proposalReceiptLoss', 'fixedPublicRefs'];
+  const keys = ['tlsTrusted', 'tlsNoRootRejected', 'tlsWrongSanRejected', 'authPkceOneUse', 'roomHttp', 'roomWss', 'roomProposals', 'proposalReceiptLoss', 'fixedPublicRefs', 'roomGenerationRead', 'roomGenerationRecovery', 'generationReadOnly'];
   if (!exactKeys(value, keys) || keys.some(key => value[key] !== true)) fail('invalid self-check result');
   return Object.fromEntries(keys.map(key => [key, true]));
 }
 function checkedObservations(value) {
-  const keys = ['id', 'event', 'rooms', 'receipts', 'actors', 'activeConnections', 'authSessions', 'trace'];
+  const keys = ['id', 'event', 'rooms', 'receipts', 'actors', 'activeConnections', 'authSessions', 'trace', 'generation'];
   if (value.event !== 'observations' || !exactKeys(value, keys) || !['rooms', 'receipts', 'actors', 'activeConnections', 'authSessions'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= 256) || !Array.isArray(value.trace) || value.trace.length > 256) fail('invalid observations');
+  const counts = ['readRequests', 'readDispatches', 'startRequests', 'cancelRequests', 'modelRequests', 'startDispatches', 'cancelDispatches', 'modelDispatches', 'deltaFrames', 'droppedFrames', 'disconnections'];
+  const generation = value.generation;
+  if (!exactKeys(generation, ['fixture', 'readHeld', ...counts])
+    || !['none', 'running', 'completed'].includes(generation.fixture) || typeof generation.readHeld !== 'boolean'
+    || counts.some(key => !Number.isSafeInteger(generation[key]) || generation[key] < 0 || generation[key] > 65_536)
+    || ['startDispatches', 'cancelDispatches', 'modelDispatches'].some(key => generation[key] !== 0)) fail('invalid generation observations');
   for (const event of value.trace) {
     if (event.kind === 'refused' && exactKeys(event, ['kind'])) continue;
     if (event.kind === 'public-card' && exactKeys(event, ['kind', 'operation', 'status']) && ['random', 'read'].includes(event.operation) && Number.isSafeInteger(event.status) && event.status >= 100 && event.status <= 599) continue;
@@ -322,6 +329,7 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
       if (entry.command === 'observe') checkedObservations(value);
       else if (entry.command === 'stop' && !(value.event === 'stopped' && exactKeys(value, ['id', 'event']))) fail('invalid stop response');
       else if (entry.command === 'arm-fault' && !(value.event === 'armed' && value.operation === entry.operation && exactKeys(value, ['id', 'event', 'operation']))) fail('invalid fault response');
+      else if (entry.command === 'generation' && !(value.event === 'generation' && value.scenario === entry.operation && exactKeys(value, ['id', 'event', 'scenario']))) fail('invalid generation response');
       pending.delete(value.id); clearTimeout(entry.timer); entry.resolve(value);
     } catch { abort(); }
   });
@@ -348,12 +356,14 @@ export function monitorMock(child, selfCheck = false, { readinessTimeoutMs = 30_
   });
   const command = async (command, operation) => {
     if (stopped || terminal || aborted || !readySeen || pending.size) fail('mock unavailable or control already pending');
-    if (!['observe', 'stop', 'arm-fault'].includes(command) || (command === 'arm-fault' ? !ROOM_ACCEPTANCE_FAULTS.includes(operation) : operation !== undefined)) fail('invalid control command');
+    if (!['observe', 'stop', 'arm-fault', 'generation'].includes(command)
+      || (command === 'arm-fault' ? !ROOM_ACCEPTANCE_FAULTS.includes(operation)
+        : command === 'generation' ? !ROOM_GENERATION_SCENARIOS.includes(operation) : operation !== undefined)) fail('invalid control command');
     const id = ++nextId;
     return new Promise((resolve, reject) => {
       const entry = { command, operation, resolve, reject, timer: setTimeout(() => { pending.delete(id); reject(failure('mock control timeout')); child.kill(); }, stopTimeoutMs) };
       pending.set(id, entry);
-      child.stdin.write(JSON.stringify({ id, command, ...(operation ? { operation } : {}) }) + '\n', error => {
+      child.stdin.write(JSON.stringify({ id, command, ...(operation ? command === 'generation' ? { scenario: operation } : { operation } : {}) }) + '\n', error => {
         if (error && pending.delete(id)) { clearTimeout(entry.timer); reject(new Error('mock control write failed')); child.kill(); }
       });
     });
@@ -409,13 +419,15 @@ export async function runApplicationPair(manifest, mock, {
       children.push(child);
       exits.push(new Promise(resolve => { child.once('error', () => { stop(); resolve({ role: instance.role, code: null, signal: 'spawn-error' }); }); child.once('exit', (code, signal) => { if (code !== 0 || signal) stop(); resolve({ role: instance.role, code, signal }); }); }));
     }
-    report(`Two isolated apps started. Commands: fault ${ROOM_ACCEPTANCE_FAULTS.join('|')}, observe, stop. Use synthetic accounts 101 and 202.`);
+    report(`Two isolated apps started. Commands: fault ${ROOM_ACCEPTANCE_FAULTS.join('|')}, generation ${ROOM_GENERATION_SCENARIOS.join('|')}, observe, stop. Use synthetic accounts 101 and 202.`);
     let control = Promise.resolve();
     input.on('line', line => { control = control.then(async () => {
       if (line === 'stop') { requested(); return; }
       if (line === 'observe') { report(JSON.stringify(await mock.command('observe'))); return; }
       const operation = line.startsWith('fault ') ? line.slice('fault '.length) : null;
+      const scenario = line.startsWith('generation ') ? line.slice('generation '.length) : null;
       if (ROOM_ACCEPTANCE_FAULTS.includes(operation)) report(JSON.stringify(await mock.command('arm-fault', operation)));
+      else if (ROOM_GENERATION_SCENARIOS.includes(scenario)) report(JSON.stringify(await mock.command('generation', scenario)));
       else report('Unknown command');
     }).catch(() => report('Mock control failed')); });
     const unexpectedMock = mock.exit.then(() => { backendEnded = true; for (const child of children) if (child.exitCode === null) child.kill(); });

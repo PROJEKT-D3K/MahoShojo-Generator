@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
-  buildArguments, ENDPOINTS, instancePaths, launchEnvironment, launcherFailureMessage, monitorMock, PATCH_FILES,
+  buildArguments, ENDPOINTS, instancePaths, launchEnvironment, launcherFailureMessage, monitorMock, PATCH_FILES, ROOM_GENERATION_SCENARIOS,
   patchSources, preflight, prepare, runApplicationPair, runBuildCopies, validatePki, validatePrepared, verify,
 } from '../scripts/desktop-room-acceptance.mjs';
 import { safeLaunchEnvironment } from '../scripts/desktop-acceptance-common.mjs';
@@ -420,9 +420,13 @@ class SyntheticChild extends EventEmitter {
   line(value: unknown) { this.stdout.write(JSON.stringify(value) + '\n'); }
   finish(code = 0) { this.exitCode = code; this.emit('exit', code, null); this.emit('close', code, null); }
 }
-const selfCheckSummary = { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true };
+const selfCheckSummary = { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true, roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: true };
 const readyMessage = () => ({ event: 'ready', roomOrigin: ENDPOINTS.room, authOrigin: ENDPOINTS.auth, roomAddress: { host: '127.0.0.1', port: ENDPOINTS.roomPort }, selfCheck: { ...selfCheckSummary } });
-const observations = (id: unknown) => ({ id, event: 'observations', rooms: 1, receipts: 1, actors: 1, activeConnections: 0, authSessions: 2, trace: [{ kind: 'room-http', operation: 'create', status: 200, dropped: false }] });
+const generationObservations = () => ({ fixture: 'none', readHeld: false, readRequests: 0, readDispatches: 0,
+  startRequests: 0, cancelRequests: 0, modelRequests: 0, startDispatches: 0, cancelDispatches: 0,
+  modelDispatches: 0, deltaFrames: 0, droppedFrames: 0, disconnections: 0 });
+const observations = (id: unknown) => ({ id, event: 'observations', rooms: 1, receipts: 1, actors: 1, activeConnections: 0, authSessions: 2,
+  generation: generationObservations(), trace: [{ kind: 'room-http', operation: 'create', status: 200, dropped: false }] });
 
 describe('Room acceptance actual CLI entry with a synthetic mock child', () => {
   it.each(['failure', 'success'])('preserves safe %s output and exit status at the outermost catch', async outcome => {
@@ -453,6 +457,68 @@ describe('Room acceptance actual CLI entry with a synthetic mock child', () => {
 });
 
 describe('Room acceptance owned mock supervision without spawning processes', () => {
+  it.each(ROOM_GENERATION_SCENARIOS)('supervises only the fixed generation %s scenario', async scenario => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    const pending = mock.command('generation', scenario);
+    expect(child.commands).toEqual([{ id: 1, command: 'generation', scenario }]);
+    child.line({ id: 1, event: 'generation', scenario });
+    await expect(pending).resolves.toEqual({ id: 1, event: 'generation', scenario });
+    expect(child.kill).not.toHaveBeenCalled();
+    child.finish(); await mock.exit; await mock.close();
+  });
+
+  it.each([
+    { id: 1, event: 'generation', scenario: 'complete' },
+    { id: 1, event: 'generation', scenario: 'seed', roomId: 'private-canary' },
+    { id: 1, event: 'generation', operation: 'seed' },
+  ])('refuses mismatched or expanded generation acknowledgement %#', async reply => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    const pending = mock.command('generation', 'seed'); child.line(reply);
+    await expect(pending).rejects.toThrow('invalid mock response');
+    expect(child.kill).toHaveBeenCalled(); await mock.exit; await mock.close();
+  });
+
+  it('keeps read and refused attempts separate from zero mutation/model dispatch counters', async () => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    const pending = mock.command('observe');
+    const value = { ...observations(1), generation: { ...generationObservations(), fixture: 'running', readHeld: true,
+      readRequests: 3, readDispatches: 2, startRequests: 1, cancelRequests: 1, modelRequests: 1,
+      deltaFrames: 4, droppedFrames: 1, disconnections: 2 },
+      trace: [{ kind: 'room-http', operation: 'generationRead', status: 200, dropped: false }] };
+    child.line(value); await expect(pending).resolves.toEqual(value);
+    child.finish(); await mock.exit; await mock.close();
+  });
+
+  it.each([
+    { startDispatches: 1 }, { cancelDispatches: 1 }, { modelDispatches: 1 },
+    { readDispatches: -1 }, { readRequests: 65_537 }, { deltaFrames: 1.5 },
+    { fixture: 'other' }, { readHeld: 'true' }, { body: 'private-canary' },
+  ])('refuses unsafe or expanded generation observations %#', async patch => {
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    const pending = mock.command('observe');
+    child.line({ ...observations(1), generation: { ...generationObservations(), ...patch } });
+    await expect(pending).rejects.toThrow('invalid mock response');
+    expect(child.kill).toHaveBeenCalled(); await mock.exit; await mock.close();
+  });
+
+  it('requires every new readiness proof and every generation observation field', async () => {
+    for (const key of ['roomGenerationRead', 'roomGenerationRecovery', 'generationReadOnly']) {
+      const child = new SyntheticChild(), mock = monitorMock(child);
+      const reply = readyMessage(); delete (reply.selfCheck as Record<string, unknown>)[key];
+      const rejected = expect(mock.ready).rejects.toThrow('invalid mock response'); child.line(reply);
+      await rejected; await mock.exit; await mock.close();
+    }
+    const child = new SyntheticChild(), mock = monitorMock(child);
+    child.line(readyMessage()); await mock.ready;
+    const pending = mock.command('observe'), value = observations(1);
+    delete (value.generation as Record<string, unknown>).modelDispatches; child.line(value);
+    await expect(pending).rejects.toThrow('invalid mock response'); await mock.exit; await mock.close();
+  });
+
   it.each(['config', 'config-unsupported'])('supervises bounded %s fault and config observations', async operation => {
     const child = new SyntheticChild(), mock = monitorMock(child);
     child.line(readyMessage()); await mock.ready;
@@ -718,7 +784,8 @@ describe('Room acceptance owned mock supervision without spawning processes', ()
     for (const reply of [{ ...observations(1), cookie: 'private-canary' }, observations(99)]) {
       const child = new SyntheticChild(), mock = monitorMock(child);
       child.line(readyMessage()); await mock.ready;
-      for (const [command, operation] of [['unknown', undefined], ['observe', 'create'], ['arm-fault', 'other']]) await expect(mock.command(command, operation)).rejects.toThrow('invalid control command');
+      for (const [command, operation] of [['unknown', undefined], ['observe', 'create'], ['arm-fault', 'other'], ['generation', undefined],
+        ['generation', 'start'], ['generation', 'seed https://example.invalid'], ['generation', { scenario: 'seed', roomId: 'other' }]]) await expect(mock.command(command, operation)).rejects.toThrow('invalid control command');
       expect(child.commands).toEqual([]);
       const refused = expect(mock.command('observe')).rejects.toThrow('invalid mock response');
       child.line(reply); await refused; await mock.exit; await mock.close();
@@ -785,6 +852,16 @@ function applicationPairFixture() {
 }
 
 describe('Room acceptance two-application lifecycle without a GUI', () => {
+  it('forwards fixed generation scenarios without accepting arbitrary destinations or payloads', async () => {
+    const fixture = applicationPairFixture(); const running = runApplicationPair(fixture.manifest, fixture.mock, fixture);
+    fixture.ready.resolve(readyMessage()); await fixture.started.promise;
+    fixture.inputStream.write(ROOM_GENERATION_SCENARIOS.map((scenario: string) => `generation ${scenario}\n`).join('')
+      + 'generation start\ngeneration seed room-1\ngeneration https://example.invalid\n');
+    await vi.waitFor(() => expect(fixture.report).toHaveBeenCalledWith('Unknown command'));
+    expect(fixture.mock.command.mock.calls).toEqual(ROOM_GENERATION_SCENARIOS.map((scenario: string) => ['generation', scenario]));
+    fixture.inputStream.write('stop\n'); await running;
+  });
+
   it('forwards both config console fault modes through the bounded control channel', async () => {
     const fixture = applicationPairFixture(); const running = runApplicationPair(fixture.manifest, fixture.mock, fixture);
     fixture.ready.resolve(readyMessage()); await fixture.started.promise;

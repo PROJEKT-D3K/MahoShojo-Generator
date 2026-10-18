@@ -14,11 +14,12 @@ import { formatRoomMockDiagnostic, roomMockFailureCode } from '../../../scripts/
 import {
   ARENA_ROOM_PRESENCE_WEBSOCKET_PROTOCOL,
   ArenaRoomSharedConfigSchema,
+  type RoomServerTransportMessage,
 } from '@mahoshojo/contracts/arena-room';
 import {
   DESKTOP_ROOM_SESSION_OPERATIONS, DESKTOP_ROOM_SESSION_PROTOCOL_VERSION,
   DesktopRoomSessionExpectedUserIdHeaderSchema, DesktopRoomSessionErrorResponseSchema, parseDesktopRoomSessionResponse,
-  DesktopRoomSessionRoomIdSchema, DesktopRoomSessionProposalIdSchema,
+  DesktopRoomSessionRoomIdSchema, DesktopRoomSessionProposalIdSchema, DesktopRoomSessionGenerationIdSchema,
   type DesktopRoomSessionOperation,
 } from '@mahoshojo/contracts/desktop-room-session';
 import {
@@ -45,9 +46,13 @@ import { createArenaRoomWebSocketAuthority } from '../src/arena-room/room-websoc
 import { ARENA_ROOM_WEBSOCKET_PATH, RoomWebSocketGateway } from '../src/arena-room/room-websocket-gateway';
 import { createRoomRequestDispatcher, createRoomWebSocketApp, createRoomWebSocketServer } from '../src/arena-room/room-websocket-transport';
 import type { HonoAppVariables } from '../src/middleware/request-metadata';
+import {
+  createRoomAcceptanceGeneration, ROOM_ACCEPTANCE_GENERATION_LARGE_BYTES, ROOM_ACCEPTANCE_GENERATION_TAIL,
+  type RoomAcceptanceGenerationObservation, type RoomAcceptanceGenerationScenario,
+} from './desktop-room-acceptance-generation';
 
 // This Native acceptance harness only exposes capabilities already implemented by its consumer.
-export const ROOM_ACCEPTANCE_OPERATIONS = ['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve'] as const satisfies readonly DesktopRoomSessionOperation[];
+export const ROOM_ACCEPTANCE_OPERATIONS = ['discover', 'create', 'join', 'session', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'generationRead'] as const satisfies readonly DesktopRoomSessionOperation[];
 export const ROOM_ACCEPTANCE_HOST = 'room.acceptance.invalid';
 export const ROOM_ACCEPTANCE_PORT = 34443;
 export const ROOM_ACCEPTANCE_AUTH_PORT = 34080;
@@ -82,7 +87,8 @@ export type RoomAcceptanceRuntime = {
   authAddress: { host: '127.0.0.1'; port: number };
   close(): Promise<void>;
   armFault(operation: RoomAcceptanceFault): void;
-  observations(): { rooms: number; receipts: number; actors: number; activeConnections: number; authSessions: number; trace: RoomAcceptanceObservation[] };
+  generation(scenario: RoomAcceptanceGenerationScenario): Promise<void>;
+  observations(): { rooms: number; receipts: number; actors: number; activeConnections: number; authSessions: number; trace: RoomAcceptanceObservation[]; generation: RoomAcceptanceGenerationObservation };
 };
 
 /** Checkpoint, receipt and directory writes are one synchronous CAS transaction. */
@@ -179,7 +185,7 @@ const roomServices = () => {
   const store = new MemoryRoomStore();
   const actors = createRoomActorRegistry({ store, maxActors: CAPACITY, maxFencedRooms: CAPACITY });
   actors.startIdleSweeper();
-  // References use real authority checks; generation remains outside this local scope.
+  // References use real authority checks; no generation/model service is constructed.
   const references = createArenaDataCardRefVerifier({ getClient: () => syntheticCardMetadata });
   const presets = createArenaRoomGenerationPresetResolver();
   const memberships = createArenaRoomMembershipService({ actors, creationReceipts: store, references, presets });
@@ -203,17 +209,19 @@ const roomServices = () => {
 };
 
 const operationFor = (request: Request): DesktopRoomSessionOperation | null => {
-  const segments = new URL(request.url).pathname.split('/');
+  const url = new URL(request.url), segments = url.pathname.split('/');
   for (const operation of ROOM_ACCEPTANCE_OPERATIONS) {
+    if (operation === 'generationRead' && url.search !== '') continue;
     const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
     const expected = definition.path.split('/');
     if (request.method !== definition.method || expected.length !== segments.length) continue;
     const matches = expected.every((part, index) => {
       const encoded = segments[index]!;
-      if (part !== ':roomId' && part !== ':proposalId') return part === encoded;
+      if (part !== ':roomId' && part !== ':proposalId' && part !== ':generationId') return part === encoded;
       try {
         const value = decodeURIComponent(encoded);
-        const schema = part === ':roomId' ? DesktopRoomSessionRoomIdSchema : DesktopRoomSessionProposalIdSchema;
+        const schema = part === ':roomId' ? DesktopRoomSessionRoomIdSchema
+          : part === ':generationId' ? DesktopRoomSessionGenerationIdSchema : DesktopRoomSessionProposalIdSchema;
         return schema.safeParse(value).success && encodeURIComponent(value) === encoded;
       } catch { return false; }
     });
@@ -238,6 +246,8 @@ export const startRoomAcceptanceMock = async (options: {
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('ACCEPTANCE_PORT_INVALID');
   }
   let services = roomServices();
+  const newGeneration = () => createRoomAcceptanceGeneration({ states: () => [...services.store.states.values()], memberships: () => services.memberships });
+  let generation = newGeneration();
   const trace: RoomAcceptanceObservation[] = [];
   const observe = (entry: RoomAcceptanceObservation) => { trace.push(entry); if (trace.length > TRACE_CAPACITY) trace.shift(); };
   let armed: RoomAcceptanceFault | null = null;
@@ -257,6 +267,7 @@ export const startRoomAcceptanceMock = async (options: {
   };
   const http = new Hono<{ Variables: HonoAppVariables }>();
   http.onError(() => Response.json({ error: 'Acceptance request failed' }, { status: 503 }));
+  http.use('*', async (context, next) => { generation.recordRequest(context.req.raw); await next(); });
   http.use('*', bodyLimit({ maxSize: 65 * 1024 }));
   http.use('*', async (context, next) => {
     context.header('cache-control', 'no-store');
@@ -292,7 +303,8 @@ export const startRoomAcceptanceMock = async (options: {
     directory: { discoverPublic: (input) => services.directory.discoverPublic(input) },
     websocketAuthority: { issue: (input) => services.authority.issue(input) },
     proposals: { submit: (input) => services.proposals.submit(input), resolve: (input) => services.proposals.resolve(input), withdraw: (input) => services.proposals.withdraw(input) },
-    generations: { start: async () => unavailable(), read: async () => unavailable(), list: async () => unavailable(), readHistory: async () => unavailable(), cancel: async () => unavailable() },
+    generations: { start: async () => generation.refusedDispatch('start'), read: (input) => generation.read(input),
+      list: async () => unavailable(), readHistory: async () => unavailable(), cancel: async () => generation.refusedDispatch('cancel') },
     configs: { publish: (input) => services.configs.publish(input) },
     rateLimit: async () => ({ allowed: true, limit: 100, remaining: 99, retryAfterSeconds: 1 }),
   }, { isAllowedOrigin: (origin) => origin === roomOrigin });
@@ -319,6 +331,7 @@ export const startRoomAcceptanceMock = async (options: {
   }) as Server;
   const auth = new Hono();
   auth.onError(() => Response.json({ error: 'Acceptance request failed' }, { status: 503 }));
+  auth.use('*', async (context, next) => { generation.recordRequest(context.req.raw); await next(); });
   auth.use('*', bodyLimit({ maxSize: 4096 }));
   auth.use('*', async (context, next) => {
     // Keep the browser's same-origin form POST Origin; suppress referrers to the callback.
@@ -401,6 +414,7 @@ export const startRoomAcceptanceMock = async (options: {
   }
   let closing: Promise<void> | null = null;
   const close = () => closing ??= (async () => {
+    generation.dispose();
     gateway?.forceClose();
     for (const socket of websocketServer.clients) socket.terminate();
     for (const socket of sockets) socket.destroy();
@@ -415,7 +429,7 @@ export const startRoomAcceptanceMock = async (options: {
     gateway = new RoomWebSocketGateway({
       allowedBrowserOrigins: [roomOrigin], authorize: async (request) => {
         const decision = await services.authority.authorize(request);
-        observe({ kind: 'ws', outcome: decision.accepted ? 'accepted' : 'rejected' }); return decision;
+        observe({ kind: 'ws', outcome: decision.accepted ? 'accepted' : 'rejected' }); return generation.wrapAuthorization(decision);
       }, closeGraceMs: 50, shutdownGraceMs: 100,
     });
     websocketApp = createRoomWebSocketApp(gateway);
@@ -427,11 +441,14 @@ export const startRoomAcceptanceMock = async (options: {
         if (!faults.includes(operation) || armed !== null || closing) throw new Error('ACCEPTANCE_FAULT_INVALID');
         armed = operation;
       },
+      generation: scenario => generation.control(scenario),
       observations: () => ({ rooms: services.store.states.size, receipts: services.store.receipts.size,
-        actors: services.actors.size, activeConnections: websocketServer.clients.size, authSessions: sessions.size, trace: structuredClone(trace) }),
+        actors: services.actors.size, activeConnections: websocketServer.clients.size, authSessions: sessions.size, trace: structuredClone(trace), generation: generation.observe() }),
     };
     resetForSelfCheck.set(runtime, async () => {
+      generation.dispose();
       await services.actors.shutdown(); services = roomServices(); sessions.clear(); flows.clear(); grants.clear(); trace.length = 0; armed = null;
+      generation = newGeneration();
     });
     return runtime;
   } catch (error) {
@@ -451,8 +468,8 @@ const probe = (runtime: RoomAcceptanceRuntime, pki: RoomAcceptancePki, endpoint:
     headers: { ...options.headers, ...(options.body === undefined ? {} : { 'content-type': typeof options.body === 'string' ? 'application/x-www-form-urlencoded' : 'application/json' }) },
     timeout: 5000,
   }, (response) => {
-    let body = '';
-    response.on('data', (chunk: Buffer) => { body += chunk.toString(); if (body.length > 300_000) request.destroy(new Error('ACCEPTANCE_PROBE_BOUND')); });
+    let body = ''; response.setEncoding('utf8');
+    response.on('data', (chunk: string) => { body += chunk; if (Buffer.byteLength(body) > 2 * 1024 * 1024) request.destroy(new Error('ACCEPTANCE_PROBE_BOUND')); });
     response.once('end', () => resolve({ status: response.statusCode ?? 0, body, headers: response.headers }));
   });
   request.once('error', (error) => {
@@ -469,6 +486,14 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
   resetForSelfCheck.delete(runtime);
   const assert = (value: unknown) => { if (!value) throw new Error('ACCEPTANCE_SELFCHECK_FAILED'); };
   const openSockets: WebSocket[] = [];
+  const generationMessages = new Map<WebSocket, RoomServerTransportMessage[]>();
+  const until = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 5000;
+    while (!predicate()) {
+      if (Date.now() >= deadline) throw new Error('ACCEPTANCE_SELFCHECK_FAILED');
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  };
   try {
     for (const negative of [{ trusted: false }, { hostname: 'wrong.acceptance.invalid' }]) {
       let rejected = false; try { await probe(runtime, pki, '/api/arena/rooms/v1', negative); } catch { rejected = true; } assert(rejected);
@@ -487,9 +512,9 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       return exchange.headers['set-cookie']![0]!.split(';')[0]!;
     };
     const hostCookie = await login(101); const memberCookie = await login(202);
-    const roomRequest = async (operation: DesktopRoomSessionOperation, userId: number, cookie: string, request?: unknown, roomId = '', proposalId = '') => {
+    const roomRequest = async (operation: DesktopRoomSessionOperation, userId: number, cookie: string, request?: unknown, roomId = '', proposalId = '', generationId = '') => {
       const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
-      const response = await probe(runtime, pki, definition.path.replace(':roomId', encodeURIComponent(roomId)).replace(':proposalId', encodeURIComponent(proposalId)), {
+      const response = await probe(runtime, pki, definition.path.replace(':roomId', encodeURIComponent(roomId)).replace(':proposalId', encodeURIComponent(proposalId)).replace(':generationId', encodeURIComponent(generationId)), {
         headers: { cookie, origin: runtime.roomOrigin, 'x-mahoshojo-desktop-room-protocol': DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, 'x-mahoshojo-room-expected-user-id': `v1:${userId}` },
         ...(definition.method === 'POST' ? { body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: userId, ...(operation === 'create' ? { createMode: 'new' } : {}) }, request } } : {}),
       });
@@ -524,7 +549,7 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
     await roomRequest('discover', 101, hostCookie);
     await roomRequest('join', 202, memberCookie, { displayName: 'Synthetic 202' }, created.roomId);
     await roomRequest('session', 202, memberCookie, undefined, created.roomId);
-    for (const [userId, cookie] of [[101, hostCookie], [202, memberCookie]] as const) {
+    const connect = async (userId: number, cookie: string) => {
       const issued = await roomRequest('ticket', userId, cookie, {}, created.roomId);
       const current = await roomRequest('session', userId, cookie, undefined, created.roomId);
       await new Promise<void>((resolve, reject) => {
@@ -534,17 +559,21 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
             ? callback(null, [{ address: '127.0.0.1', family: 4 }])
             : callback(null, '127.0.0.1', 4), handshakeTimeout: 5000 });
         openSockets.push(socket);
+        const messages: RoomServerTransportMessage[] = []; generationMessages.set(socket, messages);
         const timeout = setTimeout(() => reject(new Error('ACCEPTANCE_SELFCHECK_WS')), 5000);
         socket.once('error', () => { clearTimeout(timeout); reject(new Error('ACCEPTANCE_SELFCHECK_WS')); });
         let snapshot = false; let presence = false;
         socket.on('message', (data) => {
           const message = JSON.parse(data.toString());
+          messages.push(message as RoomServerTransportMessage);
           if (message.type === 'room.snapshot') snapshot = message.payload.members.some((member: { userId: string }) => member.userId === current.self.userId);
           if (message.type === 'room.presence') presence = message.onlineUserIds.includes(current.self.userId);
           if (snapshot && presence) { clearTimeout(timeout); resolve(); }
         });
       });
-    }
+      return openSockets.at(-1)!;
+    };
+    await connect(101, hostCookie); await connect(202, memberCookie);
     const random = await probe(runtime, pki, '/api/random-public-card?type=character', { auth: true });
     const fresh = await probe(runtime, pki, `/api/public-data-cards?id=${ROOM_ACCEPTANCE_PUBLIC_CHARACTER.id}`, { auth: true });
     assert(random.status === 200 && fresh.status === 200 && same(JSON.parse(random.body), JSON.parse(fresh.body))
@@ -591,11 +620,57 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       { kind: 'room-http', operation: 'proposalSubmit', status: 200, dropped: true },
       { kind: 'room-http', operation: 'proposalSubmit', status: 200, dropped: false },
     ]));
+    await runtime.generation('seed-large');
+    const seeded = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+    const generationId = seeded.snapshot.activeGeneration.generationId;
+    const read = () => roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', generationId);
+    const baseline = await read();
+    assert(baseline.status === 'running' && !baseline.finalAuthoritative
+      && Buffer.byteLength(baseline.markdown) === ROOM_ACCEPTANCE_GENERATION_LARGE_BYTES
+      && baseline.markdown.endsWith(ROOM_ACCEPTANCE_GENERATION_TAIL));
+    const generationPath = DESKTOP_ROOM_SESSION_OPERATIONS.generationRead.path.replace(':roomId', created.roomId).replace(':generationId', generationId);
+    const beforeOwner = runtime.observations().generation.readDispatches;
+    assert((await probe(runtime, pki, generationPath, { headers: { ...configHeaders, 'x-mahoshojo-room-expected-user-id': 'v1:202' } })).status === 409);
+    assert(runtime.observations().generation.readDispatches === beforeOwner);
+    await runtime.generation('delta'); await runtime.generation('gap');
+    await until(() => [...generationMessages.values()].every(messages => messages.some(message => message.type === 'story.delta' && message.chunkSeq === 2)));
+    for (const messages of generationMessages.values()) {
+      assert(same(messages.flatMap(message => message.type === 'story.delta' ? [message.chunkSeq] : []), [0, 2]));
+    }
+    const repaired = await read();
+    assert(repaired.nextChunkSeq === 3 && repaired.markdown.includes('受控缺口（仅传输丢帧）') && !repaired.finalAuthoritative);
+    await runtime.generation('disconnect');
+    await until(() => openSockets.every(socket => socket.readyState === WebSocket.CLOSED));
+    const reconnected = await connect(101, hostCookie);
+    assert((await read()).markdown === repaired.markdown);
+    await runtime.generation('hold-read');
+    const pendingRead = read();
+    await until(() => runtime.observations().generation.readHeld);
+    await runtime.generation('complete');
+    await until(() => generationMessages.get(reconnected)!.some(message => message.type === 'generation.completed'));
+    await runtime.generation('release-read');
+    const late = await pendingRead;
+    assert(late.status === 'running' && !late.finalAuthoritative && late.generation.generationId === generationId);
+    const final = await read();
+    assert(final.finalAuthoritative && final.status === 'completed' && final.result.format === 'stream-markdown'
+      && final.markdown === repaired.markdown && final.generationRecordId);
+    for (const endpoint of [`/api/arena/rooms/v1/${created.roomId}/generations`, `${generationPath}/cancel`, '/api/arena/generate-stream']) {
+      assert((await probe(runtime, pki, endpoint, { headers: configHeaders, body: {} })).status === 404);
+    }
+    for (const endpoint of [`/api/arena/rooms/v1/${created.roomId}/generations`, `${generationPath}/history`, `${generationPath}?view=history`, `${generationPath}?view=current`]) {
+      assert((await probe(runtime, pki, endpoint, { headers: configHeaders })).status === 404);
+    }
+    const generation = runtime.observations().generation;
+    assert(generation.fixture === 'completed' && !generation.readHeld && generation.readDispatches >= 5
+      && generation.deltaFrames === 3 && generation.droppedFrames === 2 && generation.disconnections === 2
+      && generation.startRequests === 1 && generation.cancelRequests === 1 && generation.modelRequests === 1
+      && generation.startDispatches === 0 && generation.cancelDispatches === 0 && generation.modelDispatches === 0);
     await roomRequest('leave', 202, memberCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     await roomRequest('close', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     assert((await roomRequest('discover', 101, hostCookie)).items.length === 0);
     return { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true,
-      roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true } as const;
+      roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true,
+      roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: true } as const;
   } finally {
     await Promise.all(openSockets.map((socket) => new Promise<void>((resolve) => {
       if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }
@@ -645,6 +720,8 @@ const main = async () => {
             const keys = Object.keys(value).sort().join('|');
             if (value.command === 'arm-fault' && keys === 'command|id|operation') {
               runtime.armFault(value.operation as RoomAcceptanceFault); emit({ id, event: 'armed', operation: value.operation });
+            } else if (value.command === 'generation' && keys === 'command|id|scenario') {
+              await runtime.generation(value.scenario as RoomAcceptanceGenerationScenario); emit({ id, event: 'generation', scenario: value.scenario });
             } else if (value.command === 'observe' && keys === 'command|id') emit({ id, event: 'observations', ...runtime.observations() });
             else if (value.command === 'stop' && keys === 'command|id') { stopped = true; await stop(); emit({ id, event: 'stopped' }); }
             else throw new Error('invalid');
