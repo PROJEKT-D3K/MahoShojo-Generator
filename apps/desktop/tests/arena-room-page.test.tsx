@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /** Real Desktop routes, shared views, Room owner and bridge; only Native/browser ports are fixtures. */
-import { webcrypto } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, StrictMode } from 'react';
@@ -9,13 +9,14 @@ import { RouterProvider } from '@tanstack/react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ipcFixture from '@mahoshojo/contracts/fixtures/desktop-room-ipc.json';
 import serviceFixture from '@mahoshojo/contracts/fixtures/desktop-room-session.json';
+import generationFixture from '@mahoshojo/contracts/fixtures/desktop-room-generation-read.json';
 import {
   DESKTOP_ROOM_IPC_COMMANDS, DesktopRoomAttachRequestSchema, DesktopRoomBatchSchema,
   DesktopRoomRequestSchema, DesktopRoomSubscribeRequestSchema, getDesktopRoomHttpOperation,
   type DesktopRoomAttachResponse, type DesktopRoomBatch, type DesktopRoomHttpAction,
   type DesktopRoomSubscribeRequest,
 } from '@mahoshojo/contracts/desktop-room-ipc';
-import { MAX_ROOM_MEMBERS, PROPOSAL_VERSION, type ArenaProposal, type ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
+import { MAX_ROOM_MEMBERS, PROPOSAL_VERSION, type ArenaProposal, type ArenaRoomSessionResponse, type ArenaRoomGenerationViewResponse } from '@mahoshojo/contracts/arena-room';
 import { createDesktopRouter } from '../src/app/router';
 import { parseArenaRoomJoinCode } from '@mahoshojo/multiplayer-core/room-join-code';
 import { createRoomInviteScope } from '@mahoshojo/ui-web/arena-room';
@@ -59,6 +60,7 @@ class RoomNativeFixture {
   readonly acknowledgements: { subscriptionId: string; batchId: string; sequence: number }[] = [];
   readonly order: string[] = [];
   pendingIntent: DesktopRoomAttachResponse['pendingIntent'] = null;
+  generationReadCurrent = true;
   channel: NativeChannel = {};
   handle = ipcFixture.attach.handle;
   subscriptionId = ipcFixture.attach.subscriptionId;
@@ -113,7 +115,8 @@ class RoomNativeFixture {
       const event = delivery.batch.event;
       if (event.kind === 'proposal-observation' && event.observation.settle && this.pendingIntent?.intentId === event.intentId) this.pendingIntent = null;
       this.order.push(`acknowledged:${action.batchId}`);
-      return { kind: 'acknowledged', handle: envelope.handle, subscriptionId: action.subscriptionId, batchId: action.batchId, sequence: action.sequence, accepted: true };
+      return { kind: 'acknowledged', handle: envelope.handle, subscriptionId: action.subscriptionId, batchId: action.batchId, sequence: action.sequence, accepted: true,
+        ...(event.kind === 'generation-fragment' && event.final ? { generationRead: { requestId: event.requestId, current: this.generationReadCurrent } } : {}) };
     }
     if (action.kind === 'end-config-tracking' || action.kind === 'end-proposal-tracking') {
       expect(this.pendingIntent?.intentId).toBe(action.intentId); this.pendingIntent = null;
@@ -237,6 +240,18 @@ const responseEvent = (operation: Operation, result: unknown) => ({
   operation: getDesktopRoomHttpOperation(operation.action),
   response: { desktopRoom: serviceFixture.operations.create.success.desktopRoom, result },
 });
+const deliverGeneration = async (operation: Operation, view: ArenaRoomGenerationViewResponse, holdFinalAck = false) => {
+  const text = JSON.stringify({ desktopRoom: serviceFixture.operations.create.success.desktopRoom, result: view });
+  const split = text.indexOf('"markdown"');
+  expect(split).toBeGreaterThan(0);
+  await port.deliver({ kind: 'generation-descriptor', requestId: operation.requestId,
+    roomId: view.roomId, roomEpoch: view.roomEpoch, generationId: view.generation.generationId, attempt: view.generation.attempt,
+    byteLength: Buffer.byteLength(text, 'utf8'), digest: createHash('sha256').update(text).digest('hex') });
+  await port.deliver({ kind: 'generation-fragment', requestId: operation.requestId, offset: 0, text: text.slice(0, split), final: false });
+  expect(room().textContent).not.toContain(view.markdown);
+  return port.deliver({ kind: 'generation-fragment', requestId: operation.requestId,
+    offset: Buffer.byteLength(text.slice(0, split), 'utf8'), text: text.slice(split), final: true }, { holdAck: holdFinalAck });
+};
 const sessionFor = (role: 'host' | 'member'): ArenaRoomSessionResponse => {
   const session = structuredClone(serviceFixture.operations.create.success.result) as ArenaRoomSessionResponse;
   session.self = session.snapshot.members.find(member => member.role === role)!;
@@ -354,6 +369,70 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     await mount(path);
     expect(Boolean(button('打开多人大厅'))).toBe(path === '/arena');
     expect(port.order).toEqual([]); assertNoExecution();
+  });
+
+  it.each([true, false])('reads checked room report fragments and requires current final ACK (%s) before authoritative display', async finalCurrent => {
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
+    await change('#arena-room-join-code', serviceFixture.operations.join.success.result.roomId);
+    const joining = await startAction('加入房间', 'join');
+    const session = await confirmMembership(joining, 'member'); await publishOnline(session);
+    const completed = structuredClone(generationFixture.operation.success.result) as ArenaRoomGenerationViewResponse;
+    completed.roomId = session.roomId; completed.roomEpoch = session.roomEpoch;
+    completed.generation.configRevision = session.snapshot.revision;
+    completed.markdown = '# 核验后的最终战报\n完整最终正文';
+    const running = { ...completed.generation, state: 'running' as const }; delete running.finishedAt;
+    const nextRead = port.nextAction('generation-read');
+    const active = { ...session, snapshot: { ...session.snapshot, controlSeq: session.snapshot.controlSeq + 1, activeGeneration: running } };
+    await port.deliver(snapshotEvent(active));
+    const reading = await nextRead;
+    expect(reading.action).toEqual({ kind: 'generation-read', generationId: running.generationId, expectedRoomEpoch: session.roomEpoch, expectedAttempt: running.attempt });
+    const preview: ArenaRoomGenerationViewResponse = { protocolVersion: 1, roomId: session.roomId, roomEpoch: session.roomEpoch,
+      generation: running, status: 'running', markdown: '# 房间预览\n当前正文', nextChunkSeq: 1, finalAuthoritative: false };
+    const previewDelivery = await deliverGeneration(reading, preview, true);
+    expect(room().textContent).not.toContain('当前正文');
+    await act(async () => { previewDelivery.ackGate.resolve(); await vi.waitFor(() => expect(room().textContent).toContain('当前正文')); });
+    expect(room().querySelector('[data-arena-room-generation-report="v1"] .result-card')).not.toBeNull();
+    expect(room().textContent).toContain('当前显示实时预览');
+    expect(room().textContent).not.toContain('战报已完成');
+    await port.deliver({ kind: 'socket', message: { protocolVersion: 1, type: 'story.delta', roomId: session.roomId, roomEpoch: session.roomEpoch,
+      generationId: running.generationId, chunkSeq: 1, timestamp: '2026-10-15T12:01:00Z', payload: { delta: '\n新实时片段' } } });
+    expect(room().textContent).toContain('新实时片段');
+    const finalRead = port.nextAction('generation-read');
+    await port.deliver({ kind: 'socket', message: { protocolVersion: 1, type: 'generation.completed', roomId: session.roomId, roomEpoch: session.roomEpoch,
+      controlSeq: active.snapshot.controlSeq + 1, timestamp: '2026-10-15T12:02:00Z', payload: {
+        generationRequestId: running.generationRequestId, generationId: running.generationId, attempt: running.attempt,
+        configRevision: running.configRevision, snapshotDigest: running.snapshotDigest, collaborativeInfluence: running.collaborativeInfluence,
+        participantUserIds: running.participantUserIds, generationRecordId: completed.generationRecordId,
+      } } });
+    expect(room().textContent).not.toContain('战报已完成');
+    const finalDelivery = await deliverGeneration(await finalRead, completed, true);
+    expect(room().textContent).not.toContain('完整最终正文');
+    port.generationReadCurrent = finalCurrent;
+    await act(async () => { finalDelivery.ackGate.resolve(); await vi.waitFor(() => expect(mocks.owner!.getSnapshot().generationReading).toBe(false)); });
+    if (finalCurrent) {
+      expect(room().textContent).toContain('战报已完成');
+      expect(room().textContent).toContain('完整最终正文');
+      expect(room().textContent).toContain('最终内容已从生成记录恢复并核验');
+      expect(room().textContent).not.toContain('新实时片段');
+    } else {
+      expect(room().textContent).not.toContain('战报已完成');
+      expect(room().textContent).not.toContain('完整最终正文');
+      expect(room().textContent).toContain('新实时片段');
+      expect(mocks.owner!.getSnapshot().generation.finalAuthoritative).toBe(false);
+      expect(mocks.owner!.getSnapshot().phase).toBe('online');
+      expect(button('重新同步战报', room())).toBeTruthy();
+      expect(port.actions.map(operation => operation.action.kind)).toEqual(['join', 'generation-read', 'generation-read']);
+      const retrying = await startAction('重新同步战报', 'generation-read');
+      port.generationReadCurrent = true;
+      await deliverGeneration(retrying, completed);
+      await act(async () => { await vi.waitFor(() => expect(room().textContent).toContain('战报已完成')); });
+      expect(room().textContent).toContain('完整最终正文');
+    }
+    expect(port.actions.map(operation => operation.action.kind)).toEqual(finalCurrent
+      ? ['join', 'generation-read', 'generation-read']
+      : ['join', 'generation-read', 'generation-read', 'generation-read']);
+    expect(ordinarySnapshot()).toEqual(before); assertNoExecution();
+    for (const label of ['开始协作生成', '停止生成', '重做角色更新', '应用手动修改', '保存到云端']) expect(button(label, room())).toBeUndefined();
   });
 
   it('explains invalid and ambiguous pasted invitations without dispatching any Native action', async () => {

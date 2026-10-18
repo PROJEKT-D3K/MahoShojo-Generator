@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ArenaRoomCreateRequestSchema, ArenaRoomSessionResponseSchema, type ArenaProposal, type ArenaRoomProposalResolveRequest, type ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
 import {
@@ -14,6 +15,7 @@ import { CLOUD_AUTH_STATUS_COMMAND, CLOUD_SIGN_OUT_COMMAND } from '../src/platfo
 
 const fixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-ipc.json', import.meta.url), 'utf8'));
 const proposalFixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-proposals.json', import.meta.url), 'utf8'));
+const generationFixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-generation-read.json', import.meta.url), 'utf8'));
 const events: DesktopRoomEvent[] = fixture.pulls.map((pull: { batch: unknown }) => DesktopRoomBatchSchema.parse(pull.batch).event);
 const createRequest = ArenaRoomCreateRequestSchema.parse(fixture.requests.find((entry: { request: { kind: string } }) => entry.request.kind === 'create').request.request);
 const host = ArenaRoomSessionResponseSchema.parse(fixture.pulls[2].batch.event.response.result);
@@ -152,7 +154,8 @@ async function harness() {
     channels.at(-1)!.onmessage({ type: 'available', handle: batch.handle, subscriptionId, sequence: batch.sequence });
     return { ...delivery, acknowledge: (patch: Record<string, unknown> = {}) => delivery.ack.resolve({
       kind: 'acknowledged', handle: batch.handle, subscriptionId: batch.subscriptionId,
-      batchId: batch.batchId, sequence: batch.sequence, accepted: true, ...patch,
+      batchId: batch.batchId, sequence: batch.sequence, accepted: true,
+      ...(event.kind === 'generation-fragment' && event.final ? { generationRead: { requestId: event.requestId, current: true } } : {}), ...patch,
     }) };
   };
   const receive = async (event: DesktopRoomEvent) => {
@@ -1164,5 +1167,171 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
     await h.receive(socket('room.presence'));
     expect(h.session.getSnapshot().presence?.onlineUserIds).toEqual(['user-host']);
     expect(h.requests.map(value => value.kind)).toEqual(['join']);
+  });
+});
+
+describe('Desktop current generation recovery through the Native owner', () => {
+  const completed = generationFixture.operation.success.result;
+  const running = JSON.parse(JSON.stringify({ ...completed, generation: { ...completed.generation, state: 'running', finishedAt: undefined }, status: 'running',
+    markdown: 'baseline', nextChunkSeq: 1, finalAuthoritative: false, generationRecordId: undefined, result: undefined }));
+  const activeSession = (view = running) => ArenaRoomSessionResponseSchema.parse({ ...host, snapshot: { ...host.snapshot, activeGeneration: view.generation } });
+  const story = (chunkSeq: number, delta = `delta-${chunkSeq}`): DesktopRoomEvent => DesktopRoomEventSchema.parse({ kind: 'socket', message: {
+    protocolVersion: 1, type: 'story.delta', roomId: host.roomId, roomEpoch: host.roomEpoch,
+    generationId: running.generation.generationId, chunkSeq, timestamp: '2026-10-12T00:00:01.000Z', payload: { delta },
+  } });
+  const control = (type: 'generation.started' | 'generation.completed', controlSeq: number): DesktopRoomEvent => {
+    const { generationRequestId, generationId, attempt, configRevision, snapshotDigest, collaborativeInfluence, participantUserIds } = completed.generation;
+    return DesktopRoomEventSchema.parse({ kind: 'socket', message: { protocolVersion: 1, type, roomId: host.roomId, roomEpoch: host.roomEpoch,
+      controlSeq, timestamp: '2026-10-12T00:01:00.000Z', payload: { generationRequestId, generationId, attempt, configRevision, snapshotDigest,
+        collaborativeInfluence, participantUserIds, ...(type === 'generation.completed' ? { generationRecordId: 'record-1' } : {}) } } });
+  };
+  const transfer = async (h: Harness, requestId: string, view: unknown, invalidDigest = false) => {
+    const raw = JSON.stringify({ ...generationFixture.operation.success, result: view });
+    const descriptor = { ...generationFixture.descriptor, requestId, byteLength: Buffer.byteLength(raw),
+      digest: invalidDigest ? '0'.repeat(64) : createHash('sha256').update(raw).digest('hex') };
+    await h.receive(DesktopRoomEventSchema.parse(descriptor));
+    await h.receive(DesktopRoomEventSchema.parse({ kind: 'generation-fragment', requestId, offset: 0, text: raw, final: true }));
+  };
+  async function start(value = activeSession()) {
+    const h = await harness(); await joinRoom(h, value);
+    const read = h.plan('generation-read'); await installOnlineSnapshot(h, value);
+    await read.entered.promise; read.accept(); return { h, read };
+  }
+  it.each(['close', 'leave', 'config', 'proposal-resolve'] as const)('keeps the room online when %s is refused admission during a background generation read', async kind => {
+    const value = activeSession();
+    if (kind === 'leave') value.self = member.self;
+    if (kind === 'proposal-resolve') value.snapshot.proposals = [proposal];
+    const { h, read } = await start(value);
+    await h.receive(socket('room.presence'));
+    const before = h.session.getSnapshot(), subscriptionCount = h.subscriptions().length;
+    expect(before).toMatchObject({ phase: 'online', snapshotReceived: true, busy: false, generationReading: true });
+    expect(before.presence).not.toBeNull();
+    const request = h.plan(kind);
+    const action = () => kind === 'close' ? h.session.close() : kind === 'leave' ? h.session.leave()
+      : kind === 'config' ? h.session.publishConfig(h.session.getSnapshot().session!, { ...value.snapshot.sharedConfig, userGuidance: 'changed' }, h.session.confirmationOwner()!, () => true)
+      : h.session.resolveProposal(h.session.getSnapshot().session!, proposal, rejectProposal(value), h.session.confirmationOwner()!);
+    const operation = action(); await request.entered.promise;
+    request.response.reject({ code: 'busy', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applied' }); await operation;
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'online', snapshotReceived: true, busy: false, generationReading: true,
+      unknown: null, configTracking: null, proposalTracking: null });
+    expect(h.session.getSnapshot().presence).toEqual(before.presence);
+    expect(h.session.getSnapshot().error).toContain('重试');
+    expect(h.subscriptions()).toHaveLength(subscriptionCount);
+    expect(h.invoke.mock.calls.filter(([command]) => command === DESKTOP_ROOM_IPC_COMMANDS.detach)).toHaveLength(0);
+    await transfer(h, read.requestId, completed); await whenState(h.session, state => state.generation.finalAuthoritative);
+    const retry = h.plan(kind), retrying = action(); await retry.entered.promise;
+    retry.response.reject({ code: 'busy', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applied' }); await retrying;
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'online', snapshotReceived: true, busy: false });
+  });
+  it.each(['close', 'config', 'proposalResolve'] as const)('retains the original %s unknown intent when its reconciliation read is locally busy', async operation => {
+    const { h } = await start(); await h.receive(socket('room.presence'));
+    const pending = { kind: 'mutation-unknown' as const, operation, roomId: host.roomId, intentId: 'original-unknown' };
+    await h.receive(pending);
+    const before = h.session.getSnapshot(), read = h.plan('session'), checking = h.session.reconcile();
+    await read.entered.promise; read.response.reject({ code: 'busy', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applied' }); await checking;
+    const after = h.session.getSnapshot();
+    expect(after).toMatchObject({ phase: 'online', snapshotReceived: true, busy: false, generationReading: true, unknown: pending });
+    expect(after.presence).toEqual(before.presence);
+    expect(after.configTracking).toEqual(before.configTracking);
+    expect(after.proposalTracking).toEqual(before.proposalTracking);
+  });
+  it('reads the first current generation, rebases buffered preview, and confirms terminal control only from GET', async () => {
+    const { h, read } = await start();
+    const before = h.session.getSnapshot(), subscriptions = h.subscriptions().length;
+    await h.receive(story(1, '+buffered'));
+    expect(h.session.getSnapshot().generation.markdown).toBe('');
+    await transfer(h, read.requestId, running);
+    await whenState(h.session, state => !state.generationReading);
+    expect(h.session.getSnapshot().generation).toMatchObject({ phase: 'running', markdown: 'baseline+buffered', finalAuthoritative: false });
+    await h.receive(story(2, '+live'));
+    expect(h.session.getSnapshot().generation.markdown).toBe('baseline+buffered+live');
+    const terminal = h.plan('generation-read'); await h.receive(control('generation.completed', host.snapshot.controlSeq + 1));
+    await terminal.entered.promise; terminal.accept();
+    expect(h.session.getSnapshot().generation.finalAuthoritative).toBe(false);
+    await transfer(h, terminal.requestId, completed);
+    await whenState(h.session, state => state.generation.finalAuthoritative);
+    expect(h.session.getSnapshot().generation.markdown).toBe(completed.markdown);
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'online', busy: false, constrained: before.constrained });
+    expect(h.session.getSnapshot().session!.snapshot.sharedConfig).toEqual(before.session!.snapshot.sharedConfig);
+    expect(h.subscriptions()).toHaveLength(subscriptions);
+  });
+  it('coalesces terminal/reconnect while a read is pending and cannot install a stale running response', async () => {
+    const { h, read } = await start();
+    await h.receive(control('generation.completed', host.snapshot.controlSeq + 1));
+    const terminalSession = { ...activeSession(completed), snapshot: { ...activeSession(completed).snapshot, controlSeq: host.snapshot.controlSeq + 1 } };
+    await installOnlineSnapshot(h, terminalSession); await installOnlineSnapshot(h, terminalSession);
+    expect(h.requests.filter(request => request.kind === 'generation-read')).toHaveLength(1);
+    const rerun = h.plan('generation-read'); await transfer(h, read.requestId, running);
+    await rerun.entered.promise; rerun.accept();
+    expect(h.session.getSnapshot().generation.markdown).toBe('');
+    await transfer(h, rerun.requestId, completed); await whenState(h.session, state => state.generation.finalAuthoritative);
+    expect(h.requests.filter(request => request.kind === 'generation-read')).toHaveLength(2);
+  });
+  it.each(['digest', 'too-large', 'invalid-dto'])('stops automatic %s reads for this identity and permits explicit retry without changing online state', async kind => {
+    const { h, read } = await start();
+    if (kind === 'too-large') await h.receive({ kind: 'request-error', requestId: read.requestId, operation: 'generationRead',
+      error: { code: 'response-too-large', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applicable' } });
+    else await transfer(h, read.requestId, kind === 'invalid-dto' ? { ...running, extra: true } : running, kind === 'digest');
+    await whenState(h.session, state => !state.generationReading);
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'online', generation: { recoveryCode: 'ROOM_GENERATION_RECOVERY_PROTOCOL' } });
+    await installOnlineSnapshot(h, activeSession()); await h.receive(story(7)); await h.receive(control('generation.completed', host.snapshot.controlSeq + 1));
+    expect(h.requests.filter(request => request.kind === 'generation-read')).toHaveLength(1);
+    const retry = h.plan('generation-read'), retrying = h.session.retryGenerationRecovery();
+    await retry.entered.promise; retry.accept(); await transfer(h, retry.requestId, completed); await retrying;
+    expect(h.session.getSnapshot().generation.finalAuthoritative).toBe(true);
+  });
+  it.each(['descriptor', 'offset'])('keeps a stalled invalid %s stable across reconnect and terminal triggers', async kind => {
+    vi.useFakeTimers();
+    try {
+      const { h, read } = await start();
+      await h.receive({ ...generationFixture.descriptor, requestId: read.requestId, ...(kind === 'descriptor' ? { roomId: 'other-room' } : {}) });
+      if (kind === 'offset') await h.receive({ ...generationFixture.fragments[0], requestId: read.requestId, offset: 1 });
+      await vi.advanceTimersByTimeAsync(30_001);
+      await whenState(h.session, state => !state.generationReading);
+      expect(h.session.getSnapshot()).toMatchObject({ phase: 'online', generation: { recoveryCode: 'ROOM_GENERATION_RECOVERY_PROTOCOL' } });
+      await installOnlineSnapshot(h, activeSession()); await h.receive(story(7));
+      await h.receive(control('generation.completed', host.snapshot.controlSeq + 1));
+      expect(h.requests.filter(request => request.kind === 'generation-read')).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it('recovers a gap from a fresh baseline without treating preview as authoritative', async () => {
+    const { h, read } = await start(); await transfer(h, read.requestId, running); await whenState(h.session, state => !state.generationReading);
+    const gap = h.plan('generation-read'); await h.receive(story(3, '+third')); await gap.entered.promise; gap.accept();
+    await h.receive(story(4, '+fourth')); expect(h.session.getSnapshot().generation.finalAuthoritative).toBe(false);
+    await transfer(h, gap.requestId, { ...running, markdown: 'fresh-through-two', nextChunkSeq: 3 });
+    await whenState(h.session, state => !state.generationReading);
+    expect(h.session.getSnapshot().generation).toMatchObject({ markdown: 'fresh-through-two+third+fourth', gap: null, finalAuthoritative: false });
+  });
+  it('retains an already-previewed suffix while a second GET still predates the buffered hole', async () => {
+    const { h, read } = await start();
+    await h.receive(story(1, '+one')); await h.receive(story(3, '+three'));
+    const rerun = h.plan('generation-read'); await transfer(h, read.requestId, running);
+    await rerun.entered.promise; rerun.accept();
+    expect(h.session.getSnapshot().generation.markdown).toBe('baseline+one');
+    await h.receive(story(2, '+two')); await h.receive(story(4, '+four'));
+    await transfer(h, rerun.requestId, running); await whenState(h.session, state => !state.generationReading);
+    expect(h.session.getSnapshot().generation).toMatchObject({ markdown: 'baseline+one+two+three+four', gap: null });
+    expect(h.requests.filter(request => request.kind === 'generation-read')).toHaveLength(2);
+  });
+  it.each(['detach', 'document', 'account', 'member-ended', 'epoch', 'generation'])('never installs a late digest after %s changes', async reason => {
+    const { h, read } = await start();
+    const digest = deferred<ArrayBuffer>(), spy = vi.spyOn(crypto.subtle, 'digest').mockImplementation(() => digest.promise);
+    try {
+      await transfer(h, read.requestId, completed);
+      if (reason === 'detach') h.session.detach();
+      if (reason === 'document') h.setNonce('b'.repeat(64));
+      if (reason === 'account') await h.account.signOut();
+      if (reason === 'member-ended') await h.receive({ kind: 'status', state: 'closed' });
+      if (reason === 'epoch' || reason === 'generation') {
+        const value = activeSession();
+        const updated = reason === 'epoch' ? { ...value, roomEpoch: 'new-epoch', snapshot: { ...value.snapshot, roomEpoch: 'new-epoch' } }
+          : { ...value, snapshot: { ...value.snapshot, activeGeneration: { ...value.snapshot.activeGeneration!, generationId: 'new-generation', attempt: 2 } } };
+        await installOnlineSnapshot(h, updated);
+      }
+      digest.resolve(Uint8Array.from(Buffer.from(createHash('sha256').update(JSON.stringify({ ...generationFixture.operation.success, result: completed })).digest('hex'), 'hex')).buffer);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      expect(h.session.getSnapshot().generation.finalAuthoritative).toBe(false);
+      expect(h.session.getSnapshot().generation.markdown).toBe('');
+    } finally { spy.mockRestore(); }
   });
 });

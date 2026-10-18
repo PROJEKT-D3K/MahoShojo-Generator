@@ -51,3 +51,8 @@ export { useRoomInviteCopy } from './useRoomInviteCopy';
 export type { RoomInviteCopyIntent, RoomInviteCopyOptions } from './useRoomInviteCopy';
 export { createRoomInviteScope } from './room-invite-scope';
 export type { RoomInviteScopeSource } from './room-invite-scope';
+
+export { RoomGenerationResult } from './RoomGenerationResult';
+export type { RoomGenerationResultProps } from './RoomGenerationResult';
+export type { RoomGenerationPhase, RoomGenerationView } from './generation-view';
+export * from './generation-copy';

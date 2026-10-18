@@ -1,4 +1,5 @@
 import React from 'react';
+import { RoomGenerationResult } from '@mahoshojo/ui-web/arena-room';
 import { renderToReadableStream, renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -37,6 +38,22 @@ const readyState: ArenaRoomControllerState = {
     startResultUnknown: false,
   },
 };
+
+it('Web current-generation adapter delegates the result shell and retry to the shared view', () => {
+  const onRetryRecovery = vi.fn();
+  const resultRef = React.createRef<HTMLElement>();
+  const state: ArenaRoomControllerState = {
+    ...readyState,
+    generation: { ...readyState.generation, phase: 'completed', markdown: '# 预览', generationRecordId: 'record-1' },
+  };
+  const element = ArenaRoomGenerationResult({ state, onRetryRecovery, resultRef });
+  expect(element.type).toBe(RoomGenerationResult);
+  expect(element.props.generation).toBe(state.generation);
+  expect(element.props.onRetry).toBe(onRetryRecovery);
+  expect(element.props.resultRef).toBe(resultRef);
+  expect(element.props.report.props.report).toMatchObject({ content: '# 预览', webReady: false, isStreaming: false });
+  expect(onRetryRecovery).not.toHaveBeenCalled();
+});
 
 const session = {
   protocolVersion: 1 as const,

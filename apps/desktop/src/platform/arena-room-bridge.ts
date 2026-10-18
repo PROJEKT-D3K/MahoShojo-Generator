@@ -12,6 +12,8 @@ import {
   type DesktopRoomAvailableNotification, type DesktopRoomRevokedNotification, type DesktopRoomNotification,
 } from '@mahoshojo/contracts/desktop-room-ipc';
 import type { InvokeFn } from './cloud-bridge';
+import type { ArenaRoomGenerationViewResponse } from '@mahoshojo/contracts/arena-room';
+import { DesktopGenerationReadError, DesktopGenerationReader, type DesktopGenerationIdentity } from './arena-room-generation-reader';
 
 export interface ArenaRoomChannel { onmessage: (message: unknown) => void }
 export interface ArenaRoomAcceptance {
@@ -20,7 +22,7 @@ export interface ArenaRoomAcceptance {
   readonly isCurrent: () => boolean;
 }
 export interface ArenaRoomBridgeOptions {
-  /** Resolve true only after bounded state installation/queue acceptance has succeeded. */
+  /** Non-generation batches only. Resolve true after bounded state installation/queue acceptance. */
   acceptBatch: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance) => boolean | Promise<boolean>;
   /** Runs only after the exact Native ACK is confirmed; safe boundary for replacing a subscription. */
   onAcknowledged?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance) => void;
@@ -68,7 +70,18 @@ interface Scope {
   flight: boolean;
   sequence?: number;
   lastAcknowledged: number;
+  read?: GenerationRead;
 }
+type GenerationRead = {
+  requestId: string | null; reader: DesktopGenerationReader;
+  resolve: (view: ArenaRoomGenerationViewResponse) => void; reject: (error: ArenaRoomBridgeError) => void;
+  value?: ArenaRoomGenerationViewResponse; error?: ArenaRoomBridgeError;
+  accepted: boolean; acknowledged: boolean; verified: boolean;
+  idle: ReturnType<typeof setTimeout>; deadline: ReturnType<typeof setTimeout>;
+};
+const GENERATION_READ_HTTP_TIMEOUT_MS = 20_000;
+const GENERATION_READ_IDLE_TIMEOUT_MS = 30_000;
+const GENERATION_READ_DEADLINE_MS = 5 * 60_000;
 
 /** Native-only transport. No fetch, WebSocket, implicit attach or mutation retry. */
 export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridgeOptions) => {
@@ -103,6 +116,20 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
   });
   let generation = 0;
   let scope: Scope | undefined;
+  const clearRead = (candidate: Scope, error?: ArenaRoomBridgeError) => {
+    const read = candidate.read; if (!read) return;
+    candidate.read = undefined; clearTimeout(read.idle); clearTimeout(read.deadline); read.reader.clear();
+    if (error || read.error) read.reject(error ?? read.error!);
+    else if (read.value) read.resolve(read.value);
+    else read.reject(new ArenaRoomBridgeError('invalid-response'));
+  };
+  const finishRead = (candidate: Scope) => {
+    if (candidate.read?.accepted && candidate.read.acknowledged && candidate.read.verified) clearRead(candidate);
+  };
+  const progressRead = (candidate: Scope, read: GenerationRead) => {
+    clearTimeout(read.idle);
+    read.idle = setTimeout(() => { if (candidate.read === read) clearRead(candidate, read.error ?? new ArenaRoomBridgeError('network-error')); }, GENERATION_READ_IDLE_TIMEOUT_MS);
+  };
   const callerCurrent = () => { try { return options.isCurrent(); } catch { return false; } };
   const current = (candidate: Scope, delivery = candidate.delivery) => {
     try { return scope === candidate && generation === candidate.generation
@@ -121,6 +148,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
     const retiredGeneration = generation;
     scope = undefined;
     if (previous) {
+      clearRead(previous, new ArenaRoomBridgeError('scope-changed'));
       previous.controller.abort();
       previous.notification = undefined;
       for (const notification of previous.deferredNotifications.values()) {
@@ -189,7 +217,41 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
         || batch.sequence <= candidate.lastAcknowledged) throw invalid();
       if (!context.isCurrent()) { await releaseRetired(candidate, batch); return; }
       // Exactly one complete bounded batch is retained while the consumer is awaiting capacity.
-      const accepted = await options.acceptBatch(batch, context);
+      const event = batch.event;
+      const generationDelivery = event.kind === 'generation-descriptor' || event.kind === 'generation-fragment'
+        || event.kind === 'request-error' && event.operation === 'generationRead';
+      // An aborted prior read may leave a queued small error after a newer read
+      // was admitted. It pays its own ACK debt and cannot poison that newer read.
+      if ((event.kind === 'generation-descriptor' || event.kind === 'generation-fragment')
+        && candidate.read?.requestId && candidate.read.requestId !== event.requestId) clearRead(candidate, invalid());
+      const read = generationDelivery && candidate.read?.requestId === event.requestId ? candidate.read : undefined;
+      let accepted: boolean;
+      if (generationDelivery) {
+        // Retired/read-failed bodies still release their exact delivery debt, without publication.
+        if (read) {
+          progressRead(candidate, read);
+          try {
+            if (event.kind === 'request-error') { read.error = new ArenaRoomBridgeError(event.error.code, event.error.outcome, event.error.serverCode); read.verified = true; }
+            else if (!read.error && event.kind === 'generation-descriptor') read.reader.describe(event);
+            else if (event.kind === 'generation-fragment') {
+              if (read.error) read.verified = event.final;
+              else {
+                // Final hashing never blocks the pull/ACK lane: membership and generation
+                // controls must remain consumable while WebCrypto is pending.
+                void read.reader.append(event).then(value => {
+                  if (candidate.read !== read) return;
+                  if (value) { read.value = value; read.verified = true; finishRead(candidate); }
+                }, cause => {
+                  if (candidate.read !== read) return;
+                  read.reader.clear(); read.error = cause instanceof DesktopGenerationReadError ? new ArenaRoomBridgeError(cause.code) : normalizeArenaRoomFailure(cause);
+                  if (event.final) { read.verified = true; finishRead(candidate); }
+                });
+              }
+            }
+          } catch (cause) { read.reader.clear(); read.error = cause instanceof DesktopGenerationReadError ? new ArenaRoomBridgeError(cause.code) : normalizeArenaRoomFailure(cause); }
+        }
+        accepted = true;
+      } else accepted = await options.acceptBatch(batch, context);
       if (!context.isCurrent()) { await releaseRetired(candidate, batch); return; }
       if (accepted !== true) throw new ArenaRoomBridgeError('backpressure');
       const ack = await nativeInvoke(DESKTOP_ROOM_IPC_COMMANDS.request, { request: {
@@ -199,7 +261,19 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       const result = DesktopRoomAckResponseSchema.safeParse(ack);
       if (!result.success || result.data.handle !== handle || result.data.subscriptionId !== subscriptionId
         || result.data.batchId !== batch.batchId || result.data.sequence !== batch.sequence || !result.data.accepted) throw invalid();
+      if (result.data.generationRead && !(event.kind === 'generation-fragment' && event.final)) throw invalid();
       candidate.lastAcknowledged = batch.sequence;
+      if (read && candidate.read === read) {
+        progressRead(candidate, read);
+        if (event.kind === 'request-error' || event.kind === 'generation-fragment' && event.final) {
+          if (event.kind === 'generation-fragment') {
+            const fence = result.data.generationRead;
+            if (!fence || fence.requestId !== read.requestId) { read.error = invalid(); read.verified = true; }
+            else if (!fence.current) { read.error = new ArenaRoomBridgeError('scope-changed'); read.verified = true; }
+          }
+          read.acknowledged = true; finishRead(candidate);
+        }
+      }
       // The receipt is now irreversible. A consumer failure may retire this scope,
       // but must never undo the ACK, retry it, or replay the acknowledged mutation.
       const acknowledgedContext = { signal: context.signal, isCurrent: () => context.isCurrent() && sameDocument(candidate) };
@@ -331,7 +405,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
     async request(raw: DesktopRoomHttpAction) {
       const candidate = scope;
       const action = DesktopRoomActionSchema.safeParse(raw);
-      if (!action.success || action.data.kind === 'ack' || action.data.kind === 'pull' || action.data.kind === 'end-config-tracking' || action.data.kind === 'end-proposal-tracking') throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
+      if (!action.success || action.data.kind === 'ack' || action.data.kind === 'pull' || action.data.kind === 'generation-read' || action.data.kind === 'end-config-tracking' || action.data.kind === 'end-proposal-tracking') throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
       if (!candidate?.handle || !candidate.subscriptionId || !current(candidate)) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
       const delivery = candidate.delivery;
       const outcome = action.data.kind === 'discover' || action.data.kind === 'session' ? 'not-applicable' : 'unknown';
@@ -356,6 +430,33 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       if (!result.success || result.data.handle !== candidate.handle || result.data.subscriptionId !== candidate.subscriptionId) throw new ArenaRoomBridgeError('invalid-response', outcome);
       return result.data;
     },
+    /** Independent read lane: no subscription replacement or control/config mutation. */
+    generationRead(identity: DesktopGenerationIdentity): Promise<ArenaRoomGenerationViewResponse> {
+      const candidate = scope;
+      if (!candidate?.handle || !candidate.subscriptionId || !current(candidate) || !sameDocument(candidate)) return Promise.reject(new ArenaRoomBridgeError('scope-changed'));
+      if (candidate.read) return Promise.reject(new ArenaRoomBridgeError('busy'));
+      const action = DesktopRoomActionSchema.safeParse({ kind: 'generation-read', generationId: identity.generationId,
+        expectedRoomEpoch: identity.roomEpoch, expectedAttempt: identity.attempt });
+      if (!action.success) return Promise.reject(new ArenaRoomBridgeError('invalid-request', 'not-applied'));
+      const delivery = candidate.delivery;
+      return new Promise<ArenaRoomGenerationViewResponse>((resolve, reject) => {
+        const expire = () => { if (candidate.read === read) clearRead(candidate, read.error ?? new ArenaRoomBridgeError('network-error')); };
+        const read: GenerationRead = { requestId: null, reader: new DesktopGenerationReader(identity, candidate.expectedUserId,
+          () => current(candidate, delivery) && sameDocument(candidate) && candidate.read === read), resolve, reject,
+          accepted: false, acknowledged: false, verified: false, idle: setTimeout(expire, GENERATION_READ_HTTP_TIMEOUT_MS), deadline: setTimeout(expire, GENERATION_READ_DEADLINE_MS) };
+        candidate.read = read;
+        void nativeInvoke(DESKTOP_ROOM_IPC_COMMANDS.request, { request: { handle: candidate.handle, request: action.data } },
+          () => current(candidate, delivery) && sameDocument(candidate) && candidate.read === read).then(raw => {
+          if (candidate.read !== read) return;
+          if (!current(candidate, delivery) || !sameDocument(candidate)) { clearRead(candidate, new ArenaRoomBridgeError('scope-changed')); return; }
+          const accepted = DesktopRoomAcceptedResponseSchema.safeParse(raw);
+          if (!accepted.success || accepted.data.handle !== candidate.handle || accepted.data.subscriptionId !== candidate.subscriptionId) {
+            clearRead(candidate, invalid()); return;
+          }
+          read.requestId = accepted.data.requestId; read.accepted = true; finishRead(candidate);
+        }, cause => { if (candidate.read === read) clearRead(candidate, normalizeArenaRoomFailure(cause)); });
+      });
+    },
     endConfigTracking: (intentId: string) => endTracking(intentId, 'end-config-tracking', DesktopRoomConfigTrackingEndedSchema),
     endProposalTracking: (intentId: string) => endTracking(intentId, 'end-proposal-tracking', DesktopRoomProposalTrackingEndedSchema),
     async subscribe(roomId: string, expectedRoomEpoch: string) {
@@ -364,6 +465,7 @@ export const createArenaRoomBridge = (invoke: InvokeFn, options: ArenaRoomBridge
       if (scope) scope.generation = generation;
       const candidate = scope;
       if (!candidate?.handle || !current(candidate)) throw new ArenaRoomBridgeError('scope-changed', 'not-applied');
+      clearRead(candidate, new ArenaRoomBridgeError('scope-changed'));
       const parsed = DesktopRoomSubscribeRequestSchema.safeParse({ handle: candidate.handle, roomId, expectedRoomEpoch });
       if (!parsed.success) throw new ArenaRoomBridgeError('invalid-request', 'not-applied');
       // Fence callbacks before the first await; an old acceptance can no longer ack/install.

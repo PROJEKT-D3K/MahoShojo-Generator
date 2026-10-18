@@ -6,6 +6,16 @@ import { DesktopRoomActionSchema, DESKTOP_ROOM_IPC_LIMITS, getDesktopRoomHttpOpe
 import { ArenaRoomBridgeError, createArenaRoomBridge, type ArenaRoomAcceptance, type ArenaRoomChannel } from '../../platform/arena-room-bridge';
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import type { DesktopCloudSessionStore } from '../account/cloud-session-store';
+import { GenerationStoryBuffer } from '@mahoshojo/multiplayer-core/generation-story-buffer';
+import type { RoomGenerationView } from '@mahoshojo/ui-web/arena-room';
+import type { ArenaRoomGenerationViewResponse, StoryDeltaEvent } from '@mahoshojo/contracts/arena-room';
+import type { DesktopGenerationIdentity } from '../../platform/arena-room-generation-reader';
+
+export type DesktopRoomGenerationView = RoomGenerationView & { readonly result: ArenaRoomGenerationViewResponse['result'] | null };
+const emptyGeneration = (): DesktopRoomGenerationView => ({ phase: 'idle', markdown: '', gap: null, finalAuthoritative: false, generationRecordId: null, errorCode: null, recoveryCode: null, result: null });
+const generationKey = (identity: DesktopGenerationIdentity) => JSON.stringify([identity.roomId, identity.roomEpoch, identity.generationId, identity.attempt]);
+const terminalGeneration = (state: string) => ['completed', 'failed', 'cancelled', 'producer_lost'].includes(state);
+type GenerationFlight = { owner: Owner; key: string; rerun: boolean; promise: Promise<void> };
 
 export type RoomUnknownIntent = { operation: DesktopRoomMutationOperation; roomId: string | null; intentId: string | null };
 export type DesktopConfigTracking = { id: string; roomId: string; phase: 'publishing' | 'unknown' | 'ended-needs-read'; target: ArenaRoomConfigPublishTarget | null; observation: ArenaRoomConfigPublishObservation };
@@ -18,10 +28,11 @@ export interface DesktopRoomState {
   rooms: readonly RoomDirectoryEntry[]; nextCursor: string | null;
   configTracking: DesktopConfigTracking | null; proposalTracking: DesktopProposalTracking | null;
   memberModel: ArenaMemberProposalModel | null;
+  generation: DesktopRoomGenerationView; generationReading: boolean;
   unknown: RoomUnknownIntent | null; error: string | null; notice: string | null;
   sourceIssues: readonly string[];
 }
-const initial = (): DesktopRoomState => ({ opened: false, busy: false, constrained: false, phase: 'detached', session: null, presence: null, snapshotReceived: false, rooms: [], nextCursor: null, unknown: null, error: null, notice: null, sourceIssues: [], configTracking: null, proposalTracking: null, memberModel: null });
+const initial = (): DesktopRoomState => ({ opened: false, busy: false, constrained: false, phase: 'detached', session: null, presence: null, snapshotReceived: false, rooms: [], nextCursor: null, unknown: null, error: null, notice: null, sourceIssues: [], configTracking: null, proposalTracking: null, memberModel: null, generation: emptyGeneration(), generationReading: false });
 const staleView: DesktopRoomState = { ...initial(), error: '账号或页面身份已变化，请重新打开多人房间。' };
 export interface DesktopRoomDeps {
   invoke: InvokeFn;
@@ -60,7 +71,7 @@ const freezeIntent = <T>(value: T): T => {
   return value;
 };
 const requiresTrackedObservation = (operation: string | undefined) => operation === 'config' || isProposalOperation(operation);
-const isMutation = (action: DesktopRoomHttpAction) => action.kind !== 'discover' && action.kind !== 'session';
+const isMutation = (action: DesktopRoomHttpAction) => action.kind !== 'discover' && action.kind !== 'session' && action.kind !== 'generation-read';
 const unknownFor = (action: DesktopRoomHttpAction): RoomUnknownIntent | null => {
   if (action.kind === 'create' || action.kind === 'resume-create') return { operation: 'create', roomId: null, intentId: action.kind === 'resume-create' ? action.intentId : null };
   if (action.kind === 'join' || action.kind === 'leave' || action.kind === 'close' || action.kind === 'config') return { operation: action.kind, roomId: action.roomId, intentId: null };
@@ -81,13 +92,23 @@ export const describeDesktopRoomError = (error: ArenaRoomBridgeError): string =>
 };
 
 /** Page-owned read model for the fixed Native session transport. No networking,
- * automatic mutation retry, persistence, provider configuration or story body. */
+ * automatic mutation retry, persistence or provider configuration. */
 export class DesktopArenaRoomSession {
   private state = initial(); private readonly listeners = new Set<() => void>();
   private owner: Owner | null = null; private flight: Flight | null = null;
+  private authorityVersion = 0;
   private configSequence = 0;
   private memberAuthority: ArenaRoomSessionResponse | null = null;
   private proposalRecoveryIntent: string | null = null;
+  private generationIdentity: string | null = null;
+  private generationFlight: GenerationFlight | null = null;
+  private generationStories = new GenerationStoryBuffer();
+  private generationNextChunkSeq = 0;
+  private generationBaseline = false;
+  private generationTerminal = false;
+  private generationTerminalPhase: RoomGenerationView['phase'] | null = null;
+  private generationStableFailure = false;
+  private generationGapRequested = false;
   private disposed = false; private unsubscribe: (() => void) | null = null;
   private readonly bridge: ReturnType<typeof createArenaRoomBridge>;
   constructor(private readonly deps: DesktopRoomDeps) {
@@ -99,9 +120,11 @@ export class DesktopArenaRoomSession {
   getSnapshot = (): DesktopRoomState => this.owner && !this.current() ? staleView : this.state;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   private publish(patch: Partial<DesktopRoomState>, retainMemberDraft = false) {
+    const previousAuthority = this.state;
     const previousModel = this.state.memberModel;
     const wasFresh = this.state.phase === 'online' && this.state.snapshotReceived;
     this.state = { ...this.state, ...patch };
+    if ('session' in patch) this.syncGenerationIdentity();
     const tracking = this.state.configTracking;
     if ('session' in patch && tracking?.phase === 'unknown') this.state = { ...this.state,
       configTracking: { ...tracking, observation: observeArenaRoomConfigPublish(tracking.target, this.state.session, true) } };
@@ -121,6 +144,8 @@ export class DesktopArenaRoomSession {
     // generations, even when the same authority returns. Keep the detached draft.
     // Check the final state so a failed model.sync is covered as well as transport loss.
     if (wasFresh && (this.state.phase !== 'online' || !this.state.snapshotReceived)) this.state.memberModel?.invalidatePreview();
+    if (previousAuthority.session !== this.state.session || previousAuthority.presence !== this.state.presence
+      || previousAuthority.phase !== this.state.phase || previousAuthority.snapshotReceived !== this.state.snapshotReceived) this.authorityVersion += 1;
     this.listeners.forEach(listener => listener());
   }
   private current(owner = this.owner): boolean {
@@ -129,7 +154,121 @@ export class DesktopArenaRoomSession {
     return account.account?.userId === owner.userId && this.deps.account.getCredentialEpoch() === owner.epoch
       && account.verification === 'verified' && account.authFlow.kind === 'idle' && this.deps.documentNonce() === owner.nonce; } catch { return false; }
   }
-  private invalidate() { this.state.memberModel?.dispose(); this.memberAuthority = null; this.proposalRecoveryIntent = null; this.owner = null; this.flight = null; this.bridge.detach(); this.state = { ...staleView }; this.listeners.forEach(listener => listener()); }
+  private currentGeneration(): DesktopGenerationIdentity | null {
+    const session = this.state.session, active = session?.snapshot.activeGeneration;
+    return session && active && session.self.membershipState === 'active' ? { roomId: session.roomId,
+      roomEpoch: session.roomEpoch, generationId: active.generationId, attempt: active.attempt } : null;
+  }
+  private syncGenerationIdentity(): void {
+    const identity = this.currentGeneration(), key = identity && generationKey(identity);
+    if (key !== this.generationIdentity) {
+      this.generationIdentity = key; this.generationStories = new GenerationStoryBuffer();
+      this.generationNextChunkSeq = 0; this.generationBaseline = false; this.generationTerminal = false; this.generationTerminalPhase = null;
+      this.generationStableFailure = false; this.generationGapRequested = false;
+      this.state = { ...this.state, generation: emptyGeneration(), generationReading: false };
+      if (this.generationFlight && key) this.generationFlight.rerun = true;
+    }
+    const mirror = this.state.session?.snapshot.activeGeneration;
+    if (!mirror || !key) return;
+    if (terminalGeneration(mirror.state)) { this.generationTerminal = true; this.generationTerminalPhase = mirror.state; }
+    if (!this.state.generation.finalAuthoritative && ((!this.generationBaseline && !this.generationTerminal) || terminalGeneration(mirror.state))) {
+      this.state = { ...this.state, generation: { ...this.state.generation, phase: mirror.state } };
+    }
+  }
+  private generationCurrent(owner: Owner, key: string): boolean {
+    return this.current(owner) && this.generationIdentity === key && this.currentGeneration() !== null;
+  }
+  /** Only a current member reads the server-owned current generation; start/cancel remain closed. */
+  retryGenerationRecovery = (): Promise<void> => this.requestGenerationRecovery('manual');
+  private requestGenerationRecovery(reason: 'baseline' | 'reconnect' | 'gap' | 'terminal' | 'manual', rerun = false): Promise<void> {
+    const identity = this.currentGeneration(), owner = this.owner;
+    if (!owner || !identity || !this.current(owner) || !this.state.snapshotReceived || this.state.phase !== 'online') return Promise.resolve();
+    if (reason === 'manual' && this.state.busy) return Promise.resolve();
+    const key = generationKey(identity);
+    if (reason !== 'manual' && (this.generationStableFailure || this.state.generation.finalAuthoritative)) return Promise.resolve();
+    const flight = this.generationFlight;
+    if (flight) {
+      // A newer terminal/snapshot/identity needs one reread; duplicate deltas do not
+      // turn one pending GET into an unbounded retry queue.
+      if (flight.key !== key || reason === 'terminal' || reason === 'reconnect') flight.rerun = true;
+      return flight.promise;
+    }
+    if (reason === 'gap' && this.generationGapRequested && !rerun) return Promise.resolve();
+    if (reason === 'manual') { this.generationStableFailure = false; this.generationGapRequested = false; }
+    if (reason === 'gap') this.generationGapRequested = true;
+    const entry: GenerationFlight = { owner, key, rerun: false, promise: Promise.resolve() };
+    this.generationFlight = entry;
+    this.publish({ generationReading: true, generation: { ...this.state.generation, phase: 'resyncing', recoveryCode: null } });
+    entry.promise = (async () => {
+      try {
+        const view = await this.bridge.generationRead(identity);
+        if (!this.generationCurrent(owner, key)) return;
+        if (this.generationTerminal && !terminalGeneration(view.status)) {
+          // A running GET begun before terminal control cannot undo that control.
+          if (!rerun) entry.rerun = true;
+          this.publish({ generation: { ...this.state.generation, phase: this.generationTerminalPhase ?? 'unavailable',
+            recoveryCode: 'ROOM_GENERATION_RECOVERY_TRANSIENT' } });
+          return;
+        }
+        const terminal = terminalGeneration(view.status);
+        const buffered = terminal ? null : this.generationStories.rebase(view.nextChunkSeq);
+        this.generationNextChunkSeq = buffered?.nextChunkSeq ?? view.nextChunkSeq;
+        this.generationBaseline = true; this.generationTerminal ||= terminal;
+        if (terminal || !buffered?.gap) { this.generationStories = new GenerationStoryBuffer(); this.generationGapRequested = false; }
+        const phase = view.status === 'reserved' ? 'starting' : view.status === 'finalizing' ? 'running' : view.status === 'producer_lost' ? 'failed' : view.status;
+        if (terminal) this.generationTerminalPhase = phase;
+        this.publish({ generation: { phase, markdown: view.markdown + (buffered?.markdown ?? ''), gap: buffered?.gap ?? null,
+          finalAuthoritative: view.finalAuthoritative, generationRecordId: view.generationRecordId ?? null,
+          errorCode: view.errorCode ?? null, recoveryCode: buffered?.gap ? 'ROOM_GENERATION_RECOVERY_TRANSIENT' : null, result: view.result ?? null } });
+        if (buffered?.gap && !rerun) entry.rerun = true;
+      } catch (cause) {
+        if (!this.generationCurrent(owner, key)) return;
+        const error = cause instanceof ArenaRoomBridgeError ? cause : new ArenaRoomBridgeError('internal-error');
+        if (error.code === 'scope-changed') {
+          this.publish({ generation: { ...this.state.generation, phase: 'unavailable', recoveryCode: 'ROOM_GENERATION_RECOVERY_TRANSIENT' } });
+          return;
+        }
+        const stable = ['invalid-response', 'invalid-request', 'response-too-large'].includes(error.code)
+          || ['ROOM_DESKTOP_RESPONSE_INVALID', 'ROOM_DESKTOP_RESPONSE_TOO_LARGE', 'ROOM_DESKTOP_PROTOCOL_INVALID', 'ROOM_DESKTOP_OPERATION_UNSUPPORTED'].includes(error.serverCode ?? '');
+        const gone = ['ROOM_GENERATION_NOT_FOUND', 'ROOM_NOT_FOUND', 'ROOM_FORBIDDEN'].includes(error.serverCode ?? '');
+        this.generationStableFailure = stable || gone;
+        this.publish({ generation: { ...this.state.generation,
+          phase: this.generationTerminalPhase ?? 'unavailable',
+          recoveryCode: gone ? 'ROOM_GENERATION_RECOVERY_NOT_FOUND' : stable ? 'ROOM_GENERATION_RECOVERY_PROTOCOL' : 'ROOM_GENERATION_RECOVERY_TRANSIENT' } });
+      } finally {
+        if (this.generationFlight === entry) {
+          this.generationFlight = null;
+          if (this.current(owner)) this.publish({ generationReading: false });
+          if (entry.rerun && this.current(owner) && !this.generationStableFailure) {
+            // One coalesced trailing read; a still-stale response stops until a new
+            // meaningful event or explicit retry rather than creating a storm.
+            await this.requestGenerationRecovery('baseline', true);
+          }
+        }
+      }
+    })();
+    return entry.promise;
+  }
+  private applyStoryDelta(event: StoryDeltaEvent): void {
+    const identity = this.currentGeneration();
+    // The wire allocates an attempt-unique generationId for story frames.
+    if (!identity || !this.state.snapshotReceived || this.state.phase !== 'online' || this.generationTerminal || event.generationId !== identity.generationId) return;
+    if (!this.generationBaseline || this.generationFlight || this.state.generation.gap) {
+      this.generationStories.add(event);
+      // Rebase only against a GET cursor. A partially previewed suffix must stay
+      // retained if the next authoritative response still predates that suffix.
+      return;
+    }
+    if (event.chunkSeq < this.generationNextChunkSeq) return;
+    if (event.chunkSeq > this.generationNextChunkSeq) {
+      this.generationStories.add(event);
+      this.publish({ generation: { ...this.state.generation, gap: { expectedChunkSeq: this.generationNextChunkSeq, receivedChunkSeq: event.chunkSeq } } });
+      return;
+    }
+    this.generationNextChunkSeq += 1;
+    this.publish({ generation: { ...this.state.generation, markdown: this.state.generation.markdown + event.payload.delta } });
+  }
+  private invalidate() { this.state.memberModel?.dispose(); this.memberAuthority = null; this.proposalRecoveryIntent = null; this.owner = null; this.flight = null; this.bridge.detach(); this.state = { ...staleView }; this.syncGenerationIdentity(); this.listeners.forEach(listener => listener()); }
   detach = () => { this.proposalRecoveryIntent = null; this.owner = null; this.flight = null; this.bridge.detach(); this.publish({ ...initial(), notice: '已断开本机连接；这不表示已离开房间或停止服务器任务。' }); };
   dispose = () => { this.detach(); this.disposed = true; this.unsubscribe?.(); this.unsubscribe = null; };
   /** Last verified projection is for retained read-only draft presentation, never write authority. */
@@ -162,6 +301,7 @@ export class DesktopArenaRoomSession {
       memberModel.sync(previousMemberAuthority.snapshot);
     }
     this.owner = owner; this.flight = null; this.proposalRecoveryIntent = null;
+    this.generationFlight = null; this.generationIdentity = null;
     this.publish({ ...initial(), opened: true, busy: true, phase: 'attaching', session: previousSession, memberModel, constrained: !!previousSession,
       ...(blocksProposalTracking(previousProposalTracking) ? { unknown: previousUnknown, constrained: true,
         proposalTracking: { ...previousProposalTracking!, proposalId: null, observation: unavailableProposalObservation() } } : {}) }, !!memberModel);
@@ -399,17 +539,37 @@ export class DesktopArenaRoomSession {
     if (this.state.unknown?.operation === 'create' && action.kind !== 'resume-create') return;
     const owner = this.owner;
     const flight: Flight = { action, operation: getDesktopRoomHttpOperation(action), requestId: null, accepted: false, acknowledged: false, result: null, subscribe: false, settlesUnknown: false, knownNotApplied: false };
+    const previous = this.state;
     this.flight = flight;
     this.publish({ busy: true, error: null, constrained: this.state.constrained || isMutation(action),
       ...(action.kind === 'session' ? { presence: null, snapshotReceived: false } : {}),
       ...(isMutation(action) ? { presence: null, ...(this.state.proposalTracking?.phase === 'settled' ? { proposalTracking: null } : {}) } : {}) });
+    const dispatchAuthorityVersion = this.authorityVersion;
     try {
       const accepted = await this.bridge.request(action);
       if (!this.current(owner) || this.flight !== flight) return;
       if (flight.requestId && flight.requestId !== accepted.requestId) { this.failed(new ArenaRoomBridgeError('invalid-response', isMutation(action) ? 'unknown' : 'not-applicable')); return; }
       flight.requestId = accepted.requestId; flight.accepted = true; this.finishFlight(flight);
     } catch (cause) {
-      if (this.current(owner) && this.flight === flight) this.failed(cause instanceof ArenaRoomBridgeError ? cause : new ArenaRoomBridgeError('internal-error', isMutation(action) ? 'unknown' : 'not-applicable'));
+      if (this.current(owner) && this.flight === flight) {
+        const error = cause instanceof ArenaRoomBridgeError ? cause : new ArenaRoomBridgeError('internal-error', isMutation(action) ? 'unknown' : 'not-applicable');
+        if (error.code === 'busy' && error.outcome === 'not-applied' && !flight.accepted && !flight.acknowledged && flight.requestId === null) {
+          // Native refused admission; it did not disconnect the room or make the
+          // mutation unknown. Roll back only this dispatch's freshness changes,
+          // never a newer socket observation or an existing pending intent.
+          const restore = this.authorityVersion === dispatchAuthorityVersion
+            ? { phase: previous.phase, snapshotReceived: previous.snapshotReceived, presence: previous.presence } : {};
+          const configTracking = flight.operation === 'config' && this.state.configTracking === previous.configTracking
+            && this.state.configTracking?.phase === 'publishing' ? null : this.state.configTracking;
+          const proposalTracking = isProposalOperation(flight.operation) && this.state.proposalTracking === previous.proposalTracking
+            && this.state.proposalTracking?.phase === 'resolving' ? null : this.state.proposalTracking;
+          this.flight = null;
+          this.publish({ ...restore, busy: false, error: describeDesktopRoomError(error), configTracking, proposalTracking,
+            constrained: this.state.session !== null || this.state.memberModel !== null || this.state.unknown !== null || configTracking !== null || blocksProposalTracking(proposalTracking) });
+          return;
+        }
+        this.failed(error);
+      }
     }
   }
   private correlate(requestId: string, operation: DesktopRoomHttpOperation): Flight | null {
@@ -471,12 +631,24 @@ export class DesktopArenaRoomSession {
       if (event.state === 'closed') this.publish({ session: null, presence: null, snapshotReceived: false, constrained: !!this.flight || !!this.state.unknown || !!this.state.configTracking || blocksProposalTracking(this.state.proposalTracking), phase: 'closed', notice: '房间或当前成员资格已结束。' }, true);
       else if (event.state === 'detached' || event.state === 'backpressure' || event.state === 'resync-required') this.publish({ presence: null, snapshotReceived: false, phase: event.state === 'detached' ? 'detached' : 'offline' });
       else this.publish({ phase: event.state, ...(event.state === 'online' ? {} : { presence: null, snapshotReceived: false }) });
-    } else this.applySocket(event.message);
+    } else if (event.kind === 'socket') this.applySocket(event.message);
     return context.isCurrent() && this.current();
   }
   private acknowledged(batch: DesktopRoomBatch, context: ArenaRoomAcceptance) {
     if (!context.isCurrent() || !this.current()) return;
     const event = batch.event;
+    if (event.kind === 'socket') {
+      const message = event.message;
+      if (message.type === 'room.snapshot') void this.requestGenerationRecovery('reconnect');
+      else if (message.type === 'generation.started') void this.requestGenerationRecovery('baseline');
+      else if (message.type === 'generation.completed' || message.type === 'generation.failed') void this.requestGenerationRecovery('terminal');
+      else if (message.type === 'story.delta' && (!this.generationBaseline || this.state.generation.gap)) void this.requestGenerationRecovery('gap');
+      return;
+    }
+    if (event.kind === 'status') {
+      if (event.state === 'online') void this.requestGenerationRecovery('baseline');
+      return;
+    }
     if (event.kind === 'proposal-observation') {
       if (!isProposalOperation(this.state.unknown?.operation) || this.state.unknown?.intentId !== event.intentId) return;
       const observation = event.observation;
@@ -551,7 +723,7 @@ export class DesktopArenaRoomSession {
       if (this.state.snapshotReceived && message.onlineUserIds.every(id => session.snapshot.members.some(member => member.userId === id && member.membershipState === 'active'))) this.publish({ presence: message });
       return;
     }
-    if (message.type === 'story.delta') return;
+    if (message.type === 'story.delta') { this.applyStoryDelta(message); return; }
     if (message.type !== 'room.snapshot' && message.controlSeq <= session.snapshot.controlSeq) return;
     if (message.type === 'room.snapshot' && message.roomEpoch === session.roomEpoch && message.controlSeq < session.snapshot.controlSeq) return;
     if (message.type === 'room.closing') { this.publish({ session: null, presence: null, snapshotReceived: false, phase: 'closed', constrained: !!this.flight || !!this.state.unknown || !!this.state.configTracking || blocksProposalTracking(this.state.proposalTracking), notice: '房间已关闭。' }, true); return; }

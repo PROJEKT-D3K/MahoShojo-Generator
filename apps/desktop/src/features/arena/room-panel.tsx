@@ -1,3 +1,4 @@
+import { DesktopRoomGenerationResult } from './room-generation-result';
 import { DesktopRoomProposalReview, DesktopRoomProposalStatus } from './room-proposal-review';
 import { DesktopRoomConfigComparison } from './room-config-comparison';
 import { useMemo, useState, useSyncExternalStore } from 'react';
@@ -84,7 +85,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">多人房间</h2>
       {!state.opened ? <button type="button" className={secondary} disabled={disabled} onClick={() => { void owner.open(); }}>打开多人大厅</button>
         : <button type="button" className={secondary} onClick={disconnect}>断开本机房间连接</button>}</div>
-    <p className="text-sm">当前桌面阶段支持创建、加入、成员在线状态、退出/关闭，以及房主比较后明确发布配置。支持完整成员提案编辑、提交、撤回与房主逐项审阅。生成状态仅作展示，协作生成尚未开放。</p>
+    <p className="text-sm">当前桌面阶段支持创建、加入、成员在线状态、退出/关闭，以及房主比较后明确发布配置。支持完整成员提案编辑、提交、撤回与房主逐项审阅。支持读取当前房间战报与实时预览；开始和取消协作生成仍需在 Web 端操作。</p>
     {state.constrained ? <p role="status">本次多人会话的有效执行位置：服务器。普通 AI 选择与本机草稿保持不变，退出后恢复普通操作。</p> : null}
     {state.opened ? <>
       <p role="status">{status}</p>
@@ -102,7 +103,9 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
         <RoomInviteShareButton status={inviteCopy.status} disabled={disabled || !inviteIdentity} onCopy={() => { void inviteCopy.copy(); }} />
         <p>{view.summary}</p>
         <RoomMembersView view={view} selfUserId={session.self.userId} membershipHint="断网或关闭页面只会离线，成员席位仍保留；要退出请明确离开，房主则关闭房间。" />
-        <section aria-label="房间权威设定摘要"><h3>服务器房间设定</h3><p>修订 {session.snapshot.revision} · {session.snapshot.sharedConfig.combatants.length} 位角色 · {session.snapshot.sharedConfig.auxScenarios.length} 个辅助情景 · {session.snapshot.sharedConfig.materials.length} 份素材</p><p>生成状态：{session.snapshot.activeGeneration?.state ?? '无活动生成'}。此页不读取或恢复故事正文。</p></section>
+        <section aria-label="房间权威设定摘要"><h3>服务器房间设定</h3><p>修订 {session.snapshot.revision} · {session.snapshot.sharedConfig.combatants.length} 位角色 · {session.snapshot.sharedConfig.auxScenarios.length} 个辅助情景 · {session.snapshot.sharedConfig.materials.length} 份素材</p><p>生成状态：{session.snapshot.activeGeneration?.state ?? '无活动生成'}。</p></section>
+        <DesktopRoomGenerationResult generation={state.generation} generationKey={`${scope}:${session.snapshot.activeGeneration?.generationId ?? 'none'}:${session.snapshot.activeGeneration?.attempt ?? 0}`}
+          onRetry={() => owner.retryGenerationRecovery()} retryDisabled={disabled || state.busy || state.generationReading || state.phase !== 'online' || !state.snapshotReceived || !inviteIdentity} />
         {session.self.role === 'host' ? <DesktopRoomProposalReview key={`proposals:${scope}`} owner={owner} session={session} state={state} disabled={disabled} languages={languages} />
           : <RoomProposalReadOnlyList session={session} isLive={state.phase === 'online' && state.snapshotReceived} labels={{ language: code => languages?.find(language => language.code === code)?.name }} />}
         {session.self.role === 'host' ? <DesktopRoomConfigComparison key={`comparison:${scope}`} owner={owner} session={session} draft={draft} isDraftCurrent={isDraftCurrent} languages={languages} disabled={state.busy || disabled || !!pending || !!tracking || proposalBlocked} /> : null}

@@ -10,6 +10,7 @@ import {
 } from '../src/platform/arena-room-bridge';
 
 const fixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-ipc.json', import.meta.url), 'utf8'));
+const generationFixture = JSON.parse(readFileSync(new URL('../../../packages/contracts/fixtures/desktop-room-generation-read.json', import.meta.url), 'utf8'));
 const tick = async () => { for (let i = 0; i < 24; i += 1) await Promise.resolve(); };
 const deferred = <T>() => {
   let resolve!: (value: T) => void, reject!: (cause: unknown) => void;
@@ -39,8 +40,12 @@ function harness(accept?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance
       const request = args!.request as { handle: string; request: { kind: string; subscriptionId?: string; batchId?: string; sequence?: number; intentId?: string } };
       if (request.request.kind === 'end-config-tracking' || request.request.kind === 'end-proposal-tracking') return { kind: request.request.kind === 'end-config-tracking' ? 'config-tracking-ended' : 'proposal-tracking-ended', intentId: request.request.intentId, ended: true };
       if (request.request.kind === 'pull') return { kind: 'batch', batch };
-      if (request.request.kind === 'ack') return { kind: 'acknowledged', handle: request.handle,
-        subscriptionId: request.request.subscriptionId, batchId: request.request.batchId, sequence: request.request.sequence, accepted: true };
+      if (request.request.kind === 'ack') {
+        const event = (batch as DesktopRoomBatch).event;
+        return { kind: 'acknowledged', handle: request.handle,
+          subscriptionId: request.request.subscriptionId, batchId: request.request.batchId, sequence: request.request.sequence, accepted: true,
+          ...(event.kind === 'generation-fragment' && event.final ? { generationRead: { requestId: event.requestId, current: true } } : {}) };
+      }
       return { ...fixture.accepted, subscriptionId };
     } finally { active -= 1; }
   });
@@ -66,6 +71,144 @@ function harness(accept?: (batch: DesktopRoomBatch, context: ArenaRoomAcceptance
     maximumActive: () => maximumActive,
   };
 }
+
+describe('Native current generation descriptor/fragment reader', () => {
+  const identity = generationFixture.descriptor;
+  const event = (value: Record<string, unknown>) => ({ ...value, requestId: fixture.accepted.requestId });
+  const deliver = async (h: ReturnType<typeof harness>, value: Record<string, unknown>, sequence: number) => {
+    h.setBatch({ ...batchAt(sequence), event: event(value) }); h.notify(sequence); await tick();
+  };
+  it('owns one read and resolves only after verified final bytes AND the exact final ACK', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const completed = vi.fn(); const read = h.bridge.generationRead(identity).then(completed); await tick();
+    await expect(h.bridge.generationRead(identity)).rejects.toMatchObject({ code: 'busy' });
+    await expect(h.bridge.request(generationFixture.action)).rejects.toMatchObject({ code: 'invalid-request' });
+    await deliver(h, identity, 0); await deliver(h, generationFixture.fragments[0], 1);
+    expect(completed).not.toHaveBeenCalled(); expect(h.accepted).toEqual([]);
+    const gate = deferred<unknown>(), original = h.invoke.getMockImplementation()!;
+    h.invoke.mockImplementation((command, args) => {
+      const request = args?.request as { request?: { kind: string; sequence?: number } } | undefined;
+      if (request?.request?.kind === 'ack' && request.request.sequence === 2) return gate.promise;
+      return original(command, args);
+    });
+    await deliver(h, generationFixture.fragments[1], 2); await new Promise(resolve => setTimeout(resolve, 10));
+    expect(completed).not.toHaveBeenCalled();
+    const final = batchAt(2); gate.resolve({ kind: 'acknowledged', handle: final.handle, subscriptionId: final.subscriptionId,
+      batchId: final.batchId, sequence: final.sequence, accepted: true, generationRead: { requestId: fixture.accepted.requestId, current: true } });
+    await read; expect(completed).toHaveBeenCalledWith(JSON.parse(generationFixture.rawEnvelope).result);
+    expect(h.errors).toEqual([]); expect(h.actions()).toEqual(['generation-read', 'pull', 'ack', 'pull', 'ack', 'pull', 'ack']);
+    expect(h.invoke.mock.calls.map(([command]) => command)).not.toContain(DESKTOP_ROOM_IPC_COMMANDS.subscribe);
+  });
+  it('keeps control delivery moving during final hashing and rejects late bytes after detach', async () => {
+    const digest = deferred<ArrayBuffer>(); const spy = vi.spyOn(crypto.subtle, 'digest').mockImplementation(() => digest.promise);
+    try {
+      const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+      const read = h.bridge.generationRead(identity).catch((error: unknown) => error); await tick();
+      await deliver(h, identity, 0); await deliver(h, generationFixture.fragments[0], 1); await deliver(h, generationFixture.fragments[1], 2);
+      expect(h.actions().filter(action => action === 'ack')).toHaveLength(3);
+      h.setBatch({ ...batchAt(3), event: { kind: 'status', state: 'online' } }); h.notify(3); await tick();
+      expect(h.accepted).toHaveLength(1); expect(h.accepted[0]!.event).toEqual({ kind: 'status', state: 'online' });
+      h.bridge.detach(); digest.resolve(new Uint8Array(32).buffer);
+      expect(await read).toMatchObject({ code: 'scope-changed' });
+    } finally { spy.mockRestore(); }
+  });
+  it.each(['digest', 'offset', 'request-error'])('isolates %s failure from the online socket and permits explicit reread', async kind => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const read = h.bridge.generationRead(identity).catch((error: unknown) => error); await tick();
+    if (kind === 'request-error') await deliver(h, { kind: 'request-error', operation: 'generationRead', error: { code: 'response-too-large', outcome: 'not-applicable', message: DESKTOP_ROOM_ERROR_MESSAGE } }, 0);
+    else {
+      await deliver(h, { ...identity, ...(kind === 'digest' ? { digest: '0'.repeat(64) } : {}) }, 0);
+      await deliver(h, { ...generationFixture.fragments[0], ...(kind === 'offset' ? { offset: 1 } : {}) }, 1);
+      await deliver(h, generationFixture.fragments[1], 2);
+    }
+    expect(await read).toMatchObject({ code: kind === 'request-error' ? 'response-too-large' : 'invalid-response' });
+    expect(h.errors).toEqual([]);
+    const retry = h.bridge.generationRead(identity).catch((error: unknown) => error); await tick();
+    expect(h.actions().filter(action => action === 'generation-read')).toHaveLength(2);
+    h.bridge.detach(); expect(await retry).toMatchObject({ code: 'scope-changed' });
+  });
+  it('ACKs a late error for the retired read without poisoning an already accepted newer read', async () => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const oldRead = h.bridge.generationRead(identity).catch((error: unknown) => error); await tick();
+    const oldError = { kind: 'request-error', operation: 'generationRead', error: { code: 'network-error', outcome: 'not-applicable', message: DESKTOP_ROOM_ERROR_MESSAGE } };
+    await deliver(h, oldError, 0); expect(await oldRead).toMatchObject({ code: 'network-error' });
+    const original = h.invoke.getMockImplementation()!;
+    h.invoke.mockImplementation((command, args) => {
+      const value = args?.request as { request?: { kind: string } } | undefined;
+      if (value?.request?.kind === 'generation-read') return Promise.resolve({ ...fixture.accepted, requestId: 'new-read' });
+      return original(command, args);
+    });
+    const done = vi.fn(); const read = h.bridge.generationRead(identity).then(done); await tick();
+    await deliver(h, oldError, 1); expect(done).not.toHaveBeenCalled(); expect(h.errors).toEqual([]);
+    for (const [index, value] of [identity, ...generationFixture.fragments].entries()) {
+      h.setBatch({ ...batchAt(index + 2), event: { ...value, requestId: 'new-read' } }); h.notify(index + 2); await tick();
+    }
+    await read; expect(done).toHaveBeenCalledWith(JSON.parse(generationFixture.rawEnvelope).result);
+    expect(h.errors).toEqual([]); h.bridge.detach();
+  });
+  it('uses progress-idle timeouts beyond a Web GET budget and still enforces a finite deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+      const read = h.bridge.generationRead(identity).catch((error: unknown) => error); await tick();
+      await vi.advanceTimersByTimeAsync(15_000); await deliver(h, identity, 0);
+      await vi.advanceTimersByTimeAsync(20_000); await deliver(h, generationFixture.fragments[0], 1);
+      expect(h.errors).toEqual([]);
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(await read).toMatchObject({ code: 'network-error' });
+      expect(h.errors).toEqual([]); h.bridge.detach();
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['valid', 'invalid-descriptor'])('expires the overall deadline with timely %s fragments without losing a protocol failure', async kind => {
+    vi.useFakeTimers();
+    try {
+      const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+      let settled = false;
+      const read = h.bridge.generationRead(identity).catch((error: unknown) => { settled = true; return error; }); await tick();
+      const raw = generationFixture.rawEnvelope.replace(/[^\x00-\x7f]/g, (character: string) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+      await deliver(h, { ...identity, byteLength: raw.length, ...(kind === 'invalid-descriptor' ? { roomId: 'other-room' } : {}) }, 0);
+      for (let index = 0; index < 10; index += 1) {
+        await vi.advanceTimersByTimeAsync(29_000);
+        await deliver(h, { kind: 'generation-fragment', offset: index * 10, text: raw.slice(index * 10, index * 10 + 10), final: false }, index + 1);
+      }
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(await read).toMatchObject({ code: kind === 'invalid-descriptor' ? 'invalid-response' : 'network-error' });
+      expect(h.errors).toEqual([]); h.bridge.detach();
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['descriptor', 'offset'])('preserves a bad %s failure when the transfer stalls before its final fragment', async kind => {
+    vi.useFakeTimers();
+    try {
+      const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+      const read = h.bridge.generationRead(identity).catch((error: unknown) => error); await tick();
+      await deliver(h, { ...identity, ...(kind === 'descriptor' ? { roomId: 'other-room' } : {}) }, 0);
+      if (kind === 'offset') await deliver(h, { ...generationFixture.fragments[0], offset: 1 }, 1);
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(await read).toMatchObject({ code: 'invalid-response' });
+      expect(h.errors).toEqual([]); h.bridge.detach();
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['missing', 'wrong-request', 'not-current'])('withholds completion on a %s final receipt without tearing down the socket', async kind => {
+    const h = harness(); h.setDocumentNonce(fixture.attachRequest.documentNonce); await h.start();
+    const read = h.bridge.generationRead(identity).catch((error: unknown) => error); await tick();
+    const original = h.invoke.getMockImplementation()!;
+    h.invoke.mockImplementation(async (command, args) => {
+      const value = await original(command, args);
+      const request = args?.request as { request?: { kind: string; sequence?: number } } | undefined;
+      if (request?.request?.kind !== 'ack' || request.request.sequence !== 2) return value;
+      const result = { ...value } as Record<string, unknown>;
+      if (kind === 'missing') delete result.generationRead;
+      else result.generationRead = { requestId: kind === 'wrong-request' ? 'other' : fixture.accepted.requestId, current: kind !== 'not-current' };
+      return result;
+    });
+    await deliver(h, identity, 0); await deliver(h, generationFixture.fragments[0], 1); await deliver(h, generationFixture.fragments[1], 2);
+    expect(await read).toMatchObject({ code: kind === 'not-current' ? 'scope-changed' : 'invalid-response' });
+    expect(h.errors).toEqual([]);
+    h.setBatch({ ...batchAt(3), event: { kind: 'status', state: 'online' } }); h.notify(3); await tick();
+    expect(h.accepted).toHaveLength(1); h.bridge.detach();
+  });
+});
 
 describe('Native Room bounded pull/accept/ack bridge', () => {
   it('exposes the transition boundary only after a valid exact ACK, not consumer acceptance', async () => {
@@ -619,4 +762,36 @@ it.skipIf(!nativeOutput)('passes unchanged Native-produced notification/pull obj
   expect(index).toBe(native.pulls.length);
   const revoked = native.notifications.find((notification: { type: string }) => notification.type === 'revoked');
   if (revoked) expect(errors[0]).toMatchObject({ ...revoked.error, requestId: revoked.requestId, operation: revoked.operation });
+});
+
+const nativeGenerationOutput = process.env.MAHO_ROOM_GENERATION_OUTPUT;
+it.skipIf(!nativeGenerationOutput)('replays actual Native HTTP envelope bytes, descriptors, fragments and exact final receipt', async () => {
+  const native = JSON.parse(readFileSync(nativeGenerationOutput!, 'utf8'));
+  const envelope = JSON.parse(native.rawEnvelope);
+  const descriptor = native.pulls.map((pull: { batch: DesktopRoomBatch }) => pull.batch.event).find((event: { kind: string }) => event.kind === 'generation-descriptor');
+  expect(descriptor).toBeDefined();
+  const channel: ArenaRoomChannel = { onmessage: () => undefined };
+  let index = 0;
+  const consumed: DesktopRoomBatch[] = [], errors: ArenaRoomBridgeError[] = [];
+  const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+    if (command === DESKTOP_ROOM_IPC_COMMANDS.attach) return { handle: native.accepted.handle, subscriptionId: native.accepted.subscriptionId, pendingIntent: null };
+    if (command === DESKTOP_ROOM_IPC_COMMANDS.detach) return { detached: true };
+    const value = args!.request as { request: { kind: string; batchId?: string; sequence?: number } };
+    if (value.request.kind === 'generation-read') return native.accepted;
+    if (value.request.kind === 'pull') return native.pulls[index];
+    if (value.request.kind !== 'ack') throw new Error('unexpected command');
+    const receipt = native.acks[index];
+    expect(value.request).toMatchObject({ batchId: receipt.batchId, sequence: receipt.sequence });
+    index += 1; return receipt;
+  });
+  const bridge = createArenaRoomBridge(invoke, { createChannel: () => channel, isCurrent: () => true,
+    getDocumentNonce: () => fixture.attachRequest.documentNonce, onError: error => errors.push(error),
+    acceptBatch: batch => { consumed.push(batch); return true; } });
+  await bridge.attach({ ...fixture.attachRequest, expectedUserId: envelope.desktopRoom.viewerUserId });
+  const read = bridge.generationRead(descriptor); await tick();
+  for (const notification of native.notifications) { channel.onmessage(notification); await tick(); }
+  expect(await read).toEqual(envelope.result);
+  expect(index).toBe(native.pulls.length); expect(errors).toEqual([]);
+  expect(consumed.every(batch => batch.event.kind !== 'generation-descriptor' && batch.event.kind !== 'generation-fragment')).toBe(true);
+  bridge.detach();
 });

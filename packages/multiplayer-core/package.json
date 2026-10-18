@@ -28,6 +28,11 @@
       "types": "./src/room-invite.ts",
       "import": "./src/room-invite.ts",
       "default": "./src/room-invite.ts"
+    },
+    "./generation-story-buffer": {
+      "types": "./src/generation-story-buffer.ts",
+      "import": "./src/generation-story-buffer.ts",
+      "default": "./src/generation-story-buffer.ts"
     }
   },
   "scripts": {

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ChevronDown } from 'lucide-react';
 
 import { MAX_ROOM_MEMBERS, type RoomDirectoryVisibility } from '@mahoshojo/contracts/arena-room';
-import { RoomLobbyContent, RoomMembersView, RoomExitActions, RoomInviteShareButton, useRoomInviteCopy, createRoomInviteScope, projectRoomMembers } from '@mahoshojo/ui-web/arena-room';
+import { RoomLobbyContent, RoomMembersView, RoomExitActions, RoomGenerationResult, RoomInviteShareButton, useRoomInviteCopy, createRoomInviteScope, projectRoomMembers } from '@mahoshojo/ui-web/arena-room';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { useEscapeLayer } from '@mahoshojo/ui-web/modal';
 
@@ -27,15 +27,6 @@ import { ActionBar } from '@/components/shared/ui/ActionBar';
 import { Badge, CountBadge } from '@/components/shared/ui/Badge';
 import { Button, buttonClassName } from '@/components/shared/ui/Button';
 import { StatusLine } from '@/components/shared/ui/StatusNotice';
-import {
-  arenaRoomGenerationErrorCopy,
-  arenaRoomGenerationGapNotice,
-  arenaRoomGenerationRecoveryCode,
-  arenaRoomGenerationRecoveryNotice,
-  arenaRoomGenerationStatusLabel,
-  arenaRoomGenerationUnknownNotice,
-  isArenaRoomGenerationRecoveryCode,
-} from './presentation/generation-copy';
 import { arenaRoomConfigSyncLabel } from './presentation/room-copy';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 import { ArenaProposalPanel } from './ArenaProposalPanel';
@@ -299,76 +290,12 @@ export const ArenaRoomGenerationResult = ({ state, onSaveImage, onRetryRecovery,
   readonly onRetryRecovery?: () => void | Promise<void>;
 }) => {
   const generation = state.generation;
-  if (generation.phase === 'idle' && !generation.markdown) return null;
-
-  const statusLabel = arenaRoomGenerationStatusLabel(generation);
-  const recoveryNotice = arenaRoomGenerationRecoveryNotice(generation);
-  const recoveryCode = arenaRoomGenerationRecoveryCode(generation);
-  const generationErrorCode = generation.errorCode
-    && !isArenaRoomGenerationRecoveryCode(generation.errorCode)
-    ? generation.errorCode
-    : null;
-  const errorCopy = generationErrorCode ? arenaRoomGenerationErrorCopy(generationErrorCode) : null;
-  const canRetryRecovery = Boolean(onRetryRecovery)
-    && recoveryCode !== null
-    && recoveryCode !== 'ROOM_GENERATION_RECOVERY_NOT_FOUND'
-    && generation.phase !== 'resyncing';
-
   return (
-    <section
-      ref={resultRef}
-      aria-labelledby="arena-room-generation-heading"
-      className="rounded-xl border border-fuchsia-200 bg-white/80 p-4 dark:border-fuchsia-900 dark:bg-gray-900/70"
-      data-arena-room-generation-report="v1"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 id="arena-room-generation-heading" className="text-sm font-semibold text-gray-950 dark:text-gray-100">
-          房间战报
-        </h3>
-        <Badge>{statusLabel}</Badge>
-      </div>
-      {generation.phase === 'unknown' ? (
-        <p role="status" className="mt-3 text-sm text-amber-800 dark:text-amber-200">
-          {arenaRoomGenerationUnknownNotice}
-        </p>
-      ) : null}
-      {generation.gap ? (
-        <p role="status" className="mt-3 text-sm text-amber-800 dark:text-amber-200">
-          {arenaRoomGenerationGapNotice}
-        </p>
-      ) : null}
-      {recoveryNotice ? (
-        <p role="status" className="mt-3 text-sm text-amber-800 dark:text-amber-200">
-          {recoveryNotice}
-        </p>
-      ) : null}
-      {canRetryRecovery ? (
-        <ActionBar className="mt-3">
-          <button
-            type="button"
-            className={buttonClassName()}
-            onClick={() => { void onRetryRecovery?.(); }}
-          >
-            重新同步战报
-          </button>
-        </ActionBar>
-      ) : null}
-      {errorCopy ? (
-        <div role="alert" className="mt-3 text-sm text-red-700 dark:text-red-300" data-generation-error-code={generationErrorCode}>
-          <p>{errorCopy.message}</p>
-          <details className="mt-1 text-xs opacity-80">
-            <summary className="cursor-pointer select-none">技术详情</summary>
-            <p className="mt-1">错误代码：{generationErrorCode}</p>
-          </details>
-        </div>
-      ) : null}
-      {generation.phase !== 'unknown' && (
-        generation.markdown
-        || generation.phase === 'running'
-        || generation.phase === 'starting'
-        || generation.phase === 'resyncing'
-        || generation.phase === 'completed'
-      ) ? (
+    <RoomGenerationResult
+      generation={generation}
+      resultRef={resultRef}
+      onRetry={onRetryRecovery}
+      report={
         <BattleResultPresentation
           report={{
             format: generation.result?.format ?? 'stream-markdown',
@@ -395,15 +322,8 @@ export const ArenaRoomGenerationResult = ({ state, onSaveImage, onRetryRecovery,
           adjudicationResults={generation.result?.adjudicationResults ?? null}
           combatantUpdates={generation.result?.combatantUpdates ?? null}
         />
-      ) : ['starting', 'running'].includes(generation.phase) ? (
-        <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">等待服务器发布战报内容…</p>
-      ) : null}
-      {generation.finalAuthoritative && generation.generationRecordId ? (
-        <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-          最终内容已从生成记录恢复并核验。
-        </p>
-      ) : null}
-    </section>
+      }
+    />
   );
 };
 

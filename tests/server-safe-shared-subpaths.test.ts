@@ -150,6 +150,44 @@ const collectModuleGraph = (entryFile: string): string[] => {
 };
 
 describe('server-safe shared entrypoints stay free of React hooks', () => {
+  it('keeps the actual Web story buffer on the pure shared bounded preview leaf', async () => {
+    const root = path.resolve(PACKAGE_ROOT, '../multiplayer-core');
+    const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+    expect(manifest.exports['./generation-story-buffer']).toEqual({
+      types: './src/generation-story-buffer.ts', import: './src/generation-story-buffer.ts', default: './src/generation-story-buffer.ts',
+    });
+    const webPath = path.resolve(PACKAGE_ROOT, '../../apps/web/lib/arena-room/generation-story-buffer.ts');
+    const bundled = await build({ entryPoints: [webPath], bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true });
+    expect(Object.keys(bundled.metafile!.inputs).map(file => path.resolve(file)).sort())
+      .toEqual([webPath, path.join(root, 'src/generation-story-buffer.ts')].sort());
+    expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
+    expect(bundled.outputFiles[0].text).not.toMatch(/\b(?:window|document|navigator|localStorage|fetch|WebSocket)\b/u);
+    expect(Object.values(bundled.metafile!.outputs).flatMap(output => output.imports)).toEqual([]);
+  });
+
+  it('exports the current-room result from the client barrel and keeps its own leaf host-neutral', async () => {
+    const manifest = JSON.parse(readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
+    expect(manifest.exports['./arena-room']).toBe('./src/arena-room/index.ts');
+    expect(SERVER_SAFE_ENTRYPOINTS).not.toHaveProperty('./arena-room');
+    const bundled = await build({
+      stdin: { contents: 'export { RoomGenerationResult } from "@mahoshojo/ui-web/arena-room";',
+        resolveDir: path.resolve(PACKAGE_ROOT, '../../apps/web'), loader: 'ts' },
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true,
+      external: ['react', 'react/jsx-runtime'],
+    });
+    const outputs = Object.values(bundled.metafile!.outputs).flatMap(output => Object.entries(output.inputs));
+    const liveFiles = outputs.filter(([, info]) => info.bytesInOutput > 0).map(([file]) => file);
+    expect(liveFiles.some(file => file.endsWith('/arena-room/RoomGenerationResult.tsx'))).toBe(true);
+    expect(liveFiles.some(file => /(?:apps\/|next\/|@tauri-apps\/)/u.test(file))).toBe(false);
+    // The room barrel also exports the existing member workspace. Inspect this
+    // result leaf separately so unrelated workspace copy does not become its API.
+    const leaf = await build({ entryPoints: [path.join(SRC, 'arena-room/RoomGenerationResult.tsx')],
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true,
+      external: ['react', 'react/jsx-runtime'] });
+    expect(Object.keys(leaf.metafile!.inputs).some(file => /(?:apps\/|arena-report\/|next\/|@tauri-apps\/)/u.test(file))).toBe(false);
+    expect(leaf.outputFiles[0].text).not.toMatch(/\b(?:fetch|WebSocket|localStorage|sessionStorage|indexedDB)\b/u);
+  });
+
   it('keeps room join parsing and invite building as pure leaves shared by the Web entrypoint', async () => {
     const root = path.resolve(PACKAGE_ROOT, '../multiplayer-core');
     const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
