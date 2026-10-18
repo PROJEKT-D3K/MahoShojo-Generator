@@ -61,6 +61,45 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); });
 
 describe('controlled Tea views', () => {
+  it.each(['raw', 'rendered'] as const)('reads legacy reasoning in %s view without rewriting the message', async outputView => {
+    const original = { ...message, meta: { reasoningText: '旧思考原文😀', future: { untouched: true } } };
+    const before = JSON.stringify(original);
+    await render(<MagicTeaPartyChatMessage message={original} session={session} preferences={preferences} isGenerating={false} outputView={outputView} />);
+    await act(async () => button('AI 思考过程').click());
+    expect(container.textContent).toContain('旧思考原文😀');
+    expect(container.textContent).toContain('来源：未知');
+    expect(JSON.stringify(original)).toBe(before);
+  });
+
+  it('prefers canonical reasoning over legacy text, including an intentionally unavailable envelope', async () => {
+    const original = { ...message, meta: { reasoningText: '旧文本不应覆盖', aiReasoning: { status: 'done', source: 'provider', text: '共享信封正文' } } };
+    await render(<MagicTeaPartyChatMessage message={original} session={session} preferences={preferences} isGenerating={false} />);
+    await act(async () => button('AI 思考过程').click());
+    expect(container.textContent).toContain('共享信封正文'); expect(container.textContent).not.toContain('旧文本不应覆盖');
+    await render(<MagicTeaPartyChatMessage message={{ ...original, meta: { ...original.meta, aiReasoning: { status: 'unavailable', source: 'provider' } } }} session={session} preferences={preferences} isGenerating={false} />);
+    expect(container.textContent).toContain('该模型未返回可展示思考内容'); expect(container.textContent).not.toContain('旧文本不应覆盖');
+  });
+
+  it.each([undefined, '', '  \n ', 42, { text: '不能猜测' }])('does not create a reasoning panel from empty or non-text legacy metadata %j', async reasoningText => {
+    await render(<MagicTeaPartyChatMessage message={{ ...message, meta: { reasoningText } }} session={session} preferences={preferences} isGenerating={false} />);
+    expect(container.querySelector('.ai-reasoning-panel')).toBeNull();
+  });
+
+  it.each([{}, [], { text: 42 }, { status: 'done', source: 'invalid', text: '不可信信封' },
+    { status: 'invalid', source: 'provider', text: '不可信信封' }, { status: 'done', source: 'provider', summary: {} },
+    { status: 'done', source: 'provider', text: 42 }, { status: 'done', source: 'provider', anomalyFlags: [{}] }])('falls back from malformed canonical reasoning %j without changing archive metadata', async aiReasoning => {
+    const original = { ...message, meta: { aiReasoning, reasoningText: '仍可读取的旧思考' } }; const before = JSON.stringify(original);
+    await render(<MagicTeaPartyChatMessage message={original} session={session} preferences={preferences} isGenerating={false} />);
+    await act(async () => button('AI 思考过程').click());
+    expect(container.textContent).toContain('仍可读取的旧思考'); expect(container.textContent).not.toContain('不可信信封');
+    expect(JSON.stringify(original)).toBe(before);
+  });
+
+  it('keeps the shared summary presentation unchanged even when reasoning is preserved', async () => {
+    await render(<MagicTeaPartyChatMessage message={{ ...message, meta: { kind: 'summary', reasoningText: '旧思考', aiReasoning: { status: 'done', source: 'provider', text: '新思考' } } }} session={session} preferences={preferences} isGenerating={false} />);
+    expect(container.textContent).toContain('摘要生成记录'); expect(container.querySelector('.ai-reasoning-panel')).toBeNull();
+  });
+
   it('shares the actual page columns and chat frame without owning host IO', async () => {
     await render(<MagicTeaPartyPageView
       hero={<MagicTeaPartyHero globalError={null} description="本机文本会话" homeLink={<a href="/">返回首页</a>} />}

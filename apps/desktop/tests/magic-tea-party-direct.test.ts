@@ -25,6 +25,17 @@ const paged = (source: Array<{ ordinal: number; message: TeaMessageDocument }> =
   return { read, mutate: vi.fn() } satisfies TeaNativePort;
 };
 describe('Desktop Tea actual shared prompt and Direct bridge', () => {
+  it.each(['provider', 'stopped', 'failed'] as const)('keeps %s reasoning in the canonical envelope without changing the accepted body', completion => {
+    const placeholder: TeaMessageDocument = { id: 'a', sessionId: 'tea', role: 'assistant', content: '', createdAt: 1, status: 'streaming' };
+    for (const kind of ['chat', 'choices', 'summary'] as const) {
+      const value = teaTerminalMessage(placeholder, { completion, rawText: '  正文😀  ', reasoning: '  思考原文😀  ' }, 'markdown', kind);
+      expect(value.meta?.aiReasoning).toEqual({ status: completion === 'provider' ? 'done' : 'error', source: 'provider', text: '  思考原文😀  ' });
+      expect(value.meta).not.toHaveProperty('reasoningText');
+      expect(value.meta?.rawOutput).toBe('  正文😀  ');
+      expect(value.status).toBe(completion === 'provider' ? 'done' : 'error');
+    }
+  });
+
   it.each(['markdown', 'jsonl'] as const)('uses the shared choices prompt and its own budget without mutating %s preferences or adding an opening/continue instruction', async outputFormat => {
     const value = record(); value.session.settings.outputFormat = outputFormat; value.session.draft = '不能发送的草稿'; const port = paged(); const before = JSON.stringify(value);
     const request = await prepareTeaDirectRequest(port, value, target, null, 'request', () => true, 'choices');

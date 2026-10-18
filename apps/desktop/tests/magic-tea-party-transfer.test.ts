@@ -8,6 +8,23 @@ const archive = () => buildMagicTeaPartySessionExport({ session: { id: 'old', ti
   messages: [{ id: 'm', sessionId: 'old', role: 'assistant', content: '中😀', createdAt: 2, meta: { future: { tachieId: 'inert' } } }] });
 const ids = () => { let next = 0; return () => `new-${++next}`; };
 describe('Desktop text Tea transfer host', () => {
+  it('roundtrips legacy and canonical reasoning metadata without a display migration or write', async () => {
+    const value = archive();
+    value.messages[0]!.meta = { reasoningText: '  旧思考😀  ', aiReasoning: { status: 'done', source: 'provider', text: 'canonical' }, future: { untouched: true } };
+    const before = JSON.stringify(value);
+    const plan = prepareDesktopTeaImport(before, 'json', ids(), 5);
+    if (plan.write.request.action !== 'import') throw new Error('bad fixture');
+    const entry = plan.write.request.entries[0]!; const instance = 'a'.repeat(32);
+    const port: TeaNativePort = { mutate: vi.fn(), read: vi.fn(async (input: TeaReadRequest): Promise<TeaReadResponse> => {
+      if (input.request.action === 'session') return { version: 1, result: { action: 'session', catalogRevision: 1, record: { session: entry.session, instance, revision: 1 } } };
+      return { version: 1, result: { action: 'messages', catalogRevision: 1, sessionId: entry.session.id, instance, revision: 1,
+        rows: entry.messages.map((message, index) => ({ ordinal: index + 1, message })), nextCursor: null } };
+    }) };
+    const imported = JSON.stringify(entry);
+    expect(JSON.parse(await exportDesktopTea(port, entry.session.id, 'json', () => true)).messages[0].meta).toEqual(value.messages[0]!.meta);
+    expect(JSON.stringify(entry)).toBe(imported); expect(JSON.stringify(value)).toBe(before); expect(port.mutate).not.toHaveBeenCalled();
+  });
+
   it('preserves imported known settings and inert nested extensions, using capability projection only at execution', () => {
     const value = archive(); const text = JSON.stringify(value);
     const plan = prepareDesktopTeaImport(text, 'json', ids(), 5);

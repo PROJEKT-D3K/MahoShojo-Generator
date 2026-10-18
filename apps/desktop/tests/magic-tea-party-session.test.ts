@@ -64,6 +64,54 @@ const harness = () => {
 };
 
 describe('text Tea owner save and generation identity', () => {
+  it.each(['provider', 'stopped', 'failed'] as const)('publishes accepted reasoning live and persists the %s terminal without replay', async completion => {
+    const h = harness(); await h.owner.select('s'); await h.owner.updateSettings({ outputFormat: 'markdown' });
+    let release!: () => void;
+    const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'cancel_direct_ai') return;
+      const request = args?.request as { requestId: string; contractVersion: 1; mode: 'direct-local' };
+      const channel = args?.onEvent as { onmessage: (_event: AiStreamEvent) => void };
+      const identity = { requestId: request.requestId, contractVersion: request.contractVersion, mode: request.mode };
+      channel.onmessage({ ...identity, sequence: 0, type: 'started' });
+      channel.onmessage({ ...identity, sequence: 1, type: 'reasoning-delta', delta: '已接受思考😀' });
+      channel.onmessage({ ...identity, sequence: 2, type: 'text-delta', delta: '已接受正文' });
+      await new Promise<void>(resolve => { release = resolve; });
+      if (completion === 'failed') throw new Error('synthetic stream interruption');
+      channel.onmessage({ ...identity, sequence: 3, type: 'reasoning-delta', delta: '后续思考' });
+      channel.onmessage({ ...identity, sequence: 4, type: 'result', result: { ...identity, status: 'completed', output: { text: '已接受正文', reasoning: '已接受思考😀后续思考' }, finishReason: 'stop' } });
+    }));
+    const running = h.owner.start(target, { ...h.options, invoke }, () => true, { kind: 'continue' });
+    await vi.waitFor(() => expect(h.owner.getSnapshot().messages.at(-1)?.meta?.aiReasoning).toEqual({ status: 'thinking', source: 'provider', text: '已接受思考😀' }));
+    expect(h.messages.at(-1)?.meta?.aiReasoning).toBeUndefined();
+    if (completion === 'stopped') h.owner.stop();
+    release(); await running;
+    const reasoning = { status: completion === 'provider' ? 'done' : 'error', source: 'provider', text: completion === 'provider' ? '已接受思考😀后续思考' : '已接受思考😀' };
+    expect(h.messages.at(-1)).toMatchObject({ content: '已接受正文', meta: { completion, aiReasoning: reasoning } });
+    expect(h.messages.at(-1)?.meta).not.toHaveProperty('reasoningText');
+    await h.owner.select('s'); expect(h.owner.getSnapshot().messages.at(-1)?.meta?.aiReasoning).toEqual(reasoning);
+    expect(JSON.parse(await h.owner.export('json')).messages.at(-1).meta.aiReasoning).toEqual(reasoning);
+    expect(invoke.mock.calls.filter(([command]) => command === 'stream_direct_ai')).toHaveLength(1);
+  });
+
+  it('does not publish late reasoning into a replacement owner', async () => {
+    const h = harness(); await h.owner.select('s'); let release!: () => void;
+    const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'cancel_direct_ai') return;
+      const request = args?.request as { requestId: string; contractVersion: 1; mode: 'direct-local' };
+      const channel = args?.onEvent as { onmessage: (_event: AiStreamEvent) => void };
+      const identity = { requestId: request.requestId, contractVersion: request.contractVersion, mode: request.mode };
+      channel.onmessage({ ...identity, sequence: 0, type: 'started' });
+      await new Promise<void>(resolve => { release = resolve; });
+      channel.onmessage({ ...identity, sequence: 1, type: 'reasoning-delta', delta: '旧会话迟到思考' });
+      channel.onmessage({ ...identity, sequence: 2, type: 'result', result: { ...identity, status: 'completed', output: { text: '旧正文', reasoning: '旧会话迟到思考' }, finishReason: 'stop' } });
+    }));
+    const running = h.owner.start(target, { ...h.options, invoke }, () => true, { kind: 'continue' });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    h.owner.dispose(); h.owner.activate(); await h.owner.create(); const replacement = h.owner.getSnapshot();
+    release(); await running;
+    expect(h.owner.getSnapshot()).toBe(replacement); expect(h.messages).toEqual([]);
+  });
+
   it.each(['markdown', 'jsonl'] as const)('generates separate choices then sends the frozen selection and continues while preserving the %s draft', async outputFormat => {
     const h = harness(); await h.owner.select('s'); await h.owner.updateSettings({ outputFormat }); h.owner.setInput('未发送草稿😀');
     const choices = [{ id: 'c1', text: '端起茶杯' }, { id: 'c2', text: '推开窗户' }]; const raw = JSON.stringify({ type: 'choices', items: choices });

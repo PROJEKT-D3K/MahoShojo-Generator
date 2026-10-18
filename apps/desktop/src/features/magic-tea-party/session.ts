@@ -4,7 +4,7 @@ import type { MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/typ
 import { TeaStorageError, type TeaNativePort } from '../../platform/magic-tea-party-native';
 import type { DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
 import type { ResolvedDesktopAiTarget } from '../ai-config/desktop-ai-config';
-import { desktopTeaSettings, executeTeaDirect, prepareTeaDirectRequest, readTeaMessagePages, teaTerminalMessage, type TeaDirectOutcome, type TeaRecord } from './direct';
+import { desktopTeaSettings, executeTeaDirect, prepareTeaDirectRequest, readTeaMessagePages, teaReasoningMeta, teaTerminalMessage, type TeaDirectOutcome, type TeaRecord } from './direct';
 import { exportDesktopTea, prepareDesktopTeaImport } from './transfer';
 import { editedTeaSummary, prepareTeaSummaryRequest, prepareTeaAutoSummaryRequest, type TeaSummaryPreparation } from './summary';
 
@@ -327,7 +327,9 @@ export class DesktopTeaSession {
       if (!this.current(generation.owner) || this.generation !== generation || generation.stopped) return;
       if (!generation.credentialCurrent()) { generation.stopped = true; generation.controller.abort(); return; }
       generation.rawText = text; generation.reasoning = reasoning;
-      this.publish({ rawUnsaved: text, messages: this.state.messages.map(message => message.id === generation.begin.assistantMessage.id ? { ...message, content: text, ...(generation.kind === 'summary' ? { meta: { kind: 'summary' } } : {}) } : message) });
+      this.publish({ rawUnsaved: text, messages: this.state.messages.map(message => message.id === generation.begin.assistantMessage.id ? {
+        ...message, content: text, meta: { ...message.meta, ...(generation.kind === 'summary' ? { kind: 'summary' } : {}), ...teaReasoningMeta(reasoning, 'streaming') },
+      } : message) });
     });
     if (!this.current(generation.owner) || this.generation !== generation) return;
     await this.finish(generation, generation.stopped || !generation.credentialCurrent()

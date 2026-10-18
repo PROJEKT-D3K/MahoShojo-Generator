@@ -18,7 +18,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke, isTauri: () => t
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: native.listen }) }));
 const profile = { version: 1, id: 'tea-page', name: '合成测试连接', adapter: 'openai-compatible', baseUrl: 'http://127.0.0.1:18080/v1', modelId: 'synthetic', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' };
 let root: Root; let container: HTMLDivElement; let document: TeaSessionDocument | null; let revision: number; let messages: TeaMessageDocument[]; let streams: number;
-let streamOutput: string;
+let streamOutput: string; let streamReasoning: string;
 const instance = 'a'.repeat(32);
 const button = (text: string) => { const node = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === text); expect(node, text).toBeTruthy(); return node!; };
 const click = (text: string) => act(async () => button(text).click());
@@ -35,6 +35,7 @@ beforeEach(() => {
   vi.stubGlobal('crypto', webcrypto); native.listen.mockResolvedValue(vi.fn());
   document = null; revision = 1; messages = []; streams = 0;
   streamOutput = '{"type":"narration","text":"共源茶会正文😀"}\n';
+  streamReasoning = '';
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5, selection: { executionPreference: 'client', clientTarget: { kind: 'custom', profileId: profile.id }, serverTarget: { kind: 'system' }, systemModelId: 'default' }, hiddenPresetIds: [], modelsByProfileId: {}, presetsByProviderId: {} }));
   native.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args: Record<string, unknown> = {}) => {
     if (command === 'list_provider_profile_ids') return [profile.id];
@@ -67,7 +68,8 @@ beforeEach(() => {
       const identity = { requestId: request.requestId, contractVersion: request.contractVersion, mode: request.mode };
       const text = streamOutput;
       channel.onmessage({ ...identity, sequence: 0, type: 'started' }); channel.onmessage({ ...identity, sequence: 1, type: 'text-delta', delta: text });
-      channel.onmessage({ ...identity, sequence: 2, type: 'result', result: { ...identity, status: 'completed', output: { text }, finishReason: 'stop' } }); return;
+      if (streamReasoning) channel.onmessage({ ...identity, sequence: 2, type: 'reasoning-delta', delta: streamReasoning });
+      channel.onmessage({ ...identity, sequence: streamReasoning ? 3 : 2, type: 'result', result: { ...identity, status: 'completed', output: { text, ...(streamReasoning ? { reasoning: streamReasoning } : {}) }, finishReason: 'stop' } }); return;
     }
     throw new Error(`Unconfigured native boundary ${command}`);
   }));
@@ -86,6 +88,15 @@ const mount = async (href = '#/magic-tea-party') => {
   await act(async () => getDesktopAiConfigStore().refreshProfiles());
   return router;
 };
+it('shows the generated canonical reasoning through the delivered route and shared message panel', async () => {
+  streamReasoning = '模型实际返回的思考😀';
+  await mount(); await click('新建会话'); await click('生成开场');
+  await click('AI 思考过程'); expect(container.textContent).toContain(streamReasoning);
+  expect(messages.at(-1)?.meta?.aiReasoning).toEqual({ status: 'done', source: 'provider', text: streamReasoning });
+  expect(streams).toBe(1);
+  expect(vi.mocked(fetch).mock.calls).toEqual([['/announcements.json', { credentials: 'omit', redirect: 'error' }]]);
+});
+
 it('opens a legacy deep link in the existing tea page without creating a session or changing provider state', async () => {
   // 先完成既有配置归一化，再单独检查旧深链导航的副作用。
   getDesktopAiConfigStore().init();

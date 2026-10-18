@@ -58,12 +58,32 @@ const getMessageMetaRecord = (message: MagicTeaPartyMessage): Record<string, unk
   return message.meta as Record<string, unknown>;
 };
 
+const isDisplayReasoningEnvelope = (value: unknown): value is AIReasoningEnvelope => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const envelope = value as Record<string, unknown>;
+  const optionalText = (text: unknown) => text == null || typeof text === 'string';
+  // Validate the fields consumed by the panel; unrelated archive extensions stay inert.
+  return typeof envelope.status === 'string' && ['idle', 'thinking', 'done', 'unavailable', 'error'].includes(envelope.status)
+    && typeof envelope.source === 'string' && ['sdk', 'provider', 'heuristic', 'unknown'].includes(envelope.source)
+    && optionalText(envelope.text) && optionalText(envelope.summary)
+    && (envelope.reasoningTokens == null || typeof envelope.reasoningTokens === 'number' && Number.isFinite(envelope.reasoningTokens))
+    && (envelope.anomalyFlags == null || Array.isArray(envelope.anomalyFlags) && envelope.anomalyFlags.every(flag => typeof flag === 'string'));
+};
+
 const getMessageAiReasoning = (message: MagicTeaPartyMessage): AIReasoningEnvelope | null => {
   const meta = getMessageMetaRecord(message);
   if (!meta) return null;
   const payload = meta.aiReasoning;
-  if (!payload || typeof payload !== 'object') return null;
-  return payload as AIReasoningEnvelope;
+  if (isDisplayReasoningEnvelope(payload)) return payload;
+  // Older Desktop archives retain plain reasoning text. Project it only for display;
+  // an existing canonical envelope (including unavailable) remains authoritative.
+  const legacyText = meta.reasoningText;
+  if (typeof legacyText !== 'string' || !legacyText.trim()) return null;
+  return {
+    status: message.status === 'streaming' ? 'thinking' : message.status === 'error' || message.status === 'blocked' ? 'error' : 'done',
+    source: 'unknown',
+    text: legacyText,
+  };
 };
 
 const getSpeakerNameFromRole = (session: MagicTeaPartySession | null, roleId: string): string => {

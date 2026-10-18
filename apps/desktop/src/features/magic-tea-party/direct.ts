@@ -9,6 +9,7 @@ import { pickMagicTeaPartyRequestSettings } from '@mahoshojo/domain/magic-tea-pa
 import type { MagicTeaPartyHistoryMessage, MagicTeaPartyMessage, MagicTeaPartySession, MagicTeaPartyPreferences } from '@mahoshojo/domain/magic-tea-party/types';
 import type { TeaReadResponse, TeaMessageDocument, TeaSessionDocument } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import { AiExecutionRequestSchema, type AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
+import type { AIReasoningEnvelope } from '@mahoshojo/contracts/ai-reasoning';
 import type { TeaNativePort } from '../../platform/magic-tea-party-native';
 import { createDesktopAiExecutionPort, type DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
 import { desktopChannelDeliveryFailure } from '../../platform/direct-ai-bridge';
@@ -133,6 +134,9 @@ export async function prepareTeaDirectRequest(port: TeaNativePort, record: TeaRe
 }
 
 export type TeaDirectOutcome = { completion: 'provider' | 'stopped' | 'failed'; rawText: string; reasoning: string; message?: string };
+export const teaReasoningMeta = (text: string, phase: 'streaming' | TeaDirectOutcome['completion']): { aiReasoning?: AIReasoningEnvelope } => text ? {
+  aiReasoning: { status: phase === 'streaming' ? 'thinking' : phase === 'provider' ? 'done' : 'error', source: 'provider', text },
+} : {};
 export async function executeTeaDirect(options: DesktopAiExecutionOptions, request: AiExecutionRequest, signal: AbortSignal,
   onAccepted: (_text: string, _reasoning: string) => void): Promise<TeaDirectOutcome> {
   let rawText = ''; let reasoning = '';
@@ -168,7 +172,7 @@ export const teaTerminalMessage = (placeholder: TeaMessageDocument, outcome: Tea
       message: outcome.completion === 'stopped' ? '已主动停止，旧摘要未变，收到的原文已保留'
         : outcome.completion === 'failed' ? outcome.message ?? '摘要生成未正常完成，旧摘要未变' : '模型返回空摘要或无效字符，旧摘要未变' };
     return { ...placeholder, status: valid ? 'done' : 'error', content,
-      meta: { kind: 'summary', completion: outcome.completion, rawOutput: outcome.rawText, ...(outcome.reasoning ? { reasoningText: outcome.reasoning } : {}) },
+      meta: { kind: 'summary', completion: outcome.completion, rawOutput: outcome.rawText, ...teaReasoningMeta(outcome.reasoning, outcome.completion) },
       ...(error ? { error } : {}) };
   }
   const projection = format === 'jsonl' ? projectMagicTeaPartyChoices({ rawText: outcome.rawText,
@@ -180,6 +184,6 @@ export const teaTerminalMessage = (placeholder: TeaMessageDocument, outcome: Tea
     ...(projection ? { segments: projection.segments, choices: projection.choices } : {}),
     meta: { kind: kind === 'choices' ? 'choices' : 'reply', outputFormat: format, completion: outcome.completion,
       choicesValid: Boolean(projection?.lastChoices), ...(projection?.notices.length ? { notices: projection.notices } : {}),
-      rawOutput: outcome.rawText, ...(outcome.reasoning ? { reasoningText: outcome.reasoning } : {}) },
+      rawOutput: outcome.rawText, ...teaReasoningMeta(outcome.reasoning, outcome.completion) },
     ...(error ? { error } : {}) };
 };
