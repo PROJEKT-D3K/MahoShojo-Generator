@@ -115,6 +115,7 @@ if (process.env.HONO_CONFIG_CHECK_ONLY === 'true') {
     memberships: roomMemberships,
     materializer: roomGenerationMaterializer,
     generation: roomGenerationPort,
+    startingCancelEnabled: config.arenaRoomStartingCancelEnabled === true,
     observer: telemetry,
     onBackgroundError: () => {
       console.error('[hono][room-generation] publisher task failed');

@@ -23,6 +23,7 @@ export type HonoServerConfig = {
   arenaRoomAllowedOrigins: string[];
   authMode: HonoAuthMode;
   arenaMultiplayerEnabled: boolean;
+  arenaRoomStartingCancelEnabled?: boolean;
   /** Dedicated Admin-to-Arena service key; never reuse public session or room-ticket signing keys. */
   adminArenaObservationSecret?: string;
 };
@@ -288,6 +289,7 @@ export const readHonoServerConfig = (): HonoServerConfig => {
     arenaRoomAllowedOrigins: readArenaRoomAllowedOrigins(),
     authMode: readHonoAuthMode(),
     arenaMultiplayerEnabled: readBoolean('ARENA_MULTIPLAYER_ENABLED', false),
+    arenaRoomStartingCancelEnabled: readBoolean('ARENA_ROOM_STARTING_CANCEL_ENABLED', false),
     ...(adminArenaObservationSecret ? { adminArenaObservationSecret } : {}),
   };
   validateArenaRoomOrigins(config);

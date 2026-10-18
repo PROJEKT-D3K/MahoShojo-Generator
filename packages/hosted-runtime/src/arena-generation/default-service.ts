@@ -5,6 +5,7 @@ import {
   type ArenaGenerationExecutor,
   type ArenaGenerationObserver,
   type ArenaGenerationRejectedTerminalRecorder,
+  type ArenaGenerationNoProviderCancellationRecorder,
   type ArenaGenerationTerminalStore,
   type GenerationReplayStore,
 } from '@mahoshojo/hosted-api/arena-generation/service';
@@ -61,6 +62,7 @@ export type NodeArenaGenerationServiceOptions = {
   store: GenerationReplayStore;
   terminalStore?: ArenaGenerationTerminalStore;
   rejectedTerminalRecorder?: ArenaGenerationRejectedTerminalRecorder;
+  noProviderCancellationRecorder?: ArenaGenerationNoProviderCancellationRecorder;
   env?: Readonly<Record<string, string | undefined>>;
   fetch?: typeof fetch;
   now?: () => Date;
@@ -143,6 +145,7 @@ export const createNodeArenaGenerationService = (
     now: options.now ?? (() => new Date()),
     observer: options.observer,
     ...(options.terminalStore ? { terminalStore: options.terminalStore } : {}),
+    ...(options.noProviderCancellationRecorder ? { noProviderCancellationRecorder: options.noProviderCancellationRecorder } : {}),
     ...(options.rejectedTerminalRecorder
       ? { rejectedTerminalRecorder: options.rejectedTerminalRecorder }
       : {}),

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createArenaGenerationService,
+  ROOM_GENERATION_LEGACY_START_VERSION,
   type ArenaGenerationExecutor,
   type ArenaGenerationTerminalStore,
 } from '@mahoshojo/hosted-api/arena-generation/service';
@@ -253,6 +254,22 @@ describe('GMR-10P-G product parity golden flow', () => {
     });
     const replayStore = createMemoryGenerationReplayStore({
       now: () => Date.parse(timestamps[4]!),
+      verifyRoomAdmission: (admission) => {
+        const current = store.state;
+        const record = current?.generationLedger.find((entry) => entry.mirror.generationId === admission.generationId);
+        const owner = current?.memberAuthority.find((entry) => entry.member.role === 'host' && entry.member.membershipState === 'active');
+        return admission.version === ROOM_GENERATION_LEGACY_START_VERSION
+          && current?.lifecycle.status === 'open'
+          && current.snapshot.roomId === admission.roomId && current.snapshot.roomEpoch === admission.roomEpoch
+          && current.snapshot.activeGeneration?.generationId === admission.generationId
+          && owner?.accountUserId === admission.hostAccountUserId && owner.member.userId === admission.hostUserId
+          && record?.startGate === undefined && record?.mirror.state === 'starting'
+          && record.mirror.generationRequestId === admission.generationRequestId && record.mirror.attempt === admission.attempt
+          && record.mirror.configRevision === admission.configRevision && record.mirror.snapshotDigest === admission.snapshotDigest
+          && record.mirror.startedAt === admission.startedAt && record.mirror.hostAccountUserId === admission.hostAccountUserId
+          && record.generationPayloadDigest === admission.generationPayloadDigest
+          && current.snapshot.sharedConfig.battleMode === admission.mode;
+      },
     });
     const roomSafeResult = {
       version: 1 as const,
@@ -312,7 +329,20 @@ describe('GMR-10P-G product parity golden flow', () => {
     const hostedGeneration = createArenaGenerationService({
       store: replayStore,
       terminalStore,
-      executor: { execute: hostedExecute },
+      executor: {
+        async prepare(input) {
+          return {
+            executionPayload: input.payload,
+            semanticPayload: await canonicalizeNodeArenaGenerationSemanticPayload({
+              payload: input.payload,
+              signatures: { generateSignature: async () => null, verifySignature: async () => false },
+              trustedInternalGuidance: String(input.payload.internalGuidance),
+              trustedPvpContext: input.payload.pvpContext as { roomId: string; matchId: string; roundId: string },
+            }),
+          };
+        },
+        execute: hostedExecute,
+      },
       resolveActor: async () => ({ actorKey: `pvp-room:${host.roomId}` }),
       deriveGenerationId: deriveArenaGenerationId,
       hashPayload: hashArenaGenerationPayload,

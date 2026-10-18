@@ -234,6 +234,24 @@ snapshot 与 replay；Redis 不可用时 create 必须在 Provider 前 fail clos
 重试收口，create 遇到该状态必须 fail closed，不能启动第二 Provider。Next/OpenNext DR 没有共享 Redis 时也只允许
 恢复已完成 D1/R2 terminal，不以 process memory 替代 active lifecycle。
 
+### Room 未启动任务取消（默认关闭）
+
+`ARENA_ROOM_STARTING_CANCEL_ENABLED` 默认关闭。兼容版本仍读取并原样写回 authority v2；仅在显式启用后的
+新 generation reservation CAS 中创建 authority v3 / `room-generation-start-gate-v1`。旧 intent 不升级。
+新版 Room create 使用同进程可信 context；直接重放 PVP 签名到通用 create 不能获得 Room producer 权限。
+
+启用前先确认同一 Redis namespace 的所有 Room/core writer 已升级，旧进程及其捕获的 start 已不再执行。
+仅升级路由或等待 lease TTL 不足以满足这一条件。普通部署不自动改开关、不跑 Room 迁移、不安排停服。
+无法确认时继续关闭，按[发布检查清单](../../docs/runbooks/2026-09-01_193300_Arena多人发布最小检查清单.md)另行安排启用。
+
+关闭开关后，已有 v3 仍可读取、恢复与取消，原执行围栏继续生效；这类 Room 拒绝新 start，不能降级为 legacy。
+写过 v3 后只可热回滚至兼容 v3 reader/gate 的版本，不可删围栏或强降级 checkpoint。新取消的 durable 结果复用现
+D1 generation 表，不新增 migration；D1 缺失/未知只保留取消围栏，不能报告 cancelled。
+
+本地可执行 `pnpm --filter @mahoshojo/api exec node --import tsx scripts/verify-room-starting-cancel-local.ts /absolute/path/to/redis-server`。
+该 verifier 仅启动指定官方二进制的私有 loopback Redis，用随机认证和 PID 核验隔离，禁用持久化，不读取现有
+`REDIS_URL`；generation/D1 端口均用合成数据，无真实模型。它验证服务竞态，不代表生产已启用或 Desktop 按钮已开放。
+
 ### 排位实体与参战正文绑定
 
 Hono 与 Next DR 的共用 Arena executor 在可能计分的请求中验证参战正文与所声明的线上卡/预设来源，

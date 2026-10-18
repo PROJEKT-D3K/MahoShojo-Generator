@@ -2,6 +2,8 @@ import { describe, expect, test, vi } from 'vitest';
 
 import {
   ArenaGenerationFinalizationPendingError,
+  issueArenaGenerationRoomStartContext,
+  ROOM_GENERATION_LEGACY_START_VERSION,
   createArenaGenerationService,
   isArenaGenerationDispatchReady,
   MAX_ARENA_CREATE_BODY_BYTES,
@@ -425,7 +427,7 @@ describe('Arena generation lifecycle service', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 
-  test('resolves payload-dependent operation actor after the single body parse', async () => {
+  test('rejects signed PVP actors without process-local Room context before preflight', async () => {
     const resolveCreateActor = vi.fn(async ({ generationRequestId, payload }) => {
       expect(generationRequestId).toBe('request-operation-actor');
       expect(payload).toEqual({ roomId: 'room-1' });
@@ -460,9 +462,9 @@ describe('Arena generation lifecycle service', () => {
     ));
 
     expect(response).toBeInstanceOf(Response);
-    expect((response as Response).status).toBe(409);
+    expect((response as Response).status).toBe(403);
     expect(resolveCreateActor).toHaveBeenCalledTimes(1);
-    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   test('相邻 materialization version 保持 authenticated authority 读写兼容', async () => {
@@ -2288,7 +2290,16 @@ describe('Arena generation lifecycle service', () => {
       now: () => new Date('2026-08-25T04:00:00.000Z'),
       hashPayload: async (payload) => `hash:${JSON.stringify(payload)}`,
     });
-    const stream = await service.create(createRequest('request-trusted-cancel'));
+    const stream = await service.createParsedSubscription(createRequest('request-trusted-cancel'), {
+      generationRequestId: 'request-trusted-cancel', payload: {}, bodyBytes: 0,
+      trustedRoomContext: issueArenaGenerationRoomStartContext({ admission: {
+        version: ROOM_GENERATION_LEGACY_START_VERSION, roomId: 'room-1', roomEpoch: 'epoch-1',
+        hostUserId: 'host-1', hostAccountUserId: 101, generationId: 'generation-1', generationRequestId: 'request-trusted-cancel',
+        attempt: 1, configRevision: 0, snapshotDigest: `sha256:${'a'.repeat(64)}`, generationPayloadDigest: null,
+        mode: 'classic', startedAt: '2026-08-25T04:00:00.000Z',
+      } }),
+    });
+    if (stream instanceof Response) throw new Error(`Unexpected response ${stream.status}`);
     const resolverCallsBeforeCancel = resolveActor.mock.calls.length;
 
     await expect(service.cancelOwned({
@@ -2309,7 +2320,8 @@ describe('Arena generation lifecycle service', () => {
     })).resolves.toEqual({ kind: 'accepted', cancelReason: 'user' });
 
     await aborted;
-    await readResponseText(stream);
+    const reader = stream.events.getReader();
+    while (!(await reader.read()).done) { /* Drain the terminal replay. */ }
     expect(abortCount).toBe(1);
     expect(resolveActor).toHaveBeenCalledTimes(resolverCallsBeforeCancel);
   });

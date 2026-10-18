@@ -1,11 +1,12 @@
 import { hasArenaWebPackageMeta, hasArenaWebPackageReport } from '@mahoshojo/ai-core/arena-generation';
 import type {
   ArenaGenerationRejectedTerminalRecorder,
+  ArenaGenerationNoProviderCancellationRecorder,
   ArenaGenerationRejectedTerminalRecordInput,
   ArenaGenerationTerminalRecord,
   ArenaGenerationTerminalStore,
 } from '@mahoshojo/hosted-api/arena-generation/service';
-import { ARENA_OUTPUT_NOT_ARCHIVED_WARNING } from '@mahoshojo/hosted-api/arena-generation/service';
+import { ARENA_OUTPUT_NOT_ARCHIVED_WARNING, isRoomGenerationAdmission, roomGenerationLegacyPayloadHash } from '@mahoshojo/hosted-api/arena-generation/service';
 import { extractArenaMultiplayerParticipation, type ArenaMultiplayerParticipation } from '@mahoshojo/contracts/arena-room';
 import { persistArenaGenerationParticipants } from './participants';
 import type {
@@ -217,6 +218,76 @@ VALUES (?, ?, ?, ?, 'failed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     }
     if ((numberOf(inserted.meta.changes) ?? 0) > 0) return { kind: 'recorded' };
     return { kind: await readRejectedTerminalIdentity(client, input) };
+  },
+});
+
+/** Terminal-only cancellation writer. The caller must hold the trusted Room
+ * fence and prove either never-bound ownership or an atomic reserved cancel. */
+export const createNodeArenaNoProviderCancellationRecorder = (
+  options: Pick<NodeArenaGenerationPersistenceOptions, 'getD1Client' | 'now'>,
+): ArenaGenerationNoProviderCancellationRecorder => Object.freeze<ArenaGenerationNoProviderCancellationRecorder>({
+  async record(input) {
+    const client = options.getD1Client();
+    if (!client) return { kind: 'unavailable' };
+    const admission = input.admission;
+    if (!isRoomGenerationAdmission(admission)) return { kind: 'conflict' };
+    let payloadHash: string;
+    try { payloadHash = roomGenerationLegacyPayloadHash(admission); } catch { return { kind: 'conflict' }; }
+    const acceptedHashes = new Set([payloadHash, ...(input.acceptedPayloadHashes ?? [])]);
+    if ([...acceptedHashes].some((hash) => !/^[a-f0-9]{64}$/u.test(hash))) return { kind: 'conflict' };
+    const ownerHash = await sha256(`pvp-room:${admission.roomId}`);
+    const endedAt = (options.now ?? (() => new Date()))();
+    const extraJson = JSON.stringify({
+      generationRequestId: admission.generationRequestId,
+      generationOwnerHash: ownerHash,
+      generationPayloadHash: payloadHash,
+      generationTerminalStatus: 'cancelled',
+      finalizationCompleted: true,
+      errorCode: 'USER_CANCELLED',
+      resultRef: null,
+      cancelledBeforeProvider: 'room-generation-no-provider-cancel-v1',
+    });
+    const reconcile = async (): Promise<Awaited<ReturnType<ArenaGenerationNoProviderCancellationRecorder['record']>>> => {
+      try {
+        const result = await client.prepare(`
+SELECT id, status, extra_json
+FROM battle_report_generations
+WHERE id = ?
+LIMIT 1
+        `.trim()).bind(admission.generationId).all({ retry: 'safe-read' });
+        const row = result.results[0];
+        if (!row) return { kind: 'unknown' };
+        const extra = parseExtra(row.extra_json);
+        if (row.id !== admission.generationId || !extra || extra.generationOwnerHash !== ownerHash
+          || extra.generationRequestId !== admission.generationRequestId
+          || typeof extra.generationPayloadHash !== 'string' || !acceptedHashes.has(extra.generationPayloadHash)) return { kind: 'conflict' };
+        if (extra.finalizationCompleted !== true) return { kind: 'pending' };
+        const terminal = logicalTerminalStatus(row, extra);
+        if (!terminal) return { kind: 'pending' };
+        return terminal === 'cancelled' && row.status === 'aborted'
+          && extra.cancelledBeforeProvider === 'room-generation-no-provider-cancel-v1'
+          && extra.errorCode === 'USER_CANCELLED'
+          ? { kind: 'recorded' } : { kind: 'already-terminal' };
+      } catch { return { kind: 'unknown' }; }
+    };
+    try {
+      const inserted = await client.prepare(`
+INSERT OR IGNORE INTO battle_report_generations (
+  id, started_at, ended_at, duration_ms, status, generation_mode, endpoint,
+  mode, user_id, pvp_room_id, pvp_match_id, pvp_round_id, output_chars, output_bytes,
+  extra_json, created_at, updated_at
+)
+VALUES (?, ?, ?, ?, 'aborted', 'stream', 'api/arena/generate-stream', ?, NULL, ?, ?, 'attempt-1', 0, 0, ?, ?, ?)
+      `.trim()).bind(
+        admission.generationId, admission.startedAt, endedAt.toISOString(),
+        Math.max(0, endedAt.getTime() - Date.parse(admission.startedAt)), admission.mode,
+        admission.roomId, admission.generationId, extraJson, endedAt.toISOString(), endedAt.toISOString(),
+      ).run({ retry: 'none' });
+      if (inserted.success && (numberOf(inserted.meta.changes) ?? 0) > 0) return { kind: 'recorded' };
+    } catch {
+      // The write may have committed. Its exact identity is the only retry proof.
+    }
+    return reconcile();
   },
 });
 

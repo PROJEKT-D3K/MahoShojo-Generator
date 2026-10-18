@@ -1,5 +1,6 @@
 import {
   ArenaErrorCodeSchema,
+  BattleModeSchema,
   ArenaProposalChangeSchema,
   ArenaProposalSchema,
   ArenaRoomProposalResolveRequestSchema,
@@ -24,7 +25,11 @@ import { z } from './zod';
 import { ArenaMultiplayerCoreError } from './errors';
 import { collaborativeChangeTarget, hasCollaborativeChangeEffect } from './provenance';
 
+// v2 remains the creation/default-off format. Only a new gated reservation
+// upgrades its own checkpoint to v3; reads and legacy retries never migrate it.
 export const ARENA_ROOM_AUTHORITY_STATE_VERSION = 2 as const;
+export const ARENA_ROOM_GATED_AUTHORITY_STATE_VERSION = 3 as const;
+export const ARENA_ROOM_GENERATION_START_GATE_VERSION = 'room-generation-start-gate-v1' as const;
 
 export const ArenaRoomLifecycleDeadlinesSchema = z.object({
   hostOfflineDeadline: IsoTimestampSchema.nullable(),
@@ -78,8 +83,19 @@ export const ArenaRoomMemberAuthorityRecordSchema = z.object({
 });
 export type ArenaRoomMemberAuthorityRecord = z.infer<typeof ArenaRoomMemberAuthorityRecordSchema>;
 
+export const ArenaRoomGenerationStartGateSchema = z.object({
+  version: z.literal(ARENA_ROOM_GENERATION_START_GATE_VERSION),
+  roomEpoch: OpaqueKeySchema,
+  hostUserId: OpaqueKeySchema,
+  mode: BattleModeSchema,
+  producerTokenDigest: CanonicalSnapshotDigestSchema.nullable(),
+  cancellationRequested: z.boolean(),
+}).strict();
+export type ArenaRoomGenerationStartGate = z.infer<typeof ArenaRoomGenerationStartGateSchema>;
+
 export const ArenaRoomGenerationRecordSchema = z.object({
   mirror: GenerationMirrorSchema,
+  startGate: ArenaRoomGenerationStartGateSchema.optional(),
   /**
    * Safe digest of the server-normalized generation semantic payload. Optional
    * only so checkpoints created before GMR-09 remediation remain readable;
@@ -112,7 +128,7 @@ export const ArenaRoomGenerationRecordSchema = z.object({
 export type ArenaRoomGenerationRecord = z.infer<typeof ArenaRoomGenerationRecordSchema>;
 
 export const ArenaRoomAuthorityStateSchema = z.object({
-  authorityStateVersion: z.literal(ARENA_ROOM_AUTHORITY_STATE_VERSION),
+  authorityStateVersion: z.union([z.literal(2), z.literal(3)]),
   lifecycle: ArenaRoomLifecycleSchema,
   deadlines: ArenaRoomLifecycleDeadlinesSchema,
   snapshot: ArenaRoomSnapshotSchema,
@@ -125,6 +141,14 @@ export const ArenaRoomAuthorityStateSchema = z.object({
   collaborativeChanges: z.array(ArenaProposalChangeSchema)
     .max(MAX_ROOM_COLLABORATIVE_CHANGES),
 }).strict().superRefine((state, context) => {
+  if (state.authorityStateVersion === 2 && state.generationLedger.some((record) => record.startGate !== undefined)) {
+    context.addIssue({ code: 'custom', path: ['generationLedger'], message: 'v2 must not contain gated generation records' });
+  }
+  for (const [index, record] of state.generationLedger.entries()) {
+    if (record.startGate && (record.generationPayloadDigest === undefined || record.mirror.hostAccountUserId === undefined)) {
+      context.addIssue({ code: 'custom', path: ['generationLedger', index], message: 'gated generation requires frozen owner and semantic digest' });
+    }
+  }
   const memberUserIds = state.memberAuthority.map((entry) => entry.member.userId);
   const accountUserIds = state.memberAuthority.map((entry) => entry.accountUserId);
   if (new Set(memberUserIds).size !== memberUserIds.length) {
@@ -237,6 +261,7 @@ export const ArenaRoomGenerationReservationScopeSchema = z.object({
   attempt: z.number().int().min(1),
   snapshotDigest: CanonicalSnapshotDigestSchema,
   generationPayloadDigest: CanonicalSnapshotDigestSchema,
+  startGateVersion: z.literal(ARENA_ROOM_GENERATION_START_GATE_VERSION).optional(),
   expiresAt: IsoTimestampSchema,
 }).strict();
 
@@ -554,6 +579,23 @@ export const ReserveArenaRoomGenerationCommandSchema = z.object({
   generationId: OpaqueKeySchema,
   attempt: z.number().int().min(1),
   generationPayloadDigest: CanonicalSnapshotDigestSchema,
+  startGateVersion: z.literal(ARENA_ROOM_GENERATION_START_GATE_VERSION).optional(),
+}).strict();
+
+const generationControlIdentity = {
+  ...epochCommand,
+  generationRequestId: OpaqueKeySchema,
+  generationId: OpaqueKeySchema,
+  attempt: z.literal(1),
+};
+export const BindArenaRoomGenerationProducerCommandSchema = z.object({
+  type: z.literal('bind-generation-producer'),
+  ...generationControlIdentity,
+  producerTokenDigest: CanonicalSnapshotDigestSchema,
+}).strict();
+export const CancelArenaRoomGenerationStartCommandSchema = z.object({
+  type: z.literal('cancel-generation-start'),
+  ...generationControlIdentity,
 }).strict();
 
 export const MirrorArenaRoomGenerationCommandSchema = z.object({
@@ -595,6 +637,8 @@ export const ArenaRoomCommandSchema = z.union([
   ResolveArenaRoomProposalCommandSchema,
   WithdrawArenaRoomProposalCommandSchema,
   ReserveArenaRoomGenerationCommandSchema,
+  BindArenaRoomGenerationProducerCommandSchema,
+  CancelArenaRoomGenerationStartCommandSchema,
   MirrorArenaRoomGenerationCommandSchema,
 ]);
 /**
@@ -630,6 +674,8 @@ export const ARENA_ROOM_TRANSITION_FAILURE_REASONS = [
   'proposal-selection-invalid',
   'proposal-conflict',
   'generation-active',
+  'generation-start-fenced',
+  'generation-start-gate-required',
   'generation-history-limit-reached',
   'generation-request-conflict',
   'generation-id-conflict',

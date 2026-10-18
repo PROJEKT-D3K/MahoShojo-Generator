@@ -3,6 +3,7 @@ import { ArenaMultiplayerParticipationSchema } from '@mahoshojo/contracts/arena-
 
 import {
   generationCancelCode,
+  isRoomGenerationAdmission,
   isArenaGenerationPersistenceWarning,
   isArenaPreparationSeed,
   isArenaPreparationVersion,
@@ -17,6 +18,7 @@ import type {
   GenerationTerminal,
   GenerationStatus,
 } from '@mahoshojo/hosted-api/arena-generation/service';
+import { createArenaRoomRedisKeyspace } from '../arena-room/redis-room-keyspace';
 import { isSafePublicAiErrorProjection } from '@mahoshojo/hosted-api/regular-generation';
 
 const DEFAULT_ACTIVE_TTL_SECONDS = 3_600;
@@ -155,7 +157,100 @@ redis.call('SET', KEYS[2], ARGV[4], 'PX', ARGV[3])
 return { 'created', ARGV[5], ARGV[6], ARGV[7] }
 `;
 
+// Only the gated path uses Redis wall time. Noncanonical timestamps deny
+// admission rather than turning a stale caller timestamp into a lease grant.
+const ROOM_ADMISSION_HELPERS = `
+local function canonicalMillis(value)
+  if type(value) ~= 'string' then return nil end
+  local y, m, d, h, n, s, ms = string.match(value, '^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)%.(%d%d%d)Z$')
+  y, m, d, h, n, s, ms = tonumber(y), tonumber(m), tonumber(d), tonumber(h), tonumber(n), tonumber(s), tonumber(ms)
+  if not y or y < 1970 or not m or m < 1 or m > 12 or not d or d < 1 or d > 31
+    or not h or h > 23 or not n or n > 59 or not s or s > 59 then return nil end
+  local leap = (y % 4 == 0 and y % 100 ~= 0) or y % 400 == 0
+  local months = {31, leap and 29 or 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+  if d > months[m] then return nil end
+  local days = (y - 1970) * 365 + math.floor((y - 1) / 4) - math.floor(1969 / 4)
+    - math.floor((y - 1) / 100) + math.floor(1969 / 100)
+    + math.floor((y - 1) / 400) - math.floor(1969 / 400) + d - 1
+  for index = 1, m - 1 do days = days + months[index] end
+  return (((days * 24 + h) * 60 + n) * 60 + s) * 1000 + ms
+end
+local admissionFields = {'version', 'roomId', 'roomEpoch', 'hostUserId', 'hostAccountUserId',
+  'generationId', 'generationRequestId', 'attempt', 'configRevision', 'snapshotDigest',
+  'generationPayloadDigest', 'mode', 'startedAt'}
+local function sameAdmission(left, right)
+  if type(left) ~= 'table' or type(right) ~= 'table' then return false end
+  for _, field in ipairs(admissionFields) do if left[field] ~= right[field] then return false end end
+  return true
+end
+local function admitRoom(state, encoded, nextLease)
+  if encoded == '' then return state.roomAdmission == nil or state.roomAdmission == cjson.null end
+  local ok, admission = pcall(cjson.decode, encoded)
+  if not ok or not sameAdmission(state.roomAdmission, admission)
+    or state.generationId ~= admission.generationId or state.generationRequestId ~= admission.generationRequestId then return false end
+  local raw = redis.call('GET', KEYS[5])
+  if not raw then return false end
+  local decoded, room = pcall(cjson.decode, raw)
+  if not decoded or type(room) ~= 'table' or room.checkpointVersion ~= 1 or room.expiryFence ~= nil
+    or room.roomId ~= admission.roomId or room.roomEpoch ~= admission.roomEpoch
+    or type(room.state) ~= 'table' then return false end
+  local authority = room.state
+  local snapshot = authority.snapshot
+  if (authority.authorityStateVersion ~= 2 and authority.authorityStateVersion ~= 3)
+    or type(authority.lifecycle) ~= 'table' or authority.lifecycle.status ~= 'open'
+    or type(snapshot) ~= 'table' or snapshot.roomId ~= admission.roomId or snapshot.roomEpoch ~= admission.roomEpoch
+    or type(snapshot.activeGeneration) ~= 'table' or snapshot.activeGeneration.generationId ~= admission.generationId
+    or type(authority.generationLedger) ~= 'table' or #authority.generationLedger > 64
+    or type(authority.memberAuthority) ~= 'table' then return false end
+  local hosts = 0
+  for _, member in ipairs(authority.memberAuthority) do
+    if type(member.member) == 'table' and member.member.role == 'host' and member.member.membershipState == 'active' then
+      if member.accountUserId ~= admission.hostAccountUserId or member.member.userId ~= admission.hostUserId then return false end
+      hosts = hosts + 1
+    end
+  end
+  if hosts ~= 1 then return false end
+  local record = nil
+  for _, candidate in ipairs(authority.generationLedger) do
+    if type(candidate.mirror) == 'table' and candidate.mirror.generationId == admission.generationId then
+      if record then return false end
+      record = candidate
+    end
+  end
+  if not record then return false end
+  local mirror = record.mirror
+  if mirror.state ~= 'starting' or mirror.generationRequestId ~= admission.generationRequestId
+    or mirror.attempt ~= admission.attempt or mirror.configRevision ~= admission.configRevision
+    or mirror.snapshotDigest ~= admission.snapshotDigest or mirror.startedAt ~= admission.startedAt
+    or mirror.hostAccountUserId ~= admission.hostAccountUserId
+    or (record.generationPayloadDigest or cjson.null) ~= admission.generationPayloadDigest then return false end
+  if admission.version == 'room-generation-legacy-start-v1' then
+    return record.startGate == nil
+  end
+  local gate = record.startGate
+  if admission.version ~= 'room-generation-start-gate-v1' or authority.authorityStateVersion ~= 3
+    or type(gate) ~= 'table' or gate.version ~= admission.version
+    or gate.roomEpoch ~= admission.roomEpoch or gate.hostUserId ~= admission.hostUserId or gate.mode ~= admission.mode
+    or type(gate.producerTokenDigest) ~= 'string' or gate.producerTokenDigest ~= state.producerTokenDigest
+    or gate.cancellationRequested ~= false or type(authority.deadlines) ~= 'table' then return false end
+  local clock = redis.call('TIME')
+  local current = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+  local lease = canonicalMillis(state.leaseExpiresAt)
+  local successorLease = canonicalMillis(nextLease)
+  if not lease or lease <= current or not successorLease or successorLease <= current then return false end
+  for _, field in ipairs({'hostOfflineDeadline', 'roomIdleDeadline'}) do
+    local deadline = authority.deadlines[field]
+    if deadline ~= cjson.null then
+      local expiry = canonicalMillis(deadline)
+      if not expiry or expiry <= current then return false end
+    end
+  end
+  return true
+end
+`;
+
 const MARK_RUNNING_SCRIPT = `${STATE_HELPERS}
+${ROOM_ADMISSION_HELPERS}
 -- GEN_MARK_RUNNING_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
@@ -165,8 +260,12 @@ if state.producerToken ~= ARGV[1] then return -1 end
 if state.status ~= 'reserved' then return -1 end
 if state.terminal ~= nil and state.terminal ~= cjson.null then return 0 end
 if state.leaseExpiresAt == nil or state.leaseExpiresAt == cjson.null or state.leaseExpiresAt <= ARGV[2] then return 0 end
+if not admitRoom(state, ARGV[5] or '', ARGV[3]) then return -1 end
 if state.cancelRequested == true then
-  state.status = 'finalizing'
+  -- Preserve the atomic never-started proof until gated durable cleanup succeeds.
+  if type(state.roomAdmission) ~= 'table' or state.roomAdmission.version ~= 'room-generation-start-gate-v1' then
+    state.status = 'finalizing'
+  end
   state.updatedAt = ARGV[2]
   state.leaseExpiresAt = ARGV[3]
   if state.cancelReason ~= 'content_policy' then state.cancelReason = 'user' end
@@ -384,12 +483,19 @@ return { 1, terminalEventId }
 `;
 
 const CANCEL_SCRIPT = `${STATE_HELPERS}
+${ROOM_ADMISSION_HELPERS}
 -- GEN_CANCEL_V1
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 'not-found' end
 local state = cjson.decode(raw)
 validateState(state)
 if state.actorHash ~= ARGV[1] then return 'forbidden' end
+local roomCancellation = ARGV[5] and ARGV[5] ~= ''
+if roomCancellation then
+  local decoded, admission = pcall(cjson.decode, ARGV[5])
+  if not decoded or not sameAdmission(state.roomAdmission, admission)
+    or (ARGV[6] ~= '' and state.producerTokenDigest ~= ARGV[6]) then return 'forbidden' end
+end
 if state.terminal ~= nil and state.terminal ~= cjson.null then
   return 'terminal:' .. state.terminal.status
 end
@@ -403,7 +509,7 @@ end
 state.updatedAt = ARGV[3]
 redis.call('SET', KEYS[1], cjson.encode(state), 'PX', ARGV[4])
 retain(state, ARGV[4])
-return 'accepted:' .. state.cancelReason
+return roomCancellation and ('accepted:' .. state.cancelReason .. ':' .. state.status) or ('accepted:' .. state.cancelReason)
 `;
 
 const READ_SCRIPT = `
@@ -685,6 +791,10 @@ const parseStoredState = (raw: string, sidecar = ''): StoredGenerationState => {
       multiplayerParticipation: ArenaMultiplayerParticipationSchema.parse(parsed.multiplayerParticipation),
     }),
     producerToken: parsed.producerToken,
+    ...(parsed.roomAdmission === undefined ? {} : {
+      roomAdmission: isRoomGenerationAdmission(parsed.roomAdmission) ? parsed.roomAdmission : (() => { throw new Error('REDIS_GENERATION_ROOM_ADMISSION_INVALID'); })(),
+      producerTokenDigest: parsed.producerTokenDigest,
+    }),
     status: parsed.status,
     lastEventId: typeof parsed.lastEventId === 'string' ? parsed.lastEventId : null,
     updatedAt: parsed.updatedAt,
@@ -834,9 +944,13 @@ export const createRedisGenerationReplayStore = (
     // A missing state returns before identity validation. This sentinel is never touched.
     return [stateKey(generationId), eventsKey(generationId), identity || stateKey(generationId), snapshotKey(generationId)];
   };
-  const mutate = async (generationId: string, script: string, input: { arguments: string[] }): Promise<unknown> => {
+  const roomKeyspace = createArenaRoomRedisKeyspace(options.keyPrefix);
+  const mutate = async (generationId: string, script: string, input: { arguments: string[]; roomId?: string }): Promise<unknown> => {
     try {
-      return await options.getClient().eval(script, { keys: await mutationKeys(generationId), ...input });
+      return await options.getClient().eval(script, {
+        keys: [...await mutationKeys(generationId), ...(input.roomId ? [roomKeyspace.roomCheckpointKey(input.roomId)] : [])],
+        arguments: input.arguments,
+      });
     } catch (error) {
       // A failed command may have executed. Never retry it; only discard the hint.
       identities.delete(generationId);
@@ -868,11 +982,17 @@ export const createRedisGenerationReplayStore = (
       ) {
         throw new Error('REDIS_GENERATION_PREPARATION_INVALID');
       }
+      if (input.roomAdmission && (!isRoomGenerationAdmission(input.roomAdmission)
+        || input.actorKey !== `pvp-room:${input.roomAdmission.roomId}`
+        || input.producerTokenDigest !== `sha256:${createHash('sha256').update(input.producerToken).digest('hex')}`)) {
+        throw new Error('REDIS_GENERATION_ROOM_ADMISSION_INVALID');
+      }
       const actorHash = hashKeyPart(input.actorKey);
       const identityKey = requestKey(input.actorKey, input.generationRequestId);
       const storedState: StoredGenerationState = {
         ...(options.enableSnapshotSidecar ? { storageVersion: 2 as const, snapshotMeta: null } : {}),
         actorHash,
+        ...(input.roomAdmission ? { roomAdmission: input.roomAdmission, producerTokenDigest: input.producerTokenDigest } : {}),
         reservationKey: identityKey,
         generationId: input.generationId,
         generationRequestId: input.generationRequestId,
@@ -922,7 +1042,8 @@ export const createRedisGenerationReplayStore = (
 
     async markRunning(input) {
       const result = await mutate(input.generationId, MARK_RUNNING_SCRIPT, {
-        arguments: [input.producerToken, input.now, input.leaseExpiresAt, String(activeTtlMs)],
+        ...(input.roomAdmission ? { roomId: input.roomAdmission.roomId } : {}),
+        arguments: [input.producerToken, input.now, input.leaseExpiresAt, String(activeTtlMs), input.roomAdmission ? JSON.stringify(input.roomAdmission) : ''],
       });
       const cancelReason = cancelReasonFromTaggedResult(result, 'cancelled:');
       if (cancelReason) {
@@ -1190,8 +1311,14 @@ export const createRedisGenerationReplayStore = (
           input.reason,
           input.now,
           String(activeTtlMs),
+          input.roomAdmission ? JSON.stringify(input.roomAdmission) : '',
+          input.producerTokenDigest ?? '',
         ],
       });
+      if (input.roomAdmission && typeof raw === 'string') {
+        const match = /^accepted:(user|content_policy):(reserved|running)$/u.exec(raw);
+        if (match) return { kind: 'accepted', cancelReason: match[1] as 'user' | 'content_policy', previousStatus: match[2] as 'reserved' | 'running' };
+      }
       const cancelReason = cancelReasonFromTaggedResult(raw, 'accepted:');
       if (cancelReason) return { kind: 'accepted', cancelReason };
       if (

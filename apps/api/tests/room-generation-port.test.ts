@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { issueArenaGenerationRoomStartContext, ROOM_GENERATION_LEGACY_START_VERSION } from '@mahoshojo/hosted-api/arena-generation/service';
 import type {
   ArenaGenerationApplicationService,
   GenerationStreamEvent,
@@ -134,7 +135,7 @@ describe('Arena Room generation internal port', () => {
     const controller = new AbortController();
     let receivedRequest: Request | null = null;
     const generationService = {
-      createSubscription: vi.fn(async (request: Request) => {
+      createParsedSubscription: vi.fn(async (request: Request) => {
         receivedRequest = request;
         return {
           generationId: 'arena_generation_1',
@@ -199,6 +200,12 @@ describe('Arena Room generation internal port', () => {
 
     const result = await port.startFromHostRequest({
       request: hostRequest,
+      startContext: issueArenaGenerationRoomStartContext({ admission: {
+        version: ROOM_GENERATION_LEGACY_START_VERSION, roomId: multiplayerSnapshot.roomId, roomEpoch: 'epoch-1',
+        hostUserId: 'host-1', hostAccountUserId: 101, generationId: 'arena_generation_1', generationRequestId,
+        attempt: 1, configRevision: 0, snapshotDigest: `sha256:${'a'.repeat(64)}`, generationPayloadDigest: null,
+        mode: 'classic', startedAt: '2026-08-28T11:00:00.000Z',
+      } }),
       roomId: multiplayerSnapshot.roomId,
       generationRequestId,
       payload: {

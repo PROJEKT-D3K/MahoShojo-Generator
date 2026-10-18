@@ -33,6 +33,26 @@ const reserveInput = {
 };
 
 describe('RedisGenerationReplayStore', () => {
+  it('binds full SHA-256 producer digests and rejects the truncated key-hash form', async () => {
+    const client = createClient();
+    client.command.mockResolvedValue(['created', reserveInput.generationId, '22'.repeat(32), 'arena-runtime-v1']);
+    const store = createRedisGenerationReplayStore({ getClient: () => client });
+    const digest = createHash('sha256').update(reserveInput.producerToken).digest('hex');
+    const input = { ...reserveInput, actorKey: 'pvp-room:room-1', producerTokenDigest: `sha256:${digest}`,
+      roomAdmission: {
+        version: 'room-generation-start-gate-v1' as const, roomId: 'room-1', roomEpoch: 'epoch-1',
+        hostUserId: 'host-1', hostAccountUserId: 42, generationId: reserveInput.generationId,
+        generationRequestId: reserveInput.generationRequestId, attempt: 1 as const, configRevision: 0,
+        snapshotDigest: `sha256:${'a'.repeat(64)}`, generationPayloadDigest: `sha256:${'b'.repeat(64)}`,
+        mode: 'classic', startedAt: reserveInput.now,
+      },
+    };
+    await expect(store.reserve(input)).resolves.toMatchObject({ kind: 'created' });
+    expect(client.command).toHaveBeenCalledOnce();
+    await expect(store.reserve({ ...input, producerTokenDigest: `sha256:${digest.slice(0, 32)}` })).rejects.toThrow();
+    expect(client.command).toHaveBeenCalledOnce();
+  });
+
   it('用单次 Lua reservation 建立 request identity 与 producer ownership，key 不含明文 actor', async () => {
     const client = createClient();
     vi.mocked(client.command).mockResolvedValue([
@@ -716,7 +736,7 @@ describe('RedisGenerationReplayStore', () => {
     })).resolves.toEqual({ kind: 'accepted', cancelReason: 'content_policy' });
     const [script, options] = vi.mocked(client.command).mock.calls[0]!;
     expect(script).toContain('state.cancelRequested == true');
-    expect(script).toContain("return 'accepted:' .. state.cancelReason");
+    expect(script).toContain("or ('accepted:' .. state.cancelReason)");
     expect(options.arguments[1]).toBe('content_policy');
   });
 

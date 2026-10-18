@@ -1,3 +1,22 @@
+import {
+  ROOM_GENERATION_START_GATE_VERSION,
+  hashRoomProducerToken,
+  readRoomStartContext,
+  readRoomCancelContext,
+  roomGenerationLegacyPayloadHash,
+  sameRoomGenerationAdmission,
+  type RoomGenerationAdmission,
+  type RoomStartContextData,
+  type ArenaGenerationRoomStartContext,
+  type ArenaGenerationRoomCancelContext,
+} from './room-start';
+export {
+  ROOM_GENERATION_START_GATE_VERSION, ROOM_GENERATION_LEGACY_START_VERSION,
+  issueArenaGenerationRoomStartContext, issueArenaGenerationRoomCancelContext,
+  hashRoomProducerToken, roomGenerationLegacyPayloadHash, isRoomGenerationAdmission, sameRoomGenerationAdmission,
+  type RoomGenerationAdmission, type ArenaGenerationRoomStartContext, type ArenaGenerationRoomCancelContext,
+} from './room-start';
+
 import { subscriptionToSseResponse } from './sse-response';
 import {
   compareGenerationSseIds,
@@ -123,6 +142,8 @@ export const isArenaGenerationDispatchReady = (input: Readonly<{
 
 export type GenerationReplayStoreState = {
   multiplayerParticipation?: ArenaMultiplayerParticipation;
+  roomAdmission?: RoomGenerationAdmission;
+  producerTokenDigest?: string;
   actorKey: string;
   generationId: string;
   generationRequestId: string;
@@ -145,6 +166,8 @@ export type GenerationReplayStoreState = {
 
 export interface GenerationReplayStore {
   reserve(_input: {
+    roomAdmission?: RoomGenerationAdmission;
+    producerTokenDigest?: string;
     multiplayerParticipation?: ArenaMultiplayerParticipation;
     actorKey: string;
     generationRequestId: string;
@@ -172,6 +195,7 @@ export interface GenerationReplayStore {
     | { kind: 'conflict' }
   >;
   markRunning(_input: {
+    roomAdmission?: RoomGenerationAdmission;
     generationId: string;
     producerToken: string;
     now: string;
@@ -281,8 +305,10 @@ export interface GenerationReplayStore {
     actorKey: string;
     reason: GenerationCancelReason;
     now: string;
+    roomAdmission?: RoomGenerationAdmission;
+    producerTokenDigest?: string | null;
   }): Promise<
-    | { kind: 'accepted'; cancelReason: GenerationCancelReason }
+    | { kind: 'accepted'; cancelReason: GenerationCancelReason; previousStatus?: 'reserved' | 'running' }
     | { kind: 'finalizing' }
     | { kind: 'terminal'; status: GenerationTerminal['status'] }
     | { kind: 'forbidden' }
@@ -443,6 +469,19 @@ export type ArenaGenerationRejectedTerminalRecordInput = Readonly<{
   pvpContext: ArenaTrustedPvpContext;
 }>;
 
+export type ArenaGenerationNoProviderCancellationInput = Readonly<{
+  admission: RoomGenerationAdmission;
+  /** A seeded hash is allowed only when proved by the exact current core record. */
+  acceptedPayloadHashes?: readonly string[];
+}>;
+export interface ArenaGenerationNoProviderCancellationRecorder {
+  record(_input: ArenaGenerationNoProviderCancellationInput): Promise<
+    | { kind: 'recorded' }
+    | { kind: 'already-terminal' }
+    | { kind: 'pending' | 'conflict' | 'unavailable' | 'unknown' }
+  >;
+}
+
 export interface ArenaGenerationRejectedTerminalRecorder {
   record(_input: ArenaGenerationRejectedTerminalRecordInput): Promise<
     | { kind: 'recorded' }
@@ -540,6 +579,7 @@ export type ArenaGenerationCreateCommand = Readonly<{
   bodyBytes: number;
   /** In-process authority only, supplied after strict story DTO validation. Never read from HTTP payload/headers. */
   trustedStoryIdentity?: ArenaStoryIdentity;
+  trustedRoomContext?: ArenaGenerationRoomStartContext;
 }>;
 
 export type ArenaGenerationServiceDependencies = {
@@ -570,6 +610,7 @@ export type ArenaGenerationServiceDependencies = {
   snapshotMaxBytes?: number;
   terminalStore?: ArenaGenerationTerminalStore;
   rejectedTerminalRecorder?: ArenaGenerationRejectedTerminalRecorder;
+  noProviderCancellationRecorder?: ArenaGenerationNoProviderCancellationRecorder;
   observer?: ArenaGenerationObserver;
 };
 
@@ -623,6 +664,9 @@ export type ArenaGenerationOwnedCancelResult =
   | Readonly<{ kind: 'not-found' }>;
 
 export interface ArenaGenerationTrustedOwnedService {
+  cancelRoomOwned(_input: { context: ArenaGenerationRoomCancelContext }): Promise<
+    ArenaGenerationOwnedCancelResult | { kind: 'unavailable'; code: 'GENERATION_STATE_UNAVAILABLE' }
+  >;
   cancelOwned(_input: {
     actorKey: string;
     generationId: string;
@@ -1292,6 +1336,12 @@ export const createArenaGenerationService = (
     };
   };
 
+  const acceptedStatePayloadHashes = (state: GenerationReplayStoreState): readonly string[] => (
+    state.roomAdmission?.version === ROOM_GENERATION_START_GATE_VERSION
+      ? [state.payloadHash, roomGenerationLegacyPayloadHash(state.roomAdmission)]
+      : [state.payloadHash]
+  );
+
   const terminalRecordMatchesIdentity = (input: {
     record: ArenaGenerationTerminalRecord;
     generationId: string;
@@ -1492,6 +1542,10 @@ export const createArenaGenerationService = (
     if (!leaseExpired) return { actor, state, terminalFallback: null };
 
     let terminalFallback = await readOwnedTerminal(generationId, actor.actorKey);
+    if (state.roomAdmission?.version === ROOM_GENERATION_START_GATE_VERSION
+      && state.status === 'reserved' && !terminalFallback) {
+      return jsonResponse({ code: 'GENERATION_FINALIZATION_PENDING', error: 'Room cancellation durable evidence remains pending' }, 503);
+    }
     const now = dependencies.now().toISOString();
     const reaperToken = dependencies.createProducerToken?.() ?? crypto.randomUUID();
     const claimed = await dependencies.store.claimLeaseExpiry({
@@ -1518,14 +1572,14 @@ export const createArenaGenerationService = (
           record: concurrentTerminal,
           generationId,
           generationRequestId: state.generationRequestId,
-          acceptedPayloadHashes: [state.payloadHash],
+          acceptedPayloadHashes: acceptedStatePayloadHashes(state),
         })
         ? await readBackTerminalEvidence({
             generationId,
             actorKey: actor.actorKey,
             record: concurrentTerminal,
             requireSnapshot: false,
-            acceptedPayloadHashes: [state.payloadHash],
+            acceptedPayloadHashes: acceptedStatePayloadHashes(state),
           })
         : null;
       if (!concurrentTerminal || !durableState) {
@@ -1553,7 +1607,7 @@ export const createArenaGenerationService = (
       record: terminalFallback,
       generationId,
       generationRequestId: claimed.generationRequestId,
-      acceptedPayloadHashes: [claimed.payloadHash],
+      acceptedPayloadHashes: acceptedStatePayloadHashes(state),
     })) {
       return jsonResponse({
         code: 'GENERATION_TERMINAL_RECONCILIATION_PENDING',
@@ -1597,7 +1651,7 @@ export const createArenaGenerationService = (
         record: terminalFallback,
         generationId,
         generationRequestId: claimed.generationRequestId,
-        acceptedPayloadHashes: [claimed.payloadHash],
+        acceptedPayloadHashes: acceptedStatePayloadHashes(state),
       })
     ) {
       return jsonResponse({
@@ -1613,7 +1667,7 @@ export const createArenaGenerationService = (
       priorState: state,
       replayEvidence: 'uncertain-owner-recovery',
       now,
-      acceptedPayloadHashes: [claimed.payloadHash],
+      acceptedPayloadHashes: acceptedStatePayloadHashes(state),
     });
     if (!durableState) {
       return jsonResponse({
@@ -1745,7 +1799,7 @@ export const createArenaGenerationService = (
       record: terminalFallback,
       generationId: state.generationId,
       generationRequestId: state.generationRequestId,
-      acceptedPayloadHashes: [state.payloadHash],
+      acceptedPayloadHashes: acceptedStatePayloadHashes(state),
     })) {
       return jsonResponse({
         code: 'GENERATION_TERMINAL_RECONCILIATION_PENDING',
@@ -1777,7 +1831,7 @@ export const createArenaGenerationService = (
       record: terminalFallback,
       generationId: state.generationId,
       generationRequestId: state.generationRequestId,
-      acceptedPayloadHashes: [state.payloadHash],
+      acceptedPayloadHashes: acceptedStatePayloadHashes(state),
     })) {
       return jsonResponse({
         code: 'GENERATION_TERMINAL_RECONCILIATION_PENDING',
@@ -2532,6 +2586,7 @@ export const createArenaGenerationService = (
     producerToken: string;
     payloadHash: string;
     payload: Record<string, unknown>;
+    roomContext?: RoomStartContextData;
   }): Promise<void> => {
     if (activeProducers.has(input.generationId)) return;
     const controller = new AbortController();
@@ -2543,16 +2598,30 @@ export const createArenaGenerationService = (
       input.producerToken,
       loseOwnership,
     );
+    if (input.roomContext?.admission.version === ROOM_GENERATION_START_GATE_VERSION) {
+      const bound = await input.roomContext.bindProducer!(await hashRoomProducerToken(input.producerToken));
+      if (!bound) throw new ArenaGenerationFinalizationPendingError();
+    }
     const now = dependencies.now();
     const running = await dependencies.store.markRunning({
+      ...(input.roomContext ? { roomAdmission: input.roomContext.admission } : {}),
       generationId: input.generationId,
       producerToken: input.producerToken,
       now: now.toISOString(),
       leaseExpiresAt: addLeaseDuration(now, leaseDurationMs),
     });
-    if (!running.owned) throw new Error('GENERATION_PRODUCER_FENCED');
+    if (!running.owned) {
+      if (input.roomContext?.admission.version === ROOM_GENERATION_START_GATE_VERSION) throw new ArenaGenerationFinalizationPendingError();
+      throw new Error('GENERATION_PRODUCER_FENCED');
+    }
     if (running.cancelRequested) {
       const cancelReason = running.cancelReason ?? 'user';
+      if (input.roomContext?.admission.version === ROOM_GENERATION_START_GATE_VERSION) {
+        const recorder = dependencies.noProviderCancellationRecorder;
+        if (!recorder) throw new ArenaGenerationFinalizationPendingError();
+        const written = await recorder.record({ admission: input.roomContext.admission, acceptedPayloadHashes: [input.payloadHash] });
+        if (written.kind !== 'recorded') throw new ArenaGenerationFinalizationPendingError();
+      }
       await replayWriter.finish({
         status: 'cancelled',
         code: generationCancelCode(cancelReason),
@@ -2562,7 +2631,8 @@ export const createArenaGenerationService = (
 
     let heartbeat: ReturnType<typeof setInterval> | null = null;
     const executionPromise = dependencies.executor.execute({
-      ...input,
+      generationId: input.generationId, generationRequestId: input.generationRequestId,
+      actorKey: input.actorKey, producerToken: input.producerToken, payloadHash: input.payloadHash, payload: input.payload,
       signal: controller.signal,
       emit: replayWriter.emit,
       claimFinalization: async (_terminal) => {
@@ -2648,6 +2718,7 @@ export const createArenaGenerationService = (
 
   const recordAuditableRejection = async (input: {
     rejection: ArenaGenerationAuditableRejection;
+    roomContext?: RoomStartContextData;
     actor: ArenaGenerationActor;
     generationRequestId: string;
     claimedTerminalFence?: Readonly<{
@@ -2695,6 +2766,12 @@ export const createArenaGenerationService = (
         generationRequestId: input.generationRequestId,
       });
       payloadHash = await dependencies.hashPayload(input.rejection.fingerprintPayload);
+      if (input.roomContext && (input.roomContext.admission.generationId !== generationId
+        || (input.roomContext.admission.generationPayloadDigest !== null
+          && input.roomContext.admission.generationPayloadDigest !== `sha256:${payloadHash}`))) {
+        await releaseClaimedFence();
+        return original();
+      }
       if (!terminalFence) {
         const reservationPayloadHash = splitMaterialization
           ? await dependencies.hashPayload({
@@ -2705,6 +2782,7 @@ export const createArenaGenerationService = (
         const producerToken = dependencies.createProducerToken?.() ?? crypto.randomUUID();
         const now = dependencies.now();
         const reservation = await dependencies.store.reserve({
+          ...(input.roomContext ? { roomAdmission: input.roomContext.admission, producerTokenDigest: await hashRoomProducerToken(producerToken) } : {}),
           actorKey: input.actor.actorKey,
           generationRequestId: input.generationRequestId,
           generationId,
@@ -2805,6 +2883,58 @@ export const createArenaGenerationService = (
 
   const service: ArenaGenerationApplicationService = {
     storyProtocolVersion: ARENA_STORY_PROTOCOL_VERSION,
+    async cancelRoomOwned(input) {
+      const context = readRoomCancelContext(input.context);
+      if (!context) return { kind: 'unavailable', code: 'GENERATION_STATE_UNAVAILABLE' };
+      const admission = context.admission;
+      const actorKey = `pvp-room:${admission.roomId}`;
+      const unavailable = () => ({ kind: 'unavailable' as const, code: 'GENERATION_STATE_UNAVAILABLE' as const });
+      try {
+        const cancellation = await dependencies.store.requestCancel({
+          generationId: admission.generationId, actorKey, reason: 'user',
+          now: dependencies.now().toISOString(), roomAdmission: admission,
+          producerTokenDigest: context.producerTokenDigest,
+        });
+        if (cancellation.kind === 'accepted' && cancellation.previousStatus === 'running') {
+          const producer = activeProducers.get(admission.generationId);
+          if (producer && !producer.controller.signal.aborted) producer.controller.abort(cancellation.cancelReason);
+          return { kind: 'accepted', cancelReason: cancellation.cancelReason };
+        }
+        if (cancellation.kind === 'forbidden') return cancellation;
+        if (cancellation.kind === 'finalizing') return cancellation;
+        const priorState = await dependencies.store.readState({ generationId: admission.generationId, actorKey });
+        const exactCore = priorState
+          && priorState.generationRequestId === admission.generationRequestId
+          && sameRoomGenerationAdmission(priorState.roomAdmission, admission);
+        const acceptedHashes = [roomGenerationLegacyPayloadHash(admission), ...(exactCore ? [priorState.payloadHash] : [])];
+        const neverStarted = cancellation.kind === 'accepted' && cancellation.previousStatus === 'reserved'
+          || cancellation.kind === 'not-found' && context.producerTokenDigest === null;
+        if (neverStarted) {
+          if (!dependencies.noProviderCancellationRecorder) return unavailable();
+          const written = await dependencies.noProviderCancellationRecorder.record({ admission, acceptedPayloadHashes: acceptedHashes });
+          if (written.kind !== 'recorded' && written.kind !== 'already-terminal') return unavailable();
+        }
+        const durable = await inspectOwnedFinalization(admission.generationId, actorKey);
+        if (durable.kind !== 'terminal'
+          || durable.terminal.generationRequestId !== admission.generationRequestId
+          || !durable.terminal.payloadHash || !acceptedHashes.includes(durable.terminal.payloadHash)) return unavailable();
+        if (priorState && exactCore && !priorState.terminal) {
+          if (priorState.leaseExpiresAt && Date.parse(priorState.leaseExpiresAt) <= dependencies.now().getTime()) {
+            const recovered = await reconcileOwnedActiveState({ actorKey }, priorState);
+            if (recovered instanceof Response || !recovered.state.terminal) return unavailable();
+            return { kind: 'terminal', status: recovered.state.terminal.status };
+          }
+          const committed = await commitOwnedTerminalEvidence({
+            generationId: admission.generationId, actorKey, producerToken: priorState.producerToken,
+            record: durable.terminal, priorState, replayEvidence: 'legacy-durable-rebuild',
+            now: dependencies.now().toISOString(), acceptedPayloadHashes: acceptedHashes,
+          });
+          if (!committed) return unavailable();
+        }
+        return { kind: 'terminal', status: durable.terminal.status };
+      } catch { return unavailable(); }
+    },
+
     async cancelOwned(input): Promise<ArenaGenerationOwnedCancelResult> {
       const result = await dependencies.store.requestCancel({
         generationId: input.generationId,
@@ -2854,7 +2984,7 @@ export const createArenaGenerationService = (
             record: durable,
             generationId: owned.state.generationId,
             generationRequestId: owned.state.generationRequestId,
-            acceptedPayloadHashes: [owned.state.payloadHash],
+            acceptedPayloadHashes: acceptedStatePayloadHashes(owned.state),
           })
         ) terminalFallback = durable;
       }
@@ -2998,6 +3128,8 @@ export const createArenaGenerationService = (
         payload,
         bodyBytes: command.bodyBytes,
         ...(identity?.success ? { trustedStoryIdentity: Object.freeze(identity.data) } : {}),
+        ...(command.trustedRoomContext && readRoomStartContext(command.trustedRoomContext)
+          ? { trustedRoomContext: command.trustedRoomContext } : {}),
       });
       try {
         return await service.createSubscription(request);
@@ -3026,6 +3158,16 @@ export const createArenaGenerationService = (
         if (!actor) return jsonResponse({ code: 'UNAUTHORIZED', error: 'Unauthorized' }, 401);
       }
 
+      const roomContext = readRoomStartContext(parsed.trustedRoomContext);
+      if (actor.actorKey.startsWith('pvp-room:')) {
+        if (!roomContext || actor.actorKey !== `pvp-room:${roomContext.admission.roomId}`
+          || parsed.generationRequestId !== roomContext.admission.generationRequestId) {
+          return jsonResponse({ code: 'ARENA_ROOM_START_CONTEXT_REQUIRED', error: 'Trusted Room start context required' }, 403);
+        }
+      } else if (roomContext) {
+        return jsonResponse({ code: 'ARENA_ROOM_START_CONTEXT_INVALID', error: 'Room actor mismatch' }, 403);
+      }
+
       let semanticPayload: Record<string, unknown>;
       let materializationPayload: Record<string, unknown> | null = null;
       let prepared: PreparedArenaGeneration | MaterializedArenaGeneration | null = null;
@@ -3039,6 +3181,7 @@ export const createArenaGenerationService = (
         if (preflighted instanceof Response) return preflighted;
         if (isArenaGenerationAuditableRejection(preflighted)) {
           return recordAuditableRejection({
+            ...(roomContext ? { roomContext } : {}),
             rejection: preflighted,
             actor,
             generationRequestId: parsed.generationRequestId,
@@ -3061,6 +3204,7 @@ export const createArenaGenerationService = (
         if (legacyPrepared instanceof Response) return legacyPrepared;
         if (isArenaGenerationAuditableRejection(legacyPrepared)) {
           return recordAuditableRejection({
+            ...(roomContext ? { roomContext } : {}),
             rejection: legacyPrepared,
             actor,
             generationRequestId: parsed.generationRequestId,
@@ -3093,6 +3237,12 @@ export const createArenaGenerationService = (
         candidate === payloadHash
         || (splitMaterialization && candidate === legacyPayloadHash)
       );
+      if (roomContext && (roomContext.admission.generationId !== generationId
+        || (roomContext.admission.generationPayloadDigest !== null
+          && roomContext.admission.generationPayloadDigest !== `sha256:${legacyPayloadHash}`))) {
+        return jsonResponse({ code: 'GENERATION_REQUEST_CONFLICT', error: 'Room generation identity mismatch' }, 409);
+      }
+      const producerTokenDigest = roomContext ? await hashRoomProducerToken(producerToken) : undefined;
       const preparationSeed = splitMaterialization
         ? (dependencies.createPreparationSeed?.() ?? createSecurePreparationSeed())
         : null;
@@ -3103,6 +3253,7 @@ export const createArenaGenerationService = (
       let reservation: Awaited<ReturnType<GenerationReplayStore['reserve']>>;
       try {
         reservation = await dependencies.store.reserve({
+          ...(roomContext ? { roomAdmission: roomContext.admission, producerTokenDigest } : {}),
           multiplayerParticipation: extractArenaMultiplayerParticipation(semanticPayload.multiplayerGenerationSnapshot, actor.actorKey),
           actorKey: actor.actorKey,
           generationRequestId: parsed.generationRequestId,
@@ -3351,6 +3502,7 @@ export const createArenaGenerationService = (
             if (isArenaGenerationAuditableRejection(materialized)) {
               if (reservation.kind !== 'created') return materialized.response;
               return recordAuditableRejection({
+            ...(roomContext ? { roomContext } : {}),
                 rejection: materialized,
                 actor,
                 generationRequestId: parsed.generationRequestId,
@@ -3403,8 +3555,12 @@ export const createArenaGenerationService = (
             producerToken,
             payloadHash,
             payload: prepared.executionPayload,
+            ...(roomContext ? { roomContext } : {}),
           });
-        } catch {
+        } catch (error) {
+          if (roomContext?.admission.version === ROOM_GENERATION_START_GATE_VERSION || error instanceof ArenaGenerationFinalizationPendingError) {
+            return jsonResponse({ code: 'GENERATION_FINALIZATION_PENDING', error: 'Room admission or durable cancellation remains unconfirmed' }, 503);
+          }
           const terminalNow = dependencies.now().toISOString();
           const priorState = await dependencies.store.readState({
             generationId: reservation.generationId,

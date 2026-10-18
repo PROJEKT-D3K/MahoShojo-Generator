@@ -24,6 +24,16 @@ const stubValidBearerProductionEnv = (): void => {
 };
 
 describe('Hono server config', () => {
+  it('keeps new Room starting cancellation capability default-off and requires explicit opt-in', () => {
+    stubValidBearerProductionEnv();
+    vi.stubEnv('ARENA_ROOM_STARTING_CANCEL_ENABLED', '');
+    expect(readHonoServerConfig().arenaRoomStartingCancelEnabled).toBe(false);
+    vi.stubEnv('ARENA_ROOM_STARTING_CANCEL_ENABLED', 'true');
+    expect(readHonoServerConfig().arenaRoomStartingCancelEnabled).toBe(true);
+    vi.stubEnv('ARENA_ROOM_STARTING_CANCEL_ENABLED', 'false');
+    expect(readHonoServerConfig().arenaRoomStartingCancelEnabled).toBe(false);
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });

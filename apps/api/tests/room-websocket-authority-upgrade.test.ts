@@ -15,7 +15,7 @@ import {
   type ArenaRoomAuthorityState,
 } from '@mahoshojo/multiplayer-core';
 import { createMemoryGenerationReplayStore } from '@mahoshojo/hosted-api/arena-generation/memory-replay-store';
-import { createArenaGenerationService } from '@mahoshojo/hosted-api/arena-generation/service';
+import { createArenaGenerationService, issueArenaGenerationRoomStartContext, ROOM_GENERATION_LEGACY_START_VERSION } from '@mahoshojo/hosted-api/arena-generation/service';
 import { Hono } from 'hono';
 import WebSocket from 'ws';
 
@@ -302,6 +302,82 @@ describe('Room signed-ticket real Node upgrade', () => {
         attempt: 1,
         expiresAt,
       });
+      let producerStarts = 0;
+      let releaseFirstBatch!: () => void;
+      let releaseSecondBatch!: () => void;
+      const firstBatchGate = new Promise<void>((resolve) => { releaseFirstBatch = resolve; });
+      const secondBatchGate = new Promise<void>((resolve) => { releaseSecondBatch = resolve; });
+      const generationService = createArenaGenerationService({
+        store: createMemoryGenerationReplayStore({
+          now: () => Date.parse(timestamp),
+          verifyRoomAdmission: (admission) => {
+            const current = actor.getSnapshot();
+            const record = current?.generationLedger.find((entry) => entry.mirror.generationId === admission.generationId);
+            return current?.snapshot.roomEpoch === admission.roomEpoch && record?.mirror.state === 'starting'
+              && record.startGate === undefined && record.mirror.generationRequestId === admission.generationRequestId
+              && record.generationPayloadDigest === admission.generationPayloadDigest;
+          },
+        }),
+        executor: {
+          async execute({ emit }) {
+            producerStarts += 1;
+            await firstBatchGate;
+            await emit({ type: 'markdown', data: { chunk: '房主在线时由 ' } });
+            await emit({ type: 'markdown', data: { chunk: 'Hosted batch 合并发布' } });
+            await secondBatchGate;
+            await emit({ type: 'markdown', data: { chunk: '房主断线后仍由' } });
+            await emit({ type: 'markdown', data: { chunk: '服务器继续发布' } });
+            return {
+              status: 'completed' as const,
+              resultRef: 'r2:real-ws-batched-report',
+            };
+          },
+        },
+        resolveActor: async () => ({ actorKey: 'pvp-room:room-1' }),
+        deriveGenerationId: async () => 'generation-real-ws-story',
+        hashPayload: async () => 'b'.repeat(64),
+        now: () => new Date(timestamp),
+        replayPollMs: 1,
+        deltaFlushIntervalMs: 75,
+        deltaFlushBytes: 1_024,
+      });
+      const generationPort = createArenaRoomGenerationPort({
+        generationService,
+        pvpAuthority: { sign: async () => 'real-ws-pvp-signature' },
+        internalGuidanceAuthority: { sign: async () => 'real-ws-guidance-signature' },
+        deriveGenerationId: async () => 'generation-real-ws-story',
+        canonicalizeSemanticPayload: async ({ payload }) => structuredClone(payload),
+      });
+      const committed = actor.getSnapshot()!;
+      const intent = committed.generationLedger.find((entry) => entry.mirror.generationId === 'generation-real-ws-story')!;
+      const startContext = issueArenaGenerationRoomStartContext({ admission: {
+        version: ROOM_GENERATION_LEGACY_START_VERSION, roomId: committed.snapshot.roomId, roomEpoch: committed.snapshot.roomEpoch,
+        hostUserId: host.member.userId, hostAccountUserId: 101, generationId: intent.mirror.generationId, generationRequestId: intent.mirror.generationRequestId,
+        attempt: 1, configRevision: intent.mirror.configRevision, snapshotDigest: intent.mirror.snapshotDigest,
+        generationPayloadDigest: intent.generationPayloadDigest!, mode: committed.snapshot.sharedConfig.battleMode, startedAt: intent.mirror.startedAt,
+      } });
+      const started = await generationPort.startFromHostRequest({
+        startContext,
+        request: new Request('https://api.example.test/api/arena/generate-stream', {
+          method: 'POST',
+          headers: { authorization: 'Bearer real-ws-host' },
+        }),
+        roomId: 'room-1',
+        generationRequestId: 'request-real-ws-story',
+        payload: { mode: 'classic' },
+        internalGuidance: 'server-owned real WebSocket batch test',
+        pvpContext: {
+          matchId: 'generation-real-ws-story',
+          roundId: 'attempt-1',
+        },
+        multiplayerSnapshot: createArenaRoomGenerationSnapshot(
+          authorityState,
+          'request-real-ws-story',
+        ),
+      });
+      if (started.kind !== 'subscribed') {
+        throw new Error(`real Hosted generation rejected:${started.code}`);
+      }
       await actor.execute({
         authority: publisherAuthority,
         command: {
@@ -354,64 +430,6 @@ describe('Room signed-ticket real Node upgrade', () => {
         message.type === 'generation.completed'
         && message.payload.generationId === 'generation-real-ws-story'
       ));
-      let producerStarts = 0;
-      let releaseFirstBatch!: () => void;
-      let releaseSecondBatch!: () => void;
-      const firstBatchGate = new Promise<void>((resolve) => { releaseFirstBatch = resolve; });
-      const secondBatchGate = new Promise<void>((resolve) => { releaseSecondBatch = resolve; });
-      const generationService = createArenaGenerationService({
-        store: createMemoryGenerationReplayStore(),
-        executor: {
-          async execute({ emit }) {
-            producerStarts += 1;
-            await firstBatchGate;
-            await emit({ type: 'markdown', data: { chunk: '房主在线时由 ' } });
-            await emit({ type: 'markdown', data: { chunk: 'Hosted batch 合并发布' } });
-            await secondBatchGate;
-            await emit({ type: 'markdown', data: { chunk: '房主断线后仍由' } });
-            await emit({ type: 'markdown', data: { chunk: '服务器继续发布' } });
-            return {
-              status: 'completed' as const,
-              resultRef: 'r2:real-ws-batched-report',
-            };
-          },
-        },
-        resolveActor: async () => ({ actorKey: 'pvp-room:room-1' }),
-        deriveGenerationId: async () => 'generation-real-ws-story',
-        hashPayload: async (payload) => `test:${JSON.stringify(payload)}`,
-        now: () => new Date(timestamp),
-        replayPollMs: 1,
-        deltaFlushIntervalMs: 75,
-        deltaFlushBytes: 1_024,
-      });
-      const generationPort = createArenaRoomGenerationPort({
-        generationService,
-        pvpAuthority: { sign: async () => 'real-ws-pvp-signature' },
-        internalGuidanceAuthority: { sign: async () => 'real-ws-guidance-signature' },
-        deriveGenerationId: async () => 'generation-real-ws-story',
-        canonicalizeSemanticPayload: async ({ payload }) => structuredClone(payload),
-      });
-      const started = await generationPort.startFromHostRequest({
-        request: new Request('https://api.example.test/api/arena/generate-stream', {
-          method: 'POST',
-          headers: { authorization: 'Bearer real-ws-host' },
-        }),
-        roomId: 'room-1',
-        generationRequestId: 'request-real-ws-story',
-        payload: { mode: 'classic' },
-        internalGuidance: 'server-owned real WebSocket batch test',
-        pvpContext: {
-          matchId: 'generation-real-ws-story',
-          roundId: 'attempt-1',
-        },
-        multiplayerSnapshot: createArenaRoomGenerationSnapshot(
-          authorityState,
-          'request-real-ws-story',
-        ),
-      });
-      if (started.kind !== 'subscribed') {
-        throw new Error(`real Hosted generation rejected:${started.code}`);
-      }
       const publisher = createRoomGenerationPublisher({
         actor,
         authority: publisherAuthority,

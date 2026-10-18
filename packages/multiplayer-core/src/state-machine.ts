@@ -18,6 +18,8 @@ import {
   ArenaRoomAuthorityStateSchema,
   ArenaRoomCommandSchema,
   ARENA_ROOM_AUTHORITY_STATE_VERSION,
+  ARENA_ROOM_GATED_AUTHORITY_STATE_VERSION,
+  ARENA_ROOM_GENERATION_START_GATE_VERSION,
   MAX_ROOM_COLLABORATIVE_CHANGES,
   MAX_ROOM_GENERATION_RECORDS,
   MAX_ROOM_MEMBER_AUTHORITY_RECORDS,
@@ -745,7 +747,8 @@ const reserveGeneration = (
     || scope.generationRequestId !== command.generationRequestId
     || scope.generationId !== command.generationId
     || scope.attempt !== command.attempt
-    || scope.generationPayloadDigest !== command.generationPayloadDigest) {
+    || scope.generationPayloadDigest !== command.generationPayloadDigest
+    || scope.startGateVersion !== command.startGateVersion) {
     return transitionFailure('forbidden', 'authority-scope-mismatch');
   }
   const now = Date.parse(trustedTime.now);
@@ -768,6 +771,9 @@ const reserveGeneration = (
     return sameReservation(historical, command, scope.snapshotDigest)
       ? finishIdempotent(state)
       : transitionFailure('conflict', 'generation-request-conflict');
+  }
+  if (state.authorityStateVersion === 3 && !command.startGateVersion) {
+    return transitionFailure('capability-denied', 'generation-start-gate-required');
   }
   if (state.generationLedger.some((record) => record.mirror.generationId === command.generationId)) {
     return transitionFailure('conflict', 'generation-id-conflict');
@@ -813,7 +819,70 @@ const reserveGeneration = (
   next.generationLedger.push({
     mirror: deepClone(mirror),
     generationPayloadDigest: command.generationPayloadDigest,
+    ...(command.startGateVersion ? { startGate: {
+      version: ARENA_ROOM_GENERATION_START_GATE_VERSION,
+      roomEpoch: state.snapshot.roomEpoch,
+      hostUserId: context.actorUserId,
+      mode: state.snapshot.sharedConfig.battleMode,
+      producerTokenDigest: null,
+      cancellationRequested: false,
+    } } : {}),
   });
+  if (command.startGateVersion) next.authorityStateVersion = ARENA_ROOM_GATED_AUTHORITY_STATE_VERSION;
+  next.lifecycle = { ...next.lifecycle, updatedAt: command.timestamp };
+  const events: ControlRoomEvent[] = [];
+  if (!pushSnapshotEvent(next, events, command.timestamp)) return eventOverflow();
+  return finishApplied(state, next, events);
+};
+
+const controlGenerationStart = (
+  state: ArenaRoomAuthorityState,
+  command: Extract<ArenaRoomCommand, { type: 'bind-generation-producer' | 'cancel-generation-start' }>,
+  context: ArenaRoomAuthorityContext,
+  trustedTime: ArenaRoomTrustedTime,
+): ArenaRoomTransitionResult => {
+  if (context.kind !== 'generation-reserver') return transitionFailure('forbidden', 'invalid-authority-context');
+  const owner = memberAuthorityRecord(state, context.actorUserId);
+  if (!owner || owner.accountUserId !== context.accountUserId || owner.member.membershipState !== 'active'
+    || owner.member.role !== 'host') return transitionFailure('forbidden', 'host-required');
+  const index = state.generationLedger.findIndex(({ mirror }) => mirror.generationId === command.generationId);
+  const record = state.generationLedger[index];
+  const scope = context.scope;
+  if (!record || record.mirror.generationRequestId !== command.generationRequestId
+    || record.mirror.attempt !== command.attempt || state.snapshot.activeGeneration?.generationId !== command.generationId
+    || scope.roomId !== state.snapshot.roomId || scope.roomEpoch !== state.snapshot.roomEpoch
+    || scope.generationId !== command.generationId || scope.generationRequestId !== command.generationRequestId
+    || scope.attempt !== command.attempt || scope.configRevision !== record.mirror.configRevision
+    || scope.snapshotDigest !== record.mirror.snapshotDigest || scope.generationPayloadDigest !== record.generationPayloadDigest) {
+    return transitionFailure('forbidden', 'authority-scope-mismatch');
+  }
+  const gate = record.startGate;
+  if (!gate || scope.startGateVersion !== gate.version) return transitionFailure('forbidden', 'generation-start-gate-required');
+  const timestamp = Date.parse(trustedTime.now);
+  if (timestamp !== Date.parse(command.timestamp)) return transitionFailure('forbidden', 'command-timestamp-mismatch');
+  if (timestamp < Date.parse(state.lifecycle.updatedAt)) return transitionFailure('stale', 'command-timestamp-regression');
+  if (timestamp >= Date.parse(scope.expiresAt)) return transitionFailure('forbidden', 'authority-scope-expired');
+  if ([state.deadlines.hostOfflineDeadline, state.deadlines.roomIdleDeadline].some((deadline) => deadline !== null && Date.parse(deadline) <= timestamp)) {
+    return transitionFailure('room-closed', 'room-closed');
+  }
+  if (command.type === 'bind-generation-producer') {
+    if (gate.roomEpoch !== state.snapshot.roomEpoch || gate.hostUserId !== context.actorUserId
+      || gate.cancellationRequested || record.mirror.state !== 'starting'
+      || (gate.producerTokenDigest !== null && gate.producerTokenDigest !== command.producerTokenDigest)) {
+      return transitionFailure('forbidden', 'generation-start-fenced');
+    }
+    if (gate.producerTokenDigest === command.producerTokenDigest) return finishIdempotent(state);
+  } else if (gate.cancellationRequested) return finishIdempotent(state);
+  const next = cloneState(state);
+  next.generationLedger[index] = {
+    ...record,
+    startGate: {
+      ...gate,
+      ...(command.type === 'bind-generation-producer'
+        ? { producerTokenDigest: command.producerTokenDigest }
+        : { cancellationRequested: true }),
+    },
+  };
   next.lifecycle = { ...next.lifecycle, updatedAt: command.timestamp };
   const events: ControlRoomEvent[] = [];
   if (!pushSnapshotEvent(next, events, command.timestamp)) return eventOverflow();
@@ -1050,12 +1119,14 @@ export const transitionArenaRoom = (
     case 'withdraw-proposal':
       return withdrawProposal(state, command, context);
     case 'reserve-generation':
+    case 'bind-generation-producer':
+    case 'cancel-generation-start':
     case 'mirror-generation': {
       const trustedTime = parseArenaRoomTrustedTime(trustedTimeInput);
       if (!trustedTime) return transitionFailure('forbidden', 'invalid-trusted-time');
-      return command.type === 'reserve-generation'
-        ? reserveGeneration(state, command, context, trustedTime)
-        : mirrorGeneration(state, command, context, trustedTime);
+      if (command.type === 'reserve-generation') return reserveGeneration(state, command, context, trustedTime);
+      if (command.type === 'mirror-generation') return mirrorGeneration(state, command, context, trustedTime);
+      return controlGenerationStart(state, command, context, trustedTime);
     }
   }
 };

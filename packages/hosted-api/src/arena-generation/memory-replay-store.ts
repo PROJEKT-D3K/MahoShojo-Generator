@@ -1,3 +1,4 @@
+import { ROOM_GENERATION_START_GATE_VERSION, sameRoomGenerationAdmission, type RoomGenerationAdmission } from './room-start';
 import {
   generationCancelCode,
   isArenaPreparationSeed,
@@ -15,6 +16,8 @@ export type MemoryGenerationReplayStoreOptions = {
   activeTtlMs?: number;
   terminalTtlMs?: number;
   now?: () => number;
+  /** Synchronous authority check shares this test adapter's atomic turn. Missing authority denies. */
+  verifyRoomAdmission?: (_admission: RoomGenerationAdmission, _producerTokenDigest: string | undefined, _now: number) => boolean;
 };
 
 const cloneState = (state: GenerationReplayStoreState): GenerationReplayStoreState => ({
@@ -136,6 +139,7 @@ export const createMemoryGenerationReplayStore = (
         mode: input.mode ?? null,
         ...(input.multiplayerParticipation ? { multiplayerParticipation: structuredClone(input.multiplayerParticipation) } : {}),
         producerToken: input.producerToken,
+        ...(input.roomAdmission ? { roomAdmission: structuredClone(input.roomAdmission), producerTokenDigest: input.producerTokenDigest } : {}),
         status: 'reserved',
         lastEventId: null,
         updatedAt: input.now,
@@ -167,10 +171,18 @@ export const createMemoryGenerationReplayStore = (
       ) {
         return { owned: false, cancelRequested: false };
       }
+      if (state.roomAdmission || input.roomAdmission) {
+        if (!input.roomAdmission || !sameRoomGenerationAdmission(state.roomAdmission, input.roomAdmission)
+          || !options.verifyRoomAdmission?.(input.roomAdmission, state.producerTokenDigest, now())
+          || (input.roomAdmission.version === ROOM_GENERATION_START_GATE_VERSION
+            && (!(Date.parse(state.leaseExpiresAt!) > now()) || !(Date.parse(input.leaseExpiresAt) > now())))) {
+          return { owned: false, cancelRequested: false };
+        }
+      }
       if (state.cancelRequested) {
         writeState({
           ...state,
-          status: 'finalizing',
+          status: state.roomAdmission?.version === ROOM_GENERATION_START_GATE_VERSION ? 'reserved' : 'finalizing',
           updatedAt: input.now,
           leaseExpiresAt: input.leaseExpiresAt,
         });
@@ -436,6 +448,8 @@ export const createMemoryGenerationReplayStore = (
       const state = states.get(input.generationId);
       if (!state) return { kind: 'not-found' };
       if (state.actorKey !== input.actorKey) return { kind: 'forbidden' };
+      if (input.roomAdmission && (!sameRoomGenerationAdmission(state.roomAdmission, input.roomAdmission)
+        || (input.producerTokenDigest !== null && state.producerTokenDigest !== input.producerTokenDigest))) return { kind: 'forbidden' };
       if (state.terminal) return { kind: 'terminal', status: state.terminal.status };
       if (state.status === 'finalizing') return { kind: 'finalizing' };
       const cancelReason = state.cancelRequested
@@ -447,7 +461,7 @@ export const createMemoryGenerationReplayStore = (
         cancelReason,
         updatedAt: input.now,
       });
-      return { kind: 'accepted', cancelReason };
+      return { kind: 'accepted', cancelReason, ...(input.roomAdmission ? { previousStatus: state.status as 'reserved' | 'running' } : {}) };
     },
   };
   return Object.freeze(store);

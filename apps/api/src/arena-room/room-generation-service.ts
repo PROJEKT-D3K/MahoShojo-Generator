@@ -1,3 +1,8 @@
+import {
+  ROOM_GENERATION_START_GATE_VERSION, ROOM_GENERATION_LEGACY_START_VERSION,
+  issueArenaGenerationRoomStartContext, issueArenaGenerationRoomCancelContext,
+  type RoomGenerationAdmission,
+} from '@mahoshojo/hosted-api/arena-generation/service';
 import type {
   ArenaMultiplayerGenerationSnapshot,
   ArenaRoomGenerationCancelRequest,
@@ -19,6 +24,7 @@ import {
   issueArenaRoomTrustedTime,
   type ArenaGenerationReadinessIssue,
   type ArenaRoomAuthorityState,
+  type ArenaRoomGenerationRecord,
 } from '@mahoshojo/multiplayer-core';
 
 import type {
@@ -129,6 +135,7 @@ export type ArenaRoomGenerationServiceOptions = {
   readonly now?: () => string;
   readonly onBackgroundError?: (error: unknown) => void;
   readonly observer?: ArenaRoomRuntimeObserver;
+  readonly startingCancelEnabled?: boolean;
 };
 
 type OwnedProjection = Extract<
@@ -554,7 +561,8 @@ export const createArenaRoomGenerationService = (
       });
       if (!result.ok) mapTransitionFailure(result.reason);
     };
-    if (mirror.state === 'starting' && projection.status !== 'reserved') await execute('running');
+    if (mirror.state === 'starting' && projection.status === 'cancelled') await execute('cancelled');
+    else if (mirror.state === 'starting' && projection.status !== 'reserved') await execute('running');
     state = membership.actor.getSnapshot();
     if (!state) return fail('ROOM_GENERATION_NOT_FOUND');
     const currentMirror = state.snapshot.activeGeneration;
@@ -564,11 +572,58 @@ export const createArenaRoomGenerationService = (
     return state;
   };
 
+  const admissionFor = (state: ArenaRoomAuthorityState, record: ArenaRoomGenerationRecord): RoomGenerationAdmission => {
+    const host = state.memberAuthority.find((entry) => entry.accountUserId === record.mirror.hostAccountUserId);
+    if (!host || record.mirror.attempt !== 1) return fail('ROOM_OPERATION_UNKNOWN');
+    return Object.freeze({
+      version: record.startGate?.version ?? ROOM_GENERATION_LEGACY_START_VERSION,
+      roomId: state.snapshot.roomId,
+      roomEpoch: record.startGate?.roomEpoch ?? state.snapshot.roomEpoch,
+      hostUserId: record.startGate?.hostUserId ?? host.member.userId,
+      hostAccountUserId: host.accountUserId,
+      generationId: record.mirror.generationId,
+      generationRequestId: record.mirror.generationRequestId,
+      attempt: 1,
+      configRevision: record.mirror.configRevision,
+      snapshotDigest: record.mirror.snapshotDigest,
+      generationPayloadDigest: record.generationPayloadDigest ?? null,
+      mode: record.startGate?.mode ?? state.snapshot.sharedConfig.battleMode,
+      startedAt: record.mirror.startedAt,
+    });
+  };
+  const generationControlAuthority = (membership: ResolvedArenaRoomMembership, state: ArenaRoomAuthorityState, record: ArenaRoomGenerationRecord, timestamp: string) => {
+    if (!record.generationPayloadDigest) return fail('ROOM_OPERATION_UNKNOWN');
+    return issueArenaRoomGenerationReservationAuthority({
+      actorUserId: membership.member.userId, accountUserId: membership.accountUserId,
+      roomId: state.snapshot.roomId, roomEpoch: state.snapshot.roomEpoch,
+      configRevision: record.mirror.configRevision, generationId: record.mirror.generationId,
+      generationRequestId: record.mirror.generationRequestId, attempt: record.mirror.attempt,
+      snapshotDigest: record.mirror.snapshotDigest, generationPayloadDigest: record.generationPayloadDigest,
+      ...(record.startGate ? { startGateVersion: record.startGate.version } : {}),
+      expiresAt: publisherExpiry(timestamp),
+    });
+  };
+  const reconcileCancellation = async (membership: ResolvedArenaRoomMembership, record: ArenaRoomGenerationRecord): Promise<void> => {
+    const current = membership.actor.getSnapshot();
+    if (!current || !record.startGate?.cancellationRequested || !options.generation.cancelStartingOwned) return fail('ROOM_OPERATION_UNKNOWN');
+    const result = await options.generation.cancelStartingOwned({
+      context: issueArenaGenerationRoomCancelContext({
+        admission: admissionFor(current, record), producerTokenDigest: record.startGate.producerTokenDigest,
+      }),
+    });
+    if (result.kind === 'unavailable' || result.kind === 'not-found' || result.kind === 'forbidden') return fail('ROOM_OPERATION_UNKNOWN');
+  };
+
   const readProjection = async (
     membership: ResolvedArenaRoomMembership,
     generationId: string,
     attach: boolean,
   ): Promise<ArenaRoomGenerationViewResponse> => {
+    const fencedRecord = membership.actor.getSnapshot()?.generationLedger.find((record) => record.mirror.generationId === generationId);
+    if (fencedRecord?.startGate?.cancellationRequested
+      && (fencedRecord.mirror.state === 'starting' || fencedRecord.mirror.state === 'running')) {
+      await reconcileCancellation(membership, fencedRecord);
+    }
     let result = await options.generation.readOwnedProjection({
       roomId: membership.roomId,
       generationId,
@@ -707,9 +762,33 @@ export const createArenaRoomGenerationService = (
     readonly snapshot: ArenaMultiplayerGenerationSnapshot;
     readonly generationId: string;
   }): Promise<ArenaRoomGenerationViewResponse> => {
+    const current = input.membership.actor.getSnapshot();
+    const record = current?.generationLedger.find((entry) => entry.mirror.generationId === input.generationId);
+    if (!current || !record) return fail('ROOM_OPERATION_UNKNOWN');
+    const admission = admissionFor(current, record);
+    const startContext = issueArenaGenerationRoomStartContext({
+      admission,
+      ...(record.startGate ? {
+        bindProducer: async (producerTokenDigest: string): Promise<boolean> => {
+          const state = input.membership.actor.getSnapshot();
+          const original = state?.generationLedger.find((entry) => entry.mirror.generationId === input.generationId);
+          if (!state || !original || state.snapshot.roomEpoch !== admission.roomEpoch) return false;
+          const timestamp = monotonicTimestamp(now, state);
+          const bound = await input.membership.actor.execute({
+            authority: generationControlAuthority(input.membership, state, original, timestamp),
+            command: { type: 'bind-generation-producer', expectedRoomEpoch: admission.roomEpoch,
+              generationId: admission.generationId, generationRequestId: admission.generationRequestId,
+              attempt: 1, producerTokenDigest, timestamp },
+            trustedTime: issueArenaRoomTrustedTime({ now: timestamp }),
+          });
+          return bound.ok;
+        },
+      } : {}),
+    });
     let result;
     try {
       result = await options.generation.startFromHostRequest({
+        startContext,
         request: input.sourceRequest,
         roomId: input.membership.roomId,
         generationRequestId: input.snapshot.generationRequestId,
@@ -722,6 +801,13 @@ export const createArenaRoomGenerationService = (
       return fail('ROOM_OPERATION_UNKNOWN');
     }
     if (result.kind === 'rejected') {
+      if (record.startGate) {
+        const durable = await options.generation.readOwnedProjection({ roomId: input.membership.roomId, generationId: input.generationId });
+        if (durable.kind === 'found' && durable.projection.finalAuthoritative) {
+          return readProjection(input.membership, input.generationId, false);
+        }
+        return fail('ROOM_OPERATION_UNKNOWN');
+      }
       const rejectionCode = mapDefinitiveGenerationRejection(result.code);
       if (
         rejectionCode === null
@@ -786,6 +872,21 @@ export const createArenaRoomGenerationService = (
         || mirror.state === 'failed'
         || mirror.state === 'cancelled';
       if (!terminal) {
+        const record = state.generationLedger.find((entry) => entry.mirror.generationId === input.generationId);
+        if (record?.startGate) {
+          const derived = await options.generation.deriveGenerationId({ roomId: membership.roomId, generationRequestId: record.mirror.generationRequestId });
+          if (derived !== input.generationId) return fail('ROOM_GENERATION_CONFLICT');
+          const timestamp = monotonicTimestamp(now, state);
+          const fenced = await membership.actor.execute({
+            authority: generationControlAuthority(membership, state, record, timestamp),
+            command: { type: 'cancel-generation-start', expectedRoomEpoch: input.request.expectedRoomEpoch,
+              generationId: record.mirror.generationId, generationRequestId: record.mirror.generationRequestId,
+              attempt: 1, timestamp },
+            trustedTime: issueArenaRoomTrustedTime({ now: timestamp }),
+          });
+          if (!fenced.ok) return mapTransitionFailure(fenced.reason);
+          return readProjection(membership, input.generationId, false);
+        }
         const cancellation = await options.generation.cancelOwned({
           roomId: membership.roomId,
           generationId: input.generationId,
@@ -844,6 +945,9 @@ export const createArenaRoomGenerationService = (
           return readProjection(membership, generationId, true);
         }
         if (durable.kind === 'unavailable') return fail('ROOM_OPERATION_UNKNOWN');
+        if (historical.startGate?.cancellationRequested) return readProjection(membership, generationId, false);
+        if (historical.startGate && (historical.startGate.producerTokenDigest !== null
+          || historical.startGate.roomEpoch !== current.snapshot.roomEpoch)) return fail('ROOM_OPERATION_UNKNOWN');
         if (historical.mirror.state !== 'starting' && historical.mirror.state !== 'running') {
           return fail('ROOM_GENERATION_CONFLICT');
         }
@@ -914,6 +1018,8 @@ export const createArenaRoomGenerationService = (
         return fail('ROOM_GENERATION_CONFLICT');
       }
       const state = membership.state;
+      if (state.authorityStateVersion === 3 && options.startingCancelEnabled !== true) return fail('ROOM_GENERATION_UNAVAILABLE');
+      if (options.startingCancelEnabled === true && !options.generation.cancelStartingOwned) return fail('ROOM_GENERATION_UNAVAILABLE');
       if (JSON.stringify(state.snapshot.sharedConfig) !== JSON.stringify(input.request.sharedConfig)) {
         return fail('ROOM_GENERATION_CONFLICT');
       }
@@ -945,6 +1051,7 @@ export const createArenaRoomGenerationService = (
           attempt: 1,
           snapshotDigest: snapshot.snapshotDigest,
           generationPayloadDigest,
+          ...(options.startingCancelEnabled ? { startGateVersion: ROOM_GENERATION_START_GATE_VERSION } : {}),
           expiresAt: publisherExpiry(timestamp),
         }),
         command: {
@@ -956,6 +1063,7 @@ export const createArenaRoomGenerationService = (
           generationId,
           attempt: 1,
           generationPayloadDigest,
+          ...(options.startingCancelEnabled ? { startGateVersion: ROOM_GENERATION_START_GATE_VERSION } : {}),
           timestamp,
         },
         trustedTime: issueArenaRoomTrustedTime({ now: timestamp }),

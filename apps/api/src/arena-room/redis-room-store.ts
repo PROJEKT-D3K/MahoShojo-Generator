@@ -1,6 +1,5 @@
 import { performance } from 'node:perf_hooks';
 import {
-  ARENA_ROOM_AUTHORITY_STATE_VERSION,
   checkpointPredecessorOf,
   consumeArenaRoomCheckpointCommit,
   migrateArenaRoomAuthorityStateV1,
@@ -624,8 +623,7 @@ const parseStoredCheckpoint = (
     }
     const predecessor = checkpointPredecessorOf(state);
     if (
-      state.authorityStateVersion !== ARENA_ROOM_AUTHORITY_STATE_VERSION
-      || predecessor.roomId !== candidate.roomId
+      predecessor.roomId !== candidate.roomId
       || predecessor.roomEpoch !== candidate.roomEpoch
       || predecessor.revision !== candidate.revision
       || predecessor.controlSeq !== candidate.controlSeq

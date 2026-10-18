@@ -7,6 +7,8 @@ import {
 import {
   ARENA_OUTPUT_NOT_ARCHIVED_WARNING,
   type ArenaGenerationApplicationService,
+  type ArenaGenerationRoomStartContext,
+  type ArenaGenerationRoomCancelContext,
   type ArenaGenerationOwnedCancelResult,
   type ArenaGenerationOwnedProjectionResult,
   type ArenaGenerationSubscription,
@@ -84,11 +86,12 @@ export type ArenaRoomGenerationStartInput = Readonly<{
   internalGuidance: string;
   pvpContext: Readonly<{ matchId: string; roundId: string }>;
   multiplayerSnapshot: ArenaMultiplayerGenerationSnapshot;
+  startContext?: ArenaGenerationRoomStartContext;
 }>;
 
 export type ArenaRoomGenerationSemanticPayloadInput = Omit<
   ArenaRoomGenerationStartInput,
-  'request'
+  'request' | 'startContext'
 >;
 
 export type ArenaRoomGenerationOwnedInput = Readonly<{
@@ -101,6 +104,7 @@ export type ArenaRoomGenerationResumeInput = ArenaRoomGenerationOwnedInput & Rea
 }>;
 
 export interface ArenaRoomGenerationPort {
+  cancelStartingOwned?(_input: { context: ArenaGenerationRoomCancelContext }): Promise<ArenaRoomGenerationCancelResult>;
   cancelOwned(_input: ArenaRoomGenerationOwnedInput): Promise<ArenaRoomGenerationCancelResult>;
   deriveGenerationId(_input: ArenaRoomGenerationIdentityInput): Promise<string>;
   hashSemanticPayload(_input: ArenaRoomGenerationSemanticPayloadInput): Promise<string>;
@@ -114,7 +118,7 @@ export interface ArenaRoomGenerationPort {
 type ArenaRoomGenerationPortDependencies = Readonly<{
   generationService: Pick<
     ArenaGenerationApplicationService,
-    'cancelOwned' | 'createSubscription' | 'readOwnedProjection' | 'resumeOwnedSubscription'
+    'cancelOwned' | 'cancelRoomOwned' | 'createParsedSubscription' | 'readOwnedProjection' | 'resumeOwnedSubscription'
   >;
   pvpAuthority: Readonly<{
     sign(_input: {
@@ -376,6 +380,11 @@ const projectRejectedResponse = async (response: Response): Promise<
 export const createArenaRoomGenerationPort = (
   dependencies: ArenaRoomGenerationPortDependencies,
 ): ArenaRoomGenerationPort => Object.freeze({
+  async cancelStartingOwned(input: { context: ArenaGenerationRoomCancelContext }): Promise<ArenaRoomGenerationCancelResult> {
+    try { return await dependencies.generationService.cancelRoomOwned(input); }
+    catch { return { kind: 'unavailable', code: 'GENERATION_STATE_UNAVAILABLE' }; }
+  },
+
   async cancelOwned(input: ArenaRoomGenerationOwnedInput): Promise<ArenaRoomGenerationCancelResult> {
     try {
       return await dependencies.generationService.cancelOwned({
@@ -449,7 +458,15 @@ export const createArenaRoomGenerationPort = (
       body: JSON.stringify({ ...payload, generationRequestId: input.generationRequestId }),
       signal: input.request.signal,
     });
-    const subscription = await dependencies.generationService.createSubscription(request);
+    if (!input.startContext || typeof dependencies.generationService.createParsedSubscription !== 'function') {
+      return { kind: 'rejected', status: 503, code: 'ARENA_ROOM_START_CONTEXT_REQUIRED' };
+    }
+    const subscription = await dependencies.generationService.createParsedSubscription(request, {
+      generationRequestId: input.generationRequestId,
+      payload: { ...payload },
+      bodyBytes: new TextEncoder().encode(JSON.stringify({ ...payload, generationRequestId: input.generationRequestId })).byteLength,
+      trustedRoomContext: input.startContext,
+    });
     return subscription instanceof Response
       ? projectRejectedResponse(subscription)
       : { kind: 'subscribed', subscription: projectSubscription(subscription) };
