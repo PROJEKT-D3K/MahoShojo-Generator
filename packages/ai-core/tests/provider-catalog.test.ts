@@ -17,6 +17,7 @@ import {
   listDirectCapableAiPresetModels,
   listDirectCapableAiPresets,
   resolveAIProviderModel,
+  resolveAiPresetModelDirectBaseUrl,
 } from '@mahoshojo/ai-core/provider-catalog';
 
 /** 测试宿主的 Direct 执行能力集：由调用方注入，ai-core 不镜像 native 实现。 */
@@ -139,7 +140,7 @@ describe('Direct wire 核验（端点证据层，fail-closed）', () => {
 
   it('project-forward 端点永远核验为 project-forward-endpoint', () => {
     const forwards = AI_PROVIDER_PRESETS.filter((p) => p.endpointKind === 'project-forward');
-    expect(forwards.map((p) => p.id).sort()).toEqual(['google-cloudflare', 'mystery']);
+    expect(forwards.map((p) => p.id).sort()).toEqual(['mystery']);
     for (const preset of forwards) {
       expect(describeAiPresetDirectWire(preset)).toEqual({
         status: 'unavailable',
@@ -322,8 +323,9 @@ describe('Direct 支持度判定（wire 核验 ∩ 宿主注入的已实现 adap
     expect(capable.map((p) => p.id)).toContain('opencode-zen');
     expect(capable.map((p) => p.id)).toContain('opencode-go');
     // project-forward 永远不在 Direct 来源内。
-    expect(capable.map((p) => p.id)).not.toContain('google-cloudflare');
     expect(capable.map((p) => p.id)).not.toContain('mystery');
+    // google-cloudflare 是 provider-public：Google 官方端点已核验可直连。
+    expect(capable.map((p) => p.id)).toContain('google-cloudflare');
     // isDirectCapableAiPreset 仍是 preset 级整条判定：多协议端点返回 false。
     const zen = findAiProviderPreset('opencode-zen')!;
     expect(isDirectCapableAiPreset(zen, OPENAI_COMPATIBLE_ONLY)).toBe(false);
@@ -381,6 +383,44 @@ describe('2026-10 已核验目录增量', () => {
   });
 });
 
+
+describe('Google 官方端点双面：原生 baseUrl 与 OpenAI-compat Direct 面', () => {
+  it('google-cloudflare 是 provider-public，Direct wire 走官方 openai 面', () => {
+    const google = findAiProviderPreset('google-cloudflare')!;
+    expect(google.endpointKind).toBe('provider-public');
+    expect(google.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta');
+    // wire 证据：OpenAI-compatible adapter + 与 baseUrl 不同的已核验端点面 +
+    // 官方文档 sourceUrl 与核验日期。
+    expect(describeAiPresetDirectWire(google)).toEqual({
+      status: 'verified',
+      adapter: 'openai-compatible',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      sourceUrl: 'https://ai.google.dev/gemini-api/docs/openai',
+      reviewedAt: google.direct!.reviewedAt,
+    });
+    expect(describeAiPresetModelDirectSupport(google, 'gemini-2.5-flash', OPENAI_COMPATIBLE_ONLY))
+      .toEqual({ supported: true, adapter: 'openai-compatible' });
+  });
+
+  it('resolveAiPresetModelDirectBaseUrl 解析已核验 wire 的真实出站端点', () => {
+    const google = findAiProviderPreset('google-cloudflare')!;
+    // 收录模型与未收录的自定义 modelId 都落在已核验的 openai 面。
+    expect(resolveAiPresetModelDirectBaseUrl(google, 'gemini-2.5-flash'))
+      .toBe('https://generativelanguage.googleapis.com/v1beta/openai');
+    expect(resolveAiPresetModelDirectBaseUrl(google, 'some-custom-model'))
+      .toBe('https://generativelanguage.googleapis.com/v1beta/openai');
+    // 未声明分轨端点的预设回落 preset.baseUrl。
+    const deepseek = findAiProviderPreset('deepseek')!;
+    expect(resolveAiPresetModelDirectBaseUrl(deepseek, 'deepseek-chat'))
+      .toBe(deepseek.baseUrl);
+    // 未核验/不可用一律 null：project-forward、多协议端点的未核验模型。
+    const mystery = findAiProviderPreset('mystery')!;
+    expect(resolveAiPresetModelDirectBaseUrl(mystery, 'gemini-2.5-flash')).toBeNull();
+    const zen = findAiProviderPreset('opencode-zen')!;
+    expect(resolveAiPresetModelDirectBaseUrl(zen, 'big-pickle')).toBeNull();
+    expect(resolveAiPresetModelDirectBaseUrl(zen, 'deepseek-v4-flash')).toBe(zen.baseUrl);
+  });
+});
 
 it('STA1N 保留完整 23 个 served IDs，不归一化前缀或大小写', () => {
   const preset = findAiProviderPreset('sta1n')!;

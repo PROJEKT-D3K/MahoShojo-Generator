@@ -51,11 +51,27 @@ it('OpenAI 推理模型使用兼容的角色与 completion 预算', async () => 
   expect(body).not.toHaveProperty('max_tokens');
 });
 
-it.each(['google-cloudflare', 'mystery'])('项目转发端点 %s 不作为直连供应商，也不接受旧配置绕过', async (providerId) => {
+it('Google 官方预设直连走 OpenAI-compat 面而非 Gemini 原生 baseUrl', async () => {
+  const provider = NOVELAI_TEXT_PROVIDERS.find((item) => item.id === 'google-cloudflare')!;
+  expect(provider).toBeTruthy();
+  const fetchMock = vi.fn().mockResolvedValue(response(openAIResponse())); vi.stubGlobal('fetch', fetchMock);
+  await rewriteNovelAIPrompt(
+    { providerId: provider.id, modelId: 'gemini-2.5-flash', apiKey: 'text-secret' },
+    'nai-diffusion-5-curated', 'source', new AbortController().signal,
+  );
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const [url, init] = fetchMock.mock.calls[0];
+  expect(String(url)).toBe('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
+  const body = JSON.parse(init.body);
+  expect(body).toMatchObject({ model: 'gemini-2.5-flash', max_completion_tokens: 4096 });
+  expect(body).not.toHaveProperty('max_tokens');
+});
+
+it('项目转发端点 mystery 不作为直连供应商，也不接受旧配置绕过', async () => {
   const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
-  const provider = AI_PROVIDER_CATALOG.find((item) => item.id === providerId)!;
-  expect(NOVELAI_TEXT_PROVIDERS.some((item) => item.id === providerId)).toBe(false);
-  await expect(rewriteNovelAIPrompt({ providerId, modelId: provider.models[0].value, apiKey: 'secret' }, 'nai-diffusion-5-curated', 'source', new AbortController().signal)).rejects.toThrow('直连协议');
+  const provider = AI_PROVIDER_CATALOG.find((item) => item.id === 'mystery')!;
+  expect(NOVELAI_TEXT_PROVIDERS.some((item) => item.id === 'mystery')).toBe(false);
+  await expect(rewriteNovelAIPrompt({ providerId: 'mystery', modelId: provider.models[0].value, apiKey: 'secret' }, 'nai-diffusion-5-curated', 'source', new AbortController().signal)).rejects.toThrow('直连协议');
   expect(fetchMock).not.toHaveBeenCalled();
 });
 

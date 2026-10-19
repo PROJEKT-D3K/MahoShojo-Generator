@@ -1,6 +1,6 @@
 import {
   AI_PROVIDER_PRESETS, describeAiPresetModelDirectSupport, listDirectCapableAiPresets,
-  listDirectCapableAiPresetModels, resolveAIProviderModel,
+  listDirectCapableAiPresetModels, resolveAIProviderModel, resolveAiPresetModelDirectBaseUrl,
 } from '@mahoshojo/ai-core/provider-catalog';
 import type { DirectProviderAdapter } from '@mahoshojo/contracts/provider-profile';
 import { z } from 'zod';
@@ -108,7 +108,10 @@ export async function rewriteNovelAIPrompt(
   const requirements = options.requirements?.trim() ?? '';
   if (requirements.length > 2_000) throw new Error('补充要求请控制在 2,000 字符以内');
   const system = buildNovelAIPromptRewriteInstruction(imageModel, options);
-  const baseURL = new URL(provider.baseUrl);
+  // 出站端点取该模型已核验 Direct wire 的端点——可能与 preset.baseUrl 分属
+  // 同一供应商的不同协议面（Google：Gemini 原生 baseUrl ↔ OpenAI-compat 面）。
+  const directBaseUrl = resolveAiPresetModelDirectBaseUrl(provider, model.modelId);
+  const baseURL = new URL(directBaseUrl ?? provider.baseUrl);
   if (baseURL.protocol !== 'https:' || baseURL.username || baseURL.password) throw new Error('文本供应商必须使用 HTTPS');
 
   let status: number | undefined;
@@ -117,6 +120,8 @@ export async function rewriteNovelAIPrompt(
     const url = `${base}/chat/completions`;
     // OpenAI reasoning models use a completion budget that includes reasoning tokens.
     const reasoning = provider.type === 'openai' && /^(?:o[134](?:-|$)|gpt-5(?:[.-]|$))/.test(model.modelId);
+    // Gemini 的 OpenAI-compat 面按 OpenAI 现行参数名收 completion 预算。
+    const budgetParam = reasoning || provider.type === 'google' ? 'max_completion_tokens' : 'max_tokens';
     const messages = [{ role: reasoning ? 'developer' : 'system', content: system }, {
       role: 'user', content: JSON.stringify({ source: prompt, visualRequirements: requirements }),
     }];
@@ -131,7 +136,7 @@ export async function rewriteNovelAIPrompt(
         model: model.modelId,
         messages,
         stream: false,
-        [reasoning ? 'max_completion_tokens' : 'max_tokens']: 4096,
+        [budgetParam]: 4096,
       }),
     });
     status = response.status;

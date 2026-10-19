@@ -23,6 +23,8 @@ describe('native provider authority', () => {
       expect(entry.modelAliases).toEqual(AI_PROVIDER_MODEL_ALIASES[preset.id] ?? {});
       expect(entry.endpointKind).toBe(preset.endpointKind);
       expect(entry.structuredOutput).toBe(preset.structuredOutput);
+      // 已核验 wire 与 preset.baseUrl 分轨时生成 directBaseUrl（如 Google openai 面）。
+      expect(entry.directBaseUrl ?? null).toBe(preset.direct?.baseUrl ?? null);
       expect(entry.models.map((model: { id: string }) => model.id)).toEqual(preset.models.map((model) => model.value));
       for (const model of [...preset.models, { value: 'not-a-catalog-model' }]) {
         const wire = describeAiPresetModelDirectWire(preset, model.value);
@@ -30,7 +32,11 @@ describe('native provider authority', () => {
         expect(nativeModel?.omitTemperature === true).toBe(
           getModelGenerationCapabilities(preset.id, model.value).temperature.support === 'unsupported',
         );
-        const nativeAdapter = entry.models.find((value: { id: string }) => value.id === model.value)?.adapter ?? entry.adapter;
+        const modelDirect = preset.models.find((value) => value.value === model.value)?.direct;
+        expect(nativeModel?.directBaseUrl ?? null).toBe(
+          modelDirect !== undefined && modelDirect !== 'none' ? modelDirect.baseUrl ?? null : null,
+        );
+        const nativeAdapter = nativeModel?.adapter ?? entry.adapter;
         const nativeSupports = entry.endpointKind === 'provider-public' && nativeAdapter === 'openai-compatible';
         expect(nativeSupports, `${preset.id}/${model.value}`).toBe(wire.status === 'verified' && wire.adapter === 'openai-compatible');
       }

@@ -33,17 +33,31 @@ const entries = AI_PROVIDER_PRESETS.map((preset) => ({
   endpointKind: preset.endpointKind,
   ...(preset.structuredOutput ? { structuredOutput: preset.structuredOutput } : {}),
   adapter: preset.direct?.adapter ?? null,
+  ...(preset.direct?.baseUrl ? { directBaseUrl: preset.direct.baseUrl } : {}),
   models: preset.models.map((model) => ({
     id: model.value,
     ...(getModelGenerationCapabilities(preset.id, model.value).temperature.support === 'unsupported'
       ? { omitTemperature: true } : {}),
     adapter: model.direct === 'none' ? 'none' : model.direct?.adapter ?? null,
+    ...(model.direct !== undefined && model.direct !== 'none' && model.direct.baseUrl
+      ? { directBaseUrl: model.direct.baseUrl }
+      : {}),
   })),
 }));
 for (const preset of entries) {
-  const url = new URL(preset.baseUrl);
-  if (!/^[a-z0-9][a-z0-9-]{0,99}$/u.test(preset.id) || url.protocol !== 'https:' || url.username || url.password) {
+  if (!/^[a-z0-9][a-z0-9-]{0,99}$/u.test(preset.id)) {
     throw new Error(`Untrusted provider catalog entry: ${preset.id}`);
+  }
+  const candidates = [
+    preset.baseUrl,
+    ...(preset.directBaseUrl ? [preset.directBaseUrl] : []),
+    ...preset.models.flatMap((model) => (model.directBaseUrl ? [model.directBaseUrl] : [])),
+  ];
+  for (const candidate of candidates) {
+    const url = new URL(candidate);
+    if (url.protocol !== 'https:' || url.username || url.password) {
+      throw new Error(`Untrusted provider catalog entry: ${preset.id}`);
+    }
   }
 }
 if (new Set(entries.map((entry) => entry.id)).size !== entries.length) throw new Error('Duplicate preset identity');

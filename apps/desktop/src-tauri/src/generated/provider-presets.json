@@ -868,11 +868,12 @@
   {
     "id": "google-cloudflare",
     "name": "Google",
-    "baseUrl": "https://gateway.ai.cloudflare.com/v1/5e2c3572782d87ae449e050ac15d6c5d/mhsj-custom/google-ai-studio/v1beta",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
     "providerType": "google",
     "modelAliases": {},
-    "endpointKind": "project-forward",
-    "adapter": null,
+    "endpointKind": "provider-public",
+    "adapter": "openai-compatible",
+    "directBaseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
     "models": [
       {
         "id": "gemini-3.8-flash",

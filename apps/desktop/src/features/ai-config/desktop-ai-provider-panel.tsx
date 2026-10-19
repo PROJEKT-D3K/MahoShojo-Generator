@@ -2,7 +2,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useRouter } from '@tanstack/react-router';
 import { getModelGenerationCapabilities } from '@mahoshojo/ai-core/generation-settings';
-import { SYSTEM_PROVIDER_OPTION } from '@mahoshojo/ai-core/provider-catalog';
+import {
+  resolveAiPresetModelDirectBaseUrl,
+  SYSTEM_PROVIDER_OPTION,
+} from '@mahoshojo/ai-core/provider-catalog';
 import {
   AdvancedGenerationSettings, AiExecutionLocationField, AiProviderCustomSelect,
   AiProviderSelectorForm, AiProviderModelIdInput, describeAiDirectUnsupportedReason,
@@ -66,14 +69,23 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
   const openEditor = (next: EditingState) => { if (confirmDiscardEditing()) setEditing(next); };
   const openNew = () => openEditor({ draft: { id: newConnectionId(), name: '', baseUrl: '', modelId: '' }, presetModels: null, isExisting: false, hasKeyRef: false });
   const openEdit = () => { if (profile) openEditor({ draft: draftFromProfile(profile), presetModels: null, isExisting: true, hasKeyRef: !!profile.apiKeyRef }); };
-  const copyPreset = () => { if (preset && target.modelId) openEditor({ draft: { id: newConnectionId(), name: preset.name, baseUrl: preset.baseUrl, modelId: target.modelId }, presetModels: preset.models, isExisting: false, hasKeyRef: false }); };
+  // 复制预设作编辑器草稿时必须落到该模型已核验 Direct wire 的端点
+  // （可能与 preset.baseUrl 分属同一供应商的不同协议面，如 Google OpenAI-compat）。
+  const copyPreset = () => { if (preset && target.modelId) openEditor({ draft: { id: newConnectionId(), name: preset.name, baseUrl: resolveAiPresetModelDirectBaseUrl(preset, target.modelId) ?? preset.baseUrl, modelId: target.modelId }, presetModels: preset.models, isExisting: false, hasKeyRef: false }); };
 
   const providerOptions: AiProviderSelectOption[] = [
     ...(target.location === 'server' ? [{ value: 'system', label: SYSTEM_PROVIDER_OPTION.name, description: SYSTEM_PROVIDER_OPTION.description, kind: 'builtin' }] : []),
-    ...listDesktopPresetEntries(state.hiddenPresetIds).filter((entry) => !fixedServer && !entry.hidden).map((entry) => {
-      const enabled = target.location === 'server' || entry.directCapableModels.length > 0;
-      return { value: `preset:${entry.preset.id}`, label: entry.preset.name, description: entry.preset.description, group: '内置供应商', kind: 'preset', ...(!enabled ? { disabled: true, disabledReason: entry.presetSupport.supported ? '暂无可直连的收录模型' : describeAiDirectUnsupportedReason(entry.presetSupport.reason) } : {}) };
-    }),
+    // 候选只展示当前执行位置可用的预设：服务器 BYOK 列出全部（含项目转发端点），
+    // 客户端只留已核验可直连项——不可用选项不再显示一个「不能点」的占位。
+    // 例外：当前已选中的旧预设即使现已不可用也保留条目，交由下方诊断层说明，
+    // 而不是让下拉静默显示成别的供应商。
+    ...listDesktopPresetEntries(state.hiddenPresetIds)
+      .filter((entry) => !fixedServer && !entry.hidden)
+      .filter((entry) => target.location === 'server' || entry.directCapableModels.length > 0 || entry.preset.id === presetId)
+      .map((entry) => {
+        const enabled = target.location === 'server' || entry.directCapableModels.length > 0;
+        return { value: `preset:${entry.preset.id}`, label: entry.preset.name, description: entry.preset.description, group: '内置供应商', kind: 'preset', ...(!enabled ? { disabled: true, disabledReason: entry.presetSupport.supported ? '暂无可直连的收录模型' : describeAiDirectUnsupportedReason(entry.presetSupport.reason) } : {}) };
+      }),
     ...(target.location === 'client' ? state.profiles.map((item) => ({ value: `custom:${item.id}`, label: item.name, description: `默认模型 ${item.modelId}`, group: '我的连接', kind: 'connection' })) : []),
   ];
   const providerValue = identity?.kind === 'system' ? 'system' : identity?.kind === 'preset' ? `preset:${identity.providerId}` : identity?.kind === 'custom' ? `custom:${identity.profileId}` : '';

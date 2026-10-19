@@ -10,6 +10,7 @@ import { useMemo, useState } from 'react';
 import {
   describeAiDirectUnsupportedReason,
 } from '@mahoshojo/ui-web/ai-provider';
+import { resolveAiPresetModelDirectBaseUrl } from '@mahoshojo/ai-core/provider-catalog';
 import { type DirectProviderProfileV1 } from '@mahoshojo/contracts/provider-profile';
 
 import { PROVIDER_PRESETS, type ProfileDraft } from '../providers/profile-draft';
@@ -206,7 +207,8 @@ const newDraftFromPreset = (entry: DesktopPresetEntry, modelId: string): Profile
   return {
     id: newConnectionId(),
     name: `${entry.preset.name}`,
-    baseUrl: entry.preset.baseUrl,
+    // 用该模型已核验 Direct wire 的端点，可能与 preset.baseUrl 分属不同协议面。
+    baseUrl: resolveAiPresetModelDirectBaseUrl(entry.preset, modelId) ?? entry.preset.baseUrl,
     modelId,
   };
 };

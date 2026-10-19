@@ -65,6 +65,13 @@ export type AiPresetEndpointKind = 'provider-public' | 'project-forward';
  */
 export interface AiDirectWireEvidence {
     readonly adapter: DirectProviderAdapter;
+    /**
+     * 该 wire 核验成立的实际直连端点；缺省 = preset.baseUrl。
+     * 只在已核验 Direct wire 落在与 baseUrl 不同的端点面时声明——例如 baseUrl
+     * 是供应商原生协议端点，而 Direct 走同一供应商提供的 OpenAI-compatible 面
+     * （Google AI Studio 即此形态）。声明后该 wire 的出站端点以本字段为准。
+     */
+    readonly baseUrl?: string;
     /** 核验所依据的公开一手资料（官方协议文档）；缺省时依据写在相邻注释。 */
     readonly sourceUrl?: string;
     /** 核验日期（YYYY-MM-DD）。供应商改版会让旧证据过期，必须记录时间。 */
@@ -102,6 +109,8 @@ export type AiDirectWireResolution =
     | {
           status: 'verified';
           adapter: DirectProviderAdapter;
+          /** 核验成立的实际直连端点；缺省 = preset.baseUrl，见 AiDirectWireEvidence。 */
+          baseUrl?: string;
           sourceUrl?: string;
           reviewedAt: string;
       }
@@ -249,6 +258,26 @@ export const listDirectCapableAiPresetModels = (
             describeAiPresetModelDirectSupport(preset, model.value, implementedDirectAdapters)
                 .supported
     );
+
+/**
+ * 解析 (preset, modelId) 已核验 Direct wire 的出站端点；未核验/不可用返回 null。
+ *
+ * 端点解析链：模型级 `direct.baseUrl` → preset 级 `direct.baseUrl` →
+ * `preset.baseUrl`——与 wire 证据继承链同向，避免模型声明自己的 wire 后却
+ * 静默落到 preset 的另一端点面。宿主解析（generated provider-presets.json →
+ * `provider_target.rs`）必须与此保持一致。
+ */
+export const resolveAiPresetModelDirectBaseUrl = (
+    preset: AiProviderPreset,
+    modelId: string
+): string | null => {
+    const resolution = describeAiPresetModelDirectWire(preset, modelId);
+    if (resolution.status !== 'verified') return null;
+    const modelDirect = preset.models.find((model) => model.value === modelId)?.direct;
+    const evidenceBaseUrl =
+        modelDirect !== undefined && modelDirect !== 'none' ? modelDirect.baseUrl : undefined;
+    return evidenceBaseUrl ?? preset.direct?.baseUrl ?? preset.baseUrl;
+};
 
 /** 只在项目预设集合中查找；`'system'` 属服务器策略，永远查不到。 */
 export const findAiProviderPreset = (providerId: string): AiProviderPreset | null =>
@@ -1549,15 +1578,25 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
         ]
     },
     {
+        // id 形如 `google-cloudflare` 是历史命名：该预设现指向 Google 官方端点。
+        // id 是存量选择、凭据 ref（`preset:google-cloudflare:api-key`）、能力 key
+        // 与 BYOK wire 的稳定身份，重命名会让以上全部悬空，保持原值。
         id: 'google-cloudflare',
         name: 'Google',
-        description: '咕咕噜噜原生渠道直连，使用 Cloudflare 代理。',
+        description: '咕咕噜噜官方渠道直连。',
         docsUrl: 'https://aistudio.google.com/',
-        baseUrl: 'https://gateway.ai.cloudflare.com/v1/5e2c3572782d87ae449e050ac15d6c5d/mhsj-custom/google-ai-studio/v1beta',
+        // baseUrl 走 Gemini 原生协议面（服务器 BYOK 经 createGoogleGenerativeAI
+        // 访问 `…/v1beta/models/{model}:*`）；Direct wire 是同一供应商公开的
+        // OpenAI-compatible 面（`…/v1beta/openai`），在 `direct.baseUrl` 显式声明。
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         type: 'google',
-        // 项目运营的 Cloudflare AI Gateway（路径含项目账号与 gateway 名）：
-        // 用户 Key 经它会流过项目设施，只能由服务器 BYOK 使用。
-        endpointKind: 'project-forward',
+        endpointKind: 'provider-public',
+        direct: {
+            adapter: 'openai-compatible',
+            baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+            sourceUrl: 'https://ai.google.dev/gemini-api/docs/openai',
+            reviewedAt: '2026-10-19',
+        },
         models: [
             {
                 value: 'gemini-3.8-flash',

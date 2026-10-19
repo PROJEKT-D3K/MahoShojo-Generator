@@ -41,7 +41,7 @@
 1. UI 选项 MUST 使用带 `kind` 的显式区分类型（例如 `preset` / `connection`），不得将真实 Profile ID 与预设 slug 拼在同一未经区分的查找空间中；“新建”是动作，不是虚拟 Provider。
 2. 预设与已保存连接可有相同显示名、相同 baseUrl，MUST 按身份而非 Endpoint 自动归属；不自动将旧 Profile 改认预设，旧 Profile ID/密钥引用保持不变。
 3. 预设不可原位修改名称、Endpoint、adapter。选择预设后填 Key/模型只是填写**即将创建的用户 Profile**，保存后切换到“我的连接”条目。
-4. `project-forward`、`system`、未核验 Direct wire、宿主未实现 adapter 的预设必须展示原因或显示为不可用，但不得被当作可执行 Direct 的快捷候选。预设支持度继续由 `describeAiPreset*DirectSupport` 与 Native adapter 实装集合交集计算。
+4. `project-forward`、`system`、未核验 Direct wire、宿主未实现 adapter 的预设不得被当作可执行 Direct 的快捷候选；产品层面须如实呈现为不可用——展示原因、禁用并说明，或不在该执行位置的候选中出现。当前已选中的旧预设即使现已不可用仍保留条目交由诊断层说明，不得静默显示成其他供应商。预设支持度继续由 `describeAiPreset*DirectSupport` 与 Native adapter 实装集合交集计算。
 5. `AiProviderCustomSelect` 的分组、操作项、焦点恢复、箭头键/Enter/Escape/Tab、ARIA 语义由共源层实现，Web 不显示 Desktop 专属操作。弹层在窄窗、缩放和滚动容器中不得裁切且允许触控操作。
 
 ## DESK-AIP-003 首次预设配置的“保存并使用”旅程
@@ -245,3 +245,4 @@
 
 - **2026-10-08（D5.1-G3 审查决策）**：`/creator` 创作工房完成纵切后，AIP-4 的 Desktop 生成页面覆盖自四页扩为五页——`/creator` 同样使用统一连接选择器、客户端/服务器执行开关，以及共享的高级生成设置布局；Web 侧仍只共享适合共享的外观与组件，不改变其 Provider 持久化或 BYOK 能力。本增补对应审查报告「需要决策的两件事」第 1 项的采纳结论。
 - **2026-10-09（D5.1-AIP-r1 审查收口）**：按独立审查意见收口——生成页面板改由共源 `AiProviderSelectorForm` 装配（DESK-AIP-009.1/3 闭合）；Provider 下拉承载「使用系统默认配置」+ 内置可直连预设 + 我的连接，预设即选即配落入连接编辑器；服务器位置呈现系统模型行（含「默认策略」与 GLM 5.3 Flash 等目录模型）与按系统模型作用域保存的高级参数；overlay 升级 v4 追加 `selection.systemModelId`；hosted 契约新增受检非秘密 `systemConfig` 并由 native 注入为服务器 `customProvider`（DESK-093 修订）；`AiProviderCustomSelect` 补 `role="combobox"` 语义与裁切祖先内翻转/限高；三页生成方式在客户端显示生效的「非流式」并说明服务器偏好保留。AIP-5 实机验收继续 `PENDING`。
+- **2026-10-19（预设端点分轨与客户端不可用项隐藏）**：`AiDirectWireEvidence` 新增可选 `baseUrl`——预设的已核验 Direct wire 落在与 `baseUrl` 不同的端点面时显式记录（TS `resolveAiPresetModelDirectBaseUrl` 与 Rust `direct_base_url` 同链解析：模型级 → preset 级 → `baseUrl`）。`google-cloudflare` 预设迁移为 Google 官方端点（`provider-public`）：服务器 BYOK 继续经 Gemini 原生 wire 访问 `https://generativelanguage.googleapis.com/v1beta`，客户端 Direct 走官方 OpenAI-compatible 面 `…/v1beta/openai`（`adapter: openai-compatible`，核验依据 `https://ai.google.dev/gemini-api/docs/openai`）；原项目 Cloudflare 转发端点退役，预设 ID 保持不变以兼容存量选择、凭据 ref 与能力键。DESK-AIP-002.4 同步修订为「如实呈现为不可用或不进入该位置候选」——客户端下拉不再展示 `mystery` 等仅服务器 BYOK 可用项；`mystery` 在共享目录与服务器 BYOK 路径中的位置不变。

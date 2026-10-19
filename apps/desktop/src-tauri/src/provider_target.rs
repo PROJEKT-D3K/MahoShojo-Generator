@@ -27,6 +27,9 @@ pub struct TrustedProviderPreset {
     model_aliases: std::collections::BTreeMap<String, String>,
     endpoint_kind: String,
     adapter: Option<String>,
+    /// The verified Direct endpoint when it differs from `base_url`
+    /// (TS `AiDirectWireEvidence.baseUrl`); absent = `base_url`.
+    direct_base_url: Option<String>,
     models: Vec<TrustedPresetModel>,
 }
 #[derive(Debug, Clone, Deserialize)]
@@ -36,6 +39,7 @@ struct TrustedPresetModel {
     #[serde(default)]
     omit_temperature: bool,
     adapter: Option<String>,
+    direct_base_url: Option<String>,
 }
 
 impl TrustedProviderPreset {
@@ -102,6 +106,17 @@ fn normalize_model_id_with_limit(
     Ok(value.to_owned())
 }
 
+/// Generated catalog entries are trusted authority, but their URLs are still
+/// validated: https only, never embedded credentials. Covers base_url and the
+/// optional direct_base_url declared for a verified Direct wire.
+fn validate_catalog_url(candidate: &str) -> Result<(), ProviderTargetError> {
+    let url = url::Url::parse(candidate).map_err(|_| ProviderTargetError::InvalidCatalog)?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return Err(ProviderTargetError::InvalidCatalog);
+    }
+    Ok(())
+}
+
 pub fn resolve_hosted_preset(
     provider_id: &str,
     model_id: &str,
@@ -111,15 +126,17 @@ pub fn resolve_hosted_preset(
         .into_iter()
         .find(|preset| preset.id == provider_id)
         .ok_or(ProviderTargetError::UnknownPreset)?;
-    let url = url::Url::parse(&preset.base_url).map_err(|_| ProviderTargetError::InvalidCatalog)?;
-    if url.scheme() != "https"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || !matches!(
-            preset.provider_type.as_str(),
-            "openai" | "google" | "deepseek"
-        )
+    validate_catalog_url(&preset.base_url)?;
+    for candidate in std::iter::once(&preset.direct_base_url)
+        .chain(preset.models.iter().map(|model| &model.direct_base_url))
+        .flatten()
     {
+        validate_catalog_url(candidate)?;
+    }
+    if !matches!(
+        preset.provider_type.as_str(),
+        "openai" | "google" | "deepseek"
+    ) {
         return Err(ProviderTargetError::InvalidCatalog);
     }
     Ok(preset)
@@ -236,12 +253,23 @@ pub fn resolve_direct_preset(
     if !supports_direct_model(&preset, &model_id) {
         return Err(ProviderTargetError::UnsupportedWire);
     }
+    // Endpoint chain mirrors TS `resolveAiPresetModelDirectBaseUrl`:
+    // model evidence directBaseUrl → preset evidence directBaseUrl → base_url.
+    // A verified wire may live on a different surface of the same provider
+    // (e.g. Google's OpenAI-compatible path under the Gemini base URL).
+    let base_url = preset
+        .models
+        .iter()
+        .find(|model| model.id == model_id)
+        .and_then(|model| model.direct_base_url.as_deref())
+        .or(preset.direct_base_url.as_deref())
+        .unwrap_or(&preset.base_url);
     // Only this native-authority constructor may bind the reserved preset secret namespace.
     let profile = DirectProviderExecutionProfile {
         id: format!("preset:{}", preset.id),
         name: preset.name,
         adapter: ProviderAdapter::OpenaiCompatible,
-        base_url: preset.base_url,
+        base_url: base_url.to_owned(),
         model_id: resolve_preset_model_id(provider_id, &model_id)?,
         api_key_ref: Some(preset_secret_ref(provider_id)?),
         secret_header_refs: None,
@@ -332,6 +360,7 @@ mod tests {
             omit_temperature: false,
             id: "denied-model".into(),
             adapter: Some("none".into()),
+            direct_base_url: None,
         });
         assert!(!supports_direct_model(&preset, "denied-model"));
         assert!(supports_direct_model(&preset, "other-custom-model"));
@@ -372,7 +401,8 @@ mod tests {
     #[test]
     fn unknown_and_unverified_models_fail_closed() {
         assert!(resolve_direct_preset("not-in-catalog", "model").is_err());
-        assert!(resolve_direct_preset("google-cloudflare", "model").is_err());
+        // `mystery` is a project-forward endpoint: never a Direct preset.
+        assert!(resolve_direct_preset("mystery", "model").is_err());
         for preset in catalog()
             .unwrap()
             .iter()
@@ -380,6 +410,22 @@ mod tests {
         {
             assert!(resolve_direct_preset(&preset.id, "unknown-custom-model").is_err());
         }
+    }
+    #[test]
+    fn verified_wire_may_live_on_a_distinct_direct_surface() {
+        // google-cloudflare ships the provider's native Gemini surface as baseUrl
+        // while its verified Direct wire is the official OpenAI-compatible path.
+        let profile = resolve_direct_preset("google-cloudflare", "gemini-2.5-flash").unwrap();
+        assert_eq!(
+            profile.base_url,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+        assert_eq!(profile.adapter, ProviderAdapter::OpenaiCompatible);
+        assert_eq!(profile.model_id, "gemini-2.5-flash");
+        assert_eq!(
+            profile.api_key_ref.as_deref(),
+            Some("preset:google-cloudflare:api-key")
+        );
     }
     #[test]
     fn target_cannot_smuggle_transport_or_credentials() {

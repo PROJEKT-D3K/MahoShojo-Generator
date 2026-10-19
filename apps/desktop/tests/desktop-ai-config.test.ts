@@ -426,10 +426,15 @@ describe('preset layering (DESKTOP_DIRECT_ADAPTERS = openai-compatible)', () => 
     expect(entry.directCapableModels.every((model) => entry.preset.models.includes(model))).toBe(true);
   });
 
-  it('explains project-forward endpoints instead of hiding them', () => {
-    const entry = describeDesktopPresetEntry(presetById('google-cloudflare'), false);
-    expect(entry.presetSupport).toEqual({ supported: false, reason: 'project-forward-endpoint' });
-    expect(entry.directCapableModels).toHaveLength(0);
+  it('marks Google 官方预设直连可用（OpenAI-compat 面），project-forward 仍不可用', () => {
+    const google = describeDesktopPresetEntry(presetById('google-cloudflare'), false);
+    expect(google.presetSupport).toEqual({ supported: true, adapter: 'openai-compatible' });
+    expect(google.directCapableModels.length).toBeGreaterThan(0);
+    // 项目转发端点（魔法国度）仍是「仅服务器 BYOK」：领域层给出原因而非隐藏，
+    // 客户端选择器是否展示由 UI 层决定。
+    const forward = describeDesktopPresetEntry(presetById('mystery'), false);
+    expect(forward.presetSupport).toEqual({ supported: false, reason: 'project-forward-endpoint' });
+    expect(forward.directCapableModels).toHaveLength(0);
   });
 
   it('per-model support follows verified wire intersected with DESKTOP_DIRECT_ADAPTERS', () => {

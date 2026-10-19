@@ -56,6 +56,11 @@ MahoShojo Generator 的本地桌面客户端 runtime。它是独立 app，不是
   secretRef 事务，Profile 落盘失败不会让旧配置静默换用新 Key。
   `DESKTOP_DIRECT_ADAPTERS = { openai-compatible }` 是宿主执行能力注入点，
   编辑器可表达能力由独立的 `DESKTOP_EDITABLE_PROFILE_ADAPTERS` 决定。
+- **2026-10-19 预设端点修订**：`AiDirectWireEvidence.baseUrl` 允许已核验 Direct wire 与
+  `baseUrl` 分属同一供应商的不同协议面；`google-cloudflare` 迁移为 Google 官方端点
+  （Hosted 走 Gemini 原生 `…/v1beta`，客户端 Direct 走官方 OpenAI-compat `…/v1beta/openai`），
+  客户端供应商下拉只展示当前执行位置可用的预设——`mystery` 等仅服务器 BYOK 项不再占位，
+  共享目录与服务器 BYOK 兼容不变。
 
 ## 权威边界
 

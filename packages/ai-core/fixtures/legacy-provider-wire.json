@@ -274,7 +274,7 @@
   },
   {
     "id": "google-cloudflare",
-    "baseUrl": "https://gateway.ai.cloudflare.com/v1/5e2c3572782d87ae449e050ac15d6c5d/mhsj-custom/google-ai-studio/v1beta",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
     "type": "google",
     "models": [
       "gemini-3.8-flash",

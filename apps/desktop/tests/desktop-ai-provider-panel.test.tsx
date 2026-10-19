@@ -231,6 +231,35 @@ describe('DesktopAiProviderPanel', () => {
     expect(selection).toMatchObject({ executionPreference: 'client', clientConnectionId: null, clientTarget: { kind: 'preset', providerId: firstCapable.preset.id } });
   });
 
+  it('客户端下拉只展示可用预设：魔法国度不出现，Google 官方直连可选', async () => {
+    await mount();
+    await act(async () => triggers()[0]!.click());
+    await settle();
+    const clientOptionTexts = [...container.querySelectorAll('[role="option"]')]
+      .map((item) => item.textContent ?? '');
+    // 客户端位置下项目转发端点（魔法国度）不进入候选——不可用选项不占位。
+    expect(clientOptionTexts.some((text) => text.includes('魔法国度'))).toBe(false);
+    // Google 官方 OpenAI-compat 面已核验，在客户端可直接选择。
+    const googleOption = [...container.querySelectorAll('[role="option"]')].find((item) =>
+      item.textContent?.includes('Google'),
+    )!;
+    expect(googleOption).toBeTruthy();
+    expect(googleOption.getAttribute('aria-disabled')).not.toBe('true');
+
+    // 切到服务器位置后所有预设（含魔法国度）作为服务器 BYOK 候选出现。
+    // jsdom 的 .click() 不派发 mousedown，先显式收掉已打开的下拉再重开。
+    await act(async () => document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+    await act(async () => buttons().find((item) => item.textContent?.trim() === '服务器')!.click());
+    await settle();
+    await act(async () => triggers()[0]!.click());
+    await settle();
+    expect(
+      [...container.querySelectorAll('[role="option"]')].some((item) =>
+        item.textContent?.includes('魔法国度'),
+      ),
+    ).toBe(true);
+  });
+
   it('shows the unavailable reason for an unimplemented adapter without hiding the connection', async () => {
     seedOverlay({
       version: 3,
