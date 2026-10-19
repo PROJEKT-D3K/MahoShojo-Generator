@@ -31,7 +31,7 @@ describe('tavern-cloud-save', () => {
     expect(result.warnings.length).toBeGreaterThan(0);
   });
 
-  it('超限时能通过 light/minimal 降级到 300KB 内', () => {
+  it('此夹具经 light/minimal 裁剪后低于共享云端上限', () => {
     const big = '很长的文本。'.repeat(80_000);
     const input = {
       name: '超长角色',

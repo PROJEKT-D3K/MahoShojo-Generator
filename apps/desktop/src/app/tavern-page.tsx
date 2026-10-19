@@ -1,9 +1,9 @@
-import { DesktopCloudError, STREAM_HOSTED_AI_COMMAND } from '../platform/cloud-bridge';
+import { DesktopCloudError, STREAM_HOSTED_AI_COMMAND, type InvokeFn } from '../platform/cloud-bridge';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter } from '@tanstack/react-router';
-import { isTavernMagicalGirlProjection, buildTavernScenarioFragment, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, convertTavernToMagicalGirlCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
-import { isTavernGeneralCharacter, isTavernGeneralScenario, getTavernMagicalGirlPreview, TavernConversionControls, describeTavernGenerationMode, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
+import { buildTavernCloudSavePayload, type TavernCloudSavePreset, isTavernMagicalGirlProjection, buildTavernScenarioFragment, convertTavernToGeneralCard, convertTavernToGeneralScenarioCard, convertTavernToCanshouCard, convertTavernToMagicalGirlCard, normalizeTavernCard, TAVERN_CANSHOU_TEMPLATE_ID, type TavernParseResult } from '@mahoshojo/domain/tavern-card';
+import { getTavernProjectionCardType, TavernCloudSaveControls, isTavernGeneralCharacter, isTavernGeneralScenario, getTavernMagicalGirlPreview, TavernConversionControls, describeTavernGenerationMode, isTavernStructuredScenario, TavernTemplateSelector, TAVERN_LOCAL_IMPORT_TEMPLATES, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernTabs, TavernTabPanels, TavernLocalExportPanel, TavernHeroBanner, TavernFileInput, TavernCandidateSelector, TavernCardPreview, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile } from '@mahoshojo/ui-web/tavern';
 import { GeneralScenarioCard } from '@mahoshojo/ui-web/scenario';
 import { MagicalGirlCard, resolveMagicalGirlGradient, type CanshouDetails, CanshouCard, GeneralCharacterCard } from '@mahoshojo/ui-web/character-card';
 import { ProductFooter } from '@mahoshojo/ui-web/shell';
@@ -23,6 +23,7 @@ import { useDesktopCloudSession } from '../features/account/use-desktop-cloud-se
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
 import { AiReasoningPanel } from '@mahoshojo/ui-web/details-controls';
 import { QuestionnaireDraftPanel } from './questionnaire-draft-panel';
+import { DesktopCloudCardActions } from '../features/cloud-save/private-result-save';
 
 const SYSTEM_COOLDOWN_MS = 120_000;
 const PRESET_COOLDOWN_MS = 3_000;
@@ -63,16 +64,47 @@ function TavernPage({ session }: { session: TavernAiSession }) {
   const { preference, setPreference, isHydrated: placeholderHydrated } = useTavernPlaceholderPreference();
   const sourceSelection = useTavernSourceSelection();
   const busy = useRef(false);
-  const guard = useLeaveGuard(() => busy.current || exportBusy.current || requestLock.current || aiStore.isPreparingGeneration() || session.isBusy() || session.hasUnsavedDraft() || providerDirty,
-    '生成、导出尚未完成，或草稿/AI 配置未保存。请等待、取消或导出后再离开。', undefined, () => {
-      if (busy.current || exportBusy.current || ai.saving) return false;
+  const [cloudPreset, setCloudPreset] = useState<TavernCloudSavePreset>('standard');
+  const [cloudPending, setCloudPending] = useState(false);
+  const [cloudIntent, setCloudIntent] = useState(false);
+  const cloudRequests = useRef(new Set<symbol>());
+  const cloudIntents = useRef(new Set<symbol>());
+  const cloudBusy = useRef(false);
+  const author = { ownerKey: `${cloudState.account?.userId ?? 'none'}:${cloudStore.getCredentialEpoch()}`,
+    id: cloudState.account?.userId ?? 0, username: cloudState.account?.username ?? '未登录用户' };
+  const visibleCloudAuthor = useRef(author); visibleCloudAuthor.current = author;
+  const retainedCloudAuthor = useRef<typeof author | null>(null);
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  // A retired account/form cannot release an outstanding Native request owned by another scope.
+  const cloudInvoke = useCallback<InvokeFn>(async (command, args) => {
+    const ticket = Symbol(); cloudRequests.current.add(ticket);
+    if (mounted.current) setCloudPending(true);
+    try { return await invoke(command, args as never); }
+    finally { cloudRequests.current.delete(ticket); if (mounted.current) setCloudPending(cloudRequests.current.size > 0); }
+  }, []);
+  const retainCloudSource = useCallback(() => {
+    const ticket = Symbol(); cloudIntents.current.add(ticket);
+    if (retainedCloudAuthor.current?.ownerKey !== visibleCloudAuthor.current.ownerKey) retainedCloudAuthor.current = visibleCloudAuthor.current;
+    if (mounted.current) setCloudIntent(true);
+    return () => {
+      cloudIntents.current.delete(ticket);
+      if (cloudIntents.current.size === 0) retainedCloudAuthor.current = null;
+      if (mounted.current) setCloudIntent(cloudIntents.current.size > 0);
+    };
+  }, []);
+  const onCloudBusy = useCallback((value: boolean) => { cloudBusy.current = value; }, []);
+  const guard = useLeaveGuard(() => cloudRequests.current.size > 0 || cloudBusy.current || busy.current || exportBusy.current || requestLock.current || aiStore.isPreparingGeneration() || session.isBusy() || session.hasUnsavedDraft() || providerDirty,
+    '生成、导出或云端操作尚未完成，或草稿/AI 配置未保存。请等待、取消或导出后再离开。', undefined, () => {
+      if (cloudRequests.current.size > 0 || cloudBusy.current || busy.current || exportBusy.current || ai.saving) return false;
       if (!window.confirm('确认终止当前操作并离开？未保存的内容和 AI 配置可能丢失。')) return false;
       aiStore.cancelPreparingGeneration(); session.cancel(); return true;
     });
-  const blocked = generating || reading || saving || ai.pendingRestore || !guard.ready;
+  const blocked = generating || reading || saving || ai.pendingRestore || cloudPending || !guard.ready;
+  const sourceBlocked = blocked || cloudIntent;
   const clearAiOutput = () => { session.clearOutput(); session.updateDraft({ ...session.getSnapshot().draft, input: null }); };
   const confirmChange = (clear = true, unmountProvider = false) => {
-    if (busy.current || requestLock.current || session.isBusy() || aiStore.isPreparingGeneration()) return false;
+    if (cloudRequests.current.size > 0 || cloudIntents.current.size > 0 || cloudBusy.current || busy.current || requestLock.current || session.isBusy() || aiStore.isPreparingGeneration()) return false;
     if (unmountProvider && providerDirty && !window.confirm('AI 连接配置或 API Key 尚未保存。切换会关闭配置面板，确认放弃未保存的配置？')) return false;
     if ((session.hasUnsavedResult() || session.hasUnsavedDraft() || ai.rawText) && !window.confirm('更改转换输入会清除当前 AI 结果与原始输出。请先下载或保存需要保留的内容。确认继续？')) return false;
     if (clear) clearAiOutput(); return true;
@@ -123,6 +155,11 @@ function TavernPage({ session }: { session: TavernAiSession }) {
   const scenarioPreview = useMemo(() => aiCard && isTavernStructuredScenario(aiCard)
     ? buildTavernScenarioFragment(aiCard) ?? { title: '情景', content: JSON.stringify(aiCard, null, 2) } : null, [aiCard]);
   const projection = mode === 'ai' ? aiCard : conversion.projection;
+  // Same-account profile refresh must not remount an unknown write at the size boundary.
+  const cloudAuthor = retainedCloudAuthor.current?.ownerKey === author.ownerKey ? retainedCloudAuthor.current : author;
+  const cloudPreview = useMemo(() => projection ? buildTavernCloudSavePayload(projection, cloudAuthor, cloudPreset) : null,
+    [projection, cloudAuthor.id, cloudAuthor.username, cloudPreset]);
+  const cloudData = cloudPreview && !('error' in cloudPreview) && !cloudPreview.overLimit ? cloudPreview.data : null;
   const { aiInput, aiInputError, warnings } = useMemo(() => {
     if (!candidate) return { aiInput: null, aiInputError: null, warnings: [] };
     const aiInput: TavernGenerationInput = { raw: candidate.parsed, template, language: ai.draft.language, preference };
@@ -133,9 +170,9 @@ function TavernPage({ session }: { session: TavernAiSession }) {
     catch (cause) { return { aiInput, aiInputError: cause instanceof Error ? cause.message : 'AI 输入无效', warnings: [] }; }
   }, [candidate, template, ai.draft.language, preference, target.location]);
   const unavailable = target.unavailableReason;
-  const generateDisabled = blocked || serverCooldown || accountBusy || !placeholderHydrated || !aiInput || !!aiInputError || !!unavailable || (target.location === 'client' && !target.mode) || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
+  const generateDisabled = sourceBlocked || serverCooldown || accountBusy || !placeholderHydrated || !aiInput || !!aiInputError || !!unavailable || (target.location === 'client' && !target.mode) || !target.providerTarget || aiState.overlayState !== 'ready' || (target.profile !== null && aiState.profilesState !== 'ready');
   const generate = () => {
-    if (generateDisabled || requestLock.current || session.isBusy() || !aiInput) return;
+    if (cloudRequests.current.size > 0 || cloudIntents.current.size > 0 || cloudBusy.current || generateDisabled || requestLock.current || session.isBusy() || !aiInput) return;
     if ((session.hasUnsavedResult() || ai.rawText) && !window.confirm('重新转换会替换当前 AI 结果与原始输出，且可能产生新的模型费用。确认继续？')) return;
     if (ai.phase === 'uncertain' && !window.confirm('上次转换是否已在服务器执行仍无法确认。再次转换可能产生重复调用与费用。确认继续？')) return;
     const account = cloudStore.getSnapshot();
@@ -164,20 +201,20 @@ function TavernPage({ session }: { session: TavernAiSession }) {
       .finally(() => { requestLock.current = false; });
   };
   return <div className="magic-background-white"><div className="container !max-w-[980px]"><div className="card !max-w-none !p-0">
-    <TavernHeroBanner title="酒馆生态" subtitle="SillyTavern 角色卡（PNG 内嵌 JSON）导入/导出工具" actions={<TavernTabs idPrefix={idPrefix} tab={tab} onChange={setTab} disabled={blocked || exporting} />} right={<Link to="/" className="text-sm text-pink-700 hover:underline">返回首页</Link>} />
+    <TavernHeroBanner title="酒馆生态" subtitle="SillyTavern 角色卡（PNG 内嵌 JSON）导入/导出工具" actions={<TavernTabs idPrefix={idPrefix} tab={tab} onChange={next => { if (cloudRequests.current.size === 0 && cloudIntents.current.size === 0 && !cloudBusy.current) setTab(next); }} disabled={sourceBlocked || exporting} />} right={<Link to="/" className="text-sm text-pink-700 hover:underline">返回首页</Link>} />
     <div className="p-6">
-      <p className="text-center text-xs text-gray-600">本地解析与导出 PNG / JSON、规则映射和卡库读写。仅选择 AI 深度转换并点击转换时，裁剪后的设定才会发送给所选供应商；云保存尚未接入。</p>
-      <TavernTabPanels idPrefix={idPrefix} tab={tab} exportPanel={<TavernLocalExportPanel repository={repository} exportFile={exportTavernFile} getDefaultBase={getDesktopTavernBase} disabled={!guard.ready} onBusyChange={onExportBusy} />} importPanel={<>
-      <TavernLocalSources selection={sourceSelection} repository={repository} disabled={blocked} onSource={(file) => void read(file)} />
-      <TavernFileInput disabled={blocked} onFileSelected={(file) => void read(file)} />
+      <p className="text-center text-xs text-gray-600">本地解析与导出 PNG / JSON、规则映射和卡库读写。仅选择 AI 深度转换并点击转换时，裁剪后的设定才会发送给所选供应商；明确点击云端保存或替换后才发送所选裁剪副本，本地结果与原件保留。</p>
+      <TavernTabPanels idPrefix={idPrefix} tab={tab} exportPanel={<TavernLocalExportPanel repository={repository} exportFile={exportTavernFile} getDefaultBase={getDesktopTavernBase} disabled={!guard.ready || cloudPending} onBusyChange={onExportBusy} />} importPanel={<>
+      <TavernLocalSources selection={sourceSelection} repository={repository} disabled={sourceBlocked} onSource={(file) => void read(file)} />
+      <TavernFileInput disabled={sourceBlocked} onFileSelected={(file) => void read(file)} />
       {reading ? <p role="status">解析中…</p> : null}
       {error ? <p role="alert" className="mt-3 text-sm text-red-700">{error}</p> : null}
       {candidate && normalized && result ? <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="space-y-4"><TavernCandidateSelector candidates={result.candidates} selectedIndex={index} onSelect={(next) => { if (confirmChange()) { sourceSelection.begin(); setIndex(next); } }} disabled={blocked} />
-          <TavernTemplateSelector value={template} templates={TAVERN_LOCAL_IMPORT_TEMPLATES} disabled={blocked}
+        <div className="space-y-4"><TavernCandidateSelector candidates={result.candidates} selectedIndex={index} onSelect={(next) => { if (confirmChange()) { sourceSelection.begin(); setIndex(next); } }} disabled={sourceBlocked} />
+          <TavernTemplateSelector value={template} templates={TAVERN_LOCAL_IMPORT_TEMPLATES} disabled={sourceBlocked}
             onChange={(next) => { if (confirmChange()) { sourceSelection.begin(); setTemplate(next); if (next === 'scenario' || next === 'magical-girl') setMode('ai'); } }} />
-          <TavernPlaceholderFields preference={preference} name={normalized.name} onChange={(next) => { if (confirmChange()) setPreference(next); }} disabled={blocked || !placeholderHydrated} />
-          <TavernConversionControls mode={mode} onModeChange={next => { if (next === 'rules' && template === 'scenario') return; if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={blocked}
+          <TavernPlaceholderFields preference={preference} name={normalized.name} onChange={(next) => { if (confirmChange()) setPreference(next); }} disabled={sourceBlocked || !placeholderHydrated} />
+          <TavernConversionControls mode={mode} onModeChange={next => { if (next === 'rules' && template === 'scenario') return; if (confirmChange(true, next === 'rules')) setMode(next); }} disabled={sourceBlocked}
             rulesDisabledReason={template === 'scenario' ? '结构化情景目前仅支持 AI 深度转换，尚未提供规则映射。' : undefined}
             aiDescription="裁剪后的设定将通过所选客户端或服务器通道发送；完成结果通过共源 schema 校验，原件单独保留。"
             language={ai.draft.language} languages={languages.length ? languages : [{ code: ai.draft.language, name: ai.draft.language }]}
@@ -217,13 +254,21 @@ function TavernPage({ session }: { session: TavernAiSession }) {
             busy.current = true; setSaving(true);
             try { if (mode === 'ai') { const saved = await session.saveResult(); if (!saved) throw new Error(session.getSnapshot().saveError ?? '保存失败'); return session.getSnapshot().saveStatus === 'already-present' ? 'already-present' : 'saved'; } return await saveDesktopTavernCard(repository, data); } finally { busy.current = false; setSaving(false); }
           }} />
+          <TavernCloudSaveControls preset={cloudPreset} onPresetChange={next => {
+            if (cloudRequests.current.size === 0 && cloudIntents.current.size === 0 && !cloudBusy.current) setCloudPreset(next);
+          }} preview={cloudPreview} disabled={sourceBlocked || !placeholderHydrated} />
+          {cloudIntent ? <p className="text-xs text-amber-700">云端操作保留了当前转换副本。完成或关闭原表单后再修改输入与裁剪预设；结果不确定时请先按云端提示核对。本地原件仍可导出。</p> : null}
+          <DesktopCloudCardActions data={cloudData} cardType={getTavernProjectionCardType(projection)} presentation="generation-result"
+            disabled={blocked || !placeholderHydrated} invokeFn={cloudInvoke} retainSourceIntent={retainCloudSource}
+            externalLeaveGuard={guard} onBusyChange={onCloudBusy}
+            isBlocked={() => cloudRequests.current.size > 0 || busy.current || exportBusy.current || requestLock.current || session.isBusy() || aiStore.isPreparingGeneration()} />
           {isTavernMagicalGirlProjection(projection) ? <MagicalGirlCard magicalGirl={getTavernMagicalGirlPreview(projection)} gradientStyle={resolveMagicalGirlGradient(projection.appearance?.colorScheme)} /> : isTavernStructuredScenario(projection) ? <GeneralScenarioCard scenario={scenarioPreview ?? { title: '未命名情景', content: '' }} /> : projection.templateId === TAVERN_CANSHOU_TEMPLATE_ID ? <CanshouCard canshou={projection as unknown as CanshouDetails} /> : isTavernGeneralScenario(projection) ? <GeneralScenarioCard scenario={projection} /> : isTavernGeneralCharacter(projection) ? <GeneralCharacterCard general={projection} /> : null}</> : null}</div>
         <div className="space-y-4"><TavernCardPreview normalized={normalized} warnings={result.meta.warnings} />
           <TavernOriginalExport disabled={blocked} candidate={candidate} basePngBytes={basePng} exportFile={exportTavernFile} /></div>
       </div> : null}
       </>} />
       <QuestionnaireDraftPanel draftError={ai.draftError} draftBlocked={session.isDraftBlocked()} busy={blocked} actionClass="footer-link" onRetrySave={() => session.retryDraftSave()} />
-      {session.isDraftBlocked() ? <button disabled={blocked} onClick={() => { if (window.confirm('确认清除损坏的 AI 草稿？请先导出需要保留的内容。')) session.discardDraft(); }}>清除损坏 AI 草稿</button> : null}
+      {session.isDraftBlocked() ? <button disabled={sourceBlocked} onClick={() => { if (cloudIntents.current.size === 0 && cloudRequests.current.size === 0 && window.confirm('确认清除损坏的 AI 草稿？请先导出需要保留的内容。')) session.discardDraft(); }}>清除损坏 AI 草稿</button> : null}
       {ai.resultRestored ? <p role="status">已恢复 AI 结果与酒馆 JSON 原件，不会重新发起请求。草稿不保存 PNG 底图；PNG 导出使用占位图。</p> : null}
       {guard.message ? <p role="alert" className="mt-3 text-sm text-red-700">{guard.message}</p> : null}
       <ProductFooter className="footer" assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />

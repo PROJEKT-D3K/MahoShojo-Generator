@@ -220,6 +220,7 @@
     },
     "./sublimation-stream-result": "./src/sublimation-stream-result.ts",
     "./tavern-card": "./src/tavern-card/index.ts",
+    "./tavern-card/cloud": "./src/tavern-card/cloud.ts",
     "./tavern-card/types": "./src/tavern-card/types.ts",
     "./tavern-card/base64": "./src/tavern-card/base64.ts",
     "./tavern-card/crc32": "./src/tavern-card/crc32.ts",

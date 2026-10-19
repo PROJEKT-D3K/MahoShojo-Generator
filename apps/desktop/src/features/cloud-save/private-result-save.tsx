@@ -23,6 +23,8 @@ interface DesktopCloudCardActionsBaseProps {
   onManageClose?: () => void;
   onSelectCard?: (card: DesktopOwnedCard) => void | Promise<void>;
   showManageButton?: boolean;
+  /** Optional source lock. Its release belongs to this exact form/unknown scope. */
+  retainSourceIntent?: () => (() => void);
 }
 /** External guard owners must synchronously receive cloud busy state. */
 export type DesktopCloudCardActionsProps = DesktopCloudCardActionsBaseProps & (
@@ -56,7 +58,7 @@ function InternallyGuardedCloudCardActions(props: CloudCardScopeProps & { pendin
   const guard = useLeaveGuard(() => props.pending.current, '正在保存云端数据卡，请等待响应后再离开；本地结果保留。');
   return <DesktopCloudCardActionsView {...props} guard={guard} />;
 }
-function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, disabled = false, className, presentation, invokeFn = invoke, userId, isCurrent, canSave, onBusyChange,
+function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, disabled = false, className, presentation, invokeFn = invoke, userId, isCurrent, canSave, onBusyChange, retainSourceIntent,
   defaultName, defaultDescription, manageOpen, onManageClose, onSelectCard, showManageButton = false, pending, guard }: CloudCardViewProps) {
   const [saveOpen, setSaveOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
@@ -86,9 +88,17 @@ function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, 
   const frozenData = useRef<unknown>(null);
   const preparingRef = useRef(false);
   const active = useRef(true);
+  const releaseSourceIntent = useRef<(() => void) | null>(null);
+  const sourceIntentHost = useRef(retainSourceIntent); sourceIntentHost.current = retainSourceIntent;
+  const retainIntent = () => { if (!releaseSourceIntent.current) releaseSourceIntent.current = sourceIntentHost.current?.() ?? null; };
+  const releaseIntent = () => { const release = releaseSourceIntent.current; releaseSourceIntent.current = null; release?.(); };
   const busyChanged = useRef(onBusyChange); busyChanged.current = onBusyChange;
   const current = useRef(isCurrent); current.current = isCurrent;
-  useEffect(() => { active.current = true; return () => { active.current = false; operation.current++; busyChanged.current?.(false); }; }, []);
+  useEffect(() => { active.current = true; return () => { active.current = false; operation.current++; busyChanged.current?.(false); releaseIntent(); }; }, []);
+  useEffect(() => {
+    if (saveOpen || replaceOpen || libraryOpen || manageOpen || preparing || uncertain) retainIntent();
+    else releaseIntent();
+  }, [saveOpen, replaceOpen, libraryOpen, manageOpen, preparing, uncertain]);
   useEffect(() => { if (manageOpen) setLibraryPurpose('manage'); }, [manageOpen]);
   const owns = () => active.current && current.current();
   const available = () => {
@@ -111,12 +121,14 @@ function DesktopCloudCardActionsView({ data, cardType = 'character', isBlocked, 
   };
   const showSave = () => {
     if (!available() || created || !freeze()) return;
+    retainIntent();
     setSaveOpen(true);
     const request = ++capacityEpoch.current; setCapacity(null);
     void readPrivateCloudCapacity(invokeFn, userId!).then((value) => { if (owns() && request === capacityEpoch.current) setCapacity(value); });
   };
   const showReplace = () => {
     if (!available() || !freeze()) return;
+    retainIntent();
     if (uncertain) { setReplaceOpen(uncertain === 'replace'); setSaveOpen(uncertain === 'create'); return; }
     setError(null); setLibraryPurpose('replace'); setLibraryOpen(true);
   };

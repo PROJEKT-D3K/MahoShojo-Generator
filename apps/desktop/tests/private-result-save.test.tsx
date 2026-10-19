@@ -184,3 +184,28 @@ describe.each([undefined, 'generation-result'] as const)('private result cloud-s
   await act(async () => mocks.metadata.onBusyChange(false)); expect(mocks.metadata.isBlocked()).toBe(false); expect(mocks.busy()).toBe(false); expect(onBusyChange).toHaveBeenLastCalledWith(false);
 });
 });
+
+describe('optional cloud source retention', () => {
+  it('retains the exact form through an unknown close, then releases after check/rearm and close without another write', async () => {
+    const release = vi.fn(); const retain = vi.fn(() => release);
+    await act(async () => { root.render(<PrivateResultSave data={data} invokeFn={invoke} retainSourceIntent={retain} />); await flush(); });
+    await click('保存到云端'); expect(retain).toHaveBeenCalledOnce(); expect(release).not.toHaveBeenCalled();
+    invoke.mockResolvedValueOnce({ status: 500, body: {} }); await click('保存'); await click('取消');
+    expect(release).not.toHaveBeenCalled(); expect(writes()).toHaveLength(1);
+    await click('保存到云端'); await click('检查“我的云端卡”'); await click('关闭卡库');
+    vi.spyOn(window, 'confirm').mockReturnValue(true); await click('我已检查，仍要再次新建（可能重复）');
+    expect(release).not.toHaveBeenCalled(); await click('取消');
+    expect(release).toHaveBeenCalledOnce(); expect(retain).toHaveBeenCalledOnce(); expect(writes()).toHaveLength(1);
+  });
+  it('releases an abandoned form and owns a new independent retention after account retirement', async () => {
+    const releases: ReturnType<typeof vi.fn>[] = [];
+    const retain = vi.fn(() => { const release = vi.fn(); releases.push(release); return release; });
+    const render = () => act(async () => { root.render(<PrivateResultSave data={data} invokeFn={invoke} retainSourceIntent={retain} />); await flush(); });
+    await render(); await click('保存到云端'); await click('取消'); expect(releases[0]).toHaveBeenCalledOnce();
+    await click('替换已有'); expect(retain).toHaveBeenCalledTimes(2);
+    mocks.state = { ...mocks.state, account: { userId: 8 } }; mocks.epoch++; await render();
+    expect(releases[1]).toHaveBeenCalledOnce();
+    await click('替换已有'); expect(retain).toHaveBeenCalledTimes(3); expect(releases[2]).not.toHaveBeenCalled();
+    await click('关闭卡库'); expect(releases[2]).toHaveBeenCalledOnce(); expect(invoke.mock.calls.filter(([, args]) => args.request.routeId === 'data-cards.replace')).toHaveLength(0);
+  });
+});

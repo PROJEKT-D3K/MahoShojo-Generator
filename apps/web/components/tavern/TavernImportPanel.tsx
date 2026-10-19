@@ -1,6 +1,6 @@
 import { saveImportedUnsignedCard } from '@mahoshojo/local-library/imported-unsigned-card';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
-import { TavernConversionControls, describeTavernGenerationMode, TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
+import { TavernCloudSaveControls, TavernConversionControls, describeTavernGenerationMode, TavernTemplateSelector, TAVERN_WEB_IMPORT_TEMPLATES, getTavernProjectionTitle, getTavernProjectionCardType, TavernPlaceholderFields, useTavernPlaceholderPreference, TavernFileInput, TavernCandidateSelector, TavernOriginalExport, TavernLocalProjection, TavernLocalSources, useTavernSourceSelection, readTavernFile, type TavernInputFile, type TavernProjection } from '@mahoshojo/ui-web/tavern';
 import { applyTavernPlaceholderReplacement, resolveTavernCharReplacement, buildGeneralMarkdown, buildTavernGeneralScenarioCard, buildTavernCanshouCard, buildTavernMagicalGirlCard, projectTavernStreamMarkdown } from '@mahoshojo/domain/tavern-card';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
@@ -1042,48 +1042,11 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                         <p className="mt-2 text-xs text-gray-500">两种方式可随时切换；若你开启了 `_tavern.raw`，JSON 会变大。</p>
                       </div>
 
-                      <div className="rounded-xl border border-pink-100 bg-white/60 p-3">
-                        <div className="text-sm font-semibold text-pink-700">保存到档案馆（可选）</div>
-                        <div className="mt-2 grid gap-2 md:grid-cols-3">
-                          <button
-                            type="button"
-                            className={preferenceButtonClass(cloudPreset === 'standard')}
-                            onClick={() => setCloudPreset('standard')}
-                          >
-                            标准
-                          </button>
-                          <button type="button" className={preferenceButtonClass(cloudPreset === 'light')} onClick={() => setCloudPreset('light')}>
-                            轻量
-                          </button>
-                          <button type="button" className={preferenceButtonClass(cloudPreset === 'minimal')} onClick={() => setCloudPreset('minimal')}>
-                            极简
-                          </button>
-                        </div>
-
-                        {cloudSavePreview ? (
-                          <div className="mt-3 text-xs text-gray-600">
-                            {'error' in cloudSavePreview ? (
-                              <div className="text-red-600">预估失败：{cloudSavePreview.error}</div>
-                            ) : (
-                              <>
-                                <div>
-                                  预估写入大小：{formatKilobytes(cloudSavePreview.estimatedBytes)}KB / {MAX_DATA_CARD_BYTES / 1024}KB
-                                  {cloudSavePreview.overLimit ? <span className="ml-2 font-semibold text-red-600">超限</span> : null}
-                                </div>
-                                {cloudSavePreview.warnings.length > 0 ? (
-                                  <ul className="mt-2 list-disc space-y-1 pl-5">
-                                    {cloudSavePreview.warnings.map((warning, idx) => (
-                                      <li key={`tavern-cloud-warning-${idx}`}>{warning}</li>
-                                    ))}
-                                  </ul>
-                                ) : null}
-                              </>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="mt-3 text-xs text-gray-600">生成后会在此处显示体积预估与裁剪提示。</div>
-                        )}
-                      </div>
+                      <TavernCloudSaveControls
+                        preset={cloudPreset}
+                        onPresetChange={setCloudPreset}
+                        preview={cloudSavePreview}
+                      />
 
                       <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
                         {jsonSaveMode === 'download' ? (
@@ -1116,12 +1079,12 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                         <JsonSizeIndicator
                           data={outputDataCard}
                           estimatedBytes={cloudSavePreview.estimatedBytes}
-                          warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。"
+                          warningText={`⚠️ 接近云端 ${MAX_DATA_CARD_BYTES / 1024}KB 上限，保存/替换可能失败，请先精简数据。`}
                         />
                       ) : outputDataCard ? (
                         <JsonSizeIndicator
                           data={outputDataCard}
-                          warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。"
+                          warningText={`⚠️ 接近云端 ${MAX_DATA_CARD_BYTES / 1024}KB 上限，保存/替换可能失败，请先精简数据。`}
                         />
                       ) : null}
 

@@ -14,3 +14,4 @@ export * from './placeholder-preference';
 export * from './placeholder-fields';
 export * from './template-selector';
 export * from './conversion-controls';
+export * from './cloud-save-controls';

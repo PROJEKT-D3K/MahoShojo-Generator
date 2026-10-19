@@ -150,6 +150,28 @@ const collectModuleGraph = (entryFile: string): string[] => {
 };
 
 describe('server-safe shared entrypoints stay free of React hooks', () => {
+  it('keeps Tavern cloud projection pure and its controlled UI on the client barrel', async () => {
+    const domainRoot = path.resolve(PACKAGE_ROOT, '../domain');
+    const manifest = JSON.parse(readFileSync(path.join(domainRoot, 'package.json'), 'utf8'));
+    expect(manifest.exports['./tavern-card/cloud']).toBe('./src/tavern-card/cloud.ts');
+    const webPath = path.resolve(PACKAGE_ROOT, '../../apps/web/lib/tavern-card/cloud.ts');
+    const pure = await build({ entryPoints: [webPath], bundle: true, platform: 'node', format: 'esm', write: false, metafile: true });
+    expect(Object.keys(pure.metafile!.inputs).map(file => path.resolve(file)).sort()).toEqual([
+      webPath, path.join(domainRoot, 'src/tavern-card/cloud.ts'), path.join(domainRoot, 'src/data-card-size.ts'),
+    ].sort());
+    expect(findHookCalls(pure.outputFiles[0].text)).toEqual([]);
+    expect(pure.outputFiles[0].text).not.toMatch(/\b(?:window|document|navigator|localStorage|fetch|WebSocket)\b/u);
+    expect(SERVER_SAFE_ENTRYPOINTS).not.toHaveProperty('./tavern');
+    const ui = await build({
+      stdin: { contents: 'export { TavernCloudSaveControls } from "@mahoshojo/ui-web/tavern";', resolveDir: path.resolve(PACKAGE_ROOT, '../../apps/web'), loader: 'ts' },
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true, external: ['react', 'react/jsx-runtime'],
+    });
+    const liveFiles = Object.values(ui.metafile!.outputs).flatMap(output => Object.entries(output.inputs))
+      .filter(([, info]) => info.bytesInOutput > 0).map(([file]) => file);
+    expect(liveFiles.some(file => file.endsWith('/tavern/cloud-save-controls.tsx'))).toBe(true);
+    expect(liveFiles.some(file => /(?:apps\/|next\/|@tauri-apps\/)/u.test(file))).toBe(false);
+  });
+
   it('keeps the actual Web story buffer on the pure shared bounded preview leaf', async () => {
     const root = path.resolve(PACKAGE_ROOT, '../multiplayer-core');
     const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));

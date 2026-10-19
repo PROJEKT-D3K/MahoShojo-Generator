@@ -463,7 +463,9 @@ desktop_config_open_directory()
 
 通用角色与通用情景支持非流式 Direct / Hosted JSON。Hosted 只使用固定 Next 路由 `/api/tavern/convert`，系统配置和目录预设 BYOK 由 Native 注入；自定义连接仍只允许 Direct。原始卡、占位符偏好和 PNG 底图不上传，结果从冻结本机原件补回 `_tavern.raw`，始终未签名。
 
-附件正文单件及合计限 1 MiB，最多 10 件；请求 JSON 在注入前后均限 8 MiB，成功响应仍限 4 MiB，Tavern 错误正文限 64 KiB。Desktop 另对 sourceName、附件 name/type 等非正文字段设有限上限，超限拒绝而不静默截断。未知结果不自动重发；准备期账号变化要求重新确认。设备草稿不授予新账号云保存权限，本页不开放云保存。
+附件正文单件及合计限 1 MiB，最多 10 件；请求 JSON 在注入前后均限 8 MiB，成功响应仍限 4 MiB，Tavern 错误正文限 64 KiB。Desktop 另对 sourceName、附件 name/type 等非正文字段设有限上限，超限拒绝而不静默截断。未知结果不自动重发；准备期账号变化要求重新确认。设备草稿不授予新账号云保存权限；云端保存需当前已验证账号重新确认。
+
+Tavern 规则结果与已完成 AI 卡可显式新建云端副本或替换当前账号的已有卡。三档裁剪与作者注入大小预估和 Web 共源，云副本不含 `_tavern.raw`，轻量/极简可能损失正文；完整原件、本地结果与草稿不变。未知写入先核对“我的云端卡”，不会自动重发；核对期间保留原输入/裁剪选择，仍可导出本地原件。超限不自动降档，未完成 AI 文本不可入云。Windows/Tauri 与真实账号写入仍需独立验收。
 
 ### Tavern Hosted 流式隔离宿主验收
 

@@ -4,7 +4,7 @@ import * as web from '@/lib/tavern-card';
 
 describe('Tavern Web 回用共享纯核', () => {
   it('生产出口直接使用同一实现而非双份转换器', () => {
-    for (const name of ['parseTavernCardFromPngBytes', 'normalizeTavernCard', 'createTavernV3Card', 'writeTavernCardToPngBytes', 'recommendTavernExportFields', 'buildArenaWorldbook', 'buildTavernScenarioFragment'] as const) {
+    for (const name of ['parseTavernCardFromPngBytes', 'normalizeTavernCard', 'createTavernV3Card', 'writeTavernCardToPngBytes', 'recommendTavernExportFields', 'buildArenaWorldbook', 'buildTavernScenarioFragment', 'buildTavernCloudSavePayload', 'estimateDataCardBytesAfterAuthorInjection'] as const) {
       expect(web[name]).toBe(shared[name]);
     }
   });
