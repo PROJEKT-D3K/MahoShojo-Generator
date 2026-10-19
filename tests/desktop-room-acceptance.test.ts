@@ -461,7 +461,7 @@ describe('Room acceptance actual CLI entry with a synthetic mock child', () => {
 describe('Room acceptance owned mock supervision without spawning processes', () => {
   it('permits synthetic starts only in the explicit start mode and never permits model dispatches', async () => {
     const child = new SyntheticChild(), mock = monitorMock(child, false, { syntheticStart: true });
-    child.line({ ...readyMessage(), selfCheck: { ...selfCheckSummary, generationReadOnly: false, generationCancel: true, generationStart: true, syntheticProducer: true } }); await mock.ready;
+    child.line({ ...readyMessage(), selfCheck: { ...selfCheckSummary, generationReadOnly: false, generationCancel: true, generationStart: true, generationStartingCancel: true, syntheticProducer: true } }); await mock.ready;
     const armed = mock.command('arm-fault', 'generationStart'); child.line({ id: 1, event: 'armed', operation: 'generationStart' }); await armed;
     const observed = mock.command('observe');
     const value = { ...observations(2), generation: { ...generationObservations(), cancelEnabled: true, startEnabled: true, startDispatches: 3, startPortCalls: 2, syntheticProducers: 1, startReservations: 1, byokStartPortCalls: 0 },

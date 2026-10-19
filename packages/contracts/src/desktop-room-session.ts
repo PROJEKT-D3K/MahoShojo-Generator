@@ -200,7 +200,31 @@ export const DesktopRoomGenerationStartWireRequestSchema = desktopRoomStartBusin
 export const DesktopRoomSessionGenerationStartRequestSchema = boundedObject(
   DESKTOP_ROOM_SESSION_LIMITS.generationStartRequestBytes, true, DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes,
 ).pipe(z.object({ desktopRoom: DesktopRoomSessionRequestMetadataSchema, request: DesktopRoomGenerationStartWireRequestSchema }).strict());
-export const DesktopRoomSessionGenerationCancelRequestSchema = postRequest(ArenaRoomGenerationCancelRequestSchema);
+/** Immutable target only: state and timestamps are observations, never cancellation identity. */
+export const DesktopRoomGenerationIdentitySchema = z.object({
+  generationRequestId: GenerationMirrorSchema.shape.generationRequestId,
+  generationId: GenerationMirrorSchema.shape.generationId,
+  attempt: GenerationMirrorSchema.shape.attempt,
+  configRevision: GenerationMirrorSchema.shape.configRevision,
+  snapshotDigest: GenerationMirrorSchema.shape.snapshotDigest,
+  collaborativeInfluence: GenerationMirrorSchema.shape.collaborativeInfluence,
+  participantUserIds: GenerationMirrorSchema.shape.participantUserIds,
+  hostAccountUserId: GenerationMirrorSchema.shape.hostAccountUserId,
+}).strict().refine(value => value.hostAccountUserId === undefined || value.participantUserIds.includes(value.hostAccountUserId), {
+  path: ['hostAccountUserId'], message: 'host must be a frozen participant',
+});
+export type DesktopRoomGenerationIdentity = z.infer<typeof DesktopRoomGenerationIdentitySchema>;
+export const DesktopRoomStartingGenerationCancelRequestSchema = z.object({
+  expectedRoomEpoch: OpaqueKeySchema,
+  expectedGeneration: DesktopRoomGenerationIdentitySchema,
+}).strict();
+export const DesktopRoomSessionGenerationCancelRequestSchema = z.union([
+  postRequest(ArenaRoomGenerationCancelRequestSchema),
+  boundedObject(DESKTOP_ROOM_SESSION_LIMITS.requestBodyBytes, true).pipe(z.object({
+    desktopRoom: z.object({ ...requestMetadata, cancelMode: z.literal('starting-v1') }).strict(),
+    request: DesktopRoomStartingGenerationCancelRequestSchema,
+  }).strict()),
+]);
 export const DesktopRoomSessionTicketRequestSchema = postRequest(ArenaRoomTicketRequestSchema);
 export const DesktopRoomSessionLeaveRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);
 export const DesktopRoomSessionCloseRequestSchema = postRequest(ArenaRoomEpochMutationRequestSchema);

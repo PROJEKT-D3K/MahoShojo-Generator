@@ -27,6 +27,7 @@ type Scope = {
   readonly expectedUserId: number;
   readonly request?: unknown;
   readonly createMode?: 'new' | 'resume-only';
+  readonly cancelMode?: 'starting-v1';
   viewerUserId: number | null;
   businessEntered: boolean;
 };
@@ -141,6 +142,7 @@ export const createDesktopRoomSessionAdapter = (options: {
     const expectedUserId = parsedOwner.data;
     let request: unknown;
     let createMode: 'new' | 'resume-only' | undefined;
+    let cancelMode: 'starting-v1' | undefined;
     if (context.req.method === 'POST') {
       try {
         const body = await options.readBody(context.req.raw, operation === 'generationStart'
@@ -150,6 +152,7 @@ export const createDesktopRoomSessionAdapter = (options: {
         );
         request = envelope.request;
         if ('createMode' in envelope.desktopRoom) createMode = envelope.desktopRoom.createMode;
+        if ('cancelMode' in envelope.desktopRoom) cancelMode = envelope.desktopRoom.cancelMode;
       } catch (error) {
         const tooLarge = options.isBodyTooLarge(error)
           || (error instanceof Error && 'code' in error && error.code === 'ROOM_PAYLOAD_TOO_LARGE');
@@ -161,7 +164,7 @@ export const createDesktopRoomSessionAdapter = (options: {
         );
       }
     }
-    const scope: Scope = { operation, expectedUserId, request, createMode, viewerUserId: null, businessEntered: false };
+    const scope: Scope = { operation, expectedUserId, request, createMode, cancelMode, viewerUserId: null, businessEntered: false };
     scopes.set(context, scope);
     await next();
 
@@ -248,6 +251,10 @@ export const createDesktopRoomSessionAdapter = (options: {
     },
     generationCancelReceipt(context: RoomContext): boolean {
       return scopes.get(context)?.operation === 'generationCancel';
+    },
+    generationStartingCancel(context: RoomContext): boolean {
+      const scope = scopes.get(context);
+      return scope?.operation === 'generationCancel' && scope.cancelMode === 'starting-v1';
     },
     resumeOnly(context: RoomContext): boolean {
       return scopes.get(context)?.createMode === 'resume-only';

@@ -89,6 +89,22 @@ impl RoomInstance {
                 return Err(stale());
             }
         }
+        if let Some(fence) = &inner.start_fence {
+            fence.validate_cancel_read(
+                context.account.user_id,
+                &transfer.target.room_id,
+                &transfer.target.room_epoch,
+                generation,
+            )?;
+            if let Some(response) = &transfer.response {
+                fence.validate_cancel_read(
+                    context.account.user_id,
+                    &transfer.target.room_id,
+                    &transfer.target.room_epoch,
+                    &response.meta.generation,
+                )?;
+            }
+        }
         if let Some(response) = &transfer.response {
             if authority
                 .generation_read_terminal
@@ -473,6 +489,14 @@ impl RoomInstance {
                 })
             })
             .map(|pending| pending.id.clone())
+            .or_else(|| {
+                inner.start_fence.as_ref()?.read_cancel_id(
+                    inner.scope.as_ref()?.context.account.user_id,
+                    &transfer.target.room_id,
+                    &transfer.target.room_epoch,
+                    &transfer.expected,
+                )
+            })
     }
 
     pub(super) fn acknowledge_generation_locked(
@@ -548,14 +572,27 @@ impl RoomInstance {
                             &barrier,
                         )
                     });
+                let settle_fence = inner.start_fence.as_ref().is_some_and(|fence| {
+                    fence
+                        .read_cancel_id(
+                            context.account.user_id,
+                            &transfer.target.room_id,
+                            &transfer.target.room_epoch,
+                            &barrier,
+                        )
+                        .is_some()
+                });
                 inner
                     .scope
                     .as_mut()
                     .and_then(|scope| scope.session.as_mut())
                     .expect("current authority")
                     .generation_read_terminal = Some(barrier);
+                if settle_fence {
+                    inner.start_fence = None;
+                }
                 if settle_cancel {
-                    inner.pending = None;
+                    Self::settle_cancel_locked(inner);
                 }
             }
             inner.generation = None;

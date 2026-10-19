@@ -158,6 +158,7 @@
     "./fixtures/desktop-room-proposals.json": "./fixtures/desktop-room-proposals.json",
     "./fixtures/arena-room-proposal-reconciliation.json": "./fixtures/arena-room-proposal-reconciliation.json",
     "./fixtures/desktop-room-generation-start.json": "./fixtures/desktop-room-generation-start.json",
+    "./fixtures/desktop-room-starting-cancel.json": "./fixtures/desktop-room-starting-cancel.json",
     "./fixtures/desktop-room-generation-read.json": "./fixtures/desktop-room-generation-read.json"
   },
   "scripts": {

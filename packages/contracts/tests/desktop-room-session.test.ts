@@ -1,4 +1,5 @@
 import startFixture from '../fixtures/desktop-room-generation-start.json';
+import startingCancelFixture from '../fixtures/desktop-room-starting-cancel.json';
 import { describe, expect, it } from 'vitest';
 
 import fixture from '../fixtures/desktop-room-session.json';
@@ -21,6 +22,7 @@ import {
   DesktopRoomSessionExpectedUserIdHeaderSchema,
   DesktopRoomSessionOperationSchema,
   DesktopRoomSessionPostOperationSchema,
+  DesktopRoomSessionRequestMetadataSchema,
   parseDesktopRoomSessionRequest,
   parseDesktopRoomSessionResponse,
   type DesktopRoomSessionOperation,
@@ -129,6 +131,24 @@ const expectCode = (run: () => unknown, code: string) => {
 };
 
 describe('Desktop Native Room session opt-in contract', () => {
+  it('starting cancel carries an exact immutable target only behind its strict metadata marker', () => {
+    const sample = startingCancelFixture.operation.request;
+    expect(parseDesktopRoomSessionRequest('generationCancel', sample, owner)).toEqual(sample);
+    for (const changed of [
+      without(sample, 'desktopRoom', 'cancelMode'),
+      patch(sample, 'desktopRoom/cancelMode', 'starting-v2'),
+      without(sample, 'request', 'expectedGeneration'),
+      patch(sample, 'request/expectedGeneration/state', 'starting'),
+      patch(sample, 'request/expectedGeneration/gate', 'room-generation-start-gate-v1'),
+      patch(sample, 'request/expectedGeneration/hostAccountUserId', 999),
+    ]) expectCode(() => parseDesktopRoomSessionRequest('generationCancel', changed, owner), 'ROOM_DESKTOP_PROTOCOL_INVALID');
+    for (const key of Object.keys(sample.request.expectedGeneration)) {
+      expectCode(() => parseDesktopRoomSessionRequest('generationCancel', without(sample, 'request/expectedGeneration', key), owner), 'ROOM_DESKTOP_PROTOCOL_INVALID');
+    }
+    // Frozen pre-extension metadata and legacy Web bodies both reject this wire.
+    expect(DesktopRoomSessionRequestMetadataSchema.safeParse(sample.desktopRoom).success).toBe(false);
+    expect(ArenaRoomGenerationCancelRequestSchema.safeParse(sample.request).success).toBe(false);
+  });
   it('adds only fixed operations with unchanged version and original transport budgets', () => {
     expect(DESKTOP_ROOM_SESSION_PROTOCOL_VERSION).toBe(fixture.protocolVersion);
     expect(DESKTOP_ROOM_SESSION_PROTOCOL_HEADER).toBe('x-mahoshojo-desktop-room-protocol');

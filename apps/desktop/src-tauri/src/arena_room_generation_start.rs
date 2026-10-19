@@ -720,11 +720,289 @@ impl RoomInstance {
 // Retirement keeps only the original owner/room/request identity, never credentials or wire.
 pub(super) struct StartTombstone {
     basis: StartBasis,
+    starting_cancel: Option<generation_cancel::StartingCancelLink>,
     receipt: Option<IntentReceipt>,
     closed: bool,
 }
+impl StartTombstone {
+    pub(super) fn blocks_cancel(&self, owner: u64, room: &str, generation: &Value) -> bool {
+        self.starting_cancel.is_some()
+            && self.basis.account_user_id == owner
+            && self.basis.room_id == room
+            && generation["generationRequestId"] == self.basis.request_id
+    }
+    pub(super) fn cancel_id(&self) -> Option<&str> {
+        self.starting_cancel
+            .as_ref()
+            .map(|link| link.cancel_intent_id.as_str())
+    }
+    pub(super) fn read_cancel_id(
+        &self,
+        owner: u64,
+        room: &str,
+        epoch: &str,
+        generation: &Value,
+    ) -> Option<String> {
+        (self.basis.account_user_id == owner
+            && self.basis.read_matches(room, epoch, generation)
+            && self.basis.check_mirror(generation).is_ok())
+        .then(|| self.cancel_id().map(str::to_owned))
+        .flatten()
+    }
+    pub(super) fn validate_cancel_read(
+        &self,
+        owner: u64,
+        room: &str,
+        epoch: &str,
+        generation: &Value,
+    ) -> Result<(), RoomError> {
+        if self.starting_cancel.is_some()
+            && self.basis.account_user_id == owner
+            && self.basis.read_matches(room, epoch, generation)
+        {
+            self.basis.check_mirror(generation)?;
+        }
+        Ok(())
+    }
+    pub(super) fn check_cancel_candidate(
+        &self,
+        owner: u64,
+        candidate: &Authority,
+    ) -> Result<(), RoomError> {
+        if self.starting_cancel.is_some()
+            && self.basis.account_user_id == owner
+            && self.basis.room_id == candidate.room_id
+            && self.basis.room_epoch == candidate.room_epoch
+        {
+            if let (Some(known), Some(generation)) = (&self.basis.generation, &candidate.generation)
+            {
+                if terminal(&known["state"])
+                    && known["generationId"] == generation["generationId"]
+                    && known["attempt"] == generation["attempt"]
+                {
+                    self.basis.check_mirror(generation)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn set_receipt(&mut self, receipt: IntentReceipt) {
+        self.receipt = Some(receipt);
+        self.closed = false;
+    }
+    fn accepts_state(&self, generation: &Value) -> bool {
+        if self.starting_cancel.is_some() {
+            terminal(&generation["state"])
+        } else {
+            generation["state"] != "starting"
+        }
+    }
+    fn public(&self) -> Value {
+        let mut value =
+            json!({"roomId":self.basis.room_id,"generationRequestId":self.basis.request_id});
+        if let Some(link) = &self.starting_cancel {
+            value["cancelMode"] = json!("starting-v1");
+            value["startIntentId"] = json!(link.start_intent_id);
+            value["cancelIntentId"] = json!(link.cancel_intent_id);
+        }
+        value
+    }
+}
 impl RoomInstance {
+    pub(super) fn linked_start_cancel(inner: &Inner, intent: &str) -> bool {
+        let Some(pending) = inner
+            .pending
+            .as_ref()
+            .filter(|p| p.id == intent && p.operation == Operation::GenerationCancel)
+        else {
+            return false;
+        };
+        let Some(link) = pending
+            .cancel_basis
+            .as_ref()
+            .and_then(|b| b.starting.as_ref())
+        else {
+            return false;
+        };
+        inner.start_fence.as_ref().is_some_and(|f| {
+            f.cancel_id() == Some(intent)
+                && f.basis.account_user_id == pending.account.user_id
+                && f.basis.document == link.document
+                && f.basis.generation.as_ref().is_some_and(|generation| {
+                    pending.cancel_basis.as_ref().is_some_and(|cancel| {
+                        cancel.read_matches(&f.basis.room_id, &f.basis.room_epoch, generation)
+                    })
+                })
+                && f.starting_cancel
+                    .as_ref()
+                    .is_some_and(|stored| stored.start_intent_id == link.start_intent_id)
+        })
+    }
+    pub(super) fn settle_cancel_locked(inner: &mut Inner) {
+        if inner
+            .pending
+            .as_ref()
+            .is_some_and(|p| Self::linked_start_cancel(inner, &p.id))
+        {
+            inner.start_fence = None;
+        }
+        inner.pending = None;
+    }
+    pub(super) fn cancel_generation_start(
+        self: &Arc<Self>,
+        document: DocumentId,
+        handle: String,
+        intent: String,
+    ) -> Result<EngineReply, RoomError> {
+        // The original physical task, including its send body, must really have settled.
+        let permit = self
+            .http_slot
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| busy())?;
+        let mut inner = lock(&self.inner);
+        if inner
+            .pending
+            .as_ref()
+            .filter(|p| p.tracks_start())
+            .map(|p| p.account.is_current())
+            .transpose()?
+            == Some(false)
+        {
+            Self::retire_start_locked(&mut inner);
+            return Err(stale());
+        }
+        let context = self.scope_for(&inner, document, &handle)?;
+        if inner.start_fence.is_some()
+            || inner.generation.is_some()
+            || inner.generation_completion.is_some()
+        {
+            return Err(busy());
+        }
+        let pending = inner
+            .pending
+            .as_ref()
+            .filter(|p| {
+                p.id == intent
+                    && p.operation == Operation::GenerationStart
+                    && p.phase == IntentPhase::Unknown
+            })
+            .ok_or_else(stale)?;
+        let basis = pending.start_basis.as_ref().ok_or_else(stale)?;
+        let authority = inner
+            .scope
+            .as_ref()
+            .and_then(|s| s.session.as_ref())
+            .ok_or_else(stale)?;
+        if pending.account.user_id != context.account.user_id
+            || pending.account.epoch != context.account.epoch
+            || pending.account.cookie != context.account.cookie
+            || !pending.account.is_current()?
+            || basis.document != document
+            || !basis.live_host(authority)
+            || inner
+                .scope
+                .as_ref()
+                .and_then(|s| s.socket_cancel.as_ref())
+                .is_none_or(|s| s.is_cancelled())
+        {
+            return Err(stale());
+        }
+        let known = basis
+            .generation
+            .as_ref()
+            .filter(|g| g["state"] == "starting")
+            .ok_or_else(stale)?;
+        let current = authority
+            .generation
+            .as_ref()
+            .filter(|g| g["state"] == "starting")
+            .ok_or_else(stale)?;
+        basis.check_mirror(current)?;
+        if !same_generation(known, current) {
+            return Err(stale());
+        }
+        let cancel_id = random_id()?;
+        let link = generation_cancel::StartingCancelLink {
+            start_intent_id: intent,
+            cancel_intent_id: cancel_id.clone(),
+            document,
+        };
+        let cancel = CancelBasis::from_start(authority, link.clone())?;
+        let request = cancel.request();
+        // Prepare verifies the exact request and 64/65 KiB gates without network or provider reads.
+        self.http
+            .prepare(&request, context.account.user_id, &context.account.cookie)?;
+        let public = json!({"intentId":cancel_id,"operation":"generationCancel","roomId":basis.room_id,"generationTarget":cancel.target(),"cancelMode":"starting-v1","startIntentId":link.start_intent_id});
+        let fence = json!({"roomId":basis.room_id,"generationRequestId":basis.request_id,"cancelMode":"starting-v1","startIntentId":link.start_intent_id,"cancelIntentId":cancel_id});
+        protocol::encode_attach_response(
+            &json!({"handle":handle,"subscriptionId":context.subscription_id,"pendingIntent":public,"generationStartBlocked":true,"generationStartFence":fence}),
+        )?;
+        protocol::encode_start_tracking_ended_response(
+            &json!({"kind":"generation-start-tracking-ended","intentId":cancel_id,"ended":true,"generationStartBlocked":true,"generationStartFence":fence}),
+        )?;
+        if !context.account.is_current()? {
+            Self::retire_start_locked(&mut inner);
+            return Err(stale());
+        }
+        self.current_locked(&inner, &context)?;
+        inner
+            .delivery
+            .reserve_http_terminal(&cancel_id, Operation::GenerationCancel)?;
+        // One lock is the irreversible handoff. No old wire/guard or retry basis survives.
+        let mut original = inner.pending.take().expect("checked original start");
+        let mut basis = original.start_basis.take().expect("checked start basis");
+        basis.revoke();
+        basis.preset_config = None;
+        inner.start_fence = Some(StartTombstone {
+            basis,
+            starting_cancel: Some(link),
+            receipt: None,
+            closed: false,
+        });
+        inner.pending = Some(PendingIntent {
+            id: cancel_id.clone(),
+            operation: Operation::GenerationCancel,
+            room_id: request.room_id.clone(),
+            frozen_request: Value::Null,
+            config_basis: None,
+            proposal_basis: None,
+            cancel_basis: Some(cancel.clone()),
+            start_basis: None,
+            proposal_scope: None,
+            account: context.account.clone(),
+            phase: IntentPhase::InFlight,
+            receipt: None,
+        });
+        let accepted = json!({"kind":"accepted","handle":handle,"subscriptionId":context.subscription_id,"requestId":cancel_id});
+        drop(inner);
+        let this = self.clone();
+        tokio::spawn(async move {
+            this.run_http(
+                context,
+                cancel_id.clone(),
+                request,
+                Some(cancel_id),
+                MutationDispatch::Cancel(cancel),
+                permit,
+            )
+            .await;
+        });
+        Ok(EngineReply::Small(accepted))
+    }
     pub(super) fn retire_start_locked(inner: &mut Inner) {
+        if inner
+            .pending
+            .as_ref()
+            .is_some_and(|p| Self::linked_start_cancel(inner, &p.id))
+        {
+            inner.pending = None;
+            if let Some(fence) = &mut inner.start_fence {
+                fence.receipt = None;
+                fence.closed = false;
+            }
+            return;
+        }
         if inner
             .pending
             .as_ref()
@@ -740,6 +1018,7 @@ impl RoomInstance {
         basis.preset_config = None;
         inner.start_fence = Some(StartTombstone {
             basis,
+            starting_cancel: None,
             receipt: None,
             closed: false,
         });
@@ -751,7 +1030,7 @@ impl RoomInstance {
             .start_fence
             .as_ref()
             .filter(|f| f.basis.account_user_id == owner)
-            .map(|f| json!({"roomId":f.basis.room_id,"generationRequestId":f.basis.request_id}))
+            .map(StartTombstone::public)
             .unwrap_or(Value::Null)
     }
     pub(super) fn end_generation_start_tracking(
@@ -761,6 +1040,17 @@ impl RoomInstance {
         intent_id: String,
     ) -> Result<EngineReply, RoomError> {
         let mut inner = lock(&self.inner);
+        if inner
+            .pending
+            .as_ref()
+            .filter(|p| p.tracks_start())
+            .map(|p| p.account.is_current())
+            .transpose()?
+            == Some(false)
+        {
+            Self::retire_start_locked(&mut inner);
+            return Err(stale());
+        }
         let context = self.scope_for(&inner, document, &handle)?;
         let pending = inner.pending.as_ref().ok_or_else(stale)?;
         if pending.id != intent_id
@@ -769,12 +1059,12 @@ impl RoomInstance {
             || pending.account.epoch != context.account.epoch
             || pending.account.cookie != context.account.cookie
             || !pending.account.is_current()?
-            || pending
-                .start_basis
-                .as_ref()
-                .is_none_or(|b| b.document != document)
+            || pending.tracking_document() != Some(document)
         {
             return Err(stale());
+        }
+        if pending.is_starting_cancel() {
+            Self::retire_locked(&mut inner);
         }
         Self::retire_start_locked(&mut inner);
         let ended = json!({"kind":"generation-start-tracking-ended","intentId":intent_id,"ended":true,"generationStartBlocked":true,"generationStartFence":Self::start_fence_public(&inner, context.account.user_id)});
@@ -810,7 +1100,7 @@ impl RoomInstance {
                             .is_some_and(|(_, state)| state == "active")
                         && a.generation_fresh
                         && a.generation.as_ref().is_some_and(|g| {
-                            g["state"] != "starting" && basis.check_mirror(g).is_ok()
+                            fence.accepts_state(g) && basis.check_mirror(g).is_ok()
                         })
                 })
     }
@@ -820,6 +1110,14 @@ impl RoomInstance {
         receipt: IntentReceipt,
     ) {
         if !Self::start_fence_authority_current(inner, context) {
+            return;
+        }
+        if inner
+            .pending
+            .as_ref()
+            .is_some_and(|p| Self::linked_start_cancel(inner, &p.id))
+        {
+            Self::receipt_cancel_locked(inner, context, receipt);
             return;
         }
         let generation = inner
@@ -887,6 +1185,14 @@ impl RoomInstance {
             return None;
         }
         let fence = inner.start_fence.as_ref()?;
+        if inner
+            .pending
+            .as_ref()
+            .is_some_and(|p| p.is_starting_cancel())
+            && !Self::cancel_terminal_current(inner, &context)
+        {
+            return None;
+        }
         if fence.basis.account_user_id != context.account.user_id
             || fence.receipt.as_ref().is_none_or(|r| {
                 r.document != document
@@ -900,6 +1206,16 @@ impl RoomInstance {
             return None;
         }
         let fence = inner.start_fence.take().unwrap();
+        if let Some(link) = fence.starting_cancel {
+            if inner
+                .pending
+                .as_ref()
+                .is_some_and(|p| p.id == link.cancel_intent_id && p.is_starting_cancel())
+            {
+                inner.pending = None;
+            }
+            return Some(json!({"cancelIntentId":link.cancel_intent_id,"cleared":true}));
+        }
         Some(
             json!({"roomId":fence.basis.room_id,"generationRequestId":fence.basis.request_id,"cleared":true}),
         )

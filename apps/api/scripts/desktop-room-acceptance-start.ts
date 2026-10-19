@@ -12,7 +12,7 @@ import { ROOM_ACCEPTANCE_GENERATION_LARGE_BYTES, ROOM_ACCEPTANCE_GENERATION_TAIL
 
 // Public, deliberately non-working fixture value. Never accept a real provider Key in the synthetic producer.
 export const ROOM_ACCEPTANCE_BYOK_KEY = 'maho-room-synthetic-byok-key';
-export const ROOM_ACCEPTANCE_START_SCENARIOS = ['start-reserve-only', 'start-unavailable', 'start-available', 'start-large', 'start-delta', 'start-complete', 'start-cancel-wait', 'start-cancel-complete'] as const;
+export const ROOM_ACCEPTANCE_START_SCENARIOS = ['start-reserve-only', 'start-reserve-only-gated', 'start-disable-starting-cancel', 'start-unavailable', 'start-available', 'start-large', 'start-delta', 'start-complete', 'start-cancel-wait', 'start-cancel-complete'] as const;
 export type RoomAcceptanceStartScenario = typeof ROOM_ACCEPTANCE_START_SCENARIOS[number];
 type RecordState = { roomId: string; projection: ArenaGenerationOwnedProjection; sequence: number;
   listeners: Set<ReadableStreamDefaultController<ArenaRoomGenerationEvent>> };
@@ -26,6 +26,8 @@ export const createRoomAcceptanceStart = (options: {
   const reservations = new Set<string>();
   const records = new Map<string, RecordState>();
   let latest: RecordState | null = null, reserveOnly = false, unavailable = false, large = false, cancelWait = false, cancelPending = false, disposed = false;
+  let startingCancelEnabled = false;
+  let pendingStarting: { roomId: string; generationId: string; generationRequestId: string; hostAccountUserId: number } | null = null;
   const counts = { startDispatches: 0, cancelDispatches: 0, readDispatches: 0, startPortCalls: 0, syntheticProducers: 0, startReservations: 0, byokStartPortCalls: 0 };
   const bump = (key: keyof typeof counts) => { if (counts[key] >= 65_536) refuse(); counts[key] += 1; };
   const key = (roomId: string, generationId: string) => JSON.stringify([roomId, generationId]);
@@ -73,7 +75,15 @@ export const createRoomAcceptanceStart = (options: {
         if (!provider.success || provider.data.apiKey !== ROOM_ACCEPTANCE_BYOK_KEY) return refuse();
         bump('byokStartPortCalls');
       }
-      if (reserveOnly) { reserveOnly = false; throw new Error('SYNTHETIC_RESERVATION_ONLY'); }
+      if (reserveOnly) {
+        reserveOnly = false;
+        if (startingCancelEnabled) {
+          if (pendingStarting || !input.multiplayerSnapshot.hostAccountUserId) return refuse();
+          pendingStarting = { roomId: input.roomId, generationRequestId: input.generationRequestId,
+            generationId: await port.deriveGenerationId(input), hostAccountUserId: input.multiplayerSnapshot.hostAccountUserId };
+        }
+        throw new Error('SYNTHETIC_RESERVATION_ONLY');
+      }
       const generationId = await port.deriveGenerationId(input), existing = get(input.roomId, generationId);
       if (existing) return { kind: 'subscribed', subscription: subscription(existing) };
       if (records.size >= 64) return refuse();
@@ -101,6 +111,25 @@ export const createRoomAcceptanceStart = (options: {
       else finish(value, 'cancelled');
       return { kind: 'accepted', cancelReason: 'user' };
     },
+    async cancelStartingOwned() {
+      // This one-slot synthetic port replaces the real durable core only in the isolated mock.
+      // Redis admission and D1 persistence are exercised separately by the real-service verifier.
+      const original = pendingStarting;
+      if (!original || disposed || unavailable) return { kind: 'unavailable', code: 'GENERATION_STATE_UNAVAILABLE' };
+      const membership = await options.memberships.resolveActiveByAccount({ roomId: original.roomId, accountUserId: original.hostAccountUserId });
+      const state = membership.actor.getSnapshot();
+      const record = state?.generationLedger.find(value => value.mirror.generationId === original.generationId);
+      if (record?.mirror.generationRequestId !== original.generationRequestId || !record.startGate?.cancellationRequested
+        || record.startGate.producerTokenDigest !== null || record.mirror.state !== 'starting') return refuse();
+      if (cancelWait) { cancelPending = true; return { kind: 'unavailable', code: 'GENERATION_STATE_UNAVAILABLE' }; }
+      if (records.size >= 64) return refuse();
+      const value: RecordState = { roomId: original.roomId, sequence: 0, listeners: new Set(), projection: {
+        generationId: original.generationId, generationRequestId: original.generationRequestId, status: 'cancelled', markdown: '',
+        resumeCursor: null, updatedAt: new Date().toISOString(), finalAuthoritative: true, resultAvailable: false, generationRecordId: null, errorCode: null,
+      } };
+      records.set(key(original.roomId, original.generationId), value); latest = value; pendingStarting = null;
+      return { kind: 'accepted', cancelReason: 'user' };
+    },
   };
   const presets = createArenaRoomGenerationPresetResolver();
   const service = createArenaRoomGenerationService({ memberships: options.memberships,
@@ -110,7 +139,7 @@ export const createRoomAcceptanceStart = (options: {
         if (ref.id !== options.publicCharacter.id || ref.kind !== 'character' || ![101, 202].includes(hostAccountUserId)) throw new ArenaRoomGenerationContentResolverError('ARENA_ROOM_REFERENCE_NOT_READABLE');
         return { ref: { ...ref, versionToken: options.publicCharacter.updated_at }, payload: JSON.parse(options.publicCharacter.data) as Record<string, unknown>, displayName: options.publicCharacter.name, sourceType: 'character' };
       },
-    } }), generation: port,
+    } }), generation: port, get startingCancelEnabled() { return startingCancelEnabled; },
     onBackgroundError: () => { /* No raw input or exceptions escape the synthetic control protocol. */ },
   });
   return {
@@ -123,9 +152,13 @@ export const createRoomAcceptanceStart = (options: {
     control(scenario: RoomAcceptanceStartScenario) {
       if (disposed || !ROOM_ACCEPTANCE_START_SCENARIOS.includes(scenario)) return refuse();
       if (scenario === 'start-reserve-only') { if (reserveOnly) return refuse(); reserveOnly = true; return; }
+      if (scenario === 'start-reserve-only-gated') { if (reserveOnly || pendingStarting) return refuse(); startingCancelEnabled = true; reserveOnly = true; return; }
+      if (scenario === 'start-disable-starting-cancel') { startingCancelEnabled = false; return; }
       if (scenario === 'start-unavailable') { unavailable = true; return; }
       if (scenario === 'start-available') { unavailable = false; return; }
       if (scenario === 'start-large') { large = true; return; }
+      if (pendingStarting && scenario === 'start-cancel-wait') { cancelWait = true; return; }
+      if (pendingStarting && scenario === 'start-cancel-complete') { if (!cancelPending) return refuse(); cancelPending = false; cancelWait = false; return; }
       if (!latest || terminal(latest)) return refuse();
       if (scenario === 'start-complete') { finish(latest, 'completed'); return; }
       if (scenario === 'start-cancel-wait') { cancelWait = true; return; }

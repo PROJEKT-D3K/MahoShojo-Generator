@@ -88,7 +88,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">多人房间</h2>
       {!state.opened ? <button type="button" className={secondary} disabled={disabled} onClick={() => { void owner.open(); }}>打开多人大厅</button>
         : <button type="button" className={secondary} onClick={disconnect}>断开本机房间连接</button>}</div>
-    <p className="text-sm">支持创建、加入、成员在线状态、退出/关闭，以及房主比较后明确发布配置。成员可编辑、提交、撤回提案，房主逐项审阅。房主可用服务器系统默认开始生成、读取实时战报并停止已启动的当前任务；尚未确认启动的占位只能核对或显式重试。房间 BYOK 尚未开放。</p>
+    <p className="text-sm">支持创建、加入、成员在线状态、退出/关闭，以及房主比较后明确发布配置。成员可编辑、提交、撤回提案，房主逐项审阅。房主可用服务器系统默认或固定目录 BYOK 开始生成、读取实时战报并停止当前任务；原请求尚未确认启动的占位，可明确销毁重试许可后尝试一次停止。</p>
     {state.constrained ? <p role="status">本次多人会话的有效执行位置：服务器。普通 AI 选择与本机草稿保持不变，退出后恢复普通操作。</p> : null}
     {state.opened ? <>
       <p role="status">{status}</p>
@@ -100,6 +100,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
       {pending?.operation === 'generationStart' && !session ? <section><p>原生成结果未知，当前房间不可核对。不会重新拼接材料或另开新任务。</p><button type="button" disabled={state.busy} onClick={reconcile}>只读核对原房间</button></section> : null}
       <DesktopRoomStartTracking owner={owner} state={state} disabled={disabled} />
       {pending?.operation === 'generationCancel' ? <section aria-label="核对停止生成结果">
+        {pending.cancelMode === 'starting-v1' ? <p>原 start 材料与重试许可已退休。旧服务拒绝或回执未知都不会恢复原请求，也不会再次发送停止；可只读核对或停止本机跟踪返回大厅。</p> : null}
         <p>{owner.cancelTrackingUnavailable() ? '原目标已不可核对，结果未知。新生成或房间换代不能证明原任务已停止。' : '正在核对原生成终态；停止请求不会再次发送。'}</p>
         <p>断开或刷新不会解除原停止请求的防重发状态，也不会停止服务器生成。</p>
         <button type="button" className={secondary} disabled={state.busy || state.generationReading} onClick={reconcile}>{state.phase === 'unavailable' ? '重新验证窗口与本机原意图' : '只读核对停止结果'}</button>

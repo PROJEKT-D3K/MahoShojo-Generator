@@ -1,4 +1,5 @@
 import startFixture from '@mahoshojo/contracts/fixtures/desktop-room-generation-start.json';
+import startingCancelFixture from '@mahoshojo/contracts/fixtures/desktop-room-starting-cancel.json';
 import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -32,6 +33,7 @@ import type { RedisService } from '#/redis/runtime';
 import type { ArenaRoomHttpDependencies } from '#/arena-room/room-http';
 import { ArenaRoomMembershipError } from '#/arena-room/room-membership-service';
 import { ArenaRoomConfigError } from '#/arena-room/room-config-service';
+import { ArenaRoomGenerationError } from '#/arena-room/room-generation-service';
 import { createArenaRoomState } from './arena-room-fixtures';
 
 const config: HonoServerConfig = {
@@ -154,6 +156,37 @@ const requestFor = (operation: DesktopRoomSessionOperation) => ({
 });
 
 describe('Desktop opt-in through the existing Room HTTP producer', () => {
+  it('starting-cancel marker binds the full identity without changing ordinary cancellation', async () => {
+    const deps = depsFor(), body = structuredClone(startingCancelFixture.operation.request);
+    body.desktopRoom.expectedUserId = 101;
+    body.request.expectedRoomEpoch = snapshot.roomEpoch;
+    const response = await appFor(deps).request(pathFor('generationCancel'), { method: 'POST', headers, body: JSON.stringify(body) });
+    expect(response.status).toBe(200);
+    expect(deps.generations.cancel).toHaveBeenCalledExactlyOnceWith({
+      roomId: snapshot.roomId, generationId: generationFixture.action.generationId, accountUserId: 101,
+      request: { expectedRoomEpoch: snapshot.roomEpoch }, expectedGeneration: body.request.expectedGeneration,
+    });
+    expect((await response.json()).result).not.toHaveProperty('markdown');
+  });
+  it('starting-cancel rejects malformed markers and stale owners before any business but recovery failures are unknown', async () => {
+    const wire = { ...startingCancelFixture.operation.request, desktopRoom: { ...startingCancelFixture.operation.request.desktopRoom, expectedUserId: 101 } };
+    for (const body of [
+      { ...wire, desktopRoom: { ...wire.desktopRoom, cancelMode: 'wrong' } },
+      { ...wire, request: { expectedRoomEpoch: snapshot.roomEpoch } },
+      { ...wire, desktopRoom: { ...wire.desktopRoom, expectedUserId: 202 } },
+    ]) {
+      const deps = depsFor();
+      const response = await appFor(deps).request(pathFor('generationCancel'), { method: 'POST', headers, body: JSON.stringify(body) });
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect((await response.json()).error.outcome).toBe('not-applied');
+      assertNoBusiness(deps);
+    }
+    const deps = depsFor();
+    vi.mocked(deps.generations.cancel).mockRejectedValue(new ArenaRoomGenerationError('ROOM_GENERATION_UNAVAILABLE'));
+    const response = await appFor(deps).request(pathFor('generationCancel'), { method: 'POST', headers, body: JSON.stringify(wire) });
+    expect((await response.json()).error.outcome).toBe('unknown');
+    expect(deps.generations.cancel).toHaveBeenCalledOnce();
+  });
   it.each(operations)('%s shared fixture equals actual handler JSON serialization', async (operation) => {
     const sample = operationFixtures[operation];
     const result = ArenaRoomSessionResponseSchema.parse(fixture.operations.session.success.result);

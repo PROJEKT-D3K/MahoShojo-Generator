@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DesktopRoomGenerationIdentitySchema } from '@mahoshojo/contracts/desktop-room-session';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -260,11 +261,13 @@ const cancelAtBarrier = async (barrier: Barrier, variant: Variant = 'default') =
     })]), barrier);
     const persisted = await roomStore.load(roomId);
     assert.equal(persisted?.snapshot.activeGeneration?.state, 'starting');
+    const expectedGeneration = DesktopRoomGenerationIdentitySchema.parse(Object.fromEntries(Object.entries(persisted!.snapshot.activeGeneration!).filter(([key]) => !['state', 'startedAt', 'finishedAt'].includes(key))));
+    const exactCancel = () => coordinator.cancel({ roomId, generationId, accountUserId: 101, request: { expectedRoomEpoch: host.roomEpoch }, ...(variant === 'legacy-off' ? {} : { expectedGeneration }) });
     const before = await store.readState({ generationId, actorKey });
     if (variant === 'rejection-won') {
       assert.equal(before?.terminal?.status, 'failed');
       assert.equal(before?.roomAdmission?.generationRequestId, generationRequestId);
-      await coordinator.cancel({ roomId, generationId, accountUserId: 101, request: { expectedRoomEpoch: host.roomEpoch } });
+      await exactCancel();
       release.resolve();
       await deadline(start, 'preflight rejection mirror after concurrent cancel');
       await coordinator.read({ roomId, generationId, accountUserId: 101 });
@@ -285,6 +288,7 @@ const cancelAtBarrier = async (barrier: Barrier, variant: Variant = 'default') =
     if (variant === 'legacy-off') {
       assert.equal(persisted?.authorityStateVersion, 2);
       assert.equal(persisted?.generationLedger[0]?.startGate, undefined);
+      await assert.rejects(coordinator.cancel({ roomId, generationId, accountUserId: 101, request: { expectedRoomEpoch: host.roomEpoch }, expectedGeneration }), { code: 'ROOM_GENERATION_UNAVAILABLE' });
     }
     if (denyAdmission) {
       const checkpointKey = createArenaRoomRedisKeyspace(keyPrefix).roomCheckpointKey(roomId);
@@ -337,7 +341,7 @@ const cancelAtBarrier = async (barrier: Barrier, variant: Variant = 'default') =
       assert.equal(pending?.terminal, null);
       assert.equal(database.prepare('SELECT * FROM battle_report_generations').all().length, 0);
       d1Available = true;
-      await coordinator.cancel({ roomId, generationId, accountUserId: 101, request: { expectedRoomEpoch: host.roomEpoch } });
+      await exactCancel();
       assert.equal(database.prepare('SELECT * FROM battle_report_generations').all()[0]?.status, 'aborted');
       assert.equal((await roomStore.load(roomId))?.generationLedger[0]?.mirror.state, 'cancelled');
       return;
@@ -347,7 +351,7 @@ const cancelAtBarrier = async (barrier: Barrier, variant: Variant = 'default') =
     });
     if (variant === 'd1-unavailable') d1Available = false;
     try {
-      await coordinator.cancel({ roomId, generationId, accountUserId: 101, request: { expectedRoomEpoch: host.roomEpoch } });
+      await exactCancel();
     } catch (error) { cancelError = error instanceof Error ? error.message : String(error); }
     const rowsAtCancel = database.prepare('SELECT * FROM battle_report_generations').all();
     assert.equal(rowsAtCancel.length, barrier === 'running-won' || variant === 'd1-unavailable' ? 0 : 1);
@@ -380,7 +384,7 @@ const cancelAtBarrier = async (barrier: Barrier, variant: Variant = 'default') =
       const finalRoom = await roomStore.load(roomId);
       assert.equal(finalRoom?.generationLedger[0]?.mirror.state, 'cancelled');
       assert.equal(finalRoom?.generationLedger[0]?.startGate?.cancellationRequested, true);
-      await coordinator.cancel({ roomId, generationId, accountUserId: 101, request: { expectedRoomEpoch: host.roomEpoch } });
+      await exactCancel();
       assert.equal(database.prepare('SELECT * FROM battle_report_generations').all().length, 1);
       await coordinator.read({ roomId, generationId, accountUserId: 101 });
       const projection = await hosted.readOwnedProjection({ generationId, actorKey });

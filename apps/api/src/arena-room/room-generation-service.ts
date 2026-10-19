@@ -11,6 +11,7 @@ import type {
   ArenaRoomGenerationStartRequest,
   ArenaRoomGenerationViewResponse,
 } from '@mahoshojo/contracts/arena-room';
+import { DesktopRoomGenerationIdentitySchema, type DesktopRoomGenerationIdentity } from '@mahoshojo/contracts/desktop-room-session';
 import {
   ArenaRoomGenerationHistoryResponseSchema,
   ArenaRoomGenerationHistoryViewResponseSchema,
@@ -102,6 +103,8 @@ export type ArenaRoomGenerationService = {
     readonly generationId: string;
     readonly accountUserId: number;
     readonly request: ArenaRoomGenerationCancelRequest;
+    /** Strict starting-cancel opt-in. Never fall back to legacy cancellation for this target. */
+    readonly expectedGeneration?: DesktopRoomGenerationIdentity;
   }): Promise<ArenaRoomGenerationViewResponse>;
   start(input: {
     readonly roomId: string;
@@ -868,11 +871,29 @@ export const createArenaRoomGenerationService = (
       if (!mirror || mirror.generationId !== input.generationId) {
         return fail('ROOM_GENERATION_NOT_FOUND');
       }
+      if (input.expectedGeneration !== undefined) {
+        const target = DesktopRoomGenerationIdentitySchema.safeParse(input.expectedGeneration);
+        if (!target.success) return fail('ROOM_GENERATION_INPUT_INVALID');
+        const expected = target.data;
+        if (expected.generationRequestId !== mirror.generationRequestId
+          || expected.generationId !== mirror.generationId
+          || expected.attempt !== mirror.attempt || expected.configRevision !== mirror.configRevision
+          || expected.snapshotDigest !== mirror.snapshotDigest
+          || expected.collaborativeInfluence !== mirror.collaborativeInfluence
+          || expected.hostAccountUserId !== mirror.hostAccountUserId
+          || expected.participantUserIds.length !== mirror.participantUserIds.length
+          || expected.participantUserIds.some((value, index) => value !== mirror.participantUserIds[index])) {
+          return fail('ROOM_GENERATION_CONFLICT');
+        }
+      }
       const terminal = mirror.state === 'completed'
         || mirror.state === 'failed'
         || mirror.state === 'cancelled';
       if (!terminal) {
         const record = state.generationLedger.find((entry) => entry.mirror.generationId === input.generationId);
+        if (input.expectedGeneration !== undefined && record?.startGate?.version !== ROOM_GENERATION_START_GATE_VERSION) {
+          return fail('ROOM_GENERATION_UNAVAILABLE');
+        }
         if (record?.startGate) {
           const derived = await options.generation.deriveGenerationId({ roomId: membership.roomId, generationRequestId: record.mirror.generationRequestId });
           if (derived !== input.generationId) return fail('ROOM_GENERATION_CONFLICT');

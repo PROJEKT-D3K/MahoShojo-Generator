@@ -3,11 +3,19 @@ use super::*;
 use generation_read::{same_generation, terminal};
 
 #[derive(Clone)]
+pub(super) struct StartingCancelLink {
+    pub(super) start_intent_id: String,
+    pub(super) cancel_intent_id: String,
+    pub(super) document: DocumentId,
+}
+
+#[derive(Clone)]
 pub(super) struct CancelBasis {
     room_id: String,
     room_epoch: String,
     generation: Value,
     terminal_state: Option<String>,
+    pub(super) starting: Option<StartingCancelLink>,
 }
 
 impl CancelBasis {
@@ -23,6 +31,7 @@ impl CancelBasis {
             room_epoch: epoch.into(),
             generation: authority.generation.clone().ok_or_else(stale)?,
             terminal_state: None,
+            starting: None,
         };
         if basis.generation["generationId"].as_str() != Some(generation)
             || basis.generation["attempt"].as_u64() != Some(attempt)
@@ -31,6 +40,38 @@ impl CancelBasis {
         }
         basis.dispatch_current(authority)?;
         Ok(basis)
+    }
+    pub(super) fn from_start(
+        authority: &Authority,
+        link: StartingCancelLink,
+    ) -> Result<Self, RoomError> {
+        let generation = authority.generation.as_ref().ok_or_else(stale)?;
+        if generation["state"] != "starting" {
+            return Err(stale());
+        }
+        let mut basis = Self::prepare(
+            authority,
+            &authority.room_id,
+            &authority.room_epoch,
+            generation["generationId"].as_str().ok_or_else(stale)?,
+            generation["attempt"].as_u64().ok_or_else(stale)?,
+        )?;
+        basis.starting = Some(link);
+        Ok(basis)
+    }
+    pub(super) fn request(&self) -> HttpRequest {
+        let mut expected = self.generation.clone();
+        let object = expected.as_object_mut().expect("validated generation");
+        object.remove("state");
+        object.remove("startedAt");
+        object.remove("finishedAt");
+        HttpRequest {
+            operation: Operation::GenerationCancel,
+            room_id: Some(self.room_id.clone()),
+            proposal_id: None,
+            resume_only: false,
+            request: json!({"generationId":self.generation["generationId"],"expectedRoomEpoch":self.room_epoch,"expectedGeneration":expected}),
+        }
     }
     pub(super) fn target(&self) -> Value {
         json!({"roomEpoch":self.room_epoch,"generationId":self.generation["generationId"],"attempt":self.generation["attempt"]})
@@ -127,7 +168,17 @@ impl RoomInstance {
             .as_ref()
             .filter(|pending| pending.id == intent)
             .ok_or_else(stale)?;
-        if pending.phase != IntentPhase::InFlight {
+        if pending.phase != IntentPhase::InFlight
+            || pending.account.epoch != context.account.epoch
+            || pending.account.user_id != context.account.user_id
+            || pending.account.cookie != context.account.cookie
+            || !pending.account.is_current()?
+            || basis.starting.as_ref().is_some_and(|link| {
+                link.document != context.proof.document
+                    || link.cancel_intent_id != intent
+                    || !Self::linked_start_cancel(&inner, intent)
+            })
+        {
             return Err(stale());
         }
         pending
@@ -153,6 +204,9 @@ impl RoomInstance {
         inner: &Inner,
         candidate: &Authority,
     ) -> Result<(), RoomError> {
+        if let (Some(fence), Some(scope)) = (&inner.start_fence, &inner.scope) {
+            fence.check_cancel_candidate(scope.context.account.user_id, candidate)?;
+        }
         if let Some(basis) = inner
             .pending
             .as_ref()
@@ -219,6 +273,9 @@ impl RoomInstance {
         self.current_locked(&inner, context)?;
         let candidate = Self::cancel_receipt_candidate(&inner, basis, response)?;
         inner.scope.as_mut().ok_or_else(stale)?.session = Some(candidate);
+        // Preserve a linked terminal observation before this lock can be retired,
+        // even when the HTTP batch has not yet been queued or acknowledged.
+        Self::observe_start_locked(&mut inner)?;
         Ok(())
     }
     pub(super) fn cancel_response_terminal(
@@ -252,6 +309,10 @@ impl RoomInstance {
         inner.pending.as_ref().is_some_and(|pending| {
             pending.account.user_id == context.account.user_id
                 && pending.account.epoch == context.account.epoch
+                && pending.account.cookie == context.account.cookie
+                && (!pending.is_starting_cancel()
+                    || (pending.tracking_document() == Some(context.proof.document)
+                        && Self::linked_start_cancel(inner, &pending.id)))
                 && pending.cancel_basis.as_ref().is_some_and(|basis| {
                     inner
                         .scope
@@ -288,6 +349,13 @@ impl RoomInstance {
         }
         pending.cancel_basis.as_mut().unwrap().terminal_state = Some(state);
         pending.phase = IntentPhase::AwaitingAck;
-        pending.receipt = Some(receipt);
+        pending.receipt = Some(receipt.clone());
+        if let Some(fence) = inner
+            .start_fence
+            .as_mut()
+            .filter(|fence| fence.cancel_id() == Some(pending.id.as_str()))
+        {
+            fence.set_receipt(receipt);
+        }
     }
 }

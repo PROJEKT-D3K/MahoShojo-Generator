@@ -224,6 +224,9 @@ pub(crate) struct Request {
 }
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
+    CancelGenerationStart {
+        intent_id: String,
+    },
     EndGenerationStartTracking {
         intent_id: String,
     },
@@ -1483,7 +1486,11 @@ pub(crate) fn validate_service_request(
             } else {
                 &["version", "expectedUserId"]
             },
-            &[],
+            if operation == Operation::GenerationCancel {
+                &["cancelMode"]
+            } else {
+                &[]
+            },
         )?;
         literal(&meta["version"], PROTOCOL_VERSION)?;
         integer(&mut meta["expectedUserId"], 1, MAX_SAFE_INTEGER)?;
@@ -1491,7 +1498,31 @@ pub(crate) fn validate_service_request(
         if operation == Operation::Create {
             one_of(&meta["createMode"], &["new", "resume-only"])?;
         }
-        original_request(operation, &mut value["request"])?;
+        if operation == Operation::GenerationCancel && has(meta, "cancelMode") {
+            literal(&meta["cancelMode"], "starting-v1")?;
+            let body = &mut value["request"];
+            bounded(body, MAX_ORIGINAL_REQUEST_BYTES)?;
+            closed(body, &["expectedRoomEpoch", "expectedGeneration"], &[])?;
+            key(&mut body["expectedRoomEpoch"])?;
+            let generation = &mut body["expectedGeneration"];
+            closed(
+                generation,
+                &[
+                    "generationRequestId",
+                    "generationId",
+                    "attempt",
+                    "configRevision",
+                    "snapshotDigest",
+                    "collaborativeInfluence",
+                    "participantUserIds",
+                ],
+                &["hostAccountUserId"],
+            )?;
+            generation_fields(generation)?;
+            bounded(body, MAX_ORIGINAL_REQUEST_BYTES)?;
+        } else {
+            original_request(operation, &mut value["request"])?;
+        }
         bounded(&value, MAX_REQUEST_BYTES)
     };
     validate().map_err(|_| invalid_request())?;
@@ -1935,6 +1966,7 @@ pub(crate) fn freeze_generation_start(
 /// Ordinary attach, ACK, pull and other small command replies keep their existing gates.
 pub(crate) fn encode_attach_response(value: &Value) -> Result<String, RoomError> {
     let start_recovery = value["pendingIntent"]["operation"] == "generationStart"
+        || value["pendingIntent"]["cancelMode"] == "starting-v1"
         || value
             .get("generationStartFence")
             .is_some_and(|fence| !fence.is_null());
@@ -1970,6 +2002,13 @@ pub(crate) fn parse_request(raw: &Value) -> Result<Request, RoomError> {
                 closed(&v, &["kind", "intentId"], &[])?;
                 id(&mut v["intentId"], 1)?;
                 Ok(Action::EndGenerationStartTracking {
+                    intent_id: get(&v, "intentId")?,
+                })
+            }
+            "cancel-generation-start" => {
+                closed(&v, &["kind", "intentId"], &[])?;
+                id(&mut v["intentId"], 1)?;
+                Ok(Action::CancelGenerationStart {
                     intent_id: get(&v, "intentId")?,
                 })
             }

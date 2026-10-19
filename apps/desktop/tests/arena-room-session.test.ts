@@ -123,8 +123,14 @@ async function harness() {
     }
     if (request.kind === 'end-generation-start-tracking') {
       if (endFails) throw new Error('Lost end receipt');
-      if (pendingIntent?.intentId !== request.intentId || !pendingIntent.generationStart || !pendingIntent.roomId) throw new Error('Wrong start token');
-      generationStartFence = { roomId: pendingIntent.roomId, generationRequestId: pendingIntent.generationStart.generationRequestId }; pendingIntent = null;
+      if (pendingIntent?.intentId !== request.intentId || !pendingIntent.roomId) throw new Error('Wrong start token');
+      if (pendingIntent.cancelMode === 'starting-v1') {
+        if (generationStartFence?.cancelIntentId !== request.intentId) throw new Error('Wrong cancel fence');
+      } else {
+        if (!pendingIntent.generationStart) throw new Error('Wrong start token');
+        generationStartFence = { roomId: pendingIntent.roomId, generationRequestId: pendingIntent.generationStart.generationRequestId };
+      }
+      pendingIntent = null;
       return { kind: 'generation-start-tracking-ended', intentId: request.intentId, ended: true, generationStartBlocked: true, generationStartFence };
     }
     if (request.kind === 'end-proposal-tracking') {
@@ -231,6 +237,97 @@ describe('Desktop Arena Room session through the real Native bridge', () => {
   const startBundle = (value: ArenaRoomSessionResponse): ArenaRoomHostWorkspaceBundle => ({ sharedConfig: value.snapshot.sharedConfig, hostLocalPayloads: [], hostLocalContentDigests: [] });
   const pendingStart = (value: ArenaRoomSessionResponse, id: string, retryable = true) => ({ operation: 'generationStart' as const, intentId: id, roomId: value.roomId,
     generationStart: { roomEpoch: value.roomEpoch, generationRequestId: createRequest.creationRequestId, retryable } });
+
+  const unavailableRead = (id: string): DesktopRoomEvent => ({ kind: 'request-error', requestId: id, operation: 'generationRead',
+    error: { code: 'network-error', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applicable' } });
+  async function reservedStart() {
+    const h = await harness();
+    const { finishedAt: _finished, ...generation } = generationFixture.operation.success.result.generation;
+    const value = ArenaRoomSessionResponseSchema.parse({ ...startHost(), snapshot: { ...startHost().snapshot,
+      activeGeneration: { ...generation, state: 'starting', generationRequestId: createRequest.creationRequestId } } });
+    const pending = pendingStart(value, 'original-start'); h.setPending(pending); await h.session.open();
+    const session = h.plan('session'), checking = h.session.reconcile(); await session.entered.promise; session.accept(); await checking;
+    await h.receive(success('session', session.requestId, value)); await whenState(h.session, state => !state.busy && state.phase === 'connecting');
+    const read = h.plan('generation-read'); await installOnlineSnapshot(h, value); await read.entered.promise; read.accept();
+    await h.receive(unavailableRead(read.requestId)); await whenState(h.session, state => !state.generationReading);
+    return { h, value, pending };
+  }
+  it('hands one starting intent to cancellation, retains unknown on old-server rejection, and exits without unlocking new start', async () => {
+    const { h, value, pending } = await reservedStart();
+    const target = captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!, identity = h.session.confirmationOwner()!;
+    expect(h.session.startingCancelBlockedReason()).toBeNull();
+    const cancel = h.plan('cancel-generation-start'), sending = h.session.cancelPendingStart(pending.intentId, target, identity);
+    expect(await cancel.entered.promise).toEqual({ kind: 'cancel-generation-start', intentId: pending.intentId });
+    await h.session.cancelPendingStart(pending.intentId, target, identity);
+    await h.session.retryStartGeneration(pending.intentId, identity);
+    cancel.accept(); await sending;
+    const next = { operation: 'generationCancel' as const, roomId: value.roomId, intentId: cancel.requestId,
+      generationTarget: { roomEpoch: value.roomEpoch, generationId: target.generationId, attempt: target.attempt }, cancelMode: 'starting-v1' as const, startIntentId: pending.intentId };
+    const fence = { roomId: value.roomId, generationRequestId: pending.generationStart.generationRequestId, cancelMode: 'starting-v1' as const, startIntentId: pending.intentId, cancelIntentId: cancel.requestId };
+    h.setPending(next); h.setFence(fence);
+    const read = h.plan('generation-read');
+    await h.receive({ kind: 'request-error', requestId: cancel.requestId, operation: 'generationCancel',
+      error: { code: 'service-rejected', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'unknown', serverCode: 'ROOM_DESKTOP_PROTOCOL_INVALID' } });
+    await read.entered.promise; read.accept(); await h.receive(unavailableRead(read.requestId)); await whenState(h.session, state => !state.busy && !state.generationReading);
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: next, generationStartBlocked: true, phase: 'online', snapshotReceived: true });
+    // Already delivered old start evidence may pay its own delivery debt, but cannot restore its retry UI.
+    await h.receive({ kind: 'mutation-unknown', ...pending });
+    expect(h.session.getSnapshot().unknown).toMatchObject(next);
+    await h.session.endGenerationStartTracking(cancel.requestId, h.session.confirmationOwner()!);
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: null, session: null, constrained: false, phase: 'ready', generationStartBlocked: true, generationStartFence: fence });
+    const discovery = h.plan('discover'), discovering = h.session.discover(); await discovery.entered.promise; discovery.accept(); await discovering;
+    await h.receive(success('discover', discovery.requestId)); await whenState(h.session, state => !state.busy);
+    expect(h.requests.filter(item => ['cancel-generation-start', 'retry-generation-start', 'generation-start'].includes(item.kind))).toEqual([{ kind: 'cancel-generation-start', intentId: pending.intentId }]);
+  });
+  it.each(['http', 'socket'] as const)('accepts terminal %s evidence notified before the handoff invoke returns', async transport => {
+    const { h, value, pending } = await reservedStart();
+    const target = captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!;
+    const cancel = h.plan('cancel-generation-start'), sending = h.session.cancelPendingStart(pending.intentId, target, h.session.confirmationOwner()!);
+    await cancel.entered.promise;
+    const terminal = { ...value.snapshot.activeGeneration!, state: 'cancelled', finishedAt: '2026-10-12T00:02:00.000Z' };
+    const event = transport === 'http' ? { kind: 'http-result', requestId: cancel.requestId, operation: 'generationCancel', response: {
+      desktopRoom: { version: 'desktop-room-session-v1', viewerUserId: fixture.expectedUserId },
+      result: { protocolVersion: 1, roomId: value.roomId, roomEpoch: value.roomEpoch, generation: terminal, status: 'cancelled' } } }
+      : { kind: 'socket', message: { type: 'room.snapshot', protocolVersion: 1, roomId: value.roomId, roomEpoch: value.roomEpoch,
+        controlSeq: value.snapshot.controlSeq + 1, timestamp: '2026-10-12T00:02:00.000Z', payload: { ...value.snapshot, controlSeq: value.snapshot.controlSeq + 1, activeGeneration: terminal } } };
+    const delivery = h.emit(DesktopRoomEventSchema.parse(event));
+    // The real bridge serializes framework invokes: queued evidence is pulled
+    // after this invoke returns, even when Native notified it first.
+    cancel.accept(); await sending; await delivery.ackEntered.promise;
+    const read = h.plan('generation-read');
+    delivery.acknowledge({ generationCancel: { intentId: cancel.requestId, current: true } });
+    await whenState(h.session, state => state.unknown === null);
+    expect(h.session.getSnapshot().generationStartBlocked).toBe(false);
+    await read.entered.promise; read.accept(); await h.receive(unavailableRead(read.requestId)); await whenState(h.session, state => !state.generationReading);
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: null, generationStartBlocked: false });
+    await h.receive({ kind: 'mutation-unknown', ...pending });
+    expect(h.session.getSnapshot().unknown).toBeNull();
+  });
+  it('prevents handoff while an already-consumed old start observation awaits its ACK', async () => {
+    const { h, value, pending } = await reservedStart();
+    const target = captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!;
+    const delivery = h.emit(DesktopRoomEventSchema.parse({ kind: 'socket', message: { type: 'room.snapshot', protocolVersion: 1,
+      roomId: value.roomId, roomEpoch: value.roomEpoch, controlSeq: value.snapshot.controlSeq + 1, timestamp: '2026-10-12T00:02:00.000Z',
+      payload: { ...value.snapshot, controlSeq: value.snapshot.controlSeq + 1, activeGeneration: { ...value.snapshot.activeGeneration!, state: 'running' } } } }));
+    await delivery.ackEntered.promise;
+    await h.session.cancelPendingStart(pending.intentId, target, h.session.confirmationOwner()!);
+    expect(h.requests.some(item => item.kind === 'cancel-generation-start')).toBe(false);
+    const read = h.plan('generation-read');
+    delivery.acknowledge({ generationStart: { intentId: pending.intentId, current: true } });
+    await read.entered.promise; read.accept(); await h.receive(unavailableRead(read.requestId));
+    await whenState(h.session, state => !state.generationReading && state.unknown === null);
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: null, generationStartBlocked: false, busy: false });
+    await h.session.retryStartGeneration(pending.intentId, h.session.confirmationOwner()!);
+    expect(h.requests.some(item => item.kind === 'retry-generation-start')).toBe(false);
+  });
+  it('preserves the original start only when Native refuses handoff before admission', async () => {
+    const { h, pending } = await reservedStart();
+    const target = captureArenaRoomGenerationCancelTarget(h.session.getSnapshot().session)!;
+    const cancel = h.plan('cancel-generation-start'), sending = h.session.cancelPendingStart(pending.intentId, target, h.session.confirmationOwner()!);
+    await cancel.entered.promise;
+    cancel.response.reject({ code: 'busy', message: DESKTOP_ROOM_ERROR_MESSAGE, outcome: 'not-applied' }); await sending;
+    expect(h.session.getSnapshot()).toMatchObject({ unknown: pending, generationStartBlocked: false, busy: false, phase: 'online', snapshotReceived: true });
+  });
 
   it('freezes one visible start and keeps an unknown intent through a pre-business retry refusal', async () => {
     const h = await harness(), value = startHost(); await joinProposalHost(h, value);

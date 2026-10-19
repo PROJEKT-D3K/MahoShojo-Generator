@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DesktopRoomGenerationIdentitySchema } from '@mahoshojo/contracts/desktop-room-session';
 
 import {
   createRoomActorRegistry,
@@ -1567,5 +1568,25 @@ describe('Arena Room generation coordinator', () => {
       });
       harness.finishPublisher();
     }
+  });
+
+  it('starting-cancel full identity is required and legacy reservations never fall back to cancelOwned', async () => {
+    const harness = await createHarness();
+    await harness.service.start({ roomId: 'room-1', accountUserId: 101, request: startRequest(), sourceRequest: sourceRequest() });
+    const mirror = harness.store.state!.snapshot.activeGeneration!;
+    const expectedGeneration = DesktopRoomGenerationIdentitySchema.parse(Object.fromEntries(
+      Object.entries(mirror).filter(([key]) => !['state', 'startedAt', 'finishedAt'].includes(key)),
+    ));
+    const input = { roomId: 'room-1', generationId: 'generation-1', accountUserId: 101,
+      request: { expectedRoomEpoch: 'epoch-1' }, expectedGeneration };
+    for (const changed of [
+      { generationRequestId: 'other' }, { generationId: 'other' }, { attempt: 2 },
+      { configRevision: mirror.configRevision + 1 }, { snapshotDigest: 'other' },
+      { collaborativeInfluence: !mirror.collaborativeInfluence }, { participantUserIds: [...mirror.participantUserIds, 202] },
+    ]) await expect(harness.service.cancel({ ...input, expectedGeneration: { ...expectedGeneration, ...changed } })).rejects.toMatchObject({ code: 'ROOM_GENERATION_CONFLICT' });
+    await expect(harness.service.cancel(input)).rejects.toMatchObject({ code: 'ROOM_GENERATION_UNAVAILABLE' });
+    expect(harness.generation.cancelOwned).not.toHaveBeenCalled();
+    expect(harness.generation.readOwnedProjection).not.toHaveBeenCalled();
+    harness.finishPublisher();
   });
 });

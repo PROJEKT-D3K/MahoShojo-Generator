@@ -19,7 +19,7 @@ const PREFIX = PRODUCTION_ID + '.roomacceptance.';
 // Deliberate harness capabilities, never every operation added to the production registry.
 export const ROOM_ACCEPTANCE_FAULTS = Object.freeze(['create', 'join', 'leave', 'close', 'config', 'config-unsupported', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve', 'proposal-unsupported']);
 export const ROOM_GENERATION_SCENARIOS = Object.freeze(['seed', 'seed-large', 'delta', 'gap', 'disconnect', 'complete', 'hold-read', 'release-read']);
-export const ROOM_START_SCENARIOS = Object.freeze(['start-reserve-only', 'start-unavailable', 'start-available', 'start-large', 'start-delta', 'start-complete', 'start-cancel-wait', 'start-cancel-complete']);
+export const ROOM_START_SCENARIOS = Object.freeze(['start-reserve-only', 'start-reserve-only-gated', 'start-disable-starting-cancel', 'start-unavailable', 'start-available', 'start-large', 'start-delta', 'start-complete', 'start-cancel-wait', 'start-cancel-complete']);
 export const ROOM_CANCEL_SCENARIOS = Object.freeze([...ROOM_GENERATION_SCENARIOS, 'cancel-wait', 'cancel-complete']);
 const ROOM_OBSERVATION_OPERATIONS = Object.freeze(['discover', 'create', 'join', 'session', 'generationRead', 'ticket', 'leave', 'close', 'config', 'proposalSubmit', 'proposalWithdraw', 'proposalResolve']);
 const read = file => readFileSync(file, 'utf8');
@@ -257,7 +257,7 @@ function exactKeys(value, keys) {
 function checkedSummary(value, syntheticCancel = false, syntheticStart = false) {
   const keys = ['tlsTrusted', 'tlsNoRootRejected', 'tlsWrongSanRejected', 'authPkceOneUse', 'roomHttp', 'roomWss', 'roomProposals', 'proposalReceiptLoss', 'fixedPublicRefs', 'roomGenerationRead', 'roomGenerationRecovery', 'generationReadOnly'];
   if (syntheticCancel || syntheticStart) keys.push('generationCancel');
-  if (syntheticStart) keys.push('generationStart', 'syntheticProducer');
+  if (syntheticStart) keys.push('generationStart', 'generationStartingCancel', 'syntheticProducer');
   if (!exactKeys(value, keys) || keys.some(key => value[key] !== (key === 'generationReadOnly' ? !syntheticCancel && !syntheticStart : true))) fail('invalid self-check result');
   return value;
 }

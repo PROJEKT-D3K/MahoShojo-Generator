@@ -121,7 +121,9 @@ class RoomNativeFixture {
     }
     if (action.kind === 'end-generation-start-tracking') {
       expect(this.pendingIntent?.intentId).toBe(action.intentId);
-      this.generationStartFence = { roomId: this.pendingIntent!.roomId!, generationRequestId: this.pendingIntent!.generationStart!.generationRequestId }; this.pendingIntent = null;
+      if (this.pendingIntent?.cancelMode === 'starting-v1') expect(this.generationStartFence?.cancelIntentId).toBe(action.intentId);
+      else this.generationStartFence = { roomId: this.pendingIntent!.roomId!, generationRequestId: this.pendingIntent!.generationStart!.generationRequestId };
+      this.pendingIntent = null;
       return { kind: 'generation-start-tracking-ended', intentId: action.intentId, ended: true, generationStartBlocked: true, generationStartFence: this.generationStartFence };
     }
     if (action.kind === 'end-config-tracking' || action.kind === 'end-proposal-tracking') {
@@ -143,7 +145,7 @@ class RoomNativeFixture {
     const batch = DesktopRoomBatchSchema.parse({ handle: this.handle, subscriptionId: this.subscriptionId, batchId: `page-batch-${this.attachCount}-${this.subscriptions.length}-${sequence}`, sequence, event });
     if (batch.event.kind === 'mutation-unknown') {
       const { operation, intentId, roomId } = batch.event;
-      this.pendingIntent = { operation, intentId, roomId, ...(batch.event.generationStart ? { generationStart: batch.event.generationStart } : {}), ...(batch.event.generationTarget ? { generationTarget: batch.event.generationTarget } : {}) };
+      this.pendingIntent = { operation, intentId, roomId, ...(batch.event.generationStart ? { generationStart: batch.event.generationStart } : {}), ...(batch.event.generationTarget ? { generationTarget: batch.event.generationTarget } : {}), ...(batch.event.cancelMode ? { cancelMode: batch.event.cancelMode, startIntentId: batch.event.startIntentId } : {}) };
     }
     const delivery = { batch, channel: this.channel, pullStarted: deferred<void>(), ackStarted: deferred<void>(), pullGate: deferred<void>(), ackGate: deferred<void>(), pullReturned: deferred<void>() };
     if (!options.holdPull) delivery.pullGate.resolve();
@@ -471,6 +473,51 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     expect(ordinarySnapshot()).toEqual(before); expect(port.actions.map(item => item.action.kind)).toEqual(['create', 'generation-start', 'session']);
     // Only the one explicitly confirmed Room start crossed Native; no ordinary/provider generation.
     expect(mocks.invoke.mock.calls.filter(([command]) => /^(direct_|hosted_|generation_)/.test(String(command)))).toEqual([]);
+  });
+  it('hands a confirmed starting placeholder to one stop request, then exits unknown to lobby and preserves the original fence', async () => {
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
+    const creating = await startAction('创建多人房间', 'create');
+    if (creating.action.kind !== 'create') throw new Error('Expected create');
+    const session = reviewSession(); session.snapshot.sharedConfig = creating.action.request.sharedConfig; session.snapshot.proposals = []; session.snapshot.activeGeneration = null;
+    await confirmMembership(creating, 'host', session); await publishOnline(session);
+    await click('开始多人生成', room()); const start = await startAction('确认按当前配置开始', 'generation-start');
+    if (start.action.kind !== 'generation-start') throw new Error('Expected start');
+    const pending = { operation: 'generationStart', intentId: start.requestId, roomId: session.roomId,
+      generationStart: { roomEpoch: session.roomEpoch, generationRequestId: start.action.request.generationRequestId, retryable: true } };
+    await port.deliver({ kind: 'mutation-unknown', ...pending });
+    await port.deliver({ kind: 'request-error', operation: 'generationStart', requestId: start.requestId, error: ipcFixture.error });
+    const { finishedAt: _finished, ...generation } = generationFixture.operation.success.result.generation;
+    const active = { ...session, snapshot: { ...session.snapshot, controlSeq: session.snapshot.controlSeq + 1,
+      activeGeneration: { ...generation, state: 'starting' as const, generationRequestId: start.action.request.generationRequestId } } };
+    const nextRead = port.nextAction('generation-read'); await port.deliver(snapshotEvent(active)); const read = await nextRead;
+    await port.deliver({ kind: 'request-error', operation: 'generationRead', requestId: read.requestId, error: { ...ipcFixture.error, outcome: 'not-applicable' } });
+    await click('放弃原重试并尝试停止', room());
+    expect(room().textContent).toContain('旧服务拒绝'); expect(room().textContent).toContain('原材料');
+    await click('取消', room()); expect(port.actions.filter(item => item.action.kind === 'cancel-generation-start')).toHaveLength(0);
+    await click('放弃原重试并尝试停止', room()); const cancel = await startAction('销毁原重试许可并尝试停止', 'cancel-generation-start');
+    expect(cancel.action).toEqual({ kind: 'cancel-generation-start', intentId: start.requestId });
+    const linked = { operation: 'generationCancel', intentId: cancel.requestId, roomId: session.roomId,
+      generationTarget: { roomEpoch: session.roomEpoch, generationId: generation.generationId, attempt: generation.attempt }, cancelMode: 'starting-v1', startIntentId: start.requestId };
+    port.generationStartFence = { roomId: session.roomId, generationRequestId: start.action.request.generationRequestId,
+      cancelMode: 'starting-v1', startIntentId: start.requestId, cancelIntentId: cancel.requestId };
+    await port.deliver({ kind: 'mutation-unknown', ...linked });
+    const recovery = port.nextAction('generation-read');
+    await port.deliver({ kind: 'request-error', operation: 'generationCancel', requestId: cancel.requestId,
+      error: { ...ipcFixture.error, outcome: 'unknown', serverCode: 'ROOM_DESKTOP_PROTOCOL_INVALID' } });
+    const checking = await recovery;
+    await port.deliver({ kind: 'request-error', operation: 'generationRead', requestId: checking.requestId, error: { ...ipcFixture.error, outcome: 'not-applicable' } });
+    expect(button('以原请求重试', room())).toBeUndefined(); expect(room().textContent).toContain('不会恢复原材料');
+    await click('停止本机跟踪并返回大厅', room()); expect(room().textContent).toContain('不会取消服务器任务'); await click('确认停止本机跟踪', room());
+    expect(room().textContent).toContain('大厅已就绪'); expect(requiredButton('创建多人房间', room()).disabled).toBe(false);
+    await change('#arena-room-join-code', 'another-room'); expect(requiredButton('加入房间', room()).disabled).toBe(false);
+    const original = await startAction('只读核对保留记录的原房间', 'session'); await confirmMembership(original, 'host', active);
+    const finalRead = port.nextAction('generation-read'); await publishOnline(active); const reading = await finalRead;
+    await port.deliver({ kind: 'request-error', operation: 'generationRead', requestId: reading.requestId, error: { ...ipcFixture.error, outcome: 'not-applicable' } });
+    expect(requiredButton('开始多人生成', room()).disabled).toBe(true); expect(requiredButton('关闭房间', room()).disabled).toBe(false);
+    expect(requiredButton('停止当前生成', room()).disabled).toBe(true);
+    expect(port.actions.filter(item => item.action.kind === 'cancel-generation-start')).toHaveLength(1);
+    expect(port.actions.some(item => item.action.kind === 'generation-cancel' || item.action.kind === 'retry-generation-start')).toBe(false);
+    expect(ordinarySnapshot()).toEqual(before); assertNoExecution();
   });
   it.each(['/arena', '/battle'] as const)('%s exposes only its intended Room entry and never attaches on mount', async path => {
     await mount(path);

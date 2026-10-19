@@ -268,7 +268,7 @@ impl RoomHttp {
         })
     }
 
-    fn prepare(
+    pub(crate) fn prepare(
         &self,
         input: &HttpRequest,
         owner: u64,
@@ -355,12 +355,19 @@ impl RoomHttp {
                 .ok_or_else(invalid)?;
             if fields.len()
                 != if operation == Operation::GenerationCancel {
-                    2
+                    if fields.contains_key("expectedGeneration") {
+                        3
+                    } else {
+                        2
+                    }
                 } else {
                     1
                 }
                 || !protocol::canonical_path_id(room)
                 || !protocol::canonical_path_id(generation)
+                || fields
+                    .get("expectedGeneration")
+                    .is_some_and(|expected| expected["generationId"].as_str() != Some(generation))
             {
                 return Err(invalid());
             }
@@ -410,7 +417,12 @@ impl RoomHttp {
                 });
             }
             let body = if operation == Operation::GenerationCancel {
-                json!({"expectedRoomEpoch":input.request["expectedRoomEpoch"]})
+                let mut body = json!({"expectedRoomEpoch":input.request["expectedRoomEpoch"]});
+                if let Some(generation) = input.request.get("expectedGeneration") {
+                    metadata["cancelMode"] = json!("starting-v1");
+                    body["expectedGeneration"] = generation.clone();
+                }
+                body
             } else {
                 input.request.clone()
             };

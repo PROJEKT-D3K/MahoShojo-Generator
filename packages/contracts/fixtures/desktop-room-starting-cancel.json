@@ -1,0 +1,76 @@
+{
+  "action": {
+    "kind": "cancel-generation-start",
+    "intentId": "start-intent-original"
+  },
+  "pending": {
+    "intentId": "cancel-intent-once",
+    "operation": "generationCancel",
+    "roomId": "room_01JARENAEXAMPLE",
+    "generationTarget": {
+      "roomEpoch": "epoch_01JARENA",
+      "generationId": "generation-1",
+      "attempt": 1
+    },
+    "cancelMode": "starting-v1",
+    "startIntentId": "start-intent-original"
+  },
+  "fence": {
+    "roomId": "room_01JARENAEXAMPLE",
+    "generationRequestId": "generation-request-1",
+    "cancelMode": "starting-v1",
+    "startIntentId": "start-intent-original",
+    "cancelIntentId": "cancel-intent-once"
+  },
+  "operation": {
+    "method": "POST",
+    "path": "/api/arena/rooms/v1/room_01JARENAEXAMPLE/generations/generation-1/cancel",
+    "request": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "expectedUserId": 42,
+        "cancelMode": "starting-v1"
+      },
+      "request": {
+        "expectedRoomEpoch": "epoch_01JARENA",
+        "expectedGeneration": {
+          "generationRequestId": "generation-request-1",
+          "generationId": "generation-1",
+          "attempt": 1,
+          "configRevision": 1,
+          "snapshotDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "collaborativeInfluence": false,
+          "participantUserIds": [
+            42
+          ]
+        }
+      }
+    },
+    "success": {
+      "desktopRoom": {
+        "version": "desktop-room-session-v1",
+        "viewerUserId": 42
+      },
+      "result": {
+        "protocolVersion": 1,
+        "roomId": "room_01JARENAEXAMPLE",
+        "roomEpoch": "epoch_01JARENA",
+        "generation": {
+          "generationRequestId": "generation-request-1",
+          "generationId": "generation-1",
+          "attempt": 1,
+          "state": "completed",
+          "configRevision": 1,
+          "snapshotDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "collaborativeInfluence": false,
+          "participantUserIds": [
+            42
+          ],
+          "startedAt": "2026-10-12T00:00:00.000Z",
+          "finishedAt": "2026-10-12T00:01:00.000Z"
+        },
+        "status": "completed"
+      }
+    }
+  }
+}

@@ -6,7 +6,7 @@ import { observeArenaRoomConfigPublish, validateProposalChanges, type ArenaRoomC
 import { ArenaProposalSchema, ArenaRoomProposalResolveRequestSchema, ArenaRoomProposalSubmitRequestSchema, ArenaRoomPublishConfigRequestSchema, ArenaRoomSessionResponseSchema, jsonUtf8ByteLength, type ArenaProposal, type ArenaRoomProposalResolveRequest, type ArenaRoomProposalSubmitRequest, type ArenaRoomCreateRequest, type ArenaRoomSessionResponse, type ArenaRoomSharedConfig, type RoomDirectoryEntry, type RoomDirectoryVisibility, type RoomPresenceSnapshot, type RoomServerTransportMessage } from '@mahoshojo/contracts/arena-room';
 import { DesktopRoomSessionRoomIdSchema, isDesktopRoomStartWithinNodeBudget } from '@mahoshojo/contracts/desktop-room-session';
 import { DesktopRoomStartCapacityError, DesktopRoomStartComplexityError } from './room-source';
-import { DesktopRoomActionSchema, DESKTOP_ROOM_IPC_LIMITS, getDesktopRoomHttpOperation, type DesktopRoomMutationOperation, type DesktopRoomBatch, type DesktopRoomHttpAction, type DesktopRoomHttpOperation } from '@mahoshojo/contracts/desktop-room-ipc';
+import { DesktopRoomActionSchema, DESKTOP_ROOM_IPC_LIMITS, getDesktopRoomHttpOperation, type DesktopRoomGenerationStartFence, type DesktopRoomMutationOperation, type DesktopRoomBatch, type DesktopRoomHttpAction, type DesktopRoomHttpOperation } from '@mahoshojo/contracts/desktop-room-ipc';
 import { ArenaRoomBridgeError, createArenaRoomBridge, type ArenaRoomAcceptance, type ArenaRoomChannel } from '../../platform/arena-room-bridge';
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import type { DesktopCloudSessionStore } from '../account/cloud-session-store';
@@ -21,7 +21,7 @@ const generationKey = (identity: DesktopGenerationIdentity) => JSON.stringify([i
 const terminalGeneration = (state: string) => ['completed', 'failed', 'cancelled', 'producer_lost'].includes(state);
 type GenerationFlight = { owner: Owner; key: string; rerun: boolean; promise: Promise<void>; cancelReceipt?: { intentId: string; current: boolean } };
 
-export type RoomUnknownIntent = { operation: DesktopRoomMutationOperation; roomId: string | null; intentId: string | null; generationTarget?: { roomEpoch: string; generationId: string; attempt: number }; generationStart?: { roomEpoch: string; generationRequestId: string; retryable: boolean; presetConfig?: DesktopHostedPresetConfig } };
+export type RoomUnknownIntent = { operation: DesktopRoomMutationOperation; roomId: string | null; intentId: string | null; generationTarget?: { roomEpoch: string; generationId: string; attempt: number }; generationStart?: { roomEpoch: string; generationRequestId: string; retryable: boolean; presetConfig?: DesktopHostedPresetConfig }; cancelMode?: 'starting-v1'; startIntentId?: string };
 export type DesktopConfigTracking = { id: string; roomId: string; phase: 'publishing' | 'unknown' | 'ended-needs-read'; target: ArenaRoomConfigPublishTarget | null; observation: ArenaRoomConfigPublishObservation };
 type ProposalAction = Extract<DesktopRoomHttpAction, { kind: 'proposal-submit' | 'proposal-withdraw' | 'proposal-resolve' }>;
 export type DesktopProposalTracking = { id: string | null; roomId: string; proposalId: string | null; operation: 'proposalSubmit' | 'proposalWithdraw' | 'proposalResolve'; phase: 'resolving' | 'unknown' | 'settled' | 'ended-needs-read'; observation: ArenaRoomProposalReconciliationObservation | null; intent?: ProposalAction | null };
@@ -33,7 +33,7 @@ export interface DesktopRoomState {
   configTracking: DesktopConfigTracking | null; proposalTracking: DesktopProposalTracking | null;
   memberModel: ArenaMemberProposalModel | null;
   generation: DesktopRoomGenerationView; generationReading: boolean;
-  generationStartBlocked: boolean; generationStartFence: { roomId: string; generationRequestId: string } | null;
+  generationStartBlocked: boolean; generationStartFence: DesktopRoomGenerationStartFence | null;
   unknown: RoomUnknownIntent | null; error: string | null; notice: string | null;
   sourceIssues: readonly string[];
 }
@@ -49,7 +49,7 @@ export interface DesktopRoomDeps {
 }
 export type DesktopRoomSource = { ok: true; sharedConfig: ArenaRoomSharedConfig } | { ok: false; issues: readonly string[] };
 type Owner = { userId: number; epoch: number; nonce: string; token: symbol };
-type Flight = { newStart?: boolean; action: DesktopRoomHttpAction; operation: DesktopRoomHttpOperation; requestId: string | null; accepted: boolean; acknowledged: boolean; result: 'success' | 'error' | null; subscribe: boolean; settlesUnknown: boolean; knownNotApplied: boolean };
+type Flight = { newStart?: boolean; startingCancelTarget?: DesktopGenerationIdentity; action: DesktopRoomHttpAction; operation: DesktopRoomHttpOperation; requestId: string | null; accepted: boolean; acknowledged: boolean; result: 'success' | 'error' | null; subscribe: boolean; settlesUnknown: boolean; knownNotApplied: boolean };
 // Remounts share the explicit intent counter within this actual Document. Reload
 // receives a different immutable nonce; no handle or credential is persisted.
 let lastDocument: string | undefined; let attachIntent = 0;
@@ -111,6 +111,7 @@ export class DesktopArenaRoomSession {
   private generationIdentity: string | null = null;
   private startSettledIntent: string | null = null;
   private cancelTerminalKey: string | null = null;
+  private startingCancelSettledIntent: string | null = null;
   private generationFlight: GenerationFlight | null = null;
   private generationStories = new GenerationStoryBuffer();
   private generationNextChunkSeq = 0;
@@ -220,7 +221,7 @@ export class DesktopArenaRoomSession {
   async endGenerationStartTracking(intentId: string, identity: symbol): Promise<void> {
     const pending = this.state.unknown, owner = this.owner;
     if (this.confirmationOwner() !== identity || this.state.busy || this.state.generationReading
-      || pending?.operation !== 'generationStart' || pending.intentId !== intentId) return;
+      || !pending || (pending.operation !== 'generationStart' && pending.cancelMode !== 'starting-v1') || pending.intentId !== intentId) return;
     this.flight = null;
     this.publish({ busy: true });
     try {
@@ -295,6 +296,22 @@ export class DesktopArenaRoomSession {
       || !pending.generationStart?.retryable || this.state.busy || this.state.phase !== 'online' || !this.state.snapshotReceived) return Promise.resolve();
     return this.dispatch({ kind: 'retry-generation-start', intentId });
   };
+  startingCancelBlockedReason = (): string | null => {
+    const pending = this.state.unknown, session = this.state.session;
+    if (!this.current() || this.state.phase !== 'online' || !this.state.snapshotReceived) return '等待当前连接的完整房间快照。';
+    if (this.state.busy || this.flight || this.state.generationReading || this.state.configTracking || blocksProposalTracking(this.state.proposalTracking)
+      || this.deps.canStart?.() === false) return '等待原网络操作真正结束后，才可放弃重试并尝试停止。';
+    if (pending?.operation !== 'generationStart' || !pending.intentId || !this.pendingStartIdentity()
+      || session?.snapshot.activeGeneration?.state !== 'starting' || session.self.role !== 'host' || session.self.membershipState !== 'active') {
+      return '仅当前房主可对原请求的已确认占位尝试停止；没有匹配占位时请只读核对。';
+    }
+    return null;
+  };
+  cancelPendingStart = (intentId: string, target: ArenaRoomGenerationCancelTarget, identity: symbol): Promise<void> => {
+    if (this.confirmationOwner() !== identity || this.state.unknown?.intentId !== intentId || this.startingCancelBlockedReason() !== null
+      || !isArenaRoomGenerationCancelTargetCurrent(target, this.state.session)) return Promise.resolve();
+    return this.dispatch({ kind: 'cancel-generation-start', intentId });
+  };
   private settleStart(receipt: ArenaRoomAcceptance['generationStart']): void {
     if (!receipt?.current || (this.state.unknown?.intentId !== null ? this.state.unknown?.intentId !== receipt.intentId : this.flight?.operation !== 'generationStart')) return;
     this.startSettledIntent = receipt.intentId;
@@ -305,7 +322,9 @@ export class DesktopArenaRoomSession {
     if (!this.current() || this.state.phase !== 'online' || !this.state.snapshotReceived) return '等待当前连接的完整房间快照。';
     if (this.state.busy || this.flight || this.state.unknown || this.state.configTracking || blocksProposalTracking(this.state.proposalTracking)
       || this.deps.canStart?.() === false) return '上一项操作尚未结束，请先核对。';
-    const session = this.state.session;
+    const session = this.state.session, fence = this.state.generationStartFence;
+    if (fence?.cancelMode === 'starting-v1' && session?.roomId === fence.roomId
+      && session.snapshot.activeGeneration?.generationRequestId === fence.generationRequestId) return '原占位已尝试一次停止；请只读核对，不能再次发送停止请求。';
     if (this.generationTerminal || this.cancelTerminalKey === this.generationIdentity || !session || session.self.role !== 'host' || session.self.membershipState !== 'active'
       || !['starting', 'running'].includes(session.snapshot.activeGeneration?.state ?? '')) return '只有当前房主可以停止正在生成的战报。';
     return null;
@@ -684,28 +703,36 @@ export class DesktopArenaRoomSession {
     if (!this.current() || this.state.busy || this.flight) return;
     if (this.state.proposalTracking?.phase === 'resolving' && action !== this.state.proposalTracking.intent && action.kind !== 'proposal-resolve') return;
     if ((this.state.configTracking?.phase === 'ended-needs-read' || this.state.proposalTracking?.phase === 'ended-needs-read') && action.kind !== 'session') return;
-    if (this.state.unknown && !['session', 'resume-create', 'retry-generation-start'].includes(action.kind)) return;
+    if (this.state.unknown && !['session', 'resume-create', 'retry-generation-start', 'cancel-generation-start'].includes(action.kind)) return;
     if (this.state.unknown?.operation === 'create' && action.kind !== 'resume-create') return;
+    const startingCancelTarget = action.kind === 'cancel-generation-start' ? this.pendingStartIdentity() : null;
+    if (action.kind === 'cancel-generation-start' && (!startingCancelTarget || this.state.unknown?.intentId !== action.intentId || this.startingCancelBlockedReason() !== null)) return;
     const owner = this.owner;
-    const flight: Flight = { action, operation: getDesktopRoomHttpOperation(action), requestId: null, accepted: false, acknowledged: false, result: null, subscribe: false, settlesUnknown: false, knownNotApplied: false };
+    const flight: Flight = { ...(startingCancelTarget ? { startingCancelTarget } : {}), action, operation: getDesktopRoomHttpOperation(action), requestId: null, accepted: false, acknowledged: false, result: null, subscribe: false, settlesUnknown: false, knownNotApplied: false };
     const previous = this.state;
     this.flight = flight;
     this.publish({ busy: true, error: null, constrained: this.state.constrained || isMutation(action),
       ...(action.kind === 'session' ? { presence: null, snapshotReceived: false } : {}),
-      ...(isMutation(action) && action.kind !== 'generation-cancel' && action.kind !== 'retry-generation-start' ? { presence: null, ...(this.state.proposalTracking?.phase === 'settled' ? { proposalTracking: null } : {}) } : {}) });
+      ...(isMutation(action) && action.kind !== 'generation-cancel' && action.kind !== 'cancel-generation-start' && action.kind !== 'retry-generation-start' ? { presence: null, ...(this.state.proposalTracking?.phase === 'settled' ? { proposalTracking: null } : {}) } : {}) });
     if (action.kind === 'generation-cancel') { this.cancelTerminalKey = null; this.publish({ unknown: unknownFor(action), notice: '正在发送一次停止请求。' }); }
+    if (action.kind === 'cancel-generation-start' && startingCancelTarget) {
+      this.cancelTerminalKey = null;
+      const { roomId, ...generationTarget } = startingCancelTarget;
+      this.publish({ unknown: { operation: 'generationCancel', roomId, intentId: null, generationTarget, cancelMode: 'starting-v1', startIntentId: action.intentId },
+        generationStartBlocked: true, notice: '正在交接原占位的停止请求。交接后原材料与重试许可不可恢复；只会尝试一次停止。' });
+    }
     const dispatchAuthorityVersion = this.authorityVersion;
     try {
       const accepted = await this.bridge.request(action);
       if (!this.current(owner) || this.flight !== flight) return;
       if (flight.requestId && flight.requestId !== accepted.requestId) { this.failed(new ArenaRoomBridgeError('invalid-response', isMutation(action) ? 'unknown' : 'not-applicable')); return; }
       // generationCancel uses one Native ID for the accepted request and retained intent.
-      if (action.kind === 'generation-cancel' && this.state.unknown?.operation === 'generationCancel' && this.state.unknown.intentId === null) this.publish({ unknown: { ...this.state.unknown, intentId: accepted.requestId } });
+      if ((action.kind === 'generation-cancel' || action.kind === 'cancel-generation-start') && this.state.unknown?.operation === 'generationCancel' && this.state.unknown.intentId === null) this.publish({ unknown: { ...this.state.unknown, intentId: accepted.requestId } });
       flight.requestId = accepted.requestId; flight.accepted = true; this.finishFlight(flight);
     } catch (cause) {
       if (this.current(owner) && this.flight === flight) {
         const error = cause instanceof ArenaRoomBridgeError ? cause : new ArenaRoomBridgeError('internal-error', isMutation(action) ? 'unknown' : 'not-applicable');
-        if (error.code === 'busy' && error.outcome === 'not-applied' && !flight.accepted && !flight.acknowledged && flight.requestId === null) {
+        if ((error.code === 'busy' || action.kind === 'cancel-generation-start') && error.outcome === 'not-applied' && !flight.accepted && !flight.acknowledged && flight.requestId === null) {
           // Native refused admission; it did not disconnect the room or make the
           // mutation unknown. Roll back only this dispatch's freshness changes,
           // never a newer socket observation or an existing pending intent.
@@ -716,7 +743,9 @@ export class DesktopArenaRoomSession {
           const proposalTracking = isProposalOperation(flight.operation) && this.state.proposalTracking === previous.proposalTracking
             && this.state.proposalTracking?.phase === 'resolving' ? null : this.state.proposalTracking;
           this.flight = null;
-          if (action.kind === 'generation-cancel') this.publish({ unknown: previous.unknown });
+          if (action.kind === 'generation-cancel' || action.kind === 'cancel-generation-start') this.publish({
+            unknown: previous.unknown,
+            generationStartBlocked: previous.generationStartBlocked, generationStartFence: previous.generationStartFence });
           this.publish({ ...restore, busy: false, error: describeDesktopRoomError(error), configTracking, proposalTracking,
             constrained: this.state.session !== null || this.state.memberModel !== null || this.state.unknown !== null || configTracking !== null || blocksProposalTracking(proposalTracking) });
           return;
@@ -728,7 +757,13 @@ export class DesktopArenaRoomSession {
   private correlate(requestId: string, operation: DesktopRoomHttpOperation): Flight | null {
     const flight = this.flight;
     if (!flight || flight.operation !== operation || flight.requestId && flight.requestId !== requestId) return null;
-    flight.requestId = requestId; return flight;
+    flight.requestId = requestId;
+    const pending = this.state.unknown;
+    if (flight.action.kind === 'cancel-generation-start' && pending?.cancelMode === 'starting-v1'
+      && pending.startIntentId === flight.action.intentId && pending.intentId === null) {
+      this.publish({ unknown: { ...pending, intentId: requestId } });
+    }
+    return flight;
   }
   private accept(batch: DesktopRoomBatch, context: ArenaRoomAcceptance): boolean {
     if (!this.current() || !context.isCurrent()) return false;
@@ -750,9 +785,10 @@ export class DesktopArenaRoomSession {
             // Receipt binds the request; it cannot advance the room control cursor.
           }
           else if (event.operation === 'generationCancel') {
-            if (flight.action.kind !== 'generation-cancel') return false;
-            const result = event.response.result, target = flight.action;
-            if (result.roomEpoch !== target.expectedRoomEpoch || result.generation.generationId !== target.generationId || result.generation.attempt !== target.expectedAttempt) return false;
+            const target = flight.startingCancelTarget ?? (flight.action.kind === 'generation-cancel'
+              ? { roomId: flight.action.roomId, roomEpoch: flight.action.expectedRoomEpoch, generationId: flight.action.generationId, attempt: flight.action.expectedAttempt } : null);
+            const result = event.response.result;
+            if (!target || result.roomId !== target.roomId || result.roomEpoch !== target.roomEpoch || result.generation.generationId !== target.generationId || result.generation.attempt !== target.attempt) return false;
             const terminal = terminalGeneration(result.status);
             // A terminal body alone is not an ACK-time cancellation settlement.
             const alreadySettled = flight.settlesUnknown;
@@ -788,6 +824,9 @@ export class DesktopArenaRoomSession {
       }
     } else if (event.kind === 'mutation-unknown') {
       if (event.operation === 'generationStart' && event.intentId === this.startSettledIntent) return true;
+      if (event.operation === 'generationCancel' && event.intentId === this.startingCancelSettledIntent) return true;
+      if (event.operation === 'generationStart' && (this.state.unknown?.cancelMode === 'starting-v1' && this.state.unknown.startIntentId === event.intentId
+        || this.state.generationStartFence?.cancelMode === 'starting-v1' && this.state.generationStartFence.startIntentId === event.intentId)) return true;
       if (event.operation === 'generationCancel' && event.roomId && event.generationTarget
         && this.cancelTerminalKey === generationKey({ roomId: event.roomId, ...event.generationTarget })) return true;
       if (event.operation === 'config' && event.roomId) this.publish({ configTracking: { id: event.intentId, roomId: event.roomId, phase: 'unknown', target: this.state.configTracking?.target ?? null, observation: this.state.configTracking?.observation ?? 'target-unavailable' } });
@@ -812,10 +851,20 @@ export class DesktopArenaRoomSession {
   private acknowledged(batch: DesktopRoomBatch, context: ArenaRoomAcceptance) {
     if (!context.isCurrent() || !this.current()) return;
     const cleared = context.generationStartFence, fence = this.state.generationStartFence;
-    if (cleared && fence && cleared.roomId === fence.roomId && cleared.generationRequestId === fence.generationRequestId) {
+    if (cleared && fence && fence.cancelMode === undefined && cleared.roomId === fence.roomId && cleared.generationRequestId === fence.generationRequestId) {
       this.publish({ generationStartBlocked: false, generationStartFence: null, notice: '已取得原请求或原房间结束的权威证据，防重复记录已解除；这不证明任务被取消。' });
     }
+    const cancellation = context.generationCancel, pending = this.state.unknown;
     const event = batch.event;
+    const linkedPending = pending?.cancelMode === 'starting-v1' && pending.intentId === cancellation?.intentId;
+    const linkedFence = fence?.cancelMode === 'starting-v1' && fence.cancelIntentId === cancellation?.intentId;
+    if (cancellation?.current && (linkedPending || linkedFence)) {
+      this.startingCancelSettledIntent = cancellation.intentId;
+      this.startSettledIntent = linkedPending ? pending.startIntentId ?? null : fence?.startIntentId ?? null;
+      if (this.flight?.operation === 'generationCancel' && this.flight.requestId === cancellation.intentId) this.flight.settlesUnknown = true;
+      this.publish({ generationStartBlocked: false, generationStartFence: null, ...(linkedPending ? { unknown: null } : {}),
+        notice: '已取得原目标终态或原房关闭的权威证据，防重复记录已解除；这不证明停止请求造成取消。完整战报仍须读取确认。' });
+    }
     this.settleStart(context.generationStart);
     if (event.kind === 'generation-fragment' && event.final && this.generationFlight) {
       this.generationFlight.cancelReceipt = context.generationCancel;
@@ -895,7 +944,8 @@ export class DesktopArenaRoomSession {
     if (isProposalOperation(flight?.operation) && this.state.proposalTracking) this.publish({ proposalTracking: error.outcome === 'not-applied' ? null : { ...this.state.proposalTracking, phase: 'unknown' } });
     if (flight?.operation === 'session' && this.state.configTracking?.phase === 'unknown') this.publish({ configTracking: { ...this.state.configTracking, observation: 'authority-unavailable' } });
     if (ended && flight && this.state.unknown?.operation !== 'create' && !requiresTrackedObservation(this.state.unknown?.operation)) flight.settlesUnknown = true;
-    this.publish({ error: describeDesktopRoomError(error), unknown: (flight?.operation === 'generationCancel' || flight?.newStart) && error.outcome === 'not-applied' ? null : unknown,
+    const startingCancel = flight?.action.kind === 'cancel-generation-start' || unknown?.cancelMode === 'starting-v1';
+    this.publish({ error: startingCancel ? '停止尚未确认。旧服务拒绝或回执未知都不会恢复原材料与重试许可；请只读核对，或停止本机跟踪返回大厅。' : describeDesktopRoomError(error), unknown: !startingCancel && (flight?.operation === 'generationCancel' || flight?.newStart) && error.outcome === 'not-applied' ? null : unknown,
       ...(ended ? { session: null, presence: null, snapshotReceived: false, phase: 'closed' as const } : {}) }, ended);
   }
   private failed(error: ArenaRoomBridgeError, retired = false) {

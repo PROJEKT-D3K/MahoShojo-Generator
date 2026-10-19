@@ -1411,3 +1411,7 @@ fn start_combined_exact_byte_and_node_limits_keep_one_owned_wire() {
 mod byok_tests {
     include!("arena_room_generation_byok_tests.rs");
 }
+
+mod starting_cancel_tests {
+    include!("arena_room_starting_cancel_tests.rs");
+}

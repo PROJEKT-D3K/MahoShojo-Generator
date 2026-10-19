@@ -40,7 +40,7 @@ import {
   type ArenaRoomHttpErrorCode,
   type ArenaRoomLegacyHttpErrorCode,
 } from '@mahoshojo/contracts/arena-room';
-import { DesktopRoomGenerationCancelReceiptSchema, DesktopRoomGenerationStartReceiptSchema } from '@mahoshojo/contracts/desktop-room-session';
+import { DesktopRoomGenerationCancelReceiptSchema, DesktopRoomGenerationStartReceiptSchema, DesktopRoomStartingGenerationCancelRequestSchema } from '@mahoshojo/contracts/desktop-room-session';
 import { ARENA_RESOURCE_BUDGET } from '@mahoshojo/hosted-api/arena-generation/resource-budget';
 
 import type { HonoAppVariables } from '#/middleware/request-metadata';
@@ -1254,16 +1254,18 @@ export const registerArenaRoomHttpRoutes = (
     );
     if (!authorization.accepted) return authorization.response;
     try {
-      const request = parseRequest(
-        ArenaRoomGenerationCancelRequestSchema,
-        await readOperationBody(context),
-      );
+      const body = await readOperationBody(context);
+      const startingRequest = desktopRoomSession.generationStartingCancel(context)
+        ? parseRequest(DesktopRoomStartingGenerationCancelRequestSchema, body) : null;
+      const request = startingRequest ?? parseRequest(ArenaRoomGenerationCancelRequestSchema, body);
+      // Membership recovery can checkpoint expiry/epoch changes before cancellation admission.
       desktopRoomSession.enterBusiness(context);
       const result = await dependencies.generations.cancel({
         roomId,
         generationId,
         accountUserId: authorization.accountUserId,
-        request,
+        request: { expectedRoomEpoch: request.expectedRoomEpoch },
+        ...(startingRequest ? { expectedGeneration: startingRequest.expectedGeneration } : {}),
       });
       if (desktopRoomSession.generationCancelReceipt(context)) {
         // Project before JSON serialization: a terminal report can exceed the small receipt budget.

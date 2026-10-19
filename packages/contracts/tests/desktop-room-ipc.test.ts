@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import fixture from '../fixtures/desktop-room-ipc.json';
+import startingCancel from '../fixtures/desktop-room-starting-cancel.json';
 import service from '../fixtures/desktop-room-session.json';
 import {
   DESKTOP_ROOM_ERROR_MESSAGE, DESKTOP_ROOM_IPC_COMMANDS, DESKTOP_ROOM_IPC_LIMITS,
@@ -49,6 +50,28 @@ const configRequest = () => {
 
 // This fixture is a shared contract corpus, not a claim of Native producer execution.
 describe('closed Native Room IPC', () => {
+  it('keeps starting cancellation linked, bounded, and separate from old start retry', () => {
+    expect(DesktopRoomRequestSchema.parse({ handle: fixture.attach.handle, request: startingCancel.action }).request).toEqual(startingCancel.action);
+    const attach = { ...fixture.attach, pendingIntent: startingCancel.pending, generationStartBlocked: true, generationStartFence: startingCancel.fence };
+    expect(DesktopRoomAttachResponseSchema.parse(attach)).toEqual(attach);
+    for (const invalid of [
+      { ...startingCancel.pending, startIntentId: undefined },
+      { ...startingCancel.pending, cancelMode: undefined },
+      { ...startingCancel.pending, startIntentId: startingCancel.pending.intentId },
+      { ...startingCancel.pending, operation: 'generationStart' },
+    ]) expect(DesktopRoomAttachResponseSchema.safeParse({ ...attach, pendingIntent: invalid }).success).toBe(false);
+    for (const invalid of [
+      { ...startingCancel.fence, cancelIntentId: undefined },
+      { ...startingCancel.fence, cancelMode: undefined },
+      { ...startingCancel.fence, cancelIntentId: startingCancel.fence.startIntentId },
+    ]) expect(DesktopRoomAttachResponseSchema.safeParse({ ...attach, generationStartFence: invalid }).success).toBe(false);
+    const escaped = { ...attach, pendingIntent: { ...startingCancel.pending, roomId: '\u0001'.repeat(128), generationTarget: { ...startingCancel.pending.generationTarget, roomEpoch: '\u0002'.repeat(128), generationId: '\u0003'.repeat(128) } }, generationStartFence: { ...startingCancel.fence, roomId: '\u0001'.repeat(128), generationRequestId: '\u0004'.repeat(128) } };
+    expect(jsonUtf8ByteLength(escaped)).toBeGreaterThan(DESKTOP_ROOM_IPC_LIMITS.smallResponseBytes);
+    expect(DesktopRoomAttachResponseSchema.safeParse(escaped).success).toBe(true);
+    const ack = { ...fixture.acks[0], generationCancel: { intentId: startingCancel.pending.intentId, current: true } };
+    expect(DesktopRoomAckResponseSchema.parse(ack)).toEqual(ack);
+    expect(jsonUtf8ByteLength(ack)).toBeLessThanOrEqual(DESKTOP_ROOM_IPC_LIMITS.smallResponseBytes);
+  });
   it('pins four commands and complete serialized output budgets', () => {
     expect(Object.values(DESKTOP_ROOM_IPC_COMMANDS)).toEqual(['arena_room_attach', 'arena_room_request', 'arena_room_subscribe', 'arena_room_detach']);
     expect(DESKTOP_ROOM_IPC_LIMITS).toEqual({ ...fixture.limits, generationStartRequestBytes: 12 * 1024 * 1024 + 3 * 1024, generationStartRecoveryBytes: 8_192, generationFragmentBytes: 16_384 });

@@ -524,11 +524,11 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       return exchange.headers['set-cookie']![0]!.split(';')[0]!;
     };
     const hostCookie = await login(101); const memberCookie = await login(202);
-    const roomRequest = async (operation: DesktopRoomSessionOperation, userId: number, cookie: string, request?: unknown, roomId = '', proposalId = '', generationId = '') => {
+    const roomRequest = async (operation: DesktopRoomSessionOperation, userId: number, cookie: string, request?: unknown, roomId = '', proposalId = '', generationId = '', startingCancel = false) => {
       const definition = DESKTOP_ROOM_SESSION_OPERATIONS[operation];
       const response = await probe(runtime, pki, definition.path.replace(':roomId', encodeURIComponent(roomId)).replace(':proposalId', encodeURIComponent(proposalId)).replace(':generationId', encodeURIComponent(generationId)), {
         headers: { cookie, origin: runtime.roomOrigin, 'x-mahoshojo-desktop-room-protocol': DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, 'x-mahoshojo-room-expected-user-id': `v1:${userId}` },
-        ...(definition.method === 'POST' ? { body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: userId, ...(operation === 'create' ? { createMode: 'new' } : {}) }, request } } : {}),
+        ...(definition.method === 'POST' ? { body: { desktopRoom: { version: DESKTOP_ROOM_SESSION_PROTOCOL_VERSION, expectedUserId: userId, ...(operation === 'create' ? { createMode: 'new' } : {}), ...(startingCancel ? { cancelMode: 'starting-v1' } : {}) }, request } } : {}),
       });
       const parsed = parseDesktopRoomSessionResponse(operation, JSON.parse(response.body), userId);
       assert(response.status === (operation === 'create' ? 201 : operation === 'generationStart' ? 202 : 200) && 'result' in parsed); return JSON.parse(response.body).result;
@@ -775,13 +775,39 @@ export const selfCheckRoomAcceptanceMock = async (runtime: RoomAcceptanceRuntime
       await runtime.generation('start-complete');
       const byokReport = await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', byokReceipt.generation.generationId);
       assert(byokReport.status === 'completed' && !JSON.stringify(byokReport).includes(ROOM_ACCEPTANCE_BYOK_KEY));
+      // Only the explicit start acceptance mode enables this synthetic reservation scenario.
+      // No start re-POST follows cancellation; a GET completes the held cancellation projection.
+      for (const lostReceipt of [false, true]) {
+        const previous = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+        const request = { ...original, generationRequestId: `synthetic-starting-cancel-${lostReceipt ? 'lost' : 'pending'}`,
+          expectedRevision: previous.snapshot.revision, expectedControlSeq: previous.snapshot.controlSeq };
+        const counts = runtime.observations().generation;
+        await runtime.generation('start-reserve-only-gated');
+        let reservedOnly = false;
+        try { await roomRequest('generationStart', 101, hostCookie, request, created.roomId); } catch { reservedOnly = true; }
+        const current = await roomRequest('session', 101, hostCookie, undefined, created.roomId);
+        const mirror = current.snapshot.activeGeneration;
+        assert(reservedOnly && mirror.state === 'starting' && mirror.generationRequestId === request.generationRequestId);
+        const expectedGeneration = Object.fromEntries(Object.entries(mirror).filter(([key]) => !['state', 'startedAt', 'finishedAt'].includes(key)));
+        await runtime.generation('start-disable-starting-cancel');
+        if (lostReceipt) runtime.armFault('generationCancel'); else await runtime.generation('start-cancel-wait');
+        let unknown = false;
+        try { await roomRequest('generationCancel', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch, expectedGeneration }, created.roomId, '', mirror.generationId, true); } catch { unknown = true; }
+        assert(unknown);
+        if (!lostReceipt) await runtime.generation('start-cancel-complete');
+        const cancelled = await roomRequest('generationRead', 101, hostCookie, undefined, created.roomId, '', mirror.generationId);
+        const observed = runtime.observations().generation;
+        assert(cancelled.status === 'cancelled' && cancelled.generation.state === 'cancelled'
+          && observed.startDispatches === counts.startDispatches! + 1 && observed.cancelDispatches === counts.cancelDispatches! + 1
+          && observed.syntheticProducers === counts.syntheticProducers && observed.modelDispatches === 0);
+      }
     }
     await roomRequest('leave', 202, memberCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     await roomRequest('close', 101, hostCookie, { expectedRoomEpoch: created.roomEpoch }, created.roomId);
     assert((await roomRequest('discover', 101, hostCookie)).items.length === 0);
     return { tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true,
       roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true,
-      roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: !cancelMode && !startMode, ...((cancelMode || startMode) ? { generationCancel: true } : {}), ...(startMode ? { generationStart: true, syntheticProducer: true } : {}) } as const;
+      roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: !cancelMode && !startMode, ...((cancelMode || startMode) ? { generationCancel: true } : {}), ...(startMode ? { generationStart: true, generationStartingCancel: true, syntheticProducer: true } : {}) } as const;
   } finally {
     await Promise.all(openSockets.map((socket) => new Promise<void>((resolve) => {
       if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }

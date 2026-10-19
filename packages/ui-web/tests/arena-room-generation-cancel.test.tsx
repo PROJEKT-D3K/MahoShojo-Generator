@@ -18,3 +18,14 @@ it('requires an explicit captured confirmation and restores focus on dismissal',
   await act(async () => dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   expect(dismiss).toHaveBeenCalledOnce(); expect(document.activeElement).toBe(container.querySelector('button'));
 });
+it('starting handoff explicitly retires retry rights even if the old server rejects', async () => {
+  const confirm = vi.fn(), dismiss = vi.fn();
+  await act(async () => root.render(<RoomGenerationCancelAction startingHandoff confirmation disabled={false} onRequest={() => undefined} onConfirm={confirm} onDismiss={dismiss} />));
+  const dialog = container.querySelector('[role=alertdialog]')!;
+  expect(dialog.getAttribute('aria-label')).toBe('确认放弃原重试并尝试停止');
+  expect(dialog.textContent).toContain('即使旧服务拒绝或回执丢失，也不会恢复原重试');
+  expect(dialog.textContent).toContain('停止本机跟踪返回大厅');
+  expect(confirm).not.toHaveBeenCalled();
+  await act(async () => dialog.querySelectorAll('button')[1]!.click());
+  expect(dismiss).toHaveBeenCalledOnce(); expect(confirm).not.toHaveBeenCalled();
+});

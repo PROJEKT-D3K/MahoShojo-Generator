@@ -191,11 +191,31 @@ struct PendingIntent {
 }
 
 impl PendingIntent {
+    fn is_starting_cancel(&self) -> bool {
+        self.cancel_basis
+            .as_ref()
+            .is_some_and(|b| b.starting.is_some())
+    }
+    fn tracks_start(&self) -> bool {
+        self.start_basis.is_some() || self.is_starting_cancel()
+    }
+    fn tracking_document(&self) -> Option<DocumentId> {
+        self.start_basis.as_ref().map(|b| b.document).or_else(|| {
+            self.cancel_basis
+                .as_ref()
+                .and_then(|b| b.starting.as_ref())
+                .map(|link| link.document)
+        })
+    }
     fn public(&self) -> Value {
         let mut value =
             json!({"intentId":self.id,"operation":self.operation.as_str(),"roomId":self.room_id});
         if let Some(basis) = &self.cancel_basis {
             value["generationTarget"] = basis.target();
+            if let Some(link) = &basis.starting {
+                value["cancelMode"] = json!("starting-v1");
+                value["startIntentId"] = json!(link.start_intent_id);
+            }
         }
         if let Some(basis) = &self.start_basis {
             value["generationStart"] = basis.public(self.phase);
@@ -371,8 +391,8 @@ impl RoomInstance {
         if inner
             .pending
             .as_ref()
-            .and_then(|p| p.start_basis.as_ref())
-            .is_some_and(|basis| basis.document != proof.document)
+            .and_then(PendingIntent::tracking_document)
+            .is_some_and(|document| document != proof.document)
         {
             Self::retire_start_locked(&mut inner);
         }
@@ -382,11 +402,7 @@ impl RoomInstance {
                 || pending.account.cookie != account.cookie
                 || pending.account.cancel.is_cancelled()
         }) {
-            if inner
-                .pending
-                .as_ref()
-                .is_some_and(|p| p.start_basis.is_some())
-            {
+            if inner.pending.as_ref().is_some_and(|p| p.tracks_start()) {
                 Self::retire_start_locked(&mut inner);
             } else {
                 inner.pending = None;
@@ -444,7 +460,7 @@ impl RoomInstance {
                         Self::retire_locked(&mut inner);
                         let _ = lock(&this.document).revoke_account(this.token);
                         if inner.pending.as_ref().is_some_and(|pending| pending.account.epoch == context.account.epoch
-                            && pending.account.user_id == context.account.user_id) { if inner.pending.as_ref().is_some_and(|p| p.start_basis.is_some()) { Self::retire_start_locked(&mut inner); } else { inner.pending = None; } }
+                            && pending.account.user_id == context.account.user_id) { if inner.pending.as_ref().is_some_and(|p| p.tracks_start()) { Self::retire_start_locked(&mut inner); } else { inner.pending = None; } }
                     }
                 }
                 _ = context.cancel.cancelled() => {}
@@ -601,6 +617,9 @@ impl RoomInstance {
     ) -> Result<EngineReply, RoomError> {
         let ending_proposal = matches!(&input.action, Action::EndProposalTracking { .. });
         match input.action {
+            Action::CancelGenerationStart { intent_id } => {
+                self.cancel_generation_start(document, input.handle, intent_id)
+            }
             Action::EndGenerationStartTracking { intent_id } => {
                 self.end_generation_start_tracking(document, input.handle, intent_id)
             }
@@ -682,7 +701,7 @@ impl RoomInstance {
                     && inner
                         .pending
                         .as_ref()
-                        .filter(|p| p.start_basis.is_some())
+                        .filter(|p| p.tracks_start())
                         .is_some_and(|p| p.account.is_current().is_ok_and(|current| !current))
                 {
                     Self::retire_start_locked(&mut inner);
@@ -725,7 +744,7 @@ impl RoomInstance {
                         cancel_completion =
                             Some(json!({"intentId":id,"current":cancel_ack_current}));
                         if cancel_ack_current {
-                            inner.pending = None;
+                            Self::settle_cancel_locked(&mut inner);
                         } else if let Some(pending) = &mut inner.pending {
                             pending.phase = IntentPhase::Unknown;
                             pending.receipt = None;
@@ -777,13 +796,21 @@ impl RoomInstance {
                             && inner
                                 .pending
                                 .as_ref()
-                                .is_none_or(|pending| pending.id != id);
+                                .is_none_or(|pending| pending.id != id)
+                            && inner
+                                .start_fence
+                                .as_ref()
+                                .is_none_or(|fence| fence.cancel_id() != Some(id.as_str()));
                         cancel_completion = Some(json!({"intentId":id,"current":settled}));
                     }
                     reply["generationRead"] = completion;
                 }
                 if let Some(completion) = fence_completion {
-                    reply["generationStartFence"] = completion;
+                    if let Some(id) = completion.get("cancelIntentId") {
+                        cancel_completion = Some(json!({"intentId":id,"current":true}));
+                    } else {
+                        reply["generationStartFence"] = completion;
+                    }
                 }
                 if let Some(completion) = start_completion {
                     reply["generationStart"] = completion;
@@ -840,11 +867,7 @@ impl RoomInstance {
                 || pending.account.user_id != context.account.user_id
                 || pending.account.cookie != context.account.cookie
         }) {
-            if inner
-                .pending
-                .as_ref()
-                .is_some_and(|p| p.start_basis.is_some())
-            {
+            if inner.pending.as_ref().is_some_and(|p| p.tracks_start()) {
                 Self::retire_start_locked(&mut inner);
             } else {
                 inner.pending = None;
@@ -854,7 +877,7 @@ impl RoomInstance {
             if inner
                 .pending
                 .as_ref()
-                .is_some_and(|p| p.start_basis.is_some() && p.room_id.as_ref() != Some(room_id))
+                .is_some_and(|p| p.tracks_start() && p.room_id.as_ref() != Some(room_id))
             {
                 return Err(busy());
             }
@@ -878,6 +901,18 @@ impl RoomInstance {
                 .is_none_or(|socket| socket.is_cancelled())
             {
                 return Err(stale());
+            }
+            if inner.start_fence.as_ref().is_some_and(|fence| {
+                inner
+                    .scope
+                    .as_ref()
+                    .and_then(|scope| scope.session.as_ref())
+                    .and_then(|a| a.generation.as_ref())
+                    .is_some_and(|generation| {
+                        fence.blocks_cancel(context.account.user_id, room_id, generation)
+                    })
+            }) {
+                return Err(busy());
             }
             Some(CancelBasis::prepare(
                 inner
@@ -1010,7 +1045,8 @@ impl RoomInstance {
                 resume_only: false,
                 proposal_id: None,
             },
-            Action::RetryGenerationStart { .. }
+            Action::CancelGenerationStart { .. }
+            | Action::RetryGenerationStart { .. }
             | Action::GenerationRead { .. }
             | Action::Pull { .. }
             | Action::Ack { .. }
@@ -1130,10 +1166,7 @@ impl RoomInstance {
             request.operation,
             Operation::Discover | Operation::GenerationCancel
         ) && !(request.operation == Operation::Session
-            && inner
-                .pending
-                .as_ref()
-                .is_some_and(|p| p.start_basis.is_some()))
+            && inner.pending.as_ref().is_some_and(|p| p.tracks_start()))
         {
             if let Some(scope) = &mut inner.scope {
                 if let Some(socket) = scope.socket_cancel.take() {
@@ -1273,7 +1306,9 @@ impl RoomInstance {
                 }
             }
         }
-        if operation == Operation::GenerationCancel && dispatched {
+        if operation == Operation::GenerationCancel
+            && (dispatched || cancel_basis.is_some_and(|b| b.starting.is_some()))
+        {
             if let Err(error) = &mut outcome {
                 // 已进入发送的取消只能由匹配终态收敛；404/权限/网络错误不证明取消结果。
                 error.outcome = "unknown";
@@ -1331,9 +1366,7 @@ impl RoomInstance {
                     p.account.user_id == context.account.user_id
                         && p.account.epoch == context.account.epoch
                         && p.account.cookie == context.account.cookie
-                        && p.start_basis
-                            .as_ref()
-                            .is_some_and(|b| b.document == context.proof.document)
+                        && p.tracking_document() == Some(context.proof.document)
                 })
             {
                 Self::retire_start_locked(&mut inner);
@@ -1376,7 +1409,13 @@ impl RoomInstance {
                     .as_ref()
                     .is_some_and(|pending| intent_id.as_ref() == Some(&pending.id))
                 {
-                    if not_applied && !request.resume_only {
+                    if not_applied
+                        && !request.resume_only
+                        && !inner
+                            .pending
+                            .as_ref()
+                            .is_some_and(PendingIntent::is_starting_cancel)
+                    {
                         inner.pending = None;
                     } else {
                         let pending = inner.pending.as_mut().expect("matching pending");
@@ -1388,10 +1427,7 @@ impl RoomInstance {
             }
             if operation == Operation::Session
                 && outcome.is_err()
-                && inner
-                    .pending
-                    .as_ref()
-                    .is_some_and(|p| p.start_basis.is_some())
+                && inner.pending.as_ref().is_some_and(|p| p.tracks_start())
             {
                 if let Some(authority) = inner.scope.as_mut().and_then(|s| s.session.as_mut()) {
                     authority.generation_fresh = false;
@@ -1490,7 +1526,13 @@ impl RoomInstance {
                             pending.receipt = None;
                         }
                     } else if operation == Operation::GenerationCancel {
-                        if !dispatched && not_applied {
+                        if !dispatched
+                            && not_applied
+                            && !inner
+                                .pending
+                                .as_ref()
+                                .is_some_and(PendingIntent::is_starting_cancel)
+                        {
                             inner.pending = None;
                         } else if original_queued
                             && fresh.is_ok()
@@ -1678,7 +1720,13 @@ impl RoomInstance {
             .as_ref()
             .is_some_and(|pending| intent_id == Some(pending.id.as_str()))
         {
-            if failure.outcome == "not-applied" && !resume_only {
+            if failure.outcome == "not-applied"
+                && !resume_only
+                && !inner
+                    .pending
+                    .as_ref()
+                    .is_some_and(PendingIntent::is_starting_cancel)
+            {
                 inner.pending = None;
             } else {
                 let pending = inner.pending.as_mut().expect("matching pending");
@@ -1778,6 +1826,10 @@ impl RoomInstance {
                 }
                 if failure.outcome == "not-applied"
                     && !resume_only
+                    && !inner
+                        .pending
+                        .as_ref()
+                        .is_some_and(PendingIntent::is_starting_cancel)
                     && inner
                         .pending
                         .as_ref()
@@ -1948,10 +2000,7 @@ impl RoomInstance {
                     .and_then(|scope| scope.session.as_ref())
                 {
                     if request.operation == Operation::Session
-                        && inner
-                            .pending
-                            .as_ref()
-                            .is_some_and(|p| p.start_basis.is_some())
+                        && inner.pending.as_ref().is_some_and(|p| p.tracks_start())
                         && previous.room_id == authority.room_id
                         && previous.room_epoch == authority.room_epoch
                         && previous.self_id == authority.self_id

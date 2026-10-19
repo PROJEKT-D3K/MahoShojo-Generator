@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import type { ArenaRoomSessionResponse } from '@mahoshojo/contracts/arena-room';
-import { RoomGenerationStartConfirmButton, RoomGenerationPendingProposalsWarning } from '@mahoshojo/ui-web/arena-room';
+import { RoomGenerationCancelAction, RoomGenerationStartConfirmButton, RoomGenerationPendingProposalsWarning } from '@mahoshojo/ui-web/arena-room';
+import { captureArenaRoomGenerationCancelTarget, isArenaRoomGenerationCancelTargetCurrent, type ArenaRoomGenerationCancelTarget } from '@mahoshojo/multiplayer-core';
 import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
 import { prepareDesktopRoomStartSource } from './room-source';
 import { desktopRoomStartSourceBudget } from './room-source-budget';
@@ -15,7 +16,7 @@ export function DesktopRoomStartTracking({ owner, state, disabled }: {
   owner: DesktopArenaRoomSession; state: DesktopRoomState; disabled: boolean;
 }) {
   const [confirmation, setConfirmation] = useState<{ identity: symbol; intentId: string } | null>(null);
-  const pending = state.unknown?.operation === 'generationStart' ? state.unknown : null;
+  const pending = state.unknown?.operation === 'generationStart' || state.unknown?.cancelMode === 'starting-v1' ? state.unknown : null;
   const blocked = disabled || state.busy || state.generationReading || state.phase === 'unavailable';
   const current = confirmation && confirmation.identity === owner.confirmationOwner() && pending?.intentId === confirmation.intentId ? confirmation : null;
   return <>
@@ -45,6 +46,7 @@ export function DesktopRoomGenerationStart({ owner, state, draft, isDraftCurrent
   isDraftCurrent: (draft: ArenaDraft) => boolean; disabled: boolean;
 }) {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [stopConfirmation, setStopConfirmation] = useState<{ identity: symbol; intentId: string; target: ArenaRoomGenerationCancelTarget } | null>(null);
   const { state: aiState, store: aiStore } = useDesktopAiConfig();
   const [funding, setFunding] = useState<DesktopRoomFunding>({});
   const fundingRef = useRef(funding);
@@ -53,6 +55,9 @@ export function DesktopRoomGenerationStart({ owner, state, draft, isDraftCurrent
   const fundingBlocked = roomFundingBlockedReason(funding, aiState, aiStore);
   const session = state.session, identity = owner.confirmationOwner();
   const pending = state.unknown?.operation === 'generationStart' ? state.unknown : null;
+  const stopCurrent = stopConfirmation && stopConfirmation.identity === identity && pending?.intentId === stopConfirmation.intentId
+    && isArenaRoomGenerationCancelTargetCurrent(stopConfirmation.target, session) ? stopConfirmation : null;
+  const stopBlocked = disabled || owner.startingCancelBlockedReason() !== null;
   const current = confirmation && confirmation.identity === identity && confirmation.session === session
     && confirmation.draft === draft && isDraftCurrent(draft)
     && (confirmation.intentId !== undefined || confirmation.funding === funding && fundingCurrent(confirmation.funding) && confirmation.credentialRevision === aiStore.getCredentialIntentRevision())
@@ -71,12 +76,21 @@ export function DesktopRoomGenerationStart({ owner, state, draft, isDraftCurrent
       : <p>原请求使用：{roomFundingLabel({ presetConfig: pending.generationStart?.presetConfig })}。重试仅沿本机冻结的原请求，不取当前设置中的模型或 Key。</p>}
     <p>当前可见配置与完整本地来源一致后才可开始；流式/非流式偏好不影响房间的实时共享战报。</p>
     {pending ? <>
-      <p>{session?.snapshot.activeGeneration?.state === 'starting' ? '已占位，尚未确认启动。当前只可核对或在原任务明确缺失后重试；此阶段暂不支持停止。' : '原生成请求结果未知。'}只读核对不会开始新任务；以原请求重试可能补执行原任务，不会读取新草稿。离开页面只断开本机连接，不取消服务器任务。</p>
+      <p>{session?.snapshot.activeGeneration?.state === 'starting' ? '已占位，尚未确认启动。可只读核对、在原任务明确缺失后显式重试，或明确放弃原重试后尝试一次停止。' : '原生成请求结果未知。'}只读核对不会开始新任务；以原请求重试可能补执行原任务，不会读取新草稿。离开页面只断开本机连接，不取消服务器任务。</p>
       {!pending.generationStart?.retryable ? <p>原材料或授权暂不可用于重试。请只读核对；换账号、页面或房间后不会拼回旧请求，也不能据此另开新任务。</p> : null}
       <button type="button" className={generationActionClassNames.secondary} disabled={state.busy || disabled} onClick={() => { void owner.reconcile(); }}>只读核对生成状态</button>
       <button type="button" className={generationActionClassNames.secondary} disabled={retryBlocked} onClick={() => {
-        if (identity && session && pending.intentId && !retryBlocked) setConfirmation({ identity, session, draft, funding, credentialRevision: aiStore.getCredentialIntentRevision(), intentId: pending.intentId });
+        if (identity && session && pending.intentId && !retryBlocked) { setStopConfirmation(null); setConfirmation({ identity, session, draft, funding, credentialRevision: aiStore.getCredentialIntentRevision(), intentId: pending.intentId }); }
       }}>以原请求重试</button>
+      <RoomGenerationCancelAction startingHandoff confirmation={!!stopCurrent} disabled={stopBlocked}
+        onRequest={() => {
+          const target = captureArenaRoomGenerationCancelTarget(session);
+          if (identity && pending.intentId && target && !stopBlocked) { setConfirmation(null); setStopConfirmation({ identity, intentId: pending.intentId, target }); }
+        }} onDismiss={() => setStopConfirmation(null)} onConfirm={() => {
+          const frozen = stopCurrent; setStopConfirmation(null);
+          if (frozen && !stopBlocked) void owner.cancelPendingStart(frozen.intentId, frozen.target, frozen.identity);
+        }} />
+      {owner.startingCancelBlockedReason() ? <p>{owner.startingCancelBlockedReason()}</p> : null}
     </> : <>
       <button type="button" className={generationActionClassNames.primary} disabled={blocked} onClick={() => {
         if (identity && session && !blocked) setConfirmation({ identity, session, draft, funding, credentialRevision: aiStore.getCredentialIntentRevision() });

@@ -96,7 +96,12 @@ export const DesktopRoomPendingIntentSchema = z.object({
   intentId: LocalIdSchema, operation: DesktopRoomMutationOperationSchema, roomId: OpaqueKeySchema.nullable(),
   generationTarget: DesktopRoomGenerationTargetSchema.optional(),
   generationStart: z.object({ roomEpoch: OpaqueKeySchema, generationRequestId: OpaqueKeySchema, retryable: z.boolean(), presetConfig: DesktopRoomPresetConfigSchema.optional() }).strict().optional(),
+  cancelMode: z.literal('starting-v1').optional(), startIntentId: LocalIdSchema.optional(),
 }).strict().superRefine((value, context) => {
+  if ((value.cancelMode !== undefined) !== (value.startIntentId !== undefined)
+    || value.cancelMode !== undefined && (value.operation !== 'generationCancel' || value.startIntentId === value.intentId)) {
+    context.addIssue({ code: 'custom', message: 'starting cancellation origin mismatch' });
+  }
   if ((value.operation === 'generationCancel' && value.generationTarget === undefined)
     || (value.generationTarget !== undefined && value.operation !== 'generationCancel' && value.operation !== 'generationStart')) {
     context.addIssue({ code: 'custom', message: 'cancel target scope mismatch' });
@@ -129,10 +134,17 @@ export const DesktopRoomAttachRequestSchema = request(z.object({
   attachIntent: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   expectedUserId: DesktopRoomSessionUserIdSchema,
 }).strict());
-export const DesktopRoomGenerationStartFenceSchema = z.object({ roomId: OpaqueKeySchema, generationRequestId: OpaqueKeySchema }).strict();
+export const DesktopRoomGenerationStartFenceSchema = z.object({
+  roomId: OpaqueKeySchema, generationRequestId: OpaqueKeySchema,
+  cancelMode: z.literal('starting-v1').optional(), startIntentId: LocalIdSchema.optional(), cancelIntentId: LocalIdSchema.optional(),
+}).strict().refine(value => value.cancelMode === undefined
+  ? value.startIntentId === undefined && value.cancelIntentId === undefined
+  : value.startIntentId !== undefined && value.cancelIntentId !== undefined && value.startIntentId !== value.cancelIntentId,
+{ message: 'starting cancellation fence origin mismatch' });
+export type DesktopRoomGenerationStartFence = z.infer<typeof DesktopRoomGenerationStartFenceSchema>;
 const attachBudget = (input: unknown) => {
-  const value = input as { pendingIntent?: { operation?: unknown }; generationStartFence?: unknown } | null;
-  return value?.pendingIntent?.operation === 'generationStart' || value?.generationStartFence != null
+  const value = input as { pendingIntent?: { operation?: unknown; cancelMode?: unknown }; generationStartFence?: unknown } | null;
+  return value?.pendingIntent?.operation === 'generationStart' || value?.pendingIntent?.cancelMode === 'starting-v1' || value?.generationStartFence != null
     ? DESKTOP_ROOM_IPC_LIMITS.generationStartRecoveryBytes : DESKTOP_ROOM_IPC_LIMITS.smallResponseBytes;
 };
 export const DesktopRoomAttachResponseSchema = z.custom<unknown>(input => boundedObject(attachBudget(input)).safeParse(input).success).pipe(z.object({
@@ -161,6 +173,7 @@ const actionSchema = z.discriminatedUnion('kind', [
     request: boundedObject(DESKTOP_ROOM_SESSION_LIMITS.generationStartOriginalBytes).pipe(DesktopRoomGenerationStartRequestSchema),
     presetConfig: DesktopRoomPresetConfigSchema.optional() }).strict(),
   z.object({ kind: z.literal('retry-generation-start'), intentId: LocalIdSchema }).strict(),
+  z.object({ kind: z.literal('cancel-generation-start'), intentId: LocalIdSchema }).strict(),
   z.object({ kind: z.literal('discover'), query: RoomDirectoryPageQuerySchema }).strict(),
   z.object({ kind: z.literal('create'), request: createRequest }).strict(),
   z.object({ kind: z.literal('resume-create'), intentId: LocalIdSchema }).strict(),
@@ -209,7 +222,7 @@ export const getDesktopRoomHttpOperation = (action: DesktopRoomHttpAction): Desk
     case 'resume-create': return 'create';
     case 'generation-start': case 'retry-generation-start': return 'generationStart';
     case 'generation-read': return 'generationRead';
-    case 'generation-cancel': return 'generationCancel';
+    case 'generation-cancel': case 'cancel-generation-start': return 'generationCancel';
     case 'proposal-submit': return 'proposalSubmit';
     case 'proposal-withdraw': return 'proposalWithdraw';
     case 'proposal-resolve': return 'proposalResolve';
@@ -317,7 +330,7 @@ export const DesktopRoomAckResponseSchema = small(z.object({
   batchId: LocalIdSchema, sequence: SequenceSchema, accepted: z.boolean(),
   /** Only an exact terminal receipt ACK can release this frozen cancellation intent. */
   generationStart: z.object({ intentId: LocalIdSchema, current: z.boolean() }).strict().optional(),
-  generationStartFence: DesktopRoomGenerationStartFenceSchema.extend({ cleared: z.literal(true) }).strict().optional(),
+  generationStartFence: DesktopRoomGenerationStartFenceSchema.safeExtend({ cleared: z.literal(true) }).strict().optional(),
   generationCancel: z.object({ intentId: LocalIdSchema, current: z.boolean() }).strict().optional(),
   /** Only the first exact final-fragment receipt can grant current-generation completion. */
   generationRead: z.object({ requestId: LocalIdSchema, current: z.boolean() }).strict().optional(),
