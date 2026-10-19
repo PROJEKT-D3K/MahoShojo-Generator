@@ -47,7 +47,6 @@
     "ai": "^6.0.184",
     "aws4fetch": "^1.0.20",
     "better-auth": "~1.6.30",
-    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
@@ -100,9 +99,7 @@
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^30.0.1",
     "playwright": "1.62.1",
-    "shadcn": "^3.5.2",
     "tailwindcss": "^4",
-    "tw-animate-css": "^1.3.0",
     "typescript": "^5",
     "vitest": "^4.1.7",
     "wrangler": "^4.125.0"

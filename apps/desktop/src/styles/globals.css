@@ -9,24 +9,6 @@
  * color-mode init 脚本在首屏前写入（apps/desktop/index.html）。 */
 @custom-variant dark (&:where([data-color-mode='dark'], [data-color-mode='dark'] *));
 
-/**
- * D0 遗留的调试面板配色。
- *
- * 它**不是**产品主题：产品主题是 `@mahoshojo/ui-web/styles.css` 里的 `--app-*` 三段解析，Desktop 与 Web
- * 共用同一份。下面的 `--color-*` 只服务尚未迁走的运行时/Provider 面板，随对应切片退出；不允许它扩成
- * 第二套需要人工同步的主题（`DESK-PROD-009`）。
- *
- * 保留它而不是立刻删除，是因为本阶段仍有一个真实消费者（`src/app/App.tsx` 的运行时自述），删掉会让面板
- * 无主题可读；而在没有第二个消费者之前，它不该被任何共源组件引用。
- */
-@theme {
-  --color-surface: oklch(0.18 0.012 300);
-  --color-surface-raised: oklch(0.23 0.014 300);
-  --color-ink: oklch(0.94 0.006 300);
-  --color-ink-muted: oklch(0.72 0.01 300);
-  --color-accent: oklch(0.78 0.16 350);
-}
-
 /* `height: 100%` 链不再存在：body 背景会传播到 canvas，body 高度被钉死在视口时，
    传播图以 body 盒为图幅按默认 repeat 平铺——长页面在每一屏边界出现断层/循环。
    壳的 min-height 改由 AppShell 的 `min-h-screen` 直接承担，不再依赖祖先高度链。 */
