@@ -394,7 +394,6 @@ export const DetailsPage: React.FC = () => {
   }, [magicalGirlDetails, answerItems, questionnaireItems]);
 
   const streamedGeneralCardForDisplay = useMemo(() => {
-    if (generationMode !== 'stream') return null;
     const markdown = streamingMarkdown ?? streamedGeneralCard?.content ?? null;
     if (markdown === null) return null;
 
@@ -405,16 +404,15 @@ export const DetailsPage: React.FC = () => {
       defaultName: '魔法少女',
     });
     return card;
-  }, [generationMode, streamingMarkdown, streamedGeneralCard, answerItems]);
+  }, [streamingMarkdown, streamedGeneralCard, answerItems]);
 
   const streamPortraitPrompt = useMemo(() => {
-    if (generationMode !== 'stream') return '';
     const name = typeof streamedGeneralCardForDisplay?.name === 'string' ? streamedGeneralCardForDisplay.name.trim() : '';
     const contentRaw = (streamingMarkdown ?? streamedGeneralCard?.content ?? '').trim();
     const contentHead = contentRaw.length > 800 ? contentRaw.slice(0, 800) : contentRaw;
     const prefix = [name, contentHead].filter(Boolean).join(', ');
     return `${prefix ? `${prefix}, ` : ''}Xiabanmo, 二次元, 角色立绘`;
-  }, [generationMode, streamedGeneralCardForDisplay, streamingMarkdown, streamedGeneralCard]);
+  }, [streamedGeneralCardForDisplay, streamingMarkdown, streamedGeneralCard]);
 
   useEffect(() => {
     fetch('/languages.json')
@@ -1809,8 +1807,8 @@ export const DetailsPage: React.FC = () => {
 
           <div ref={resultSectionRef}>
 
-          {/* 流式：通用角色卡（Markdown） */}
-          {generationMode === 'stream' && (streamingMarkdown !== null || streamedGeneralCard) && (
+          {/* 结果由实际输出决定；模式控件只配置下一次请求。 */}
+          {(streamingMarkdown !== null || streamedGeneralCard) && (
             <>
               {streamedGeneralCardForDisplay && (
                 <>
