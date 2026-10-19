@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
 import { resolve } from 'node:path';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -9,6 +10,8 @@ import { RouterProvider } from '@tanstack/react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QuestionnaireQuestion } from '@mahoshojo/domain/questionnaire-definition';
 import { buildUnsignedMagicalGirlDetailsCard } from '@mahoshojo/ai-core/magical-girl-details-generation';
+import { digestLocalCardPayloadV1 } from '@mahoshojo/local-library/digest';
+import { LocalCardRecordV1Schema } from '@mahoshojo/local-library/record';
 import type { DetailsGenerationOutcome } from '../src/features/details/generation';
 import { DETAILS_DRAFT_KEY } from '../src/features/details/session';
 import { builtinSelectionId } from '../src/features/details/questionnaire';
@@ -17,12 +20,12 @@ import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop
 import { createDesktopRouter } from '../src/app/router';
 import { describeRegenerateConfirm } from '../src/app/details-page';
 
-const mocks = vi.hoisted(() => ({ execute: vi.fn(), save: vi.fn(), listen: vi.fn(), profiles: vi.fn(), scrollResult: vi.fn() }));
+const mocks = vi.hoisted(() => ({ execute: vi.fn(), save: vi.fn(), listCards: vi.fn(), listen: vi.fn(), profiles: vi.fn(), scrollResult: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: mocks.listen }) }));
 vi.mock('../src/features/details/generation', async (original) => ({ ...await original<object>(), executeDetailsGeneration: mocks.execute }));
 vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileIds: async () => ['local'], getProviderProfile: mocks.profiles }));
-vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: class { putIfAbsent = mocks.save; } }));
+vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: class { putIfAbsent = mocks.save; list = mocks.listCards; } }));
 
 const questionnaire = JSON.parse(readFileSync(resolve(process.cwd(), '../../content/questionnaires/presets/magical-girl-default.json'), 'utf8'));
 const card = buildUnsignedMagicalGirlDetailsCard({
@@ -68,6 +71,7 @@ beforeEach(() => {
   resetDesktopAiConfigStoreForTests();
   mocks.profiles.mockResolvedValue({ id: 'local', name: '本地模型', adapter: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', modelId: 'model' });
   mocks.execute.mockResolvedValue(completed); mocks.save.mockResolvedValue({ written: true });
+  mocks.listCards.mockResolvedValue({ items: [] });
   mocks.listen.mockImplementation(async (handler) => { close = handler; activeCloseHandlers.add(handler); return vi.fn(() => { activeCloseHandlers.delete(handler); }); });
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => questionnaire })));
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
@@ -104,6 +108,39 @@ const fillCurrentAnswer = async (value: string) => {
 };
 
 describe('Desktop Details real route and session UI (native adapter mock)', () => {
+  it('keeps a rejected library questionnaire visible without changing answers, then accepts a valid card', async () => {
+    vi.stubGlobal('crypto', webcrypto);
+    const invalid = { id: 'empty', kind: 'magical-girl', title: '空问卷', questions: [] };
+    const valid = { ...questionnaire, id: 'accepted', title: '可用问卷' };
+    const items = await Promise.all([invalid, valid].map(async (data) => LocalCardRecordV1Schema.parse({
+      id: data.id, schemaVersion: 1, storageLocation: 'local', cardType: 'questionnaire', title: data.title,
+      data, contentDigest: await digestLocalCardPayloadV1(data), provenance: { kind: 'unsigned', execution: 'imported' },
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    })));
+    mocks.listCards.mockResolvedValue({ items });
+    window.localStorage.setItem(DETAILS_DRAFT_KEY, JSON.stringify(draft()));
+    await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="问卷来源"] button')!.click());
+    await click('从问卷数据卡选择');
+    const picker = () => document.querySelector('[role="dialog"][aria-label="选择问卷数据卡"]');
+    const before = JSON.parse(window.localStorage.getItem(DETAILS_DRAFT_KEY)!);
+    await act(async () => picker()!.querySelector<HTMLElement>('[aria-label="选择空问卷"]')!.click());
+    await settle();
+    expect(picker()).toBeTruthy();
+    expect(picker()?.textContent).toContain('这张数据卡不包含可识别的问卷内容。');
+    expect(JSON.parse(window.localStorage.getItem(DETAILS_DRAFT_KEY)!)).toEqual(before);
+    expect(container.querySelector<HTMLTextAreaElement>('.ui-web-questionnaire-answer-input')?.value).toBe('善良');
+    await act(async () => picker()!.querySelector<HTMLElement>('[aria-label="选择可用问卷"]')!.click());
+    await settle();
+    expect(picker()).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(DETAILS_DRAFT_KEY)!).questionnaireSelections).toEqual([
+      expect.objectContaining({ questionnaire: expect.objectContaining({ id: 'accepted', title: '可用问卷' }) }),
+    ]);
+    expect(container.querySelector<HTMLTextAreaElement>('.ui-web-questionnaire-answer-input')?.value).toBe('善良');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+
   it.each(['missing', 'rejected'] as const)('copies the actual generated JSON through fallback when clipboard is %s', async (kind) => {
     const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     const originalExec = Object.getOwnPropertyDescriptor(document, 'execCommand');

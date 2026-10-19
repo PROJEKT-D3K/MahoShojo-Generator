@@ -565,7 +565,7 @@ function DetailsForm({ session, restored }: { session: DetailsSession; restored:
     const parsed = parseQuestionnaireSelection(payload, context);
     if ('error' in parsed) {
       setPickerError(parsed.error);
-      return;
+      return false;
     }
     // 追加/切换问卷不清空已填回答：key 失配的旧回答由答案重映射按元数据
     // 匹配到新 key，无法匹配的不再保留（与 Web 同一口径）。

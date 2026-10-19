@@ -726,6 +726,7 @@ export const DetailsPage: React.FC = () => {
       setShowQuestionnairePicker(false);
     } catch (error) {
       setQuestionnairePickerError(error instanceof Error ? error.message : '解析问卷失败');
+      return false;
     }
   };
 
