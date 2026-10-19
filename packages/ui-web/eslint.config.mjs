@@ -2,6 +2,7 @@ import tsParser from '@typescript-eslint/parser';
 import tsPlugin from '@typescript-eslint/eslint-plugin';
 import reactPlugin from 'eslint-plugin-react';
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
+import jsxA11yPlugin from 'eslint-plugin-jsx-a11y';
 
 export default [
   {
@@ -18,6 +19,7 @@ export default [
       '@typescript-eslint': tsPlugin,
       react: reactPlugin,
       'react-hooks': reactHooksPlugin,
+      'jsx-a11y': jsxA11yPlugin,
     },
     settings: {
       react: { version: 'detect' },
@@ -30,6 +32,11 @@ export default [
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
+      // VIS-A11Y-001：a11y 推荐规则集整体先行 warn——与 Next 侧 eslint-config-next
+      // 内置的 jsx-a11y 口径对齐，存量命中随接触收口后再逐级收紧。
+      ...Object.fromEntries(
+        Object.entries(jsxA11yPlugin.flatConfigs.recommended.rules).map(([rule, setting]) => [rule, setting === 'off' ? 'off' : 'warn']),
+      ),
     },
   },
 ];
