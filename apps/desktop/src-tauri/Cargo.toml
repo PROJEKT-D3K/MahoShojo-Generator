@@ -74,3 +74,5 @@ incremental = true
 [dev-dependencies]
 # The test feature only exposes Tauri's in-process IPC harness; no new dependency.
 tauri = { version = "2.11.6", features = ["test"] }
+# test-util 提供 time::advance / #[tokio::test(start_paused)]，仅限测试构建。
+tokio = { version = "1", features = ["test-util"] }
