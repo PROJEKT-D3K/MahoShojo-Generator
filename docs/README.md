@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-19 视觉治理体系：[双端视觉治理体系 ADR](./decisions/2026-10-19_215000_双端视觉治理体系决策.md)与[双端视觉基线与工程契约规格](./specs/2026-10-19_215200_双端视觉基线与工程契约规格.md)已接受。采纳五层治理——成文规范 → token 单源 → 契约门禁（`var()` 可解析、token 所有权、字面量基线、对比度矩阵，进 `workspace:checks`）→ ui-web 单源样板间挂两端 dev 路由 → 本地显式巡检留证据；门禁验「规则未被破坏」不验外观，无像素 diff/CI 截图门禁，延续 DESK-PROD-009 口径。共源样板间优先于 Storybook（保留显式再评估触发条件），组件原语按需渐进抽取；范围限 Web/Desktop/ui-web，admin 不纳入。本轮为 ADR+spec 落地，各层实现按批次推进。
+
 2026-10-19 D5.2-A 开工：[Desktop 安装包构建与内部验收](./runbooks/2026-10-19_201500_Desktop安装包构建与内部验收.md)确立版本契约（`apps/desktop/package.json` 权威 + `sync-desktop-version.mjs` 三处派生）、NSIS currentUser/中英双语安装器与 `desktop-package.yml` 内部打包流水线（无发布私钥、不签名、不建 Release）；维护者确认内部测试先行、OS 签名 Alpha 暂缓、identifier 保持不变，首个内部版本 `0.1.0-alpha.1`。updater、受保护 Release workflow 与公开发行仍属 D5.2-C/D/E 后继。
 
 2026-10-11 Desktop Direct 分支：[真实生成接缝](./reports/2026-10-11_085200_DesktopDirect分支真实生成接缝.md)接通内部可选 owner 的真实 Direct branch Prompt、共享完成投影与原冻结保存链，合成模型 transport；摘要 ID 有界分页并以原 descriptor 封口。定向516项、Native614项/10既有ignored、真实内部pipe11case与类型/lint/fmt/clippy及独审通过；受测35340a58于09:00:20–09:09:19Z原完整CI exit0（10,815 passed executions/21原条件skip）。CI后仅docs收口、3761非docs严格NUL同源，Native/pipe为独立同源实测而非该CI复跑；不开放 IPC/ACL/默认 binder/两页，不关闭资源或真实平台门。
