@@ -3,17 +3,20 @@ import React, { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ dispatch: vi.fn(), copy: vi.fn() }));
+const mocks = vi.hoisted(() => ({ dispatch: vi.fn(), copy: vi.fn(), download: vi.fn() }));
 vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntentLatch: () => ({ tryAcquire: () => ({ dispatch: mocks.dispatch }) }) }));
 vi.mock('@/lib/auth', () => ({ authStorage: { getActivityHeaders: async () => ({}), getAuthHeader: async () => null } }));
 vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({ isCooldown: false, startCooldown: vi.fn(), remainingTime: 0, otherRemainingTime: 0 }) }));
 vi.mock('@/lib/content-safety/client', () => ({ getSensitiveWordRedirectTarget: async () => null }));
+vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: async (text: string) => ({ hasSensitiveWords: false, filteredText: text }) }));
+vi.mock('@/lib/shield-word-filter', () => ({ applyShieldWords: (text: string) => ({ filteredText: text }) }));
+vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: mocks.download }));
 vi.mock('@/lib/app-router-adapter', () => ({ useAppRouterAdapter: () => ({ push: vi.fn() }) }));
 vi.mock('@/components/ai/ProviderCooldownNotice', () => ({ ProviderCooldownNotice: () => null }));
 vi.mock('@/components/Footer', () => ({ default: () => null }));
 vi.mock('@/components/AiProviderSelector', () => ({ default: () => <div>供应商适配</div> }));
-vi.mock('@/components/ai/AiReasoningPanel', () => ({ default: () => null }));
-vi.mock('@/components/SaveToCloudButton', () => ({ default: () => <button>保存到云端</button> }));
+vi.mock('@/components/ai/AiReasoningPanel', () => ({ default: ({ reasoning }: { reasoning?: { text?: string } | null }) => reasoning?.text ? <div aria-label="思考内容">{reasoning.text}</div> : null }));
+vi.mock('@/components/SaveToCloudButton', () => ({ default: ({ data, cardType }: { data: unknown; cardType: string }) => <button data-card-type={cardType} data-card-json={JSON.stringify(data)}>保存到云端</button> }));
 vi.mock('@/components/shared/CharacterPortraitAssetPanel', () => ({ CharacterPortraitAssetPanel: () => null }));
 vi.mock('@/components/GeneralCharacterCard', () => ({ default: ({ general }: { general: { content: string } }) => <div aria-label="生成结果">{general.content}</div> }));
 import { FreePage } from '@/components/creation/FreePage';
@@ -27,6 +30,15 @@ const draft = { schemaId: 'general', generationMode: 'non-stream', prompt: '恢�
 const byText = (label: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === label)!;
 const mount = () => act(async () => root.render(<StrictMode><FreePage /></StrictMode>));
 const edit = async (text: string) => act(async () => { const input = container.querySelector('textarea[aria-label="提示词"]')!; Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, text); input.dispatchEvent(new Event('input', { bubbles: true })); });
+const selectSchema = async (schemaId: string) => act(async () => { const select = container.querySelector<HTMLSelectElement>('select[aria-label="选择 Schema"]')!; select.value = schemaId; select.dispatchEvent(new Event('change', { bubbles: true })); });
+const preview = () => container.querySelector('[data-testid="free-preview"]')!;
+const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+const markdown = '# 流式标题\n\n保留的流式正文';
+const streamResponse = (tail = sse('done', { ok: true })) => new Response([
+  sse('reasoning', { source: 'sdk', chunk: '保留的思考内容' }),
+  sse('markdown', { chunk: markdown }),
+  tail,
+].join(''), { headers: { 'content-type': 'text/event-stream' } });
 beforeEach(() => {
   localStorage.clear();
   vi.stubGlobal('fetch', vi.fn(async () => Response.json([{ code: 'en', name: 'English' }, { code: 'zh-CN', name: '中文' }])));
@@ -51,6 +63,158 @@ it('restores before autosave, copies text and clears only input while preserving
   await act(async () => byText('清空存档').click());
   expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ ...draft, prompt: '' });
   expect(container.textContent).toContain('保留的生成正文');
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it('keeps the completed non-stream result visible when choosing the next generation mode', async () => {
+  localStorage.setItem(KEY, JSON.stringify(draft));
+  await mount();
+  await act(async () => byText('开始生成').click());
+  await act(async () => byText('流式').click());
+  expect(JSON.parse(localStorage.getItem(KEY)!).generationMode).toBe('stream');
+  expect(container.querySelector('[aria-label="生成结果"]')?.textContent).toBe('保留的生成正文');
+  expect(byText('保存到云端').getAttribute('data-card-type')).toBe('character');
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it.each(['scenario', 'general-scenario'])('keeps a non-stream %s result when selecting the next stream schema', async (schemaId) => {
+  localStorage.setItem(KEY, JSON.stringify({ ...draft, schemaId }));
+  const card = { title: '已完成的情景', content: '原情景正文', elements: [], extension: { retained: true } };
+  mocks.dispatch.mockResolvedValueOnce(Response.json(card));
+  await mount();
+  await act(async () => byText('开始生成').click());
+  const rendered = preview().innerHTML;
+  await act(async () => byText('流式').click());
+  expect(JSON.parse(localStorage.getItem(KEY)!)).toMatchObject({ generationMode: 'stream', schemaId: schemaId === 'scenario' ? 'general' : schemaId });
+  await selectSchema('general');
+  expect(preview().innerHTML).toBe(rendered);
+  expect(byText('保存到云端').getAttribute('data-card-type')).toBe('scenario');
+  expect(JSON.parse(byText('保存到云端').getAttribute('data-card-json')!)).toEqual(card);
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it.each(['scenario', 'general-scenario', 'magical-girl', 'canshou'])('keeps the completed card renderer and save type when choosing next schema %s', async (schemaId) => {
+  localStorage.setItem(KEY, JSON.stringify(draft));
+  await mount();
+  await act(async () => byText('开始生成').click());
+  const savedJson = byText('保存到云端').getAttribute('data-card-json');
+  await selectSchema(schemaId);
+  expect(JSON.parse(localStorage.getItem(KEY)!).schemaId).toBe(schemaId);
+  expect(byText('保存到云端').getAttribute('data-card-type')).toBe('character');
+  expect(container.querySelector('[aria-label="生成结果"]')?.textContent).toBe('保留的生成正文');
+  expect(byText('保存到云端').getAttribute('data-card-json')).toBe(savedJson);
+  await act(async () => byText('下载 JSON').click());
+  expect(mocks.download).toHaveBeenCalledWith(expect.any(Blob), '数据卡_角色_角色.json');
+  await act(async () => byText('复制到剪贴板').click());
+  expect(JSON.parse(mocks.copy.mock.calls.at(-1)![0])).toEqual(JSON.parse(savedJson!));
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it.each(['general', 'general-scenario'])('keeps completed %s stream output and reasoning while editing the next schema and mode', async (schemaId) => {
+  localStorage.setItem(KEY, JSON.stringify({ ...draft, schemaId, generationMode: 'stream' }));
+  mocks.dispatch.mockResolvedValueOnce(streamResponse());
+  await mount();
+  await act(async () => byText('开始生成').click());
+  const rendered = preview().innerHTML;
+  const savedJson = byText('保存到云端').getAttribute('data-card-json');
+  expect(preview().textContent).toContain('保留的流式正文');
+  expect(preview().textContent).toContain('保留的思考内容');
+  await selectSchema(schemaId === 'general' ? 'general-scenario' : 'general');
+  expect(preview().innerHTML).toBe(rendered);
+  await act(async () => byText('非流式').click());
+  await selectSchema('magical-girl');
+  expect(preview().innerHTML).toBe(rendered);
+  expect(byText('保存到云端').getAttribute('data-card-type')).toBe(schemaId === 'general' ? 'character' : 'scenario');
+  expect(byText('保存到云端').getAttribute('data-card-json')).toBe(savedJson);
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+  expect(mocks.dispatch.mock.calls[0][0]).toBe('/api/generate-free-stream?format=sse');
+  expect(JSON.parse(mocks.dispatch.mock.calls[0][1].body).schema).toBe(schemaId);
+});
+
+it('binds the next actual generation to its own schema after keeping the previous result visible', async () => {
+  localStorage.setItem(KEY, JSON.stringify(draft));
+  await mount();
+  await act(async () => byText('开始生成').click());
+  await selectSchema('scenario');
+  expect(container.querySelector('[aria-label="生成结果"]')).not.toBeNull();
+  const nextCard = { title: '下一次情景', elements: [], extension: { retained: true } };
+  mocks.dispatch.mockResolvedValueOnce(Response.json(nextCard));
+  await act(async () => byText('开始生成').click());
+  expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(mocks.dispatch.mock.calls[1][1].body).schema).toBe('scenario');
+  expect(preview().textContent).toContain('下一次情景');
+  expect(preview().textContent).not.toContain('保留的生成正文');
+  expect(byText('保存到云端').getAttribute('data-card-type')).toBe('scenario');
+  expect(JSON.parse(byText('保存到云端').getAttribute('data-card-json')!)).toEqual(nextCard);
+  await selectSchema('general');
+  expect(preview().textContent).toContain('下一次情景');
+  expect(byText('保存到云端').getAttribute('data-card-type')).toBe('scenario');
+});
+
+it('does not revive an old result after a new request fails', async () => {
+  localStorage.setItem(KEY, JSON.stringify(draft));
+  await mount();
+  await act(async () => byText('开始生成').click());
+  await selectSchema('scenario');
+  mocks.dispatch.mockResolvedValueOnce(Response.json({ error: '请求失败' }, { status: 500 }));
+  await act(async () => byText('开始生成').click());
+  expect(container.textContent).toContain('请求失败');
+  await selectSchema('general');
+  expect(preview().textContent).not.toContain('保留的生成正文');
+  expect(byText('保存到云端')).toBeUndefined();
+  expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+});
+
+it('keeps partial stream output after failure when changing the next mode', async () => {
+  localStorage.setItem(KEY, JSON.stringify({ ...draft, generationMode: 'stream' }));
+  mocks.dispatch.mockResolvedValueOnce(streamResponse(sse('error', { error: '合成上游失败' })));
+  await mount();
+  await act(async () => byText('开始生成').click());
+  expect(container.textContent).toContain('合成上游失败');
+  expect(preview().textContent).toContain('保留的流式正文');
+  expect(byText('保存到云端')).toBeUndefined();
+  await act(async () => byText('非流式').click());
+  await selectSchema('scenario');
+  expect(preview().textContent).toContain('保留的流式正文');
+  expect(preview().textContent).toContain('保留的思考内容');
+  expect(byText('保存到云端')).toBeUndefined();
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it('keeps a manually stopped stream card saveable after choosing the next mode', async () => {
+  localStorage.setItem(KEY, JSON.stringify({ ...draft, generationMode: 'stream' }));
+  mocks.dispatch.mockImplementationOnce((_url: string, options: RequestInit) => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(sse('markdown', { chunk: markdown })));
+      options.signal!.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true });
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } }));
+  await mount();
+  await act(async () => byText('开始生成').click());
+  expect(preview().textContent).toContain('保留的流式正文');
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="停止生成"]')!.click());
+  expect(container.textContent).toContain('已手动停止生成');
+  const savedJson = byText('保存到云端').getAttribute('data-card-json');
+  await act(async () => byText('非流式').click());
+  await selectSchema('scenario');
+  expect(preview().textContent).toContain('保留的流式正文');
+  expect(byText('保存到云端').getAttribute('data-card-json')).toBe(savedJson);
+  expect(byText('保存到云端').getAttribute('data-card-type')).toBe('character');
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it('restores only the draft on remount without treating stored extensions as a generated result', async () => {
+  localStorage.setItem(KEY, JSON.stringify({ ...draft, output: { card: { name: '旧扩展结果' } } }));
+  await mount();
+  await act(async () => byText('开始生成').click());
+  await selectSchema('scenario');
+  await act(async () => root.render(<div />));
+  await mount();
+  expect(container.querySelector<HTMLSelectElement>('select[aria-label="选择 Schema"]')?.value).toBe('scenario');
+  expect(preview().textContent).not.toContain('保留的生成正文');
+  expect(preview().textContent).not.toContain('旧扩展结果');
+  expect(byText('保存到云端')).toBeUndefined();
+  expect(JSON.parse(localStorage.getItem(KEY)!).output).toEqual({ card: { name: '旧扩展结果' } });
   expect(mocks.dispatch).toHaveBeenCalledOnce();
 });
 

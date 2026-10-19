@@ -200,6 +200,8 @@ export function FreePage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [resultData, setResultData] = useState<any | null>(null);
+  // 与生成输出一起固定身份；表单只编辑下一次请求，不能重解释已保留的结果。
+  const [resultContext, setResultContext] = useState<{ schemaId: FreeSchemaId; generationMode: GenerationMode } | null>(null);
   const [nonStreamReasoning, setNonStreamReasoning] = useState<AIReasoningEnvelope | null>(null);
 
   const [streamingMarkdown, setStreamingMarkdown] = useState<string | null>(null);
@@ -353,6 +355,7 @@ export function FreePage() {
 
     setSubmitting(true);
     setError(null);
+    setResultContext({ schemaId, generationMode });
     setResultData(null);
     setNonStreamReasoning(null);
     setStreamingMarkdown(null);
@@ -549,10 +552,12 @@ export function FreePage() {
   };
 
   const renderResult = () => {
-    if (generationMode === 'stream') {
+    if (!resultContext) return null;
+    const { schemaId: resultSchemaId, generationMode: resultGenerationMode } = resultContext;
+    if (resultGenerationMode === 'stream') {
       if (streamingMarkdown === null && !streamedGeneralCard) return null;
 
-      const isGeneralScenario = streamedGeneralCard?.templateId === GENERAL_SCENARIO_TEMPLATE_ID || schemaId === 'general-scenario';
+      const isGeneralScenario = streamedGeneralCard?.templateId === GENERAL_SCENARIO_TEMPLATE_ID || resultSchemaId === 'general-scenario';
       const title = isGeneralScenario ? '通用情景卡（流式）' : '通用角色卡（流式）';
 
       return (
@@ -634,7 +639,7 @@ export function FreePage() {
 
     if (!resultData) return null;
 
-    const selectedOption = FREE_SCHEMA_OPTIONS.find(item => item.id === schemaId) ?? null;
+    const selectedOption = FREE_SCHEMA_OPTIONS.find(item => item.id === resultSchemaId) ?? null;
     const kind = selectedOption?.kind ?? 'character';
     const nonStreamReasoningNode = nonStreamReasoning ? (
       <AiReasoningPanel
@@ -645,7 +650,7 @@ export function FreePage() {
       />
     ) : null;
 
-    if (schemaId === 'magical-girl') {
+    if (resultSchemaId === 'magical-girl') {
       const safe = normalizeMagicalGirlForCard(resultData);
       return (
         <>
@@ -676,7 +681,7 @@ export function FreePage() {
       );
     }
 
-    if (schemaId === 'canshou') {
+    if (resultSchemaId === 'canshou') {
       const safe = normalizeCanshouForCard(resultData);
       const promptForPortrait = buildCanshouPortraitPrompt(safe);
       return (
@@ -704,7 +709,7 @@ export function FreePage() {
       );
     }
 
-    if (schemaId === 'general') {
+    if (resultSchemaId === 'general') {
       const promptForPortrait = buildGeneralPortraitPrompt(
         typeof resultData?.name === 'string' ? resultData.name : '',
         typeof resultData?.content === 'string' ? resultData.content : ''
@@ -731,7 +736,7 @@ export function FreePage() {
       );
     }
 
-    if (schemaId === 'general-scenario') {
+    if (resultSchemaId === 'general-scenario') {
       return (
         <>
           {nonStreamReasoningNode}
