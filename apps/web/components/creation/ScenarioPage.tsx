@@ -245,6 +245,7 @@ export const ScenarioPage: React.FC = () => {
     setSelectedLanguage('zh-CN');
     setGenerationMode('non-stream');
     setGeneralScenarioDraft(null);
+    setStreamingReasoning(null);
     setGeneralScenarioDraftEdited(false);
     setAutoSaveTimestamp(null);
     setError(null);
@@ -494,6 +495,7 @@ export const ScenarioPage: React.FC = () => {
   const handleCreateBlankGeneralScenario = () => {
     const blank = createBlankDataCard('general-scenario');
     setGeneralScenarioDraft(blank);
+    setStreamingReasoning(null);
     setGeneralScenarioDraftEdited(true);
   };
 
@@ -571,7 +573,7 @@ export const ScenarioPage: React.FC = () => {
               ) : null}</>}
           tokens={<TokenIndicator text={[...Object.values(answers), scenarioTitleHint].filter((item) => item.trim()).join('\n\n')} />}
           feedback={<>
-            {!isGenerating && generationMode === 'non-stream' && resultData && <div className="text-center text-sm text-green-600 my-2 font-semibold">🎉 情景生成成功！结果已显示在下方。</div>}
+            {!isGenerating && resultData && <div className="text-center text-sm text-green-600 my-2 font-semibold">🎉 情景生成成功！结果已显示在下方。</div>}
             {error && <ErrorMessage message={error} className="error-message mt-4" />}
             {streamNotice ? <div className="mt-3 text-center text-sm text-amber-700">{streamNotice}</div> : null}
           </>}
@@ -579,7 +581,8 @@ export const ScenarioPage: React.FC = () => {
       )}
       results={(
         <div ref={resultSectionRef}>
-          {generationMode === 'non-stream' && resultData && (
+          {/* 结果由实际完成的数据决定；生成方式只编辑下一次请求。 */}
+          {resultData && (
             <>
               {nonStreamReasoning && (
                 <AiReasoningPanel
@@ -618,7 +621,7 @@ export const ScenarioPage: React.FC = () => {
             canConvert={!!resultData}
             disabled={isGenerating}
             onChange={(patch) => { setGeneralScenarioDraftEdited(true); setGeneralScenarioDraft((prev: any) => ({ ...prev, ...patch })); }}
-            reasoning={generationMode === 'stream' && <AiReasoningPanel reasoning={streamingReasoning} status={streamingReasoning?.status ?? 'idle'} compact />}
+            reasoning={<AiReasoningPanel reasoning={streamingReasoning} status={streamingReasoning?.status ?? 'idle'} compact />}
             actions={generalScenarioDraft && <>
               <button onClick={() => downloadJson(generalScenarioDraft)} className={`${generationActionClassNames.secondary} flex-1`}>下载通用情景卡</button>
               <SaveToCloudButton data={generalScenarioDraft} cardType="scenario" buttonText="保存到云端" className={`${generationActionClassNames.primary} flex-1`} />

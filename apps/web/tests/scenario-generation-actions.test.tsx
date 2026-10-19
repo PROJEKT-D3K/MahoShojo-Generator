@@ -8,11 +8,13 @@ vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntent
 vi.mock('@/lib/auth', () => ({ authStorage: { getActivityHeaders: async () => ({}), getAuthHeader: async () => null } }));
 vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({ isCooldown: false, startCooldown: vi.fn(), remainingTime: 0, otherRemainingTime: 0 }) }));
 vi.mock('@/lib/content-safety/client', () => ({ getSensitiveWordRedirectTarget: async () => null }));
+vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: async (text: string) => ({ hasSensitiveWords: false, filteredText: text }) }));
+vi.mock('@/lib/shield-word-filter', () => ({ applyShieldWords: (text: string) => ({ filteredText: text }) }));
 vi.mock('@/lib/app-router-adapter', () => ({ useAppRouterAdapter: () => ({ push: mocks.navigate }) }));
 vi.mock('@/components/ai/ProviderCooldownNotice', () => ({ ProviderCooldownNotice: () => null }));
 vi.mock('@/components/Footer', () => ({ default: () => null }));
 vi.mock('@/components/AiProviderSelector', () => ({ default: () => null }));
-vi.mock('@/components/ai/AiReasoningPanel', () => ({ default: () => null }));
+vi.mock('@/components/ai/AiReasoningPanel', () => ({ default: ({ reasoning }: { reasoning?: { text?: string } | null }) => reasoning?.text ? <div aria-label="思考内容">{reasoning.text}</div> : null }));
 vi.mock('@/components/SaveToCloudButton', async () => {
   const { CloudCardActionButtons } = await import('@mahoshojo/ui-web/cloud-save');
   return { default: ({ data, className, style, presentation }: { data: unknown; className?: string; style?: React.CSSProperties; presentation?: string }) => presentation === 'generation-result'
@@ -22,6 +24,7 @@ vi.mock('@/components/SaveToCloudButton', async () => {
 vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: mocks.download }));
 
 import { ScenarioPage } from '@/components/creation/ScenarioPage';
+import { createBlankDataCard } from '@/lib/data-card-converter';
 import { writeScenarioPageDraft } from '@/lib/scenario-page-draft';
 
 let root: Root;
@@ -29,11 +32,23 @@ let container: HTMLDivElement;
 const general = { templateId: '通用情景', title: '雨夜', content: '完整内容', metadata: { signature: 'retained' } };
 const structured = { title: '钟楼', scenario_type: '调查', description: '结构化内容' };
 const findButton = (surface: Element, label: string) => [...surface.querySelectorAll('button')].find((button) => button.textContent === label)!;
+const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+const streamMarkdown = '# 流式情景\n\n生成的流式情景正文';
+const streamResponse = (tail = sse('done', { ok: true })) => new Response([
+  sse('reasoning', { source: 'sdk', chunk: '原流式思考' }),
+  sse('markdown', { chunk: streamMarkdown }),
+  tail,
+].join(''), { headers: { 'content-type': 'text/event-stream' } });
 
 beforeEach(() => {
   localStorage.clear();
   writeScenarioPageDraft({ answers: { '故事发生的场景是怎样的？': '钟楼' }, scenarioTitleHint: '', fieldsToKeepEmpty: [], isAdvancedVisible: false, selectedLanguage: 'zh-CN', generationMode: 'non-stream', generalScenarioDraft: general, generalScenarioDraftEdited: true });
-  vi.stubGlobal('fetch', vi.fn(async () => Response.json([{ code: 'zh-CN', name: '中文' }])));
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+    if (url === '/languages.json') return Response.json([{ code: 'zh-CN', name: '中文' }]);
+    if (url === '/api/resign-data') return Response.json({ ...JSON.parse(String(options?.body)), signature: 'synthetic-stream-signature' });
+    if (url === '/api/verify-origin') return Response.json({ isValid: false });
+    throw new Error(`Unexpected test request: ${url}`);
+  }));
   vi.stubGlobal('alert', vi.fn());
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: mocks.copy.mockResolvedValue(undefined) } });
   HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -66,6 +81,158 @@ it('gives save and export the same finite hierarchy as Desktop without changing 
   expect(mocks.dispatch).toHaveBeenCalledOnce();
   expect(mocks.download).toHaveBeenCalledTimes(2);
   expect(editor.querySelector('textarea')?.value).toBe(general.content);
+});
+
+it('keeps structured results and their original actions while selecting the next stream mode', async () => {
+  mocks.dispatch.mockResolvedValueOnce(Response.json({ data: structured, aiMeta: { aiReasoning: { status: 'done', source: 'sdk', text: '原结构化思考' } } }));
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '生成情景').click());
+  await act(async () => findButton(container, '流式').click());
+  const output = container.querySelector('[aria-label="结构化情景结果"]');
+  expect(output).not.toBeNull();
+  expect(output!.querySelector('pre')?.textContent).toBe(JSON.stringify(structured, null, 2));
+  expect(container.textContent).toContain('原结构化思考');
+  expect(container.textContent).toContain('情景生成成功');
+  expect(container.querySelector<HTMLTextAreaElement>('#general-scenario-content')?.value).toBe(general.content);
+  await act(async () => { findButton(output!, '保存到云端').click(); findButton(output!, '下载情景文件').click(); findButton(output!, '复制到剪贴板').click(); });
+  expect(mocks.save).toHaveBeenLastCalledWith(structured);
+  expect(mocks.copy).toHaveBeenLastCalledWith(JSON.stringify(structured, null, 2));
+  expect(mocks.download).toHaveBeenLastCalledWith(expect.any(Blob), '情景_钟楼.json');
+  expect(JSON.parse(localStorage.getItem('mahoshojo.scenario.page-draft.v1')!).payload.generationMode).toBe('stream');
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it('keeps completed stream reasoning and the signed editor card when selecting the next non-stream mode', async () => {
+  mocks.dispatch.mockResolvedValueOnce(streamResponse());
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '流式').click());
+  await act(async () => findButton(container, '生成情景').click());
+  const editor = container.querySelector('[aria-label="通用情景卡编辑器"]')!;
+  const card = JSON.parse(editor.querySelector('pre')!.textContent!);
+  expect(card).toMatchObject({ content: streamMarkdown, signature: 'synthetic-stream-signature' });
+  expect(editor.textContent).toContain('原流式思考');
+  await act(async () => findButton(container, '非流式').click());
+  expect(editor.textContent).toContain('原流式思考');
+  expect(editor.querySelector('pre')?.textContent).toBe(JSON.stringify(card, null, 2));
+  await act(async () => findButton(editor, '保存到云端').click());
+  expect(mocks.save).toHaveBeenLastCalledWith(card);
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it('replaces structured output only when the next stream request starts and keeps its original request mode', async () => {
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '生成情景').click());
+  await act(async () => findButton(container, '流式').click());
+  expect(container.querySelector('[aria-label="结构化情景结果"]')).not.toBeNull();
+  mocks.dispatch.mockResolvedValueOnce(streamResponse());
+  await act(async () => findButton(container, '生成情景').click());
+  expect(container.querySelector('[aria-label="结构化情景结果"]')).toBeNull();
+  expect(container.querySelector<HTMLTextAreaElement>('#general-scenario-content')?.value).toBe(streamMarkdown);
+  expect(container.textContent).toContain('原流式思考');
+  expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+  expect(mocks.dispatch.mock.calls.map(([url]) => url)).toEqual(['/api/generate-scenario', '/api/generate-scenario-stream?format=sse']);
+  await act(async () => findButton(container, '非流式').click());
+  expect(container.querySelector('[aria-label="结构化情景结果"]')).toBeNull();
+  expect(container.textContent).not.toContain('情景生成成功');
+  expect(container.textContent).toContain('原流式思考');
+});
+
+it('clears old stream reasoning on a new non-stream request while retaining its independent editor card', async () => {
+  mocks.dispatch.mockResolvedValueOnce(streamResponse());
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '流式').click());
+  await act(async () => findButton(container, '生成情景').click());
+  const cardJson = container.querySelector('[aria-label="通用情景卡编辑器"] pre')!.textContent;
+  await act(async () => findButton(container, '非流式').click());
+  expect(container.textContent).toContain('原流式思考');
+  await act(async () => findButton(container, '生成情景').click());
+  expect(container.querySelector('[aria-label="结构化情景结果"] h2')?.textContent).toBe(structured.title);
+  expect(container.querySelector('[aria-label="通用情景卡编辑器"] pre')?.textContent).toBe(cardJson);
+  expect(container.textContent).not.toContain('原流式思考');
+  expect(mocks.dispatch.mock.calls.map(([url]) => url)).toEqual(['/api/generate-scenario-stream?format=sse', '/api/generate-scenario']);
+});
+
+it('uses the next stream editor without reviving structured output after the request fails', async () => {
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '生成情景').click());
+  await act(async () => findButton(container, '流式').click());
+  mocks.dispatch.mockResolvedValueOnce(Response.json({ error: '合成请求失败' }, { status: 500 }));
+  await act(async () => findButton(container, '生成情景').click());
+  expect(container.textContent).toContain('合成请求失败');
+  await act(async () => findButton(container, '非流式').click());
+  expect(container.querySelector('[aria-label="结构化情景结果"]')).toBeNull();
+  expect(container.querySelector<HTMLTextAreaElement>('#general-scenario-content')?.value).toBe('');
+  expect(container.textContent).not.toContain('情景生成成功');
+  expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+});
+
+it('keeps partial stream content and failure reasoning while changing the next mode without signing it', async () => {
+  mocks.dispatch.mockResolvedValueOnce(streamResponse(sse('error', { error: '合成流式失败' })));
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '流式').click());
+  await act(async () => findButton(container, '生成情景').click());
+  expect(container.textContent).toContain('合成流式失败');
+  await act(async () => findButton(container, '非流式').click());
+  expect(container.querySelector<HTMLTextAreaElement>('#general-scenario-content')?.value).toBe(streamMarkdown);
+  expect(container.querySelector('[aria-label="通用情景卡编辑器"]')?.textContent).toContain('原流式思考');
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/resign-data')).toBe(false);
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it('keeps manually stopped stream content and reasoning without turning it into a signed card', async () => {
+  mocks.dispatch.mockImplementationOnce((_url: string, options: RequestInit) => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(sse('reasoning', { source: 'sdk', chunk: '停止前思考' }) + sse('markdown', { chunk: streamMarkdown })));
+      options.signal!.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true });
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } }));
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '流式').click());
+  await act(async () => findButton(container, '生成情景').click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="停止生成"]')!.click());
+  expect(container.textContent).toContain('已手动停止生成');
+  await act(async () => findButton(container, '非流式').click());
+  expect(container.querySelector<HTMLTextAreaElement>('#general-scenario-content')?.value).toBe(streamMarkdown);
+  expect(container.querySelector('[aria-label="通用情景卡编辑器"]')?.textContent).toContain('停止前思考');
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/resign-data')).toBe(false);
+  const card = JSON.parse(container.querySelector('[aria-label="通用情景卡编辑器"] pre')!.textContent!);
+  expect(card).not.toHaveProperty('signature');
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])('does not attach old stream reasoning to a newly created editor after clearing=%s', async (clearFirst) => {
+  mocks.dispatch.mockResolvedValueOnce(streamResponse());
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '流式').click());
+  await act(async () => findButton(container, '生成情景').click());
+  expect(container.textContent).toContain('原流式思考');
+  if (clearFirst) {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await act(async () => findButton(container, '清空本地草稿').click());
+    expect(container.querySelector('#general-scenario-content')).toBeNull();
+  }
+  await act(async () => findButton(container, '创建空白通用情景卡').click());
+  expect(container.querySelector<HTMLTextAreaElement>('#general-scenario-content')?.value).toBe(createBlankDataCard('general-scenario').content);
+  expect(container.textContent).not.toContain('原流式思考');
+  await act(async () => findButton(container, '流式').click());
+  expect(container.textContent).not.toContain('原流式思考');
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+});
+
+it('restores the signed editor but does not invent persisted reasoning or structured output on remount', async () => {
+  mocks.dispatch.mockResolvedValueOnce(streamResponse());
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '流式').click());
+  await act(async () => findButton(container, '生成情景').click());
+  await act(async () => findButton(container, '非流式').click());
+  const cardJson = container.querySelector('[aria-label="通用情景卡编辑器"] pre')!.textContent;
+  await act(async () => root.render(null));
+  await act(async () => root.render(<ScenarioPage />));
+  expect(container.querySelector<HTMLTextAreaElement>('#general-scenario-content')?.value).toBe(streamMarkdown);
+  expect(container.querySelector('[aria-label="通用情景卡编辑器"] pre')?.textContent).toBe(cardJson);
+  expect(container.querySelector('[aria-label="结构化情景结果"]')).toBeNull();
+  expect(container.textContent).not.toContain('原流式思考');
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
 });
 
 it('preserves corrupt Scenario bytes and sets the dirty baseline after preferences restore', async () => {
