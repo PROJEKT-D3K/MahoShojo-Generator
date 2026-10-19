@@ -1,3 +1,5 @@
+import type { ArenaReportPresentationSnapshot } from './report-presentation';
+import { normalizeUsage } from '@mahoshojo/ai-core/token-usage';
 import {
   assembleArenaGenerationPrompt,
   buildArenaGenerationInputSnapshot,
@@ -58,6 +60,7 @@ export interface ArenaDirectHostContext {
   resolveWebPackage?: (ref: WebPackageRef) => Promise<ResolvedWebPackage>;
 }
 export interface ArenaDirectPartial {
+  presentation?: ArenaReportPresentationSnapshot | null;
   rawText: string;
   markdown: string;
   reasoning: string;
@@ -144,8 +147,9 @@ export const executeArenaDirect = async (
   let rawText = '';
   let reasoning = '';
   let usage: AiExecutionUsage | undefined;
+  let presentation: ArenaReportPresentationSnapshot | undefined;
   let terminal: AiExecutionResult | null = null;
-  const partial = (): ArenaDirectPartial => ({ rawText, markdown: splitStreamMeta(rawText).markdown, reasoning, usage });
+  const partial = (): ArenaDirectPartial => ({ rawText, markdown: splitStreamMeta(rawText).markdown, reasoning, usage, ...(presentation ? { presentation: { ...presentation, aiUsage: normalizeUsage(usage) } } : {}) });
   const common = (): CommonOutcome => ({ ...partial(), requestId: task.requestId, scopeKey: host.scopeKey, mode: task.mode, terminal });
   const cancelled = (): ArenaDirectOutcome => ({ ...common(), status: 'cancelled', reason: 'aborted' });
   let failureStage: ArenaFailureStage = 'request';
@@ -228,6 +232,14 @@ export const executeArenaDirect = async (
     reporterInfo: host.reporterInfo,
     adjudicationResults: host.adjudicationResults,
   });
+  presentation = {
+    version: 1, mode: payload.mode, scenarioName: payload.mode === 'scenario' && typeof prompt.metadata.scenarioTitle === 'string' ? prompt.metadata.scenarioTitle : undefined,
+    reporterInfo: host.reporterInfo, aiModel: task.modelId,
+    userGuidance: typeof prompt.metadata.userGuidance === 'string' ? prompt.metadata.userGuidance : undefined,
+    characterGuidances: prompt.metadata.characterGuidances as ArenaBattleReport['characterGuidances'],
+    adjudicationResults: host.adjudicationResults,
+    ...(payload.readNarrativeHistory ? { narrativeHistoryReadCount: 'narrativeHistory' in payload && Array.isArray(payload.narrativeHistory) ? payload.narrativeHistory.length : 0 } : {}),
+  };
   const parsedRequest = AiExecutionRequestSchema.safeParse({
     requestId: task.requestId, contractVersion: 1, mode: task.mode, requestKind: 'arena', arenaInputJson,
     modelId: task.modelId,
@@ -253,7 +265,7 @@ export const executeArenaDirect = async (
         // single terminal and the fixed byte policy. A rejected event is never resumed.
         if (event.type === 'text-delta') rawText += event.delta;
         if (event.type === 'reasoning-delta') reasoning += event.delta;
-        if (event.type === 'usage') usage = event.usage;
+        if (event.type === 'usage') usage = { ...usage, ...event.usage };
         if (onPartial && event.type !== 'result' && !signal.aborted) onPartial(partial());
       }
     } catch (cause) {
@@ -284,7 +296,8 @@ export const executeArenaDirect = async (
   // The final full text is separately validated by the same content budget.
   rawText = terminal.output.text ?? rawText;
   reasoning = terminal.output.reasoning ?? reasoning;
-  usage = terminal.usage ?? usage;
+  usage = terminal.usage ? { ...usage, ...terminal.usage } : usage;
+  if (presentation) presentation = { ...presentation, aiModel: terminal.resolvedModelId ?? task.modelId };
   if (terminal.finishReason !== 'stop') return failed('incomplete-output', '生成未正常结束，原文已保留。', true,
     terminal.finishReason === 'length' ? { kind: 'trusted-length' } : undefined);
   let report: ArenaBattleReport;
@@ -373,7 +386,12 @@ export const executeArenaDirect = async (
   report.adjudicationResults = host.adjudicationResults;
   report.reportFormat = web ? 'web' : 'markdown';
   report.aiModel = terminal.resolvedModelId ?? task.modelId;
-  if (payload.mode === 'scenario' && payload.scenarioTitle) report.scenario = payload.scenarioTitle;
+  report.aiUsage = normalizeUsage(usage) ?? undefined;
+  report.aiReasoning = reasoning ? { status: 'done', source: 'provider', text: reasoning } : null;
+  report.userGuidance = typeof prompt.metadata.userGuidance === 'string' ? prompt.metadata.userGuidance : undefined;
+  report.characterGuidances = prompt.metadata.characterGuidances as ArenaBattleReport['characterGuidances'];
+  if (payload.readNarrativeHistory) report.narrativeHistoryReadCount = 'narrativeHistory' in payload && Array.isArray(payload.narrativeHistory) ? payload.narrativeHistory.length : 0;
+  if (presentation.scenarioName) report.scenario = presentation.scenarioName;
   return {
     ...common(), status: 'completed', markdown, report, impacts, metaStatus, ...(renderSnapshot ? { renderSnapshot } : {}),
     ...(payload.writeNarrativeHistory ? { historyCandidate: {

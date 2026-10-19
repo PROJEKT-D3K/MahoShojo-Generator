@@ -30,6 +30,7 @@ import { controlArenaHosted, type ArenaHostedChannel, type ArenaHostedHandshake 
 import type { InvokeFn } from '../../platform/cloud-bridge';
 import type { GenerationDraftStorage } from '../generation/session';
 import type { ArenaDirectPartial } from './direct';
+import { readArenaReportPresentationSnapshot, type ArenaReportPresentationSnapshot } from './report-presentation';
 import { DesktopArenaHostedStoryRecovery } from './hosted-story-recovery';
 import { openArenaHostedStoryTransport, ARENA_HOSTED_STORY_USER_STOP, type ArenaHostedStoryTransportIntent } from './hosted-story-transport';
 import { createArenaHostedStreamOutput, collectArenaHostedStreamOutput, type ArenaHostedStreamOutput } from './hosted-stream-output';
@@ -61,7 +62,26 @@ const initialState = (): DesktopHostedStoryState => ({ slots: {}, discoveryError
 type Originals = { input: StoryPendingInput; markdown: string; reasoning: string; meta?: StoryPendingMeta;
   header?: StoryPendingHeader; telemetry?: StoryPendingTelemetry; roleResponse?: StoryPendingRoleResponse };
 type LiveCandidate = { originals: Originals; session: StorySessionSnapshot | null; selection: BattleStoryReadToken;
-  source: StorySessionSnapshot['source']; generationId: string | null; acceptedInMemory?: StoryPendingRoleResponse };
+  source: StorySessionSnapshot['source']; generationId: string | null; acceptedInMemory?: StoryPendingRoleResponse;
+  /** Window-only metadata, never a completion, role, or persistence authority. */
+  presentation?: ArenaReportPresentationSnapshot };
+/** Read only this request's original input and server metadata; funding aliases are not actual models. */
+const projectHostedStoryReport = (originals: Originals,
+  header = originals.header, telemetry: ArenaHostedStreamOutput['telemetry'] = originals.telemetry ?? null) => {
+  const success = telemetry && !('errorClass' in telemetry) ? telemetry : originals.telemetry;
+  return readArenaReportPresentationSnapshot({ version: 1,
+    mode: header?.mode ?? originals.input.seed.mode,
+    scenarioName: header?.scenarioDisplayName ?? (typeof originals.input.seed.scenario?.title === 'string' ? originals.input.seed.scenario.title.trim() || undefined : undefined),
+    reporterInfo: header?.reporterInfo, userGuidance: header?.userGuidance ?? originals.input.userGuidance,
+    characterGuidances: header?.characterGuidances, adjudicationResults: header?.adjudicationResults,
+    aiModel: success?.aiModel, aiUsage: success?.usage,
+    narrativeHistoryReadCount: success?.narrativeHistoryReadCount ?? header?.narrativeHistoryReadCount,
+  }) ?? undefined;
+};
+const originalResult = (live: LiveCandidate): ArenaDirectPartial => ({
+  rawText: live.originals.markdown, markdown: live.originals.markdown, reasoning: live.originals.reasoning,
+  presentation: live.presentation ?? projectHostedStoryReport(live.originals),
+});
 type RetrySeal = { prepared: PreparedStoryPendingUpload; previous: StoryPendingSnapshot | null; after: 'input' | 'completed' | 'accepted' | 'commit'; resume?: { token?: string } };
 const headFromDocument = (value: unknown) => {
   const document = value as Record<string, unknown>;
@@ -235,27 +255,27 @@ export class DesktopHostedStorySession {
         requestId: input.requestId, actor: target.actor, pendingRevision: 1, inputDigest: manifest.inputDigest, clientBodyHash: bodyHash,
         ...(target.systemConfig ? { systemConfig: target.systemConfig } : {}), ...(target.presetConfig ? { presetConfig: target.presetConfig } : {}) } }, epoch, controller, true);
     } catch (cause) {
-      if (this.live && this.current(epoch)) this.dependencies.onResult({ rawText: this.live.originals.markdown, markdown: this.live.originals.markdown, reasoning: this.live.originals.reasoning }, this.live.originals.input.chapterIndex, controller.signal.aborted ? 'cancelled' : 'failed');
+      if (this.live && this.current(epoch)) this.dependencies.onResult(originalResult(this.live), this.live.originals.input.chapterIndex, controller.signal.aborted ? 'cancelled' : 'failed');
       this.publish({ message: errorText(cause), pointerError: this.recovery.getSnapshot().error });
     }
     finally { externalSignal.removeEventListener('abort', detach); if (this.controller === controller) this.controller = null; this.publish({ busy: null }); await this.discover(); }
   }
-  private output(result: ArenaHostedStreamOutput, phase: 'generating' | 'completed' | 'failed' | 'cancelled') {
+  private output(result: ArenaHostedStreamOutput, phase: 'generating' | 'completed' | 'failed' | 'cancelled', header?: ArenaHostedHandshake['headerMeta']) {
     const live = this.live; if (!live) return;
     live.originals.markdown = result.markdown; live.originals.reasoning = result.reasoning;
-    this.dependencies.onResult({ rawText: result.markdown, markdown: result.markdown, reasoning: result.reasoning, usage: result.usage }, live.originals.input.chapterIndex, phase);
+    live.presentation = projectHostedStoryReport(live.originals, header ?? live.originals.header, result.telemetry ?? live.originals.telemetry);
+    this.dependencies.onResult({ ...originalResult(live), usage: result.usage }, live.originals.input.chapterIndex, phase);
   }
   private async runTransport(intent: ArenaHostedStoryTransportIntent, epoch: number, controller: AbortController, automatic: boolean) {
     const live = this.live; if (!live) throw new Error('故事原输入未读取');
     const output = createArenaHostedStreamOutput(), fence = createArenaHostedNativeSettle(this.dependencies.invoke);
     const previousWindow = { markdown: live.originals.markdown, reasoning: live.originals.reasoning };
     const preservesWindow = () => automatic || output.markdown.startsWith(previousWindow.markdown) && output.reasoning.startsWith(previousWindow.reasoning);
-    const showOutput = (phase: 'generating' | 'completed' | 'failed' | 'cancelled') => {
-      if (preservesWindow()) this.output(output, phase);
-      else this.dependencies.onResult({ rawText: live.originals.markdown, markdown: live.originals.markdown,
-        reasoning: live.originals.reasoning }, live.originals.input.chapterIndex, phase);
-    };
     let handshake: ArenaHostedHandshake | null = null;
+    const showOutput = (phase: 'generating' | 'completed' | 'failed' | 'cancelled') => {
+      if (preservesWindow()) this.output(output, phase, handshake?.headerMeta);
+      else this.dependencies.onResult(originalResult(live), live.originals.input.chapterIndex, phase);
+    };
     this.publish({ busy: 'model', outputDurable: false, message: '正在读取原服务器请求；尚未完成的最新正文仅保留在当前窗口。' });
     const assertCurrent = () => { if (!this.current(epoch) || !this.actorMatches()) throw new Error('原账号或生成世代已变化，当前正文仍可导出。'); };
     try {
@@ -296,8 +316,7 @@ export class DesktopHostedStorySession {
       else this.publish({ localRetry: this.state.active?.manifest.roleState === 'not-requested' || this.state.active?.manifest.roleState === 'accepted' ? 'freeze' : null, message: '完成原件已封存到本机。请明确选择角色同步或继续原本地保存，不会再次调用模型。' });
     } catch (cause) {
       if (this.current(epoch)) showOutput(controller.signal.aborted ? 'cancelled' : 'failed');
-      else if (this.controller === controller && this.live === live) this.dependencies.onResult({ rawText: live.originals.markdown,
-        markdown: live.originals.markdown, reasoning: live.originals.reasoning }, live.originals.input.chapterIndex, 'cancelled');
+      else if (this.controller === controller && this.live === live) this.dependencies.onResult(originalResult(live), live.originals.input.chapterIndex, 'cancelled');
       this.publish({ message: controller.signal.aborted
         ? '已停止本机订阅；服务器可能仍在运行，最新未封存正文仅保留在当前窗口。停止服务器须另行请求并确认。'
         : `${errorText(cause)} 已收到的正文仍可导出；不会重发模型。` });
@@ -365,7 +384,7 @@ export class DesktopHostedStorySession {
         : snapshot.manifest.roleState === 'accepted' ? { status: 'accepted' }
         : snapshot.manifest.roleState === 'old-roles' ? { status: 'user-kept-original', warning: '原保留旧角色决定已与提交一并封存。' }
         : { status: 'unresolved' };
-      this.dependencies.onResult({ rawText: originals.markdown, markdown: originals.markdown, reasoning: originals.reasoning }, input.chapterIndex, snapshot.manifest.modelCompleted ? 'completed' : 'failed');
+      this.dependencies.onResult(originalResult(live), input.chapterIndex, snapshot.manifest.modelCompleted ? 'completed' : 'failed');
       this.publish({ role, hydrated: true, outputDurable: snapshot.manifest.modelCompleted, evidence: snapshot.saveAttemptId || snapshot.restored ? 'unknown' : 'not-written',
         localRetry: snapshot.manifest.commitManifest ? 'save' : snapshot.manifest.modelCompleted && this.live.session && role.status !== 'unresolved' ? 'freeze' : null,
         message: baselineError ?? (snapshot.restored ? '这是备份恢复作品，只能读取、原请求回放、查询原回执、导出或明确放弃。'

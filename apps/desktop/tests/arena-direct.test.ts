@@ -55,11 +55,23 @@ describe('typed Arena Direct adapter', () => {
       expect(native.request!.arenaInputJson).toBe(JSON.stringify(payload));
       expect(native.request!.messages.at(-1)!.content).not.toContain('source-only');
       expect(native.invoke).toHaveBeenCalledTimes(1);
-      expect(outcome).toMatchObject({ scopeKey: context.scopeKey, reasoning: '独立推理', usage: { totalTokens: 30 }, report: { headline: '相遇', reporterInfo: context.reporterInfo, aiModel: 'actual-model' }, impacts: report.impacts });
+      expect(outcome).toMatchObject({ scopeKey: context.scopeKey, reasoning: '独立推理', usage: { totalTokens: 30 }, report: { headline: '相遇', reporterInfo: context.reporterInfo, aiModel: 'actual-model', aiUsage: { promptTokens: 10, completionTokens: 20, reasoningTokens: 3, totalTokens: 30 }, userGuidance: '守护彼此', narrativeHistoryReadCount: 0 }, impacts: report.impacts });
       expect(outcome).not.toHaveProperty('card'); expect(outcome).not.toHaveProperty('updatedCombatants'); expect(outcome).not.toHaveProperty('signature');
       expect(outcome.markdown).not.toContain('MAHOSHOJO'); expect(outcome.markdown).not.toContain('独立推理');
       if (outcome.status === 'completed') expect(outcome.historyCandidate).toMatchObject({ scopeKey: context.scopeKey, requestId: intent.requestId, title: '相遇', content: outcome.markdown });
     }
+  });
+  it('同一请求 usage 按已提供字段覆盖，保留显式零和此前统计，不相加或信任模型正文 telemetry', async () => {
+    const native = harness(streamText, events => {
+      const terminal = events.at(-1)!;
+      if (terminal.type === 'result' && terminal.result.status === 'completed') terminal.result.usage = { inputTokens: 0, reasoningTokens: 0, totalTokens: 20 };
+      return events;
+    });
+    const outcome = await executeArenaDirect(native.options, input(), task(), host(), new AbortController().signal);
+    expect(outcome).toMatchObject({ status: 'completed', usage: { inputTokens: 0, outputTokens: 20, reasoningTokens: 0, totalTokens: 20 },
+      report: { aiModel: 'actual-model', aiUsage: { promptTokens: 0, completionTokens: 20, reasoningTokens: 0, totalTokens: 20 } },
+      presentation: { aiModel: 'actual-model', aiUsage: { promptTokens: 0, completionTokens: 20, reasoningTokens: 0 } } });
+    expect(native.invoke).toHaveBeenCalledOnce();
   });
   it('freezes input, provider target, model, parameters and original scope before dispatch', async () => {
     const value = input(); const context = host(); const intent = task();

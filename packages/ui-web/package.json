@@ -232,7 +232,12 @@
     "./ranking": "./src/ranking/index.ts",
     "./card-details": "./src/card-details/index.ts",
     "./name-generation": "./src/name-generation/index.ts",
-    "./cooldown": "./src/cooldown/index.ts"
+    "./cooldown": "./src/cooldown/index.ts",
+    "./error-help": {
+      "types": "./src/details-controls/error-help.ts",
+      "import": "./src/details-controls/error-help.ts",
+      "default": "./src/details-controls/error-help.ts"
+    }
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

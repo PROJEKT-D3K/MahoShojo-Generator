@@ -2,3 +2,4 @@ export { BattleReportCard, type BattleReportCardProps, type NewsReport, type Bat
 export { StreamingBattleReportCard, type StreamingBattleReportCardProps } from './StreamingBattleReportCard';
 export type { BattleReportHostPorts } from './ports';
 export * from './views';
+export { GeneratedByUserBadgeView, type GeneratedByUserBadgeViewProps } from './GeneratedByUserBadgeView';

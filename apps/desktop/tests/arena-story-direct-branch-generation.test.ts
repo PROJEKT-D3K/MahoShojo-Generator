@@ -81,6 +81,7 @@ describe('internal Direct branch real producer', () => {
     expect(output).toMatchObject({ isNative: false, isPreset: false, data: { current_state: { summary: '已恢复平静' }, extension: { signature: 'nested-user-keep' } } });
     expect(output.data).not.toHaveProperty('signature'); expect(JSON.stringify(output.data.arena_history)).toContain('建立新的信任');
     expect(f.prepared[0]!.parts[1]!.prepared.value).toMatchObject({ cardSnapshot: { aiModel: 'synthetic-branch-model', aiUsage: usage, aiReasoning: { status: 'done', source: 'provider', text: '独立推理原文' } } });
+    expect(f.owner.getSnapshot().result?.presentation).toMatchObject({ aiModel: 'synthetic-branch-model', userGuidance: '在原边界之后向北', aiUsage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 } });
     expect(Buffer.from(f.reads.documents.get(`${f.sessionId}:${f.checkpointIds[2]}`)!.bytes)).toEqual(original);
   });
   it('accepts a copied historical chapter as another branch anchor without treating it as another model receipt', async () => {

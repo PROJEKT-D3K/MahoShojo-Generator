@@ -7,7 +7,8 @@ import { StreamingBattleReportCard, type StreamingBattleReportCardProps, type Ba
 import { useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { DENY_EXTERNAL_MEDIA } from '@mahoshojo/ui-web/markdown';
 import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
-import { ArenaCompanionAdjudicationResultSchema } from '@mahoshojo/contracts/arena-companion';
+import { normalizeUsage } from '@mahoshojo/ai-core/token-usage';
+import { readArenaReportPresentationSnapshot } from './report-presentation';
 import type { StoryBranchAnchorRequest } from '@mahoshojo/contracts/desktop-arena-story-branch';
 import {
   formatBattleStoryChapterProgress, isBattleStoryChapterPlanLimitReached, normalizeBattleStoryTotalChapters,
@@ -22,20 +23,15 @@ const secondary = generationActionClassNames.secondary;
 const record = (value: unknown): Record<string, unknown> | null => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 /** Read-only presentation. Carrier extensions stay in storage; only validated fields
  * become React/card props. No 48 KiB render-snapshot envelope is imposed on chapters. */
-const cardProps = (value: unknown): Partial<StreamingBattleReportCardProps> => {
+const cardProps = (value: unknown, mode?: StreamingBattleReportCardProps['mode']): Partial<StreamingBattleReportCardProps> => {
   const snapshot = record(value); if (!snapshot) return {};
-  const reporter = record(snapshot.reporterInfo), reasoning = record(snapshot.aiReasoning), usage = record(snapshot.aiUsage);
-  const adjudications = ArenaCompanionAdjudicationResultSchema.array().safeParse(snapshot.adjudicationResults);
+  const reasoning = record(snapshot.aiReasoning);
+  const presentation = readArenaReportPresentationSnapshot({ ...snapshot, version: 1,
+    scenarioName: snapshot.scenarioName ?? snapshot.scenarioDisplayName });
   return {
-    ...(reporter && typeof reporter.name === 'string' && typeof reporter.publication === 'string' ? { reporterInfo: { name: reporter.name, publication: reporter.publication } } : {}),
-    ...(typeof snapshot.userGuidance === 'string' ? { userGuidance: snapshot.userGuidance } : {}),
-    ...(typeof snapshot.aiModel === 'string' ? { aiModel: snapshot.aiModel } : {}),
+    ...presentation,
+    scenarioName: (presentation?.mode ?? mode) === 'scenario' ? presentation?.scenarioName : undefined,
     ...(reasoning && typeof reasoning.text === 'string' ? { aiReasoning: { status: 'done', source: 'provider', text: reasoning.text } } : {}),
-    ...(adjudications.success ? { adjudicationResults: adjudications.data } : {}),
-    ...(usage ? { aiUsage: Object.fromEntries(Object.entries(usage).filter(([, value]) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) } : {}),
-    ...(Array.isArray(snapshot.characterGuidances) ? { characterGuidances: snapshot.characterGuidances.flatMap((item) => {
-      const entry = record(item); return entry && typeof entry.characterName === 'string' && typeof entry.guidance === 'string' ? [{ characterName: entry.characterName, guidance: entry.guidance }] : [];
-    }) } : {}),
   };
 };
 type StoryProduct = 'battle' | 'arena';
@@ -136,6 +132,8 @@ export function DesktopArenaStoryControls(props: {
   onBranch?(anchor: StoryBranchAnchorRequest, userGuidance: string): void; branchUnavailableReason?: string | null;
   download(fileName: string, text: string, mimeType: string): void;
   onNavigateExternal: BattleReportHostPorts['onNavigateExternal'];
+  reportPorts?: BattleReportHostPorts;
+  reportExporting?: boolean;
 }) {
   const { owner, draft } = props;
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
@@ -145,7 +143,7 @@ export function DesktopArenaStoryControls(props: {
   const [guidance, setGuidance] = useState('');
   const resultRef = useRef<HTMLDivElement>(null);
   const generating = state.phase === 'preparing' || state.phase === 'generating';
-  useResultAutoScroll(resultRef, !!state.result?.markdown && (state.phase === 'generating' || state.phase === 'completed'), { restored: false });
+  useResultAutoScroll(resultRef, Boolean(state.result?.markdown || state.result?.reasoning) && (state.phase === 'generating' || state.phase === 'completed'), { restored: false });
   const plan = resolveBattleStoryInitialChapterPlan({ scenario: draft.battleMode === 'scenario' ? draft.scenario.content : null,
     userSelectionMode: planMode, userDesiredTotalChapters: planInput });
   const fixed = plan?.locked === true;
@@ -168,7 +166,7 @@ export function DesktopArenaStoryControls(props: {
     props.onBranch?.(Object.freeze({ sessionId: head.id, revision: head.revision, expectedLastChapterId: head.lastChapterId,
       expectedChapterCount: head.chapterCount, anchorChapterId: chapterId, anchorIndex: chapterIndex }), guidance);
   };
-  const ports: BattleReportHostPorts = { mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: props.onNavigateExternal,
+  const ports: BattleReportHostPorts = props.reportPorts ?? { mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: props.onNavigateExternal,
     downloadMarkdown: (text, fileName) => props.download(fileName, text, 'text/markdown;charset=utf-8') };
   const selection = state.selected;
   const readState: BattleStoryChapterReadViewState = selection.status === 'unloaded' ? { status: 'unloaded' }
@@ -177,7 +175,7 @@ export function DesktopArenaStoryControls(props: {
       title: `章节预览｜第 ${selection.chapter.index} 章 · ${formatBattleStoryDisplayTitle(selection.chapter.title)}`,
       content: <BattleStoryContentPreview key={selection.chapterId} characterCount={selection.chapter.markdown.length}
         exportAction={<button type="button" className={secondary} onClick={() => props.download(`第${selection.chapter.index}章.md`, selection.chapter.markdown, 'text/markdown;charset=utf-8')}>导出本章完整正文</button>}>
-        <StreamingBattleReportCard {...cardProps(selection.chapter.cardSnapshot)} content={selection.chapter.markdown} mode={state.active?.mode} ports={ports} />
+        <StreamingBattleReportCard mode={state.active?.mode} {...cardProps(selection.chapter.cardSnapshot, state.active?.mode)} content={selection.chapter.markdown} ports={ports} />
       </BattleStoryContentPreview>,
       footer: <>
         <p className="text-xs text-gray-500">本章保存在当前设备；角色变化仅属于本故事的工作副本。</p>
@@ -277,30 +275,30 @@ export function DesktopArenaStoryControls(props: {
       saveActions={state.pending.retryable ? <button className={secondary} type="button" disabled={state.saving} onClick={() => void owner.savePending()}>{state.pending.evidence === 'unknown' ? '查询原保存结果' : '重试本地保存'}</button> : null}
       exportAction={<>
         <button className={secondary} type="button" onClick={exportResult}>导出未保存章节</button><button className={secondary} type="button" onClick={exportRaw}>导出完整原始输出</button>
-        <button className={secondary} type="button" disabled={owner.isBusy()} onClick={() => { if (window.confirm('丢弃当前未保存结果？请先导出。保存待确认时，本机可能已有此章。')) owner.discardResult(); }}>丢弃当前结果</button>
+        <button className={secondary} type="button" disabled={owner.isBusy() || props.reportExporting} onClick={() => { if (props.reportExporting) return; if (window.confirm('丢弃当前未保存结果？请先导出。保存待确认时，本机可能已有此章。')) owner.discardResult(); }}>丢弃当前结果</button>
       </>} /> : null}
-    {state.savedUnread ? <button className={secondary} type="button" onClick={() => void owner.readSavedResult()}>读取刚保存的章节</button> : null}
+    {state.savedUnread ? <button className={secondary} type="button" disabled={props.reportExporting} onClick={() => { if (!props.reportExporting) void owner.readSavedResult(); }}>读取刚保存的章节</button> : null}
     {state.exporting ? <p role="status">{state.exportProgress?.phase === 'writing' ? '正在写出完整故事' : '正在核对完整故事'}：{state.exportProgress?.bytes ?? 0} 字节；未完成核验前不会发布文件。</p> : null}
     {state.exportError ? <p role="alert">{state.exportError}</p> : null}
     {state.exportResult ? <p role="status" className="break-all">完整故事已导出：{state.exportResult.absolutePath}（{state.exportResult.byteLength} 字节）</p> : null}
     <div className="grid gap-5 xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
       <div className="space-y-4">
-        <BattleStorySessionDirectory rows={state.sessions.map((row) => ({ id: row.id, title: `${row.titlePreview}${row.titleTruncated ? '…' : ''}`,
+        <BattleStorySessionDirectory rows={state.sessions.map((row) => ({ id: row.id, disabled: props.reportExporting, title: `${row.titlePreview}${row.titleTruncated ? '…' : ''}`,
           description: `${new Date(row.updatedAt).toLocaleString()}｜${formatBattleStoryChapterProgress({ completedChapterCount: row.chapterCount, chapterPlan: row.chapterPlan })}` }))}
-          selectedId={state.active?.id ?? null} onSelect={(id) => { const head = state.sessions.find((row) => row.id === id); if (head) void owner.selectSession(head); }}
+          selectedId={state.active?.id ?? null} onSelect={(id) => { if (props.reportExporting) return; const head = state.sessions.find((row) => row.id === id); if (head) void owner.selectSession(head); }}
           loading={state.listLoading} error={state.listError} footer={<BattleStoryActions className="mt-3 flex flex-wrap gap-2"><button type="button" className={secondary} disabled={state.listLoading} onClick={() => void owner.refreshSessions()}>刷新故事目录</button>{state.sessionCursor ? <button type="button" className={secondary} disabled={state.listLoading} onClick={() => void owner.refreshSessions(true)}>更多故事</button> : null}</BattleStoryActions>} />
-        <BattleStoryChapterDirectory rows={state.chapters.map((row) => ({ id: row.id, title: `第 ${row.index} 章 · ${row.titlePreview}${row.titleTruncated ? '…' : ''}`,
+        <BattleStoryChapterDirectory rows={state.chapters.map((row) => ({ id: row.id, disabled: props.reportExporting, title: `第 ${row.index} 章 · ${row.titlePreview}${row.titleTruncated ? '…' : ''}`,
           description: `${row.action === 'start' ? '首章' : row.action === 'branch' ? '分支' : '续写'}｜${new Date(row.createdAt).toLocaleString()}` }))}
-          selectedId={selection.status === 'unloaded' ? null : selection.chapterId} count={state.active?.chapterCount ?? 0} onSelect={(id) => void owner.selectChapter(id)}
-          loading={state.chaptersLoading} error={state.chaptersError} footer={<BattleStoryActions className="mt-3 flex flex-wrap gap-2">{state.chaptersError && state.active ? <button type="button" className={secondary} onClick={() => { if (state.active) void owner.selectSession(state.active); }}>重读章节目录</button> : null}{state.chapterCursor ? <button type="button" className={secondary} disabled={state.chaptersLoading} onClick={() => void owner.loadMoreChapters()}>更多章节</button> : null}</BattleStoryActions>} />
+          selectedId={selection.status === 'unloaded' ? null : selection.chapterId} count={state.active?.chapterCount ?? 0} onSelect={(id) => { if (!props.reportExporting) void owner.selectChapter(id); }}
+          loading={state.chaptersLoading} error={state.chaptersError} footer={<BattleStoryActions className="mt-3 flex flex-wrap gap-2">{state.chaptersError && state.active ? <button type="button" className={secondary} disabled={props.reportExporting} onClick={() => { if (!props.reportExporting && state.active) void owner.selectSession(state.active); }}>重读章节目录</button> : null}{state.chapterCursor ? <button type="button" className={secondary} disabled={state.chaptersLoading} onClick={() => void owner.loadMoreChapters()}>更多章节</button> : null}</BattleStoryActions>} />
       </div>
       <div className="min-w-0 space-y-4">
         <div ref={resultRef}>
-          {state.result && (state.result.rawText || state.result.markdown || state.result.reasoning) ? <section aria-label="本次章节结果" className="space-y-3">
+          {state.result && (generating || state.result.rawText || state.result.markdown || state.result.reasoning) ? <section aria-label="本次章节结果" className="space-y-3">
             <p className="font-semibold">本次第 {state.resultChapterIndex} 章 · {state.resultSaved ? '已保存' : generating ? '生成中' : '尚未保存'}</p>
             <BattleStoryContentPreview key={state.resultChapterIndex} characterCount={state.result.markdown.length}
               exportAction={<button type="button" className={secondary} onClick={exportResult}>导出当前完整正文</button>}>
-              <StreamingBattleReportCard content={state.result.markdown} isStreaming={state.phase === 'generating'} onStopGeneration={hostedResult ? undefined : () => owner.cancel()}
+              <StreamingBattleReportCard {...cardProps(state.result.presentation)} aiUsage={normalizeUsage(state.result.presentation?.aiUsage ?? state.result.usage)} content={state.result.markdown} isStreaming={state.phase === 'generating'} onStopGeneration={hostedResult ? undefined : () => owner.cancel()}
                 aiReasoning={state.result.reasoning ? { status: generating ? 'thinking' : 'done', source: 'provider', text: state.result.reasoning } : null} ports={ports} />
             </BattleStoryContentPreview>
             {hostedResult && !state.resultSaved && !hosted?.outputDurable ? <p role="status">当前窗口原文，尚未耐久封存。正文与推理仅在当前窗口，请分别导出完整正文与推理原文；本机已封存的输入原件不包含这些最新输出。</p> : null}
@@ -308,11 +306,11 @@ export function DesktopArenaStoryControls(props: {
               <button type="button" className={secondary} onClick={exportWindowReasoning}>导出当前窗口推理原文</button>
             </BattleStoryActions> : null}
             {!hostedResult ? <><details><summary>完整原始输出</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all">{state.result.rawText}</pre></details>
-            <BattleStoryActions><button type="button" className={secondary} onClick={exportRaw}>导出完整原始输出</button>{!state.pending && !generating ? <button type="button" className={secondary} disabled={owner.isBusy()} onClick={() => { if (!owner.hasUnsavedResult() || window.confirm('清除当前未保存原文？请先导出。')) owner.discardResult(); }}>清除本次预览</button> : null}</BattleStoryActions></> : null}
+            <BattleStoryActions><button type="button" className={secondary} onClick={exportRaw}>导出完整原始输出</button>{!state.pending && !generating ? <button type="button" className={secondary} disabled={owner.isBusy() || props.reportExporting} onClick={() => { if (props.reportExporting) return; if (!owner.hasUnsavedResult() || window.confirm('清除当前未保存原文？请先导出。')) owner.discardResult(); }}>清除本次预览</button> : null}</BattleStoryActions></> : null}
           </section> : null}
         </div>
         <BattleStoryChapterReader state={readState} description="按需读取所选章节全文；目录页数不会限制完整故事导出。" emptyContent={<p>选择故事后可阅读任意章节。</p>}
-          errorActions={selection.status === 'error' ? <button className={secondary} type="button" onClick={() => void owner.selectChapter(selection.chapterId)}>重试读取本章</button> : null} />
+          errorActions={selection.status === 'error' ? <button className={secondary} type="button" disabled={props.reportExporting} onClick={() => { if (!props.reportExporting) void owner.selectChapter(selection.chapterId); }}>重试读取本章</button> : null} />
       </div>
     </div>
   </section>;

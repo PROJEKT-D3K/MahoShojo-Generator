@@ -42,6 +42,7 @@ let accountId: number | null, hold: boolean, failSave: boolean, activeCloseHandl
 let webOverride: string | null;
 let failureCode: string | null;
 let rankingFeedback: unknown;
+let reportTelemetry: { aiModel: string; usage: { promptTokens: number; completionTokens: number; reasoningTokens?: number; completionTokensIncludesReasoning?: boolean } } | null;
 let streamRequests: (DesktopArenaHostedStreamRequest | DesktopArenaHostedJsonCreateRequest)[], controlRequests: DesktopArenaHostedControlRequest[];
 let roleRequests: Record<string, unknown>[];
 let httpRequests: { method: string; path: string; body: Record<string, unknown> | null }[];
@@ -74,7 +75,7 @@ beforeAll(async () => {
         const report = { headline: '车站重逢', reporterInfo: { name: '服务端记者', publication: '服务端日报' },
           article: { body, analysis: '完整非流分析' }, officialReport: { winner: '甲', conclusion: '完整非流结论' }, mode: value!.mode,
           ...(value!.reportFormat === 'web' ? { reportFormat: 'web', webHtml: body } : {}),
-          aiReasoning: { status: 'complete', text: '完整非流推理' } };
+          aiReasoning: { status: 'complete', text: '完整非流推理' }, ...(reportTelemetry ? { aiModel: reportTelemetry.aiModel, aiUsage: reportTelemetry.usage } : {}) };
         companion = ArenaCompanionEnvelopeSchema.parse({ version: ARENA_COMPANION_PROTOCOL_VERSION,
           body: { report, updatedCombatants: [], generationId, adjudicationResults: adjudications }, metadata: { reportFormat: value!.reportFormat,
             outputContract: value!.reportFormat === 'web' ? 'web-document' : 'structured-report', mode: value!.mode,
@@ -92,6 +93,7 @@ beforeAll(async () => {
         res.write(wire('1-0', 'markdown', { chunk: output.text }));
         const finish = () => {
           if (rankingFeedback !== undefined) res.write(wire('1-1', 'ranking', rankingFeedback));
+          if (reportTelemetry) res.write(wire('1-2', 'telemetry', reportTelemetry));
           res.end(failureCode ? wire('2-0', 'error', { status: 'failed', code: failureCode }) : wire('2-0', 'done', { ok: true, status: 'completed' }));
         };
         if (hold) released.push(finish); else finish(); return;
@@ -139,7 +141,7 @@ const releaseAll = () => { released.splice(0).forEach(finish => finish()); };
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks(); localStorage.clear(); holdFirstChunk = false; nativeResponseCount = 0; saveBarrier = null; releaseSave = null; accountId = null; hold = false; failSave = false; activeCloseHandles = 0; webOverride = null; failureCode = null;
-  companion = null; rankingFeedback = undefined; roleRequests = []; streamRequests = []; controlRequests = []; httpRequests = []; docs = new Map(); released = []; pendingNative = new Set(); configure(); resetDesktopCloudSessionStoreForTests();
+  companion = null; rankingFeedback = undefined; reportTelemetry = null; roleRequests = []; streamRequests = []; controlRequests = []; httpRequests = []; docs = new Map(); released = []; pendingNative = new Set(); configure(); resetDesktopCloudSessionStoreForTests();
   mocks.hint.mockReset().mockImplementation(async (product: Product) => ({ product, state: 'none' }));
   mocks.listen.mockImplementation(async () => { activeCloseHandles += 1; return vi.fn(() => { activeCloseHandles -= 1; }); }); mocks.download.mockResolvedValue(undefined);
   mocks.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
@@ -476,6 +478,7 @@ describe('Hosted non-stream lifecycle through the real route', () => {
   });
 
   it('reopens a v2 JSON pointer using original structured model replay without claiming the original companion', async () => {
+    reportTelemetry = { aiModel: 'server-resolved-model', usage: { promptTokens: 10, completionTokens: 7, reasoningTokens: 4, completionTokensIncludesReasoning: false } };
     accountId = 42; configure('preset'); saveDraft(draft(), 'arena'); await mount('arena'); await click('生成战报');
     await vi.waitFor(async () => { await settle(); expect(container.textContent).toContain('服务器生成完成'); });
     const pointer = DesktopArenaHostedAnyRecoveryPointerSchema.parse(JSON.parse(localStorage.getItem(ARENA_HOSTED_RECOVERY_KEYS.arena)!));
@@ -492,6 +495,8 @@ describe('Hosted non-stream lifecycle through the real route', () => {
     const exported = await exportResult(); expect(exported.result.rawText).toBe(originalRaw); expect(exported.result.markdown).toBe(markdown);
     expect(exported.result.hosted).toMatchObject({ delivery: 'non-stream', restored: true, companionState: 'recovered-model-only' });
     expect(exported.result.hosted.companion).toBeNull(); expect(exported.draft.narrativeHistoryEntries).toEqual([]);
+    expect(container.querySelector('.result-card')?.textContent).toContain('模型：server-resolved-model');
+    expect(container.querySelector('.result-card')?.textContent).toContain('输入 10｜推理 4｜输出 7');
     await click('将本次正文加入活动历史'); expect((await exportResult()).draft.narrativeHistoryEntries).toHaveLength(1);
     expect(httpRequests.filter(request => request.path === '/api/generate-battle-story')).toHaveLength(1);
   });

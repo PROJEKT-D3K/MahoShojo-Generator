@@ -12,15 +12,17 @@ import { DESKTOP_PRODUCT_ORIGIN } from '../../platform/product-origin';
 import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
 import { prepareDesktopRoomSource } from './room-source';
 import type { ArenaDraft } from './session';
+import type { BattleReportHostPorts } from '@mahoshojo/ui-web/arena-report';
 import type { DesktopArenaRoomSession } from './room-session';
 const secondary = generationActionClassNames.secondary;
 export interface DesktopArenaRoomPanelProps {
   languages?: readonly { code: string; name: string }[];
+  reportPorts?: BattleReportHostPorts;
   owner: DesktopArenaRoomSession; draft: ArenaDraft; isDraftCurrent: (draft: ArenaDraft) => boolean;
   disabled: boolean; authenticated: boolean; displayName: string; onAuthenticate: () => void;
 }
 /** Shared product sections; only this Desktop host binds the fixed Native owner. */
-export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, authenticated, displayName, onAuthenticate, languages }: DesktopArenaRoomPanelProps) {
+export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, authenticated, displayName, onAuthenticate, languages, reportPorts }: DesktopArenaRoomPanelProps) {
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
   const [title, setTitle] = useState('多人房间'); const [visibility, setVisibility] = useState<RoomDirectoryVisibility>('public');
   const [joinCode, setJoinCode] = useState('');
@@ -115,7 +117,7 @@ export function DesktopArenaRoomPanel({ owner, draft, isDraftCurrent, disabled, 
         <p>{view.summary}</p>
         <RoomMembersView view={view} selfUserId={session.self.userId} membershipHint="断网或关闭页面只会离线，成员席位仍保留；要退出请明确离开，房主则关闭房间。" />
         <section aria-label="房间权威设定摘要"><h3>服务器房间设定</h3><p>修订 {session.snapshot.revision} · {session.snapshot.sharedConfig.combatants.length} 位角色 · {session.snapshot.sharedConfig.auxScenarios.length} 个辅助情景 · {session.snapshot.sharedConfig.materials.length} 份素材</p><p>生成状态：{session.snapshot.activeGeneration?.state ?? '无活动生成'}。</p></section>
-        <DesktopRoomGenerationResult generation={state.generation} generationKey={`${scope}:${session.snapshot.activeGeneration?.generationId ?? 'none'}:${session.snapshot.activeGeneration?.attempt ?? 0}`}
+        <DesktopRoomGenerationResult reportPorts={reportPorts} generation={state.generation} generationKey={`${scope}:${session.snapshot.activeGeneration?.generationId ?? 'none'}:${session.snapshot.activeGeneration?.attempt ?? 0}`}
           onRetry={() => owner.retryGenerationRecovery()} retryDisabled={disabled || state.busy || state.generationReading || state.phase !== 'online' || !state.snapshotReceived || !inviteIdentity} />
         {session.self.role === 'host' ? <DesktopRoomGenerationStart key={`start:${scope}`} owner={owner} state={state} draft={draft} isDraftCurrent={isDraftCurrent} disabled={disabled} /> : null}
         {session.self.role === 'host' ? <RoomGenerationCancelAction

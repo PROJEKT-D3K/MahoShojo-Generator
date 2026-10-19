@@ -74,6 +74,23 @@ describe('Hosted continuous-story owner through real TS binders and a synthetic 
 });
 
 describe('Hosted completion, roles and single-use save', () => {
+  it('uses only original response metadata for live, completed and cold-restored presentation', async () => {
+    const h = setup(); h.fixture.failPrepareSave = true;
+    h.input.story.seed.mode = 'scenario'; h.input.story.seed.scenario = { title: '原始故事情景' };
+    h.input.session.source.mode = 'scenario'; h.input.session.seed.scenario = h.input.story.seed.scenario;
+    await h.generate();
+    const live = h.onResult.mock.calls.find(([result, , phase]) => phase === 'generating' && result.markdown && !result.presentation?.aiModel)?.[0];
+    expect(live).toMatchObject({ presentation: { mode: 'scenario', scenarioName: '原始故事情景', userGuidance: '首章引导', reporterInfo: { name: '合成记者' }, aiUsage: null } });
+    expect(live?.presentation).not.toHaveProperty('aiModel');
+    const completed = [...h.onResult.mock.calls].reverse().find(([, , phase]) => phase === 'completed')?.[0];
+    expect(completed).toMatchObject({ presentation: { aiModel: 'actual-fixture-model',
+      aiUsage: { completionTokens: 7, cachedTokens: 0, completionTokensIncludesReasoning: false } } });
+    expect(completed?.presentation.aiUsage).not.toHaveProperty('promptTokens');
+    h.owner.dispose(); const cold = setup({ fixture: h.fixture }); await cold.owner.openCandidate();
+    expect(cold.onResult.mock.calls.at(-1)?.[0].presentation).toEqual(completed?.presentation);
+    expect(createCalls(h.fixture)).toHaveLength(1); expect(globalThis.fetch).not.toHaveBeenCalled();
+    cold.owner.dispose();
+  });
   it.each(['whole-commit', 'pending-originals-plus-commit'] as const)('%s budget refusal preserves completed originals and permits export without another model', async budget => {
     const h = setup({ prepareCommit: async input => {
       if (budget === 'whole-commit') throw new Error('whole commit exceeds 128 MiB');

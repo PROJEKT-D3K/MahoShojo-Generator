@@ -2,7 +2,7 @@
 // components/StreamingBattleReportCard.tsx
 
 import React, { useRef, useState } from 'react';
-import { getVisibleOutputTokens } from '@mahoshojo/ai-core/token-usage';
+import { BattleReportMetadata } from './BattleReportMetadata';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
@@ -144,21 +144,6 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
     };
 
     const modeDisplay = mode ? getModeDisplay(mode) : null;
-    const hasAnyTokenNumber =
-        !showingWeb &&
-        aiUsage != null &&
-        [aiUsage.promptTokens, aiUsage.reasoningTokens, aiUsage.completionTokens, aiUsage.textTokens].some(
-            (value) => typeof value === 'number' && Number.isFinite(value)
-        );
-    const shouldShowNarrativeReadCount = typeof narrativeHistoryReadCount === 'number';
-    const aiModelText = typeof aiModel === 'string' ? aiModel.trim() : '';
-    const shouldShowAiModel = !showingWeb && Boolean(aiModelText);
-
-    const formatToken = (value: unknown): string => {
-        if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
-        return value.toLocaleString();
-    };
-
     const buildExportMarkdown = (): string => {
         const metaLines: string[] = [];
         if (reporterInfo?.name && reporterInfo?.publication) {
@@ -578,28 +563,13 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
                         </div>
                     ) : null}
 
-                    {(reporterInfo?.name && reporterInfo?.publication) || shouldShowAiModel || hasAnyTokenNumber || shouldShowNarrativeReadCount ? (
+                    {!showingWeb || (reporterInfo?.name && reporterInfo?.publication) || typeof narrativeHistoryReadCount === 'number' ? (
                         <div className="px-1 mb-4 text-sm text-gray-300">
-                            {reporterInfo?.name && reporterInfo?.publication && (
-                                <>
-                                    <p>记者 | {reporterInfo.name}</p>
-                                    <p>来源 | {reporterInfo.publication}</p>
-                                </>
-                            )}
-                            {(shouldShowAiModel || hasAnyTokenNumber || shouldShowNarrativeReadCount) && (
-                                <p className="text-xs text-gray-400 mt-1">
-                                    {shouldShowAiModel && <>模型：{aiModelText}</>}
-                                    {shouldShowAiModel && (hasAnyTokenNumber || shouldShowNarrativeReadCount) ? ' · ' : ''}
-                                    {hasAnyTokenNumber && (
-                                        <>
-                                            tokens：输入 {formatToken(aiUsage?.promptTokens)}｜推理 {formatToken(aiUsage?.reasoningTokens)}｜输出{' '}
-                                            {formatToken(getVisibleOutputTokens(aiUsage))}
-                                        </>
-                                    )}
-                                    {hasAnyTokenNumber && shouldShowNarrativeReadCount ? ' · ' : ''}
-                                    {shouldShowNarrativeReadCount && <>叙事历史读取：{narrativeHistoryReadCount} 条</>}
-                                </p>
-                            )}
+                            {reporterInfo?.name && reporterInfo?.publication ? <>
+                                <p>记者 | {reporterInfo.name}</p>
+                                <p>来源 | {reporterInfo.publication}</p>
+                            </> : null}
+                            <BattleReportMetadata aiModel={aiModel} aiUsage={aiUsage} narrativeHistoryReadCount={narrativeHistoryReadCount} showModelAndTokens={!showingWeb} />
                         </div>
                     ) : null}
 

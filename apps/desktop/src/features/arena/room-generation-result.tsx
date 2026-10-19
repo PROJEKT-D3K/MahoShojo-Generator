@@ -1,6 +1,6 @@
 import type { ArenaRoomGenerationResult } from '@mahoshojo/contracts/arena-room';
 import { RoomGenerationResult, type RoomGenerationView } from '@mahoshojo/ui-web/arena-room';
-import { ArenaWebResultView, CombatantUpdatesPresentation, StreamingBattleReportCard } from '@mahoshojo/ui-web/arena-report';
+import { ArenaWebResultView, CombatantUpdatesPresentation, StreamingBattleReportCard, type BattleReportHostPorts } from '@mahoshojo/ui-web/arena-report';
 import { BattleStoryContentPreview } from '@mahoshojo/ui-web/arena-story-session';
 import { DENY_EXTERNAL_MEDIA, MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
@@ -13,10 +13,11 @@ export type DesktopRoomGenerationResultProps = {
   readonly generationKey: string;
   readonly onRetry?: () => void | Promise<void>;
   readonly retryDisabled?: boolean;
+  readonly reportPorts?: BattleReportHostPorts;
 };
 
 /** Read-only room report: shared renderers with the existing Desktop media/link gates. */
-export function DesktopRoomGenerationResult({ generation, generationKey, onRetry, retryDisabled }: DesktopRoomGenerationResultProps) {
+export function DesktopRoomGenerationResult({ generation, generationKey, onRetry, retryDisabled, reportPorts }: DesktopRoomGenerationResultProps) {
   const { openContent } = useExternalLinks();
   const result = generation.result;
   const web = result?.format === 'stream-web';
@@ -35,7 +36,7 @@ export function DesktopRoomGenerationResult({ generation, generationKey, onRetry
           characterGuidances={result?.characterGuidances?.map(guidance => ({ characterName: guidance.displayName, guidance: guidance.guidance })) ?? null}
           adjudicationResults={result?.adjudicationResults ?? null} aiUsage={result?.ai?.usage ?? null} aiModel={result?.ai?.model ?? null}
           narrativeHistoryReadCount={result?.narrativeHistoryReadCount ?? null}
-          ports={{ mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: openContent,
+          ports={reportPorts ?? { mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: openContent,
             downloadMarkdown: (content, filename) => downloadTextFile(filename, content, 'text/markdown;charset=utf-8') }}
           disableExport={web}
           reportContent={web ? <ArenaWebResultView source={generation.markdown} ready={ready}

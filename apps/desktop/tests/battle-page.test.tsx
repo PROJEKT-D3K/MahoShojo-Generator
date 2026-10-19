@@ -33,10 +33,11 @@ import { STORY_PENDING_IPC } from '../src/platform/arena-story-pending-native';
 import { ARENA_HOSTED_RECOVERY_KEYS } from '../src/features/arena/hosted-recovery';
 import { getDesktopCloudSessionStore, resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
 installStoryCrypto();
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), download: vi.fn(), downloadBinary: vi.fn(), profile: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), download: vi.fn(), downloadBinary: vi.fn(), downloadBlob: vi.fn(), capture: vi.fn(), profile: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke, isTauri: () => true, Channel: class { onmessage?: (value: unknown) => void; } }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: mocks.listen }) }));
-vi.mock('../src/platform/download-text-file', () => ({ downloadTextFile: mocks.download, downloadBinaryFile: mocks.downloadBinary }));
+vi.mock('../src/platform/download-text-file', () => ({ downloadTextFile: mocks.download, downloadBinaryFile: mocks.downloadBinary, downloadBlobFile: mocks.downloadBlob }));
+vi.mock('@mahoshojo/ui-web/client', async (original) => ({ ...await original<object>(), capturePngBlob: mocks.capture }));
 vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileIds: async () => ['loopback'], getProviderProfile: mocks.profile }));
 let actScope: ReturnType<typeof createReactActScope>;
 const act = <T,>(callback: () => T | Promise<T>) => actScope.act(callback);
@@ -48,6 +49,7 @@ let hostedStory: HostedStoryFixture, hostedCapabilityAvailable: boolean;
 let cloudAccount: { userId: number; username: string } | null;
 const pendingCommands = new Set<string>(Object.values(STORY_PENDING_IPC));
 let markdownSuffix = '';
+let holdBeforeBody = false;
 let webTextOverride: string | null = null;
 let packageDocs: Map<string, LocalWebPackageRecordV1>, packageBytes: Map<string, Uint8Array>;
 let docs: Map<string, LocalCardRecordV1>, received: AiExecutionRequest[], hold: boolean, release: (() => void) | undefined, failSave: boolean, eof: boolean;
@@ -97,12 +99,12 @@ const scopeClose = () => { const args = mocks.listen.mock.calls.at(-1)!; const e
 beforeEach((context) => {
   actScope = createReactActScope(context.signal);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.clearAllMocks(); localStorage.clear(); storyBranch = null; storyPort = new StoryFixturePort(); storyIpc = storyFixtureInvoke(storyPort); received = []; docs = new Map(); hold = false; failSave = false; eof = false; release = undefined; activeCloseHandles = 0; markdownSuffix = ''; webTextOverride = null; packageDocs = new Map(); packageBytes = new Map();
+  vi.clearAllMocks(); localStorage.clear(); storyBranch = null; storyPort = new StoryFixturePort(); storyIpc = storyFixtureInvoke(storyPort); received = []; docs = new Map(); hold = false; failSave = false; eof = false; release = undefined; activeCloseHandles = 0; markdownSuffix = ''; holdBeforeBody = false; webTextOverride = null; packageDocs = new Map(); packageBytes = new Map();
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'client', clientConnectionId: 'loopback' }, hiddenPresetIds: [] }));
   resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
   hostedStory = new HostedStoryFixture(); hostedCapabilityAvailable = true; cloudAccount = null;
   mocks.profile.mockResolvedValue({ id: 'loopback', name: 'Loopback', adapter: 'openai-compatible', baseUrl: endpoint.replace('/chat/completions', ''), modelId: 'fixture-model' });
-  mocks.listen.mockImplementation(async () => { activeCloseHandles += 1; return vi.fn(() => { activeCloseHandles -= 1; }); }); mocks.download.mockResolvedValue(undefined);
+  mocks.listen.mockImplementation(async () => { activeCloseHandles += 1; return vi.fn(() => { activeCloseHandles -= 1; }); }); mocks.download.mockResolvedValue(undefined); mocks.capture.mockResolvedValue(new Blob(['fixture'], { type: 'image/png' }));
   mocks.invoke.mockImplementation(withFixtureStreamReceipt(async (command: string, raw?: Record<string, unknown> | Uint8Array, options?: { headers: Record<string, string> }) => {
     // Pending discovery is separate; the Direct record fixture must not swallow it.
     if (pendingCommands.has(command)) return hostedStory.invoke(command, raw, options);
@@ -135,9 +137,11 @@ beforeEach((context) => {
       const request = args!.request as AiExecutionRequest; const channel = args!.onEvent as { onmessage(event: AiStreamEvent): void };
       const response = await nativeFetch(endpoint, { method: 'POST', body: JSON.stringify(request) }); const output = await response.json() as { text: string; reasoning: string };
       const identity = { requestId: request.requestId, contractVersion: 1 as const, mode: request.mode };
-      channel.onmessage({ ...identity, sequence: 0, type: 'started' }); channel.onmessage({ ...identity, sequence: 1, type: 'reasoning-delta', delta: output.reasoning }); channel.onmessage({ ...identity, sequence: 2, type: 'text-delta', delta: output.text });
+      channel.onmessage({ ...identity, sequence: 0, type: 'started' }); channel.onmessage({ ...identity, sequence: 1, type: 'reasoning-delta', delta: output.reasoning });
+      if (holdBeforeBody) await new Promise<void>((resolve) => { release = resolve; });
+      channel.onmessage({ ...identity, sequence: 2, type: 'text-delta', delta: output.text });
       if (hold) await new Promise<void>((resolve) => { release = resolve; });
-      if (!eof) channel.onmessage({ ...identity, sequence: 3, type: 'result', result: { ...identity, status: 'completed', output, finishReason: 'stop' } }); return;
+      if (!eof) channel.onmessage({ ...identity, sequence: 3, type: 'result', result: { ...identity, status: 'completed', output, finishReason: 'stop', resolvedModelId: 'actual-fixture-model', usage: { inputTokens: 10, outputTokens: 20, reasoningTokens: 3 } } }); return;
     }
     if (command === 'public_read_cache_query') return { status: 'ready', total: 1, bodyCount: 1, entries: [{ card: { id: 'cached-1', name: '缓存角色', type: 'character', description: '完整公开副本', is_public: 1, updated_at: '2026-10-01T00:00:00Z' }, hasBody: true, lastSuccessAt: '2026-10-01T00:00:00Z', summaryUpdatedAt: '2026-10-01T00:00:00Z', bodyUpdatedAt: '2026-10-01T00:00:00Z' }] };
     if (command === 'public_read_cache_card') return { status: 'ready', availability: 'full', entry: { card: { id: 'cached-1', name: '缓存角色', type: 'character', is_public: 1, data: JSON.stringify({ templateId: '通用角色', name: '缓存角色', content: '缓存完整原文', signature: 'unverified-source' }) }, bodyUpdatedAt: '2026-10-01T00:00:00Z', lastSuccessAt: '2026-10-01T00:00:00Z' } };
@@ -163,6 +167,85 @@ afterEach(async () => {
 });
 
 describe('Desktop /battle journey against loopback fixture', () => {
+  it.each(['battle', 'arena'] as const)('/%s 从 reasoning-only 到完成保留共源卡壳，并由卡内导出含模型/用量/署名的图片', async product => {
+    holdBeforeBody = true; cloudAccount = { userId: 42, username: '验收用户名' };
+    localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
+    window.location.hash = `#/${product}`; await mount(); await click('生成战报');
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const card = container.querySelector('.result-card')!; expect(card).not.toBeNull();
+    expect(card.querySelector('.ai-reasoning-panel')?.textContent).toContain('AI 正在思考');
+    await act(async () => card.querySelector<HTMLButtonElement>('.ai-reasoning-panel button')!.click());
+    expect(card.querySelector('.ai-reasoning-panel pre')?.textContent).toContain('独立的推理');
+    expect(card.textContent).not.toContain(text); expect(card.textContent).toContain('停止生成');
+    await act(async () => release!()); await settle();
+    await vi.waitFor(() => expect(card.textContent).toContain('actual-fixture-model'));
+    expect(card.textContent).toContain('输入 10｜推理 3｜输出 17');
+    expect(button('📱 保存为图片', card)).toBeTruthy(); expect(button('📄 下载记录', card)).toBeTruthy();
+    mocks.capture.mockImplementationOnce(async (element: HTMLElement) => {
+      expect(element).toBe(card); expect(element.textContent).toContain('验收用户名');
+      expect(element.querySelector('.logo-placeholder img')?.getAttribute('src')).toBe('/logo-white-qrcode.svg');
+      expect(element.querySelector<HTMLElement>('.logo-placeholder')?.style.display).toBe('flex');
+      expect(element.querySelector<HTMLElement>('.ai-reasoning-panel')?.style.display).toBe('none');
+      return new Blob(['fixture'], { type: 'image/png' });
+    });
+    await click('📱 保存为图片', card);
+    expect(mocks.capture).toHaveBeenCalledOnce(); expect(mocks.downloadBlob).toHaveBeenCalledOnce();
+    expect(calls()).toHaveLength(1);
+  });
+  it('图片失败走共享错误框、恢复卡片操作，并在捕获期间阻止离开', async () => {
+    saveDraft(draft('daily', 'non-stream')); await mount(); await click('生成战报');
+    await vi.waitFor(() => expect(container.querySelector('.result-card')?.textContent).toContain('actual-fixture-model'));
+    let rejectCapture!: (cause: unknown) => void;
+    mocks.capture.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCapture = reject; }));
+    await click('📱 保存为图片'); expect(scopeClose().preventDefault).toHaveBeenCalled();
+    await act(async () => rejectCapture(new Error('capture-failed'))); await settle();
+    expect(container.querySelector('.error-message[role="alert"]')?.textContent).toContain('生成图片失败，请重试');
+    expect(button('📱 保存为图片').disabled).toBe(false); expect(container.querySelector<HTMLElement>('.logo-placeholder')?.style.display).toBe('none');
+    expect(mocks.downloadBlob).not.toHaveBeenCalled(); expect(calls()).toHaveLength(1);
+  });
+  it('多卡截图全部结束前持续保护页面和故事预览', async () => {
+    saveDraft(draft('daily', 'stream')); await mount(); await click('新建连续战报');
+    await vi.waitFor(() => expect(storyPort.heads()[0]?.chapterCount).toBe(1)); await settle();
+    const current = container.querySelector('[aria-label="本次章节结果"]')!;
+    const saved = container.querySelector('[data-story-read-status="loaded"]')!;
+    const first = deferred<Blob>(), second = deferred<Blob>();
+    mocks.capture.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    await click('📱 保存为图片', current); await click('📱 保存为图片', saved);
+    expect(mocks.capture).toHaveBeenCalledTimes(2);
+    const rows = () => [...container.querySelectorAll<HTMLButtonElement>('[aria-label="连续战报会话"] button[aria-pressed]')];
+    expect(rows().length).toBeGreaterThan(0); expect(rows().every(node => node.disabled)).toBe(true);
+    expect(button('清除本次预览').disabled).toBe(true);
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await act(async () => { first.resolve(new Blob(['first'])); }); await settle();
+    expect(scopeClose().preventDefault).toHaveBeenCalled();
+    expect(button('清除本次预览').disabled).toBe(true); expect(rows().every(node => node.disabled)).toBe(true);
+    expect(current.isConnected).toBe(true); expect(saved.isConnected).toBe(true);
+    await act(async () => { second.resolve(new Blob(['second'])); }); await settle();
+    expect(button('清除本次预览').disabled).toBe(false); expect(rows().every(node => !node.disabled)).toBe(true);
+    expect(scopeClose().preventDefault).not.toHaveBeenCalled();
+    expect(mocks.downloadBlob).toHaveBeenCalledTimes(2); expect(received).toHaveLength(1);
+  });
+  it('再次生成的 reasoning-only 结果仍自动定位一次', async () => {
+    holdBeforeBody = true; saveDraft(draft('daily', 'stream')); vi.mocked(window.confirm).mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: 99999 } as DOMRect);
+    await mount();
+    const scrolls = () => vi.mocked(HTMLElement.prototype.scrollIntoView).mock.contexts.filter(node => (node as HTMLElement).getAttribute('aria-label') === '战报结果').length;
+    for (let run = 1; run <= 2; run++) {
+      release = undefined; await click('生成战报'); await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+      expect(scrolls()).toBe(run);
+      await act(async () => release!()); await settle();
+      await vi.waitFor(() => expect(container.querySelector('.result-card')?.textContent).toContain('actual-fixture-model'));
+      expect(scrolls()).toBe(run);
+    }
+    expect(received).toHaveLength(2);
+  });
+  it('部分正文失败复用魔法失效错误框且不重放模型请求', async () => {
+    eof = true; saveDraft(draft('daily', 'stream')); await mount(); await click('生成战报');
+    await vi.waitFor(() => expect(container.querySelector('.error-message[role="alert"]')?.textContent).toContain('✨ 魔法失效了！'));
+    expect(container.querySelector('.result-card')?.textContent).toContain(text);
+    expect(container.querySelector('.error-message a')?.getAttribute('href')).toMatch(/^#\/encyclopedia\//);
+    expect(calls()).toHaveLength(1);
+  });
   it.each(['battle', 'arena'] as const)('/%s shares the guide and ordinary navigation without claiming unavailable capabilities', async product => {
     saveDraft(draft('daily', 'non-stream'));
     localStorage.setItem(ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('kizuna', 'stream') }));

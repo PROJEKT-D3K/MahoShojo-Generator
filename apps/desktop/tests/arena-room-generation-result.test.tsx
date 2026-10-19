@@ -42,6 +42,26 @@ describe('Desktop current room report adapter', () => {
     expect(invoke).not.toHaveBeenCalled(); expect(retry).not.toHaveBeenCalled();
   });
 
+  it('forwards host image, markdown and attribution ports into the same shared report card', async () => {
+    const captured: Array<{ text: string | null; logo: string | undefined; externalImage: boolean }> = [];
+    const saveImage = vi.fn(async (element: HTMLElement) => {
+      captured.push({ text: element.textContent, logo: element.querySelector<HTMLElement>('.logo-placeholder')?.style.display,
+        externalImage: !!element.querySelector('img[src^="https:"]') });
+    });
+    const downloadMarkdown = vi.fn();
+    await render({ ...generation, phase: 'completed', finalAuthoritative: true }, {
+      reportPorts: { saveImage, downloadMarkdown, generatedBy: <span>本机用户署名</span> },
+    });
+    await click('📱 保存为图片');
+    expect(saveImage).toHaveBeenCalledOnce();
+    expect(saveImage.mock.calls[0]?.[0]).toBe(container.querySelector('.result-card'));
+    expect(captured[0]).toMatchObject({ logo: 'flex', externalImage: false });
+    expect(captured[0]?.text).toContain('本机用户署名'); expect(captured[0]?.text).toContain('shared-model');
+    await click('📄 下载记录'); expect(downloadMarkdown).toHaveBeenCalledOnce();
+    expect(downloadMarkdown.mock.calls[0]?.[0]).toContain('# 共享战报');
+    expect(invoke).not.toHaveBeenCalled(); expect(retry).not.toHaveBeenCalled();
+  });
+
   it('blocks external media and sends report links through the existing confirmation/native gate', async () => {
     await render();
     expect(container.querySelector('img[src^="https:"]')).toBeNull();

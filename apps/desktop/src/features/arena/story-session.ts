@@ -462,7 +462,7 @@ export class DesktopArenaStorySession {
         (partial) => { if (!this.disposed && this.runController === controller && !controller.signal.aborted) this.publish({ result: partial }); });
       if (this.disposed || this.runController !== controller) return;
       if (outcome.requestId !== requestId || outcome.scopeKey !== scopeKey) throw new Error('生成结果身份不匹配，未保存章节。');
-      this.publish({ result: { rawText: outcome.rawText, markdown: outcome.markdown, reasoning: outcome.reasoning, usage: outcome.usage } });
+      this.publish({ result: { rawText: outcome.rawText, markdown: outcome.markdown, reasoning: outcome.reasoning, usage: outcome.usage, presentation: outcome.presentation } });
       if (controller.signal.aborted || input.epoch !== this.executionEpoch || outcome.status !== 'completed') {
         this.publish({ phase: controller.signal.aborted || outcome.status === 'cancelled' ? 'cancelled' : 'failed', message: `${'message' in outcome ? `${outcome.message} ` : ''}本次未完成有效章节，未写入故事。收到的原文仍保留，可导出。` }); return;
       }
@@ -592,7 +592,7 @@ export class DesktopArenaStorySession {
         terminal = true;
         if (!ownsRun() || run.controller.signal.aborted || run.epoch !== this.executionEpoch) return;
         if (outcome.requestId !== generationId || outcome.scopeKey !== scopeKey) throw new Error('生成结果身份不匹配，未保存尾章');
-        this.publish({ result: { rawText: outcome.rawText, markdown: outcome.markdown, reasoning: outcome.reasoning, usage: outcome.usage } });
+        this.publish({ result: { rawText: outcome.rawText, markdown: outcome.markdown, reasoning: outcome.reasoning, usage: outcome.usage, presentation: outcome.presentation } });
         if (outcome.status !== 'completed') { this.generationFailure(new Error(`${'message' in outcome ? outcome.message : '生成已取消'} 收到的原文仍保留，可导出。`), run.controller); return; }
         completed = true;
         // Prose survives effects, projection and byte/schema failures. The source is never renewed.
@@ -696,7 +696,7 @@ export class DesktopArenaStorySession {
       try {
         // Keep completed text before role effects, record projection, schema or budget validation.
         this.publish({ resultSource: 'direct', phase: 'completed', result: { rawText: result.rawText, markdown: result.markdown,
-          reasoning: result.reasoning, usage: result.usage }, resultChapterIndex: identity.source.anchorIndex + 1,
+          reasoning: result.reasoning, usage: result.usage, presentation: result.presentation }, resultChapterIndex: identity.source.anchorIndex + 1,
           pending: { title, evidence: 'not-written', retryable: false, tooLarge: false }, message: '分支生成完成，正在准备本地保存。' });
         const records = project();
         title = typeof records?.chapter?.title === 'string' ? records.chapter.title : title;
@@ -719,7 +719,7 @@ export class DesktopArenaStorySession {
         && run.epoch === this.executionEpoch && run.selection.isCurrent(),
       retainPartial: (result: ArenaDirectPartial) => {
         if (!consumed && ownsRun() && !run.controller.signal.aborted && run.epoch === this.executionEpoch) {
-          this.publish({ resultSource: 'direct', result: { rawText: result.rawText, markdown: result.markdown, reasoning: result.reasoning, usage: result.usage } });
+          this.publish({ resultSource: 'direct', result: { rawText: result.rawText, markdown: result.markdown, reasoning: result.reasoning, usage: result.usage, presentation: result.presentation } });
         }
       },
       cancel: () => run.controller.abort(),

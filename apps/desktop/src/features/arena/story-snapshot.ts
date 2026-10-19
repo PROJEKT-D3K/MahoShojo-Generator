@@ -76,9 +76,13 @@ export const buildDesktopStoryGeneratedContent = (input: {
   return { chapterIndex: input.chapterIndex, markdown: outcome.markdown, reportJson: { report, impacts: outcome.impacts },
     digest, generationId: outcome.requestId, nextWorkingCombatants,
     cardSnapshot: {
+      mode: outcome.report.mode ?? session.source.mode,
+      scenarioName: outcome.report.scenario ?? outcome.presentation?.scenarioName,
+      characterGuidances: outcome.report.characterGuidances ?? outcome.presentation?.characterGuidances,
+      narrativeHistoryReadCount: outcome.report.narrativeHistoryReadCount ?? outcome.presentation?.narrativeHistoryReadCount,
       reporterInfo: outcome.report.reporterInfo, userGuidance: input.userGuidance,
-      adjudicationResults: input.adjudicationResults, aiUsage: outcome.usage ?? null,
-      aiModel: outcome.report.aiModel ?? input.source.modelId,
+      adjudicationResults: input.adjudicationResults, aiUsage: outcome.usage ?? outcome.report.aiUsage ?? null,
+      aiModel: outcome.report.aiModel ?? outcome.presentation?.aiModel ?? input.source.modelId,
       ...(outcome.reasoning ? { aiReasoning: { status: 'done', source: 'provider', text: outcome.reasoning } } : {}),
     },
   };
@@ -175,5 +179,10 @@ export const completeHostedStoryRecords = (input: {
     source: input.source, operationId: manifest.operationId, checkpointId: manifest.outputCheckpointId,
     ...(manifest.initialCheckpointId ? { initialCheckpointId: manifest.initialCheckpointId } : {}), now, inputCombatants: combatants,
     generated: { chapterIndex: originals.input.chapterIndex, markdown: originals.markdown, digest,
-      generationId: input.generationId, ...projection } }));
+      generationId: input.generationId, ...projection,
+      cardSnapshot: { ...projection.cardSnapshot, mode: originals.header?.mode ?? originals.input.seed.mode,
+        ...(originals.input.seed.mode === 'scenario' && projection.cardSnapshot.scenarioDisplayName === undefined
+          && typeof originals.input.seed.scenario?.title === 'string' && originals.input.seed.scenario.title.trim()
+          ? { scenarioDisplayName: originals.input.seed.scenario.title.trim() } : {}),
+      } } }));
 };

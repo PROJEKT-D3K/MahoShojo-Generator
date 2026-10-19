@@ -1,3 +1,4 @@
+import { projectDesktopArenaReport } from '../src/features/arena/report-presentation';
 import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
@@ -53,6 +54,28 @@ const native = (text: string, finishReason = 'stop', wait?: Promise<void>) => {
 const build = () => { const repo = repository(), storage = memory(); const session = new DesktopArenaSession({ repository: repo.port, storage, requestId: () => 'arena-fixed', now: () => '2026-10-09T23:00:00.000Z' }); session.setScope('account-A:target-A'); session.setNarrativeDraftScope('account:A'); session.narrativeDrafts.setAutoRetain(true); return { session, storage, ...repo }; };
 
 describe('未完成草稿保留与已有会话存储', () => {
+  it.each(['stream', 'non-stream'] as const)('%s 重开保留展示元数据而不恢复执行或角色写入权限', async mode => {
+    const f = build(), base = makeDraft('daily', mode);
+    const source = { ...base, settings: { ...base.settings, userGuidance: '原任务引导' },
+      combatants: base.combatants.map((item, index) => index === 0 ? { ...item, characterGuidance: '勇敢前进' } : item) };
+    f.session.updateDraft(source);
+    await f.session.generate(native(valid(mode === 'stream')), source, intent(mode));
+    const original = projectDesktopArenaReport(f.session.getSnapshot());
+    expect(original).toMatchObject({ mode: 'daily', aiModel: 'fixture', userGuidance: '原任务引导', reporterInfo: { name: '记者' } });
+    const saved = JSON.parse(f.storage.getItem(ARENA_DRAFT_KEY)!);
+    expect(saved.output.presentation).toMatchObject({ version: 1, aiModel: 'fixture', userGuidance: '原任务引导' });
+    expect(saved.output.presentation).not.toHaveProperty('content');
+    f.session.dispose();
+    const reopened = new DesktopArenaSession({ repository: f.port, storage: f.storage });
+    reopened.setScope('different-account-and-model'); reopened.restoreDraft();
+    reopened.updateDraft({ ...source, battleMode: 'classic', settings: { ...source.settings, userGuidance: '新草稿' } });
+    const state = reopened.getSnapshot(), projected = projectDesktopArenaReport(state);
+    expect(projected).toMatchObject({ mode: 'daily', aiModel: 'fixture', userGuidance: '原任务引导', reporterInfo: original.reporterInfo, characterGuidances: original.characterGuidances });
+    expect(state.generation).toBeNull(); expect(state.candidates).toBeNull();
+    expect(JSON.parse(reopened.exportDocument()).result.presentation).toMatchObject({ version: 1, aiModel: 'fixture' });
+    reopened.discardDraft(); expect(reopened.getSnapshot().presentation).toBeNull(); reopened.dispose();
+  });
+
   it('自动写入关闭时只有显式保存，并可重新打开独立归档', async () => {
     const f = build(), base = makeDraft('daily', 'stream');
     f.session.narrativeDrafts.setAutoRetain(false);

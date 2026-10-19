@@ -2,7 +2,7 @@
 // components/BattleReportCard.tsx
 
 import React, { useRef, useState } from 'react';
-import { getVisibleOutputTokens } from '@mahoshojo/ai-core/token-usage';
+import { BattleReportMetadata } from './BattleReportMetadata';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
@@ -79,15 +79,6 @@ export const BattleReportCard: React.FC<BattleReportCardProps> = ({
       ? (typeof illustrationAsset.note === 'string' && illustrationAsset.note.trim() ? illustrationAsset.note.trim() : '用户自行上传')
       : '';
 
-  const aiModel = typeof report.aiModel === 'string' ? report.aiModel.trim() : '';
-  const aiUsage = report.aiUsage;
-  const hasAnyTokenNumber =
-    aiUsage != null &&
-    [aiUsage.promptTokens, aiUsage.reasoningTokens, aiUsage.completionTokens, aiUsage.textTokens].some(
-      (value) => typeof value === 'number' && Number.isFinite(value)
-    );
-  const shouldShowNarrativeReadCount = typeof report.narrativeHistoryReadCount === 'number';
-  const shouldShowAiModel = Boolean(aiModel);
   const reportReasoningText = typeof reportReasoning?.text === 'string' ? reportReasoning.text.trim() : '';
   const heuristicReasoning = !reportReasoningText ? (ports.extractReasoning?.(bodyContent) ?? null) : null;
   const reasoningForPanel =
@@ -112,11 +103,6 @@ export const BattleReportCard: React.FC<BattleReportCardProps> = ({
 
   const modeDisplay = mode ? getModeDisplay(mode) : null;
   const showScenarioTitle = mode === 'scenario' && typeof report.scenario === 'string' && Boolean(report.scenario.trim());
-
-  const formatToken = (value: unknown): string => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
-    return value.toLocaleString();
-  };
 
   // 处理保存为图片的功能
   const handleSaveImage = async () => {
@@ -455,20 +441,7 @@ ${adjudicationMarkdown}
             <p className="text-sm text-gray-300">
               来源 | {reporterPublication || '—'}
             </p>
-            {(shouldShowAiModel || hasAnyTokenNumber || shouldShowNarrativeReadCount) && (
-              <p className="text-xs text-gray-400 mt-1">
-                {shouldShowAiModel && <>模型：{aiModel}</>}
-                {shouldShowAiModel && (hasAnyTokenNumber || shouldShowNarrativeReadCount) ? ' · ' : ''}
-                {hasAnyTokenNumber && (
-                  <>
-                    tokens：输入 {formatToken(aiUsage?.promptTokens)}｜推理 {formatToken(aiUsage?.reasoningTokens)}｜输出{' '}
-                    {formatToken(getVisibleOutputTokens(aiUsage))}
-                  </>
-                )}
-                {hasAnyTokenNumber && shouldShowNarrativeReadCount ? ' · ' : ''}
-                {shouldShowNarrativeReadCount && <>叙事历史读取：{report.narrativeHistoryReadCount} 条</>}
-              </p>
-            )}
+            <BattleReportMetadata aiModel={report.aiModel} aiUsage={report.aiUsage} narrativeHistoryReadCount={report.narrativeHistoryReadCount} />
           </div>
           {/* 显示战斗模式 */}
           {modeDisplay && (

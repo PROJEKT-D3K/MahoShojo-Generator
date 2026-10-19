@@ -14,12 +14,12 @@ const button=(text:string)=>[...container.querySelectorAll('button')].find((node
 const click=async(text:string)=>{expect(button(text)).toBeTruthy();await act(async()=>{button(text).click();});};
 beforeEach(()=>{(globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;container=document.createElement('div');document.body.append(container);root=createRoot(container);HTMLElement.prototype.scrollIntoView=vi.fn();vi.spyOn(window,'scrollTo').mockImplementation(()=>{});vi.spyOn(window,'confirm').mockReturnValue(true);});
 afterEach(()=>{act(()=>root.unmount());owner?.dispose();container.remove();vi.restoreAllMocks();});
-const mount=async(options:{draft?:ReturnType<typeof storyDraft>;product?:'battle'|'arena';rawText?:string;beforeTerminal?:()=>Promise<void>;beforeEnd?:()=>Promise<void>;budget?:number;unknown?:boolean}={})=>{
+const mount=async(options:{draft?:ReturnType<typeof storyDraft>;product?:'battle'|'arena';rawText?:string;beforeTerminal?:()=>Promise<void>;beforeEnd?:()=>Promise<void>;budget?:number;unknown?:boolean;reportPorts?:import('@mahoshojo/ui-web/arena-report').BattleReportHostPorts}={})=>{
  const port=new StoryFixturePort(),execution=storyExecution(options.rawText,options.beforeTerminal),draft=options.draft??storyDraft(),download=vi.fn();let id=0;
  port.hideReceipts=!!options.unknown;port.loseEndReply=!!options.unknown;port.beforeEnd=options.beforeEnd;
  let generation=Promise.resolve();
  owner=new DesktopArenaStorySession({port,id:()=>`ui-${++id}`,exportMarkdown:async()=>({absolutePath:'complete.md',byteLength:10}),...(options.budget===undefined?{}:{prepareCommit:(input)=>prepareStoryStorageCommit(input,options.budget)})});owner.setExecutionScope('A');
- await act(async()=>{root.render(<DesktopArenaStoryControls owner={owner} product={options.product} draft={draft} disabled={false} unavailableReason={null} onStart={(chapterPlan)=>{generation=owner.start({draft,product:options.product??'battle',chapterPlan},execution.prepare);}} onContinue={(guidance)=>{generation=owner.continue(guidance,execution.prepare);}} download={download} onNavigateExternal={()=>{}}/>);await owner.initialize();});
+ await act(async()=>{root.render(<DesktopArenaStoryControls reportPorts={options.reportPorts} owner={owner} product={options.product} draft={draft} disabled={false} unavailableReason={null} onStart={(chapterPlan)=>{generation=owner.start({draft,product:options.product??'battle',chapterPlan},execution.prepare);}} onContinue={(guidance)=>{generation=owner.continue(guidance,execution.prepare);}} download={download} onNavigateExternal={()=>{}}/>);await owner.initialize();});
  return{port,execution,download,settleGeneration:()=>act(async()=>{await generation;})};
 };
 describe('continuous-story actual controlled surface',()=>{
@@ -28,6 +28,46 @@ describe('continuous-story actual controlled surface',()=>{
   expect(container.querySelector('[data-story-read-status="loaded"]')?.textContent).toContain('甲与乙继续前行');
   expect(execution.requests).toHaveLength(1);expect(port.begin).toHaveBeenCalledTimes(1);
   expect(container.textContent).toContain('共 1 章');await click('继续续写');await settleGeneration();expect(execution.requests).toHaveLength(2);
+ });
+ it('shows frozen chapter metadata and both current/saved image ports without rereading the edited draft', async () => {
+  const draft = storyDraft(); draft.battleMode = 'scenario'; draft.scenario.content = { title: '原情景' };
+  const captured: Array<{ text: string | null; logo: string | undefined }> = [];
+  const saveImage = vi.fn(async (element: HTMLElement) => {
+   captured.push({ text: element.textContent, logo: element.querySelector<HTMLElement>('.logo-placeholder')?.style.display });
+  });
+  const { execution, settleGeneration } = await mount({ draft, reportPorts: { saveImage, generatedBy: <span>已验证用户名</span> } });
+  await click('新建连续战报'); await settleGeneration();
+  draft.scenario.content = { title: '当前草稿情景' }; draft.settings.userGuidance = '当前草稿引导';
+  await act(async () => { await owner.refreshSessions(); });
+  for (const region of ['[aria-label="本次章节结果"]', '[data-story-read-status="loaded"]']) {
+   const card = container.querySelector(region)!;
+   for (const expected of ['actual-model', '首章引导', '原情景', '输入 未提供', '已验证用户名']) expect(card.textContent).toContain(expected);
+   expect(card.textContent).not.toContain('当前草稿');
+   const image = [...card.querySelectorAll('button')].find(node => node.textContent?.includes('保存为图片'))!;
+   await act(async () => image.click());
+  }
+  expect(saveImage).toHaveBeenCalledTimes(2); expect(execution.requests).toHaveLength(1);
+  for (const image of captured) {
+   expect(image.text).toContain('已验证用户名'); expect(image.text).toContain('actual-model'); expect(image.logo).toBe('flex');
+  }
+ });
+ it('reads legacy saved card telemetry without losing false flags or borrowing missing metadata', async () => {
+  const { port, execution, settleGeneration } = await mount(); await click('新建连续战报'); await settleGeneration();
+  const head = owner.getSnapshot().active!, stored = port.documents.get(`${head.id}:${head.lastChapterId}`)!;
+  stored.value.cardSnapshot = { aiModel: '原服务器模型', scenarioDisplayName: '原封存情景', mode: 'scenario',
+   userGuidance: '封存引导', narrativeHistoryReadCount: 0,
+   aiUsage: { completionTokens: 7, promptTokens: null, reasoningTokens: null, completionTokensIncludesReasoning: false } };
+  stored.bytes = Uint8Array.from(new TextEncoder().encode(JSON.stringify(stored.value)));
+  await act(async () => { await owner.selectChapter(head.lastChapterId); });
+  expect(owner.getSnapshot().selected, JSON.stringify(owner.getSnapshot().selected)).toMatchObject({ status: 'loaded' });
+  const read = () => container.querySelector('[data-story-read-status="loaded"]')!.textContent;
+  for (const expected of ['原服务器模型', '原封存情景', '封存引导', '输入 未提供', '推理 未提供', '输出 7', '叙事历史读取：0 条']) expect(read()).toContain(expected);
+  stored.value.cardSnapshot = { mode: 'daily', scenarioDisplayName: '旧情景不属于本章', aiUsage: { completionTokens: 7, reasoningTokens: null, completionTokensIncludesReasoning: true } };
+  stored.bytes = Uint8Array.from(new TextEncoder().encode(JSON.stringify(stored.value)));
+  await act(async () => { await owner.selectChapter(head.lastChapterId); });
+  expect(read()).toContain('模型：未提供'); expect(read()).toContain('输出 未提供');
+  expect(read()).not.toContain('actual-model'); expect(read()).not.toContain('原封存情景'); expect(read()).not.toContain('旧情景不属于本章');
+  expect(execution.requests).toHaveLength(1);
  });
  it.each(['failed','cancelled'] as const)('keeps metadata-only raw output visible and exportable after %s with no commit',async(status)=>{
   const raw='<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"仅元数据"}} -->';const gate=deferred<void>();

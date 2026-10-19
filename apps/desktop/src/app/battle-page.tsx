@@ -1,3 +1,6 @@
+import { createDesktopBattleReportPorts } from '../features/arena/report-ports';
+import { projectDesktopArenaReport } from '../features/arena/report-presentation';
+import { DesktopArenaErrorMessage } from '../features/arena/error-message';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from '@tanstack/react-router';
@@ -18,7 +21,7 @@ import { ArenaReportFormatSelectorView, BattleReportCard, StreamingBattleReportC
 import { Button, CardLibraryModal, mapPublicDataCardRowToSourceData, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { NarrativeHistoryPicker, NarrativeDraftsPanel, NarrativeLegacyDraftsSection } from '@mahoshojo/ui-web/narrative-history';
 import { buildNarrativeDraftArchive, type NarrativeDraft } from '@mahoshojo/domain/narrative-drafts';
-import { AiReasoningPanel, GenerationModeSwitcher, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
+import { GenerationModeSwitcher, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { ThemeImage } from '@mahoshojo/ui-web/media';
 import { DENY_EXTERNAL_MEDIA, MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import { BackHomeLink, ProductFooter } from '@mahoshojo/ui-web/shell';
@@ -127,6 +130,13 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const [diagnosing, setDiagnosing] = useState(false);
   const diagnosisFlight = useRef<symbol | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 当前结果与历史章节可同时截图，最后一次导出完成后才解除离开保护。
+  const exportingReport = useRef(0);
+  const [reportExporting, setReportExporting] = useState(false);
+  const onReportExportingChange = useCallback((value: boolean) => {
+    exportingReport.current = Math.max(0, exportingReport.current + (value ? 1 : -1));
+    setReportExporting(exportingReport.current > 0);
+  }, []);
   const [backupFeedback, setBackupFeedback] = useState<ArenaBackupFeedback>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [magicalGirlPage, setMagicalGirlPage] = useState(1);
@@ -183,22 +193,22 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   useLayoutEffect(() => { storyOwner.setExecutionScope(scope, cloudState.bootstrapped ? cloudState.account ? { kind: 'account', expectedUserId: cloudState.account.userId } : { kind: 'anonymous' } : null); }, [scope, cloudState.bootstrapped, cloudState.account?.userId, storyOwner]);
   useEffect(() => () => { ownerEpoch.current += 1; diagnosisFlight.current = null; strictActiveRef.current = false; strictPreparation.current?.controller.abort(); strictPreparation.current = null; aiStore.cancelPreparingGeneration(); }, [aiStore]);
   const guard = useLeaveGuard(
-    () => roomOwner.needsLeaveConfirmation() || storyOwner.isBusy() || storyOwner.hasUnsavedResult() || Boolean(diagnosisFlight.current) || session.isBusy() || packageOwner.isBusy() || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current || packageOwner.getSnapshot().temporary.length > 0 || session.hasUnsavedDraft() || Object.values(dirtyControls.current).some(Boolean),
+    () => exportingReport.current > 0 || roomOwner.needsLeaveConfirmation() || storyOwner.isBusy() || storyOwner.hasUnsavedResult() || Boolean(diagnosisFlight.current) || session.isBusy() || packageOwner.isBusy() || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current || packageOwner.getSnapshot().temporary.length > 0 || session.hasUnsavedDraft() || Object.values(dirtyControls.current).some(Boolean),
     '当前生成、读取或保存尚未完成，或仍有未保存的内容。',
     '窗口关闭保护初始化失败，生成、导入与保存暂不可用，请重新打开页面。',
     () => {
-      if (storyOwner.getSnapshot().hosted?.busy && storyOwner.getSnapshot().hosted?.busy !== 'model' || storyOwner.getSnapshot().saving || storyOwner.getSnapshot().exporting || storyOwner.getSnapshot().phase === 'preparing' || diagnosisFlight.current || packageOwner.isBusy() || session.getSnapshot().saving || session.getSnapshot().importing || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current) return false;
+      if (exportingReport.current || storyOwner.getSnapshot().hosted?.busy && storyOwner.getSnapshot().hosted?.busy !== 'model' || storyOwner.getSnapshot().saving || storyOwner.getSnapshot().exporting || storyOwner.getSnapshot().phase === 'preparing' || diagnosisFlight.current || packageOwner.isBusy() || session.getSnapshot().saving || session.getSnapshot().importing || preparing.current || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection || historyLoading.current || advancedBusyRef.current) return false;
       const roomWarning = roomOwner.needsLeaveConfirmation() ? '成员提案草稿将丢弃，普通 Arena 草稿、结果和模型保留。多人房间只会断开本机连接，不代表退出、关闭或停止生成；未知操作仍可能已发生，建议先核对。' : '';
       if (!window.confirm(roomWarning + (storyOwner.hosted?.hasCandidate() || session.getSnapshot().hosted || session.getSnapshot().generation?.intent.mode === 'hosted' ? '确认离开？只停止本机订阅，服务器可能继续生成；已封存原件可从原页面恢复，尚未封存的最新正文仅在当前窗口，请先导出。' : '确认离开？正在生成的请求会取消，未保存的输入或原文可能丢失。'))) return false;
       roomOwner.detach(); storyOwner.detach(); session.detach(); return true;
     },
   );
-  const busy = Boolean(storyState.hosted?.stopping) || Boolean(storyState.hosted?.busy) || storyState.saving || storyState.exporting || storyState.phase === 'preparing' || storyState.phase === 'generating' || diagnosing || state.roleUpdates.status === 'updating' || state.phase === 'generating' || state.saving || state.importing || aiState.generationActive || advancedBusy || packageState.busy;
+  const busy = reportExporting || Boolean(storyState.hosted?.stopping) || Boolean(storyState.hosted?.busy) || storyState.saving || storyState.exporting || storyState.phase === 'preparing' || storyState.phase === 'generating' || diagnosing || state.roleUpdates.status === 'updating' || state.phase === 'generating' || state.saving || state.importing || aiState.generationActive || advancedBusy || packageState.busy;
   roomStartAllowed.current = () => guard.ready && !strictActiveRef.current && !session.isBusy() && !storyOwner.isBusy() && !storyOwner.hosted?.hasCandidate() && !storyOwner.getSnapshot().hosted?.slots[product] && !packageOwner.isBusy() && !preparing.current && !diagnosisFlight.current && !advancedBusyRef.current && !session.getSnapshot().pendingRestore && !aiStore.isPreparingGeneration() && !aiStore.getSnapshot().generationActive && !aiStore.getSnapshot().savingConnection && !aiStore.getSnapshot().savingCredential && !aiStore.getSnapshot().deletingConnection;
   const disabled = !guard.ready || busy || state.pendingRestore || roomState.constrained;
   const update = (patch: Partial<ArenaDraft>) => { if (!roomOwner.isConstrained() && !disabled) session.updateDraft({ ...session.getSnapshot().draft, ...patch }); };
   const resultRef = useRef<HTMLDivElement>(null);
-  useResultAutoScroll(resultRef, state.phase === 'completed' || (state.phase === 'generating' && state.activeGenerationMode === 'stream' && !!state.markdown.trim()), { restored: state.restored });
+  useResultAutoScroll(resultRef, state.phase === 'completed' || state.phase === 'generating' && Boolean(state.markdown.trim() || state.reasoning.trim()), { restored: state.restored });
   useEffect(() => {
     const controller = new AbortController();
     void fetch('/languages.json', { signal: controller.signal, credentials: 'omit', redirect: 'error' }).then((response) => response.ok ? response.json() : null)
@@ -544,7 +554,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     if (!window.confirm(`${pointer.actor.kind === 'anonymous' ? '以原匿名身份' : '以原账号'}恢复服务器请求？不会重新创建或携带供应商 Key；当前结果将被恢复正文替换。${pointer.version !== 1 && pointer.delivery === 'non-stream' ? ' 原完整非流式 JSON 及附加信息可能无法重新取得，建议先完整导出。' : ''}`)) return;
     void session.restoreHosted({ invoke }, pointer.requestId);
   };
-  const reasoning = state.hosted?.delivery === 'non-stream' && state.report?.aiReasoning ? state.report.aiReasoning : state.reasoning ? { status: state.phase === 'generating' ? 'thinking' as const : 'done' as const, source: 'provider' as const, text: state.reasoning } : null;
+  const reportProps = projectDesktopArenaReport(state);
+  const reasoning = reportProps.aiReasoning;
+  const reportPorts = createDesktopBattleReportPorts({
+    username: cloudState.verification === 'verified' ? cloudState.account?.username : null, onNavigateExternal: openContent,
+    onError: reportError, onExportingChange: onReportExportingChange,
+  });
   const download = (filename: string, text: string, mimeType: string) => { try { downloadTextFile(filename, text, mimeType); } catch (cause) { reportError(cause); } };
   const exportAll = () => {
     setBackupFeedback(null);
@@ -566,10 +581,14 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     onDelete: (ids: readonly string[]) => draftArchiveAction(() => session.narrativeDrafts.deleteDrafts(ids, narrativeScope)),
   };
   const ranking = state.hosted?.ranking;
-  const result = (state.rawText || state.reasoning || state.report) ? <section ref={resultRef} className="mt-6 space-y-4" aria-label="战报结果">
-    {state.resultFormat === 'web' ? <><DesktopArenaWebResult key={`${scope}:${state.generation?.intent.requestId ?? 'restored'}`} state={state} owner={packageOwner} disabled={disabled} />{reasoning ? <AiReasoningPanel reasoning={reasoning} /> : null}</> : state.report && state.activeGenerationMode !== 'stream' ? <BattleReportCard report={{ ...state.report, aiReasoning: reasoning }} mode={state.report.mode} ports={{ mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: openContent, downloadMarkdown: (text: string, filename: string) => download(filename, text, 'text/markdown;charset=utf-8') }} />
-      : state.markdown && state.activeGenerationMode === 'stream' ? <StreamingBattleReportCard aiReasoning={reasoning} reporterInfo={state.report?.reporterInfo} adjudicationResults={state.generation?.adjudicationResults} content={state.markdown} mode={state.generation?.input.battleMode ?? draft.battleMode} isStreaming={state.phase === 'generating'} onStopGeneration={() => session.cancel()} ports={{ mediaPolicy: DENY_EXTERNAL_MEDIA, onNavigateExternal: openContent, downloadMarkdown: (text: string, filename: string) => download(filename, text, 'text/markdown;charset=utf-8') }} /> : null}
-    {state.resultFormat !== 'web' && !(state.markdown && state.activeGenerationMode === 'stream') && !state.report && reasoning ? <AiReasoningPanel reasoning={reasoning} /> : null}
+  const result = (state.phase === 'generating' || state.rawText || state.reasoning || state.report) ? <section ref={resultRef} className="mt-6 space-y-4" aria-label="战报结果">
+    {state.resultFormat === 'web' ? <StreamingBattleReportCard {...reportProps} ports={reportPorts} disableExport reportContent={<DesktopArenaWebResult key={`${scope}:${state.generation?.intent.requestId ?? 'restored'}`} state={state} owner={packageOwner} disabled={disabled} />} />
+      : state.report && state.activeGenerationMode !== 'stream'
+        ? <BattleReportCard report={{ ...state.report, scenario: reportProps.scenarioName, aiModel: reportProps.aiModel, aiUsage: reportProps.aiUsage ?? undefined,
+          aiReasoning: reasoning, reporterInfo: reportProps.reporterInfo ?? state.report.reporterInfo,
+          userGuidance: reportProps.userGuidance ?? undefined, characterGuidances: reportProps.characterGuidances ?? undefined,
+          adjudicationResults: reportProps.adjudicationResults ?? undefined, narrativeHistoryReadCount: reportProps.narrativeHistoryReadCount ?? undefined }} mode={reportProps.mode} ports={reportPorts} />
+        : <StreamingBattleReportCard {...reportProps} onStopGeneration={() => session.cancel()} ports={reportPorts} />}
     <details><summary>{state.hosted ? '服务器收到的正文（控制元数据单独保留）' : '完整原始输出（含元数据）'}</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all">{state.rawText}</pre></details>
     {state.hosted ? <div className="space-y-2" aria-label="服务器生成状态">
       <p role="status">{arenaRecoveryStatusLabel(state.hosted.connectionState)}。连接或恢复失败不表示服务器任务已停止。</p>
@@ -621,7 +640,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     </div>
     <ArenaBackupNotice feedback={backupFeedback} />
     {state.saveStatus === 'saved' ? <p role="status">已保存到本地库，可在卡库重新打开。</p> : null}
-    {state.saveError ? <p role="alert">{state.saveError}</p> : null}
+    {state.saveError ? <DesktopArenaErrorMessage message={state.saveError} /> : null}
     {state.narrativeDraftCandidate ? <NarrativeDraftsPanel {...narrativeArchiveControls} drafts={draftArchive.drafts.filter(item => item.requestId === state.narrativeDraftCandidate?.requestId)} candidate={state.narrativeDraftCandidate} status={state.narrativeDraftStatus}
       onSave={() => { session.saveNarrativeDraft(); }} onExport={exportNarrativeDrafts}
       renderMarkdown={content => <MarkdownBlock content={content} variant="light" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} />} /> : null}
@@ -702,17 +721,17 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           {hostedUnavailable ? <p role="status">{hostedUnavailable}</p> : null}
           {readinessMessage ? <p>{readinessMessage}</p> : null}
           {importWarnings.length ? <ul role="status">{importWarnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
-          {error ? <p role="alert">{error}</p> : null}
-          {state.message ? <p role="status">{state.message}</p> : null}
+          {error ? <DesktopArenaErrorMessage message={error} /> : null}
+          {state.message ? state.phase === 'failed' ? <DesktopArenaErrorMessage message={state.message} generation /> : <p role="status">{state.message}</p> : null}
         </>,
-        community: null, result, storySession: <DesktopArenaStoryControls owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={strictActive ? '请先退出严格排位准备，再生成连续故事。' : hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
+        community: null, result, storySession: <DesktopArenaStoryControls reportPorts={reportPorts} reportExporting={reportExporting} owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={strictActive ? '请先退出严格排位准备，再生成连续故事。' : hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
         homeLink: <BackHomeLink href="#/" onNavigate={() => navigateByProductHref(router, '/')} />,
         footer: <ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />,
   };
   return <>
     {product === 'arena' ? <AdvancedArenaPageView
       header={<AdvancedArenaHeader Link={libraryHost.platform.Link} draftSharing="independent" illustrationAvailable={false} logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} />}
-      links={<><ArenaRankingLinks Link={libraryHost.platform.Link} onOpenRankingModal={roomState.constrained ? undefined : () => setRankingOpen(true)} /><ArenaPageLinks Link={libraryHost.platform.Link} variant="full" onNavigateExternal={openFixed} /></>} beforeWorkspace={<>{sessionNotice}<DesktopArenaRoomPanel languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
+      links={<><ArenaRankingLinks Link={libraryHost.platform.Link} onOpenRankingModal={roomState.constrained ? undefined : () => setRankingOpen(true)} /><ArenaPageLinks Link={libraryHost.platform.Link} variant="full" onNavigateExternal={openFixed} /></>} beforeWorkspace={<>{sessionNotice}<DesktopArenaRoomPanel reportPorts={reportPorts} languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
       {roomState.memberModel && memberWorkspaceSession ? <DesktopRoomMemberWorkspace owner={roomOwner} model={roomState.memberModel} session={memberWorkspaceSession} languages={languages} /> : null}
       {roomState.constrained ? <p>普通 Arena 草稿、结果和模型选择已保留在本机。结束房间操作或明确断开本机连接后，可恢复普通操作。</p> : null}<fieldset disabled={roomState.constrained} hidden={roomState.constrained && !roomHostPreview}><ArenaEditorWorkspaceLayout preview={roomHostPreview} disabled={disabled} sections={buildArenaEditorSections([
         { kind: 'presetCharacters', description: '选择内置角色', defaultOpen: true, content: slots.presets },
