@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { buildBattleStoryBranchChain, readBattleStoryBranchLink, type BattleStoryBranchLink } from '@mahoshojo/domain/arena-story-branch';
 import { BaseModal } from '../modal';
+import { ErrorMessageBox } from '../details-controls/ErrorMessageBox';
 import { formatBattleStoryDisplayTitle } from './display-title';
 
 /** Display-only projection. Do not retain the source session/seed/summary here. */
@@ -62,7 +63,7 @@ export function BattleStoryBranchChainModal(props: BattleStoryBranchChainModalPr
     <div className="space-y-4">
       <p className="text-xs text-gray-500">{props.scopeNote ?? '只展示当前已加载目录中的已知关系；目录可能不完整。'}</p>
       {props.loading ? <p role="status" className="text-sm text-gray-500">正在读取分支来源…</p> : null}
-      {props.error ? <p role="alert" className="text-sm text-red-700">{props.error}</p> : null}
+      {props.error ? <ErrorMessageBox message={props.error} /> : null}
       {!props.activeSession ? !props.loading && !props.error ? <p className="text-sm text-gray-500">尚未选择连续战报会话。</p> : null : <>
         <section aria-label="已知父链"><div className="text-sm font-semibold text-gray-800">主线链路</div><div className="mt-2 space-y-2">{chain.map(row)}</div></section>
         {stop?.kind === 'root' ? <p role="status" className="text-xs text-gray-500">已读取到根会话。</p> : null}

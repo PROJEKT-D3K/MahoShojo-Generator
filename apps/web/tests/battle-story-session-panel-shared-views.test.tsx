@@ -6,6 +6,7 @@ import { BattleStorySessionPanel } from '@/components/arena/components/BattleSto
 import type { useBattleStorySession } from '@/components/arena/hooks/useBattleStorySession';
 import type { BattleStoryChapterRecord, BattleStorySessionRecord } from '@/lib/ai-session/battle-story/types';
 
+// 真 Web panel + 共享视图；只在宿主 hook 边界注入状态，不模拟存储读取或为共享视图追加 props。
 const fixture = vi.hoisted(() => ({ hook: {} as Partial<ReturnType<typeof useBattleStorySession>>, card: vi.fn(), download: vi.fn() }));
 vi.mock('@/components/arena/hooks/useBattleStorySession', () => ({ useBattleStorySession: () => fixture.hook }));
 vi.mock('@/components/arena/stores/useBattleStore', () => ({ useBattleStore: (selector: (value: unknown) => unknown) => selector({ settings: { battleReportCardWidthMode: 'manual', battleReportCardWidthPx: 760 } }) }));
@@ -50,12 +51,60 @@ beforeEach(() => {
     setSelectedChapterId: vi.fn(), handleSelectSession: vi.fn(), handleBranchSelectedChapter: vi.fn(),
     handleRewriteSelectedChapter: vi.fn(), handleDeleteSelectedChapter: vi.fn(), handleStartSession: vi.fn(),
     handleContinueSession: vi.fn(), handleBranchSession: vi.fn(), handleRewriteLastChapter: vi.fn(),
-    handleExportMarkdown: vi.fn(), handleDeleteSession: vi.fn(), stopGeneration: vi.fn(),
+    handleExportMarkdown: vi.fn(), handleDeleteSession: vi.fn(), handleRefreshSessionDirectory: vi.fn(), stopGeneration: vi.fn(),
   };
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 describe('Web panel consumes the shared controlled story views', () => {
+  it('keeps storage failures in the host alert without inventing directory or reader errors', async () => {
+    await render();
+    const refresh = button('刷新故事目录'); refresh.focus();
+    const message = '读取本地连续战报会话失败。\n请保留现有章节。';
+    fixture.hook.storageError = message;
+    fixture.hook.actionError = '目录刷新失败，请稍后重读。';
+    await render();
+    const alert = container.querySelector('.error-message[role="alert"]')!;
+    expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    expect(alert.querySelector('.whitespace-pre-wrap')?.textContent).toBe(message);
+    for (const title of ['本地会话', '章节列表']) {
+      const directory = [...container.querySelectorAll('section')].find((node) => node.firstElementChild?.textContent?.startsWith(title))!;
+      expect(directory.querySelector('[role="alert"], .error-message')).toBeNull();
+    }
+    expect(container.querySelector('[data-story-read-status="loaded"]')?.textContent).toContain('完整正文1');
+    expect(container.querySelector('[data-story-read-status="error"]')).toBeNull();
+    expect(document.activeElement).toBe(refresh);
+    expect(fixture.hook.handleRefreshSessionDirectory).not.toHaveBeenCalled();
+    expect(fixture.hook.handleSelectSession).not.toHaveBeenCalled();
+    expect(fixture.hook.setSelectedChapterId).not.toHaveBeenCalled();
+
+    fixture.hook.storageError = null; await render();
+    // actionError 仍属宿主原路径，不能因共享纯 error 的样式替换而变成新 alert。
+    expect(container.textContent).toContain(fixture.hook.actionError);
+    expect(container.querySelector('[role="alert"], .error-message')).toBeNull();
+    expect(document.activeElement).toBe(refresh);
+    await act(async () => refresh.click());
+    expect(fixture.hook.handleRefreshSessionDirectory).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it('keeps Web startup and unloaded selection outside shared error states', async () => {
+    fixture.hook.isReady = false; fixture.hook.sessions = []; fixture.hook.activeSession = null;
+    fixture.hook.chapters = []; fixture.hook.latestActiveChapter = null;
+    fixture.hook.selectedChapter = null; fixture.hook.selectedChapterId = null;
+    await render();
+    const refresh = button('刷新故事目录'); refresh.focus();
+    await render();
+    // Web 目前没有传目录 loading/error 或 reader loading/error；保留宿主既有读取提示。
+    expect(container.textContent).toContain('正在读取本地连续战报会话...');
+    expect(container.querySelector('[data-story-read-status="unloaded"]')).not.toBeNull();
+    expect(container.querySelector('[data-story-read-status="error"], [role="alert"], .error-message')).toBeNull();
+    expect(fixture.card).not.toHaveBeenCalled();
+    expect(fixture.hook.handleRefreshSessionDirectory).not.toHaveBeenCalled();
+    expect(fixture.hook.handleSelectSession).not.toHaveBeenCalled();
+    expect(fixture.hook.setSelectedChapterId).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(refresh);
+  });
+
   it('keeps a selected older chapter and original card snapshot across list refresh and rerenders', async () => {
     await render();
     const reader = () => container.querySelector('[data-story-read-status="loaded"]')!;

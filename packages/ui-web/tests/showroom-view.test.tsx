@@ -41,3 +41,21 @@ it('renders every registered section, the real result card, and a working modal 
   act(() => { openButton!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 });
+
+it('uses production story error views with multiline copy, an explicit read action and the real branch modal', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('[aria-label="故事读取错误样板"]')!;
+  expect(sample.querySelectorAll('.error-message[role=alert]')).toHaveLength(2);
+  expect(sample.querySelector('[data-story-read-status=error] .whitespace-pre-wrap')?.textContent).toContain('\n');
+  const button = (label: string) => [...sample.querySelectorAll('button')].find(node => node.textContent === label)!;
+  act(() => button('模拟重读本章').click());
+  expect(sample.querySelector('[data-story-read-status=loaded]')?.textContent).toContain('已读取示例正文');
+  expect(sample.querySelector('[data-story-read-status=loaded] [role=alert]')).toBeNull();
+  act(() => button('重置章节错误样板').click());
+  expect(sample.querySelector('[data-story-read-status=error] .error-message')).not.toBeNull();
+  act(() => button('打开分支读取错误样板').click());
+  expect(document.querySelector('[role=dialog] .error-message[role=alert] .whitespace-pre-wrap')?.textContent).toBe('示例：分支来源读取失败\n原故事仍保留。');
+  expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭对话框');
+  act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  expect(document.querySelector('[role=dialog]')).toBeNull();
+});

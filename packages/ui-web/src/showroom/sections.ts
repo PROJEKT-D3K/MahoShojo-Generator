@@ -56,7 +56,7 @@ export const SHOWROOM_SECTIONS: readonly ShowroomSectionMeta[] = [
   {
     id: 'result-surfaces',
     title: '卡片与结果面',
-    summary: '真实角色结果卡、竞技场安全源码及共享品牌/模型用量展示。',
+    summary: '真实角色结果卡、竞技场安全源码、品牌/模型用量及故事读取错误。',
   },
   {
     id: 'footer',

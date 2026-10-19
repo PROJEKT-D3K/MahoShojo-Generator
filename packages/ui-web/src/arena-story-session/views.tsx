@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { ErrorMessageBox } from '../details-controls/ErrorMessageBox';
 
 /** A display projection only: a directory row never claims to contain a complete record. */
 export type BattleStoryDirectoryRow = {
@@ -34,7 +35,7 @@ function DirectoryRows(props: BattleStoryDirectoryProps & { kind: 'session' | 'c
   return (
     <>
       {loading ? <div role="status" className="text-sm text-gray-500">{loadingContent ?? '正在读取...'}</div> : null}
-      {error ? <div role="alert" className="text-sm text-red-700">{error}</div> : null}
+      {error ? <ErrorMessageBox message={error} /> : null}
       {rows.length === 0 ? (
         !loading && !error ? <div className="text-sm text-gray-500">{emptyContent}</div> : null
       ) : (
@@ -130,7 +131,7 @@ export function BattleStoryChapterReader(props: BattleStoryChapterReaderProps) {
       </div>
       {state.status === 'unloaded' ? emptyContent : null}
       {state.status === 'loading' ? <div role="status" className="text-sm text-gray-500">{loadingContent ?? '正在读取章节...'}</div> : null}
-      {state.status === 'error' ? <div role="alert" className="text-sm text-red-700">{state.message}{errorActions}</div> : null}
+      {state.status === 'error' ? <ErrorMessageBox message={state.message}>{errorActions}</ErrorMessageBox> : null}
       {state.status === 'loaded' ? <>{state.actions}{state.content}{state.footer}</> : null}
     </div>
   );

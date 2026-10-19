@@ -32,9 +32,16 @@ it('directories render summary projections and never choose a new row on refresh
 });
 
 it('session directory exposes independent loading/errors while preserving valid rows and host pagination', async () => {
-  await act(async () => root.render(<BattleStorySessionDirectory rows={[{ id: 'A', title: '会话 A' }]} selectedId="A" onSelect={vi.fn()} loading error="翻页读取失败" footer={<button>重试下一页</button>} />));
+  const onSelect = vi.fn();
+  const render = (error?: string) => root.render(<BattleStorySessionDirectory rows={[{ id: 'A', title: '会话 A' }]} selectedId="A" onSelect={onSelect} loading error={error} footer={<button>重试下一页</button>} />);
+  await act(async () => render());
+  const focused = container.querySelector('button')!; focused.focus();
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  await act(async () => render('翻页读取失败\n已读取目录仍保留'));
   expect(container.querySelector('[role="status"]')?.textContent).toBe('正在读取...');
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe('翻页读取失败');
+  expect(container.querySelector('.error-message[role="alert"] .whitespace-pre-wrap')?.textContent).toBe('翻页读取失败\n已读取目录仍保留');
+  expect(document.activeElement).toBe(focused);
+  expect(onSelect).not.toHaveBeenCalled();
   expect(container.querySelector('[aria-pressed="true"]')?.textContent).toBe('会话 A');
   expect(container.textContent).toContain('重试下一页');
   expect(container.textContent).not.toContain('本地还没有');
@@ -46,19 +53,28 @@ describe('selected chapter state', () => {
       status: 'loaded', identity: { sessionId: 'session-A', chapterId: 'chapter-A' },
       title: 'A 标题', content: <article>A 正文</article>, actions: <button>A 动作</button>, footer: <aside>A 元数据</aside>,
     };
-    const render = (state: BattleStoryChapterReadViewState) => root.render(<BattleStoryChapterReader state={state} emptyContent="尚未选择章节" errorActions={<button>重试</button>} />);
+    const retry = vi.fn();
+    const render = (state: BattleStoryChapterReadViewState) => root.render(<BattleStoryChapterReader state={state} emptyContent="尚未选择章节" errorActions={<button onClick={retry}>重试</button>} />);
     await act(async () => render(stateA));
     expect(container.textContent).toBe('A 标题A 动作A 正文A 元数据');
     const identity = { sessionId: 'session-B', chapterId: 'chapter-B' };
     await act(async () => render({ status: 'loading', identity }));
     expect(container.querySelector('[data-story-chapter-id]')?.getAttribute('data-story-chapter-id')).toBe('chapter-B');
     expect(container.querySelector('[role="status"]')?.textContent).toBe('正在读取章节...');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(container.textContent).not.toContain('A ');
     await act(async () => render({ status: 'error', identity, message: 'B 读取失败' }));
     expect(container.querySelector('[role="alert"]')?.textContent).toBe('B 读取失败重试');
+    const error = container.querySelector('.error-message[role="alert"]')!;
+    expect(error.querySelector('.whitespace-pre-wrap')?.textContent).toBe('B 读取失败');
+    expect(retry).not.toHaveBeenCalled();
+    const retryButton = error.querySelector('button')!; retryButton.focus();
+    expect(document.activeElement).toBe(retryButton);
+    await act(async () => retryButton.click()); expect(retry).toHaveBeenCalledOnce();
     expect(container.textContent).not.toContain('A ');
     await act(async () => render({ status: 'loaded', identity, title: 'B 标题', content: <article>B 正文</article> }));
     expect(container.textContent).toBe('B 标题B 正文');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
     await act(async () => render({ status: 'unloaded' }));
     expect(container.textContent).toBe('章节预览尚未选择章节');
     expect(container.querySelector('[data-story-chapter-id]')).toBeNull();

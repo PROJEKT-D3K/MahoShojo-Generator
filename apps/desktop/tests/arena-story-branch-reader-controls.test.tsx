@@ -50,3 +50,22 @@ it('Escape closes an in-flight native-shaped read and a late result cannot reope
   await act(async () => { gate.resolve(); await Promise.resolve(); });
   expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(owner.branchReader.getSnapshot().activeSession).toBeNull();
 });
+
+it('keeps branch read failure in the shared alert and retries only after explicit intent', async () => {
+  const { port, execution } = await mount('arena'); const writes = port.begin.mock.calls.length;
+  const gate = deferred<void>();
+  port.beforeRead = async descriptor => { if (descriptor.kind === 'session') { await gate.promise; throw new Error('synthetic read failure'); } };
+  await click('查看分支链');
+  expect(document.querySelector('[role=dialog] [role=status]')?.textContent).toContain('正在读取分支来源');
+  expect(document.querySelector('[role=dialog] [role=alert]')).toBeNull();
+  const focused = document.activeElement;
+  await act(async () => { gate.resolve(); await vi.waitFor(() => expect(owner.branchReader.getSnapshot().error).toBeTruthy()); });
+  expect(document.querySelector('[role=dialog] .error-message[role=alert]')?.textContent).toBe(owner.branchReader.getSnapshot().error);
+  expect(document.activeElement).toBe(focused);
+  const reads = port.read.mock.calls.length;
+  await act(async () => { await Promise.resolve(); }); expect(port.read).toHaveBeenCalledTimes(reads);
+  port.beforeRead = undefined; await click('重试读取分支来源');
+  expect(document.querySelector('[role=dialog] [role=alert]')).toBeNull();
+  expect(document.querySelector('[role=dialog]')?.textContent).toContain('当前子会话');
+  expect(port.begin).toHaveBeenCalledTimes(writes); expect(execution.requests).toHaveLength(2);
+});

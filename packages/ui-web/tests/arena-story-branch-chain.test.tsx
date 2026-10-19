@@ -29,6 +29,8 @@ it('current row and Escape close without selecting or writing anything', async (
 it('does not label an incomplete parent chain as root or claim no children exist', async () => {
   props.sessions = []; props.activeSession = view('B', 'outside-page'); await render();
   expect(text()).toContain('不能据此认定已删除'); expect(text()).toContain('outside-page'); expect(text()).not.toContain('根会话');
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull();
+  expect(document.querySelector('[role="dialog"] [role="status"]')?.textContent).toContain('不能据此认定已删除');
   expect(text()).toContain('当前已加载目录中没有子分支记录'); expect(text()).not.toContain('当前会话没有子分支');
 });
 it('shows cycle and damaged-link states, and only host-provided controls can read another record', async () => {
@@ -39,9 +41,13 @@ it('shows cycle and damaged-link states, and only host-provided controls can rea
 it('can show an incremental parent read and cancel while loading, with no fake empty or missing result', async () => {
   props.activeSession = null; props.sessions = []; props.loading = true; props.showChildren = false;
   await render(); expect(text()).toContain('正在读取分支来源'); expect(text()).not.toContain('尚未选择'); expect(text()).not.toContain('根会话');
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull();
+  const focused = document.activeElement;
   await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   expect(props.onClose).toHaveBeenCalledOnce();
-  props.loading = false; props.error = '读取时来源目前不存在'; await render(); expect(text()).toContain(props.error); expect(text()).not.toContain('尚未选择');
+  props.loading = false; props.error = '读取时来源目前不存在\n原选择仍保留'; await render(); expect(text()).toContain(props.error); expect(text()).not.toContain('尚未选择');
+  expect(document.querySelector('.error-message[role="alert"] .whitespace-pre-wrap')?.textContent).toBe(props.error);
+  expect(document.activeElement).toBe(focused); expect(props.onSelectSession).not.toHaveBeenCalled();
 });
 it('projects bounded title fields without retaining the complete session or mutating it', () => {
   const source = { id: 'long', title: '星'.repeat(100000), updatedAt: 1, branchLabel: '光'.repeat(100000), branchOf: { sessionId: 'A', chapterIndex: 1, chapterTitle: '月'.repeat(100000) }, secret: 'not a view field' };

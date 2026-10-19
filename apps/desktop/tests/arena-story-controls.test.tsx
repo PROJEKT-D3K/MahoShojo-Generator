@@ -23,6 +23,37 @@ const mount=async(options:{draft?:ReturnType<typeof storyDraft>;product?:'battle
  return{port,execution,download,settleGeneration:()=>act(async()=>{await generation;})};
 };
 describe('continuous-story actual controlled surface',()=>{
+ it('shares native directory and chapter read errors without automatic retry or losing explicit read actions', async () => {
+  const { port, execution, settleGeneration } = await mount(); await click('新建连续战报'); await settleGeneration();
+  const head = owner.getSnapshot().active!, writes = port.begin.mock.calls.length;
+  const focused = button('刷新故事目录'); focused.focus();
+  port.listSessions.mockRejectedValueOnce(new Error('读取目录失败\n保留原目录'));
+  await click('刷新故事目录');
+  expect(container.querySelector('.error-message[role=alert] .whitespace-pre-wrap')?.textContent).toBe('读取目录失败\n保留原目录');
+  expect(document.activeElement).toBe(focused); expect(owner.getSnapshot().sessions).toHaveLength(1);
+  await click('刷新故事目录'); expect(container.querySelector('[role=alert]')).toBeNull();
+  port.listChapters.mockRejectedValueOnce(new Error('读取章节目录失败'));
+  await act(async () => owner.selectSession(head));
+  expect(container.querySelector('.error-message[role=alert]')?.textContent).toBe('读取章节目录失败');
+  await click('重读章节目录'); expect(container.querySelector('[role=alert]')).toBeNull();
+  const gate = deferred<void>();
+  port.beforeRead = async descriptor => { if (descriptor.kind === 'chapter') { await gate.promise; throw new Error('读取章节失败\n原章节未改写'); } };
+  let read: Promise<void>;
+  await act(async () => { read = owner.selectChapter(head.lastChapterId); });
+  expect(container.querySelector('[data-story-read-status=loading] [role=status]')?.textContent).toBe('正在读取章节...');
+  expect(container.querySelector('[role=alert]')).toBeNull();
+  await act(async () => { gate.resolve(); await read!; });
+  const error = container.querySelector('[data-story-read-status=error] .error-message[role=alert]')!;
+  expect(error.querySelector('.whitespace-pre-wrap')?.textContent).toBe('读取章节失败\n原章节未改写');
+  expect(document.activeElement).toBe(focused);
+  const reads = port.read.mock.calls.length;
+  await act(async () => { await Promise.resolve(); }); expect(port.read).toHaveBeenCalledTimes(reads);
+  const retry = button('重试读取本章'); retry.focus(); expect(document.activeElement).toBe(retry);
+  port.beforeRead = undefined; await click('重试读取本章');
+  expect(container.querySelector('[data-story-read-status=loaded]')?.textContent).toContain('甲与乙继续前行');
+  expect(container.querySelector('[role=alert]')).toBeNull();
+  expect(port.begin).toHaveBeenCalledTimes(writes); expect(execution.requests).toHaveLength(1);
+ });
  it('renders actual shared directories and selected loaded body after one explicit request',async()=>{
   const {execution,port,settleGeneration}=await mount();await click('新建连续战报');await settleGeneration();
   expect(container.querySelector('[data-story-read-status="loaded"]')?.textContent).toContain('甲与乙继续前行');

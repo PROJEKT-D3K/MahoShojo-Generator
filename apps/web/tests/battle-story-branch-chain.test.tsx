@@ -20,7 +20,9 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 it('actual Web wrapper renders a cyclic graph with finite unique rows and explicit termination', async () => {
   const sessions = [session('A', 'B'), session('B', 'A')], select = vi.fn(), close = vi.fn();
   await act(async () => root.render(<BattleStoryBranchChainModal isOpen sessions={sessions} activeSession={sessions[0]!} onSelectSession={select} onClose={close} />));
-  expect(document.body.textContent).toContain('循环分支来源');
+  expect(document.querySelector('[role="status"]')?.textContent).toContain('循环分支来源');
+  expect(document.querySelector('[role="alert"], .error-message')).toBeNull();
+  expect(select).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled();
   const parent = document.querySelector('[aria-label="已知父链"]')!;
   expect(parent.querySelectorAll('button')).toHaveLength(2); expect(parent.textContent).not.toContain('根会话');
   await act(async () => parent.querySelector<HTMLButtonElement>('button')!.click());
@@ -28,10 +30,22 @@ it('actual Web wrapper renders a cyclic graph with finite unique rows and explic
 });
 it('actual Web directory boundary does not turn an unavailable 101st parent into root or proof of deletion', async () => {
   const sessions = Array.from({ length: 100 }, (_, i) => session(`recent-${i}`));
-  const active = session('active', 'older-than-page');
-  await act(async () => root.render(<BattleStoryBranchChainModal isOpen sessions={sessions} activeSession={active} onSelectSession={vi.fn()} onClose={vi.fn()} />));
+  const active = session('active', 'older-than-page'), select = vi.fn(), close = vi.fn();
+  const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('分支关系展示不应自动发起请求'));
+  const render = async () => {
+    await act(async () => root.render(<BattleStoryBranchChainModal isOpen sessions={[...sessions]} activeSession={active} onSelectSession={select} onClose={close} />));
+  };
+  await render();
   const chain = document.querySelector('[aria-label="已知父链"]')!;
   expect(chain.textContent).not.toContain('根会话'); expect(chain.querySelectorAll('button')).toHaveLength(1);
   expect(document.body.textContent).toContain('最近 100 个会话'); expect(document.body.textContent).toContain('不能据此认定已删除');
   expect(document.body.textContent).toContain('older-than-page');
+  expect(document.querySelector('[role="status"]')?.textContent).toContain('不能据此认定已删除');
+  expect(document.querySelector('[role="alert"], .error-message')).toBeNull();
+  const current = chain.querySelector<HTMLButtonElement>('button')!; current.focus();
+  await render();
+  // 真 Web wrapper 不提供 error/loading；缺失父链只是 status，刷新 props 不重置模态内焦点。
+  expect(document.activeElement).toBe(current);
+  expect(document.querySelector('[role="alert"], .error-message')).toBeNull();
+  expect(select).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
 });

@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlCard } from '../character-card';
 import { StreamingBattleReportCard } from '../arena-report';
 import { ArenaWebResultView } from '../arena-report/views';
+import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
 import { generationActionClassNames } from '../generation-actions';
 import type { HomeAssetSource } from '../home/feature-catalog';
@@ -208,6 +209,28 @@ function OverlaySection({ onOpen }: { onOpen: () => void }) {
   );
 }
 
+function StoryReadErrorsSample() {
+  const [branchOpen, setBranchOpen] = useState(false);
+  const [chapterError, setChapterError] = useState(true);
+  return (
+    <div className={`${PANEL_CLASS} flex flex-col gap-3`} aria-label="故事读取错误样板">
+      <h3 className="text-sm font-medium text-(--app-text-muted)">连续故事：明确读取错误与原有操作</h3>
+      <BattleStorySessionDirectory rows={[]} selectedId={null} onSelect={() => {}}
+        error={'示例：故事目录读取失败\n已保存的故事不受影响。'} />
+      <BattleStoryChapterReader state={chapterError
+        ? { status: 'error', identity: { sessionId: 'showroom', chapterId: 'chapter' }, message: '示例：章节读取失败\n可以显式重读。' }
+        : { status: 'loaded', identity: { sessionId: 'showroom', chapterId: 'chapter' }, title: '示例章节', content: <p>已读取示例正文，未发出网络请求。</p> }}
+        errorActions={<button type="button" className={generationActionClassNames.secondary} onClick={() => setChapterError(false)}>模拟重读本章</button>} />
+      <div className="flex flex-wrap gap-3">
+        <button type="button" className={generationActionClassNames.secondary} onClick={() => setChapterError(true)}>重置章节错误样板</button>
+        <button type="button" className={generationActionClassNames.secondary} onClick={() => setBranchOpen(true)}>打开分支读取错误样板</button>
+      </div>
+      <BattleStoryBranchChainModal isOpen={branchOpen} onClose={() => setBranchOpen(false)} onSelectSession={() => {}}
+        sessions={[]} activeSession={null} error={'示例：分支来源读取失败\n原故事仍保留。'} />
+    </div>
+  );
+}
+
 function ResultSurfacesSection() {
   return (
     <div className="flex flex-col gap-3">
@@ -225,6 +248,7 @@ function ResultSurfacesSection() {
           reportContent={<ArenaWebResultView source="<main>样板间战报</main>" ready
             execution={{ available: false, reason: '样板间只展示安全文本，不运行生成代码。' }} />} />
       </div>
+      <StoryReadErrorsSample />
     </div>
   );
 }
