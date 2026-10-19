@@ -7,6 +7,8 @@
 import {
   buildQuestionKey,
   collectStoredQuestionnaireAnswerItems,
+  normalizeQuestionnaireDefinition,
+  parseQuestionnaireDataCardPayload,
   type QuestionnaireDefinition,
   type QuestionnaireQuestion,
 } from './questionnaire-definition';
@@ -324,6 +326,28 @@ export const resolveQuestionnaireSelectionNativeAllowedFallback = (
   }
   if (source === 'upload') return false;
   return typeof declared === 'boolean' ? declared : false;
+};
+
+/**
+ * 卡库选择的内容可以来自兼容包装，许可只能来自外层卡正文。
+ * 这里只投影客户端许可；服务器仍须回读卡片并独立决定签名。
+ * 本地/缓存副本由宿主传 upload，不能继承内外层许可；预设不走此入口。
+ */
+export const resolveQuestionnaireCardSelection = (
+  payload: unknown,
+  source: 'database' | 'upload',
+  resolveFallback: (rawQuestionnaire: Record<string, unknown>) => {
+    fallbackKind: QuestionnaireDefinition['kind'];
+    fallbackId?: string;
+    fallbackTitle?: string;
+  },
+): QuestionnaireDefinition | null => {
+  const rawQuestionnaire = parseQuestionnaireDataCardPayload(payload);
+  const questionnaire = normalizeQuestionnaireDefinition(rawQuestionnaire, resolveFallback(rawQuestionnaire));
+  if (!questionnaire) return null;
+  // normalizer 的 nativeAllowed 参数仅是兜底，不能阻止内层声明覆盖它。
+  questionnaire.nativeAllowed = resolveQuestionnaireSelectionNativeAllowedFallback(source, payload);
+  return questionnaire;
 };
 
 /** hosted 生成请求 `questionnaireSelections[]` 的 wire 字段。 */

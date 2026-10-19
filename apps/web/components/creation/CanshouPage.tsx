@@ -74,7 +74,6 @@ import {
   compactQuestionnaireAnswerItems,
   formatQuestionnaireAnswers,
   normalizeQuestionnaireDefinition,
-  parseQuestionnaireDataCardPayload,
   normalizeUserAnswers,
   resolveQuestionnaireAnswerTarget,
   resolveQuestionnaireReferences,
@@ -96,6 +95,7 @@ import {
   reconcileQuestionnaireSelectionsForSingleMode,
   remapAnswersToQuestionnaireChange,
   removeQuestionnaireSelection,
+  resolveQuestionnaireCardSelection,
   setQuestionnaireSelectionLore,
   type QuestionnaireContextItem as DomainQuestionnaireContextItem,
   type QuestionnaireSelection as DomainQuestionnaireSelection,
@@ -626,17 +626,16 @@ export const CanshouPage: React.FC = () => {
 
   const handleSelectQuestionnaireCard = (card: any) => {
     try {
-      const rawData = parseQuestionnaireDataCardPayload(card);
+      const source = card?._storageLocation === 'local' || card?._storageLocation === 'cache' ? 'upload' : 'database';
       const cardSourceMeta = mapDataCardSourceMeta(card);
-      const normalized = normalizeQuestionnaireDefinition(rawData, {
+      const normalized = resolveQuestionnaireCardSelection(card, source, (rawData) => ({
         fallbackKind: 'canshou',
         fallbackId: typeof rawData?.id === 'string' ? rawData.id : `canshou-card-${card?.id ?? ''}`,
         fallbackTitle: typeof rawData?.title === 'string' ? rawData.title : card?.name || '未命名问卷',
-        nativeAllowed: typeof rawData?.nativeAllowed === 'boolean' ? rawData.nativeAllowed : false,
-      });
+      }));
       if (!normalized) throw new Error('问卷数据卡解析失败');
       applySelection({
-        source: 'database',
+        source,
         questionnaire: normalized,
         ...cardSourceMeta,
       });
@@ -644,6 +643,7 @@ export const CanshouPage: React.FC = () => {
       setShowQuestionnairePicker(false);
     } catch (error) {
       setQuestionnairePickerError(error instanceof Error ? error.message : '解析问卷失败');
+      return false;
     }
   };
 

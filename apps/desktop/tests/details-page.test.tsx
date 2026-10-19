@@ -108,12 +108,16 @@ const fillCurrentAnswer = async (value: string) => {
 };
 
 describe('Desktop Details real route and session UI (native adapter mock)', () => {
-  it('keeps a rejected library questionnaire visible without changing answers, then accepts a valid card', async () => {
+  it.each([false, true])('keeps rejected library input visible, then accepts a valid card (wrapped: %s)', async (wrapped) => {
     vi.stubGlobal('crypto', webcrypto);
     const invalid = { id: 'empty', kind: 'magical-girl', title: '空问卷', questions: [] };
-    const valid = { ...questionnaire, id: 'accepted', title: '可用问卷' };
-    const items = await Promise.all([invalid, valid].map(async (data) => LocalCardRecordV1Schema.parse({
-      id: data.id, schemaVersion: 1, storageLocation: 'local', cardType: 'questionnaire', title: data.title,
+    const valid = { ...questionnaire, id: 'accepted', title: '可用问卷', nativeAllowed: true };
+    const entries = [
+      { id: invalid.id, title: invalid.title, data: invalid },
+      { id: valid.id, title: valid.title, data: wrapped ? { questionnaire: valid, nativeAllowed: false } : valid },
+    ];
+    const items = await Promise.all(entries.map(async ({ id, title, data }) => LocalCardRecordV1Schema.parse({
+      id, schemaVersion: 1, storageLocation: 'local', cardType: 'questionnaire', title,
       data, contentDigest: await digestLocalCardPayloadV1(data), provenance: { kind: 'unsigned', execution: 'imported' },
       createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
     })));
@@ -134,7 +138,7 @@ describe('Desktop Details real route and session UI (native adapter mock)', () =
     await settle();
     expect(picker()).toBeNull();
     expect(JSON.parse(window.localStorage.getItem(DETAILS_DRAFT_KEY)!).questionnaireSelections).toEqual([
-      expect.objectContaining({ questionnaire: expect.objectContaining({ id: 'accepted', title: '可用问卷' }) }),
+      expect.objectContaining({ source: 'upload', questionnaire: expect.objectContaining({ id: 'accepted', title: '可用问卷', nativeAllowed: false }) }),
     ]);
     expect(container.querySelector<HTMLTextAreaElement>('.ui-web-questionnaire-answer-input')?.value).toBe('善良');
     expect(mocks.execute).not.toHaveBeenCalled();

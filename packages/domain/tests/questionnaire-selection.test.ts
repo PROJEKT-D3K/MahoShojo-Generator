@@ -19,6 +19,7 @@ import {
   reconcileQuestionnaireSelectionsForSingleMode,
   remapAnswersToQuestionnaireChange,
   removeQuestionnaireSelection,
+  resolveQuestionnaireCardSelection,
   resolveQuestionnaireSelectionNativeAllowedFallback,
   setQuestionnaireSelectionLore,
   type QuestionnaireSelection,
@@ -36,6 +37,49 @@ const makeSelection = (overrides: Partial<QuestionnaireSelection> = {}): Questio
   source: 'preset',
   questionnaire: makeQuestionnaire(),
   ...overrides,
+});
+
+describe('问卷卡内容解析与来源许可分离', () => {
+  const fallback = () => ({ fallbackKind: 'magical-girl' as const, fallbackId: 'fallback', fallbackTitle: '回退标题' });
+
+  test.each(['database', 'upload'] as const)('%s 包装内容只能继承外层许可，不改原件', (source) => {
+    for (const outer of [undefined, false, true]) {
+      for (const inner of [false, true]) {
+        const payload = { questionnaire: makeQuestionnaire({ nativeAllowed: inner }), ...(outer === undefined ? {} : { nativeAllowed: outer }) };
+        const original = structuredClone(payload);
+        const resolved = resolveQuestionnaireCardSelection(payload, source, fallback)!;
+        expect(resolved).toMatchObject({ id: 'q-demo', title: '示例问卷', questions: [{ id: 'q1' }], nativeAllowed: source === 'database' && outer === true });
+        expect(payload).toEqual(original);
+      }
+    }
+  });
+
+  test.each(['data', 'dataJson', 'data_json', 'dataJSON'])('复用既有 %s 容器且不采其内部许可', (key) => {
+    const payload = { [key]: JSON.stringify(makeQuestionnaire({ nativeAllowed: true })), nativeAllowed: false };
+    expect(resolveQuestionnaireCardSelection(payload, 'database', fallback)).toMatchObject({ id: 'q-demo', nativeAllowed: false });
+  });
+
+  test('普通卡保持外层许可，上传副本恒为非原生', () => {
+    for (const nativeAllowed of [undefined, false, true]) {
+      const payload = makeQuestionnaire({ nativeAllowed });
+      expect(resolveQuestionnaireCardSelection(payload, 'database', fallback)?.nativeAllowed).toBe(nativeAllowed === true);
+      expect(resolveQuestionnaireCardSelection(payload, 'upload', fallback)?.nativeAllowed).toBe(false);
+    }
+  });
+
+  test('保留已支持的直读纯 Lore，但不为坏包装或空内容回退', () => {
+    const lore = { id: 'lore', kind: 'magical-girl', title: '纯设定', loreMarkdown: '# 设定' };
+    expect(resolveQuestionnaireCardSelection(lore, 'upload', fallback)).toMatchObject({ questions: [], loreMarkdown: '# 设定', nativeAllowed: false });
+    expect(resolveQuestionnaireCardSelection({ ...lore, questions: [] }, 'upload', fallback)).toMatchObject({ questions: [] });
+    expect(resolveQuestionnaireCardSelection({ ...lore, questionnaire: makeQuestionnaire({ loreMarkdown: '内层正文' }) }, 'upload', fallback)).toMatchObject({
+      id: 'q-demo', title: '示例问卷', questions: [{ id: 'q1' }], loreMarkdown: '内层正文',
+    });
+    expect(() => resolveQuestionnaireCardSelection({ ...lore, data: '{bad' }, 'upload', fallback)).toThrow();
+    expect(() => resolveQuestionnaireCardSelection({ questionnaire: { unrelated: true } }, 'database', fallback)).toThrow();
+    expect(() => resolveQuestionnaireCardSelection({ ...lore, questionnaire: { unrelated: true } }, 'database', fallback)).toThrow();
+    expect(resolveQuestionnaireCardSelection({ kind: 'magical-girl', questions: [] }, 'database', fallback)).toBeNull();
+    expect(resolveQuestionnaireCardSelection({ kind: 'invalid', questions: ['题目'] }, 'database', fallback)).toBeNull();
+  });
 });
 
 let suffixCounter = 0;

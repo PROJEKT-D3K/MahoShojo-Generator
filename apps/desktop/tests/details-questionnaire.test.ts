@@ -12,6 +12,7 @@ import {
   buildQuestionKey,
   MAX_QUESTIONNAIRE_IMPORT_BYTES,
 } from '@mahoshojo/domain/questionnaire-definition';
+import { mapPublicDataCardRowToBattleSelectionPayload } from '@mahoshojo/ui-web/card-library';
 
 const source = () => JSON.parse(readFileSync(new URL('../../../content/questionnaires/presets/magical-girl-default.json', import.meta.url), 'utf8'));
 const fixture = (question: Record<string, unknown>) => ({
@@ -141,6 +142,23 @@ describe('parseQuestionnaireSelection', () => {
     nativeAllowed: true,
     questions: [{ id: 'q1', question: '名字？' }],
   };
+
+  it.each(['cloud', 'local', 'cache'] as const)('解包 %s 内容但保留外层来源与许可', (location) => {
+    for (const outer of [undefined, false, true]) {
+      const body = { questionnaire: { ...basePayload, _cardId: '伪造卡ID', _storageLocation: 'cloud', nativeAllowed: true }, ...(outer === undefined ? {} : { nativeAllowed: outer }) };
+      const payload = mapPublicDataCardRowToBattleSelectionPayload({
+        id: 'card-9', name: '外层卡名', type: 'questionnaire', storageLocation: location, data: JSON.stringify(body),
+      });
+      const parsed = parseQuestionnaireSelection(payload, { selectionId: `${location}:card-9`, storageLocation: location });
+      if ('error' in parsed) throw new Error(parsed.error);
+      expect(parsed.questionnaire).toMatchObject({ id: basePayload.id, title: basePayload.title, nativeAllowed: location === 'cloud' && outer === true });
+      expect(parsed.source).toEqual({
+        kind: location === 'cloud' ? 'cloud' : 'local', title: '外层卡名', selectionId: `${location}:card-9`,
+        ...(location === 'cloud' ? { cardId: 'card-9' } : {}),
+      });
+      expect(payload.questionnaire).toEqual(body.questionnaire);
+    }
+  });
 
   it('云端问卷卡保留服务器身份并归一化题目', () => {
     const parsed = parseQuestionnaireSelection({

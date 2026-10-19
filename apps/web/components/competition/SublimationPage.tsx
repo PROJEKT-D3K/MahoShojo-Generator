@@ -54,7 +54,6 @@ import { composeSublimationNarrativeHistoryReference } from '@/lib/narrative-his
 import { mapDataCardSourceMeta } from '@/lib/data-card-read-mappers';
 import {
   normalizeQuestionnaireDefinition,
-  parseQuestionnaireDataCardPayload,
   type QuestionnairePresetEntry,
 } from '@/lib/questionnaires';
 import {
@@ -64,6 +63,7 @@ import {
   createStoredQuestionnaireSelectionNormalizer,
   ensureQuestionnaireSelectionId,
   removeQuestionnaireSelection,
+  resolveQuestionnaireCardSelection,
   setQuestionnaireSelectionLore,
   type QuestionnaireSelection,
 } from '@mahoshojo/domain/questionnaire-selection';
@@ -643,20 +643,21 @@ export const SublimationPage: React.FC = () => {
 
     const handleSelectQuestionnaireCard = (card: any) => {
         try {
-            const rawData = parseQuestionnaireDataCardPayload(card);
+            const source = card?._storageLocation === 'local' || card?._storageLocation === 'cache' ? 'upload' : 'database';
             const cardSourceMeta = mapDataCardSourceMeta(card);
 
-            const fallbackKind = rawData?.kind === 'canshou' ? 'canshou' : 'magical-girl';
-            const normalized = normalizeQuestionnaireDefinition(rawData, {
-                fallbackKind,
-                fallbackId: typeof rawData?.id === 'string' ? rawData.id : `${fallbackKind}-card-${card?.id ?? ''}`,
-                fallbackTitle: typeof rawData?.title === 'string' ? rawData.title : card?.name || '未命名问卷',
-                nativeAllowed: typeof rawData?.nativeAllowed === 'boolean' ? rawData.nativeAllowed : false,
+            const normalized = resolveQuestionnaireCardSelection(card, source, (rawData) => {
+                const fallbackKind = rawData.kind === 'canshou' ? 'canshou' : 'magical-girl';
+                return {
+                    fallbackKind,
+                    fallbackId: typeof rawData?.id === 'string' ? rawData.id : `${fallbackKind}-card-${card?.id ?? ''}`,
+                    fallbackTitle: typeof rawData?.title === 'string' ? rawData.title : card?.name || '未命名问卷',
+                };
             });
             if (!normalized) throw new Error('问卷数据卡解析失败');
 
             applyQuestionnaireSelection({
-                source: 'database',
+                source,
                 questionnaire: normalized,
                 ...cardSourceMeta,
             });
@@ -664,6 +665,7 @@ export const SublimationPage: React.FC = () => {
             setShowQuestionnairePicker(false);
         } catch (err) {
             setQuestionnairePickerError(err instanceof Error ? err.message : '解析问卷失败');
+            return false;
         }
     };
 

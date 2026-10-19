@@ -8,6 +8,7 @@ import {
 } from '@mahoshojo/domain/questionnaire-definition';
 import type { QuestionnaireAnswerItem } from '@mahoshojo/domain/questionnaire';
 import {
+  resolveQuestionnaireCardSelection,
   resolveQuestionnaireSelectionNativeAllowedFallback,
   type QuestionnaireSelection,
   type QuestionnaireSelectionSource,
@@ -99,25 +100,21 @@ export const parseQuestionnaireCardSelection = (
     ? payload._cardName.trim()
     : '未命名问卷';
   const isLocal = payload._storageLocation === 'local';
-  // `nativeAllowed` 只决定签名资格、不决定可用性：本地副本按 upload 语义恒 false，
-  // 云端卡按 database 语义取声明值（未声明 false），与 Web/hosted-runtime 同一口径。
-  const questionnaire = normalizeQuestionnaireDefinition(payload, {
-    fallbackId: typeof payload._cardId === 'string' && payload._cardId ? `card-${payload._cardId}` : 'custom-questionnaire',
-    fallbackKind: family.fallbackKind,
-    fallbackTitle: cardName,
-    nativeAllowed: resolveQuestionnaireSelectionNativeAllowedFallback(
-      isLocal ? 'upload' : 'database',
-      payload,
-    ),
-  });
+  let questionnaire: QuestionnaireDefinition | null;
+  try {
+    questionnaire = resolveQuestionnaireCardSelection(payload, isLocal ? 'upload' : 'database', () => ({
+      fallbackId: typeof payload._cardId === 'string' && payload._cardId ? `card-${payload._cardId}` : 'custom-questionnaire',
+      fallbackKind: family.fallbackKind,
+      fallbackTitle: cardName,
+    }));
+  } catch {
+    return { error: '这张数据卡不包含可识别的问卷内容。' };
+  }
   // 纯 Lore 问卷（questions 为空但有 loreMarkdown）是合法形态：共享面板按
   // 「只有设定没有题目」处理，与上传/粘贴/预设入口的归一化口径一致（D5.1-P2-r1）。
   if (!questionnaire || (questionnaire.questions.length === 0 && !questionnaire.loreMarkdown?.trim())) {
     return { error: '这张数据卡不包含可识别的问卷内容。' };
   }
-  // `normalizeQuestionnaireDefinition` 优先采纳卡片声明的 nativeAllowed；
-  // 本地副本没有服务器可以背书，upload 语义下恒为非原生——归一化后强制回 false。
-  if (isLocal) questionnaire.nativeAllowed = false;
   // selectionId 是宿主给的权威实例作用域（`local:<recordId>`/`cloud:<cardId>`）；
   // 缺上下文时按来源种类 + canonical id 兜底，仍保证云/本地副本互不错投。
   const fallbackScopeId = isLocal

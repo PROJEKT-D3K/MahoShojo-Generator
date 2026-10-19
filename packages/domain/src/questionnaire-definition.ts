@@ -272,6 +272,12 @@ export const parseQuestionnaireDataCardPayload = (source: unknown): Record<strin
   if (isRecord(nestedQuestionnaire) && Array.isArray(nestedQuestionnaire.questions)) {
     return nestedQuestionnaire;
   }
+  // 保留 normalizer 已支持的直读纯 Lore 旧形态，但不覆盖既有包装优先级，
+  // 也不让坏包装借外层 Lore 回退而被接受。
+  if (source.questions === undefined && nestedQuestionnaire === undefined
+    && typeof source.loreMarkdown === 'string' && source.loreMarkdown.trim()) {
+    return source;
+  }
 
   throw new Error(QUESTIONNAIRE_CARD_PAYLOAD_ERROR);
 };

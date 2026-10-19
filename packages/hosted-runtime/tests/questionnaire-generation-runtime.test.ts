@@ -284,6 +284,31 @@ describe('questionnaire generation runtime', () => {
     });
   });
 
+  it.each([false, undefined])('数据库包装内层许可不能覆盖外层 %s', async (nativeAllowed) => {
+    const result = await resolveNativeQuestionnaires({
+      requestUrl: 'https://example.test/api/generate',
+      selections: normalizeQuestionnaireSelections([{
+        source: 'database',
+        kind: 'magical-girl',
+        dataCardId: 'card-1',
+      }]),
+      requiredQuestionnaireIds: new Set(['mg-default']),
+      presetEntries: [],
+      loadPreset: vi.fn(),
+      loadDataCard: vi.fn(async () => ({
+        type: 'questionnaire',
+        data: JSON.stringify({
+          id: 'mg-default',
+          kind: 'magical-girl',
+          title: '云卡外层',
+          nativeAllowed,
+          questionnaire: questionnaire({ nativeAllowed: true }),
+        }),
+      })),
+    });
+    expect(result).toEqual({ allowed: false, questionnaires: [] });
+  });
+
   it('不可信 selection 仅可在无 lore 且与已提交答案无关时跳过', async () => {
     const resolve = (requiredQuestionnaireIds: Set<string>, useLore: boolean) => resolveNativeQuestionnaires({
       requestUrl: 'https://example.test/api/generate',

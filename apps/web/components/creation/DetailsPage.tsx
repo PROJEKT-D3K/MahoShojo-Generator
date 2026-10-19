@@ -40,7 +40,6 @@ import {
   formatQuestionnaireAnswers,
   MAX_QUESTIONNAIRE_IMPORT_BYTES,
   normalizeQuestionnaireDefinition,
-  parseQuestionnaireDataCardPayload,
   normalizeUserAnswers,
   resolveQuestionnaireAnswerTarget,
   resolveQuestionnaireReferences,
@@ -63,6 +62,7 @@ import {
   remapAnswersToQuestionnaireChange,
   removeQuestionnaireSelection,
   resolveQuestionnaireSelectionNativeAllowedFallback,
+  resolveQuestionnaireCardSelection,
   setQuestionnaireSelectionLore,
   type QuestionnaireContextItem,
   type QuestionnaireSelection,
@@ -708,17 +708,16 @@ export const DetailsPage: React.FC = () => {
 
   const handleSelectQuestionnaireCard = (card: any) => {
     try {
-      const rawData = parseQuestionnaireDataCardPayload(card);
+      const source = card?._storageLocation === 'local' || card?._storageLocation === 'cache' ? 'upload' : 'database';
       const cardSourceMeta = mapDataCardSourceMeta(card);
-      const normalized = normalizeQuestionnaireDefinition(rawData, {
+      const normalized = resolveQuestionnaireCardSelection(card, source, (rawData) => ({
         fallbackKind: 'magical-girl',
         fallbackId: typeof rawData?.id === 'string' ? rawData.id : `magical-girl-card-${card?.id ?? ''}`,
         fallbackTitle: typeof rawData?.title === 'string' ? rawData.title : card?.name || '未命名问卷',
-        nativeAllowed: resolveQuestionnaireSelectionNativeAllowedFallback('database', rawData),
-      });
+      }));
       if (!normalized) throw new Error('问卷数据卡解析失败');
       applySelection({
-        source: 'database',
+        source,
         questionnaire: normalized,
         ...cardSourceMeta,
       });

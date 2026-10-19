@@ -6,11 +6,10 @@ import BattleDataModal from '@/components/BattleDataModal';
 import DataCardDetailsModal from '@/components/DeferredDataCardDetailsModal';
 import { TokenIndicator } from '@/components/shared/TokenIndicator';
 import { QuestionnaireLorePanel as SharedQuestionnaireLorePanel } from '@mahoshojo/ui-web/arena';
-import { buildQuestionnaireSelectionLoreText } from '@mahoshojo/domain/questionnaire-selection';
+import { buildQuestionnaireSelectionLoreText, resolveQuestionnaireCardSelection } from '@mahoshojo/domain/questionnaire-selection';
 import { mapDataCardSourceMeta } from '@/lib/data-card-read-mappers';
 import {
   normalizeQuestionnaireDefinition,
-  parseQuestionnaireDataCardPayload,
   type QuestionnairePresetEntry,
 } from '@/lib/questionnaires';
 import {
@@ -93,19 +92,20 @@ export function QuestionnaireLorePanel() {
   const handleSelectQuestionnaireCard = useCallback((card: any) => {
     try {
       if (!hasReferenceCapacity) throw new Error(referenceLimitMessage);
-      const rawData = parseQuestionnaireDataCardPayload(card);
+      const source = card?._storageLocation === 'local' || card?._storageLocation === 'cache' ? 'upload' : 'database';
       const cardSourceMeta = mapDataCardSourceMeta(card);
-      const fallbackKind = rawData?.kind === 'canshou' ? 'canshou' : 'magical-girl';
-      const normalized = normalizeQuestionnaireDefinition(rawData, {
-        fallbackKind,
-        fallbackId: typeof rawData?.id === 'string' ? rawData.id : `${fallbackKind}-card-${card?.id ?? ''}`,
-        fallbackTitle: typeof rawData?.title === 'string' ? rawData.title : card?.name || '未命名问卷',
-        nativeAllowed: typeof rawData?.nativeAllowed === 'boolean' ? rawData.nativeAllowed : false,
+      const normalized = resolveQuestionnaireCardSelection(card, source, (rawData) => {
+        const fallbackKind = rawData.kind === 'canshou' ? 'canshou' : 'magical-girl';
+        return {
+          fallbackKind,
+          fallbackId: typeof rawData?.id === 'string' ? rawData.id : `${fallbackKind}-card-${card?.id ?? ''}`,
+          fallbackTitle: typeof rawData?.title === 'string' ? rawData.title : card?.name || '未命名问卷',
+        };
       });
       if (!normalized) throw new Error('问卷数据卡解析失败');
       requireLore(normalized);
       addQuestionnaireSelection({
-        source: 'database',
+        source,
         questionnaire: normalized,
         ...cardSourceMeta,
       });
@@ -113,6 +113,7 @@ export function QuestionnaireLorePanel() {
       setShowQuestionnairePicker(false);
     } catch (error) {
       setQuestionnairePickerError(error instanceof Error ? error.message : '解析问卷失败');
+      return false;
     }
   }, [addQuestionnaireSelection, hasReferenceCapacity, referenceLimitMessage]);
 
