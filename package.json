@@ -64,7 +64,8 @@
     "generate:desktop-web-execution-policies": "node scripts/generate-desktop-web-execution-policies.mjs",
     "check:desktop-web-execution-policies": "node scripts/generate-desktop-web-execution-policies.mjs --check",
     "sync:desktop-version": "node scripts/sync-desktop-version.mjs",
-    "check:desktop-version": "node scripts/sync-desktop-version.mjs --check"
+    "check:desktop-version": "node scripts/sync-desktop-version.mjs --check",
+    "review:visual": "node scripts/review-visual.mjs"
   },
   "devDependencies": {
     "@types/node": "^20",
