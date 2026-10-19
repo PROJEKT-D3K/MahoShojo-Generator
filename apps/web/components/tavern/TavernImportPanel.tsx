@@ -13,6 +13,7 @@ import { ErrorMessage } from '@/components/ErrorMessage';
 import GeneralCharacterCard from '@/components/GeneralCharacterCard';
 import GeneralScenarioCard from '@/components/GeneralScenarioCard';
 import MagicalGirlCard from '@/components/MagicalGirlCard';
+import { MAGICAL_GIRL_CARD_GRADIENT } from '@mahoshojo/ui-web/character-card';
 import SaveToCloudButton from '@/components/SaveToCloudButton';
 import TachieGenerator from '@/components/TachieGenerator';
 import type { GenerationMode } from '@/components/shared/GenerationModeSwitcher';
@@ -957,7 +958,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                     {outputTemplateForPreview === 'magical-girl' ? (
                       <MagicalGirlCard
                         magicalGirl={previewDataCard as any}
-                        gradientStyle="linear-gradient(135deg, #9775fa 0%, #b197fc 100%)"
+                        gradientStyle={MAGICAL_GIRL_CARD_GRADIENT}
                         onSaveImage={handleSaveImage}
                         imageSaveMode={imageSaveMode}
                         saveButtonLabel={imageSaveButtonLabel}

@@ -21,6 +21,7 @@ import { JsonSizeIndicator } from '@/components/shared/JsonSizeIndicator';
 import { StreamStopButton } from '@/components/shared/StreamStopButton';
 import { MarkdownBlock } from '@/components/MarkdownBlock';
 import MagicalGirlCard from '@/components/MagicalGirlCard';
+import { MAGICAL_GIRL_CARD_GRADIENT } from '@mahoshojo/ui-web/character-card';
 import CanshouCard from '@/components/CanshouCard';
 import GeneralCharacterCard from '@/components/GeneralCharacterCard';
 
@@ -651,7 +652,7 @@ export function FreePage() {
           {nonStreamReasoningNode}
           <MagicalGirlCard
             magicalGirl={safe}
-            gradientStyle="linear-gradient(135deg, #9775fa 0%, #b197fc 100%)"
+            gradientStyle={MAGICAL_GIRL_CARD_GRADIENT}
             portraitAsset={characterPortraitAsset}
           />
           <div className="card !max-w-none">

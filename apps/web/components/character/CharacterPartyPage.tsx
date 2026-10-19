@@ -22,7 +22,7 @@ import { copyTextToClipboard } from '@/lib/clipboard';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import { randomUUID } from '@/lib/crypto';
 import { mapDataCardSourceMeta, mapPublicDataCardRowToBattleSelectionPayload } from '@/lib/data-card-read-mappers';
-import { COLOR_GRADIENTS, MainColor } from '@/lib/main-color';
+import { resolveMagicalGirlGradient } from '@mahoshojo/ui-web/character-card';
 import { inferTemplate, type InferableTemplate } from '@/lib/data-card-converter';
 import { mergeTeamDataCards, type TeamMergeOutputTemplate } from '@/lib/team/merge-team-cards';
 import type { CharacterCardPortraitAsset } from '@/types/visual-asset';
@@ -391,12 +391,10 @@ export function CharacterPartyPage() {
   const tachiePrompt = useMemo(() => buildTachiePrompt(mergedData), [mergedData]);
 
   const gradientStyle = useMemo(() => {
-    if (mergedTemplate !== 'magical-girl') return 'linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)';
-    const appearance = isPlainObject(mergedData.appearance) ? (mergedData.appearance as Record<string, unknown>) : null;
-    const colorScheme = typeof appearance?.colorScheme === 'string' ? appearance.colorScheme : '';
-    const mainColorName = Object.values(MainColor).find((color) => colorScheme.includes(color)) ?? MainColor.Pink;
-    const colors = COLOR_GRADIENTS[mainColorName] ?? COLOR_GRADIENTS[MainColor.Pink];
-    return `linear-gradient(135deg, ${colors.first} 0%, ${colors.second} 100%)`;
+    const appearance = mergedTemplate === 'magical-girl' && isPlainObject(mergedData.appearance)
+      ? (mergedData.appearance as Record<string, unknown>)
+      : null;
+    return resolveMagicalGirlGradient(appearance?.colorScheme);
   }, [mergedTemplate, mergedData]);
 
   const mergedFileName = useMemo(() => {

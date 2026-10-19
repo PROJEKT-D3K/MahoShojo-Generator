@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { getMainColorGradient, MainColor, type MainColorKey } from '@mahoshojo/domain/main-color';
+
 import { MarkdownBlock as SharedMarkdownBlock } from '../markdown';
 import { CharacterParameterSection } from './CharacterParameterSection';
 import { CurrentStatePanel } from './CurrentStatePanel';
@@ -20,30 +22,6 @@ import type {
 export interface GeneralCharacterCardProps extends CharacterCardCommonProps {
   general: GeneralCharacterCardData;
 }
-
-type MainColorKey = 'Red' | 'Orange' | 'Cyan' | 'Blue' | 'Purple' | 'Pink' | 'Yellow' | 'Green';
-
-const MAIN_COLORS: Record<MainColorKey, string> = {
-  Red: '红色',
-  Orange: '橙色',
-  Cyan: '青色',
-  Blue: '蓝色',
-  Purple: '紫色',
-  Pink: '粉色',
-  Yellow: '黄色',
-  Green: '绿色',
-};
-
-const COLOR_GRADIENTS: Record<MainColorKey, { first: string; second: string }> = {
-  Red: { first: '#ff6b6b', second: '#ee5a6f' },
-  Orange: { first: '#ff922b', second: '#ffa94d' },
-  Cyan: { first: '#22b8cf', second: '#66d9e8' },
-  Blue: { first: '#5c7cfa', second: '#748ffc' },
-  Purple: { first: '#9775fa', second: '#b197fc' },
-  Pink: { first: '#ff9a9e', second: '#fecfef' },
-  Yellow: { first: '#f59f00', second: '#fcc419' },
-  Green: { first: '#51cf66', second: '#8ce99a' },
-};
 
 const ENGLISH_COLOR_KEYWORDS: Record<string, MainColorKey> = {
   red: 'Red',
@@ -67,7 +45,7 @@ const ENGLISH_COLOR_KEYWORDS: Record<string, MainColorKey> = {
 
 const detectColorFromContent = (content?: string): MainColorKey => {
   if (!content) return 'Pink';
-  for (const [key, label] of Object.entries(MAIN_COLORS) as [MainColorKey, string][]) {
+  for (const [key, label] of Object.entries(MainColor) as [MainColorKey, string][]) {
     if (content.includes(label)) {
       return key;
     }
@@ -125,7 +103,7 @@ export function GeneralCharacterCard({
         : '（content 字段为空，建议补充完整的角色设定，包括外观、能力、背景。）';
 
   const gradientStyle = useMemo(() => {
-    const colors = COLOR_GRADIENTS[detectColorFromContent(general?.content)];
+    const colors = getMainColorGradient(detectColorFromContent(general?.content));
     return `linear-gradient(135deg, ${colors.first} 0%, ${colors.second} 100%)`;
   }, [general]);
 

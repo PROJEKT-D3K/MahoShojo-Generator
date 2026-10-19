@@ -44,4 +44,4 @@ export type {
   GeneralCharacterDetails,
   MagicalGirlCardData,
 } from './types';
-export { resolveMagicalGirlGradient } from './gradient';
+export { MAGICAL_GIRL_CARD_GRADIENT, resolveMagicalGirlGradient } from './gradient';

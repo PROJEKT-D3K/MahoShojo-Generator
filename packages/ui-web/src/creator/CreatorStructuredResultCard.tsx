@@ -1,5 +1,6 @@
 import {
   CanshouCard,
+  MAGICAL_GIRL_CARD_GRADIENT,
   MagicalGirlCard,
   type CharacterCardPortraitAsset,
 } from '../character-card';
@@ -15,8 +16,6 @@ type CreatorStructuredResultCardProps = {
   saveButtonLabel?: string;
   portraitAsset?: CharacterCardPortraitAsset | null;
 };
-
-const MAGICAL_GIRL_GRADIENT = 'linear-gradient(135deg, #9775fa 0%, #b197fc 100%)';
 
 /**
  * 创作工房结构化结果卡（D5.1-G3 上移共源）。
@@ -51,7 +50,7 @@ export function CreatorStructuredResultCard({
   return (
     <MagicalGirlCard
       magicalGirl={result}
-      gradientStyle={MAGICAL_GIRL_GRADIENT}
+      gradientStyle={MAGICAL_GIRL_CARD_GRADIENT}
       parameterView={parameterView}
       onSaveImage={onSaveImage}
       imageSaveMode={imageSaveMode}

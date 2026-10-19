@@ -5,6 +5,7 @@ import React, { useState, ChangeEvent, useEffect, useMemo, useCallback, useRef }
 import Link from 'next/link';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import MagicalGirlCard from '@/components/MagicalGirlCard';
+import { resolveMagicalGirlGradient } from '@mahoshojo/ui-web/character-card';
 import CanshouCard from '@/components/CanshouCard';
 import GeneralCharacterCard from '@/components/GeneralCharacterCard';
 import { getSensitiveWordRedirectTarget } from '@/lib/content-safety/client';
@@ -75,28 +76,7 @@ import {
 } from '@/lib/data-card-converter';
 import { GENERAL_CHARACTER_TEMPLATE_ID } from '@/lib/schemas/general-character';
 
-// 颜色处理方案
-const MainColor = {
-    Red: '红色',
-    Orange: '橙色',
-    Cyan: '青色',
-    Blue: '蓝色',
-    Purple: '紫色',
-    Pink: '粉色',
-    Yellow: '黄色',
-    Green: '绿色'
-} as const;
-
-const gradientColors: Record<string, { first: string; second: string }> = {
-    [MainColor.Red]: { first: '#ff6b6b', second: '#ee5a6f' },
-    [MainColor.Orange]: { first: '#ff922b', second: '#ffa94d' },
-    [MainColor.Cyan]: { first: '#22b8cf', second: '#66d9e8' },
-    [MainColor.Blue]: { first: '#5c7cfa', second: '#748ffc' },
-    [MainColor.Purple]: { first: '#9775fa', second: '#b197fc' },
-    [MainColor.Pink]: { first: '#ff9a9e', second: '#fecfef' },
-    [MainColor.Yellow]: { first: '#f59f00', second: '#fcc419' },
-    [MainColor.Green]: { first: '#51cf66', second: '#8ce99a' }
-};
+// 颜色处理方案由 @mahoshojo/domain/main-color 维护，渐变解析用 ui-web 的 resolveMagicalGirlGradient。
 
 type SupportedTargetTemplate = 'magical-girl' | 'canshou' | 'general';
 
@@ -1071,9 +1051,7 @@ export const SublimationPage: React.FC = () => {
 
         if (targetTemplate === 'magical-girl' && data.codename) {
             const colorScheme = data.appearance.colorScheme || "红色、粉色";
-            const mainColorName = Object.values(MainColor).find(color => colorScheme.includes(color)) || MainColor.Pink;
-            const colors = gradientColors[mainColorName] || gradientColors[MainColor.Pink];
-            const gradientStyle = `linear-gradient(135deg, ${colors.first} 0%, ${colors.second} 100%)`;
+            const gradientStyle = resolveMagicalGirlGradient(colorScheme);
             return <MagicalGirlCard magicalGirl={data} gradientStyle={gradientStyle} onSaveImage={handleSaveImage} />;
         } else if (targetTemplate === 'canshou' && data.name && data.templateId !== GENERAL_CHARACTER_TEMPLATE_ID) {
             return <CanshouCard canshou={data} onSaveImage={handleSaveImage} />;

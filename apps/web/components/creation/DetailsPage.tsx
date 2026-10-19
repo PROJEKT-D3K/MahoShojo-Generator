@@ -13,6 +13,7 @@ import { useUnsavedPageGuard } from '@mahoshojo/ui-web/client';
 import { assertSupportedQuestionnaireAnswerDraft, questionnaireAnswerDraftFingerprint } from '@/lib/questionnaire-draft-shape';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import MagicalGirlCard from '@/components/MagicalGirlCard';
+import { MAGICAL_GIRL_CARD_GRADIENT } from '@mahoshojo/ui-web/character-card';
 import GeneralCharacterCard from '@/components/GeneralCharacterCard';
 import { useProviderModeCooldown } from '@/lib/cooldown';
 import { quickCheck } from '@/lib/sensitive-word-filter';
@@ -1882,7 +1883,7 @@ export const DetailsPage: React.FC = () => {
             <>
               <MagicalGirlCard
                 magicalGirl={magicalGirlDetails}
-                gradientStyle="linear-gradient(135deg, #9775fa 0%, #b197fc 100%)"
+                gradientStyle={MAGICAL_GIRL_CARD_GRADIENT}
                 onSaveImage={handleSaveImage}
                 imageSaveMode={imageSaveMode}
                 saveButtonLabel={imageSaveButtonLabel}

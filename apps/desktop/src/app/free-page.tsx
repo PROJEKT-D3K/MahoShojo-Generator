@@ -24,6 +24,7 @@ import {
 import {
   CanshouCard,
   GeneralCharacterCard,
+  MAGICAL_GIRL_CARD_GRADIENT,
   MagicalGirlCard,
   type CanshouDetails,
   type GeneralCharacterCardData,
@@ -354,7 +355,7 @@ function FreeForm({ session }: { session: FreeSession }) {
             <div ref={resultSectionRef}>
               {card && <section aria-label="生成结果" className="flex flex-col gap-3">
                 <p className="text-sm text-(--app-text-muted)">生成结果 · 未签名（自由生成为非原生卡）</p>
-                {cardKind === 'magical-girl' && <MagicalGirlCard magicalGirl={card as unknown as MagicalGirlCardData} gradientStyle="linear-gradient(135deg, #9775fa 0%, #b197fc 100%)" />}
+                {cardKind === 'magical-girl' && <MagicalGirlCard magicalGirl={card as unknown as MagicalGirlCardData} gradientStyle={MAGICAL_GIRL_CARD_GRADIENT} />}
                 {cardKind === 'canshou' && <CanshouCard canshou={card as unknown as CanshouDetails} />}
                 {cardKind === 'general' && <GeneralCharacterCard general={card as unknown as GeneralCharacterCardData} />}
                 {cardKind === 'general-scenario' && (

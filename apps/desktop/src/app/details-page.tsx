@@ -70,7 +70,7 @@ import {
   getQuestionnaireQuestionPresentation,
   QuestionnaireSelectionPanel,
 } from '@mahoshojo/ui-web/questionnaire';
-import { MagicalGirlCard, GeneralCharacterCard, type GeneralCharacterCardData, type MagicalGirlCardData } from '@mahoshojo/ui-web/character-card';
+import { MagicalGirlCard, GeneralCharacterCard, MAGICAL_GIRL_CARD_GRADIENT, type GeneralCharacterCardData, type MagicalGirlCardData } from '@mahoshojo/ui-web/character-card';
 import { revokeBlobUrl } from '@mahoshojo/ui-web/client';
 import { CardLibraryModal, type BattleSelectionPayload, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { ImagePreviewModal, useEscapeLayer } from '@mahoshojo/ui-web/modal';
@@ -107,8 +107,6 @@ const DESKTOP_ASSET_SOURCE: HomeAssetSource = { baseUrl: '/' };
 const actionClass = generationActionClassNames.secondary;
 
 type DeviceType = 'mobile' | 'desktop' | 'unknown';
-
-const RESULT_CARD_GRADIENT = 'linear-gradient(135deg, #9775fa 0%, #b197fc 100%)';
 
 const sanitizeFileNamePart = (value: string): string =>
   value.replace(/[^a-z0-9一-龥]/gi, '_').slice(0, 80) || 'data';
@@ -905,7 +903,7 @@ function DetailsForm({ session, restored }: { session: DetailsSession; restored:
                   />
                 : <MagicalGirlCard
                     magicalGirl={state.card as unknown as MagicalGirlCardData}
-                    gradientStyle={RESULT_CARD_GRADIENT}
+                    gradientStyle={MAGICAL_GIRL_CARD_GRADIENT}
                     onSaveImage={handleSaveImage}
                     imageSaveMode={imageSaveMode}
                     saveButtonLabel={imageSaveButtonLabel}
