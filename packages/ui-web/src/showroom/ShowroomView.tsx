@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react';
 
 import { MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlCard } from '../character-card';
+import { StreamingBattleReportCard } from '../arena-report';
+import { ArenaWebResultView } from '../arena-report/views';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
 import { generationActionClassNames } from '../generation-actions';
 import type { HomeAssetSource } from '../home/feature-catalog';
@@ -214,6 +216,14 @@ function ResultSurfacesSection() {
       </p>
       <div className="max-w-3xl">
         <MagicalGirlCard magicalGirl={SHOWROOM_MAGICAL_GIRL} gradientStyle={MAGICAL_GIRL_CARD_GRADIENT} />
+      </div>
+      <div className="max-w-3xl">
+        <h3 className="mb-3 text-sm font-medium text-(--app-text-muted)">竞技场安全源码：共享品牌与元数据（示例用量）</h3>
+        <StreamingBattleReportCard content="<main>样板间战报</main>" mode="classic" disableExport
+          aiModel="showroom-example-model" aiUsage={{ promptTokens: 120, reasoningTokens: 30, completionTokens: 90 }}
+          reporterInfo={{ name: '样板记者', publication: '样板日报' }}
+          reportContent={<ArenaWebResultView source="<main>样板间战报</main>" ready
+            execution={{ available: false, reason: '样板间只展示安全文本，不运行生成代码。' }} />} />
       </div>
     </div>
   );

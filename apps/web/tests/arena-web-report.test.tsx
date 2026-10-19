@@ -96,6 +96,41 @@ const buildLocalPackage = async (version: string, id = 'local.ui-replay-package'
 };
 
 describe('Web 战报的本地执行许可', () => {
+  it('真实战报卡在安全源码、恢复完成及隔离预览间保留一份模型用量和品牌', async () => {
+    const content = '<!doctype html><html><body><script>unsafe()</script>完整故事</body></html>';
+    const { generatedContent: _generated, ...artifact } = await createWebPackageOverlay(BUILTIN_ARENA_NEWS_PACKAGE_REF, content);
+    expect(_generated).toBe(content);
+    const render = (ready: boolean, withUsage = true) => <BattleResultPresentation report={{
+      format: 'stream-web', content, webPackage: artifact, webConsentScope: 'metadata-owner', webReady: ready,
+      isStreaming: !ready, aiModel: withUsage ? 'actual-web-package-model' : null,
+      aiUsage: withUsage ? { promptTokens: 12, reasoningTokens: 2, completionTokens: 8 } : null,
+    }} />;
+    await act(async () => root.render(render(false)));
+    await act(async () => { await vi.dynamicImportSettled(); });
+    const expectMetadata = () => {
+      expect(container.textContent?.match(/模型：actual-web-package-model/g)).toHaveLength(1);
+      expect(container.textContent).toContain('输入 12｜推理 2｜输出 6');
+      expect(container.querySelectorAll('img[src="/arena-white.svg"]')).toHaveLength(1);
+    };
+    expectMetadata();
+    expect(container.querySelector('pre')?.textContent).toContain('<script>unsafe()</script>');
+    expect(container.querySelector('script, iframe')).toBeNull();
+    await act(async () => root.render(render(false, false)));
+    expect(container.textContent).toContain('模型：未提供');
+    expect(container.textContent).toContain('输入 未提供｜推理 未提供｜输出 未提供');
+    await act(async () => root.render(render(true)));
+    await waitForReact(() => expect(document.body.textContent).toContain('启用 Web 战报'));
+    expectMetadata();
+    expect(container.querySelector('iframe')).toBeNull();
+    await click('继续使用 Web');
+    expect(container.querySelector('iframe')?.getAttribute('sandbox')).toBe('allow-scripts');
+    expectMetadata();
+    await click('普通显示');
+    expectMetadata();
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(container.querySelector('pre')?.textContent).toContain('<script>unsafe()</script>');
+  });
+
   it('offers first-party presets in the picker modal and disables selection while generating', async () => {
     // 网格已经移进模态框：生成方式区块只保留当前选择与入口。
     const openPicker = async (): Promise<void> => {

@@ -25,6 +25,30 @@ describe('shared report capabilities', () => {
 });
 
 describe('完整报告导出展示契约', () => {
+  it('安全内嵌内容沿用共享品牌和真实元数据，仅显式拥有页头的 Web 文档避免重复', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div'), root = createRoot(container);
+    const content = <pre>&lt;script&gt;安全源码&lt;/script&gt;</pre>;
+    try {
+      await act(async () => root.render(<StreamingBattleReportCard content="安全源码" reportContent={content} disableExport
+        aiModel="actual-web-model" aiUsage={{ promptTokens: 12, completionTokens: 8, reasoningTokens: 2 }} />));
+      expect(container.textContent).toContain('模型：actual-web-model');
+      expect(container.textContent).toContain('输入 12｜推理 2｜输出 6');
+      expect(container.querySelectorAll('img[src="/arena-white.svg"]')).toHaveLength(1);
+      expect(container.textContent!.indexOf('模型：')).toBeLessThan(container.textContent!.indexOf('安全源码'));
+      expect(container.querySelector('script')).toBeNull();
+      expect(container.querySelector('.buttons-container')).toBeNull();
+      await act(async () => root.render(<StreamingBattleReportCard content="安全源码" reportContent={content} disableExport />));
+      expect(container.textContent).toContain('模型：未提供');
+      expect(container.textContent).toContain('输入 未提供｜推理 未提供｜输出 未提供');
+      await act(async () => root.render(<StreamingBattleReportCard content="安全源码" reportContent={content} reportContentIncludesHeader disableExport
+        aiModel="actual-web-model" reporterInfo={{ name: '记者', publication: '日报' }} narrativeHistoryReadCount={2} />));
+      expect(container.textContent).not.toContain('模型：');
+      expect(container.querySelector('img[src="/arena-white.svg"]')).toBeNull();
+      expect(container.textContent).toContain('记者 | 记者');
+      expect(container.textContent).toContain('叙事历史读取：2 条');
+    } finally { await act(async () => root.unmount()); }
+  });
   it.each(['streaming', 'structured'] as const)('%s 显示真实模型/Tokens；图片捕获带署名/Logo，不带思考和操作栏，失败恢复', async kind => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);

@@ -26,6 +26,12 @@ it('renders every registered section, the real result card, and a working modal 
   }
   // 结果卡分区渲染的是真实 MagicalGirlCard（.result-card 来自 product-shell.css）。
   expect(container.querySelector('#showroom-result-surfaces .result-card')).not.toBeNull();
+  const results = container.querySelector('#showroom-result-surfaces')!;
+  expect(results.textContent).toContain('模型：showroom-example-model');
+  expect(results.textContent).toContain('输入 120｜推理 30｜输出 60');
+  expect(results.querySelector('img[src="/arena-white.svg"]')).not.toBeNull();
+  expect(results.querySelector('[data-testid="arena-web-result"] pre')?.textContent).toBe('<main>样板间战报</main>');
+  expect(results.querySelector('[data-testid="arena-web-result"] main, iframe')).toBeNull();
   // 页脚分区渲染真实 ProductFooter。
   expect(container.querySelector('#showroom-footer footer, #showroom-footer .footer')).not.toBeNull();
 

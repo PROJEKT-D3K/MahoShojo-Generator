@@ -27,7 +27,9 @@ import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop
 import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { getDesktopCloudSessionStore, resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), owner: null as DesktopArenaRoomSession | null, roomRenders: [] as (string | null)[] }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn(), download: vi.fn(), downloadBlob: vi.fn(), capture: vi.fn(), owner: null as DesktopArenaRoomSession | null, roomRenders: [] as (string | null)[] }));
+vi.mock('../src/platform/download-text-file', () => ({ downloadTextFile: mocks.download, downloadBinaryFile: vi.fn(), downloadBlobFile: mocks.downloadBlob }));
+vi.mock('@mahoshojo/ui-web/client', async original => ({ ...await original<object>(), capturePngBlob: mocks.capture }));
 // Observe the actual route-owned owner; render the original panel unchanged. No state or methods are replaced.
 vi.mock('../src/features/arena/room-panel', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/features/arena/room-panel')>();
@@ -327,6 +329,7 @@ beforeEach(() => {
   originalExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand');
   mocks.owner = null; mocks.roomRenders = [];
   vi.clearAllMocks(); localStorage.clear(); resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
+  mocks.download.mockReset(); mocks.downloadBlob.mockReset(); mocks.capture.mockReset().mockResolvedValue(new Blob(['image'], { type: 'image/png' }));
   vi.stubGlobal('crypto', webcrypto);
   Object.defineProperty(window, '__MAHOSHOJO_ROOM_DOCUMENT_V1__', { configurable: true, writable: true, value: ipcFixture.attachRequest.documentNonce });
   port = new RoomNativeFixture(); account = { userId: serviceFixture.expectedUserId, username: '普通账号' };
@@ -523,6 +526,37 @@ describe('Desktop /arena Room journey through the real route and Native bridge',
     await mount(path);
     expect(Boolean(button('打开多人大厅'))).toBe(path === '/arena');
     expect(port.order).toEqual([]); assertNoExecution();
+  });
+
+  it.each(['image', 'markdown'] as const)('shows %s export errors in the actual constrained room rather than the hidden ordinary editor', async kind => {
+    seedOrdinary(); await mount(); const before = ordinarySnapshot(); await open();
+    await change('#arena-room-join-code', serviceFixture.operations.join.success.result.roomId);
+    const joining = await startAction('加入房间', 'join');
+    const session = await confirmMembership(joining, 'member'); await publishOnline(session);
+    const completed = structuredClone(generationFixture.operation.success.result) as ArenaRoomGenerationViewResponse;
+    completed.roomId = session.roomId; completed.roomEpoch = session.roomEpoch;
+    completed.generation.configRevision = session.snapshot.revision;
+    completed.markdown = '# 可导出的房间战报\n失败后保留完整正文';
+    const nextRead = port.nextAction('generation-read');
+    await port.deliver(snapshotEvent({ ...session, snapshot: { ...session.snapshot,
+      controlSeq: session.snapshot.controlSeq + 1, activeGeneration: completed.generation } }));
+    await deliverGeneration(await nextRead, completed);
+    assertConstrained();
+    const failure = new Error('房间下载端口暂时不可用');
+    if (kind === 'image') mocks.capture.mockRejectedValueOnce(failure);
+    else mocks.download.mockImplementationOnce(() => { throw failure; });
+    const label = kind === 'image' ? '📱 保存为图片' : '📄 下载记录';
+    await click(label, room());
+    const alert = room().querySelector('.error-message[role="alert"]');
+    expect(alert?.textContent).toContain(kind === 'image' ? '生成图片失败' : failure.message);
+    expect(alert?.closest('[hidden]')).toBeNull();
+    expect(room().querySelector('.result-card')?.textContent).toContain('失败后保留完整正文');
+    expect([...container.querySelectorAll('.error-message[role="alert"]')].filter(node => node.closest('[hidden]'))).toEqual([]);
+    await click(label, room());
+    expect(room().querySelector('.error-message[role="alert"]')).toBeNull();
+    expect(ordinarySnapshot()).toEqual(before);
+    expect(port.actions.map(operation => operation.action.kind)).toEqual(['join', 'generation-read']);
+    assertNoExecution();
   });
 
   it.each([true, false])('reads checked room report fragments and requires current final ACK (%s) before authoritative display', async finalCurrent => {

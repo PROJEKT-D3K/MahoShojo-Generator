@@ -27,6 +27,8 @@ import type { BattleReportIllustrationAsset } from './BattleReportCard';
 export interface StreamingBattleReportCardProps {
     /** 共享卡片外壳内的已隔离 Web 内容。 */
     reportContent?: React.ReactNode;
+    /** 仅在内嵌内容自己展示竞技场 Logo 与模型/Tokens 时启用，安全源码沿用共享页头。 */
+    reportContentIncludesHeader?: boolean;
     /** Web 显示不支持卡片截图或 Markdown 导出。 */
     disableExport?: boolean;
     /** 与默认导出操作共用卡片底部操作栏。 */
@@ -82,6 +84,7 @@ export interface StreamingBattleReportCardProps {
 export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps> = ({
     content,
     reportContent,
+    reportContentIncludesHeader = false,
     disableExport = false,
     additionalActions,
     ports = {},
@@ -113,6 +116,7 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
     const cardRef = useRef<HTMLDivElement>(null);
     const [isSavingImage, setIsSavingImage] = useState(false);
     const showingWeb = reportContent != null;
+    const embeddedHeader = showingWeb && reportContentIncludesHeader;
     const headlineMatch = content.match(/^\s*#{1,3}\s*(.*)(?:\r?\n|$)/);
     const headline = headlineMatch ? headlineMatch[1].trim() : '';
     const markdownBody = fixNestedListIndentation(headlineMatch && headline ? content.slice(headlineMatch[0].length).trimStart() : content);
@@ -522,10 +526,10 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
             }}
         >
             <div className="result-content">
-                {reportContent}
+                {embeddedHeader ? reportContent : null}
                 <div style={showingWeb ? { padding: '1rem' } : undefined}>
                     {/* 顶部 Logo */}
-                    {!showingWeb && <img
+                    {!embeddedHeader && <img
                         src="/arena-white.svg"
                         style={{ marginBottom: '0rem', marginTop: '0.5rem' }}
                         width={280}
@@ -563,13 +567,13 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
                         </div>
                     ) : null}
 
-                    {!showingWeb || (reporterInfo?.name && reporterInfo?.publication) || typeof narrativeHistoryReadCount === 'number' ? (
+                    {!embeddedHeader || (reporterInfo?.name && reporterInfo?.publication) || typeof narrativeHistoryReadCount === 'number' ? (
                         <div className="px-1 mb-4 text-sm text-gray-300">
                             {reporterInfo?.name && reporterInfo?.publication ? <>
                                 <p>记者 | {reporterInfo.name}</p>
                                 <p>来源 | {reporterInfo.publication}</p>
                             </> : null}
-                            <BattleReportMetadata aiModel={aiModel} aiUsage={aiUsage} narrativeHistoryReadCount={narrativeHistoryReadCount} showModelAndTokens={!showingWeb} />
+                            <BattleReportMetadata aiModel={aiModel} aiUsage={aiUsage} narrativeHistoryReadCount={narrativeHistoryReadCount} showModelAndTokens={!embeddedHeader} />
                         </div>
                     ) : null}
 
@@ -600,6 +604,7 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
                         </div>
                     )}
 
+                    {!embeddedHeader ? reportContent : null}
                     {/* Markdown 内容渲染区域 */}
                     {!showingWeb && <div className="min-h-[200px]">
                         <ReactMarkdown

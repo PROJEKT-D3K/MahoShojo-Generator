@@ -289,7 +289,7 @@ export function ArenaWebReport({ content, ready, roomId, aiModel, aiUsage, displ
   /** 上游解析好的显示标题；缺省时按同一 resolver 从内容尽力解析。 */
   displayTitle?: string | null;
   webPackage?: WebPackageArtifact | null;
-  children: (webContent: ReactNode | undefined, actions: ReactNode) => ReactNode;
+  children: (webContent: ReactNode | undefined, actions: ReactNode, includesHeader: boolean) => ReactNode;
 }) {
   const { accepted, accept } = useWebConsent(roomId);
   const [displayMode, setDisplayMode] = useState<ArenaWebDisplayMode>('web');
@@ -629,7 +629,7 @@ export function ArenaWebReport({ content, ready, roomId, aiModel, aiUsage, displ
           packageMode={webPackage ? (trust.trusted ? 'trusted' : 'restricted') : undefined}
           packageIdentity={`${matchingResolution?.base?.ref.digest ?? webPackage?.packageRef.digest}:${webPackage?.generatedDigest}`}
         />
-      ) : webPackage ? <ArenaWebSourceView source={packageFallback} label="Web 包故事数据（安全文本）" /> : undefined, <ArenaWebReportActions actions={reportActions} />)}
+      ) : webPackage ? <ArenaWebSourceView source={packageFallback} label="Web 包故事数据（安全文本）" /> : undefined, <ArenaWebReportActions actions={reportActions} />, showingWeb)}
       {ready && accepted && riskProfile && trustDialogKey === riskProfile.fingerprint ? <WebPackageTrustDialog
         key={riskProfile.fingerprint}
         profile={riskProfile}

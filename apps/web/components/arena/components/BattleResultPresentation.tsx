@@ -188,10 +188,11 @@ function StreamingResult({ report, onSaveImage, adjudicationResults }: {
         })
       : null
   ), [isWebFormat, report.headline, report.content, report.scenarioName, report.mode]);
-  const renderCard = (webContent?: ReactNode, actions?: ReactNode) => (
+  const renderCard = (webContent?: ReactNode, actions?: ReactNode, includesHeader = false) => (
     <StreamingBattleReportCard
       content={report.content}
       reportContent={webContent}
+      reportContentIncludesHeader={includesHeader}
       additionalActions={actions}
       disableExport={webContent != null}
       onSaveImage={onSaveImage}

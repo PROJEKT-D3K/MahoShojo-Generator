@@ -696,11 +696,29 @@ describe('Desktop /battle journey against loopback fixture', () => {
 describe('Desktop Web source journey with execution closed', () => {
   it.each((['battle', 'arena'] as const).flatMap((product) => (['classic', 'kizuna', 'daily', 'scenario'] as const).map((mode) => ({ product, mode }))))('$product $mode × both delivery modes generates/saves/reopens without mounting content', async ({ product, mode }) => {
     for (const output of ['stream', 'non-stream'] as const) {
+      holdBeforeBody = output === 'stream'; release = undefined;
       const key = product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
       localStorage.setItem(key, JSON.stringify({ version: 1, draft: { ...draft(mode, output), reportFormat: 'web' } }));
       window.location.hash = `#/${product}`;
       const router = await mount(); await settle(); await click('生成战报');
+      if (output === 'stream') {
+        await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+        const pendingCard = container.querySelector('.result-card');
+        expect(pendingCard?.textContent).toContain('模型：fixture-model');
+        expect(pendingCard?.textContent).toContain('tokens：输入 未提供｜推理 未提供｜输出 未提供');
+        expect(pendingCard?.querySelector('.ai-reasoning-panel')?.textContent).toContain('AI 正在思考');
+        expect(pendingCard?.querySelector('img[src="/arena-white.svg"]')).not.toBeNull();
+        expect(button('📱 保存为图片', pendingCard!)).toBeUndefined();
+        expect(container.querySelector('iframe, script, img[src*="untrusted.invalid"]')).toBeNull();
+        await act(async () => release!()); holdBeforeBody = false;
+      }
       await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
+      const resultCard = container.querySelector('.result-card');
+      expect(resultCard?.textContent).toContain('模型：actual-fixture-model');
+      expect(resultCard?.textContent).toContain('tokens：输入 10｜推理 3｜输出 17');
+      expect(resultCard?.querySelector('img[src="/arena-white.svg"]')).not.toBeNull();
+      expect(button('📱 保存为图片', resultCard!)).toBeUndefined();
+      expect(mocks.capture).not.toHaveBeenCalled();
       expect(container.querySelector('[aria-label="Web 战报源码（安全文本）"]')?.textContent).toContain('webShouldNotRun');
       expect(container.querySelector('iframe, script, img[src*="untrusted.invalid"]')).toBeNull();
       expect((globalThis as { webShouldNotRun?: boolean }).webShouldNotRun).toBeUndefined();
