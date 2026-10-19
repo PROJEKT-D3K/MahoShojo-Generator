@@ -10,6 +10,11 @@
       "default": "./src/me/index.tsx"
     },
     "./styles.css": "./src/styles.css",
+    "./showroom": {
+      "types": "./src/showroom/index.ts",
+      "import": "./src/showroom/index.ts",
+      "default": "./src/showroom/index.ts"
+    },
     "./navigation": {
       "types": "./src/navigation.ts",
       "import": "./src/navigation.ts",
