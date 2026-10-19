@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Writable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
@@ -118,8 +118,10 @@ const checkFailedChild = async (stage: string, code: string, options: { args?: s
   const stateRoot = await mkdtemp(path.join(tmpdir(), 'room-acceptance-failure-'));
   const api = fileURLToPath(new URL('../', import.meta.url));
   const require = createRequire(new URL('../package.json', import.meta.url));
+  // `--import` 只接受 URL specifier；Windows 绝对路径的盘符会被误解析为
+  // scheme（ERR_UNSUPPORTED_ESM_URL_SCHEME），必须经 pathToFileURL 转换。
   const child = spawn(process.execPath, [
-    '--import', require.resolve('tsx'),
+    '--import', pathToFileURL(require.resolve('tsx')).href,
     ...(options.bootstrap ? ['--import', `data:text/javascript,${encodeURIComponent(options.bootstrap)}`] : []),
     path.join(api, 'scripts/desktop-room-acceptance-mock.ts'),
     ...(options.args ?? ['--self-check', '--state-root', stateRoot]),
@@ -130,7 +132,9 @@ const checkFailedChild = async (stage: string, code: string, options: { args?: s
   let stderr = '', stdout = '';
   child.stderr.on('data', chunk => { stderr += chunk.toString(); });
   child.stdout.on('data', chunk => { stdout += chunk.toString(); });
-  const monitor = monitorMock(child, true, { readinessTimeoutMs: 10_000 });
+  // 子进程要经 tsx 编译+启动才到达目标失败点，负载下可逼近 10s；
+  // readiness 余量抬到 30s，配合各用例 40s 超时仍保持有界。
+  const monitor = monitorMock(child, true, { readinessTimeoutMs: 30_000 });
   try {
     const failure = await monitor.ready.catch(error => error);
     expect(failure).toBeInstanceOf(Error);
@@ -146,10 +150,13 @@ const checkFailedChild = async (stage: string, code: string, options: { args?: s
 describe.sequential('Desktop Room acceptance real TLS producer', () => {
   it('collects a real child final diagnostic from inherited stderr after exit', async () => {
     const diagnostic = 'ROOM_ACCEPTANCE_FAILURE stage=listen code=EADDRINUSE\n';
-    const writer = `process.stdin.once('data', () => { process.stderr.write(${JSON.stringify(diagnostic)}); process.stdin.destroy(); });`;
+    // 两个 Windows 特有坑：子进程默认挂在 kill-on-job-close 的 Job 上，父进程退出
+    // 会连带杀掉孙进程——detached 才能让孙进程"退出后存活"；stderr 对继承的管道 fd
+    // 是异步写，先 destroy stdin 会在 flush 前退出、诊断行丢失——等 write 完成回调再销毁。
+    const writer = `process.stdin.once('data', () => { process.stderr.write(${JSON.stringify(diagnostic)}, () => process.stdin.destroy()); });`;
     const child = spawn(process.execPath, ['-e', `
       require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(writer)}], {
-        stdio: [3, 'ignore', 2],
+        stdio: [3, 'ignore', 2], detached: true,
       }).unref();
       process.exitCode = 1;
     `], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'], shell: false });
@@ -165,7 +172,7 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
 
   it('reports invalid child arguments without echoing their private values', async () => {
     await checkFailedChild('validate-args', 'ACCEPTANCE_ARGUMENT_INVALID', { args: ['PRIVATE-DIAGNOSTIC-CANARY'] });
-  });
+  }, 40_000);
 
   it.each(['missing', 'invalid-json'])('reports a real child %s fixture failure without the original error', async fault => {
     const bootstrap = `
@@ -183,7 +190,7 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
       syncBuiltinESMExports();
     `;
     await checkFailedChild('load-fixture', fault === 'missing' ? 'ENOENT' : 'INVALID_JSON', { bootstrap });
-  });
+  }, 40_000);
 
   it('reports an occupied listener from the real child and keeps the owner listener alive', async () => {
     const blocker = createServer();
@@ -191,7 +198,7 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
     try {
       await checkFailedChild('listen', 'EADDRINUSE'); expect(blocker.listening).toBe(true);
     } finally { await new Promise<void>((resolve) => blocker.close(() => resolve())); }
-  });
+  }, 40_000);
 
   it('preserves a safe self-check reason from a real child and discards the private error payload', async () => {
     await checkFailedChild('self-check', 'ECONNREFUSED', { bootstrap: `
@@ -219,23 +226,23 @@ describe.sequential('Desktop Room acceptance real TLS producer', () => {
       };
       syncBuiltinESMExports();
     ` });
-  });
+  }, 40_000);
 
   it.each([false, true])('real tsx child self-check matches launcher monitor (synthetic start=%s)', async syntheticStart => {
     const stateRoot = await mkdtemp(path.join(tmpdir(), 'room-acceptance-monitor-'));
     const api = fileURLToPath(new URL('../', import.meta.url));
     const require = createRequire(new URL('../package.json', import.meta.url));
-    const child = spawn(process.execPath, ['--import', require.resolve('tsx'), path.join(api, 'scripts/desktop-room-acceptance-mock.ts'), '--self-check', ...(syntheticStart ? ['--synthetic-start'] : []), '--state-root', stateRoot], {
+    const child = spawn(process.execPath, ['--import', pathToFileURL(require.resolve('tsx')).href, path.join(api, 'scripts/desktop-room-acceptance-mock.ts'), '--self-check', ...(syntheticStart ? ['--synthetic-start'] : []), '--state-root', stateRoot], {
       cwd: api, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
       env: { ...process.env, NODE_OPTIONS: '', NODE_EXTRA_CA_CERTS: '', NODE_TLS_REJECT_UNAUTHORIZED: '1' },
     });
-    const monitor = monitorMock(child, true, { readinessTimeoutMs: 10_000, syntheticStart });
+    const monitor = monitorMock(child, true, { readinessTimeoutMs: 30_000, syntheticStart });
     try {
       expect(await monitor.ready).toMatchObject({ event: 'self-check', roomOrigin: 'https://room.acceptance.invalid:34443', authOrigin: 'http://127.0.0.1:34080',
         selfCheck: { roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true } });
       expect(await monitor.exit).toEqual({ code: 0, signal: null });
     } finally { await monitor.close(); await rm(stateRoot, { recursive: true, force: true }); }
-  });
+  }, 40_000);
   it('same-listener self-check validates auth and TLS and clears only its synthetic state', async () => {
     const runtime = await start();
     expect(await selfCheckRoomAcceptanceMock(runtime, pki)).toEqual({ tlsTrusted: true, tlsNoRootRejected: true, tlsWrongSanRejected: true, authPkceOneUse: true, roomHttp: true, roomWss: true, roomProposals: true, proposalReceiptLoss: true, fixedPublicRefs: true, roomGenerationRead: true, roomGenerationRecovery: true, generationReadOnly: true });

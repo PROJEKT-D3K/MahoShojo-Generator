@@ -244,7 +244,7 @@ async function build(stateRoot) {
 export function startMock(manifest, selfCheck = false, syntheticCancel = false, syntheticStart = false) {
   const api = path.join(manifest.source, 'apps/api');
   const require = createRequire(path.join(api, 'package.json'));
-  const loader = require.resolve('tsx');
+  const loader = pathToFileURL(require.resolve('tsx')).href;
   const child = spawn(process.execPath, ['--import', loader, path.join(api, 'scripts/desktop-room-acceptance-mock.ts'), ...(selfCheck ? ['--self-check'] : []), ...(syntheticStart ? ['--synthetic-start'] : syntheticCancel ? ['--synthetic-cancel'] : []), '--state-root', manifest.stateRoot], {
     cwd: api, env: safeLaunchEnvironment(manifest.instances[0]), stdio: ['pipe', 'pipe', 'pipe'], shell: false,
   });
