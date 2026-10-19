@@ -30,7 +30,6 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = path.join(REPO_ROOT, '.tmp', 'visual-review');
 const requireFromWeb = createRequire(path.join(REPO_ROOT, 'apps', 'web', 'package.json'));
-const { chromium } = requireFromWeb('playwright');
 
 // ---------- 参数 ----------
 
@@ -73,19 +72,27 @@ const gitSha = () => {
   }
 };
 
-const waitForServer = async (url, timeoutMs) => {
+const waitForServer = async (url, timeoutMs, checkStartup = () => {}) => {
   const deadline = Date.now() + timeoutMs;
   let lastError = 'not attempted';
   while (Date.now() < deadline) {
+    checkStartup();
     try {
-      const response = await fetch(url, { method: 'GET' });
-      if (response.status < 500) return true;
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(Math.min(2000, Math.max(1, deadline - Date.now()))),
+      });
+      if (response.status < 500) {
+        checkStartup();
+        return true;
+      }
       lastError = `HTTP ${response.status}`;
     } catch (error) {
       lastError = String(error?.cause?.code ?? error?.message ?? error);
     }
     await sleep(1000);
   }
+  checkStartup();
   throw new Error(`等待 ${url} 就绪超时（${timeoutMs / 1000}s）：${lastError}`);
 };
 
@@ -101,10 +108,30 @@ const startDevServer = () => {
     cwd: REPO_ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, BROWSER: 'none' },
+    // 只给本脚本自启的 pnpm/next 建独立进程组，回收时不触碰外部服务。
+    detached: process.platform !== 'win32',
   });
   child.stdout.on('data', (chunk) => process.stdout.write(`  [next] ${chunk}`));
   child.stderr.on('data', (chunk) => process.stderr.write(`  [next] ${chunk}`));
   return child;
+};
+
+const stopDevServer = async (server) => {
+  if (!server.pid) return; // spawn 失败，没有可回收进程。
+  if (process.platform === 'win32') {
+    // pnpm.cmd 的包装进程不足以代表 next dev；按自启 PID 回收整棵树。
+    await new Promise((resolve, reject) => {
+      const cleanup = spawn('taskkill', ['/pid', String(server.pid), '/t', '/f'], { stdio: 'ignore' });
+      cleanup.once('error', reject);
+      cleanup.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`taskkill 退出码 ${code}`)));
+    });
+  } else {
+    try {
+      process.kill(-server.pid, 'SIGTERM');
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+    }
+  }
 };
 
 // ---------- 页面内断言（浏览器侧执行） ----------
@@ -219,30 +246,12 @@ const PAGE_AUDIT = () => {
 
 // ---------- 主流程 ----------
 
-const main = async () => {
-  mkdirSync(OUT_DIR, { recursive: true });
-
+export const main = async () => {
   let server = null;
   let serverOwned = false;
-  if (MANAGE_SERVER) {
-    try {
-      await waitForServer(BASE_URL, 2000);
-      console.log(`[review:visual] 复用已在 ${BASE_URL} 运行的服务器`);
-    } catch {
-      server = startDevServer();
-      serverOwned = true;
-      try {
-        await waitForServer(BASE_URL, 90_000);
-      } catch (error) {
-        server.kill('SIGTERM');
-        throw error;
-      }
-      console.log(`[review:visual] 开发服务器就绪`);
-    }
-  } else {
-    await waitForServer(BASE_URL, 10_000);
-    console.log(`[review:visual] 使用外部服务器 ${BASE_URL}`);
-  }
+  let browser = null;
+  let failure = null;
+  let phase = 'output-directory';
 
   const report = {
     tool: 'review-visual',
@@ -254,6 +263,7 @@ const main = async () => {
     server: serverOwned ? 'spawned-next-dev' : 'external',
     screenshots: TAKE_SCREENSHOTS,
     matrix: [],
+    errors: [],
     unverified: [
       'Desktop WebView2 未巡检——Tauri 真机验收按 runbook 人工走',
       '像素级外观比对不在本工具范围（无黄金图、无阈值）',
@@ -262,12 +272,43 @@ const main = async () => {
     totals: { conditions: 0, findings: { fail: 0, warn: 0, info: 0 } },
   };
 
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
-  });
+  const recordFailure = (stage, error) => {
+    failure ??= error;
+    report.errors.push({ stage, detail: String(error?.stack ?? error) });
+    report.totals.findings.fail += 1;
+  };
 
   try {
+    mkdirSync(OUT_DIR, { recursive: true });
+    phase = 'server-readiness';
+    if (MANAGE_SERVER) {
+      try {
+        await waitForServer(BASE_URL, 2000);
+        console.log(`[review:visual] 复用已在 ${BASE_URL} 运行的服务器`);
+      } catch {
+        server = startDevServer();
+        serverOwned = true;
+        let startupError = null;
+        server.on('error', (error) => { startupError = error; });
+        server.once('exit', (code, signal) => {
+          startupError ??= new Error(`next dev 提前退出（code=${code}, signal=${signal}）`);
+        });
+        await waitForServer(BASE_URL, 90_000, () => { if (startupError) throw startupError; });
+        console.log(`[review:visual] 开发服务器就绪`);
+      }
+    } else {
+      await waitForServer(BASE_URL, 10_000);
+      console.log(`[review:visual] 使用外部服务器 ${BASE_URL}`);
+    }
+
+    report.server = serverOwned ? 'spawned-next-dev' : 'external';
+    phase = 'browser-launch';
+    const { chromium } = requireFromWeb('playwright');
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+    });
+    phase = 'page-audit';
     for (const route of ROUTES) {
       for (const condition of CONDITIONS) {
         const context = await browser.newContext({
@@ -342,30 +383,53 @@ const main = async () => {
         console.log(`[review:visual] ${status.padEnd(4)} ${route} @ ${condition.name}`);
       }
     }
+  } catch (error) {
+    recordFailure(phase, error);
   } finally {
-    await browser.close();
-    if (serverOwned && server) {
-      // Windows 下 pnpm.cmd 经 shell 包装，SIGTERM 只杀包装层；
-      // taskkill /t 才能把 next dev 整棵进程树收掉，避免占用端口与子进程残留。
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', String(server.pid), '/t', '/f'], { stdio: 'ignore' });
-      } else {
-        server.kill('SIGTERM');
+    // 各项清理和写报告互不阻断，首个失败始终保留为最终错误。
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (error) {
+        recordFailure('browser-cleanup', error);
       }
-      console.log('[review:visual] 已回收开发服务器');
     }
+    if (serverOwned && server) {
+      report.server = 'spawned-next-dev';
+      try {
+        await stopDevServer(server);
+        console.log('[review:visual] 已请求回收开发服务器');
+      } catch (error) {
+        recordFailure('server-cleanup', error);
+      }
+    }
+
+    const persistReport = (name) => {
+      const reportPath = path.join(OUT_DIR, name);
+      try {
+        writeFileSync(reportPath, JSON.stringify(report, null, 2));
+        console.log(`[review:visual] 报告：${path.relative(REPO_ROOT, reportPath)}`);
+        return true;
+      } catch (error) {
+        recordFailure('report-write', error);
+        console.error(`[review:visual] 无法写入 ${name}：${error?.message ?? error}`);
+        return false;
+      }
+    };
+    const latestWritten = persistReport('report.json');
+    const archiveWritten = persistReport(`report-${report.generatedAt.replace(/[:.]/g, '-')}.json`);
+    // 归档失败不能让已写出的 canonical report 仍声称零失败。
+    if (!archiveWritten && latestWritten) persistReport('report.json');
   }
 
-  const reportPath = path.join(OUT_DIR, 'report.json');
-  writeFileSync(reportPath, JSON.stringify(report, null, 2));
-  writeFileSync(path.join(OUT_DIR, `report-${report.generatedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify(report, null, 2));
-  console.log(`[review:visual] 报告：${path.relative(REPO_ROOT, reportPath)}`);
   console.log(`[review:visual] fail=${report.totals.findings.fail ?? 0} warn=${report.totals.findings.warn ?? 0} info=${report.totals.findings.info ?? 0}（${report.totals.conditions} 个条件）`);
-
   process.exitCode = (report.totals.findings.fail ?? 0) > 0 ? 1 : 0;
+  if (failure) throw failure;
 };
 
-main().catch((error) => {
-  console.error(`[review:visual] 失败：${error?.stack ?? error}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`[review:visual] 失败：${error?.stack ?? error}`);
+    process.exitCode = 1;
+  });
+}
