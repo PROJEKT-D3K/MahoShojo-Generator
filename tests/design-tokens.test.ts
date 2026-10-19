@@ -93,7 +93,7 @@ const FILE_BASELINE: Record<string, { literals: number; appTokenFallbacks: numbe
   'apps/web/styles/globals.css': { literals: 8, appTokenFallbacks: 0, offGridSpacing: 1 },
   'packages/ui-web/src/arena/styles.css': { literals: 2, appTokenFallbacks: 0, offGridSpacing: 0 },
   'packages/ui-web/src/card-forge/styles.css': { literals: 85, appTokenFallbacks: 0, offGridSpacing: 22 },
-  'packages/ui-web/src/product-shell.css': { literals: 134, appTokenFallbacks: 0, offGridSpacing: 11 },
+  'packages/ui-web/src/product-shell.css': { literals: 130, appTokenFallbacks: 0, offGridSpacing: 11 },
   'packages/ui-web/src/styles.css': { literals: 89, appTokenFallbacks: 11, offGridSpacing: 6 },
 };
 

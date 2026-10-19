@@ -159,6 +159,17 @@ const expectSharedOutput = (css: string, artifact: string): void => {
     .toBe('min(90dvh,100dvh-2rem)');
 
   expect(layersFor('body', 'font-family', 'var(--app-font-sans)'), artifact).toContain('base');
+  // 插值语法不被旧 WebView 识别时，只让 background-image 失效，独立纯色底仍可读。
+  // 构建器不能把两条长属性重新合成会整体失效的 background shorthand。
+  for (const [selector, prefix] of [['.error-message', '--app-error'], ['.blue-theme .error-message', '--app-error-blue']]) {
+    const error = declarationsFor(selector);
+    expect(error['background-color'], artifact).toBe(`var(${prefix}-bg)`);
+    expect(error['background-image'], artifact).toBe(`var(${prefix}-bg-gradient)`);
+    expect(error.background, artifact).toBeUndefined();
+  }
+  expect(declarationsFor('.error-message').color, artifact).toBe('var(--app-error-text)');
+  expect(declarationsFor('.blue-theme .error-message').color, artifact).toBeUndefined();
+  expect(['95%', '.95', '0.95'], artifact).toContain(declarationsFor('.opacity-95').opacity);
   expect(layersFor('pre', 'font-family', 'var(--app-font-mono)'), artifact).toContain('base');
   expect(layersFor('.font-mono', 'font-family', 'var(--app-font-mono)'), artifact).toContain('utilities');
   for (const control of ['button', 'input', 'select', 'textarea']) {

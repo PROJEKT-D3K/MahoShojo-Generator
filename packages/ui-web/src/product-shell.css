@@ -281,8 +281,9 @@
   }
 
   .error-message {
-    background: linear-gradient(135deg, #ff6b6b, #ee5a6f);
-    color: white;
+    background-color: var(--app-error-bg);
+    background-image: var(--app-error-bg-gradient);
+    color: var(--app-error-text);
     padding: 15px;
     border-radius: 10px;
     margin: 15px 0;
@@ -430,7 +431,8 @@
   }
 
   .blue-theme .error-message {
-    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    background-color: var(--app-error-blue-bg);
+    background-image: var(--app-error-blue-bg-gradient);
   }
 
   .blue-theme .footer-link {

@@ -59,3 +59,17 @@ it('uses production story error views with multiline copy, an explicit read acti
   act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   expect(document.querySelector('[role=dialog]')).toBeNull();
 });
+
+it('shows the shared red and blue error surfaces with inherited, focusable help links', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('[aria-label="错误文字对比样板"]')!;
+  expect(sample.querySelectorAll('.error-message[role=alert]')).toHaveLength(2);
+  expect(sample.querySelectorAll('.blue-theme .error-message')).toHaveLength(1);
+  const links = sample.querySelectorAll<HTMLAnchorElement>('.error-message .opacity-95 a');
+  expect(links).toHaveLength(2);
+  for (const link of links) {
+    expect(link.getAttribute('href')).toBe('#showroom-result-surfaces');
+    expect(link.classList.contains('hover:opacity-100')).toBe(true);
+    expect(link.tabIndex).toBe(0); link.focus(); expect(document.activeElement).toBe(link);
+  }
+});

@@ -531,6 +531,13 @@
   --app-z-overlay: 60;
   --app-z-modal: 80;
   --app-z-toast: 100;
+  /* 错误面保留红/蓝渐变与白字；普通正文及 95% 帮助文字均由对比度契约守卫。
+   * 背景色独立于图片：不支持显式 sRGB 插值的旧 WebView 保留可读纯色底。 */
+  --app-error-text: #ffffff;
+  --app-error-bg: #c2414b;
+  --app-error-bg-gradient: linear-gradient(135deg in srgb, #c2414b, #ad3048);
+  --app-error-blue-bg: #2563eb;
+  --app-error-blue-bg-gradient: linear-gradient(135deg in srgb, #2563eb, #1d4ed8);
 }
 
 :root {

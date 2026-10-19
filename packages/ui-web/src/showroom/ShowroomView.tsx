@@ -5,6 +5,7 @@ import { StreamingBattleReportCard } from '../arena-report';
 import { ArenaWebResultView } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
+import { ErrorMessageBox } from '../details-controls/ErrorMessageBox';
 import { generationActionClassNames } from '../generation-actions';
 import type { HomeAssetSource } from '../home/feature-catalog';
 import { BaseModal } from '../modal';
@@ -249,6 +250,15 @@ function ResultSurfacesSection() {
             execution={{ available: false, reason: '样板间只展示安全文本，不运行生成代码。' }} />} />
       </div>
       <StoryReadErrorsSample />
+      <div className="grid gap-3 md:grid-cols-2" aria-label="错误文字对比样板">
+        {['默认红色', '蓝色主题'].map((label, index) => <div key={label} className={index ? 'blue-theme' : undefined}>
+          <ErrorMessageBox message={`${label}：普通正文保持清晰，原文换行仍保留。\n示例错误内容，不触发真实请求。`}>
+            <div className="mt-2 text-xs opacity-95">
+              <a href="#showroom-result-surfaces" className="underline underline-offset-2 hover:opacity-100">95% 帮助链接：悬停与焦点仍继承错误文字颜色</a>
+            </div>
+          </ErrorMessageBox>
+        </div>)}
+      </div>
     </div>
   );
 }
