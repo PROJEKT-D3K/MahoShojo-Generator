@@ -9,8 +9,10 @@
  *    `unset`，样式无声消失。这类失败只有扫描全部样式表、对照声明清单才抓得住。
  * 2. **`--app-*`/`--creator-*` 的 `:root` 级定义只在 `styles.css`**。DESK-PROD-009 要求主题单点
  *    维护；宿主或组件在别处重定义同名 token，就是第二套需要人工同步的主题，且同样不报错。
- * 3. **硬编码颜色字面量与 `var(--app-x, 兜底)` 写法只降不增**。存量逐项登记在 baseline 表里，
- *    测试断言逐文件计数不超过登记值——不追求存量清零，但增量必须为零，且谁让数字下降谁受益。
+ * 3. **硬编码颜色字面量、`var(--app-x, 兜底)` 写法与离网格间距只降不增**。存量逐项登记在
+ *    baseline 表里，测试断言逐文件计数不超过登记值——不追求存量清零，但增量必须为零，
+ *    且谁让数字下降谁受益。「离网格间距」指 margin/padding/gap/inset 等盒间距属性里
+ *    非 4px 整数倍的 px 字面量，收敛方向是消费 `--app-space-*` 刻度（VIS-TOK-003）。
  *
  * ## 为什么放在仓库根而不是 `packages/ui-web/tests`
  *
@@ -78,27 +80,37 @@ const OPTIONAL_VAR_PREFIXES: ReadonlyArray<{ prefix: string; reason: string }> =
 ];
 
 /**
- * 逐文件存量 baseline：硬编码颜色字面量数、`var(--app-x, 兜底)` 写法（含 --creator- 前缀）数。
- * 只许下降，不许上升；不在表内的文件按双零要求。
+ * 逐文件存量 baseline：硬编码颜色字面量数、`var(--app-x, 兜底)` 写法（含 --creator- 前缀）数、
+ * 离网格间距数。只许下降，不许上升；不在表内的文件按三项全零要求。
  *
  * 收割方式见文件头注释（BASELINE=print）。
  */
-const FILE_BASELINE: Record<string, { literals: number; appTokenFallbacks: number }> = {
+const FILE_BASELINE: Record<string, { literals: number; appTokenFallbacks: number; offGridSpacing: number }> = {
   // 2026-10-19 首次收割。Web 端唯一 CSS Module 的沉浸查看器配色、产品壳闭包（顶栏/blue-theme/
   // 危险操作色系）、卡牌工坊宝石装饰常量均为已登记存量；styles.css 的兜底写法是问卷/结果
   // 共享类从 Web globals 上移时逐字保留的历史防御，随接触清理。
-  'apps/web/components/arena/components/ArenaWebReport.module.css': { literals: 12, appTokenFallbacks: 0 },
-  'apps/web/styles/globals.css': { literals: 8, appTokenFallbacks: 0 },
-  'packages/ui-web/src/arena/styles.css': { literals: 2, appTokenFallbacks: 0 },
-  'packages/ui-web/src/card-forge/styles.css': { literals: 85, appTokenFallbacks: 0 },
-  'packages/ui-web/src/product-shell.css': { literals: 134, appTokenFallbacks: 0 },
-  'packages/ui-web/src/styles.css': { literals: 89, appTokenFallbacks: 11 },
+  'apps/web/components/arena/components/ArenaWebReport.module.css': { literals: 12, appTokenFallbacks: 0, offGridSpacing: 2 },
+  'apps/web/styles/globals.css': { literals: 8, appTokenFallbacks: 0, offGridSpacing: 1 },
+  'packages/ui-web/src/arena/styles.css': { literals: 2, appTokenFallbacks: 0, offGridSpacing: 0 },
+  'packages/ui-web/src/card-forge/styles.css': { literals: 85, appTokenFallbacks: 0, offGridSpacing: 22 },
+  'packages/ui-web/src/product-shell.css': { literals: 134, appTokenFallbacks: 0, offGridSpacing: 11 },
+  'packages/ui-web/src/styles.css': { literals: 89, appTokenFallbacks: 11, offGridSpacing: 6 },
 };
 
 const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|color)\s*\(/g;
 const VAR_REF = /var\(\s*(--[a-zA-Z0-9_-]+)/g;
 const APP_TOKEN_FALLBACK = /var\(\s*--(?:app|creator)-[a-zA-Z0-9_-]+\s*,/g;
 const OWNED_TOKEN = /^--(?:app|creator)-/;
+const PX_LENGTH = /\b(\d+(?:\.\d+)?)px\b/g;
+
+/** 盒间距属性：速记与方向/逻辑长柄都在内；border-width、outline 等不属于间距网格对象。 */
+const SPACING_PROPS = new Set([
+  'margin', 'padding', 'gap', 'row-gap', 'column-gap',
+  'inset', 'inset-block', 'inset-inline',
+  'top', 'right', 'bottom', 'left',
+]);
+const isSpacingProp = (prop: string): boolean =>
+  SPACING_PROPS.has(prop) || /^(?:margin|padding|inset)-/.test(prop);
 
 const collectCssFiles = (dir: string, out: string[] = []): string[] => {
   if (!existsSync(dir)) return out;
@@ -192,17 +204,23 @@ describe('VIS-GATE-001 token 所有权', () => {
   });
 });
 
-describe('VIS-GATE-001 字面量与兜底基线（只降不增）', () => {
-  const metrics = new Map<string, { literals: number; appTokenFallbacks: number }>();
+describe('VIS-GATE-001 字面量、兜底与间距基线（只降不增）', () => {
+  const metrics = new Map<string, { literals: number; appTokenFallbacks: number; offGridSpacing: number }>();
   for (const file of scanned) {
     let literals = 0;
     let appTokenFallbacks = 0;
+    let offGridSpacing = 0;
     for (const decl of file.decls) {
       if (decl.prop.startsWith('--')) continue; // token 定义本身可以含字面量——那正是定义
       literals += (decl.value.match(COLOR_LITERAL) ?? []).length;
       appTokenFallbacks += (decl.value.match(APP_TOKEN_FALLBACK) ?? []).length;
+      if (isSpacingProp(decl.prop)) {
+        for (const match of decl.value.matchAll(PX_LENGTH)) {
+          if (Number.parseFloat(match[1]) % 4 !== 0) offGridSpacing += 1;
+        }
+      }
     }
-    if (literals || appTokenFallbacks) metrics.set(file.rel, { literals, appTokenFallbacks });
+    if (literals || appTokenFallbacks || offGridSpacing) metrics.set(file.rel, { literals, appTokenFallbacks, offGridSpacing });
   }
 
   if (process.env.BASELINE === 'print') {
@@ -216,12 +234,15 @@ describe('VIS-GATE-001 字面量与兜底基线（只降不增）', () => {
   it('逐文件计数不超过登记值；未登记文件要求双零', () => {
     const failures: string[] = [];
     for (const [file, actual] of metrics) {
-      const baseline = FILE_BASELINE[file] ?? { literals: 0, appTokenFallbacks: 0 };
+      const baseline = FILE_BASELINE[file] ?? { literals: 0, appTokenFallbacks: 0, offGridSpacing: 0 };
       if (actual.literals > baseline.literals) {
         failures.push(`${file}: 颜色字面量 ${actual.literals} > baseline ${baseline.literals}`);
       }
       if (actual.appTokenFallbacks > baseline.appTokenFallbacks) {
         failures.push(`${file}: --app-* 兜底写法 ${actual.appTokenFallbacks} > baseline ${baseline.appTokenFallbacks}`);
+      }
+      if (actual.offGridSpacing > baseline.offGridSpacing) {
+        failures.push(`${file}: 离网格间距 ${actual.offGridSpacing} > baseline ${baseline.offGridSpacing}（新增间距请消费 --app-space-* 或落 4px 网格）`);
       }
     }
     for (const file of Object.keys(FILE_BASELINE)) {

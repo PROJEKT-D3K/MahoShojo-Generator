@@ -496,6 +496,43 @@
   }
 }
 
+/*
+ * 主题无关刻度层（SPEC-visual-baseline-v1 VIS-TOK-003）。
+ *
+ * 刻度值从现有共享/宿主 CSS 的真实用量归纳：间距取 4px 网格档位，
+ * 圆角/字号取高频档，阴影为中性档位（主题化阴影仍归 --app-card-shadow
+ * 等语义 token），z 层在 --global-topbar-z-index 之上补 overlay/modal/toast 档。
+ * 新增手写样式应消费这些刻度；离刻度字面量由 design-tokens 契约按 baseline
+ * 只降不增管控。
+ */
+:root {
+  --app-space-1: 4px;
+  --app-space-2: 8px;
+  --app-space-3: 12px;
+  --app-space-4: 16px;
+  --app-space-5: 20px;
+  --app-space-6: 24px;
+  --app-space-8: 32px;
+  --app-space-10: 40px;
+  --app-radius-sm: 8px;
+  --app-radius-md: 12px;
+  --app-radius-lg: 16px;
+  --app-radius-xl: 20px;
+  --app-radius-pill: 9999px;
+  --app-text-xs: 12px;
+  --app-text-sm: 14px;
+  --app-text-base: 16px;
+  --app-text-lg: 18px;
+  --app-text-xl: 20px;
+  --app-text-2xl: 24px;
+  --app-shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.1);
+  --app-shadow-md: 0 10px 30px rgba(0, 0, 0, 0.1);
+  --app-shadow-lg: 0 25px 50px rgba(0, 0, 0, 0.2);
+  --app-z-overlay: 60;
+  --app-z-modal: 80;
+  --app-z-toast: 100;
+}
+
 :root {
   color-scheme: light;
   --app-page-bg: linear-gradient(135deg, #ffffff 0%, #ffffff 25%, #ffe3f6 86%, #fecfef 100%);
