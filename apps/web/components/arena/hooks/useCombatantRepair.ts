@@ -21,6 +21,7 @@ import { useArenaRoomContext } from '../multiplayer/useArenaRoom';
 import { useBattleStore } from '../stores/useBattleStore';
 import type { BattleAiImpact, BattleStoreState, CombatantData } from '../types';
 import { toBattleReportMarkdown } from '../utils/battleReportMarkdown';
+import { resolveBattleResultContext } from '../utils/battleResultContext';
 import {
   ARENA_PROVIDER_COOLDOWN_BASE_KEY,
   resolveArenaProviderCooldownConfig,
@@ -84,7 +85,8 @@ export const useCombatantRepair = () => {
     useBattleStore(selector)
   );
   const combatants = useBattleSelector((state) => state.combatants);
-  const generationMode = useBattleSelector((state) => state.generationMode);
+  const resultContext = useBattleSelector((state) => state.resultContext);
+  const streamUserGuidance = useBattleSelector((state) => state.streamUserGuidance);
   const streamingMarkdown = useBattleSelector((state) => state.streamingMarkdown);
   const newsReport = useBattleSelector((state) => state.newsReport);
   const lastGenerationId = useBattleSelector((state) => state.lastGenerationId);
@@ -93,9 +95,7 @@ export const useCombatantRepair = () => {
   );
   const repairAppliedGenerationId = useBattleSelector((state) => state.repairAppliedGenerationId);
   const latestAiImpacts = useBattleSelector((state) => state.latestAiImpacts);
-  const battleMode = useBattleSelector((state) => state.battleMode);
   const settings = useBattleSelector((state) => state.settings);
-  const scenario = useBattleSelector((state) => state.scenario);
   const isGenerating = useBattleSelector((state) => state.isGenerating);
   const isCombatantMutationPending = useBattleSelector(
     (state) => state.isCombatantMutationPending,
@@ -130,9 +130,15 @@ export const useCombatantRepair = () => {
     () => combatants.filter((item): item is CombatantData => 'data' in item),
     [combatants],
   );
+  const reportContext = resolveBattleResultContext({ resultContext, newsReport, streamingMarkdown });
+  const generationMode = reportContext?.generationMode;
+  const battleMode = reportContext?.battleMode ?? null;
+  const scenarioDisplayName = reportContext?.scenarioDisplayName ?? null;
+  const reportUserGuidance = (generationMode === 'stream'
+    ? streamUserGuidance : newsReport?.userGuidance)?.trim() || null;
   const reportMarkdown = useMemo(() => {
     if (generationMode === 'stream') return streamingMarkdown?.trim() ?? '';
-    return newsReport ? toBattleReportMarkdown(newsReport) : '';
+    return generationMode === 'non-stream' && newsReport ? toBattleReportMarkdown(newsReport) : '';
   }, [generationMode, newsReport, streamingMarkdown]);
 
   const repairContextIsCurrent = useCallback((
@@ -144,6 +150,11 @@ export const useCombatantRepair = () => {
     const currentState = useBattleStore.getState();
     if (currentState.lastGenerationId !== generationId) return false;
     if (
+      currentState.resultContext !== resultContext
+      || currentState.newsReport !== newsReport
+      || currentState.streamingMarkdown !== streamingMarkdown
+    ) return false;
+    if (
       capturedRepairContext
       && currentState.lastGenerationRepairContext !== capturedRepairContext
     ) return false;
@@ -152,7 +163,7 @@ export const useCombatantRepair = () => {
     );
     return currentRoster.length === capturedRoster.length
       && currentRoster.every((combatant, index) => combatant === capturedRoster[index]);
-  }, [arenaRoomRuntime, lastGenerationRepairContext]);
+  }, [arenaRoomRuntime, lastGenerationRepairContext, newsReport, resultContext, streamingMarkdown]);
 
   useEffect(() => {
     if (draftGenerationRef.current === lastGenerationId) return;
@@ -183,6 +194,10 @@ export const useCombatantRepair = () => {
       || lastGenerationRepairContext?.generationId !== lastGenerationId
     ) {
       setRepairError('本次战报缺少 generationId 或角色 roster，无法生成修复草稿。');
+      return;
+    }
+    if (!battleMode) {
+      setRepairError('本次战报缺少模式信息，无法生成 AI 修复草稿。');
       return;
     }
     if (!settings.writeArenaHistory && !settings.writeCurrentState) {
@@ -218,8 +233,8 @@ export const useCombatantRepair = () => {
           })),
           battleReportMarkdown: reportMarkdown,
           mode: battleMode,
-          userGuidance: settings.userGuidance,
-          scenario: battleMode === 'scenario' ? scenario.content : undefined,
+          userGuidance: reportUserGuidance,
+          scenario: battleMode === 'scenario' ? capturedRepairContext.scenario ?? undefined : undefined,
           writeArenaHistory: settings.writeArenaHistory,
           writeCurrentState: settings.writeCurrentState,
           ...(capturedRepairContext.customProvider
@@ -262,8 +277,7 @@ export const useCombatantRepair = () => {
     repairContextIsCurrent,
     reportMarkdown,
     roster,
-    scenario.content,
-    settings.userGuidance,
+    reportUserGuidance,
     settings.writeArenaHistory,
     settings.writeCurrentState,
     startCooldown,
@@ -278,7 +292,7 @@ export const useCombatantRepair = () => {
       setRepairError('本次战报缺少 generationId 或角色 roster，无法应用修复。');
       return;
     }
-    const report = precheckBattleReportForRedo(reportMarkdown, battleMode);
+    const report = precheckBattleReportForRedo(reportMarkdown, battleMode ?? '');
     if (!report.ok) {
       setRepairError(report.error);
       return;
@@ -298,19 +312,18 @@ export const useCombatantRepair = () => {
         generationId: lastGenerationId,
         patches,
         nowISO: new Date().toISOString(),
-        createHistoryEntry: {
+        // 旧结果缺少模式时仍可修复已有 effect，但不能虚构新历战记录的身份。
+        createHistoryEntry: battleMode ? {
           type: battleMode,
           title: report.parsed.headline,
           participants: roster.map(displayNameOf),
           winner: report.parsed.winner,
           metadata: {
-            user_guidance: settings.userGuidance.trim() || null,
-            scenario_title: battleMode === 'scenario'
-              ? (scenario.content?.title ?? scenario.content?.name ?? scenario.fileName ?? null)
-              : null,
+            user_guidance: reportUserGuidance,
+            scenario_title: scenarioDisplayName,
             non_native_data_involved: true,
           },
-        },
+        } : undefined,
         verifyNative: verifyArenaContentOrigin,
         confirmTrustDowngrade: (names) => window.confirm(
           `角色「${names.join('、')}」具有原生或 canonical 来源。继续会创建非原生可编辑版本，服务器不会重新签名，源角色不会被自动覆盖。是否继续？`,
@@ -370,13 +383,12 @@ export const useCombatantRepair = () => {
     reportMarkdown,
     repairContextIsCurrent,
     roster,
-    scenario.content,
-    scenario.fileName,
+    scenarioDisplayName,
     setCombatants,
     setLatestAiImpacts,
     setRepairAppliedGenerationId,
     setUpdatedCombatants,
-    settings.userGuidance,
+    reportUserGuidance,
   ]);
 
   return {

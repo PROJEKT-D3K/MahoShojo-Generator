@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import React, { act } from 'react';
+import React, { act, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,8 +40,9 @@ import { useBattleStore } from '@/components/arena/stores/useBattleStore';
 let currentHook: ReturnType<typeof useCombatantRepair> | null = null;
 
 const Harness = () => {
-  currentHook = useCombatantRepair();
-  return <pre data-testid="draft">{currentHook.draftText}</pre>;
+  const hook = useCombatantRepair();
+  useEffect(() => { currentHook = hook; });
+  return <pre data-testid="draft">{hook.draftText}</pre>;
 };
 
 beforeEach(() => {
@@ -54,6 +55,7 @@ afterEach(() => {
   useBattleStore.setState({
     combatants: [],
     newsReport: null,
+    resultContext: null,
     streamingMarkdown: null,
     latestAiImpacts: null,
     updatedCombatants: [],
@@ -79,6 +81,7 @@ describe('useCombatantRepair', () => {
       generationMode: 'non-stream',
       newsReport: {
         headline: '终局战报',
+        mode: 'classic',
         reporterInfo: { name: '记者', publication: '日报' },
         article: {
           body: '角色 A 在漫长的魔法竞技中完成了清晰且可验证的成长。'.repeat(8),
@@ -180,6 +183,7 @@ describe('useCombatantRepair', () => {
       }],
       generationMode: 'stream',
       streamingMarkdown: `# 旧战报\n\n## 胜利者\n\n- 角色 A\n\n${'完整正文。'.repeat(40)}`,
+      resultContext: { generationMode: 'stream', battleMode: 'classic', scenarioDisplayName: null },
       lastGenerationId: 'generation-stale-001',
       lastGenerationRepairContext: {
         generationId: 'generation-stale-001',

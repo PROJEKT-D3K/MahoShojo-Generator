@@ -75,12 +75,14 @@ export interface UpdatedCombatantData {
 }
 
 /**
- * 只在当前页面进程中保留的生成时 Provider 快照。
+ * 只在当前页面进程中保留的生成时修复上下文。
  * BYOK apiKey 不得进入 Zustand persist、D1、日志或遥测。
  */
 export type ArenaGenerationRepairContext = Readonly<{
   generationId: string;
   customProvider: CustomProviderPayload | null;
+  /** 原始请求的情景内容；缺失时不得从下一场草稿补充。 */
+  scenario?: Record<string, unknown> | null;
 }>;
 
 export type { CombatantData } from '@mahoshojo/domain/arena-file-parser';

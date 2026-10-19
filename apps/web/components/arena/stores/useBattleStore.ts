@@ -68,6 +68,7 @@ const cloneGenerationRepairContext = (
   const customProvider = context.customProvider;
   return {
     generationId: context.generationId,
+    ...(context.scenario !== undefined ? { scenario: structuredClone(context.scenario) } : {}),
     customProvider: customProvider ? {
       ...customProvider,
       ...(customProvider.generationOverrides ? {

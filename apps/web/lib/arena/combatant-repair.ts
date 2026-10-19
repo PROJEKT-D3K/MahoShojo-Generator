@@ -194,7 +194,7 @@ export const prepareAndApplyArenaCombatantRepair = async <
   generationId: string;
   patches: readonly ArenaCharacterRepairPatch[];
   nowISO: string;
-  createHistoryEntry: ArenaCharacterRepairHistoryEntryInput;
+  createHistoryEntry?: ArenaCharacterRepairHistoryEntryInput;
   verifyNative: (characterData: unknown) => Promise<boolean>;
   confirmTrustDowngrade: (characterNames: readonly string[]) => Promise<boolean> | boolean;
   confirmCreateMissingEffects: () => Promise<boolean> | boolean;

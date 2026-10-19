@@ -589,6 +589,8 @@ export const useBattleEngine = () => {
         customStoryLength: normalizeCustomStoryLength(customStoryLength) || undefined,
         questionnaireSelections, questionnaires,
       });
+      const generationScenarioSnapshot = businessInputSnapshot?.scenario
+        ? structuredClone(businessInputSnapshot.scenario) : null;
       const customProviderPayload = buildCustomProviderRequestPayload(userProviderConfig);
       const generationProviderSnapshot = customProviderPayload ? {
         ...customProviderPayload,
@@ -612,6 +614,7 @@ export const useBattleEngine = () => {
         setLastGenerationRepairContext({
           generationId: normalizedGenerationId,
           customProvider: generationProviderSnapshot,
+          scenario: generationScenarioSnapshot,
         });
       };
       let webPackagePromptProjection: WebPackagePromptProjection | undefined;
