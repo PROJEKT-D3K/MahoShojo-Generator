@@ -135,6 +135,7 @@ export const useBattleStore = create<BattleStoreState>()(
       reportFormat: 'markdown',
       webPackageRef: null,
       resultReportFormat: 'markdown',
+      resultContext: null,
       resultWebPackage: null,
       resultWebReady: false,
       arenaFreeRankingEnabled: false,
@@ -559,6 +560,8 @@ export const useBattleStore = create<BattleStoreState>()(
           webPackageRef: persisted.reportFormat === 'web' ? WebPackageRefSchema.safeParse(persisted.webPackageRef).data ?? null : null,
           resultWebPackage: null,
           resultReportFormat: 'markdown',
+          // 草稿 hydration 不导入结果 metadata，也不丢弃进程内已有结果的上下文。
+          resultContext: currentState.resultContext,
           resultWebReady: false,
         } as BattleStoreState;
         if (persisted.settings && typeof persisted.settings === 'object') {

@@ -19,6 +19,7 @@ import { BattleIllustrationPanel } from './DeferredArenaRenderers';
 import { BattleResultPresentation } from './BattleResultPresentation';
 import { CombatantUpdatesPresentation } from './CombatantUpdatesPresentation';
 import { resolveBattleReportCardManualWidthPx } from '../utils/battleReportCardWidth';
+import { resolveBattleResultContext } from '../utils/battleResultContext';
 import { downloadBlob } from '@/lib/client/blobUrl';
 
 interface BattleResultProps {
@@ -50,7 +51,7 @@ export function BattleResult({ onSaveImage }: BattleResultProps) {
   const resultReportFormat = useBattleSelector((state) => state.resultReportFormat);
   const resultWebReady = useBattleSelector((state) => state.resultWebReady);
   const resultWebPackage = useBattleSelector((state) => state.resultWebPackage);
-  const generationMode = useBattleSelector((state) => state.generationMode);
+  const resultContext = useBattleSelector((state) => state.resultContext);
   const streamingMarkdown = useBattleSelector((state) => state.streamingMarkdown);
   const streamReporterInfo = useBattleSelector((state) => state.streamReporterInfo);
   const streamUserGuidance = useBattleSelector((state) => state.streamUserGuidance);
@@ -67,22 +68,19 @@ export function BattleResult({ onSaveImage }: BattleResultProps) {
   const latestAiImpacts = useBattleSelector((state) => state.latestAiImpacts);
   const lastGenerationId = useBattleSelector((state) => state.lastGenerationId);
   const settings = useBattleSelector((state) => state.settings);
-  const battleMode = useBattleSelector((state) => state.battleMode);
-  const scenario = useBattleSelector((state) => state.scenario);
   const isCancellingArenaGeneration = arenaGenerationConnectionState === 'cancelling';
   const [illustrationAsset, setIllustrationAsset] = useState<BattleReportIllustrationAsset | null>(null);
   const battleReportCardWidthPx = resolveBattleReportCardManualWidthPx(settings);
 
-  const scenarioDisplayName = useMemo(() => {
-    if (battleMode !== 'scenario') return undefined;
-    const rawTitle = (scenario.content as any)?.title ?? (scenario.content as any)?.name;
-    if (typeof rawTitle === 'string' && rawTitle.trim()) {
-      return rawTitle.trim();
-    }
-    return scenario.fileName ?? undefined;
-  }, [battleMode, scenario.content, scenario.fileName]);
+  const displayContext = useMemo(() => resolveBattleResultContext({
+    resultContext, newsReport, streamingMarkdown,
+  }), [resultContext, newsReport, streamingMarkdown]);
+  const generationMode = displayContext?.generationMode;
+  const battleMode = displayContext?.battleMode ?? undefined;
+  const scenarioDisplayName = displayContext?.scenarioDisplayName ?? undefined;
 
-  const hasBattleReport = generationMode === 'stream' ? Boolean(streamingMarkdown) : Boolean(newsReport);
+  const hasBattleReport = generationMode === 'stream' ? Boolean(streamingMarkdown)
+    : generationMode === 'non-stream' && Boolean(newsReport);
   const shouldShowIllustrationPanel = hasBattleReport && !isGenerating;
   const illustrationPanelKey = `${generationMode}:${lastGenerationId ?? 'no-id'}:${
     generationMode === 'stream'
@@ -197,7 +195,7 @@ export function BattleResult({ onSaveImage }: BattleResultProps) {
                 cardWidthPx: battleReportCardWidthPx,
               }
             : null
-          : newsReport
+          : generationMode === 'non-stream' && newsReport
             ? newsReport.reportFormat === 'web'
               ? {
                   format: 'web-document',
@@ -207,6 +205,7 @@ export function BattleResult({ onSaveImage }: BattleResultProps) {
                   webReady: resultWebReady,
                   isStreaming: false,
                   mode: battleMode,
+                  scenarioName: scenarioDisplayName,
                   reporterInfo: newsReport.reporterInfo,
                   userGuidance: newsReport.userGuidance,
                   characterGuidances: newsReport.characterGuidances,

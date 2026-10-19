@@ -31,6 +31,12 @@ export type { CombatantType } from '@mahoshojo/domain/arena-file-parser';
 export type BattleMode = 'classic' | 'kizuna' | 'daily' | 'scenario';
 export type StoryLengthOption = 'default' | 'short' | 'standard' | 'detailed' | 'long';
 export type GenerationMode = 'non-stream' | 'stream';
+/** 与当前结果一同保留的显示上下文；只在内存中存在，不含 Provider 凭据。 */
+export type ArenaBattleResultContext = Readonly<{
+  generationMode: GenerationMode;
+  battleMode: BattleMode | null;
+  scenarioDisplayName: string | null;
+}>;
 export type StreamTransportMode = 'sse';
 export type BattleReportCardWidthMode = 'auto' | 'manual';
 
@@ -176,6 +182,7 @@ export interface BattleStoreState {
   reportFormat: 'markdown' | 'web';
   webPackageRef: import('@mahoshojo/contracts/web-package').WebPackageRef | null;
   resultReportFormat: 'markdown' | 'web';
+  resultContext: ArenaBattleResultContext | null;
   resultWebPackage: import('@mahoshojo/contracts/web-package').WebPackageArtifact | null;
   resultWebReady: boolean;
   /** 是否启用“自由排位”计分（默认关闭；仅影响 free 队列）。 */

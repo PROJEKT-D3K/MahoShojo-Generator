@@ -25,10 +25,11 @@ import {
   STREAM_ABORT_REASON_USER,
 } from '@/lib/stream/abort';
 import { useBattleStore } from '../stores/useBattleStore';
-import { BattleApiResponse, BattleStoreState, CombatantData } from '../types';
+import { BattleApiResponse, BattleStoreState, CombatantData, type ArenaBattleResultContext } from '../types';
 import { useBattleActions } from './useBattleActions';
 import { useStreamCombatantUpdater } from './useStreamCombatantUpdater';
 import { toBattleReportMarkdown } from '../utils/battleReportMarkdown';
+import { applyBattleResultMetadata } from '../utils/battleResultContext';
 import { extractStreamTelemetryMeta, extractStreamUpdateMeta, stripStreamUpdateMetaComment } from '@/lib/arena/stream-meta';
 import { normalizeUsage } from '@/lib/arena/battle-report-log-utils';
 import {
@@ -505,7 +506,24 @@ export const useBattleEngine = () => {
         throw new DOMException('生成请求已取消', 'AbortError');
       }
     };
-    useBattleStore.setState({ resultNavigation: null });
+    let generationResultContext: ArenaBattleResultContext = Object.freeze({
+      generationMode,
+      battleMode,
+      scenarioDisplayName: shouldUseScenario && scenarioDisplayName
+        ? sanitizeTextByShieldWords(scenarioDisplayName) : null,
+    });
+    const applyResultContextMetadata = (metadata: unknown) => {
+      if (!canCommit()) return;
+      generationResultContext = applyBattleResultMetadata(generationResultContext, metadata, sanitizeTextByShieldWords);
+      useBattleStore.setState({ resultContext: generationResultContext });
+    };
+    useBattleStore.setState({
+      resultNavigation: null,
+      resultContext: roomAction.inRoom ? null : generationResultContext,
+      resultReportFormat: reportFormat,
+      streamingMarkdown: null,
+      newsReport: null,
+    });
     setIsGenerating(true);
     const narrativeDraftOwner = captureNarrativeDraftOwner();
     useNarrativeDraftsStore.getState().setScope(narrativeDraftOwner.scope);
@@ -513,12 +531,9 @@ export const useBattleEngine = () => {
     useNarrativeDraftsStore.getState().clearCandidate();
     setArenaGenerationConnectionState(null);
     setIsStreaming(false);
-    setResultReportFormat(reportFormat);
     setResultWebPackage(null);
     setResultWebReady(false);
-    setStreamingMarkdown(null);
     setError(null);
-    setNewsReport(null);
     setUpdatedCombatants([]);
     setAdjudicationResults(null);
     setStreamReporterInfo(null);
@@ -907,8 +922,14 @@ export const useBattleEngine = () => {
         }
 
         if (!canCommit()) return true;
+        applyResultContextMetadata({
+          mode: result.report.mode,
+          scenarioDisplayName: result.report.scenario,
+        });
         const reportWithScenario = projectArenaBattleReport({
-          report: result.report, mode: battleMode, scenarioDisplayName,
+          report: result.report,
+          mode: generationResultContext.battleMode ?? '',
+          scenarioDisplayName: generationResultContext.scenarioDisplayName,
           adjudicationResults: result.adjudicationResults,
           sanitizeText: sanitizeTextByShieldWords,
         });
@@ -1091,6 +1112,7 @@ export const useBattleEngine = () => {
           if (metaHeader) {
             try {
               const parsed = JSON.parse(decodeURIComponent(metaHeader));
+              applyResultContextMetadata(parsed);
               const contract = parsed?.outputContract;
               authoritativeWebContract = (contract === 'web-document' || contract === 'web-package-target') && parsed?.reportFormat === 'web';
               authoritativePackage = authoritativeWebContract && Boolean(parsed?.webPackageRef);
@@ -1964,6 +1986,14 @@ export const useBattleEngine = () => {
 
       const result: BattleApiResponse = await response.json();
       if (!canCommit()) return;
+      const resultMetaHeader = response.headers.get('x-mahoshojo-stream-meta');
+      if (resultMetaHeader) {
+        try {
+          applyResultContextMetadata(JSON.parse(decodeURIComponent(resultMetaHeader)));
+        } catch {
+          // 旧响应无合法显示 metadata 时保留已冻结的请求上下文。
+        }
+      }
 
       if (await applyBattleResult(result, 'battle')) {
         return;
