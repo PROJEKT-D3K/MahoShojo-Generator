@@ -529,6 +529,51 @@ describe('Web CanshouPage 页面级行为契约（真实共享控件）', () => 
     expect(container.textContent).toContain('半截残兽正文');
   });
 
+  it.each(['error', 'eof'] as const)('流式部分输出遇到 %s 后切换下一次模式仍保留预览与推理', async (failure) => {
+    window.localStorage.setItem(PREF_KEY, JSON.stringify({ generationMode: 'stream' }));
+    const event = (name: string, payload: unknown) => `event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`;
+    streamResponder = () => new Response([
+      event('reasoning', { source: 'sdk', chunk: '未完成残兽的推理' }),
+      event('markdown', { chunk: '名字：未完成残响兽\n\n保留的部分正文' }),
+      failure === 'error' ? event('error', { error: '上游测试失败' }) : '',
+    ].join(''), { headers: { 'Content-Type': 'text/event-stream' } });
+    await mountPage();
+    await startQuestionnaire();
+    await typeCurrentAnswer('回声筑巢的幼体');
+    await jumpToQuestion('canshou-default::birthEnvironment');
+    await clickButton('跳过并生成', 220);
+
+    expect(container.textContent).toContain('保留的部分正文');
+    expect(container.textContent).toContain(failure === 'error' ? '上游测试失败' : '请求可能已经开始处理，请勿立即重复提交');
+    const reasoningToggle = container.querySelector<HTMLButtonElement>('.ai-reasoning-panel button');
+    expect(reasoningToggle).toBeTruthy();
+    await act(async () => reasoningToggle!.click());
+    expect(container.textContent).toContain('未完成残兽的推理');
+    expect(findButtonExact('非流式')?.disabled).toBe(false);
+    await clickButton('非流式');
+    expect(findButtonExact('非流式')?.getAttribute('aria-pressed')).toBe('true');
+    expect(container.textContent).toContain('保留的部分正文');
+    expect(container.textContent).toContain('未完成残兽的推理');
+    expect(findButtonExact('下载通用角色卡')).toBeUndefined();
+    expect(findButtonExact('保存到云端')).toBeUndefined();
+    expect(container.textContent).not.toContain('可继续保存');
+    expect(generationCalls('/api/generate-canshou-stream?format=sse')).toHaveLength(1);
+    expect(generationCalls('/api/generate-canshou')).toHaveLength(0);
+
+    if (failure === 'error') {
+      // 明确终态错误后，冷却到期的下一次显式请求才替换部分输出。
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+      await settle(1100);
+      expect(findButtonExact('跳过并生成')?.disabled).toBe(false);
+      await clickButton('跳过并生成', 220);
+      expect(generationCalls('/api/generate-canshou')).toHaveLength(1);
+      expect(container.textContent).toContain(CANSHOU_RESULT.name);
+      expect(container.textContent).not.toContain('保留的部分正文');
+      expect(container.textContent).not.toContain('未完成残兽的推理');
+      expect(findButtonExact('保存到云端')).toBeTruthy();
+    }
+  });
+
   it('未作答任何题目时不发起生成请求并提示', async () => {
     await mountPage();
     await startQuestionnaire();

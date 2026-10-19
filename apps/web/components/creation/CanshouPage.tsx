@@ -357,7 +357,6 @@ export const CanshouPage: React.FC = () => {
   }, [canshouDetails, answerItems, questionnaireItems]);
 
   const streamedGeneralCardForDisplay = useMemo(() => {
-    if (generationMode !== 'stream') return null;
     const markdown = streamingMarkdown ?? streamedGeneralCard?.content ?? null;
     if (markdown === null) return null;
 
@@ -367,7 +366,7 @@ export const CanshouPage: React.FC = () => {
     });
 
     return card;
-  }, [generationMode, streamingMarkdown, streamedGeneralCard]);
+  }, [streamingMarkdown, streamedGeneralCard]);
 
   useEffect(() => {
     fetch('/languages.json')
@@ -1524,7 +1523,8 @@ export const CanshouPage: React.FC = () => {
                   warningText="⚠️ 预计问卷回答较长，可能更易超时/失败。可尝试精简答案或减少问卷数量。"
                 />
 
-                {generationMode === 'stream' && streamedGeneralCardForDisplay && (
+                {/* 保留本次失败的部分输出；模式控件只配置下一次请求。 */}
+                {streamedGeneralCardForDisplay && (
                   <div ref={resultSectionRef} className="my-6">
                     <GeneralCharacterCard
                       general={streamedGeneralCardForDisplay}
