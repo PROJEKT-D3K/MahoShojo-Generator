@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-19 D5.2-A 开工：[Desktop 安装包构建与内部验收](./runbooks/2026-10-19_201500_Desktop安装包构建与内部验收.md)确立版本契约（`apps/desktop/package.json` 权威 + `sync-desktop-version.mjs` 三处派生）、NSIS currentUser/中英双语安装器与 `desktop-package.yml` 内部打包流水线（无发布私钥、不签名、不建 Release）；维护者确认内部测试先行、OS 签名 Alpha 暂缓、identifier 保持不变，首个内部版本 `0.1.0-alpha.1`。updater、受保护 Release workflow 与公开发行仍属 D5.2-C/D/E 后继。
+
 2026-10-11 Desktop Direct 分支：[真实生成接缝](./reports/2026-10-11_085200_DesktopDirect分支真实生成接缝.md)接通内部可选 owner 的真实 Direct branch Prompt、共享完成投影与原冻结保存链，合成模型 transport；摘要 ID 有界分页并以原 descriptor 封口。定向516项、Native614项/10既有ignored、真实内部pipe11case与类型/lint/fmt/clippy及独审通过；受测35340a58于09:00:20–09:09:19Z原完整CI exit0（10,815 passed executions/21原条件skip）。CI后仅docs收口、3761非docs严格NUL同源，Native/pipe为独立同源实测而非该CI复跑；不开放 IPC/ACL/默认 binder/两页，不关闭资源或真实平台门。
 
 2026-10-11 Desktop任意锚点源：[生成前冻结切片](./reports/2026-10-11_081500_Desktop任意锚点分支源冻结.md)新增未注册内部resolver、boundary k角色与安全摘要/十二章上下文冻结，复用同owner/run完成保存。定向219项、contracts11项、Native614项/10既有ignored、真实内部pipe16case与types/lint/fmt/clippy及独审通过；受测0538084于08:23:16–08:32:42Z原完整CI exit0（10,785 passed executions/21原条件skip）。最终仅docs收口、3756非docs严格NUL同源；Native/pipe为独立冻结实测，CI未重跑。无模型、IPC/ACL/默认binder/两页开放，不关闭资源/Windows/Tauri门。

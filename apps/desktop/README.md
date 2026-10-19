@@ -120,6 +120,26 @@ pnpm --filter @mahoshojo/desktop run dev:tauri
 pnpm --filter @mahoshojo/desktop run dev
 ```
 
+## 打包与版本
+
+本 app 的版本号是 Desktop 独立序列的**唯一权威来源**（`apps/desktop/package.json`
+的 `version`）；`tauri.conf.json`、`Cargo.toml`、`Cargo.lock` 三处派生版本由
+`scripts/sync-desktop-version.mjs` 同步，`pnpm run check:desktop-version` 校验
+（已并入 `workspace:checks`）。修改版本号时先改 package.json 再运行
+`pnpm run sync:desktop-version`，不要单独手改派生文件。
+
+```bash
+# 产出 Windows NSIS 安装包（含前端构建与 Rust release 编译）
+pnpm build:desktop
+# 产物：apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+```
+
+安装包为按当前用户安装的 NSIS（无需管理员），界面语言简体中文/英文随系统，
+WebView2 缺失时在线下载引导。内部跨设备验收清单与升级/数据红线见
+[Desktop 安装包构建与内部验收](../../docs/runbooks/2026-10-19_201500_Desktop安装包构建与内部验收.md)；
+CI 打包流水线为 `.github/workflows/desktop-package.yml`，只做内部分发，
+不含签名、updater 与 Release。
+
 ## 类型检查口径
 
 Desktop 通过 workspace 的 source export 直接编译 `@mahoshojo/*` 的源码，因此
