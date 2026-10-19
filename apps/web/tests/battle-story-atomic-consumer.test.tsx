@@ -394,14 +394,23 @@ describe('real story hook + IndexedDB completed result persistence', () => {
     await awaitSessionRestore();
     vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockRejectedValueOnce(new storage.BattleStoryCommitNotSavedError(new Error('known fault')));
     const button = (text: string) => [...container.querySelectorAll('button')].find((item) => item.textContent === text)!;
-    const { pending } = await start(); await finish(pending, '# UI待保存章\n正文');
+    const { pending } = await start();
+    const planningButton = button('自动'); planningButton.focus();
+    await finish(pending, '# UI待保存章\n正文');
     expect(container.textContent).toContain('正文已完成，尚未保存');
+    expect(container.textContent).toContain(session.actionError);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(document.activeElement).toBe(planningButton);
+    expect(container.querySelector('[data-story-pending-outcome] [role="status"]')).not.toBeNull();
+    expect(container.querySelector('[data-story-pending-outcome] [role="alert"]')).toBeNull();
     expect(button('新建连续战报').disabled).toBe(true);
     expect(button('重试保存').disabled).toBe(false);
+    button('重试保存').focus(); expect(document.activeElement).toBe(button('重试保存'));
     await act(async () => button('导出本章').click()); expect(fixture.download).toHaveBeenCalledTimes(1);
     await act(async () => button('重试保存').click());
     await vi.waitFor(async () => { await act(async () => {}); expect(session.pendingCompletedChapter).toBeNull(); });
     expect(container.textContent).not.toContain('正文已完成，尚未保存');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(container.textContent).toContain('UI待保存章');
     expect(fixture.dispatch).toHaveBeenCalledTimes(1);
   });
@@ -1304,6 +1313,80 @@ async function mountActualPanel() {
   await awaitSessionRestore();
 }
 const panelButton = (text: string) => [...container.querySelectorAll('button')].find((button) => button.textContent === text)!;
+
+describe('actual story Panel shares explicit error presentation', () => {
+  it('preserves the mixed action message without inventing alert classification, focus or retries', async () => {
+    await mountActualPanel();
+    const message = '生成请求失败\n原始说明保持不变';
+    fixture.dispatch.mockRejectedValueOnce(new Error(message));
+    const startButton = panelButton('新建连续战报'); startButton.focus();
+    await act(async () => startButton.click());
+    await vi.waitFor(async () => { await act(async () => {}); expect(session.actionError).toBe(message); });
+    expect(container.textContent).toContain(message);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(document.activeElement).toBe(startButton);
+    expect(startButton.disabled).toBe(false);
+    expect(session.pendingCompletedChapter).toBeNull();
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('announces a local directory read failure without starting a generation', async () => {
+    const message = '读取本地连续战报失败\n请保留当前记录';
+    vi.spyOn(storage, 'listBattleStorySessions').mockRejectedValueOnce(new Error(message));
+    const previousControl = document.createElement('button');
+    container.before(previousControl); previousControl.focus();
+    try {
+      await mountActualPanel();
+      expect(session.storageError).toBe(message);
+      const error = container.querySelector('[role="alert"]')!;
+      expect(error.className).toBe('error-message');
+      expect(error.querySelector('.whitespace-pre-wrap')?.textContent).toBe(message);
+      expect(error.querySelector('button, a, [tabindex]')).toBeNull();
+      expect(document.activeElement).toBe(previousControl);
+      expect(fixture.dispatch).not.toHaveBeenCalled();
+    } finally { previousControl.remove(); }
+  });
+
+  it('keeps an unknown save query-only, with its recovery status distinct from the error', async () => {
+    await mountActualPanel();
+    const original = storage.commitCompletedBattleStoryChapter;
+    const writer = vi.spyOn(storage, 'commitCompletedBattleStoryChapter').mockImplementationOnce(async (commit) => {
+      await original(commit); throw new Error('保存结果回执丢失');
+    });
+    const { pending } = await start(); await finish(pending, '# 未知结果原件\n完整正文');
+    expect(session.pendingSaveUnknown).toBe(true);
+    expect(container.textContent).toContain(session.actionError);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    const recovery = container.querySelector('[data-story-pending-outcome]')!;
+    expect(recovery.querySelector('[role="status"]')?.textContent).toContain('保存状态待确认');
+    expect(recovery.querySelector('[role="alert"]')).toBeNull();
+    expect([...container.querySelectorAll('button')].some((button) => button.textContent === '重试保存')).toBe(false);
+    const queryButton = panelButton('查询保存结果');
+    expect(queryButton.disabled).toBe(false);
+    queryButton.focus(); expect(document.activeElement).toBe(queryButton);
+    const writes = watchWrites();
+    await act(async () => session.handleRetrySaveChapter());
+    writes.expectNone();
+    expect(writer).toHaveBeenCalledTimes(1); expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+    expect(session.pendingCompletedChapter).toBeNull();
+    expect(session.selectedChapter?.markdown).toBe('# 未知结果原件\n完整正文');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('keeps the real stop control focusable and cancellation free of a failure alert', async () => {
+    await mountActualPanel();
+    const { pending } = await start();
+    const stopButton = container.querySelector<HTMLButtonElement>('button[aria-label="停止生成"]')!;
+    expect(stopButton.disabled).toBe(false); stopButton.focus();
+    expect(document.activeElement).toBe(stopButton);
+    await act(async () => { stopButton.click(); await pending; });
+    expect(session.isGenerating).toBe(false);
+    expect(session.pendingCompletedChapter).toBeNull();
+    expect(session.actionError).toBeNull();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  });
+});
 
 const middleWriteStages = [
   ['supersede target', 'put', AI_SESSION_STORE_NAMES.battleStoryChapters],

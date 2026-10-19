@@ -101,6 +101,11 @@ describe('Hosted story controlled pending surface', () => {
     await act(async () => { await vi.waitFor(() => expect(owner.getSnapshot().resultSaved).toBe(true)); });
     expect(roleCount(fixture)).toBe(0); expect(createCount(fixture)).toBe(1);
     expect(fixture.commands(STORY_PENDING_IPC.save)).toHaveLength(1);
+    // 本地补封存后的成功提示不可由先前生成 phase 推断成错误。
+    const savedMessage = owner.getSnapshot().message;
+    expect(savedMessage).toBe('完整章节已保存到本机故事。');
+    expect([...container.querySelectorAll('[role=status]')].some(node => node.textContent === savedMessage)).toBe(true);
+    expect([...container.querySelectorAll('[role=alert]')].some(node => node.textContent === savedMessage)).toBe(false);
   });
 
   it.each(['battle', 'arena'] as const)('%s discovers both Native slots, reads locally and navigates the foreign product without recovery', async product => {
@@ -171,6 +176,9 @@ describe('Hosted story controlled pending surface', () => {
     const fixture = new HostedStoryFixture(); fixture.loseSaveReply = true; fixture.records.hideReceipts = true;
     const { owner, settle } = await mount(fixture); await click('新建连续战报'); await settle();
     expect(container.textContent).toContain('保存状态待确认'); expect(button('查询原保存回执')).toBeTruthy();
+    const pending = container.querySelector('[data-story-pending-outcome]')!;
+    expect(pending.querySelector('[role=status][aria-live=polite]')?.textContent).toContain('保存状态待确认');
+    expect(pending.querySelector('.error-message[role=alert]')).toBeNull();
     expect(button('重试原本地保存')).toBeUndefined(); expect(button('重试角色同步')).toBeUndefined();
     await act(async () => owner.setExecutionScope('new-account', { kind: 'account', expectedUserId: 9 }));
     await click('查询原保存回执');
@@ -308,9 +316,14 @@ describe('Hosted story controlled pending surface', () => {
   it('reports a window input export failure and retains the original recovery actions', async () => {
     const fixture = new HostedStoryFixture(); fixture.failSeal = manifest => manifest.pendingRevision === 1;
     const { owner, download, settle } = await mount(fixture); await click('新建连续战报'); await settle();
-    vi.spyOn(owner.hosted!, 'readWindowInputOriginal').mockRejectedValueOnce(new Error('original input digest mismatch'));
+    const message = 'original input digest mismatch\n保留原冻结输入';
+    vi.spyOn(owner.hosted!, 'readWindowInputOriginal').mockRejectedValueOnce(new Error(message));
+    const focused = button('刷新故事目录')!; focused.focus();
     await click('导出当前窗口冻结输入');
-    expect(container.querySelector('[data-story-pending-outcome] [role="alert"]')?.textContent).toBe('original input digest mismatch');
+    const error = container.querySelector('[data-story-pending-outcome] .error-message[role="alert"]');
+    expect(error?.textContent).toBe(message);
+    expect(error?.querySelector('.whitespace-pre-wrap')?.textContent).toBe(message);
+    expect(document.activeElement).toBe(focused); expect(focused.tabIndex).toBe(0);
     expect(download).not.toHaveBeenCalled(); expect(button('查询或恢复原件封存')!.disabled).toBe(false);
     expect(fixture.commands(STORY_PENDING_IPC.abandon)).toHaveLength(0); expect(fixture.streams).toHaveLength(0);
   });
@@ -345,7 +358,8 @@ describe('Hosted story controlled pending surface', () => {
     const { owner } = await mount(fixture); await click('读取原件（本地）'); const streams = fixture.streams.length;
     await click('恢复原请求');
     await act(async () => { await vi.waitFor(() => expect(owner.getSnapshot().hosted?.busy).toBe(null)); });
-    expect(owner.getSnapshot().hosted?.pointerError).toBeTruthy(); expect(container.textContent).toContain('原恢复入口仍保留');
+    expect(owner.getSnapshot().hosted?.pointerError).toBeTruthy();
+    expect([...container.querySelectorAll('.error-message[role=alert]')].some(node => node.textContent === `原恢复入口仍保留：${owner.getSnapshot().hosted?.pointerError}`)).toBe(true);
     expect(fixture.pointers.get(ARENA_HOSTED_RECOVERY_KEYS.battle)).toBe(invalid); expect(fixture.streams).toHaveLength(streams);
     expect(button('导出全部已封存原件')!.disabled).toBe(false);
   });

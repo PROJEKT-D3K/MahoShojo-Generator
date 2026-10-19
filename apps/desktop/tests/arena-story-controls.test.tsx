@@ -71,10 +71,16 @@ describe('continuous-story actual controlled surface',()=>{
  });
  it.each(['failed','cancelled'] as const)('keeps metadata-only raw output visible and exportable after %s with no commit',async(status)=>{
   const raw='<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"headline":"仅元数据"}} -->';const gate=deferred<void>();
-  const {port,execution,download,settleGeneration}=await mount({rawText:raw,...(status==='cancelled'?{beforeTerminal:()=>gate.promise}:{})});
+  const {port,execution,download,settleGeneration}=await mount({rawText:raw,beforeTerminal:()=>gate.promise});
   await click('新建连续战报');await act(async()=>{await vi.waitFor(()=>expect(owner.getSnapshot().result?.rawText).toBe(raw));});
-  if(status==='cancelled'){await click('停止章节生成');await act(async()=>{gate.resolve();});}
+  const focused=button('刷新故事目录');focused.focus();expect(document.activeElement).toBe(focused);
+  if(status==='cancelled')await click('停止章节生成');
+  await act(async()=>{gate.resolve();});
   await settleGeneration();expect(owner.getSnapshot().phase).toBe(status);
+  const message=owner.getSnapshot().message;
+  expect(container.querySelector('.error-message[role=alert]')).toBeNull();
+  expect([...container.querySelectorAll('[role=status]')].some(node=>node.textContent===message)).toBe(true);
+  expect(document.activeElement).toBe(focused);expect(focused.tabIndex).toBe(0);
   expect(owner.getSnapshot().result?.markdown).toBe('');expect(container.querySelector('[aria-label="本次章节结果"]')?.textContent).toContain(raw);
   await click('导出完整原始输出');expect(JSON.parse(download.mock.calls.at(-1)![1]).rawText).toBe(raw);
   expect(port.begin).not.toHaveBeenCalled();expect(execution.requests).toHaveLength(1);
@@ -147,6 +153,8 @@ describe('continuous-story actual controlled surface',()=>{
   await act(async()=>{await vi.waitFor(()=>expect(port.end).toHaveBeenCalledTimes(1));});
   expect(owner.getSnapshot().saving).toBe(true);expect(container.textContent).toContain('正在保存已完成章节');
   await act(async()=>{endGate.resolve();});await settleGeneration();expect(container.textContent).toContain('保存状态待确认');
+  expect(container.querySelector('[data-story-pending-outcome] [role=status][aria-live=polite]')?.textContent).toContain('保存状态待确认');
+  expect(container.querySelector('.error-message[role=alert]')).toBeNull();
   const save=vi.spyOn(owner,'savePending');
   await act(async()=>owner.setExecutionScope('signed-out'));await click('查询原保存结果');await act(async()=>{await save.mock.results.at(-1)!.value;});
   expect(save).toHaveBeenCalledTimes(1);expect(container.textContent).toContain('保存状态待确认');expect(port.begin).toHaveBeenCalledTimes(1);expect(execution.requests).toHaveLength(1);

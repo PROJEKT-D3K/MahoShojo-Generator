@@ -1,5 +1,6 @@
 'use client';
 
+import { ErrorMessageBox } from '@mahoshojo/ui-web/details-controls';
 import { useMemo, useState } from 'react';
 import {
   BattleStoryActions, BattleStoryBranchChainButton, BattleStoryChapterPlanControl,
@@ -481,7 +482,7 @@ export function BattleStorySessionPanel(props: {
           ) : null}
 
           {storageError ? (
-            <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{storageError}</div>
+            <ErrorMessageBox message={storageError} />
           ) : null}
 
           {pendingCompletedChapter ? (

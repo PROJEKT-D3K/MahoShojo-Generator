@@ -4,7 +4,7 @@ import {
   type BattleStoryChapterReadViewState,
 } from '@mahoshojo/ui-web/arena-story-session';
 import { StreamingBattleReportCard, type StreamingBattleReportCardProps, type BattleReportHostPorts } from '@mahoshojo/ui-web/arena-report';
-import { useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
+import { ErrorMessageBox, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { DENY_EXTERNAL_MEDIA } from '@mahoshojo/ui-web/markdown';
 import { generationActionClassNames } from '@mahoshojo/ui-web/generation-actions';
 import { normalizeUsage } from '@mahoshojo/ai-core/token-usage';
@@ -121,7 +121,7 @@ function HostedStoryInputPendingControls(props: {
     </>}
     exportAction={<button type="button" className={secondary} disabled={props.disabled || exportState.busy} onClick={() => void exportInput()}>导出当前窗口冻结输入</button>}
     saveActions={<button type="button" className={secondary} disabled={props.disabled || exportState.busy || !props.owner.canRetryLocal()} onClick={() => void props.owner.retryLocal()}>查询或恢复原件封存</button>}>
-    {exportState.error ? <p role="alert" className="mt-3">{exportState.error}</p> : null}
+    {exportState.error ? <ErrorMessageBox message={exportState.error} /> : null}
   </BattleStoryPendingOutcome>;
 }
 
@@ -247,7 +247,7 @@ export function DesktopArenaStoryControls(props: {
           && candidate?.manifest.pendingRevision === slot?.manifest.pendingRevision;
         return <section key={slotProduct} aria-label={`${productTitle(slotProduct)}原候选`} className="space-y-2 rounded-lg border border-gray-200 p-3">
           <h4 className="font-semibold">{productTitle(slotProduct)} 原候选</h4>
-          {hosted.discoveryErrors[slotProduct] ? <p role="alert">{hosted.discoveryErrors[slotProduct]}</p> : slot ? <>
+          {hosted.discoveryErrors[slotProduct] ? <ErrorMessageBox message={hosted.discoveryErrors[slotProduct]} /> : slot ? <>
             <p className="break-all text-xs">原请求：{slot.manifest.requestId}｜{slot.restored ? '备份恢复，只读' : slot.abandonRequested ? '原放弃清理待完成' : slot.manifest.modelCompleted ? '完成原件已封存' : '尚未完成封存'}</p>
             {slotProduct === product ? <BattleStoryActions>
               <button type="button" className={secondary} disabled={busy || hasUnsealedWindowResult || alreadyRead} title={hasUnsealedWindowResult ? '当前窗口仍有未保存正文或推理，请先导出并处理原结果' : alreadyRead ? '本候选原件已读取；请继续处理当前原件' : undefined} onClick={() => void hostedOwner.openCandidate()}>读取原件（本地）</button>
@@ -265,8 +265,8 @@ export function DesktopArenaStoryControls(props: {
         owner={hostedOwner} state={hosted} disabled={busy} hasWindowBody={hostedResult && !!state.result?.markdown} hasWindowReasoning={hostedResult && !!state.result?.reasoning} exportWindowBody={exportResult} /> : null}
       {!candidate && hosted.localRetry === 'seal' ? <HostedStoryInputPendingControls owner={hostedOwner} disabled={busy} download={props.download} /> : null}
       {hosted.message ? <p role="status" className="text-sm text-amber-800">{hosted.message}</p> : null}
-      {hosted.pointerError ? <p role="alert">原恢复入口仍保留：{hosted.pointerError}</p> : null}
-      {hosted.exportError ? <p role="alert">{hosted.exportError}</p> : null}
+      {hosted.pointerError ? <ErrorMessageBox message={`原恢复入口仍保留：${hosted.pointerError}`} /> : null}
+      {hosted.exportError ? <ErrorMessageBox message={hosted.exportError} /> : null}
       {hosted.exportResults.length ? <ul aria-label="原件导出成功回执" className="space-y-1 text-xs">{hosted.exportResults.map(result => <li key={result.token} className="break-all">已导出：{result.absolutePath}（{result.byteLength} 字节）｜{result.digest}</li>)}</ul> : null}
     </section> : null}
     {state.pending ? <BattleStoryPendingOutcome
@@ -279,7 +279,7 @@ export function DesktopArenaStoryControls(props: {
       </>} /> : null}
     {state.savedUnread ? <button className={secondary} type="button" disabled={props.reportExporting} onClick={() => { if (!props.reportExporting) void owner.readSavedResult(); }}>读取刚保存的章节</button> : null}
     {state.exporting ? <p role="status">{state.exportProgress?.phase === 'writing' ? '正在写出完整故事' : '正在核对完整故事'}：{state.exportProgress?.bytes ?? 0} 字节；未完成核验前不会发布文件。</p> : null}
-    {state.exportError ? <p role="alert">{state.exportError}</p> : null}
+    {state.exportError ? <ErrorMessageBox message={state.exportError} /> : null}
     {state.exportResult ? <p role="status" className="break-all">完整故事已导出：{state.exportResult.absolutePath}（{state.exportResult.byteLength} 字节）</p> : null}
     <div className="grid gap-5 xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
       <div className="space-y-4">
