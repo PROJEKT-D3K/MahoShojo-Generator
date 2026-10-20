@@ -586,6 +586,19 @@ describe('DesktopAiProviderPanel', () => {
 });
 
 describe('temporary Strict execution panel lock', () => {
+  it('撤销已展开的供应商菜单，解除锁定后仍需主动展开', async () => {
+    await mount();
+    await act(async () => triggers()[0]!.click());
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+    const before = localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY);
+    await act(async () => root.render(<StrictMode><DesktopAiProviderPanel executionConstraint={{ location: 'server', reason: '严格排位锁定' }} /></StrictMode>));
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    expect(triggers().every((trigger) => trigger.getAttribute('aria-expanded') === 'false')).toBe(true);
+    await act(async () => root.render(<StrictMode><DesktopAiProviderPanel /></StrictMode>));
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    expect(localStorage.getItem(DESKTOP_AI_CONFIG_STORAGE_KEY)).toBe(before);
+  });
+
   it('shows the effective server target and freezes advanced controls and an already open editor without changing ordinary config', async () => {
     await mount();
     await act(async () => button('高级生成设置')!.click()); await settle();

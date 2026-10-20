@@ -115,7 +115,8 @@ export const AiProviderCustomSelect = ({
   actions = [],
   onAction,
 }: AiProviderCustomSelectProps) => {
-  const [isOpen, setIsOpen] = useState(false);
+  const [openRequested, setOpenRequested] = useState(false);
+  const isOpen = openRequested && !disabled;
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -149,10 +150,15 @@ export const AiProviderCustomSelect = ({
   );
 
   const closeMenu = useCallback((restoreFocus = false) => {
-    setIsOpen(false);
+    setOpenRequested(false);
     setActiveIndex(-1);
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
+
+  // 禁用不仅锁定触发器，也撤销已展开菜单与 Escape 层；解锁不恢复旧展开意图。
+  useEffect(() => {
+    if (disabled) closeMenu();
+  }, [closeMenu, disabled]);
 
   const openMenu = useCallback(
     (preferredIndex?: number) => {
@@ -162,7 +168,7 @@ export const AiProviderCustomSelect = ({
         setOpenUpward(placement.openUpward);
         setMenuMaxHeight(placement.maxHeight);
       }
-      setIsOpen(true);
+      setOpenRequested(true);
       setActiveIndex(() => {
         if (preferredIndex !== undefined) return preferredIndex;
         const selectedIndex = options.findIndex(
@@ -178,7 +184,7 @@ export const AiProviderCustomSelect = ({
 
   const activateItem = useCallback(
     (item: NavItem | undefined) => {
-      if (!item) return;
+      if (disabled || !item) return;
       if (item.type === 'option') {
         if (item.option.disabled === true) return;
         onChange(item.option.value);
@@ -186,9 +192,11 @@ export const AiProviderCustomSelect = ({
         if (item.action.disabled === true) return;
         onAction?.(item.action.id);
       }
-      closeMenu();
+      // 鼠标会把焦点移到菜单按钮；卸载前还给触发器。动作若已将焦点交给
+      // 另一个控件/对话框，则保留新的焦点所有权。
+      closeMenu(menuRef.current?.contains(document.activeElement) === true);
     },
-    [closeMenu, onAction, onChange],
+    [closeMenu, disabled, onAction, onChange],
   );
 
   const moveActive = useCallback(
@@ -338,11 +346,7 @@ export const AiProviderCustomSelect = ({
       aria-disabled={option.disabled === true}
       className={optionClassName(option, id)}
       onMouseEnter={() => setActiveIndex(flatIndex)}
-      onClick={() => {
-        if (option.disabled === true) return;
-        onChange(option.value);
-        closeMenu();
-      }}
+      onClick={() => activateItem(navItems[flatIndex])}
     >
       <div className="flex flex-1 flex-col items-start gap-1">
         <span className="battle-lite-strong-text text-sm font-semibold">
@@ -438,11 +442,7 @@ export const AiProviderCustomSelect = ({
                       action.disabled === true ? 'cursor-not-allowed opacity-60' : ''
                     } ${isActive(id) ? 'battle-lite-select-option-focus' : ''}`}
                     onMouseEnter={() => setActiveIndex(flatIndex)}
-                    onClick={() => {
-                      if (action.disabled === true) return;
-                      onAction?.(action.id);
-                      closeMenu();
-                    }}
+                    onClick={() => activateItem(navItems[flatIndex])}
                   >
                     <div className="flex flex-1 flex-col items-start gap-1">
                       <span className="battle-lite-strong-text text-sm font-semibold">

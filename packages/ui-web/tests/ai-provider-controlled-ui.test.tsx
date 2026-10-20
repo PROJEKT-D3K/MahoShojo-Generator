@@ -106,7 +106,8 @@ describe('AiProviderCustomSelect（AIP-1 分组/动作/键盘）', () => {
     const actionButton = [...container.querySelectorAll('button')].find(
       (el) => el.textContent === '＋ 新建自定义连接',
     )!;
-    await act(async () => actionButton.click());
+    await act(async () => { actionButton.focus(); actionButton.click(); });
+    expect(document.activeElement).toBe(triggerOf());
     expect(onAction).toHaveBeenCalledWith('new');
     expect(onChange).not.toHaveBeenCalled();
     expect(menuOf()).toBeNull();
@@ -234,6 +235,44 @@ describe('AiProviderCustomSelect（AIP-1 分组/动作/键盘）', () => {
     });
     expect(onAction).toHaveBeenCalledWith('new');
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('已展开时禁用会关闭菜单与 Escape 层，重新启用不自动展开', async () => {
+    const onChange = vi.fn();
+    const onAction = vi.fn();
+    const view = (disabled: boolean) => <AiProviderCustomSelect options={options} value="p1" onChange={onChange} placeholder="选择供应商" disabled={disabled} actions={[{ id: 'new', label: '新建连接' }]} onAction={onAction} />;
+    await render(view(false));
+    await act(async () => triggerOf().click());
+    expect(menuOf()).not.toBeNull();
+    await render(view(true));
+    expect(menuOf()).toBeNull();
+    expect(triggerOf().getAttribute('aria-expanded')).toBe('false');
+    expect(triggerOf().getAttribute('aria-activedescendant')).toBeNull();
+    const escape = keydown(document, 'Escape');
+    expect(escape.defaultPrevented).toBe(false);
+    await render(view(false));
+    expect(menuOf()).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it('鼠标选择后恢复触发器焦点，但动作已移到外部控件时不抢焦点', async () => {
+    const onChange = vi.fn();
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    try {
+      await render(<AiProviderCustomSelect options={options} value="p1" onChange={onChange} placeholder="选择供应商" actions={[{ id: 'new', label: '新建连接' }]} onAction={() => outside.focus()} />);
+      await act(async () => triggerOf().click());
+      const option = container.querySelector<HTMLButtonElement>('[role="option"]')!;
+      await act(async () => { option.focus(); option.click(); });
+      expect(onChange).toHaveBeenCalledWith('p1');
+      expect(document.activeElement).toBe(triggerOf());
+      await act(async () => triggerOf().click());
+      const action = [...container.querySelectorAll('button')].find((button) => button.textContent === '新建连接')!;
+      await act(async () => { action.focus(); action.click(); });
+      expect(menuOf()).toBeNull();
+      expect(document.activeElement).toBe(outside);
+    } finally { outside.remove(); }
   });
 
   it('可用空间极小时按实际高度限高，不强制最小高度溢出裁切', async () => {
