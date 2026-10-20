@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 
 import { hasNonDeferredFocusTrapLayer, hasNonDeferredLayerAbove, isTopmostFocusTrapLayer, popEscapeLayer, pushEscapeLayer, subscribeFocusTrapLayers } from './escape-stack';
 import { acquireModalEnvironment } from './modal-lifecycle';
+import { resolveModalTabTarget } from './tab-focus';
 
 type Props = {
   isOpen: boolean;
@@ -36,14 +37,6 @@ const noModalSubscription = () => () => {};
 
 const DEFAULT_Z_INDEX_CLASS_NAME = 'z-50';
 const DEFAULT_MAX_WIDTH_CLASS_NAME = 'max-w-4xl';
-const FOCUSABLE_SELECTOR = [
-  'button:not([disabled])',
-  'a[href]',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
 
 /**
  * 对话框的 Escape/Tab 层级由 `escape-stack` 统一登记（DESK-PARITY-007）：
@@ -116,24 +109,10 @@ export const useBaseModalAccessibility = ({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab' || !isTopmostFocusTrapLayer(layerId)) return;
 
-      const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [])]
-        .filter((element) => !element.matches(':disabled') && !element.hidden && element.getAttribute('aria-hidden') !== 'true');
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialogRef.current?.focus({ preventScroll: true });
-        return;
-      }
-
-      const first = focusable[0]!;
-      const last = focusable.at(-1)!;
-      const current = document.activeElement;
-      if (event.shiftKey && (current === first || !dialogRef.current?.contains(current))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (current === last || !dialogRef.current?.contains(current))) {
-        event.preventDefault();
-        first.focus();
-      }
+      const target = resolveModalTabTarget(dialogRef.current, document.activeElement, event.shiftKey);
+      if (!target) return;
+      event.preventDefault();
+      target.focus(target === dialogRef.current ? { preventScroll: true } : undefined);
     };
 
     document.addEventListener('keydown', onKeyDown);

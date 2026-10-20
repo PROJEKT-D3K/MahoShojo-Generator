@@ -1365,3 +1365,41 @@ test('卡组逐项等待提交，拒绝的卡不占上限或上报使用', async
   expect(onToggleCard).toHaveBeenCalledTimes(2);
   expect(online.reportCardStat).toHaveBeenCalledTimes(1); expect(online.reportCardStat).toHaveBeenCalledWith('b', 'usage');
 });
+
+test('卡库向未登记共享栈的宿主详情让出 Tab，子层关闭后恢复环绕', async () => {
+  const { host } = createHost([record('tab-child')]);
+  host.slots.CardDetailsModal = ({ isOpen, onClose }) => isOpen ? <div data-host-child><button onClick={onClose}>关闭宿主子层</button></div> : null;
+  await render({ host, isOpen: true, onClose: vi.fn(), selectedType: 'character', initialTab: 'local', visibleTabs: ['local'] });
+  await settle(); await click(detailsButton()); await settle();
+  const child = document.querySelector<HTMLButtonElement>('[data-host-child] button')!;
+  const press = (target: HTMLElement, shiftKey = false) => {
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true });
+    act(() => { target.focus(); target.dispatchEvent(event); });
+    return event;
+  };
+  expect(press(child).defaultPrevented).toBe(false); expect(document.activeElement).toBe(child);
+  expect(press(child, true).defaultPrevented).toBe(false); expect(document.activeElement).toBe(child);
+  await click(child); await settle();
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  const first = dialog.querySelector<HTMLButtonElement>('button')!;
+  const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+  const last = focusable.at(-1)!;
+  expect(press(first, true).defaultPrevented).toBe(true); expect(document.activeElement).toBe(last);
+  expect(press(last).defaultPrevented).toBe(true); expect(document.activeElement).toBe(first);
+});
+
+test('宿主空态中 disabled fieldset 的后代不成为卡库 Tab 环绕目标', async () => {
+  const { host } = createHost([]);
+  host.slots.renderLocalLibraryEmpty = () => <><button data-enabled>可用入口</button><fieldset disabled><button data-inherited>等待存储就绪</button></fieldset></>;
+  await render({ host, isOpen: true, onClose: vi.fn(), selectedType: 'character', initialTab: 'local', visibleTabs: ['local'] });
+  await settle();
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  const first = dialog.querySelector<HTMLButtonElement>('button')!;
+  const inherited = dialog.querySelector<HTMLButtonElement>('[data-inherited]')!;
+  expect(inherited.disabled).toBe(false);
+  expect(inherited.matches(':disabled')).toBe(true);
+  const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+  act(() => { first.focus(); first.dispatchEvent(event); });
+  expect(event.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(dialog.querySelector('[data-enabled]'));
+});

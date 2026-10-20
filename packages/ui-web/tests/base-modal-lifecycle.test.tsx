@@ -241,3 +241,24 @@ it('exposes the native content scroller as a keyboard stop without swallowing sc
     expect(event.defaultPrevented).toBe(false);
   }
 });
+
+it('Tab 只环绕首尾或收回外部焦点，内部移动仍交给浏览器', () => {
+  render(<BaseModal isOpen title="循环" onClose={() => {}}><button data-middle>中间</button><button data-last>末尾</button></BaseModal>);
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  const first = dialog.querySelector<HTMLButtonElement>('button')!;
+  const middle = dialog.querySelector<HTMLButtonElement>('[data-middle]')!;
+  const last = dialog.querySelector<HTMLButtonElement>('[data-last]')!;
+  const press = (target: HTMLElement, shiftKey = false) => {
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true });
+    act(() => { target.focus(); target.dispatchEvent(event); });
+    return event;
+  };
+  expect(press(last).defaultPrevented).toBe(true); expect(document.activeElement).toBe(first);
+  expect(press(first, true).defaultPrevented).toBe(true); expect(document.activeElement).toBe(last);
+  expect(press(middle).defaultPrevented).toBe(false); expect(document.activeElement).toBe(middle);
+  const outside = document.createElement('button'); document.body.append(outside);
+  try {
+    expect(press(outside).defaultPrevented).toBe(true); expect(document.activeElement).toBe(first);
+    expect(press(outside, true).defaultPrevented).toBe(true); expect(document.activeElement).toBe(last);
+  } finally { outside.remove(); }
+});

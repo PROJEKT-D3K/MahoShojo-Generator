@@ -26,6 +26,7 @@ import { useLocalLibraryAutoSave } from './use-local-library-auto-save';
 import { ChevronDown, Filter, HardDrive } from 'lucide-react';
 import { BASE_MODAL_BODY_LAYOUT_CLASS_NAME, BaseModal } from '../modal/BaseModal';
 import { acquireModalEnvironment } from '../modal/modal-lifecycle';
+import { resolveModalTabTarget } from '../modal/tab-focus';
 import { isTopmostFocusTrapLayer, useEscapeLayer } from '../modal/escape-stack';
 import { ModalTabs, modalTabIds, type ModalTabItem } from '../modal/ModalTabs';
 import { buttonClassName } from './Button';
@@ -355,37 +356,15 @@ export function CardLibraryModal({
     const modal = modalRef.current;
     closeButtonRef.current?.focus({ preventScroll: true });
 
-    const focusableSelector = [
-      'button:not([disabled])',
-      'a[href]',
-      'input:not([disabled])',
-      'select:not([disabled])',
-      'textarea:not([disabled])',
-      '[tabindex]:not([tabindex="-1"])',
-    ].join(',');
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return;
       // 栈外子层在前台，或上方另有模态层（本地删除确认等 BaseModal）时让位。
       if (childOverlayOpenRef.current || !isTopmostFocusTrapLayer(modalLayerId)) return;
 
-      const focusable = [...(modalRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])]
-        .filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
-      if (focusable.length === 0) {
-        event.preventDefault();
-        modalRef.current?.focus();
-        return;
-      }
-
-      const first = focusable[0]!;
-      const last = focusable.at(-1)!;
-      const current = document.activeElement;
-      if (event.shiftKey && (current === first || !modalRef.current?.contains(current))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (current === last || !modalRef.current?.contains(current))) {
-        event.preventDefault();
-        first.focus();
-      }
+      const target = resolveModalTabTarget(modalRef.current, document.activeElement, event.shiftKey);
+      if (!target) return;
+      event.preventDefault();
+      target.focus();
     };
     document.addEventListener('keydown', onKeyDown);
 
