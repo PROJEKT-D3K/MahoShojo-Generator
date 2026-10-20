@@ -19,8 +19,10 @@ export type CharacterCardMarkdown = ComponentType<MarkdownBlockProps>;
 export interface CharacterCardHostExtras {
   /** Markdown 渲染组件；缺省共享 `MarkdownBlock`。 */
   Markdown?: CharacterCardMarkdown;
-  /** 「生成者」徽标等署名节点，渲染在截图导出的 logo 占位区。 */
+  /** 当前导出账号展示节点，不代表角色作者或数字签名。 */
   generatedByBadge?: ReactNode;
+  /** 点击时捕获宿主账号范围；失效的异步截图不再交付。缺省不绑定账号。 */
+  captureExportGuard?: () => () => boolean;
   /** 截图时的站外媒体内联策略；缺省 `DENY_SNAPDOM_MEDIA`（不发起站外请求）。 */
   captureMediaAdapter?: SnapdomMediaAdapter;
   /** 卡片顶部标题图地址；缺省 `/questionnaire-title.svg`。 */

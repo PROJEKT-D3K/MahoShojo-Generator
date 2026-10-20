@@ -1,3 +1,4 @@
+import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge } from '../features/account/character-card-export-badge';
 import { PrivateResultSave } from '../features/cloud-save/private-result-save';
 import { DesktopSublimationLoreSelector } from '../features/sublimation/lore-selector';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -240,9 +241,9 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
     <div ref={resultRef}>
       {card && <section aria-label="升华结果" className="mt-6 space-y-4">
         <p className="text-sm">升华结果 · {signatureLabel}</p>
-        {preview?.kind === 'magical-girl' && <MagicalGirlCard magicalGirl={preview.data} gradientStyle={resolveMagicalGirlGradient(preview.data.appearance.colorScheme)} />}
-        {preview?.kind === 'canshou' && <CanshouCard canshou={preview.data} />}
-        {preview?.kind === 'general' && <GeneralCharacterCard general={preview.data} />}
+        {preview?.kind === 'magical-girl' && <MagicalGirlCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} magicalGirl={preview.data} gradientStyle={resolveMagicalGirlGradient(preview.data.appearance.colorScheme)} />}
+        {preview?.kind === 'canshou' && <CanshouCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} canshou={preview.data} />}
+        {preview?.kind === 'general' && <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} general={preview.data} />}
         <div className="card"><h3 className="text-lg font-semibold">保存升华结果</h3><p className="mb-3 text-xs text-gray-500">另存新卡，原始角色与本地历史不会被覆盖。</p>
           {resultCardType && <PrivateResultSave externalLeaveGuard={guard} data={card} cardType={resultCardType} onBusyChange={onCloudSavingChange} isBlocked={() => session.isBusy() || aiStore.isPreparingGeneration() || importingRef.current || loreLoadingRef.current} disabled={!guard.ready || busy} className={generationActionClassNames.primary} />}
                   <button className={generationActionClassNames.primary} disabled={!guard.ready || busy || state.saveStatus === 'saved' || state.saveStatus === 'already-present'} onClick={() => void session.saveResult()}>{state.saving ? '正在保存…' : '保存到本地卡库'}</button>

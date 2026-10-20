@@ -1,3 +1,4 @@
+import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge } from '../features/account/character-card-export-badge';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter, useSearch } from '@tanstack/react-router';
@@ -944,9 +945,9 @@ export function DesktopCharacterManager() {
         </div>
         {draftRestoreReady && preview !== null && (
           <CharacterManagerPreviewPanel>
-            {preview.kind === 'magical-girl' && <MagicalGirlCard magicalGirl={preview.data} gradientStyle={resolveMagicalGirlGradient(preview.data.appearance.colorScheme)} />}
-            {preview.kind === 'general' && <GeneralCharacterCard general={preview.data} />}
-            {preview.kind === 'canshou' && <CanshouCard canshou={preview.data} />}
+            {preview.kind === 'magical-girl' && <MagicalGirlCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} magicalGirl={preview.data} gradientStyle={resolveMagicalGirlGradient(preview.data.appearance.colorScheme)} />}
+            {preview.kind === 'general' && <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} general={preview.data} />}
+            {preview.kind === 'canshou' && <CanshouCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} canshou={preview.data} />}
           </CharacterManagerPreviewPanel>
         )}
         {draft === null && cloudActions}

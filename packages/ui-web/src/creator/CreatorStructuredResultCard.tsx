@@ -3,6 +3,7 @@ import {
   MAGICAL_GIRL_CARD_GRADIENT,
   MagicalGirlCard,
   type CharacterCardPortraitAsset,
+  type CharacterCardCommonProps,
 } from '../character-card';
 import type { CreatorTemplateId } from '@mahoshojo/domain/creator/templates';
 
@@ -15,6 +16,8 @@ type CreatorStructuredResultCardProps = {
   imageSaveMode?: 'auto' | 'modal' | 'download';
   saveButtonLabel?: string;
   portraitAsset?: CharacterCardPortraitAsset | null;
+  generatedByBadge?: CharacterCardCommonProps['generatedByBadge'];
+  captureExportGuard?: CharacterCardCommonProps['captureExportGuard'];
 };
 
 /**
@@ -29,6 +32,8 @@ export function CreatorStructuredResultCard({
   imageSaveMode = 'auto',
   saveButtonLabel,
   portraitAsset = null,
+  generatedByBadge,
+  captureExportGuard,
 }: CreatorStructuredResultCardProps) {
   const parameterView = buildCharacterParameterView({
     creationInputs: result?.creationInputs,
@@ -43,6 +48,8 @@ export function CreatorStructuredResultCard({
         imageSaveMode={imageSaveMode}
         saveButtonLabel={saveButtonLabel}
         portraitAsset={portraitAsset}
+        generatedByBadge={generatedByBadge}
+        captureExportGuard={captureExportGuard}
       />
     );
   }
@@ -56,6 +63,8 @@ export function CreatorStructuredResultCard({
       imageSaveMode={imageSaveMode}
       saveButtonLabel={saveButtonLabel}
       portraitAsset={portraitAsset}
+      generatedByBadge={generatedByBadge}
+      captureExportGuard={captureExportGuard}
     />
   );
 }

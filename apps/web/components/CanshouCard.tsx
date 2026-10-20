@@ -3,18 +3,20 @@
 import React, { useMemo } from 'react';
 
 import {
+  CHARACTER_CARD_EXPORTER_LABEL,
   CanshouCard as SharedCanshouCard,
   type CanshouCardProps as SharedCanshouCardProps,
 } from '@mahoshojo/ui-web/character-card';
 import { WEB_SNAPDOM_MEDIA } from '@mahoshojo/ui-web/client';
 
 import { MarkdownBlock } from '@/components/MarkdownBlock';
+import { captureCharacterCardExportGuard } from '@/lib/character-card-export';
 import { GeneratedByUserBadge } from '@/components/shared/GeneratedByUserBadge';
 import { buildCharacterParameterView } from '@/lib/creator/character-parameter-view';
 
 export type { CanshouDetails } from '@mahoshojo/ui-web/character-card';
 
-type CanshouCardProps = Omit<SharedCanshouCardProps, 'Markdown' | 'generatedByBadge' | 'captureMediaAdapter' | 'parameterView'>;
+type CanshouCardProps = Omit<SharedCanshouCardProps, 'Markdown' | 'generatedByBadge' | 'captureMediaAdapter' | 'captureExportGuard' | 'parameterView'>;
 
 const CanshouCard: React.FC<CanshouCardProps> = ({ canshou, ...rest }) => {
   const parameterView = useMemo(
@@ -31,8 +33,9 @@ const CanshouCard: React.FC<CanshouCardProps> = ({ canshou, ...rest }) => {
       canshou={canshou}
       parameterView={parameterView}
       Markdown={MarkdownBlock}
-      generatedByBadge={<GeneratedByUserBadge variant="dark" className="mt-3" />}
+      generatedByBadge={<GeneratedByUserBadge label={CHARACTER_CARD_EXPORTER_LABEL} variant="dark" className="mt-3" />}
       captureMediaAdapter={WEB_SNAPDOM_MEDIA}
+      captureExportGuard={captureCharacterCardExportGuard}
       {...rest}
     />
   );

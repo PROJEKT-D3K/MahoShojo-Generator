@@ -1,3 +1,4 @@
+import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge } from '../features/account/character-card-export-badge';
 import { DesktopQuestionnaireDetailsModal } from '../features/questionnaire/questionnaire-details-modal';
 import { ResultJsonCopyButton } from '@mahoshojo/ui-web/details-controls';
 import { buildCreatorInputEstimateText } from '@mahoshojo/domain/creator/input-estimate';
@@ -1202,7 +1203,7 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
       </h2>}
       {resolvedResultPayload && <p data-testid="result-signature-status" className="text-sm text-(--app-text-muted)">{resultSignatureLabel}</p>}
       {state.cardKind === 'general' && resolvedResultPayload && (
-        <GeneralCharacterCard
+        <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard}
           general={resolvedResultPayload as unknown as GeneralCharacterCardData}
           onSaveImage={handleSaveImage}
           imageSaveMode={imageSaveMode}
@@ -1218,7 +1219,7 @@ function CreatorForm({ session, restored }: { session: CreatorSession; restored:
         </div>
       )}
       {(state.cardKind === 'magical-girl' || state.cardKind === 'canshou') && resolvedResultPayload && (
-        <CreatorStructuredResultCard
+        <CreatorStructuredResultCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard}
           template={state.cardKind}
           result={resolvedResultPayload}
           onSaveImage={handleSaveImage}

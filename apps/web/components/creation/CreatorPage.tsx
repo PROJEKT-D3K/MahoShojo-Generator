@@ -1,5 +1,9 @@
 'use client';
 
+import { CHARACTER_CARD_EXPORTER_LABEL } from '@mahoshojo/ui-web/character-card';
+import { captureCharacterCardExportGuard } from '@/lib/character-card-export';
+import { GeneratedByUserBadge } from '@/components/shared/GeneratedByUserBadge';
+
 import { ResultJsonCopyButton } from '@mahoshojo/ui-web/details-controls';
 
 import { buildCreatorInputEstimateText } from '@mahoshojo/domain/creator/input-estimate';
@@ -2820,6 +2824,8 @@ export const CreatorPage: React.FC = () => {
           {hasNonStreamCreatorResult && magicalGirlDetails && (
             <>
               <CreatorStructuredResultCard
+                captureExportGuard={captureCharacterCardExportGuard}
+                generatedByBadge={<GeneratedByUserBadge label={CHARACTER_CARD_EXPORTER_LABEL} variant="dark" className="mt-3" />}
                 template={creatorDisplayState.template}
                 result={magicalGirlDetails}
                 onSaveImage={handleSaveImage}

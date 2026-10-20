@@ -33,6 +33,7 @@ export function CanshouCard({
   Markdown = SharedMarkdownBlock,
   generatedByBadge,
   captureMediaAdapter,
+  captureExportGuard,
   titleImageSrc = '/beast-title.svg',
   titleImageAlt = '残兽档案',
   titleImageVariant = 'fluid',
@@ -49,6 +50,7 @@ export function CanshouCard({
     imageSaveMode,
     onSaveImage,
     mediaAdapter: captureMediaAdapter,
+    captureExportGuard,
     resolveFileName: () =>
       `残兽档案_${canshou.name.replace(/[^a-z0-9一-龥]/gi, '_')}.png`,
   });

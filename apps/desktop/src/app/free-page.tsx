@@ -1,3 +1,4 @@
+import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge } from '../features/account/character-card-export-badge';
 import { PrivateResultSave } from '../features/cloud-save/private-result-save';
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
@@ -356,9 +357,9 @@ function FreeForm({ session }: { session: FreeSession }) {
             <div ref={resultSectionRef}>
               {card && <section aria-label="生成结果" className="flex flex-col gap-3">
                 <p className="text-sm text-(--app-text-muted)">生成结果 · 未签名（自由生成为非原生卡）</p>
-                {cardKind === 'magical-girl' && <MagicalGirlCard magicalGirl={card as unknown as MagicalGirlCardData} gradientStyle={MAGICAL_GIRL_CARD_GRADIENT} />}
-                {cardKind === 'canshou' && <CanshouCard canshou={card as unknown as CanshouDetails} />}
-                {cardKind === 'general' && <GeneralCharacterCard general={card as unknown as GeneralCharacterCardData} />}
+                {cardKind === 'magical-girl' && <MagicalGirlCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} magicalGirl={card as unknown as MagicalGirlCardData} gradientStyle={MAGICAL_GIRL_CARD_GRADIENT} />}
+                {cardKind === 'canshou' && <CanshouCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} canshou={card as unknown as CanshouDetails} />}
+                {cardKind === 'general' && <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} general={card as unknown as GeneralCharacterCardData} />}
                 {cardKind === 'general-scenario' && (
                   <FreeResultPanel title={typeof card.title === 'string' && card.title ? card.title : '通用情景卡'}>
                     <div className="rounded-lg bg-gray-50 p-4 border border-gray-200">

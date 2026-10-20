@@ -41,6 +41,7 @@ export interface UseCardImageSaveParams {
   /** 生成导出文件名（含 .png 扩展名）。 */
   resolveFileName: () => string;
   mediaAdapter?: SnapdomMediaAdapter;
+  captureExportGuard?: () => () => boolean;
   /** 流式时是否禁用截图（GeneralCharacterCard 语义；MagicalGirlCard/CanshouCard 不设）。 */
   blockWhenStreaming?: boolean;
 }
@@ -64,6 +65,7 @@ export function useCardImageSave({
   onSaveImage,
   resolveFileName,
   mediaAdapter = DENY_SNAPDOM_MEDIA,
+  captureExportGuard,
   blockWhenStreaming = false,
 }: UseCardImageSaveParams): UseCardImageSaveResult {
   const [isSavingImage, setIsSavingImage] = useState(false);
@@ -75,12 +77,14 @@ export function useCardImageSave({
     if (!element) return;
     if (isSavingImage) return;
 
+    const isCurrentExport = captureExportGuard?.() ?? (() => true);
     const saveButton = element.querySelector('.save-button') as HTMLElement;
     const logoPlaceholder = element.querySelector('.logo-placeholder') as HTMLElement;
     try {
       setIsSavingImage(true);
       flushSync(() => setIsExportingImage(true));
       await waitForNextPaint();
+      if (!isCurrentExport()) return;
       if (saveButton) saveButton.style.display = 'none';
       if (logoPlaceholder) logoPlaceholder.style.display = 'flex';
 
@@ -92,6 +96,8 @@ export function useCardImageSave({
         excludeMode: 'remove',
         mediaAdapter,
       });
+
+      if (!isCurrentExport()) return;
 
       const resolvedMode: 'modal' | 'download' = imageSaveMode === 'modal' || imageSaveMode === 'download'
         ? imageSaveMode
@@ -112,6 +118,7 @@ export function useCardImageSave({
         downloadBlob(blob, filename);
       }
     } catch (err) {
+      if (!isCurrentExport()) return;
       alert('生成图片失败，请重试');
       console.error('Image generation failed:', err);
     } finally {
@@ -120,7 +127,7 @@ export function useCardImageSave({
       if (logoPlaceholder) logoPlaceholder.style.display = 'none';
       setIsSavingImage(false);
     }
-  }, [blockWhenStreaming, isStreaming, cardRef, isSavingImage, imageSaveMode, mediaAdapter, onSaveImage, resolveFileName]);
+  }, [blockWhenStreaming, isStreaming, cardRef, isSavingImage, imageSaveMode, mediaAdapter, captureExportGuard, onSaveImage, resolveFileName]);
 
   return { isSavingImage, isExportingImage, handleSaveImage };
 }

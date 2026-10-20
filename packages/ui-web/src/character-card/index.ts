@@ -45,3 +45,6 @@ export type {
   MagicalGirlCardData,
 } from './types';
 export { MAGICAL_GIRL_CARD_GRADIENT, resolveMagicalGirlGradient } from './gradient';
+
+/** 截图中的当前导出账号，不代表角色原作者或数字签名。 */
+export const CHARACTER_CARD_EXPORTER_LABEL = '导出者：';

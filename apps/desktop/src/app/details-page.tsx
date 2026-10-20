@@ -1,3 +1,4 @@
+import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge } from '../features/account/character-card-export-badge';
 import { DesktopQuestionnaireDetailsModal } from '../features/questionnaire/questionnaire-details-modal';
 import { ResultJsonCopyButton } from '@mahoshojo/ui-web/details-controls';
 import { PrivateResultSave } from '../features/cloud-save/private-result-save';
@@ -895,13 +896,13 @@ function DetailsForm({ session, restored }: { session: DetailsSession; restored:
               </h2>
               <p data-testid="result-signature-status" className="text-sm text-(--app-text-muted)">{resultSignatureLabel}</p>
               {state.cardKind === 'general'
-                ? <GeneralCharacterCard
+                ? <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard}
                     general={state.card as GeneralCharacterCardData}
                     onSaveImage={handleSaveImage}
                     imageSaveMode={imageSaveMode}
                     saveButtonLabel={imageSaveButtonLabel}
                   />
-                : <MagicalGirlCard
+                : <MagicalGirlCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard}
                     magicalGirl={state.card as unknown as MagicalGirlCardData}
                     gradientStyle={MAGICAL_GIRL_CARD_GRADIENT}
                     onSaveImage={handleSaveImage}

@@ -1,3 +1,4 @@
+import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge } from '../features/account/character-card-export-badge';
 import { DesktopQuestionnaireDetailsModal } from '../features/questionnaire/questionnaire-details-modal';
 import { PrivateResultSave } from '../features/cloud-save/private-result-save';
 import { GenerationMarkdownPreview } from './generation-markdown-preview';
@@ -942,13 +943,13 @@ function CanshouForm({ session, restored }: { session: CanshouSession; restored:
                 </h2>
                 <p data-testid="result-signature-status" className="text-sm text-(--app-text-muted)">{resultSignatureLabel}</p>
                 {state.cardKind === 'general'
-                  ? <GeneralCharacterCard
+                  ? <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard}
                       general={state.card as GeneralCharacterCardData}
                       onSaveImage={handleSaveImage}
                       imageSaveMode={imageSaveMode}
                       saveButtonLabel={imageSaveButtonLabel}
                     />
-                  : <CanshouCard
+                  : <CanshouCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard}
                       canshou={state.card as unknown as CanshouDetails}
                       onSaveImage={handleSaveImage}
                       imageSaveMode={imageSaveMode}

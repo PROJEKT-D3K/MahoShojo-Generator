@@ -1,3 +1,4 @@
+import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge } from '../features/account/character-card-export-badge';
 import { DesktopCloudError, STREAM_HOSTED_AI_COMMAND, type InvokeFn } from '../platform/cloud-bridge';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -262,7 +263,7 @@ function TavernPage({ session }: { session: TavernAiSession }) {
             disabled={blocked || !placeholderHydrated} invokeFn={cloudInvoke} retainSourceIntent={retainCloudSource}
             externalLeaveGuard={guard} onBusyChange={onCloudBusy}
             isBlocked={() => cloudRequests.current.size > 0 || busy.current || exportBusy.current || requestLock.current || session.isBusy() || aiStore.isPreparingGeneration()} />
-          {isTavernMagicalGirlProjection(projection) ? <MagicalGirlCard magicalGirl={getTavernMagicalGirlPreview(projection)} gradientStyle={resolveMagicalGirlGradient(projection.appearance?.colorScheme)} /> : isTavernStructuredScenario(projection) ? <GeneralScenarioCard scenario={scenarioPreview ?? { title: '未命名情景', content: '' }} /> : projection.templateId === TAVERN_CANSHOU_TEMPLATE_ID ? <CanshouCard canshou={projection as unknown as CanshouDetails} /> : isTavernGeneralScenario(projection) ? <GeneralScenarioCard scenario={projection} /> : isTavernGeneralCharacter(projection) ? <GeneralCharacterCard general={projection} /> : null}</> : null}</div>
+          {isTavernMagicalGirlProjection(projection) ? <MagicalGirlCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} magicalGirl={getTavernMagicalGirlPreview(projection)} gradientStyle={resolveMagicalGirlGradient(projection.appearance?.colorScheme)} /> : isTavernStructuredScenario(projection) ? <GeneralScenarioCard scenario={scenarioPreview ?? { title: '未命名情景', content: '' }} /> : projection.templateId === TAVERN_CANSHOU_TEMPLATE_ID ? <CanshouCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} canshou={projection as unknown as CanshouDetails} /> : isTavernGeneralScenario(projection) ? <GeneralScenarioCard scenario={projection} /> : isTavernGeneralCharacter(projection) ? <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} general={projection} /> : null}</> : null}</div>
         <div className="space-y-4"><TavernCardPreview normalized={normalized} warnings={result.meta.warnings} />
           <TavernOriginalExport disabled={blocked} candidate={candidate} basePngBytes={basePng} exportFile={exportTavernFile} /></div>
       </div> : null}

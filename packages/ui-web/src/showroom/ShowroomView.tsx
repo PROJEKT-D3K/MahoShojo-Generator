@@ -1,10 +1,10 @@
 import { useState, type ReactNode } from 'react';
 
-import { MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlCard } from '../character-card';
+import { CHARACTER_CARD_EXPORTER_LABEL, MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlCard } from '../character-card';
 import { CardForgeThemeEditor } from '../card-forge';
 import { BattleReportCardWidthSettings } from '../arena/BattleReportCardWidthSettings';
 import { resolveBattleReportCardManualWidthPx, type BattleReportCardWidthSettingsValue } from '../arena/battle-report-card-width';
-import { StreamingBattleReportCard } from '../arena-report';
+import { GeneratedByUserBadgeView, StreamingBattleReportCard } from '../arena-report';
 import { ArenaWebResultView } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
@@ -250,7 +250,8 @@ function ResultSurfacesSection() {
         以下为共享 <code>MagicalGirlCard</code> 真实组件（fixture 数据 + <code>MAGICAL_GIRL_CARD_GRADIENT</code>）：
       </p>
       <div className="max-w-3xl">
-        <MagicalGirlCard magicalGirl={SHOWROOM_MAGICAL_GIRL} gradientStyle={MAGICAL_GIRL_CARD_GRADIENT} />
+        <MagicalGirlCard magicalGirl={SHOWROOM_MAGICAL_GIRL} gradientStyle={MAGICAL_GIRL_CARD_GRADIENT}
+          generatedByBadge={<GeneratedByUserBadgeView username="样板导出账号" label={CHARACTER_CARD_EXPORTER_LABEL} className="mt-3" />} />
       </div>
       <div className="max-w-3xl">
         <h3 className="mb-3 text-sm font-medium text-(--app-text-muted)">竞技场安全源码：共享品牌与元数据（示例用量）</h3>

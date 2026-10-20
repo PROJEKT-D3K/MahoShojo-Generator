@@ -35,6 +35,7 @@ export function MagicalGirlCard({
   Markdown = SharedMarkdownBlock,
   generatedByBadge,
   captureMediaAdapter,
+  captureExportGuard,
   titleImageSrc = '/questionnaire-title.svg',
   titleImageAlt = 'Logo',
   titleImageVariant = 'svg',
@@ -50,6 +51,7 @@ export function MagicalGirlCard({
     imageSaveMode,
     onSaveImage,
     mediaAdapter: captureMediaAdapter,
+    captureExportGuard,
     resolveFileName: () =>
       `魔法少女_${magicalGirl.codename.replace(/[^a-z0-9一-龥]/gi, '_')}.png`,
   });

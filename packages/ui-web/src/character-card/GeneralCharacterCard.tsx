@@ -73,6 +73,7 @@ export function GeneralCharacterCard({
   Markdown = SharedMarkdownBlock,
   generatedByBadge,
   captureMediaAdapter,
+  captureExportGuard,
   titleImageSrc = '/questionnaire-title.svg',
   titleImageAlt = '通用角色档案',
   titleImageVariant = 'fluid',
@@ -90,6 +91,7 @@ export function GeneralCharacterCard({
     imageSaveMode,
     onSaveImage,
     mediaAdapter: captureMediaAdapter,
+    captureExportGuard,
     blockWhenStreaming: true,
     resolveFileName: () =>
       `通用角色_${(general?.name || '未命名角色').replace(/[^a-z0-9一-龥]/gi, '_')}.png`,

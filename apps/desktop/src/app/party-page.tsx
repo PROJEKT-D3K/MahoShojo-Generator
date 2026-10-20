@@ -1,3 +1,4 @@
+import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge } from '../features/account/character-card-export-badge';
 import { useCallback, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter } from '@tanstack/react-router';
@@ -35,9 +36,9 @@ export function DesktopParty() {
       downloadJson={(data, name) => downloadTextFile(buildSafeFileName(name, 'json', '队伍'), JSON.stringify(data, null, 2))}
       renderPreview={(result) => {
         const preview = asCharacterCardPreview({ original: null, cardType: 'character', title: '队伍', data: result.data });
-        if (preview?.kind === 'magical-girl') return <MagicalGirlCard magicalGirl={preview.data} gradientStyle={resolveMagicalGirlGradient(preview.data.appearance.colorScheme)} />;
-        if (preview?.kind === 'canshou') return <CanshouCard canshou={preview.data} />;
-        if (preview?.kind === 'general') return <GeneralCharacterCard general={preview.data} />;
+        if (preview?.kind === 'magical-girl') return <MagicalGirlCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} magicalGirl={preview.data} gradientStyle={resolveMagicalGirlGradient(preview.data.appearance.colorScheme)} />;
+        if (preview?.kind === 'canshou') return <CanshouCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} canshou={preview.data} />;
+        if (preview?.kind === 'general') return <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} general={preview.data} />;
         return <p>请查看下方合并 JSON。</p>;
       }} />
     {guard.message ? <p role="alert">{guard.message}</p> : null}
