@@ -94,6 +94,17 @@ const expectSharedOutput = (css: string, artifact: string): void => {
   expect(family(declarationsFor(':root')['--app-font-mono']), artifact).toBe(mono);
   expect(declarationsFor('.font-mono')['font-family'], artifact).toBe('var(--app-font-mono)');
   expect(declarationsFor('.font-sans')['font-family'], artifact).toBe('var(--app-font-sans)');
+  // Arena 操作反馈的紧凑布局由共享视图消费，两端编译必须保留同一色阶及窄窗换行。
+  for (const tone of ['red', 'yellow']) {
+    expect(declarationsFor(`.bg-${tone}-100`)['background-color'], artifact).toBe(`var(--color-${tone}-100)`);
+    expect(declarationsFor(`.text-${tone}-800`).color, artifact).toBe(`var(--color-${tone}-800)`);
+  }
+  expect(declarationsFor('.wrap-anywhere')['overflow-wrap'], artifact).toBe('anywhere');
+  for (const tone of ['error', 'warning']) {
+    expect(declarationsFor(`.battle-lite-alert--${tone}`).color?.replace(/\s/g, ''), artifact).toBe(`var(--battle-lite-${tone}-text,var(--app-text))`);
+    expect(declarationsFor(`.battle-lite-alert--${tone}`).background?.replace(/\s/g, ''), artifact).toBe(`var(--battle-lite-${tone}-bg,var(--app-surface))`);
+    expect(declarationsFor(":root[data-color-mode='dark'] .battle-lite-shell")[`--battle-lite-${tone}-text`], artifact).toBeTruthy();
+  }
   const layersFor = (selector: string, property: string, value: string): string[] => {
     const layers: string[] = [];
     stylesheet.walkRules((rule) => {

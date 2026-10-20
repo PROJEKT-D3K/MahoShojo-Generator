@@ -1,6 +1,6 @@
 import { createDesktopBattleReportPorts } from '../features/arena/report-ports';
 import { projectDesktopArenaReport } from '../features/arena/report-presentation';
-import { DesktopArenaErrorMessage } from '../features/arena/error-message';
+import { DesktopArenaErrorMessage, DesktopArenaFeedbackMessage } from '../features/arena/error-message';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from '@tanstack/react-router';
@@ -129,7 +129,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const [recoveryHint, setRecoveryHint] = useState<{ value: DesktopArenaHostedRecoveryHint; repair: ArenaHostedRecoveryReplacement; epoch: number } | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const diagnosisFlight = useRef<symbol | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // 沿用同一个反馈槽和覆盖/清理时机，仅区分原导出错误框与操作区呈现。
+  const [feedback, setFeedback] = useState<{ message: string; presentation: 'operation' | 'default' } | null>(null);
+  const error = feedback?.message ?? null;
+  const setError = useCallback((message: string | null) => {
+    setFeedback(message === null ? null : { message, presentation: 'operation' });
+  }, []);
   // 当前结果与历史章节可同时截图，最后一次导出完成后才解除离开保护。
   const exportingReport = useRef(0);
   const [reportExporting, setReportExporting] = useState(false);
@@ -222,7 +227,9 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       .finally(() => { if (!controller.signal.aborted) historyLoading.current = false; });
     return () => { controller.abort(); historyLoading.current = false; };
   }, [historyOpen, historyRevision, repository, scope]);
-  const reportError = (cause: unknown) => { setError(cause instanceof Error ? cause.message : '操作失败，原输入仍保留。'); };
+  const reportError = (cause: unknown, presentation: 'operation' | 'default' = 'operation') => {
+    setFeedback({ message: cause instanceof Error ? cause.message : '操作失败，原输入仍保留。', presentation });
+  };
   const performImport = async (load: Parameters<DesktopArenaSession['importInput']>[0]) => {
     if (roomOwner.isConstrained() || !guard.ready || diagnosisFlight.current || preparing.current || aiState.generationActive || packageOwner.isBusy()) throw new Error('请等待当前操作完成。');
     const epoch = ownerEpoch.current; setError(null); try { await session.importInput(load); } catch (cause) { if (epoch === ownerEpoch.current && !(cause instanceof Error && cause.name === 'AbortError')) reportError(cause); throw cause; }
@@ -558,9 +565,9 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const reasoning = reportProps.aiReasoning;
   const reportPorts = createDesktopBattleReportPorts({
     username: cloudState.verification === 'verified' ? cloudState.account?.username : null, onNavigateExternal: openContent,
-    onError: reportError, onExportingChange: onReportExportingChange,
+    onError: cause => reportError(cause, 'default'), onExportingChange: onReportExportingChange,
   });
-  const download = (filename: string, text: string, mimeType: string) => { try { downloadTextFile(filename, text, mimeType); } catch (cause) { reportError(cause); } };
+  const download = (filename: string, text: string, mimeType: string) => { try { downloadTextFile(filename, text, mimeType); } catch (cause) { reportError(cause, 'default'); } };
   const exportAll = () => {
     setBackupFeedback(null);
     try { downloadTextFile('arena-complete.json', session.exportDocument(), 'application/json'); setBackupFeedback('download-started'); }
@@ -721,8 +728,10 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           {hostedUnavailable ? <p role="status">{hostedUnavailable}</p> : null}
           {readinessMessage ? <p>{readinessMessage}</p> : null}
           {importWarnings.length ? <ul role="status">{importWarnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
-          {error ? <DesktopArenaErrorMessage message={error} /> : null}
-          {state.message ? state.phase === 'failed' ? <DesktopArenaErrorMessage message={state.message} generation /> : <p role="status">{state.message}</p> : null}
+          {error ? feedback?.presentation === 'default'
+            ? <DesktopArenaErrorMessage message={error} />
+            : <DesktopArenaFeedbackMessage message={error} appearance={product === 'battle' ? 'lite' : 'full'} /> : null}
+          {state.message ? state.phase === 'failed' ? <DesktopArenaFeedbackMessage message={state.message} appearance={product === 'battle' ? 'lite' : 'full'} generation /> : <p role="status">{state.message}</p> : null}
         </>,
         community: null, result, storySession: <DesktopArenaStoryControls reportPorts={reportPorts} reportExporting={reportExporting} owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={strictActive ? '请先退出严格排位准备，再生成连续故事。' : hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
         homeLink: <BackHomeLink href="#/" onNavigate={() => navigateByProductHref(router, '/')} />,

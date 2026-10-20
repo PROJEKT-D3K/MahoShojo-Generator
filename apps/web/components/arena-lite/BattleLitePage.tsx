@@ -7,7 +7,7 @@ import BattleDataModal from '@/components/BattleDataModal';
 import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
 import { createDeferredModuleLoader } from '@/lib/client/loadDeferredModule';
 import Footer from '@/components/Footer';
-import { ErrorMessage } from '@/components/ErrorMessage';
+import { ArenaFeedbackMessage } from '@/components/arena/shared/ArenaFeedbackMessage';
 import { BattleLitePageView } from '@mahoshojo/ui-web/arena';
 import { useAuth } from '@/lib/useAuth';
 import { ONLINE_DATA_CARD_TYPES } from '@mahoshojo/contracts/data-cards';
@@ -205,14 +205,7 @@ export function BattleLitePage() {
           actions: <>                <BattleLiteInheritedContextNotice summary={inheritedSummary} />
                 <BattleActions showAdvancedUtilities={false} />
                 {error ? (
-                  <ErrorMessage
-                    message={error}
-                    className={`mt-3 rounded-md p-4 text-sm ${
-                      error.startsWith('❌')
-                        ? 'battle-lite-alert battle-lite-alert--error'
-                        : 'battle-lite-alert battle-lite-alert--warning'
-                    }`}
-                  />
+                  <ArenaFeedbackMessage message={error} appearance="lite" />
                 ) : null}</>,
           community: <ArenaCommunitySection />,
           result: <BattleResult onSaveImage={handleSaveImage} />,

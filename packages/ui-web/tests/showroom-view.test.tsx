@@ -74,6 +74,23 @@ it('shows the shared red and blue error surfaces with inherited, focusable help 
   }
 });
 
+it('shows both production Arena appearances and tones with multiline copy and focusable host help', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('[aria-label="竞技场操作反馈样板"]')!;
+  for (const appearance of ['full', 'lite']) {
+    for (const tone of ['error', 'warning']) {
+      const alert = sample.querySelector(`.arena-feedback--${appearance}.arena-feedback--${tone}`)!;
+      expect(alert.getAttribute('role')).toBe('alert');
+      expect(alert.classList.contains('error-message')).toBe(false);
+      expect(alert.querySelector('.whitespace-pre-wrap')?.textContent).toContain('\n');
+      expect(!!alert.closest('.battle-lite-shell')).toBe(appearance === 'lite');
+      const link = alert.querySelector<HTMLAnchorElement>('a')!;
+      expect(link.getAttribute('href')).toBe('#showroom-result-surfaces');
+      link.focus(); expect(document.activeElement).toBe(link);
+    }
+  }
+});
+
 it('uses the real forge theme editor for preset and custom color states', () => {
   act(() => root.render(<ShowroomView />));
   const sample = container.querySelector('#showroom-forms [aria-label="卡牌工坊主题色样板"]')!;

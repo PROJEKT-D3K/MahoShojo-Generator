@@ -7,6 +7,7 @@ import { ArenaWebResultView } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
 import { ErrorMessageBox } from '../details-controls/ErrorMessageBox';
+import { ArenaFeedbackView, resolveArenaFeedbackTone } from '../arena/ArenaFeedbackView';
 import { generationActionClassNames } from '../generation-actions';
 import type { HomeAssetSource } from '../home/feature-catalog';
 import { BaseModal } from '../modal';
@@ -255,6 +256,17 @@ function ResultSurfacesSection() {
             execution={{ available: false, reason: '样板间只展示安全文本，不运行生成代码。' }} />} />
       </div>
       <StoryReadErrorsSample />
+      <div className="grid min-w-0 gap-3 md:grid-cols-2" aria-label="竞技场操作反馈样板">
+        {(['full', 'lite'] as const).map(appearance => <div key={appearance} className={appearance === 'lite' ? 'battle-lite-shell min-w-0' : 'min-w-0'}>
+          <h3 className="text-sm font-medium text-(--app-text-muted)">{appearance === 'lite' ? '简化版' : '完整版'}操作反馈</h3>
+          {['❌ 数据卡 JSON 解析失败\n原输入仍保留。', '✨ 魔法失效了！网络连接中断\n示例内容，不触发真实请求。'].map(message =>
+            <ArenaFeedbackView key={message} message={message} tone={resolveArenaFeedbackTone(message)} appearance={appearance}>
+              <div className="mt-2 text-xs opacity-95">
+                <a href="#showroom-result-surfaces" className="underline underline-offset-2 hover:opacity-100">查看百科：示例帮助</a>
+              </div>
+            </ArenaFeedbackView>)}
+        </div>)}
+      </div>
       <div className="grid gap-3 md:grid-cols-2" aria-label="错误文字对比样板">
         {['默认红色', '蓝色主题'].map((label, index) => <div key={label} className={index ? 'blue-theme' : undefined}>
           <ErrorMessageBox message={`${label}：普通正文保持清晰，原文换行仍保留。\n示例错误内容，不触发真实请求。`}>

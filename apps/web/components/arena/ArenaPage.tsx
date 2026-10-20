@@ -6,7 +6,7 @@ import { AdvancedArenaPageView, getArenaCardLibrarySelectionOptions } from '@mah
 
 import BattleDataModal from '@/components/BattleDataModal';
 import Footer from '@/components/Footer';
-import { ErrorMessage } from '@/components/ErrorMessage';
+import { ArenaFeedbackMessage } from './shared/ArenaFeedbackMessage';
 import { DeferredChunkBoundary } from '@/components/shared/DeferredChunkBoundary';
 import { createDeferredModuleLoader } from '@/lib/client/loadDeferredModule';
 import { useAuth } from '@/lib/useAuth';
@@ -337,12 +337,7 @@ export function ArenaPage({ multiplayer }: ArenaPageProps = {}) {
                       <>
                         <BattleActions />
                         {error && (
-                          <ErrorMessage
-                            message={error}
-                            className={`p-4 rounded-md mt-3 text-sm ${
-                              error.startsWith('❌') ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'
-                            }`}
-                          />
+                          <ArenaFeedbackMessage message={error} appearance="full" />
                         )}
                       </>
                     ),

@@ -1,4 +1,5 @@
 export { ArenaRankingQueueFeedback, type ArenaRankingQueueFeedbackProps } from './presentation/ArenaRankingQueueFeedback';
+export { ArenaFeedbackView, resolveArenaFeedbackTone, type ArenaFeedbackViewProps, type ArenaFeedbackTone, type ArenaFeedbackAppearance } from './ArenaFeedbackView';
 export { StrictSetupChecklist, type StrictSetupChecklistProps } from './StrictSetupChecklist';
 export { ArenaRosterSection } from './features/roster/ArenaRosterSection';
 export type { ArenaRosterTeamView, ArenaRosterRowView, ArenaRosterRowExtras, ArenaRosterSectionCapabilities, ArenaRosterPlaceholderType, ArenaRosterSectionActions, ArenaRosterSectionModel } from './features/roster/roster-contract';

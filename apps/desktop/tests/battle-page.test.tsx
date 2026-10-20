@@ -192,16 +192,30 @@ describe('Desktop /battle journey against loopback fixture', () => {
     expect(mocks.capture).toHaveBeenCalledOnce(); expect(mocks.downloadBlob).toHaveBeenCalledOnce();
     expect(calls()).toHaveLength(1);
   });
-  it('图片失败走共享错误框、恢复卡片操作，并在捕获期间阻止离开', async () => {
-    saveDraft(draft('daily', 'non-stream')); await mount(); await click('生成战报');
+  it.each(['battle', 'arena'] as const)('/%s 图片失败保留通用错误框、恢复卡片操作，并在捕获期间阻止离开', async product => {
+    localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'non-stream') }));
+    window.location.hash = `#/${product}`; await mount(); await click('生成战报');
     await vi.waitFor(() => expect(container.querySelector('.result-card')?.textContent).toContain('actual-fixture-model'));
     let rejectCapture!: (cause: unknown) => void;
     mocks.capture.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCapture = reject; }));
     await click('📱 保存为图片'); expect(scopeClose().preventDefault).toHaveBeenCalled();
     await act(async () => rejectCapture(new Error('capture-failed'))); await settle();
     expect(container.querySelector('.error-message[role="alert"]')?.textContent).toContain('生成图片失败，请重试');
+    expect(container.querySelector('.arena-feedback')).toBeNull();
     expect(button('📱 保存为图片').disabled).toBe(false); expect(container.querySelector<HTMLElement>('.logo-placeholder')?.style.display).toBe('none');
     expect(mocks.downloadBlob).not.toHaveBeenCalled(); expect(calls()).toHaveLength(1);
+  });
+  it.each(['battle', 'arena'] as const)('/%s 文本导出失败保留通用错误框与原报告', async product => {
+    localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'non-stream') }));
+    window.location.hash = `#/${product}`; await mount(); await click('生成战报');
+    await vi.waitFor(() => expect(container.querySelector('.result-card')?.textContent).toContain('actual-fixture-model'));
+    mocks.download.mockImplementationOnce(() => { throw new Error('文本导出失败，网络规则未改变'); });
+    await click('📄 下载战斗记录');
+    expect(container.querySelector('.error-message[role="alert"]')?.textContent).toContain('文本导出失败');
+    expect(container.querySelector('.error-message a')?.getAttribute('href')).toMatch(/^#\/encyclopedia\//);
+    expect(container.querySelector('.arena-feedback')).toBeNull();
+    expect(container.querySelector('.result-card')?.textContent).toContain(text);
+    expect(calls()).toHaveLength(1);
   });
   it('多卡截图全部结束前持续保护页面和故事预览', async () => {
     saveDraft(draft('daily', 'stream')); await mount(); await click('新建连续战报');
@@ -239,11 +253,14 @@ describe('Desktop /battle journey against loopback fixture', () => {
     }
     expect(received).toHaveLength(2);
   });
-  it('部分正文失败复用魔法失效错误框且不重放模型请求', async () => {
-    eof = true; saveDraft(draft('daily', 'stream')); await mount(); await click('生成战报');
-    await vi.waitFor(() => expect(container.querySelector('.error-message[role="alert"]')?.textContent).toContain('✨ 魔法失效了！'));
+  it.each(['battle', 'arena'] as const)('/%s 部分正文失败复用紧凑反馈且不重放模型请求', async product => {
+    eof = true;
+    localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: draft('daily', 'stream') }));
+    window.location.hash = `#/${product}`; await mount(); await click('生成战报');
+    const selector = `.arena-feedback--${product === 'battle' ? 'lite' : 'full'}.arena-feedback--warning[role="alert"]`;
+    await vi.waitFor(() => expect(container.querySelector(selector)?.textContent).toContain('✨ 魔法失效了！'));
     expect(container.querySelector('.result-card')?.textContent).toContain(text);
-    expect(container.querySelector('.error-message a')?.getAttribute('href')).toMatch(/^#\/encyclopedia\//);
+    expect(container.querySelector(`${selector} a`)?.getAttribute('href')).toMatch(/^#\/encyclopedia\//);
     expect(calls()).toHaveLength(1);
   });
   it.each(['battle', 'arena'] as const)('/%s shares the guide and ordinary navigation without claiming unavailable capabilities', async product => {
