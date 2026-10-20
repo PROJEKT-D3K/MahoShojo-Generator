@@ -227,10 +227,31 @@ describe('controlled Tea views', () => {
     expect([...container.querySelectorAll('button')].filter((node) => node.textContent === '删除')).toHaveLength(3);
     const search = container.querySelector<HTMLInputElement>('input')!;
     expect(search.placeholder).toContain('已加载');
+    expect(search.labels![0]?.textContent).toBe(search.placeholder);
+    const pageSize = container.querySelector('select')!;
+    expect(pageSize.labels![0]?.textContent).toBe('每页');
+    expect(pageSize.labels![0]?.control).toBe(pageSize);
+    await act(async () => { pageSize.value = '5'; pageSize.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect([...container.querySelectorAll('button')].filter(node => node.textContent === '删除')).toHaveLength(5);
+    expect(container.textContent).toContain('第 1 / 3 页');
     await act(async () => inputValue(search, '茶会12'));
     expect(container.textContent).toContain('已加载 1 个会话');
     await act(async () => [...container.querySelectorAll('button')].find((node) => node.textContent?.startsWith('茶会12'))!.click());
     expect(select).toHaveBeenCalledExactlyOnceWith('s12');
+  });
+
+  it('keeps two session-list control pairs distinct and native-disabled', async () => {
+    const props = { sessions: [], activeSessionId: null, onCreateSession: vi.fn(), onSelectSession: vi.fn(), onDeleteSession: vi.fn(),
+      pinnedCollapsed: false, recentCollapsed: false, onPinnedCollapsedChange: vi.fn(), onRecentCollapsedChange: vi.fn(), busy: true };
+    await render(<><MagicTeaPartySessionList {...props} /><MagicTeaPartySessionList {...props} listScope="loaded" /></>);
+    const fields = [...container.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input,select')];
+    expect(new Set(fields.map(field => field.id)).size).toBe(4);
+    for (const field of fields) {
+      expect(field.labels![0].control).toBe(field); expect(field.matches(':disabled')).toBe(true);
+      const activated = vi.fn(); field.addEventListener('click', activated);
+      await act(async () => { field.labels![0].click(); field.focus(); });
+      expect(activated).not.toHaveBeenCalled(); expect(document.activeElement).not.toBe(field);
+    }
   });
 
   it('keeps ZIP labels and callback absent for the text transfer host', async () => {

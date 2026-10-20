@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useState, type DragEvent, type ReactNode } from 'react';
 import type { MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
 
 /** Directory previews need names/titles, never full role cards or generation settings. */
@@ -38,6 +38,8 @@ export function MagicTeaPartySessionList({
   pinnedCollapsed, recentCollapsed, onPinnedCollapsedChange, onRecentCollapsedChange,
   busy = false, listScope = 'all', pagination, children,
 }: MagicTeaPartySessionListProps) {
+  const controlId = useId();
+  const searchLabel = listScope === 'loaded' ? '搜索已加载会话标题 / 角色 / 情景' : '搜索会话标题 / 角色 / 情景';
   const [searchText, setSearchText] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -119,10 +121,12 @@ export function MagicTeaPartySessionList({
           </button>
         </div>
         <div className="mt-3 grid gap-2">
+          <label htmlFor={`${controlId}-search`} className="sr-only">{searchLabel}</label>
           <input
+            id={`${controlId}-search`}
             type="text"
             className="input-field !h-9 !px-2 text-xs"
-            placeholder={listScope === 'loaded' ? '搜索已加载会话标题 / 角色 / 情景' : '搜索会话标题 / 角色 / 情景'}
+            placeholder={searchLabel}
             value={searchText}
             onChange={(event) => {
               setSearchText(event.target.value);
@@ -134,8 +138,9 @@ export function MagicTeaPartySessionList({
               {listScope === 'loaded' ? '已加载' : '共'} {filteredSessions.length} 个会话 · 置顶 {pinnedSessions.length} · 第 {currentPage} / {totalPages} 页
             </span>
             <div className="flex items-center gap-2">
-              <span>每页</span>
+              <label htmlFor={`${controlId}-page-size`}>每页</label>
               <select
+                id={`${controlId}-page-size`}
                 className="input-field !h-7 !py-0 !px-2 text-[11px]"
                 value={String(pageSize)}
                 onChange={(event) => {

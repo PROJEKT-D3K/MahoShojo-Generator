@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { MagicTeaPartyMessage, MagicTeaPartyPreferences, MagicTeaPartySession, MagicTeaPartyTachieAsset } from '@mahoshojo/domain/magic-tea-party/types';
 import * as shared from '@mahoshojo/ui-web/magic-tea-party';
@@ -56,7 +58,7 @@ describe('Web Tea actual shared composition', () => {
   it('keeps the original hook and all migrated Web entrypoints wired to the public shared module', () => {
     expect(useChatAutoScroll).toBe(shared.useChatAutoScroll);
     for (const name of ['ChatMessage', 'ChatTimeline', 'ChatComposer', 'SessionSetupPanel', 'Hero', 'NoticePanel', 'SessionSidebar', 'ImportExportPanel', 'MagicTeaPartyPage', 'SummaryPanel']) {
-      const source = readFileSync(new URL(`../components/magic-tea-party/${name}.tsx`, import.meta.url), 'utf8');
+      const source = readFileSync(join(process.cwd(), `components/magic-tea-party/${name}.tsx`), 'utf8');
       expect(source, name).toContain("from '@mahoshojo/ui-web/magic-tea-party'");
     }
   });
@@ -97,6 +99,13 @@ describe('Web Tea actual shared composition', () => {
       onReorderPinnedSessions={noop} onSessionImported={noop} onPresetSelected={noop} onProviderConfigChange={noop}
       onPreferenceChange={noop} onSessionSettingChange={noop} onMergeSession={noop} onCleanupSessions={async () => {}} />);
     for (const text of ['取消置顶', '返回原会话', '合并到原会话', '分支链', '合并输出计划', '更新草案', '资料读写', 'Web Provider', 'ZIP 导出会包含本地图片资源']) expect(markup).toContain(text);
+    const host = document.createElement('div'); host.innerHTML = markup;
+    const search = host.querySelector<HTMLInputElement>('input[placeholder="搜索会话标题 / 角色 / 情景"]')!;
+    const pageSize = search.closest('fieldset')!.querySelector('select')!;
+    for (const [control, name] of [[search, search.placeholder], [pageSize, '每页']] as const) {
+      expect(control.labels).toHaveLength(1); expect(control.labels![0].textContent).toBe(name);
+      expect(control.labels![0].control).toBe(control);
+    }
   });
 
   it('renders the actual nonempty Web page using the shared columns, setup, timeline and composer', () => {

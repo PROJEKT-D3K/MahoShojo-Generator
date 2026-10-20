@@ -137,6 +137,37 @@ it.each(setupControlCases)('gives the delivered setup control "%s" its native la
   expect(streams).toBe(0);
 });
 
+it('labels delivered session-list search and page size without owner writes or generation', async () => {
+  await mount(); await click('新建会话');
+  const search = container.querySelector<HTMLInputElement>('input[placeholder="搜索已加载会话标题 / 角色 / 情景"]')!;
+  const list = search.closest('fieldset')!;
+  const pageSize = list.querySelector<HTMLSelectElement>('select')!;
+  const writes = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  for (const [control, name] of [[search, search.placeholder], [pageSize, '每页']] as const) {
+    const labels = [...(control.labels ?? [])];
+    expect(labels).toHaveLength(1);
+    const label = labels[0]!;
+    expect(label.textContent?.trim()).toBe(name);
+    expect(control.id).not.toBe(''); expect(label.htmlFor).toBe(control.id); expect(label.control).toBe(control);
+    expect([...container.querySelectorAll('[id]')].filter(node => node.id === control.id)).toEqual([control]);
+    expect(control.getAttribute('aria-label')).toBeNull(); expect(control.getAttribute('aria-labelledby')).toBeNull();
+    const activated = vi.fn(); control.addEventListener('click', activated);
+    await act(async () => label.click());
+    expect(activated).toHaveBeenCalledTimes(1); expect(activated.mock.calls[0]![0].target).toBe(control);
+    // jsdom 不实现标签默认聚焦；独立验证真实控件可聚焦。
+    await act(async () => control.focus()); expect(window.document.activeElement).toBe(control);
+  }
+  expect(list.textContent).toContain('已加载 1 个会话');
+  await change('input[placeholder="搜索已加载会话标题 / 角色 / 情景"]', '不存在的茶会');
+  expect(search.value).toBe('不存在的茶会'); expect(list.textContent).toContain('已加载 0 个会话');
+  await change('input[placeholder="搜索已加载会话标题 / 角色 / 情景"]', '');
+  expect(list.textContent).toContain('已加载 1 个会话'); expect(pageSize.value).toBe('10');
+  await act(async () => { pageSize.value = '5'; pageSize.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(pageSize.value).toBe('5');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(writes);
+  expect(streams).toBe(0);
+});
+
 it('shows the generated canonical reasoning through the delivered route and shared message panel', async () => {
   streamReasoning = '模型实际返回的思考😀';
   await mount(); await click('新建会话'); await click('生成开场');
