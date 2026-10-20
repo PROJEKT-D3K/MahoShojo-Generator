@@ -1,3 +1,4 @@
+import { resolveMagicTeaPartyPlayerIdentity } from '@mahoshojo/domain/magic-tea-party/player-identity';
 import { sameMagicTeaPartyRoleSource } from '@mahoshojo/domain/magic-tea-party/role-editor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, Dispatch, SetStateAction } from 'react';
@@ -16,6 +17,7 @@ import {
   DEFAULT_MAGIC_TEA_PARTY_PREFERENCES,
   patchMagicTeaPartyPreferences,
   readMagicTeaPartyPreferences,
+  resolveMagicTeaPartyUserDisplayName,
 } from '@/lib/magic-tea-party/preferences';
 import { getMagicTeaPartyPreset, type MagicTeaPartyPresetId } from '@/lib/magic-tea-party/presets';
 import {
@@ -366,11 +368,17 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
     const loadRevision = activeSessionLoadRevisionRef.current;
     const isCurrent = () => roleSaveAlive.current && loadRevision === activeSessionLoadRevisionRef.current
       && isMagicTeaPartySessionCurrent(activeSessionIdRef.current, next.id);
-    // Keep controlled non-role inputs responsive. Roles are adopted only from a completed transaction.
+    const withPlayerSelection = (target: MagicTeaPartySession, source: MagicTeaPartySession) => {
+      const projected = { ...target };
+      if (Object.prototype.hasOwnProperty.call(source, 'playerRoleId')) projected.playerRoleId = source.playerRoleId;
+      else delete projected.playerRoleId;
+      return projected;
+    };
+    // Keep controlled text inputs responsive. Roles and player selection require a completed transaction.
     if (!options?.preserveSummary) {
-      if (isCurrent()) setActiveSession(current => current?.id === next.id && current.createdAt === next.createdAt ? { ...next, roles: current.roles } : current);
+      if (isCurrent()) setActiveSession(current => current?.id === next.id && current.createdAt === next.createdAt ? withPlayerSelection({ ...next, roles: current.roles }, current) : current);
       setSessions(current => sortSessionsByUpdatedAtDesc(current.map(item => item.id === next.id && item.createdAt === next.createdAt
-        ? { ...next, roles: item.roles } : item)));
+        ? withPlayerSelection({ ...next, roles: item.roles }, item) : item)));
     }
     return enqueueSessionWrite(next, async () => {
       const committed = await putMagicTeaPartySessionPreservingRoles(next, options);
@@ -382,7 +390,7 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         const roles = stableRoles.length === current.roles.length && stableRoles.every((role, index) => role === current.roles[index])
           ? current.roles : stableRoles;
         return options?.preserveSummary ? { ...committed, roles }
-          : { ...current, roles, updatedAt: Math.max(current.updatedAt, committed.updatedAt) };
+          : withPlayerSelection({ ...current, roles, updatedAt: Math.max(current.updatedAt, committed.updatedAt) }, committed);
       };
       if (isCurrent()) setActiveSession(current => current ? merge(current) : current);
       setSessions(current => sortSessionsByUpdatedAtDesc(current.map(merge)));
@@ -1208,7 +1216,7 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
   const playerOptions = useMemo(() => {
     const roles = activeSession?.roles ?? [];
     return [
-      { value: '', label: `{{user}}（${activeSession?.settings.userDisplayName || preferences.userDisplayName || '旅人'}）` },
+      { value: '', label: `{{user}}（${resolveMagicTeaPartyUserDisplayName(activeSession?.settings.userDisplayName, preferences.userDisplayName)}）` },
       ...roles.map((role) => ({ value: role.id, label: role.name })),
     ];
   }, [activeSession?.roles, activeSession?.settings.userDisplayName, preferences.userDisplayName]);
@@ -1234,9 +1242,10 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
   const updatePlayerRole = useCallback(
     (roleId: string | null) => {
       if (!activeSession) return;
-      void persistSession({ ...activeSession, playerRoleId: roleId, updatedAt: Date.now() });
+      void persistSession({ ...activeSession, playerRoleId: roleId, updatedAt: Date.now() }, { updatePlayerRole: true })
+        .catch(error => onGlobalError?.(error instanceof Error ? error.message : '保存玩家身份失败'));
     },
-    [activeSession, persistSession]
+    [activeSession, persistSession, onGlobalError]
   );
 
   const forkSessionFromMessage = useCallback(
@@ -1286,15 +1295,22 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         session: activeSession, messages, replaceFromIndex: targetIndex, clonedMessageIds: idMap,
       });
 
+      const userDisplayName = resolveMagicTeaPartyUserDisplayName(activeSession.settings.userDisplayName, preferences.userDisplayName);
+      const { playerRoleId, speakerName } = resolveMagicTeaPartyPlayerIdentity({
+        roles: activeSession.roles, playerRoleId: activeSession.playerRoleId,
+        userDisplayName,
+      });
+
       const nextSession: MagicTeaPartySession = {
         ...activeSession,
+        playerRoleId,
         id: newSessionId,
         createdAt: now,
         updatedAt: now,
         summary,
         summarySections,
         summaryMeta,
-        settings: { ...activeSession.settings, autoSummaryEnabled: false },
+        settings: { ...activeSession.settings, autoSummaryEnabled: false, userDisplayName },
         autoSummaryState: undefined,
         forkedFrom: { sessionId: activeSession.id, messageId: targetMessage.id, createdAt: now },
         branchLabel,
@@ -1305,12 +1321,6 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         await Promise.all(fixedMessages.map((message) => putMagicTeaPartyMessage(message)));
       }
 
-      const playerRoleId = activeSession.playerRoleId ?? null;
-      const playerRoleName = playerRoleId
-        ? (activeSession.roles ?? []).find((role) => role.id === playerRoleId)?.name ?? ''
-        : '';
-      const speakerName =
-        playerRoleId ? playerRoleName || playerRoleId : activeSession.settings.userDisplayName || preferences.userDisplayName || '旅人';
 
       const editedMessage: MagicTeaPartyMessage = {
         id: randomUUID(),

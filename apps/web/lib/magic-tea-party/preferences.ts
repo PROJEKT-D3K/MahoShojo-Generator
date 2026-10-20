@@ -13,6 +13,16 @@ import {
 const STORAGE_KEY = 'magic-tea-party:preferences';
 const LEGACY_STORAGE_KEY = 'magic-tavern:preferences';
 
+/** Use one request-safe display name for a new message, its prompt, and the current player label. */
+export const resolveMagicTeaPartyUserDisplayName = (sessionName?: unknown, preferenceName?: unknown): string => {
+  const name = (typeof sessionName === 'string' ? sessionName.trim() : '')
+    || (typeof preferenceName === 'string' ? preferenceName.trim() : '') || '旅人';
+  let end = 20;
+  if (name.charCodeAt(19) >= 0xd800 && name.charCodeAt(19) <= 0xdbff
+    && name.charCodeAt(20) >= 0xdc00 && name.charCodeAt(20) <= 0xdfff) end -= 1;
+  return name.slice(0, end);
+};
+
 export const DEFAULT_MAGIC_TEA_PARTY_PREFERENCES: MagicTeaPartyPreferences = {
   outputFormat: 'jsonl',
   outputPlan: {

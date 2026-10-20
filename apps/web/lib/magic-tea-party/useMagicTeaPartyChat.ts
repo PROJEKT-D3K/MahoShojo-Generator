@@ -1,3 +1,5 @@
+import { resolveMagicTeaPartyUserDisplayName } from '@/lib/magic-tea-party/preferences';
+import { resolveMagicTeaPartyPlayerIdentity } from '@mahoshojo/domain/magic-tea-party/player-identity';
 import { pickMagicTeaPartyRequestSettings } from '@mahoshojo/domain/magic-tea-party/import-plan';
 import { appendMagicTeaPartyAutoSummaryMessage, createMagicTeaPartyAutoSummaryScan, planMagicTeaPartyAutoSummary, projectMagicTeaPartyAutoSummaryInput, resolveMagicTeaPartyAutoSummaryBudget, matchesMagicTeaPartySummaryInput, projectMagicTeaPartySummaryInput } from '@mahoshojo/ai-core/magic-tea-party';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -304,12 +306,7 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
       const enableChoices =
         typeof session.settings.enableChoices === 'boolean' ? session.settings.enableChoices : preferences.enableChoices;
       const choiceCount = session.settings.choiceCount ?? preferences.choiceCount;
-      const displayName = typeof session.settings.userDisplayName === 'string' ? session.settings.userDisplayName.trim() : '';
-      let nameEnd = 20;
-      if (displayName.charCodeAt(19) >= 0xd800 && displayName.charCodeAt(19) <= 0xdbff
-        && displayName.charCodeAt(20) >= 0xdc00 && displayName.charCodeAt(20) <= 0xdfff) nameEnd -= 1;
-      const sessionDisplayName = displayName.slice(0, nameEnd);
-      const userDisplayName = sessionDisplayName || preferences.userDisplayName || '旅人';
+      const userDisplayName = resolveMagicTeaPartyUserDisplayName(session.settings.userDisplayName, preferences.userDisplayName);
 
       return {
         ...buildRequestSettings(session),
@@ -1092,7 +1089,7 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
               ...buildRequestSettings(params.session),
               providerId: userProviderConfig?.providerId,
               modelId: userProviderConfig?.modelId,
-              userDisplayName: params.session.settings.userDisplayName,
+              userDisplayName: resolvePromptSettings(params.session, params.outputFormat).userDisplayName,
             },
             customProvider: buildMagicTeaPartyCustomProviderPayload(userProviderConfig!),
           }),
@@ -1560,12 +1557,9 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
 
         const now = Date.now();
         const sessionOutputFormat = (activeSession.settings.outputFormat ?? 'jsonl') as MagicTeaPartyOutputFormat;
-        const playerRoleIdAtSend = activeSession.playerRoleId ?? null;
-        const userDisplayNameAtSend =
-          (activeSession.settings.userDisplayName || preferences.userDisplayName || '旅人').trim() || '旅人';
-        const playerRoleNameAtSend = playerRoleIdAtSend
-          ? (activeSession.roles ?? []).find((role) => role.id === playerRoleIdAtSend)?.name ?? ''
-          : '';
+        const userDisplayNameAtSend = resolvePromptSettings(activeSession, sessionOutputFormat).userDisplayName;
+        const player = resolveMagicTeaPartyPlayerIdentity({ roles: activeSession.roles,
+          playerRoleId: activeSession.playerRoleId, userDisplayName: userDisplayNameAtSend });
         const userMessage: MagicTeaPartyMessage = {
           id: randomUUID(),
           sessionId: activeSession.id,
@@ -1573,8 +1567,8 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
           content: trimmed,
           createdAt: now,
           status: 'done',
-          ...(playerRoleIdAtSend ? { speakerId: playerRoleIdAtSend } : {}),
-          meta: { speakerName: playerRoleIdAtSend ? playerRoleNameAtSend || playerRoleIdAtSend : userDisplayNameAtSend },
+          ...(player.playerRoleId ? { speakerId: player.playerRoleId } : {}),
+          meta: { speakerName: player.speakerName },
         };
 
         const assistantMessageId = randomUUID();
@@ -1598,7 +1592,7 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
         await putMagicTeaPartyMessage(assistantMessage);
         assertGenerationActive(controller, activeSession.id);
 
-        const updatedSession: MagicTeaPartySession = { ...activeSession, updatedAt: now };
+        const updatedSession: MagicTeaPartySession = { ...activeSession, updatedAt: now, playerRoleId: player.playerRoleId };
         await persistSession(updatedSession, { preserveSummary: true });
         assertGenerationActive(controller, activeSession.id);
 
@@ -1655,7 +1649,7 @@ export function useMagicTeaPartyChat(options: UseMagicTeaPartyChatOptions): UseM
       isGenerationCurrent,
       messages,
       onGlobalError,
-      preferences.userDisplayName,
+      resolvePromptSettings,
       persistSession,
       router,
       runGenerateStream,

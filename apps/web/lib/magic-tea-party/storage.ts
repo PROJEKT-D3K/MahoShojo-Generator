@@ -1,3 +1,4 @@
+import { resolveMagicTeaPartyPlayerIdentity } from '@mahoshojo/domain/magic-tea-party/player-identity';
 import { sameMagicTeaPartyRoleSource } from '@mahoshojo/domain/magic-tea-party/role-editor';
 import type { MagicTeaPartyRole, MagicTeaPartyMessage, MagicTeaPartySession, MagicTeaPartyTachieAsset } from '@/lib/magic-tea-party/types';
 
@@ -267,6 +268,8 @@ const summarySettingKeys = [
 
 export type MagicTeaPartySessionWriteOptions = {
   preserveSummary?: boolean;
+  /** Only the explicit player selector owns this field; old turn/draft writes cannot restore it. */
+  updatePlayerRole?: boolean;
   /** Only explicit role-list mutations may replace roles; unchanged entries keep their latest value. */
   sourceRoles?: MagicTeaPartyRole[];
 };
@@ -329,6 +332,8 @@ export const putMagicTeaPartySessionPreservingRoles = async (
         const current = request.result as MagicTeaPartySession | undefined;
         if (!current || current.createdAt !== session.createdAt) throw new Error('会话已删除或替换，未保存过时结果');
         next = { ...session, roles: mergeRoleChanges(current.roles, sourceRoles, session.roles), updatedAt: Math.max(current.updatedAt, session.updatedAt) };
+        next.playerRoleId = resolveMagicTeaPartyPlayerIdentity({ roles: next.roles,
+          playerRoleId: options.updatePlayerRole ? session.playerRoleId : current.playerRoleId }).playerRoleId;
         if (preserveSummary) {
           const settings = { ...session.settings };
           for (const key of summarySettingKeys) Object.assign(settings, { [key]: current.settings[key] });

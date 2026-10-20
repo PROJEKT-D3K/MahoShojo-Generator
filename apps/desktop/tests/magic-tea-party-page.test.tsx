@@ -164,6 +164,95 @@ it('preserves composer draft across preference updates and keeps null/player sel
   await act(async () => { select.value = ''; select.dispatchEvent(new Event('change', { bubbles: true })); });
   expect(document?.playerRoleId).toBeNull(); expect(composer.value).toBe('保住草稿');
 });
+it('removes the selected player role through the shared setup panel and sends as the fallback identity', async () => {
+  await mount(); await click('新建会话');
+  await change('textarea[placeholder^="粘贴角色"]', JSON.stringify([
+    { templateId: '通用角色', name: '原玩家', content: '第一位设定' },
+    { templateId: '通用角色', name: '新玩家', content: '第二位设定' },
+  ])); await click('导入');
+  const first = document!.roles[0]!; const second = document!.roles[1]!;
+  const select = [...container.querySelectorAll('select')].find(item => [...item.options].some(option => option.textContent === '原玩家'))!;
+  await act(async () => { select.value = first.id; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await change('textarea[placeholder^="输入你的行动"]', '过去的玩家台词'); await click('发送');
+  const historical = structuredClone(messages);
+  await change('textarea[placeholder^="输入你的行动"]', '留下草稿');
+  await change('input[placeholder^="例如：旅人"]', '  自定旅人  ');
+  const writes = () => native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party');
+  const before = writes().length;
+  const remove = container.querySelector<HTMLButtonElement>('[aria-label="编辑角色：原玩家"]')!.parentElement!.querySelectorAll('button')[1]!;
+  await act(async () => remove.click());
+  expect(writes()).toHaveLength(before + 1);
+  expect(document).toMatchObject({ roles: [second], playerRoleId: null, draft: '留下草稿' });
+  expect(select.value).toBe(''); expect(messages).toEqual(historical);
+  await click('发送');
+  const fallback = messages.find(message => message.content === '留下草稿');
+  expect(fallback).not.toHaveProperty('speakerId'); expect(fallback?.meta?.speakerName).toBe('自定旅人');
+  await act(async () => { select.value = second.id; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await change('textarea[placeholder^="输入你的行动"]', '重新扮演'); await click('发送');
+  expect(messages.find(message => message.content === '重新扮演')).toMatchObject({ speakerId: second.id, meta: { speakerName: second.name } });
+  expect(messages.slice(0, historical.length)).toEqual(historical);
+  await click('×'); expect(document).toMatchObject({ roles: [], playerRoleId: null }); expect(select.value).toBe('');
+});
+it.each([false, true])('keeps the player selection unchanged while the role-removal save is unresolved (unknown=%s)', async unknown => {
+  const role = { id: 'player', name: '原玩家', source: 'local' as const, card: { name: '原玩家' } };
+  document = { id: 's', title: '恢复茶会', createdAt: 1, updatedAt: 1, roles: [role], playerRoleId: role.id,
+    settings: { providerId: 'openai', modelId: 'm' }, draft: '' };
+  await mount(); await openSession('恢复茶会');
+  await change('textarea[placeholder^="输入你的行动"]', '保留草稿');
+  const select = [...container.querySelectorAll('select')].find(item => [...item.options].some(option => option.textContent === role.name))!;
+  const original = native.invoke.getMockImplementation()!; let reject = true;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === 'mutate_magic_tea_party' && TeaWriteRequestSchema.parse(args.request).request.action === 'update' && reject) {
+      reject = false;
+      if (unknown) { await original(command, args); throw new Error('synthetic reply loss after commit'); }
+      throw { code: 'tea-io', message: 'Local tea storage did not complete; retain the input or unsaved result', writeEvidence: 'not-written' };
+    }
+    return original(command, args);
+  });
+  const writes = () => native.invoke.mock.calls.filter(([command, args]) => command === 'mutate_magic_tea_party' && TeaWriteRequestSchema.parse(args.request).request.action === 'update').map(([, args]) => args.request);
+  await click('×');
+  expect(select.value).toBe(role.id); expect(select.disabled).toBe(true);
+  expect(container.querySelector('[aria-label="编辑角色：原玩家"]')).toBeTruthy();
+  expect(container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!.value).toBe('保留草稿');
+  expect(document).toMatchObject(unknown ? { roles: [], playerRoleId: null } : { roles: [role], playerRoleId: role.id });
+  const pending = structuredClone(writes()[0]);
+  expect(pending).toMatchObject({ request: { action: 'update', session: { roles: [], playerRoleId: null, draft: '保留草稿' } } });
+  await click(unknown ? '核对原保存' : '重试原保存');
+  expect(writes()).toEqual(unknown ? [pending] : [pending, pending]);
+  expect(select.value).toBe(''); expect(select.disabled).toBe(false);
+  expect(container.querySelector('[aria-label="编辑角色：原玩家"]')).toBeNull();
+  expect(document).toMatchObject({ roles: [], playerRoleId: null, draft: '保留草稿' });
+  expect(streams).toBe(0);
+});
+it('opens an orphan player session without writing and normalizes the next sent message', async () => {
+  document = { id: 's', title: '恢复茶会', createdAt: 1, updatedAt: 1, roles: [], playerRoleId: 'deleted',
+    settings: { providerId: 'openai', modelId: 'm', userDisplayName: '  恢复旅人  ' }, draft: '恢复草稿' };
+  await mount(); await openSession('恢复茶会');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(0);
+  expect(document.playerRoleId).toBe('deleted');
+  await click('发送');
+  expect(messages[0]).not.toHaveProperty('speakerId');
+  expect(messages[0]).toMatchObject({ content: '恢复草稿', meta: { speakerName: '恢复旅人' } });
+  expect(document.playerRoleId).toBeNull(); expect(streams).toBe(1);
+});
+it('keeps the player selected at send while credential preparation disables role removal', async () => {
+  const role = { id: 'player', name: '原玩家', source: 'local' as const, card: { name: '原玩家' } };
+  document = { id: 's', title: '恢复茶会', createdAt: 1, updatedAt: 1, roles: [role], playerRoleId: role.id,
+    settings: { providerId: 'openai', modelId: 'm' }, draft: '在途台词' };
+  await mount(); await openSession('恢复茶会');
+  await act(async () => getDesktopAiConfigStore().selectProviderTarget({ kind: 'preset', providerId: 'deepseek' }));
+  const original = native.invoke.getMockImplementation()!; let release!: () => void;
+  native.invoke.mockImplementation(async (command, args) => {
+    if (command === 'has_provider_secret') await new Promise<void>(resolve => { release = resolve; });
+    return original(command, args);
+  });
+  await click('发送'); expect(release).toBeTypeOf('function');
+  expect(button('×').disabled).toBe(true); await click('×');
+  expect(document).toMatchObject({ roles: [role], playerRoleId: role.id });
+  await act(async () => release());
+  expect(messages[0]).toMatchObject({ speakerId: role.id, content: '在途台词', meta: { speakerName: role.name } });
+  expect(streams).toBe(1);
+});
 it('stages continuous title and display-name typing without per-character writes or disabling the fields', async () => {
   await mount(); await click('新建会话');
   const writes = () => native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;

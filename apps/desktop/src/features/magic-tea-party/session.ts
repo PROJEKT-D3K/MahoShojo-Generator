@@ -1,6 +1,7 @@
 import { TeaWriteRequestSchema, type TeaHead, type TeaMessageDocument, type TeaReadResponse, type TeaSessionDocument, type TeaWriteRequest, type TeaWriteResponse } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
+import { resolveMagicTeaPartyPlayerIdentity } from '@mahoshojo/domain/magic-tea-party/player-identity';
 import { TeaStorageError, type TeaNativePort } from '../../platform/magic-tea-party-native';
 import type { DesktopAiExecutionOptions } from '../../platform/desktop-ai-execution';
 import type { ResolvedDesktopAiTarget } from '../ai-config/desktop-ai-config';
@@ -120,7 +121,10 @@ export class DesktopTeaSession {
     const next = { ...session, ...(this.state.summaryDraft === null ? {} : editedTeaSummary(session, this.state.summaryDraft, this.now())), draft: this.state.input, ...(this.state.titleDraft === null ? {} : { title: this.state.titleDraft }), ...patch,
       settings: { ...session.settings, ...patch.settings, ...(this.state.nameDraft === null ? {} : { userDisplayName: this.state.nameDraft }) },
       id: session.id, createdAt: session.createdAt, updatedAt: this.now() };
-    return this.write({ version: 1, request: { action: 'update', sessionId: session.id, instance, expectedRevision: revision, session: next } }, 'ordinary');
+    const { playerRoleId } = resolveMagicTeaPartyPlayerIdentity({ roles: next.roles,
+      playerRoleId: typeof next.playerRoleId === 'string' ? next.playerRoleId : null });
+    return this.write({ version: 1, request: { action: 'update', sessionId: session.id, instance, expectedRevision: revision,
+      session: { ...next, playerRoleId } } }, 'ordinary');
   };
   updateSettings = (patch: Partial<MagicTeaPartySession['settings']>) => {
     this.cancelAutomaticIntent();
@@ -284,11 +288,12 @@ export class DesktopTeaSession {
     this.publish({ busy: true, generating: true, generationKind: kind, isAutoSummarizing: automatic, error: null });
     const preparation = { cancelled: false, automatic }; this.preparation = preparation;
     const requestId = this.id();
-    const playerRoleId = typeof record.session.playerRoleId === 'string' ? record.session.playerRoleId : null;
-    const playerRoleName = playerRoleId ? record.session.roles.find(role => role.id === playerRoleId)?.name : '';
-    const displayName = desktopTeaSettings(record.session.settings).userDisplayName?.trim() || '旅人';
+    const { playerRoleId, speakerName } = resolveMagicTeaPartyPlayerIdentity({ roles: record.session.roles,
+      playerRoleId: typeof record.session.playerRoleId === 'string' ? record.session.playerRoleId : null,
+      userDisplayName: desktopTeaSettings(record.session.settings).userDisplayName });
+    record.session = { ...record.session, playerRoleId };
     const userMessage: TeaMessageDocument | null = text === null ? null : { id: this.id(), sessionId: record.session.id, role: 'user', content: text, createdAt: at, status: 'done',
-      ...(playerRoleId ? { speakerId: playerRoleId } : {}), meta: { speakerName: playerRoleId ? playerRoleName || playerRoleId : displayName } };
+      ...(playerRoleId ? { speakerId: playerRoleId } : {}), meta: { speakerName } };
     try {
       const current = () => this.current(owner) && !preparation.cancelled && credentialCurrent();
       const summary = kind === 'summary' ? automatic

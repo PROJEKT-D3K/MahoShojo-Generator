@@ -12,8 +12,8 @@ import { prepareDesktopTeaImport } from '../src/features/magic-tea-party/transfe
 
 const target: ResolvedDesktopAiTarget = { location: 'client', providerTarget: { kind: 'custom', profileId: 'tea-loopback' }, profile: null, mode: 'direct-local', modelId: 'synthetic', availableModelIds: [], generationOverrides: undefined, unavailableReason: null };
 const baseSession = (): TeaSessionDocument => ({ id: 's', title: '茶会', createdAt: 1, updatedAt: 1, roles: [], settings: { providerId: 'openai', modelId: 'm' }, draft: '' });
-const harness = () => {
-  let record: { session: TeaSessionDocument; instance: string; revision: number } | null = { session: baseSession(), instance: 'a'.repeat(32), revision: 1 };
+const harness = (session = baseSession()) => {
+  let record: { session: TeaSessionDocument; instance: string; revision: number } | null = { session, instance: 'a'.repeat(32), revision: 1 };
   let messages: TeaMessageDocument[] = []; let drop: string | null = null; let fail: string | null = null;
   let output = '{"type":"narration","text":"星光😀"}\n';
   let count = 0; let sequence = 0; const receipts = new Map<string, TeaWriteResponse['result']>();
@@ -220,6 +220,88 @@ describe('text Tea owner save and generation identity', () => {
     expect(h.messages[0]).toMatchObject({ speakerId: 'role', meta: { speakerName: '原角色' } });
     const archive = JSON.parse(await h.owner.export('json'));
     expect(archive.messages[0]).toMatchObject({ speakerId: 'role', meta: { speakerName: '原角色' } });
+  });
+  it('normalizes player identity in the role update transaction and keeps historical speakers when selecting again', async () => {
+    const h = harness(); await h.owner.select('s');
+    const first = { id: 'first', name: '原角色', source: 'local' as const, card: { name: '原角色' } };
+    const second = { id: 'second', name: '新角色', source: 'local' as const, card: { name: '新角色' } };
+    await h.owner.update({ roles: [first, second], playerRoleId: first.id });
+    await h.owner.start(target, h.options, () => true, { kind: 'reply', text: '过去的台词' });
+    const historical = structuredClone(h.messages);
+    h.owner.setInput('保留草稿'); h.owner.stageName('  自定称呼  ');
+    const writes = () => h.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party');
+    const before = writes().length; const revision = h.record!.revision;
+    expect(await h.owner.update({ roles: [second] })).toBe(true);
+    expect(writes()).toHaveLength(before + 1);
+    expect(writes().at(-1)?.[1]?.request).toMatchObject({ request: { action: 'update', expectedRevision: revision,
+      session: { roles: [second], playerRoleId: null, draft: '保留草稿', settings: { userDisplayName: '  自定称呼  ' } } } });
+    expect(h.owner.getSnapshot().record?.session.playerRoleId).toBeNull();
+    expect(h.messages).toEqual(historical);
+    await h.owner.start(target, h.options, () => true, { kind: 'selected-choice', text: '旅人选项' });
+    const fallback = h.messages.find(message => message.content === '旅人选项');
+    expect(fallback).not.toHaveProperty('speakerId'); expect(fallback?.meta?.speakerName).toBe('自定称呼');
+    expect(h.owner.getSnapshot().input).toBe('保留草稿');
+    expect(await h.owner.update({ playerRoleId: second.id })).toBe(true);
+    await h.owner.start(target, h.options, () => true, { kind: 'reply', text: '新角色台词' });
+    expect(h.messages.find(message => message.content === '新角色台词')).toMatchObject({ speakerId: second.id, meta: { speakerName: second.name } });
+    expect(await h.owner.update({ roles: [] })).toBe(true);
+    expect(h.record?.session).toMatchObject({ roles: [], playerRoleId: null });
+    expect(h.messages.slice(0, historical.length)).toEqual(historical);
+    expect(JSON.parse(await h.owner.export('json')).messages.slice(0, historical.length)).toEqual(historical);
+  });
+  it.each([['  自定旅人  ', '自定旅人'], ['  ', '旅人']] as const)('recovers an orphan player only in a new write and sends with %j', async (userDisplayName, speakerName) => {
+    const h = harness({ ...baseSession(), playerRoleId: 'deleted', settings: { ...baseSession().settings, userDisplayName } });
+    await h.owner.select('s');
+    expect(h.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(0);
+    expect(h.record?.session.playerRoleId).toBe('deleted');
+    await h.owner.start(target, h.options, () => true, { kind: 'reply', text: '恢复后的台词' });
+    const user = h.messages.find(message => message.role === 'user');
+    expect(user).not.toHaveProperty('speakerId'); expect(user?.meta?.speakerName).toBe(speakerName);
+    const begin = h.invoke.mock.calls.find(([command, args]) => command === 'mutate_magic_tea_party' && (args?.request as TeaWriteRequest).request.action === 'begin-generation')![1]!.request as TeaWriteRequest;
+    expect(begin).toMatchObject({ request: { action: 'begin-generation', expectedRevision: 1,
+      session: { playerRoleId: null }, userMessage: { meta: { speakerName } } } });
+    expect(h.record?.session.playerRoleId).toBeNull();
+    const stream = h.invoke.mock.calls.find(([command]) => command === 'stream_direct_ai')![1]!.request as { messages: Array<{ content: string }> };
+    expect(stream.messages[0]!.content).toContain(`玩家身份：${speakerName}`);
+    expect(stream.messages[0]!.content).not.toContain('玩家正在扮演角色');
+  });
+  it.each([false, true])('keeps player and role changes atomic across a failed update (unknown=%s)', async unknown => {
+    const role = { id: 'player', name: '原玩家', source: 'local' as const, card: { name: '原玩家' } };
+    const h = harness({ ...baseSession(), roles: [role], playerRoleId: role.id }); await h.owner.select('s');
+    h.owner.setInput('未提交草稿'); h.owner.stageName('新称呼');
+    if (unknown) h.drop('update'); else h.fail('update');
+    expect(await h.owner.update({ roles: [] })).toBe(false);
+    expect(h.owner.getSnapshot()).toMatchObject({ record: { session: { roles: [role], playerRoleId: role.id } },
+      input: '未提交草稿', nameDraft: '新称呼', pending: unknown ? 'unknown' : 'save' });
+    expect(h.record?.session).toMatchObject(unknown ? { roles: [], playerRoleId: null, draft: '未提交草稿' } : { roles: [role], playerRoleId: role.id, draft: '' });
+    const updates = () => h.invoke.mock.calls.filter(([command, args]) => command === 'mutate_magic_tea_party' && (args?.request as TeaWriteRequest).request.action === 'update').map(([, args]) => args?.request);
+    const original = structuredClone(updates()[0]);
+    expect(original).toMatchObject({ request: { session: { roles: [], playerRoleId: null, draft: '未提交草稿' } } });
+    await h.owner.start(target, h.options, () => true, { kind: 'reply', text: '保存未决不得发送' }); expect(h.count()).toBe(0);
+    if (unknown) await h.owner.resolvePending(); else await h.owner.retryPending();
+    expect(updates()).toEqual(unknown ? [original] : [original, original]);
+    expect(h.owner.getSnapshot()).toMatchObject({ record: { session: { roles: [], playerRoleId: null } }, input: '未提交草稿', nameDraft: null, pending: 'none' });
+  });
+  it('freezes the player identity through deferred history preparation and rejects concurrent role replacement', async () => {
+    const role = { id: 'player', name: '  原玩家  ', source: 'local' as const, card: { name: '原玩家' } };
+    const h = harness({ ...baseSession(), roles: [role], playerRoleId: role.id }); await h.owner.select('s');
+    const original = h.invoke.getMockImplementation()!; let release!: () => void; let first = true;
+    h.invoke.mockImplementation(async (command, args) => {
+      if (command === 'read_magic_tea_party' && (args?.request as { request: { action: string } }).request.action === 'messages' && first) {
+        first = false; await new Promise<void>(resolve => { release = resolve; });
+      }
+      return original(command, args);
+    });
+    const running = h.owner.start(target, h.options, () => true, { kind: 'reply', text: '原玩家在途台词' });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    expect(await h.owner.update({ roles: [], playerRoleId: null })).toBe(false);
+    h.owner.stageName('不得替换');
+    release(); await running;
+    expect(h.messages[0]).toMatchObject({ speakerId: role.id, meta: { speakerName: '原玩家' } });
+    expect(h.record?.session).toMatchObject({ roles: [role], playerRoleId: role.id });
+    const historical = structuredClone(h.messages);
+    expect(await h.owner.update({ roles: [] })).toBe(true);
+    expect(h.record?.session.playerRoleId).toBeNull(); expect(h.messages).toEqual(historical);
   });
   it('preflights rejected imports before saving any dirty current draft', async () => {
     const h = harness(); await h.owner.select('s'); h.owner.setInput('仍未保存'); h.owner.stageTitle('仍未改名');

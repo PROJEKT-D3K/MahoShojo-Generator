@@ -2,6 +2,7 @@
 
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 
+import { resolveMagicTeaPartyPlayerIdentity } from '@mahoshojo/domain/magic-tea-party/player-identity';
 import type { MagicTeaPartyRole, MagicTeaPartyScenario, MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
 
 export type MagicTeaPartyPlayerOption = { value: string; label: string };
@@ -379,7 +380,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
           <label className="text-xs font-semibold text-gray-600">扮演方式</label>
           <select
             className="input-field"
-            value={activeSession?.playerRoleId ?? ''}
+            value={resolveMagicTeaPartyPlayerIdentity({ roles, playerRoleId: activeSession?.playerRoleId }).playerRoleId ?? ''}
             onChange={(event) => {
               const value = event.target.value;
               if (canEdit) onUpdatePlayerRole(value ? value : null);

@@ -1,3 +1,4 @@
+import { resolveMagicTeaPartyPlayerIdentity } from '@mahoshojo/domain/magic-tea-party/player-identity';
 import type { TavernCharacterBook } from '@mahoshojo/domain/tavern-card/worldbook';
 import type {
   MagicTeaPartyMessage,
@@ -211,8 +212,8 @@ export const buildMagicTeaPartyMainPrompt = (params: {
 }): string => {
   const language = params.session.settings.language ?? 'zh-CN';
   const outputFormat = params.session.settings.outputFormat ?? 'jsonl';
-  const userDisplayName = params.session.settings.userDisplayName?.trim() || '{{user}}';
-  const playerRoleId = params.session.playerRoleId ?? null;
+  const userDisplayName = params.session.settings.userDisplayName?.trim() || '旅人';
+  const player = resolveMagicTeaPartyPlayerIdentity({ roles: params.roles, playerRoleId: params.session.playerRoleId, userDisplayName });
   const baseOutputPlan = params.session.settings.outputPlan ?? { choices: 'off', summary: 'off', updates: 'off' };
   const enableSummary = params.session.settings.enableSummary !== false;
   const enableChoicesSetting = params.requestChoices === true ? true : Boolean(params.session.settings.enableChoices);
@@ -233,7 +234,6 @@ export const buildMagicTeaPartyMainPrompt = (params: {
     : undefined;
   const roleNames = params.roles.map((role) => role.name).filter(Boolean);
 
-  const playerRole = playerRoleId ? params.roles.find((role) => role.id === playerRoleId) ?? null : null;
   const protocolShadowDrafts = Array.isArray(params.session.protocolShadow?.drafts) ? params.session.protocolShadow?.drafts ?? [] : [];
   const findShadowDraft = (role: MagicTeaPartyRole): Pick<MagicTeaPartyUpdateDraft, 'impact' | 'currentStateSummary'> | undefined => {
     if (!protocolShadowDrafts || protocolShadowDrafts.length === 0) return undefined;
@@ -274,10 +274,10 @@ export const buildMagicTeaPartyMainPrompt = (params: {
     systemLines.push(stylePrompt);
   }
 
-  if (playerRole) {
+  if (player.playerRoleId) {
     systemLines.push('');
     systemLines.push('【玩家扮演约束】');
-    systemLines.push(`- 玩家正在扮演角色：${playerRole.name}。你不得代替该角色发言或做决定。`);
+    systemLines.push(`- 玩家正在扮演角色：${player.speakerName}。你不得代替该角色发言或做决定。`);
     systemLines.push('- 输出中禁止该角色的 dialogue；必要时仅可用 narration 描述其动作结果。');
   } else {
     systemLines.push('');
