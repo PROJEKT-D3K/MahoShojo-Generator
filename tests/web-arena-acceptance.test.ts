@@ -153,6 +153,15 @@ describe('合成 Web 验收网络边界', () => {
 });
 
 describe('无浏览器构建与真实组件 DOM smoke', () => {
+  it('静态 SVG 逐字节复用 content 品牌素材权威源', async () => {
+    const assets = [...files].filter(([url]) => url.endsWith('.svg'));
+    expect(assets.length).toBeGreaterThan(0);
+    for (const [url, asset] of assets) {
+      expect(asset.type).toBe('image/svg+xml');
+      expect(asset.body).toEqual(await readFile(path.join(root, 'content/brand', url.slice(1))));
+    }
+  });
+
   it('prepare-only 构建真实 bundle、样式和依赖清单，不运行浏览器或读取 Next/env 配置', async () => {
     const prepared = await runAcceptance({ prepareOnly: true });
     try {

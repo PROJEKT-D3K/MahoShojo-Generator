@@ -68,7 +68,7 @@ export async function buildHarness(outputDir) {
   const { generatedContent: _generated, ...artifact } = await runnerModule.createWebPackageOverlay(runnerModule.BUILTIN_ARENA_NEWS_PACKAGE_REF, fixture.reportText('web'));
   webArtifacts.set(files, artifact);
   files.set(RUNNER_PATH, { body: runnerModule.WEB_PACKAGE_RUNNER_HTML, type: 'text/html', headers: Object.fromEntries(runnerModule.WEB_PACKAGE_RUNNER_HEADERS.map(h => [h.key, h.value])) });
-  for (const asset of ASSETS) files.set('/' + asset, { body: await readFile(path.join(APP, 'public', asset)), type: 'image/svg+xml' });
+  for (const asset of ASSETS) files.set('/' + asset, { body: await readFile(path.join(ROOT, 'content/brand', asset)), type: 'image/svg+xml' });
   files.set('/favicon.ico', { body: '', type: 'image/x-icon' });
   files.set('/', { body: '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>合成 Web 组件验收</title><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/app.js"></script></body></html>', type: 'text/html' });
   for (const [name, file] of files) if (name === '/app.js' || name === '/app.css') await writeFile(path.join(outputDir, name.slice(1)), file.body);
