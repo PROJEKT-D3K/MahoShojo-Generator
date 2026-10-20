@@ -561,3 +561,78 @@ it('生成结果保存命中回收站后仍可重试，保存后重新生成不�
   expect(container.querySelector<HTMLDialogElement>('dialog')?.open).toBe(true);
   expect(container.querySelector('[aria-label="生成结果"] h2')?.textContent).toBe(scenarioCard.title);
 });
+
+let originalCopyExec: PropertyDescriptor | undefined;
+beforeEach(() => { originalCopyExec = Object.getOwnPropertyDescriptor(document, 'execCommand'); });
+afterEach(() => {
+  if (originalCopyExec) Object.defineProperty(document, 'execCommand', originalCopyExec);
+  else Reflect.deleteProperty(document, 'execCommand');
+});
+
+it.each(['missing', 'rejected'] as const)('Scenario restored result and editor handle %s Clipboard with exact bytes and honest feedback', async (api) => {
+  const original = { ...scenarioCard, metadata: { ...scenarioCard.metadata, signature: 'keep' } };
+  const editor = { templateId: '通用情景', title: '编辑原件', content: '全部正文', metadata: { signature: 'keep-editor' } };
+  window.localStorage.setItem(SCENARIO_DRAFT_KEY, JSON.stringify({ ...storedDraft({}), generalScenarioDraft: editor, output: { mode: 'hosted-json', phase: 'completed', cardKind: 'scenario', card: original, rawText: '原正文' } }));
+  vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: api === 'missing' ? undefined : { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+  let copied = '', fallbackSuccess = false;
+  const fallback = vi.fn(() => { copied = document.querySelector<HTMLTextAreaElement>('textarea[readonly][style*="position: fixed"]')!.value; return fallbackSuccess; });
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  await mount();
+  for (const [label, data, success] of [['生成结果', original, '✅ 数据卡 JSON 已复制到剪贴板'], ['通用情景卡编辑器', editor, '已复制到剪贴板']] as const) {
+    const surface = container.querySelector(`[aria-label="${label}"]`)!;
+    const copy = [...surface.querySelectorAll('button')].find((item) => item.textContent === '复制到剪贴板')!;
+    fallbackSuccess = false; await act(async () => copy.click());
+    expect(copied).toBe(JSON.stringify(data, null, 2));
+    expect(container.textContent).toContain('复制失败，请手动选择 JSON 内容后复制。');
+    if (label === '生成结果') expect(container.textContent).not.toContain(success);
+    else expect(surface.querySelector('[role=status]')?.textContent).toBe('复制失败，请手动选择 JSON 内容后复制。');
+    fallbackSuccess = true; await act(async () => copy.click());
+    expect(copied).toBe(JSON.stringify(data, null, 2));
+    expect(container.textContent).toContain(success);
+  }
+  expect(fallback).toHaveBeenCalledTimes(4); expect(mocks.execute).not.toHaveBeenCalled(); expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.download).not.toHaveBeenCalled();
+});
+
+it.each(['success', 'failure'] as const)('Scenario pending %s stays active for the current result and retires on result or editor replacement', async (outcome) => {
+  window.localStorage.setItem(SCENARIO_DRAFT_KEY, JSON.stringify(storedDraft({ '故事发生的场景是怎样的？': '钟楼' })));
+  await mount(); await click('生成情景'); await click('创建空白通用情景卡');
+  const fallback = vi.fn(() => true);
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  for (const target of ['result', 'editor'] as const) {
+    for (const replace of [false, true]) {
+      let resolve!: () => void, reject!: (reason: Error) => void;
+      const writeText = vi.fn(() => new Promise<void>((yes, no) => { resolve = yes; reject = no; }));
+      vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: { writeText } });
+      const surface = container.querySelector(`[aria-label="${target === 'result' ? '生成结果' : '通用情景卡编辑器'}"]`)!;
+      const data = surface.querySelector('pre')!.textContent!;
+      await act(async () => [...surface.querySelectorAll('button')].find((item) => item.textContent === '复制到剪贴板')!.click());
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(data);
+      if (!replace && target === 'result') await click('流式');
+      else if (replace && target === 'result') { await click('非流式'); await click('重新生成'); await click('确定重新生成'); }
+      else if (replace) {
+        const input = container.querySelector<HTMLTextAreaElement>('#general-scenario-content')!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '新的编辑内容');
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+      }
+      const beforeFeedback = container.textContent; fallback.mockClear();
+      await act(async () => outcome === 'success' ? resolve() : reject(new Error('late')));
+      if (replace) { expect(container.textContent).toBe(beforeFeedback); expect(fallback).not.toHaveBeenCalled(); }
+      else { expect(container.textContent).toContain(target === 'result' ? '✅ 数据卡 JSON 已复制到剪贴板' : '已复制到剪贴板'); expect(fallback).toHaveBeenCalledTimes(outcome === 'failure' ? 1 : 0); }
+    }
+  }
+});
+
+it.each(['success', 'failure'] as const)('retires an editor copy on the existing draft identity change from next-mode selection (%s)', async (outcome) => {
+  window.localStorage.setItem(SCENARIO_DRAFT_KEY, JSON.stringify({ ...storedDraft({}), generalScenarioDraft: { templateId: '通用情景', title: '原件', content: '完整正文' } }));
+  let resolve!: () => void, reject!: (reason: Error) => void;
+  const writeText = vi.fn(() => new Promise<void>((yes, no) => { resolve = yes; reject = no; }));
+  vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: { writeText } });
+  const fallback = vi.fn(() => true);
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  await mount(); await click('复制到剪贴板'); await click('流式');
+  await act(async () => outcome === 'success' ? resolve() : reject(new Error('late')));
+  expect(container.querySelector('[aria-label="通用情景卡编辑器"] [role=status]')).toBeNull();
+  expect(fallback).not.toHaveBeenCalled(); expect(writeText).toHaveBeenCalledTimes(1);
+});

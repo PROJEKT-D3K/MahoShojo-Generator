@@ -19,6 +19,7 @@ import {
   isMobileFormFactor,
   recommendedSaveModes,
   SaveJsonButton,
+  ResultJsonCopyButton,
   useResultAutoScroll,
 } from '@mahoshojo/ui-web/details-controls';
 import {
@@ -394,7 +395,7 @@ function FreeForm({ session }: { session: FreeSession }) {
                   />
                   )}>
                     {jsonSaveMode === 'text' && <button className={`${actionClass} flex-1`} onClick={() => downloadTextFile(resultJsonName, JSON.stringify(card, null, 2))}>下载 JSON 文件</button>}
-                    <button className={`${actionClass} flex-1`} onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(card, null, 2)).then(() => setActionInfo('✅ 数据卡 JSON 已复制到剪贴板')).catch(() => setActionError('复制失败，请手动选择 JSON 内容后复制。')); }}>复制到剪贴板</button>
+                    <ResultJsonCopyButton data={card} className={`${actionClass} flex-1`} onResult={(copied) => copied ? setActionInfo('✅ 数据卡 JSON 已复制到剪贴板') : setActionError('复制失败，请手动选择 JSON 内容后复制。')} />
                   </FreeResultActions>
                 </FreeResultPanel>
               </section>}

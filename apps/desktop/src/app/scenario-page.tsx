@@ -13,6 +13,7 @@ import {
   isMobileFormFactor,
   recommendedSaveModes,
   SaveJsonButton,
+  ResultJsonCopyButton,
   useResultAutoScroll,
 } from '@mahoshojo/ui-web/details-controls';
 import { convertDataCard, createBlankDataCard } from '@mahoshojo/domain/sublimation';
@@ -274,7 +275,7 @@ function ScenarioForm({ session }: { session: ScenarioSession }) {
     resolveFileName={() => resultJsonName}
     downloadJson={downloadTextFile}
   />;
-  const copyResultAction = <button className={actionClass} onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(card, null, 2)).then(() => setActionInfo('✅ 数据卡 JSON 已复制到剪贴板')).catch(() => setActionError('复制失败，请手动选择 JSON 内容后复制。')); }}>复制到剪贴板</button>;
+  const copyResultAction = <ResultJsonCopyButton data={card} className={actionClass} onResult={(copied) => copied ? setActionInfo('✅ 数据卡 JSON 已复制到剪贴板') : setActionError('复制失败，请手动选择 JSON 内容后复制。')} />;
   const resultSizeIndicator = <JsonSizeIndicator
     data={card}
     maxBytes={MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES}
@@ -415,7 +416,7 @@ function ScenarioForm({ session }: { session: ScenarioSession }) {
               actions={editorDraft && <>
                 <button className={`${actionClass} flex-1`} onClick={() => downloadTextFile(resolveResultJsonFileName(editorDraft), JSON.stringify(editorDraft, null, 2))}>下载通用情景卡</button>
                 <button className={`${generationActionClassNames.primary} flex-1`} disabled={busy || !guard.ready} onClick={() => void saveEditor()}>{editorSaving ? '正在保存…' : '保存到本地卡库'}</button>
-                <button className={`${actionClass} flex-1`} onClick={() => { void Promise.resolve().then(() => navigator.clipboard.writeText(JSON.stringify(editorDraft, null, 2))).then(() => setEditorMessage('已复制到剪贴板')).catch(() => setEditorMessage('复制失败，请手动选择 JSON 内容后复制。')); }}>复制到剪贴板</button>
+                <ResultJsonCopyButton data={editorDraft} className={`${actionClass} flex-1`} onResult={(copied) => setEditorMessage(copied ? '已复制到剪贴板' : '复制失败，请手动选择 JSON 内容后复制。')} />
               </>}
               sizeIndicator={editorDraft && <JsonSizeIndicator data={editorDraft} maxBytes={MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES} hintText="按 UTF-8 字节估算，对照本地卡单条记录上限" warningText="⚠️ 接近本地卡单条上限（4 MiB），保存到本地卡库可能失败，请先精简数据。" />}
               feedback={editorMessage && <p role="status">{editorMessage}</p>}

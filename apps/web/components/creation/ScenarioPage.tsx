@@ -1,7 +1,7 @@
 'use client';
 
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
-import { useGeneratedResultAutoScroll, TokenIndicator } from '@mahoshojo/ui-web/details-controls';
+import { ResultJsonCopyButton, useGeneratedResultAutoScroll, TokenIndicator } from '@mahoshojo/ui-web/details-controls';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { BackHomeLink } from '@mahoshojo/ui-web/shell';
@@ -485,13 +485,6 @@ export const ScenarioPage: React.FC = () => {
     downloadBlob(blob, `${data?.templateId === '通用情景' ? '通用情景' : '情景'}_${title}.json`);
   };
 
-  const copyToClipboard = (data: any) => {
-    const jsonData = JSON.stringify(data, null, 2);
-    navigator.clipboard.writeText(jsonData)
-      .then(() => alert('已复制到剪贴板！'))
-      .catch(() => alert('复制失败'));
-  };
-
   const handleCreateBlankGeneralScenario = () => {
     const blank = createBlankDataCard('general-scenario');
     setGeneralScenarioDraft(blank);
@@ -601,9 +594,7 @@ export const ScenarioPage: React.FC = () => {
                     <button onClick={() => downloadJson(resultData)} className={`${generationActionClassNames.secondary} flex-1`}>
                       下载情景文件
                     </button>
-                    <button onClick={() => copyToClipboard(resultData)} className={`${generationActionClassNames.secondary} flex-1`}>
-                      复制到剪贴板
-                    </button>
+                    <ResultJsonCopyButton data={resultData} className={`${generationActionClassNames.secondary} flex-1`} onResult={(copied) => alert(copied ? '已复制到剪贴板！' : '复制失败')} />
                   </>}
                   sizeIndicator={<JsonSizeIndicator
                     data={resultData}
@@ -625,7 +616,7 @@ export const ScenarioPage: React.FC = () => {
             actions={generalScenarioDraft && <>
               <button onClick={() => downloadJson(generalScenarioDraft)} className={`${generationActionClassNames.secondary} flex-1`}>下载通用情景卡</button>
               <SaveToCloudButton data={generalScenarioDraft} cardType="scenario" buttonText="保存到云端" className={`${generationActionClassNames.primary} flex-1`} />
-              <button onClick={() => copyToClipboard(generalScenarioDraft)} className={`${generationActionClassNames.secondary} flex-1`}>复制到剪贴板</button>
+              <ResultJsonCopyButton data={generalScenarioDraft} className={`${generationActionClassNames.secondary} flex-1`} onResult={(copied) => alert(copied ? '已复制到剪贴板！' : '复制失败')} />
             </>}
             sizeIndicator={generalScenarioDraft && <JsonSizeIndicator data={generalScenarioDraft} warningText="⚠️ 接近云端 300KB 上限，保存/替换可能失败，请先精简数据。" />}
           />

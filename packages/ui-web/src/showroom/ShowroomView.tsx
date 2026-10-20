@@ -8,6 +8,7 @@ import { StreamingBattleReportCard } from '../arena-report';
 import { ArenaWebResultView } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
+import { ResultJsonCopyButton } from '../details-controls/ResultJsonCopyButton';
 import { ErrorMessageBox } from '../details-controls/ErrorMessageBox';
 import { ArenaFeedbackView, resolveArenaFeedbackTone } from '../arena/ArenaFeedbackView';
 import { generationActionClassNames } from '../generation-actions';
@@ -241,6 +242,7 @@ function StoryReadErrorsSample() {
 }
 
 function ResultSurfacesSection() {
+  const [copyResult, setCopyResult] = useState<boolean | null>(null);
   const [width, setWidth] = useState<BattleReportCardWidthSettingsValue>({ battleReportCardWidthMode: 'manual', battleReportCardWidthPx: 760 });
   return (
     <div className="flex flex-col gap-3">
@@ -261,6 +263,11 @@ function ResultSurfacesSection() {
           reporterInfo={{ name: '样板记者', publication: '样板日报' }}
           reportContent={<ArenaWebResultView source="<main>样板间战报</main>" ready
             execution={{ available: false, reason: '样板间只展示安全文本，不运行生成代码。' }} />} />
+      </div>
+      <div className={PANEL_CLASS} aria-label="完整结果 JSON 复制样板">
+        <h3 className="text-sm font-medium text-(--app-text-muted)">复制完整结果 JSON</h3>
+        <ResultJsonCopyButton data={SHOWROOM_MAGICAL_GIRL} className={generationActionClassNames.secondary} onResult={setCopyResult} />
+        {copyResult !== null && <p role="status">{copyResult ? '完整结果 JSON 已复制到剪贴板' : '复制失败，请检查剪贴板权限。'}</p>}
       </div>
       <StoryReadErrorsSample />
       <div className="grid min-w-0 gap-3 md:grid-cols-2" aria-label="竞技场操作反馈样板">

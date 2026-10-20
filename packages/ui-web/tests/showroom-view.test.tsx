@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ShowroomView } from '../src/showroom';
+import { SHOWROOM_MAGICAL_GIRL } from '../src/showroom/fixtures';
 import { SHOWROOM_SECTIONS } from '../src/showroom/sections';
 
 let container: HTMLDivElement;
@@ -123,4 +124,20 @@ it('uses production width controls with independent disabled groups and a live r
   const auto = groups[0].querySelector<HTMLInputElement>('input[type=radio]')!;
   act(() => auto.click()); expect(card.style.maxWidth).toBe('100%');
   for (const input of groups[1].querySelectorAll<HTMLInputElement>('input')) expect(input.disabled).toBe(true);
+});
+
+it('copies the complete fixture through the production result button only after an explicit click', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: { writeText } });
+  try {
+    act(() => root.render(<ShowroomView />));
+    const sample = container.querySelector('[aria-label="完整结果 JSON 复制样板"]')!;
+    const button = sample.querySelector('button')!;
+    expect(button.textContent).toBe('复制到剪贴板');
+    expect(button.classList.contains('ui-web-generation-action--secondary')).toBe(true);
+    expect(sample.querySelector('[role=status]')).toBeNull(); expect(writeText).not.toHaveBeenCalled();
+    await act(async () => button.click());
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(JSON.stringify(SHOWROOM_MAGICAL_GIRL, null, 2));
+    expect(sample.querySelector('[role=status]')?.textContent).toBe('完整结果 JSON 已复制到剪贴板');
+  } finally { vi.unstubAllGlobals(); }
 });

@@ -449,3 +449,27 @@ it('shows protected-source feedback in settings without replacing malformed draf
   expect([...container.querySelectorAll('button')].find((item) => item.textContent === '重置该页偏好')?.disabled).toBe(true);
   expect(localStorage.getItem(DESKTOP_FREE_PREFERENCES.storageKey)).toBe(raw);
 });
+
+let originalCopyExec: PropertyDescriptor | undefined;
+beforeEach(() => { originalCopyExec = Object.getOwnPropertyDescriptor(document, 'execCommand'); });
+afterEach(() => {
+  if (originalCopyExec) Object.defineProperty(document, 'execCommand', originalCopyExec);
+  else Reflect.deleteProperty(document, 'execCommand');
+});
+
+it.each(['missing', 'rejected'] as const)('restored full result copy handles %s Clipboard without dropping content or extensions', async (api) => {
+  const original = { templateId: '通用角色', name: '原件', content: '原正文', extension: { kept: true } };
+  window.localStorage.setItem(FREE_DRAFT_KEY, JSON.stringify({ ...storedDraft('完整提示词'), output: { mode: 'hosted-json', phase: 'completed', cardKind: 'general', card: original, rawText: '原正文' } }));
+  vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: api === 'missing' ? undefined : { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+  let copied = '', fallbackSuccess = false;
+  const fallback = vi.fn(() => { copied = document.querySelector<HTMLTextAreaElement>('textarea[readonly][style*="position: fixed"]')!.value; return fallbackSuccess; });
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  await mount(); await click('复制到剪贴板');
+  expect(copied).toBe(JSON.stringify(original, null, 2));
+  expect(container.textContent).toContain('复制失败，请手动选择 JSON 内容后复制。');
+  expect(container.textContent).not.toContain('✅ 数据卡 JSON 已复制到剪贴板');
+  fallbackSuccess = true; await click('复制到剪贴板');
+  expect(copied).toBe(JSON.stringify(original, null, 2));
+  expect(container.textContent).toContain('✅ 数据卡 JSON 已复制到剪贴板');
+  expect(fallback).toHaveBeenCalledTimes(2); expect(mocks.execute).not.toHaveBeenCalled(); expect(mocks.save).not.toHaveBeenCalled();
+});

@@ -1,7 +1,7 @@
 'use client';
 
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
-import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
+import { ResultJsonCopyButton, useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { BackHomeLink } from '@mahoshojo/ui-web/shell';
@@ -202,6 +202,13 @@ export function FreePage() {
   const [resultData, setResultData] = useState<any | null>(null);
   // 与生成输出一起固定身份；表单只编辑下一次请求，不能重解释已保留的结果。
   const [resultContext, setResultContext] = useState<{ schemaId: FreeSchemaId; generationMode: GenerationMode } | null>(null);
+  // 规范化投影跟随已完成结果；编辑下一次请求不应使在途复制意图失效。
+  const normalizedResultData = useMemo(() => {
+    if (!resultData) return null;
+    if (resultContext?.schemaId === 'magical-girl') return normalizeMagicalGirlForCard(resultData);
+    if (resultContext?.schemaId === 'canshou') return normalizeCanshouForCard(resultData);
+    return resultData;
+  }, [resultData, resultContext?.schemaId]);
   const [nonStreamReasoning, setNonStreamReasoning] = useState<AIReasoningEnvelope | null>(null);
 
   const [streamingMarkdown, setStreamingMarkdown] = useState<string | null>(null);
@@ -315,16 +322,6 @@ export function FreePage() {
     const jsonData = JSON.stringify(data, null, 2);
     const blob = new Blob([jsonData], { type: 'application/json' });
     downloadBlob(blob, suggestedName);
-  };
-
-  const copyToClipboard = async (data: any, label: string) => {
-    try {
-      if (!navigator.clipboard) throw new Error('clipboard-not-available');
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
-      alert(`✅ 已复制${label} JSON 到剪贴板`);
-    } catch {
-      alert('⚠️ 复制失败，请手动选择 JSON 内容后复制。');
-    }
   };
 
   const handleGenerate = async () => {
@@ -541,12 +538,11 @@ export function FreePage() {
             buttonText="保存到云端"
             className={`${generationActionClassNames.primary} flex-1`}
           />
-          <button
-            onClick={() => void copyToClipboard(data, kind === 'scenario' ? '情景卡' : '角色卡')}
+          <ResultJsonCopyButton
+            data={data}
             className={`${generationActionClassNames.secondary} flex-1`}
-          >
-            复制到剪贴板
-          </button>
+            onResult={(copied) => alert(copied ? `✅ 已复制${kind === 'scenario' ? '情景卡' : '角色卡'} JSON 到剪贴板` : '⚠️ 复制失败，请手动选择 JSON 内容后复制。')}
+          />
       </FreeResultActions>
     );
   };
@@ -651,7 +647,7 @@ export function FreePage() {
     ) : null;
 
     if (resultSchemaId === 'magical-girl') {
-      const safe = normalizeMagicalGirlForCard(resultData);
+      const safe = normalizedResultData;
       return (
         <>
           {nonStreamReasoningNode}
@@ -682,7 +678,7 @@ export function FreePage() {
     }
 
     if (resultSchemaId === 'canshou') {
-      const safe = normalizeCanshouForCard(resultData);
+      const safe = normalizedResultData;
       const promptForPortrait = buildCanshouPortraitPrompt(safe);
       return (
         <>

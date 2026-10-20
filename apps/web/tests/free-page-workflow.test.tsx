@@ -303,3 +303,65 @@ it('shows protected-source feedback in settings without replacing malformed draf
   expect([...container.querySelectorAll('button')].find((item) => item.textContent === '重置该页偏好')?.disabled).toBe(true);
   expect(localStorage.getItem(WEB_FREE_PREFERENCES.storageKey)).toBe(raw);
 });
+
+let originalCopyExec: PropertyDescriptor | undefined;
+beforeEach(() => { originalCopyExec = Object.getOwnPropertyDescriptor(document, 'execCommand'); });
+afterEach(() => {
+  if (originalCopyExec) Object.defineProperty(document, 'execCommand', originalCopyExec);
+  else Reflect.deleteProperty(document, 'execCommand');
+});
+
+it.each(['missing', 'rejected'] as const)('Free copies the original scenario after schema changes with %s Clipboard and honest fallback feedback', async (api) => {
+  const card = { templateId: '通用情景', title: '原情景', content: '完整正文', signature: 'keep', extension: { kept: true } };
+  localStorage.setItem(KEY, JSON.stringify({ ...draft, schemaId: 'general-scenario' }));
+  mocks.dispatch.mockResolvedValueOnce(Response.json(card));
+  vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: api === 'missing' ? undefined : { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+  let copied = '';
+  const fallback = vi.fn(() => { copied = document.querySelector<HTMLTextAreaElement>('textarea[readonly][style*="position: fixed"]')!.value; return true; });
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  await mount(); await act(async () => byText('开始生成').click()); await selectSchema('general');
+  await act(async () => byText('复制到剪贴板').click());
+  expect(copied).toBe(JSON.stringify(card, null, 2));
+  expect(alert).toHaveBeenLastCalledWith('✅ 已复制情景卡 JSON 到剪贴板');
+  fallback.mockReturnValueOnce(false);
+  await act(async () => byText('复制到剪贴板').click());
+  expect(alert).toHaveBeenLastCalledWith('⚠️ 复制失败，请手动选择 JSON 内容后复制。');
+  expect(fallback).toHaveBeenCalledTimes(2); expect(mocks.dispatch).toHaveBeenCalledOnce();
+  expect(mocks.download).not.toHaveBeenCalled();
+});
+
+it.each(['magical-girl', 'canshou'] as const)('keeps a pending %s result copy through unrelated renders but retires an identical replacement', async (schemaId) => {
+  const original = { name: '原件', codename: '原件', extension: { retained: true } };
+  localStorage.setItem(KEY, JSON.stringify({ ...draft, schemaId }));
+  mocks.dispatch.mockImplementation(async () => Response.json(original));
+  let fallbackText = '';
+  const fallback = vi.fn(() => { fallbackText = document.querySelector<HTMLTextAreaElement>('textarea[readonly][style*="position: fixed"]')!.value; return true; });
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  await mount(); await act(async () => byText('开始生成').click());
+  const expected = JSON.stringify(JSON.parse(byText('保存到云端').dataset.cardJson!), null, 2);
+  expect(JSON.parse(expected).extension).toEqual({ retained: true });
+  for (const replace of [false, true]) {
+    for (const outcome of ['success', 'failure']) {
+      let resolve!: () => void, reject!: (reason: Error) => void;
+      const writeText = vi.fn(() => new Promise<void>((yes, no) => { resolve = yes; reject = no; }));
+      vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: { writeText } });
+      await act(async () => byText('复制到剪贴板').click());
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(expected);
+      await edit(`下一次提示词-${replace}-${outcome}`);
+      await selectSchema('general');
+      expect(JSON.stringify(JSON.parse(byText('保存到云端').dataset.cardJson!), null, 2)).toBe(expected);
+      if (replace) {
+        await selectSchema(schemaId);
+        await act(async () => byText('开始生成').click());
+      }
+      vi.mocked(alert).mockClear(); fallback.mockClear();
+      await act(async () => outcome === 'success' ? resolve() : reject(new Error('late')));
+      if (replace) { expect(alert).not.toHaveBeenCalled(); expect(fallback).not.toHaveBeenCalled(); }
+      else {
+        expect(alert).toHaveBeenLastCalledWith('✅ 已复制角色卡 JSON 到剪贴板');
+        expect(fallback).toHaveBeenCalledTimes(outcome === 'failure' ? 1 : 0);
+        if (outcome === 'failure') expect(fallbackText).toBe(expected);
+      }
+    }
+  }
+});

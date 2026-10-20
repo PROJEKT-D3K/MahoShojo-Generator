@@ -3,7 +3,7 @@
 import { ImagePreviewModal } from '@mahoshojo/ui-web/modal';
 import { BackHomeLink } from '@mahoshojo/ui-web/shell';
 import { getQuestionnaireQuestionPresentation } from '@mahoshojo/ui-web/questionnaire';
-import { QuestionnaireResultActions } from '@mahoshojo/ui-web/details-controls';
+import { QuestionnaireResultActions, ResultJsonCopyButton } from '@mahoshojo/ui-web/details-controls';
 
 import { CanshouRegenerateButton, generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -1236,20 +1236,6 @@ export const CanshouPage: React.FC = () => {
     downloadBlob(blob, `通用残兽角色_${sanitizedName}.json`);
   };
 
-  const copyStreamedGeneralCard = async (data: any) => {
-    if (!data) return;
-    try {
-      if (typeof navigator === 'undefined' || !navigator.clipboard) {
-        throw new Error('clipboard-not-available');
-      }
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
-      alert('✅ 通用角色卡 JSON 已复制到剪贴板');
-    } catch (err) {
-      console.error('复制 JSON 失败：', err);
-      alert('⚠️ 复制失败，请手动长按选择 JSON 内容后复制。');
-    }
-  };
-
   const hasDraftResult = canshouDetails !== null || streamedGeneralCard !== null || Boolean(streamingMarkdown);
   useEffect(() => {
     if (!hasDraftResult) unpersistedResult.current = false;
@@ -1656,7 +1642,7 @@ export const CanshouPage: React.FC = () => {
                     >
                       <button onClick={() => downloadStreamedGeneralCard(streamedGeneralCard)} className={`${generationActionClassNames.secondary} flex-1`}>下载通用角色卡</button>
                       <SaveToCloudButton data={streamedGeneralCard} cardType="character" buttonText="保存到云端" className={`${generationActionClassNames.primary} flex-1`} />
-                      <button onClick={() => void copyStreamedGeneralCard(streamedGeneralCard)} className={`${generationActionClassNames.secondary} flex-1`}>复制到剪贴板</button>
+                      <ResultJsonCopyButton data={streamedGeneralCard} className={`${generationActionClassNames.secondary} flex-1`} onResult={(copied) => alert(copied ? '✅ 通用角色卡 JSON 已复制到剪贴板' : '⚠️ 复制失败，请手动长按选择 JSON 内容后复制。')} />
                     </QuestionnaireResultActions>
                   </>
                 ) : (

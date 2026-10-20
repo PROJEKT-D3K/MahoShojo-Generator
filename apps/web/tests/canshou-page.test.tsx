@@ -38,8 +38,8 @@ vi.mock('next/navigation', () => ({
 // 与页面契约无关，收成最小占位按钮。
 vi.mock('@/components/SaveToCloudButton', () => ({
   __esModule: true,
-  default: ({ buttonText }: { buttonText?: string }) => (
-    <button type="button">{buttonText ?? '保存到云端'}</button>
+  default: ({ buttonText, data }: { buttonText?: string; data: unknown }) => (
+    <button type="button" data-card-json={JSON.stringify(data)}>{buttonText ?? '保存到云端'}</button>
   ),
 }));
 
@@ -600,3 +600,31 @@ function reviewListContainer(): HTMLElement {
   expect(card, '答案概览容器应存在').toBeTruthy();
   return card as HTMLElement;
 }
+
+let originalCopyExec: PropertyDescriptor | undefined;
+beforeEach(() => { originalCopyExec = Object.getOwnPropertyDescriptor(document, 'execCommand'); });
+afterEach(() => {
+  if (originalCopyExec) Object.defineProperty(document, 'execCommand', originalCopyExec);
+  else Reflect.deleteProperty(document, 'execCommand');
+});
+
+it.each(['missing', 'rejected'] as const)('Canshou copies its full stream result with %s Clipboard and honest fallback feedback', async (api) => {
+  window.localStorage.setItem(PREF_KEY, JSON.stringify({ generationMode: 'stream' }));
+  streamResponder = () => new Response('event: markdown\ndata: {"chunk":"名字：原件残兽\\n\\n完整正文"}\n\nevent: done\ndata: {}\n\n', { headers: { 'content-type': 'text/event-stream' } });
+  vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: api === 'missing' ? undefined : { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+  let copied = '';
+  const fallback = vi.fn(() => { copied = document.querySelector<HTMLTextAreaElement>('textarea[readonly][style*="position: fixed"]')!.value; return true; });
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  await mountPage(); await startQuestionnaire(); await typeCurrentAnswer('完整原件回答');
+  await jumpToQuestion('canshou-default::birthEnvironment'); await clickButton('跳过并生成', 220);
+  const data = JSON.parse(container.querySelector<HTMLButtonElement>('button[data-card-json]')!.dataset.cardJson!);
+  expect(data.content).toContain('完整正文'); expect(data.userAnswers).toBeTruthy();
+  const copy = [...container.querySelectorAll('button')].filter((item) => item.textContent === '复制到剪贴板').at(-1)!;
+  await act(async () => copy.click());
+  expect(copied).toBe(JSON.stringify(data, null, 2));
+  expect(window.alert).toHaveBeenLastCalledWith('✅ 通用角色卡 JSON 已复制到剪贴板');
+  fallback.mockReturnValueOnce(false); await act(async () => copy.click());
+  expect(window.alert).toHaveBeenLastCalledWith('⚠️ 复制失败，请手动长按选择 JSON 内容后复制。');
+  expect(fallback).toHaveBeenCalledTimes(2);
+  expect(generationCalls('/api/generate-canshou-stream?format=sse')).toHaveLength(1);
+});

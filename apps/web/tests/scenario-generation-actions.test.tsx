@@ -342,3 +342,59 @@ it('page changes are immediately visible to the settings adapter at the canonica
   expect(createScenarioPagePreferenceAdapter(localStorage).read()).toEqual({ status: 'ready', values: { isAdvancedVisible: true } });
   expect(JSON.parse(localStorage.getItem('mahoshojo.scenario.preferences.v1')!)).not.toHaveProperty('isAdvancedVisible');
 });
+
+let originalCopyExec: PropertyDescriptor | undefined;
+beforeEach(() => { originalCopyExec = Object.getOwnPropertyDescriptor(document, 'execCommand'); });
+afterEach(() => {
+  if (originalCopyExec) Object.defineProperty(document, 'execCommand', originalCopyExec);
+  else Reflect.deleteProperty(document, 'execCommand');
+});
+
+it.each(['missing', 'rejected'] as const)('Scenario result and editor copy exact JSON through %s Clipboard fallback, reporting actual success only', async (api) => {
+  vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: api === 'missing' ? undefined : { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+  let copied = '';
+  const fallback = vi.fn(() => { copied = document.querySelector<HTMLTextAreaElement>('textarea[readonly][style*="position: fixed"]')!.value; return true; });
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '生成情景').click());
+  for (const [label, data] of [['结构化情景结果', structured], ['通用情景卡编辑器', general]] as const) {
+    const surface = container.querySelector(`[aria-label="${label}"]`)!;
+    await act(async () => findButton(surface, '复制到剪贴板').click());
+    expect(copied).toBe(JSON.stringify(data, null, 2));
+    expect(alert).toHaveBeenLastCalledWith('已复制到剪贴板！');
+    fallback.mockReturnValueOnce(false);
+    await act(async () => findButton(surface, '复制到剪贴板').click());
+    expect(alert).toHaveBeenLastCalledWith('复制失败');
+  }
+  expect(fallback).toHaveBeenCalledTimes(4);
+  expect(document.querySelector('textarea[readonly][style*="position: fixed"]')).toBeNull();
+  expect(mocks.dispatch).toHaveBeenCalledOnce();
+  expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.download).not.toHaveBeenCalled();
+});
+
+it.each(['success', 'failure'] as const)('Scenario retains pending %s for next-mode selection but retires it when either displayed result changes', async (outcome) => {
+  const fallback = vi.fn(() => true);
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback });
+  await act(async () => root.render(<ScenarioPage />));
+  await act(async () => findButton(container, '生成情景').click());
+  for (const target of ['result', 'editor'] as const) {
+    for (const replace of [false, true]) {
+      let resolve!: () => void, reject!: (reason: Error) => void;
+      const writeText = vi.fn(() => new Promise<void>((yes, no) => { resolve = yes; reject = no; }));
+      vi.stubGlobal('navigator', { userAgent: navigator.userAgent, clipboard: { writeText } });
+      const surface = container.querySelector(`[aria-label="${target === 'result' ? '结构化情景结果' : '通用情景卡编辑器'}"]`)!;
+      const before = surface.querySelector('pre')!.textContent!;
+      await act(async () => findButton(surface, '复制到剪贴板').click());
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(before);
+      if (!replace) await act(async () => findButton(container, '流式').click());
+      else if (target === 'result') {
+        await act(async () => findButton(container, '非流式').click());
+        await act(async () => findButton(container, '生成情景').click());
+      } else await act(async () => findButton(container, '创建空白通用情景卡').click());
+      vi.mocked(alert).mockClear(); fallback.mockClear();
+      await act(async () => outcome === 'success' ? resolve() : reject(new Error('late')));
+      if (replace) { expect(alert).not.toHaveBeenCalled(); expect(fallback).not.toHaveBeenCalled(); }
+      else { expect(alert).toHaveBeenLastCalledWith('已复制到剪贴板！'); expect(fallback).toHaveBeenCalledTimes(outcome === 'failure' ? 1 : 0); }
+    }
+  }
+});
