@@ -1,6 +1,6 @@
 // 自 `apps/web/components/AdjudicatorEditor.tsx` 抽取的共源编辑器（D5.1-P2-r5）。
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useId } from 'react';
 
 import { normalizeAdjudicationEvents, createAdjudicatorId } from '@mahoshojo/domain/adjudicator-normalize';
 import type { AdjudicatorEvent } from '@mahoshojo/domain/arena-types';
@@ -22,6 +22,7 @@ const AdjudicatorEditor: React.FC<AdjudicatorEditorProps> = ({
     onEventsChange,
     depth = 0
 }) => {
+    const editorId = useId();
     useEffect(() => {
         const normalized = normalizeAdjudicationEvents(events);
         if (normalized !== events) {
@@ -67,6 +68,7 @@ const AdjudicatorEditor: React.FC<AdjudicatorEditorProps> = ({
 
     // ---- 渲染单个事件的函数 ----
     const renderEvent = (event: AdjudicatorEvent, index: number) => {
+        const controlId = `${editorId}-event-${event.id}`;
         
         /**
          * 处理自定义结果的概率变化，并自动重新分配以确保总和为100。
@@ -142,7 +144,9 @@ const AdjudicatorEditor: React.FC<AdjudicatorEditorProps> = ({
                 {/* 事件描述和删除按钮 */}
                 <div className="flex min-w-0 items-start gap-2">
                     <span className="text-sm font-semibold text-gray-500 pt-2">{depth > 0 ? ' L' : ''} {index + 1}.</span>
+                    <label htmlFor={`${controlId}-description`} className="sr-only">事件描述</label>
                     <textarea
+                        id={`${controlId}-description`}
                         value={event.description}
                         onChange={(e) => handleEventChange(index, { ...event, description: e.target.value })}
                         placeholder={`输入事件描述 (例如：${depth > 0 ? 'TA是否躲开了攻击？' : '天空突然降下惊雷'})`}
@@ -155,17 +159,17 @@ const AdjudicatorEditor: React.FC<AdjudicatorEditorProps> = ({
                 </div>
 
                 {/* 判定类型切换 */}
-                <div className="flex flex-wrap items-center gap-4 text-sm">
-                    <label className="font-medium text-gray-700">判定类型:</label>
+                <div role="radiogroup" aria-labelledby={`${controlId}-type-label`} className="flex flex-wrap items-center gap-4 text-sm">
+                    <span id={`${controlId}-type-label`} className="font-medium text-gray-700">判定类型:</span>
                     <div className="flex items-center gap-2">
-                        <input type="radio" id={`type-binary-${event.id}`} name={`type-${event.id}`} value="binary" checked={event.type === 'binary'}
+                        <input type="radio" id={`${controlId}-binary`} name={`${controlId}-type`} value="binary" checked={event.type === 'binary'}
                             onChange={() => handleEventChange(index, { ...event, type: 'binary' })} />
-                        <label htmlFor={`type-binary-${event.id}`}>成功/失败</label>
+                        <label htmlFor={`${controlId}-binary`}>成功/失败</label>
                     </div>
                     <div className="flex items-center gap-2">
-                        <input type="radio" id={`type-custom-${event.id}`} name={`type-${event.id}`} value="custom" checked={event.type === 'custom'}
+                        <input type="radio" id={`${controlId}-custom`} name={`${controlId}-type`} value="custom" checked={event.type === 'custom'}
                             onChange={() => handleEventChange(index, { ...event, type: 'custom', outcomes: event.outcomes?.length ? event.outcomes : [{ id: createAdjudicatorId('outcome'), name: '结果1', probability: 100 }] })} />
-                        <label htmlFor={`type-custom-${event.id}`}>自定义结果</label>
+                        <label htmlFor={`${controlId}-custom`}>自定义结果</label>
                     </div>
                 </div>
 
@@ -174,12 +178,13 @@ const AdjudicatorEditor: React.FC<AdjudicatorEditorProps> = ({
                     // 二元判定编辑器
                     <div>
                         <div className="flex flex-wrap items-center gap-3">
-                            <label className="text-sm font-medium text-gray-700">成功率:</label>
-                            <input type="range" min="1" max="100" value={event.probability}
+                            <label htmlFor={`${controlId}-probability-range`} className="text-sm font-medium text-gray-700">成功率:</label>
+                            <input id={`${controlId}-probability-range`} type="range" min="1" max="100" value={event.probability}
                                 onChange={(e) => handleEventChange(index, { ...event, probability: parseInt(e.target.value, 10) })}
                                 className="h-2 min-w-0 flex-1 rounded-lg bg-gray-200 appearance-none cursor-pointer" />
                             <div className="relative w-24 flex-shrink-0">
-                                <input type="number" min="1" max="100" value={event.probability}
+                                <label htmlFor={`${controlId}-probability-number`} className="sr-only">成功率数值</label>
+                                <input id={`${controlId}-probability-number`} type="number" min="1" max="100" value={event.probability}
                                     onChange={(e) => handleEventChange(index, { ...event, probability: parseInt(e.target.value, 10) || 50 })}
                                     className="input-field w-full text-center pr-6" />
                                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm pointer-events-none">%</span>
@@ -195,7 +200,8 @@ const AdjudicatorEditor: React.FC<AdjudicatorEditorProps> = ({
                         {(event.outcomes || []).map((outcome, oIndex) => (
                             <div key={outcome.id} className="min-w-0 rounded border bg-white p-3">
                                 <div className="flex min-w-0 flex-wrap items-center gap-2">
-                                    <input type="text" value={outcome.name}
+                                    <label htmlFor={`${controlId}-outcome-${oIndex}-name`} className="sr-only">结果名称</label>
+                                    <input id={`${controlId}-outcome-${oIndex}-name`} type="text" value={outcome.name}
                                         onChange={(e) => {
                                             const newOutcomes = [...(event.outcomes || [])];
                                             newOutcomes[oIndex].name = e.target.value;
@@ -203,7 +209,8 @@ const AdjudicatorEditor: React.FC<AdjudicatorEditorProps> = ({
                                         }}
                                         placeholder="结果名称" className="input-field min-w-0 flex-1" />
                                     <div className="relative w-28 flex-shrink-0">
-                                        <input type="number" value={outcome.probability}
+                                        <label htmlFor={`${controlId}-outcome-${oIndex}-probability`} className="sr-only">结果概率</label>
+                                        <input id={`${controlId}-outcome-${oIndex}-probability`} type="number" value={outcome.probability}
                                             onChange={(e) => handleOutcomeProbabilityChange(oIndex, parseInt(e.target.value, 10) || 0)}
                                             className="input-field w-full text-center pr-6" />
                                         <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 text-sm pointer-events-none">%</span>

@@ -17,6 +17,7 @@ import {
 } from '../src/platform/local-card-bridge';
 import { DESKTOP_CHARACTER_MANAGER_DRAFT_KEY } from '../src/features/character-manager/draft-persistence';
 import { createDesktopRouter } from '../src/app/router';
+import { resetDesktopCloudSessionStoreForTests } from '../src/features/account/use-desktop-cloud-session';
 
 const native = vi.hoisted(() => ({ listen: vi.fn() }));
 const bridge = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -192,6 +193,77 @@ const deferCardGet = () => {
     return fallback(command, args);
   });
   return async () => { await act(async () => { pendingGets.forEach((resolve) => resolve()); }); };
+};
+
+const scenarioData = {
+  title: '雾港巡夜',
+  scenario_type: '调查',
+  description: '追查雨夜失踪的灯火',
+  _battle_story: { total_chapters: 5, plan_mode: 'suggested' },
+  adjudicationEvents: [{
+    id: 'harbor:event:1',
+    description: '守灯人是否发现归航信号',
+    type: 'binary',
+    probability: 65,
+    outcomes: [
+      { id: 'signal-found', name: '找到信号', probability: 60 },
+      { id: 'signal-missed', name: '错过信号', probability: 40 },
+    ],
+  }],
+  futureExtension: { keep: ['unknown', 7] },
+  elements: {
+    scene: { time: '深夜', place: '旧港', features: '浓雾遮住航道' },
+    roles: [
+      { name: '守灯人', description: '等待归航' },
+      { name: '领航员', description: '辨认暗礁' },
+    ],
+    events: '调查灯塔失火',
+    atmosphere: '紧张',
+    development: ['追踪脚印', '询问船员'],
+  },
+};
+
+const mountScenario = async () => {
+  const record = await makeRecord(scenarioData, { cardType: 'scenario', title: scenarioData.title });
+  rows.set(record.id, record);
+  window.history.replaceState(null, '', `#/character-manager?card=${record.id}`);
+  const router = await mount();
+  await waitFor(() => container.textContent?.includes(`编辑情景: ${scenarioData.title}`) === true);
+  return { record, router };
+};
+
+const scenarioLabel = (text: string, scope: Element = container) => {
+  const labels = [...scope.querySelectorAll('label')].filter((item) => item.textContent?.trim() === text);
+  expect(labels, `标签 ${text} 应在当前范围唯一`).toHaveLength(1);
+  return labels[0]!;
+};
+
+const scenarioField = (text: string, scope: Element = container) => {
+  const label = scenarioLabel(text, scope);
+  expect(label.htmlFor, `标签 ${text} 应具名关联控件`).not.toBe('');
+  const control = label.control;
+  expect(control, `标签 ${text} 应关联当前范围中的控件`).not.toBeNull();
+  expect(scope.contains(control)).toBe(true);
+  expect(document.getElementById(label.htmlFor)).toBe(control);
+  return control as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+};
+
+const scenarioGroup = (text: string) => {
+  const legend = [...container.querySelectorAll('legend')].find((item) => item.textContent?.trim() === text);
+  expect(legend, `应存在 ${text} 分组`).toBeDefined();
+  return legend!.parentElement as HTMLFieldSetElement;
+};
+
+const scenarioText = (text: string, scope: Element = container) => {
+  const control = scenarioField(text, scope);
+  expect(control.tagName === 'INPUT' || control.tagName === 'TEXTAREA').toBe(true);
+  return control as HTMLInputElement | HTMLTextAreaElement;
+};
+
+const scenarioRecordData = (record: LocalCardRecordV1) => {
+  const data = record.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('保存的情景应是 JSON 对象');
+  return data;
 };
 
 describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', () => {
@@ -722,6 +794,242 @@ describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', 
     await waitFor(() => container.textContent?.includes('页面草稿自动保存失败') === true);
     expect(container.textContent).toContain('页面草稿自动保存暂不可用');
     expect(container.textContent).not.toContain('当前输入会自动保存到浏览器');
+  });
+
+  it('结构化情景编辑的基本字段和章节规划使用原生具名标签关联', async () => {
+    await mountScenario();
+    const fields = [
+      ['情景标题', 'INPUT', '雾港巡夜'],
+      ['情景类型', 'INPUT', '调查'],
+      ['简短描述', 'TEXTAREA', '追查雨夜失踪的灯火'],
+      ['时间', 'INPUT', '深夜'],
+      ['地点', 'INPUT', '旧港'],
+      ['环境特征', 'TEXTAREA', '浓雾遮住航道'],
+      ['核心事件', 'TEXTAREA', '调查灯塔失火'],
+      ['氛围', 'INPUT', '紧张'],
+      ['总章节数', 'INPUT', '5'],
+      ['规划模式', 'SELECT', 'suggested'],
+    ] as const;
+    const controls = fields.map(([text, tagName, value]) => {
+      const control = scenarioField(text);
+      expect(control.tagName).toBe(tagName);
+      expect(control.value).toBe(value);
+      act(() => { control.focus(); });
+      expect(document.activeElement).toBe(control);
+      return control;
+    });
+    expect(new Set(controls.map((control) => control.id)).size).toBe(fields.length);
+    expect(bridge.invoke.mock.calls.some(([command]) => command === SAVE_LOCAL_CARD_COMMAND)).toBe(false);
+  });
+
+  it('结构化情景删除和新增动态行后标签仍关联当前项，编辑由真实保存 IPC 持久化', async () => {
+    const { record, router } = await mountScenario();
+    const originalData = JSON.parse(JSON.stringify(record.data));
+    const roles = () => [...scenarioGroup('NPC角色').querySelectorAll('input')].map((input) => input.parentElement!.parentElement!);
+    expect(roles()).toHaveLength(2);
+    expect(scenarioField('角色名称', roles()[0]).value).toBe('守灯人');
+    expect(scenarioField('角色描述', roles()[0]).value).toBe('等待归航');
+    expect(scenarioField('角色名称', roles()[1]).value).toBe('领航员');
+    expect(scenarioField('角色描述', roles()[1]).value).toBe('辨认暗礁');
+
+    await click(roles()[0]!.parentElement!.querySelector('button')!);
+    expect(roles()).toHaveLength(1);
+    expect(scenarioField('角色名称', roles()[0]).value).toBe('领航员');
+    expect(scenarioField('角色描述', roles()[0]).value).toBe('辨认暗礁');
+    await click(button('+ 添加NPC角色'));
+    expect(roles()).toHaveLength(2);
+    expect(scenarioField('角色名称', roles()[1]).value).toBe('');
+    expect(scenarioField('角色描述', roles()[1]).value).toBe('');
+    await type(scenarioText('角色名称', roles()[0]), '老领航员');
+    await type(scenarioText('角色描述', roles()[0]), '保留第二位角色并更新线索');
+    await type(scenarioText('角色名称', roles()[1]), '邮差');
+    await type(scenarioText('角色描述', roles()[1]), '携带新的航海图');
+
+    expect(scenarioField('发展方向 1').value).toBe('追踪脚印');
+    expect(scenarioField('发展方向 2').value).toBe('询问船员');
+    await click(scenarioField('发展方向 1').parentElement!.querySelector('button')!);
+    expect(scenarioField('发展方向 1').value).toBe('询问船员');
+    expect([...container.querySelectorAll('label')].some((label) => label.textContent === '发展方向 2')).toBe(false);
+    await click(button('+ 添加发展方向'));
+    expect(scenarioField('发展方向 2').value).toBe('');
+    await type(scenarioText('发展方向 1'), '继续询问船员');
+    await type(scenarioText('发展方向 2'), '寻找航海图');
+    const dynamicControls = [
+      ...roles().flatMap((row) => [scenarioField('角色名称', row), scenarioField('角色描述', row)]),
+      scenarioField('发展方向 1'), scenarioField('发展方向 2'),
+    ];
+    expect(new Set(dynamicControls.map((control) => control.id)).size).toBe(dynamicControls.length);
+
+    await type(scenarioText('情景标题'), '雾港寻光');
+    await type(scenarioText('情景类型'), '探索');
+    await type(scenarioText('简短描述'), '寻找失落的航海图');
+    await type(scenarioText('时间'), '黎明');
+    await type(scenarioText('地点'), '灯塔');
+    await type(scenarioText('环境特征'), '海雾渐散');
+    await type(scenarioText('核心事件'), '重新点亮灯塔');
+    await type(scenarioText('氛围'), '希望');
+    await type(scenarioText('总章节数'), '7');
+    const mode = scenarioField('规划模式');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(mode, 'fixed');
+      mode.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await click(button('保存到本地库'));
+    await waitFor(() => container.textContent?.includes('已另存为一条新记录') === true);
+    const created = [...rows.values()].find((item) => item.id !== record.id && item.cardType === 'scenario')!;
+    expect(created.data).toEqual({
+      ...originalData,
+      title: '雾港寻光', scenario_type: '探索', description: '寻找失落的航海图',
+      _battle_story: { total_chapters: 7, plan_mode: 'fixed' },
+      elements: {
+        scene: { time: '黎明', place: '灯塔', features: '海雾渐散' },
+        roles: [
+          { name: '老领航员', description: '保留第二位角色并更新线索' },
+          { name: '邮差', description: '携带新的航海图' },
+        ],
+        events: '重新点亮灯塔', atmosphere: '希望', development: ['继续询问船员', '寻找航海图'],
+      },
+    });
+    expect(rows.get(record.id)?.data).toEqual(originalData);
+    expect(bridge.invoke.mock.calls.filter(([command]) => command === SAVE_LOCAL_CARD_COMMAND)).toHaveLength(1);
+    await waitFor(() => router.state.location.search.card === created.id);
+  });
+
+  it('结构化情景内嵌判定器标签可原生激活并经真实保存保留事件和结果标识', async () => {
+    const { record } = await mountScenario();
+    const description = scenarioText('事件描述');
+    expect(description.value).toBe('守灯人是否发现归航信号');
+    await type(description, '领航员能否辨认归航信号');
+    const range = scenarioText('成功率:') as HTMLInputElement;
+    const number = scenarioText('成功率数值') as HTMLInputElement;
+    expect(range.type).toBe('range');
+    expect(number.type).toBe('number');
+    expect(range.value).toBe('65');
+    expect(number.value).toBe('65');
+    await type(range, '70');
+    expect(scenarioField('成功率数值').value).toBe('70');
+    await type(number, '75');
+    expect(scenarioField('成功率:').value).toBe('75');
+    // jsdom 的 label.click() 验证原生激活；焦点单独调用 focus，不推断浏览器默认焦点行为。
+    const custom = scenarioField('自定义结果') as HTMLInputElement;
+    const binary = scenarioField('成功/失败') as HTMLInputElement;
+    expect(binary.checked).toBe(true);
+    act(() => { scenarioLabel('自定义结果').click(); });
+    expect(custom.checked).toBe(true);
+    expect(binary.checked).toBe(false);
+    act(() => { custom.focus(); });
+    expect(document.activeElement).toBe(custom);
+    const outcomes = () => [...scenarioGroup('🎲 内嵌随机事件').querySelectorAll('input[placeholder="结果名称"]')].map((input) => input.parentElement!);
+    expect(outcomes()).toHaveLength(2);
+    expect(scenarioField('结果名称', outcomes()[0]).value).toBe('找到信号');
+    expect(scenarioField('结果概率', outcomes()[0]).value).toBe('60');
+    expect(scenarioField('结果名称', outcomes()[1]).value).toBe('错过信号');
+    expect(scenarioField('结果概率', outcomes()[1]).value).toBe('40');
+    await type(scenarioText('结果名称', outcomes()[0]), '找到航标');
+    await type(scenarioText('结果概率', outcomes()[0]), '30');
+    expect(scenarioField('结果概率', outcomes()[1]).value).toBe('70');
+    act(() => { scenarioLabel('成功/失败').click(); });
+    expect(binary.checked).toBe(true);
+    expect(custom.checked).toBe(false);
+    expect(scenarioField('成功率数值').value).toBe('75');
+    act(() => { scenarioLabel('自定义结果').click(); });
+    expect(scenarioField('结果名称', outcomes()[0]).value).toBe('找到航标');
+    expect(scenarioField('结果概率', outcomes()[0]).value).toBe('30');
+    await click(button('保存到本地库'));
+    await waitFor(() => container.textContent?.includes('已另存为一条新记录') === true);
+    const created = [...rows.values()].find((item) => item.id !== record.id && item.cardType === 'scenario')!;
+    expect(scenarioRecordData(created).adjudicationEvents).toEqual([{
+      id: 'harbor:event:1', description: '领航员能否辨认归航信号', type: 'custom', probability: 75,
+      outcomes: [
+        { id: 'signal-found', name: '找到航标', probability: 30 },
+        { id: 'signal-missed', name: '错过信号', probability: 70 },
+      ],
+    }]);
+    expect(scenarioRecordData(created).futureExtension).toEqual(scenarioData.futureExtension);
+    expect(rows.get(record.id)?.data).toEqual(scenarioData);
+    expect(bridge.invoke.mock.calls.filter(([command]) => command === SAVE_LOCAL_CARD_COMMAND)).toHaveLength(1);
+  });
+
+  it('结构化情景遵守本地保存的既有边界：模板禁用，具名正文控件仍可编辑', async () => {
+    const { record } = await mountScenario();
+    await type(scenarioText('情景标题'), '提交中的情景');
+    const fallback = bridge.invoke.getMockImplementation()!;
+    let release!: () => void;
+    bridge.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === SAVE_LOCAL_CARD_COMMAND) await new Promise<void>((resolve) => { release = resolve; });
+      return fallback(command, args);
+    });
+    await click(button('保存到本地库'));
+    await waitFor(() => release !== undefined);
+    try {
+      expect(container.querySelector('fieldset select')!.matches(':disabled')).toBe(true);
+      expect(button('我的数据卡')).toBeUndefined();
+      for (const label of ['情景标题', '简短描述', '总章节数', '规划模式', '发展方向 1', '事件描述', '成功/失败']) {
+        expect(scenarioField(label).matches(':disabled'), `${label} 不应被本地保存禁用`).toBe(false);
+      }
+      await type(scenarioText('情景标题'), '保存期间继续编辑');
+    } finally {
+      await act(async () => { release(); });
+    }
+    await waitFor(() => button('保存到本地库')?.disabled === false);
+    expect(scenarioField('情景标题').value).toBe('保存期间继续编辑');
+    const created = [...rows.values()].find((item) => item.id !== record.id && item.cardType === 'scenario')!;
+    expect(scenarioRecordData(created).title).toBe('提交中的情景');
+    expect(rows.get(record.id)?.data).toEqual(scenarioData);
+  });
+
+  it('结构化情景在真实云写期间继承 owner fieldset 禁用，失败后具名控件恢复可用', async () => {
+    resetDesktopCloudSessionStoreForTests();
+    const fallback = bridge.invoke.getMockImplementation()!;
+    const account = { userId: 7, username: 'tester' };
+    const sessionExpiresAt = '2026-12-31T00:00:00.000Z';
+    let release!: (response: unknown) => void;
+    bridge.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'cloud_cached_account') return { account, sessionExpiresAt };
+      if (command === 'cloud_auth_status') return { state: 'active', account, sessionExpiresAt };
+      if (command === 'cloud_card_library_request') {
+        const request = args?.request as { routeId: string };
+        if (request.routeId === 'user-capacity.query') return { status: 200, body: { success: true, capacity: 20, usedSlots: 1 } };
+        if (request.routeId === 'data-cards.create') return await new Promise((resolve) => { release = resolve; });
+        return { status: 200, body: { success: true, items: {} } };
+      }
+      return fallback(command, args);
+    });
+    try {
+      const { record } = await mountScenario();
+      await waitFor(() => button('保存到云端')?.disabled === false);
+      await click(button('保存到云端'));
+      await waitFor(() => document.querySelector('[role="dialog"]') !== null);
+      const save = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((item) => item.textContent?.trim() === '保存')!;
+      await click(save);
+      await waitFor(() => release !== undefined);
+      try {
+        const controls = [
+          '情景标题', '情景类型', '简短描述', '时间', '地点', '环境特征', '核心事件', '氛围',
+          '总章节数', '规划模式', '发展方向 1', '发展方向 2', '事件描述', '成功率:', '成功率数值',
+          '成功/失败', '自定义结果',
+        ].map((text) => scenarioField(text));
+        for (const label of scenarioGroup('NPC角色').querySelectorAll('label')) {
+          expect(label.control).not.toBeNull();
+          controls.push(label.control as HTMLInputElement | HTMLTextAreaElement);
+        }
+        controls.forEach((control) => expect(control.matches(':disabled'), `${control.id} 应继承 owner 禁用`).toBe(true));
+        act(() => { scenarioLabel('自定义结果').click(); });
+        expect((scenarioField('成功/失败') as HTMLInputElement).checked).toBe(true);
+        expect((scenarioField('自定义结果') as HTMLInputElement).checked).toBe(false);
+        expect(rows.get(record.id)?.data).toEqual(scenarioData);
+        expect(bridge.invoke.mock.calls.filter(([command]) => command === SAVE_LOCAL_CARD_COMMAND)).toHaveLength(0);
+      } finally {
+        await act(async () => { release({ status: 400, body: { error: '容量不足' } }); });
+      }
+      await waitFor(() => document.body.textContent?.includes('容量不足') === true);
+      expect(scenarioField('情景标题').matches(':disabled')).toBe(false);
+      expect(scenarioField('规划模式').matches(':disabled')).toBe(false);
+      expect(scenarioField('自定义结果').matches(':disabled')).toBe(false);
+      expect(scenarioField('情景标题').value).toBe(scenarioData.title);
+    } finally {
+      resetDesktopCloudSessionStoreForTests();
+    }
   });
 
   it('结构化情景卡导入归类为 scenario，跨类别模板转换脱离原记录', async () => {

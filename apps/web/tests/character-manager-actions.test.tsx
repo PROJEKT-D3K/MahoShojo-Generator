@@ -66,6 +66,40 @@ afterEach(async () => {
 });
 
 describe('Web 角色管理共源动作与本地库接线', () => {
+  it('真实情景表单为基本字段、章节与随机事件关联标签并保持编辑保存', async () => {
+    const scenario = { title: '雾港', scenario_type: '调查', description: '雨夜',
+      elements: { scene: { time: '夜', place: '港口', features: '浓雾' },
+        roles: [{ name: '船长', description: '领航者' }], events: '寻找灯塔', atmosphere: '神秘', development: ['出海', '靠岸'] },
+      _battle_story: { total_chapters: 5, plan_mode: 'suggested' }, future: { keep: true },
+      adjudicationEvents: [{ id: 'event-kept', description: '发现线索', type: 'binary', probability: 60 },
+        { id: 'event-custom', description: '天气', type: 'custom', outcomes: [{ id: 'outcome-kept', name: '晴', probability: 100 }] }] };
+    await mount(scenario);
+    const heading = [...container.querySelectorAll('h2')].find(node => node.textContent?.startsWith('编辑情景:'))!;
+    const editor = heading.parentElement!.parentElement!;
+    const controls = [...editor.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input,textarea,select')];
+    expect(controls.length).toBeGreaterThan(20);
+    for (const control of controls) {
+      expect(control.labels?.length, control.outerHTML).toBeGreaterThan(0);
+      expect(control.labels![0].control).toBe(control);
+    }
+    const title = editor.querySelector<HTMLInputElement>('input[placeholder="请输入情景标题"]')!;
+    expect(title.labels![0].textContent).toBe('情景标题');
+    const activated = vi.fn(); title.addEventListener('click', activated);
+    await act(async () => title.labels![0].click()); expect(activated).toHaveBeenCalledOnce();
+    // jsdom verifies native activation separately from focusability, not browser default label focus.
+    await act(async () => title.focus()); expect(document.activeElement).toBe(title);
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(title, '新雾港');
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click('保存到本地库');
+    await waitFor(() => container.textContent?.includes('已保存到本地库。') === true);
+    const saved = (await getLocalCardRepository().list({ limit: 100 })).items[0];
+    expect(saved.cardType).toBe('scenario');
+    expect(saved.data).toEqual({ ...scenario, title: '新雾港' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('指南保留原问卷编辑器内链和云端问卷卡说明', async () => {
     await mount();
     const link = container.querySelector<HTMLAnchorElement>('a[href="/questionnaire-editor"]')!;

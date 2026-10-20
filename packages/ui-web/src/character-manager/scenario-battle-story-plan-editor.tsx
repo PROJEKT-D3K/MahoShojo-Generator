@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 
 import {
   SCENARIO_BATTLE_STORY_MAX_TOTAL_CHAPTERS,
@@ -17,6 +17,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 
 export default function ScenarioBattleStoryPlanEditor(props: ScenarioBattleStoryPlanEditorProps) {
   const { data, onChange } = props;
+  const controlId = useId();
   const rawPlan = isRecord(data?._battle_story) ? data._battle_story : null;
   const parsedPlan = readScenarioBattleStoryConfig(data);
   const isEnabled = Boolean(rawPlan);
@@ -40,6 +41,7 @@ export default function ScenarioBattleStoryPlanEditor(props: ScenarioBattleStory
       <div className="space-y-4">
         <label className="flex items-center gap-2 text-sm text-gray-700">
           <input
+            id={`${controlId}-enabled`}
             type="checkbox"
             checked={isEnabled}
             onChange={(event) => updatePlan(event.target.checked ? createDefaultPlan() : undefined)}
@@ -50,8 +52,9 @@ export default function ScenarioBattleStoryPlanEditor(props: ScenarioBattleStory
         {isEnabled ? (
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <label className="input-label">总章节数</label>
+              <label htmlFor={`${controlId}-total`} className="input-label">总章节数</label>
               <input
+                id={`${controlId}-total`}
                 type="number"
                 min={SCENARIO_BATTLE_STORY_MIN_TOTAL_CHAPTERS}
                 max={SCENARIO_BATTLE_STORY_MAX_TOTAL_CHAPTERS}
@@ -73,8 +76,9 @@ export default function ScenarioBattleStoryPlanEditor(props: ScenarioBattleStory
             </div>
 
             <div>
-              <label className="input-label">规划模式</label>
+              <label htmlFor={`${controlId}-mode`} className="input-label">规划模式</label>
               <select
+                id={`${controlId}-mode`}
                 value={planModeValue}
                 onChange={(event) =>
                   updatePlan({

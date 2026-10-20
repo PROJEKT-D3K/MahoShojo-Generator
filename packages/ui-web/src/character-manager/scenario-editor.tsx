@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useId } from 'react';
 
 import AdjudicatorEditor from './adjudicator-editor';
 import ScenarioBattleStoryPlanEditor from './scenario-battle-story-plan-editor';
@@ -9,6 +9,7 @@ export interface ScenarioEditorProps {
 }
 
 export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) {
+  const controlId = useId();
   const handleFieldChange = (path: string, value: any) => {
     onChange(path, value);
   };
@@ -61,8 +62,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
       {/* 基本信息 */}
       <div className="space-y-4">
         <div>
-          <label className="input-label">情景标题</label>
+          <label htmlFor={`${controlId}-title`} className="input-label">情景标题</label>
           <input
+            id={`${controlId}-title`}
             type="text"
             value={data.title || ''}
             onChange={(e) => handleFieldChange('title', e.target.value)}
@@ -72,8 +74,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
         </div>
 
         <div>
-          <label className="input-label">情景类型</label>
+          <label htmlFor={`${controlId}-type`} className="input-label">情景类型</label>
           <input
+            id={`${controlId}-type`}
             type="text"
             value={data.scenario_type || ''}
             onChange={(e) => handleFieldChange('scenario_type', e.target.value)}
@@ -83,8 +86,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
         </div>
 
         <div>
-          <label className="input-label">简短描述</label>
+          <label htmlFor={`${controlId}-description`} className="input-label">简短描述</label>
           <textarea
+            id={`${controlId}-description`}
             value={data.description || ''}
             onChange={(e) => handleFieldChange('description', e.target.value)}
             className="input-field"
@@ -101,8 +105,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
         <legend className="text-sm font-semibold px-2 text-gray-600">场景设置</legend>
         <div className="space-y-4">
           <div>
-            <label className="input-label">时间</label>
+            <label htmlFor={`${controlId}-time`} className="input-label">时间</label>
             <input
+              id={`${controlId}-time`}
               type="text"
               value={data.elements?.scene?.time || ''}
               onChange={(e) => handleFieldChange('elements.scene.time', e.target.value)}
@@ -112,8 +117,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
           </div>
 
           <div>
-            <label className="input-label">地点</label>
+            <label htmlFor={`${controlId}-place`} className="input-label">地点</label>
             <input
+              id={`${controlId}-place`}
               type="text"
               value={data.elements?.scene?.place || ''}
               onChange={(e) => handleFieldChange('elements.scene.place', e.target.value)}
@@ -123,8 +129,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
           </div>
 
           <div>
-            <label className="input-label">环境特征</label>
+            <label htmlFor={`${controlId}-features`} className="input-label">环境特征</label>
             <textarea
+              id={`${controlId}-features`}
               value={data.elements?.scene?.features || ''}
               onChange={(e) => handleFieldChange('elements.scene.features', e.target.value)}
               className="input-field"
@@ -152,8 +159,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
               </div>
               <div className="space-y-2">
                 <div>
-                  <label className="input-label text-xs">角色名称</label>
+                  <label htmlFor={`${controlId}-role-${index}-name`} className="input-label text-xs">角色名称</label>
                   <input
+                    id={`${controlId}-role-${index}-name`}
                     type="text"
                     value={role.name || ''}
                     onChange={(e) => handleRoleChange(index, 'name', e.target.value)}
@@ -162,8 +170,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
                   />
                 </div>
                 <div>
-                  <label className="input-label text-xs">角色描述</label>
+                  <label htmlFor={`${controlId}-role-${index}-description`} className="input-label text-xs">角色描述</label>
                   <textarea
+                    id={`${controlId}-role-${index}-description`}
                     value={role.description || ''}
                     onChange={(e) => handleRoleChange(index, 'description', e.target.value)}
                     className="input-field"
@@ -188,8 +197,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
         <legend className="text-sm font-semibold px-2 text-gray-600">故事内容</legend>
         <div className="space-y-4">
           <div>
-            <label className="input-label">核心事件</label>
+            <label htmlFor={`${controlId}-events`} className="input-label">核心事件</label>
             <textarea
+              id={`${controlId}-events`}
               value={data.elements?.events || ''}
               onChange={(e) => handleFieldChange('elements.events', e.target.value)}
               className="input-field"
@@ -199,8 +209,9 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
           </div>
 
           <div>
-            <label className="input-label">氛围</label>
+            <label htmlFor={`${controlId}-atmosphere`} className="input-label">氛围</label>
             <input
+              id={`${controlId}-atmosphere`}
               type="text"
               value={data.elements?.atmosphere || ''}
               onChange={(e) => handleFieldChange('elements.atmosphere', e.target.value)}
@@ -210,10 +221,12 @@ export default function ScenarioEditor({ data, onChange }: ScenarioEditorProps) 
           </div>
 
           <div>
-            <label className="input-label">可能的发展方向</label>
+            <span className="input-label">可能的发展方向</span>
             {(data.elements?.development || []).map((item: string, index: number) => (
               <div key={index} className="flex gap-2 mb-2">
+                <label htmlFor={`${controlId}-development-${index}`} className="sr-only">发展方向 {index + 1}</label>
                 <input
+                  id={`${controlId}-development-${index}`}
                   type="text"
                   value={item}
                   onChange={(e) => handleArrayChange('elements.development', index, e.target.value)}
