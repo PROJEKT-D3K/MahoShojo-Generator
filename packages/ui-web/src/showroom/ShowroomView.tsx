@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 
 import { MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlCard } from '../character-card';
+import { CardForgeThemeEditor } from '../card-forge';
 import { StreamingBattleReportCard } from '../arena-report';
 import { ArenaWebResultView } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
@@ -173,6 +174,7 @@ function ControlsSection() {
 }
 
 function FormsSection() {
+  const [forgeColor, setForgeColor] = useState('#ff6b9d');
   return (
     <div className={`${PANEL_CLASS} flex flex-col gap-5`}>
       <div className="max-w-md">
@@ -184,6 +186,9 @@ function FormsSection() {
           <label className="input-label" htmlFor="showroom-input-filled">已填写输入</label>
           <input id="showroom-input-filled" className="input-field" type="text" defaultValue="示例输入内容" readOnly />
         </div>
+      </div>
+      <div role="group" aria-label="卡牌工坊主题色样板">
+        <CardForgeThemeEditor color={forgeColor} onChange={setForgeColor} />
       </div>
       <div className="flex flex-col gap-2 border-t border-(--app-border) pt-4">
         <h3 className="text-sm font-medium text-(--app-text-muted)">battle-lite 共享类</h3>

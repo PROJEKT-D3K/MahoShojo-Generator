@@ -7,6 +7,44 @@ import { DENY_SNAPDOM_MEDIA, type capturePngBlob } from '../src/client/snapdomCa
 const face = { cardName: '蔷薇', cardType: 'character' as const, rarity: 'epic' as const, cost: 3, element: 'dark' as const, attack: 2, defense: 1, hp: 3, effects: [{ type: '被动', description: '效果' }], traits: [], flavorText: '', powerLevel: 'A', description: '', themeColor: '#ef4444' };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('shared forge real controls and capture lifecycle', () => {
+  it('names every native preset, exposes case-insensitive selection, and leaves custom colors unselected', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
+    const onChange = vi.fn();
+    const presets = ['#ff6b9d', '#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#06b6d4'];
+    const buttons = () => [...container.querySelectorAll<HTMLButtonElement>('button')];
+    try {
+      for (const selected of presets) {
+        await act(async () => root.render(<CardForgeThemeEditor color={selected.toUpperCase()} onChange={onChange} />));
+        expect(buttons()).toHaveLength(presets.length);
+        buttons().forEach((button, index) => {
+          expect(button.getAttribute('aria-label')).toBe(`主题色 ${presets[index]}`);
+          expect(button.title).toBe(`主题色 ${presets[index]}`);
+          expect(button.getAttribute('aria-pressed')).toBe(String(presets[index] === selected));
+          expect(button.type).toBe('button');
+          expect(button.tabIndex).toBe(0);
+          button.focus(); expect(document.activeElement).toBe(button);
+          expect(button.classList.contains('border-white')).toBe(presets[index] === selected);
+          expect(button.classList.contains('border-transparent')).toBe(presets[index] !== selected);
+          expect(button.style.boxShadow !== 'none').toBe(presets[index] === selected);
+        });
+        const button = buttons()[presets.indexOf(selected)];
+        act(() => { button.click(); button.click(); });
+        expect(onChange.mock.calls.slice(-2)).toEqual([[selected], [selected]]);
+      }
+      for (const color of ['#123456', 'not-a-color', '']) {
+        await act(async () => root.render(<CardForgeThemeEditor color={color} onChange={onChange} />));
+        expect(buttons().every((button) => button.getAttribute('aria-pressed') === 'false')).toBe(true);
+        expect(buttons().every((button) => button.style.boxShadow === 'none')).toBe(true);
+      }
+      const custom = container.querySelector<HTMLInputElement>('input[aria-label="自定义主题色"]')!;
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(custom, '#123456');
+        custom.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(onChange).toHaveBeenLastCalledWith('#123456');
+    } finally { act(() => root.unmount()); container.remove(); }
+  });
   it('preserves card/crop DOM, selected preset and canonical control callbacks', async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);

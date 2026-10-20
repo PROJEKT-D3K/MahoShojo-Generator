@@ -73,3 +73,23 @@ it('shows the shared red and blue error surfaces with inherited, focusable help 
     expect(link.tabIndex).toBe(0); link.focus(); expect(document.activeElement).toBe(link);
   }
 });
+
+it('uses the real forge theme editor for preset and custom color states', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('#showroom-forms [aria-label="卡牌工坊主题色样板"]')!;
+  expect(sample).not.toBeNull();
+  const presets = () => [...sample.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')];
+  expect(presets()).toHaveLength(8);
+  expect(presets().filter((button) => button.getAttribute('aria-pressed') === 'true').map((button) => button.getAttribute('aria-label'))).toEqual(['主题色 #ff6b9d']);
+  const blue = sample.querySelector<HTMLButtonElement>('button[aria-label="主题色 #3b82f6"]')!;
+  blue.focus(); expect(document.activeElement).toBe(blue);
+  act(() => blue.click());
+  expect(blue.getAttribute('aria-pressed')).toBe('true');
+  const custom = sample.querySelector<HTMLInputElement>('input[aria-label="自定义主题色"]')!;
+  expect(custom.value).toBe('#3b82f6');
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(custom, '#123456');
+    custom.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  expect(presets().every((button) => button.getAttribute('aria-pressed') === 'false')).toBe(true);
+});

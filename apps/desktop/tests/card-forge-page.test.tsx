@@ -15,6 +15,31 @@ const inputFile = (text: string, name = '原件.json') => { const bytes = new Te
 const choose = (input: HTMLInputElement, file: unknown) => { Object.defineProperty(input, 'files', { configurable: true, value: [file] }); input.dispatchEvent(new Event('change', { bubbles: true })); };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); mocks.capture.mockReset(); mocks.download.mockReset(); });
 describe('Desktop local forge host journey', () => {
+  it('exposes the shared theme preset names and selected state after import and edits', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const presets = () => [...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')];
+    const selectedNames = () => presets().filter((button) => button.getAttribute('aria-pressed') === 'true').map((button) => button.getAttribute('aria-label'));
+    try {
+      await act(async () => root.render(<DesktopCardForge />));
+      const input = container.querySelector<HTMLInputElement>('[aria-label="导入卡牌 JSON"]')!;
+      await act(async () => choose(input, inputFile(JSON.stringify({ ...face, themeColor: '#EF4444' }))));
+      expect(presets()).toHaveLength(8);
+      expect(selectedNames()).toEqual(['主题色 #ef4444']);
+      const blue = container.querySelector<HTMLButtonElement>('button[aria-label="主题色 #3b82f6"]')!;
+      expect(blue.title).toBe('主题色 #3b82f6');
+      blue.focus(); expect(document.activeElement).toBe(blue);
+      act(() => blue.click());
+      expect(selectedNames()).toEqual(['主题色 #3b82f6']);
+      expect(container.querySelector<HTMLInputElement>('input[aria-label="自定义主题色"]')?.value).toBe('#3b82f6');
+      await act(async () => choose(input, inputFile(JSON.stringify({ ...face, themeColor: '#123456' }))));
+      expect(presets()).toHaveLength(8);
+      expect(selectedNames()).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { act(() => root.unmount()); container.remove(); }
+  });
   it('imports without network, retains exact original, edits shared controls, exports self-contained JSON and protects dirty state after download', async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     vi.stubGlobal('Blob', NodeBlob); const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);

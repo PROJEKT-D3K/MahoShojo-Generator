@@ -46,7 +46,7 @@ export const SHOWROOM_SECTIONS: readonly ShowroomSectionMeta[] = [
   {
     id: 'forms',
     title: '表单底座',
-    summary: '.input-group/.input-label/.input-field 与 battle-lite 文本/盒面共享类。',
+    summary: '.input-group/.input-label/.input-field、卡牌工坊主题色选中/自定义态与 battle-lite 文本/盒面共享类。',
   },
   {
     id: 'overlay',
