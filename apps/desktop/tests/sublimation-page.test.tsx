@@ -101,6 +101,21 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); release?.(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('Desktop Sublimation real page/session/executor with fake IPC (not native acceptance)', () => {
+  it.each(['non-stream', 'stream'] as const)('%s result keeps its original preview and export after changing next-generation controls', async (mode) => {
+    outputMode = mode;
+    writeDraft({ originalData: source, targetTemplate: 'general', generationMode: mode });
+    await mount(); await click('开始升华');
+    const card = stored().output.card;
+    expect(card.content).toBe(generated.content);
+    await click(mode === 'stream' ? '非流式' : '流式');
+    await change('#sublimation-target', 'magical-girl');
+    expect(container.querySelector('[aria-label="升华结果"]')?.textContent).toContain('守护归来的人');
+    expect(stored().output.card).toEqual(card);
+    await click('💾 下载设定文件');
+    expect(JSON.parse(mocks.download.mock.calls.at(-1)![1])).toEqual(card);
+    expect(generationCalls()).toHaveLength(1);
+    expect(documents.get(sourceRecord.id)).toEqual(sourceRecord);
+  });
   it('keeps pasted input across collapse and failed loads without replacing the saved source or generating', async () => {
     writeDraft({ originalData: source });
     await mount();

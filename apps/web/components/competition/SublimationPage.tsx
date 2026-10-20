@@ -166,6 +166,14 @@ export const SublimationPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [resultData, setResultData] = useState<SublimationResponse | null>(null);
     const [generationMode, setGenerationMode] = useState<GenerationMode>('non-stream');
+    // 当前输出只属于已接纳的请求；下次输入/方式与预检不能改写它的展示身份。
+    const [resultContext, setResultContext] = useState<{
+        generationMode: GenerationMode;
+        targetTemplate: SupportedTargetTemplate;
+        fallbackName: string;
+        defaultName: string;
+    } | null>(null);
+    const [isOutputGenerating, setIsOutputGenerating] = useState(false);
     const [streamingMarkdown, setStreamingMarkdown] = useState<string | null>(null);
     const [streamedGeneralCard, setStreamedGeneralCard] = useState<any | null>(null);
     const [streamingReasoning, setStreamingReasoning] = useState<AIReasoningEnvelope | null>(null);
@@ -256,31 +264,17 @@ export const SublimationPage: React.FC = () => {
     );
 
     const streamedGeneralCardForDisplay = useMemo(() => {
-        if (generationMode !== 'stream') return null;
+        if (resultContext?.generationMode !== 'stream') return null;
         const markdown = streamingMarkdown ?? streamedGeneralCard?.content ?? null;
         if (markdown === null) return null;
-
-        const fallbackName =
-            typeof (characterData as any)?.codename === 'string'
-                ? String((characterData as any).codename).trim()
-                : typeof (characterData as any)?.name === 'string'
-                    ? String((characterData as any).name).trim()
-                    : '';
-
-        const defaultName = sourceTemplate === 'magical-girl'
-            ? '魔法少女'
-            : sourceTemplate === 'canshou'
-                ? '残兽'
-                : '角色';
-
         const { card } = buildGeneralCharacterCardFromMarkdown({
             markdown,
-            fallbackName,
-            defaultName,
+            fallbackName: resultContext.fallbackName,
+            defaultName: resultContext.defaultName,
         });
 
         return card;
-    }, [generationMode, streamingMarkdown, streamedGeneralCard, characterData, sourceTemplate]);
+    }, [resultContext, streamingMarkdown, streamedGeneralCard]);
 
     useEffect(() => {
         fetch('/languages.json').then(res => res.json()).then(data => setLanguages(data));
@@ -510,7 +504,6 @@ export const SublimationPage: React.FC = () => {
             setCharacterData(json);
             setFileName('粘贴的内容');
             setError(null);
-            setResultData(null);
 
             const inferred = inferTemplate(json);
             setSourceTemplate(inferred);
@@ -796,12 +789,6 @@ export const SublimationPage: React.FC = () => {
         }
         setIsGenerating(true);
         setError(null);
-        setResultData(null);
-        setStreamingMarkdown(null);
-        setStreamedGeneralCard(null);
-        setStreamingReasoning(null);
-        setNonStreamReasoning(null);
-        setStreamNotice(null);
         let nextCooldownMs = sublimationCooldownMs;
         let shouldStartCooldown = false;
 
@@ -862,6 +849,21 @@ export const SublimationPage: React.FC = () => {
             }
             const generationIntent = generationApiIntentLatch.tryAcquire();
             if (!generationIntent) return;
+            setResultContext({
+                generationMode,
+                targetTemplate,
+                fallbackName: typeof characterData.codename === 'string'
+                    ? characterData.codename.trim()
+                    : typeof characterData.name === 'string' ? characterData.name.trim() : '',
+                defaultName: sourceTemplate === 'magical-girl' ? '魔法少女' : sourceTemplate === 'canshou' ? '残兽' : '角色',
+            });
+            setResultData(null);
+            setStreamingMarkdown(null);
+            setStreamedGeneralCard(null);
+            setStreamingReasoning(null);
+            setNonStreamReasoning(null);
+            setStreamNotice(null);
+            setIsOutputGenerating(true);
             const revealGeneratedResult = beginResultNavigation(generationIntent, streamController?.signal);
             const response = await generationIntent.dispatch(endpoint, {
                 method: 'POST',
@@ -1009,6 +1011,7 @@ export const SublimationPage: React.FC = () => {
             if (shouldStartCooldown) {
                 startCooldown(nextCooldownMs);
             }
+            setIsOutputGenerating(false);
             setIsGenerating(false);
         }
     };
@@ -1050,14 +1053,16 @@ export const SublimationPage: React.FC = () => {
     const renderResultCard = () => {
         if (!resultData?.sublimatedData) return null;
         const data = resultData.sublimatedData;
+        const resultTemplate = resultData.targetTemplate && TARGET_TEMPLATE_OPTIONS.includes(resultData.targetTemplate)
+            ? resultData.targetTemplate : resultContext?.targetTemplate;
 
-        if (targetTemplate === 'magical-girl' && data.codename) {
+        if (resultTemplate === 'magical-girl' && data.codename) {
             const colorScheme = data.appearance.colorScheme || "红色、粉色";
             const gradientStyle = resolveMagicalGirlGradient(colorScheme);
             return <MagicalGirlCard magicalGirl={data} gradientStyle={gradientStyle} onSaveImage={handleSaveImage} />;
-        } else if (targetTemplate === 'canshou' && data.name && data.templateId !== GENERAL_CHARACTER_TEMPLATE_ID) {
+        } else if (resultTemplate === 'canshou' && data.name && data.templateId !== GENERAL_CHARACTER_TEMPLATE_ID) {
             return <CanshouCard canshou={data} onSaveImage={handleSaveImage} />;
-        } else if (targetTemplate === 'general') {
+        } else if (resultTemplate === 'general') {
             return <GeneralCharacterCard general={data} onSaveImage={handleSaveImage} />;
         }
         return (
@@ -1118,7 +1123,7 @@ export const SublimationPage: React.FC = () => {
     const streamResultNativenessStatus: NativenessStatus | null = streamedGeneralCardForDisplay
         ? (streamedGeneralCard
             ? (hasNativeSignature(streamedGeneralCard) ? 'native' : 'derived')
-            : isGenerating
+            : isOutputGenerating
                 ? 'checking'
                 : 'unknown')
         : null;
@@ -1427,12 +1432,12 @@ export const SublimationPage: React.FC = () => {
                         />
 
                         {/* 成功提示信息 */}
-                        {!isGenerating && generationMode === 'non-stream' && resultData && (
+                        {!isOutputGenerating && resultContext?.generationMode === 'non-stream' && resultData && (
                             <div className="text-center text-sm text-green-600 my-2 font-semibold">
                                 🎉 升华成功！结果已显示在下方，请下滑查看。
                             </div>
                         )}
-                        {!isGenerating && generationMode === 'stream' && streamedGeneralCard && !streamNotice && (
+                        {!isOutputGenerating && resultContext?.generationMode === 'stream' && streamedGeneralCard && !streamNotice && (
                             <div className="text-center text-sm text-green-600 my-2 font-semibold">
                                 🎉 升华成功！已生成通用角色卡（流式），请下滑查看。
                             </div>
@@ -1442,7 +1447,7 @@ export const SublimationPage: React.FC = () => {
                         <button onClick={handleGenerate} disabled={isGenerating || !characterData || isCooldown} className="generate-button mt-4">
                             {isCooldown ? `冷却中 (${remainingTime}s)` : isGenerating ? '升华中...' : '开始升华'}
                         </button>
-                        {isGenerating && generationMode === 'stream' ? (
+                        {isOutputGenerating && resultContext?.generationMode === 'stream' ? (
                             <div className="mt-3 flex justify-center">
                                 <StreamStopButton
                                     onClick={() => streamAbortControllerRef.current?.abort(STREAM_ABORT_REASON_USER)}
@@ -1457,7 +1462,7 @@ export const SublimationPage: React.FC = () => {
 
                     {isGenerating && <div className="text-center mt-6">少女蜕变中，请稍后...</div>}
 
-                    {generationMode === 'stream' && (streamingMarkdown !== null || streamedGeneralCard) && (
+                    {resultContext?.generationMode === 'stream' && (streamingMarkdown !== null || streamedGeneralCard) && (
                         <>
                             {streamedGeneralCardForDisplay && (
                                 <div ref={resultSectionRef} className="card mt-6">
@@ -1470,7 +1475,7 @@ export const SublimationPage: React.FC = () => {
                                     <GeneralCharacterCard
                                         general={streamedGeneralCardForDisplay}
                                         onSaveImage={handleSaveImage}
-                                        isStreaming={isGenerating}
+                                        isStreaming={isOutputGenerating}
                                         onStopGeneration={() => streamAbortControllerRef.current?.abort(STREAM_ABORT_REASON_USER)}
                                     />
                                     <AiReasoningPanel reasoning={streamingReasoning} status={streamingReasoning?.status ?? 'idle'} compact />
@@ -1510,7 +1515,7 @@ export const SublimationPage: React.FC = () => {
                         </>
                     )}
 
-                    {generationMode === 'non-stream' && resultData && (
+                    {resultContext?.generationMode === 'non-stream' && resultData && (
                         <>
                             {nonStreamReasoning && (
                                 <AiReasoningPanel
