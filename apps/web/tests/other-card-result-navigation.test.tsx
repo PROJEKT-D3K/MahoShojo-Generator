@@ -26,7 +26,7 @@ vi.mock('@/components/SaveToCloudButton', () => ({ default: () => null }));
 vi.mock('@/components/BattleDataModal', () => ({ default: () => null }));
 vi.mock('@/components/card-forge/ImageCropEditor', () => ({ ImageCropEditor: () => null }));
 vi.mock('@/components/shared/TokenIndicator', () => ({ TokenIndicator: () => null }));
-vi.mock('@/components/game-card/GameCardFace', () => ({ GameCardFace: () => <div>Generated face</div>, DEFAULT_IMAGE_TRANSFORM: {} }));
+vi.mock('@/components/game-card/GameCardFace', () => ({ GameCardFace: ({ faceData }: { faceData: { cardName: string } }) => <div>Generated face: {faceData.cardName}</div>, DEFAULT_IMAGE_TRANSFORM: {} }));
 vi.mock('@/lib/card-forge/content-safety', () => ({ applyShieldWordsToGameCardFaceData: (faceData: unknown) => ({ faceData }) }));
 vi.mock('@/components/GeneralCharacterCard', () => ({ default: ({ general }: { general: { content: string } }) => <div>{general.content}</div> }));
 vi.mock('@/components/GeneralScenarioCard', () => ({ default: () => null }));
@@ -35,6 +35,7 @@ vi.mock('@/components/CanshouCard', () => ({ default: () => null }));
 vi.mock('@/components/tavern/TavernCardPreview', () => ({ TavernCardPreview: () => null }));
 vi.mock('@/lib/stream/read-safe-text-and-reasoning-stream', () => ({ readSafeTextAndReasoningStreamFromResponse: (...args: unknown[]) => api.stream(...args) }));
 import { getPlaceholderPngBytes, writeTavernCardToPngBytes } from '@mahoshojo/domain/tavern-card';
+import { GameCardFaceDataSchema } from '@mahoshojo/contracts/game-card';
 
 import { NamePage } from '@/components/creation/NamePage';
 import { CardForgePage } from '@/components/card-forge/CardForgePage';
@@ -44,7 +45,11 @@ let root: Root;
 let host: HTMLDivElement;
 let scroll: Mock<HTMLElement['scrollIntoView']>;
 const nameResult = { flowerName: '花', flowerDescription: 'Description', appearance: { mainColor: 'Pink' }, spell: 'Spell' };
-const faceResult = { faceData: { name: '花', rarity: 'common', cardType: 'character', element: 'light', stats: {}, effects: [] } };
+const faceResult = { faceData: GameCardFaceDataSchema.parse({
+  cardName: '花', rarity: 'common', cardType: 'character', element: 'light', cost: 1,
+  attack: 1, defense: 1, hp: 1, effects: [], traits: [], flavorText: '',
+  powerLevel: 'A', description: '', themeColor: '#ff6b9d',
+}) };
 
 beforeEach(() => {
   localStorage.clear();
@@ -105,6 +110,25 @@ describe('real card generation pages use request-bound result navigation', () =>
     await act(async () => resolve(Response.json(faceResult)));
     expect(scroll).toHaveBeenCalledTimes(1);
     expect((scroll.mock.instances[0] as HTMLElement).textContent).toContain('卡面预览');
+  });
+  it.each([undefined, 123])('forge rejects an invalid theme color without rendering or navigating (%s)', async (themeColor) => {
+    api.dispatch.mockResolvedValue(Response.json({ faceData: { ...faceResult.faceData, themeColor } }));
+    await forgeSetup(); await click('生成卡牌卡面');
+    expect(host.textContent).toContain('卡面生成结果校验失败，请重试');
+    expect(host.textContent).not.toContain('Generated face:');
+    expect(scroll).not.toHaveBeenCalled();
+  });
+  it('forge keeps the previous valid face when a later response fails schema validation', async () => {
+    api.dispatch.mockResolvedValueOnce(Response.json(faceResult));
+    await forgeSetup(); await click('生成卡牌卡面');
+    expect(host.textContent).toContain('Generated face: 花');
+    expect(scroll).toHaveBeenCalledTimes(1);
+    api.dispatch.mockResolvedValueOnce(Response.json({ faceData: { ...faceResult.faceData, cardName: 'Invalid face', themeColor: null } }));
+    await click('生成卡牌卡面');
+    expect(host.textContent).toContain('卡面生成结果校验失败，请重试');
+    expect(host.textContent).toContain('Generated face: 花');
+    expect(host.textContent).not.toContain('Invalid face');
+    expect(scroll).toHaveBeenCalledTimes(1);
   });
   it('forge ignores a response arriving after stop', async () => {
     let resolve!: (value: Response) => void;

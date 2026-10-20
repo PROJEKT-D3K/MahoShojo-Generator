@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { CardForgeThemeEditor, CardForgePageView, CardForgeWorkspace } from '@mahoshojo/ui-web/card-forge';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { useSearchParams } from 'next/navigation';
+import { GameCardFaceDataSchema } from '@mahoshojo/contracts/game-card';
 import {
   type GameCardFaceData,
   type GameCardImageAspectRatio,
@@ -310,7 +311,12 @@ export function CardForgePage() {
         throw new Error(errorMessage);
       }
 
-      setFaceData(applyShieldWordsToGameCardFaceData(json.faceData).faceData);
+      const parsedFace = GameCardFaceDataSchema.safeParse(json.faceData);
+      if (!parsedFace.success) {
+        throw new Error('卡面生成结果校验失败，请重试。');
+      }
+
+      setFaceData(applyShieldWordsToGameCardFaceData(parsedFace.data).faceData);
       setSourceCardKind(json.sourceCardKind ?? null);
       setThemeColorOverride(null);
       setGenStatus('success');
