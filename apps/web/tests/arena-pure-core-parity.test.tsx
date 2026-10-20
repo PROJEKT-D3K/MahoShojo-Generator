@@ -35,7 +35,6 @@ vi.mock('@/lib/arena/resumable-generation-client', async (importOriginal) => ({
 
 import { useBattleEngine } from '@/components/arena/hooks/useBattleEngine';
 import { useBattleStore } from '@/components/arena/stores/useBattleStore';
-import { createHash } from 'node:crypto';
 import { useNarrativeHistoryStore } from '@/components/arena/stores/useNarrativeHistoryStore';
 import { arenaModes, arenaDeliveries, arenaParityPayload } from '../../../fixtures/arena-generation/input';
 
@@ -53,22 +52,37 @@ const report = {
   headline: 'SHIELD 雨夜', article: { body: '重逢正文', analysis: '点评独立' },
   officialReport: { winner: '雪绒', conclusion: '约定延续' }, reporterInfo: { name: '记者', publication: 'Arena' },
   aiReasoning: { status: 'done', source: 'provider', text: 'REASONING_ONLY', parts: [{ text: 'SHIELD 思考' }] },
-  scenario: '上一场标题', aiModel: 'fixture-model',
+  scenario: '服务端情景', aiModel: 'fixture-model',
   characterGuidances: [{ characterName: '雪绒', guidance: '守约' }],
   extension: { preserved: ['不丢失'] },
 };
 const markdown = '# SHIELD 雨夜\n\n重逢正文\n\n## 胜利者\n\n- 雪绒\n\n## 最终结果\n\n约定延续';
-const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-// Captured before useBattleEngine extraction; only random request ID and timestamps are normalized.
-const golden: Record<string, string> = {
-  "classic/stream": "b6ccf1b47422bc16eaf8f10bde3359b718712f8c0dec7a8a46094a5c6fb25633",
-  "classic/non-stream": "166d9cbf78ea899063521ffac8bd4e0d2f6b571db2da8875ed5abe1d4978f70d",
-  "kizuna/stream": "eeef9042a32f33c67852e55496ab5a45610fc33bd1e391b30a6a8442ee4ee231",
-  "kizuna/non-stream": "3fad09e2a778588275b7ad3f5197225099ef4db92ed38a3c85e4b1d9fe70aa38",
-  "daily/stream": "24554a1c31e532cb33d53dac4e2b19a7d1357e85635182d83107f002fbd228d9",
-  "daily/non-stream": "2c33a461180fc9bfc175abbddbb5a54c11923e56b282a4d00d0b2d69548fea59",
-  "scenario/stream": "1f3d86ade8f945b2f150683eebd54c7a5b3c2eb13be197f47a6c47dc2e5bfba0",
-  "scenario/non-stream": "86d13b29067347d5cabcbe19aee662e6710300ff059addfa2d75c3d460e5f43a"
+// 完整比较请求与结果，保留字段回归诊断；响应显示信息允许覆盖请求时的回退值。
+const expectedRequest = (mode: typeof arenaModes[number], delivery: typeof arenaDeliveries[number]) => {
+  const fixture = arenaParityPayload(mode, delivery);
+  return {
+    generationRequestId: 'fixture-request', reportFormat: 'markdown', mode,
+    combatants: fixture.combatants.map((item, index) => ({
+      ...item, isNative: false, isPreset: index === 0, filename: index === 0 ? '0.json' : null,
+      sourceDataCardId: `card-${index}`, sourceDataCardUpdatedAt: '2026-01-01',
+    })),
+    arenaFreeRankingEnabled: true, userGuidance: fixture.userGuidance,
+    ...(mode === 'scenario' ? {
+      scenario: fixture.scenario, auxScenarios: fixture.auxScenarios,
+      scenarioTitle: '雨夜车站', scenarioFileName: 'scenario.json', scenarioSourceDataCardId: 'scenario-card',
+    } : {}),
+    materials: fixture.materials.map((item) => ({ ...item, id: 'material', sourceKind: 'raw-json', isNative: false })),
+    teams: fixture.teams, teamNames: fixture.teamNames, language: 'ja',
+    readArenaHistory: true, arenaHistoryReadLimit: null, writeArenaHistory: false,
+    readCurrentState: true, writeCurrentState: false,
+    readNarrativeHistory: true, writeNarrativeHistory: true, narrativeHistoryReadLimit: 2,
+    narrativeHistory: fixture.narrativeHistory,
+    isDowngrade: false,
+    adjudicationEvents: [{ id: 'event', type: 'binary', description: '是否晚点', probability: 50 }],
+    storyLength: 'long', customStoryLength: '880',
+    questionnaireSelections: [{ source: 'preset', kind: 'magical-girl', presetId: 'lore' }],
+    questionnaires: fixture.questionnaires,
+  };
 };
 
 beforeEach(async () => {
@@ -125,7 +139,7 @@ function respond(delivery: typeof arenaDeliveries[number], status = 'completed')
 const wireRequest = (delivery: typeof arenaDeliveries[number]) => delivery === 'stream'
   ? mocks.openStream.mock.calls[0][0].body : JSON.parse(mocks.dispatch.mock.calls[0][1].body);
 
-describe('actual shared /battle and /arena engine frozen parity', () => {
+describe('actual shared /battle and /arena engine behavior parity', () => {
   for (const mode of arenaModes) for (const delivery of arenaDeliveries) {
     it(`${mode}/${delivery} retains request, projected result and narrative history`, async () => {
       await configure(mode, delivery); respond(delivery);
@@ -135,14 +149,31 @@ describe('actual shared /battle and /arena engine frozen parity', () => {
       request.generationRequestId = 'fixture-request';
       const state = useBattleStore.getState();
       const history = useNarrativeHistoryStore.getState().entries.map(({ createdAt: _created, updatedAt: _updated, ...entry }) => entry);
-      const value = { request, report: state.newsReport, markdown: state.streamingMarkdown, impacts: state.latestAiImpacts, history };
-      expect(digest(value)).toBe(golden[`${mode}/${delivery}`]);
-      expect(request.combatants[0].data.extension).toEqual({ nested: ['不可丢失', 0] });
-      expect(request.customStoryLength).toBe('880');
-      expect(history).toHaveLength(2);
-      expect(history[1].content).not.toContain('REASONING_ONLY');
-      expect(history[1].content).not.toContain('点评独立');
-      expect(history[1].content).not.toContain('MAHOSHOJO_ARENA_META');
+      expect(request).toEqual(expectedRequest(mode, delivery));
+      const filteredMarkdown = markdown.replaceAll('SHIELD', '被替换');
+      const structured = delivery === 'non-stream';
+      expect(state.newsReport).toEqual(structured ? {
+        ...report,
+        headline: '被替换 雨夜',
+        aiReasoning: { ...report.aiReasoning, parts: [{ text: '被替换 思考' }] },
+        scenario: mode === 'scenario' ? '服务端情景' : undefined,
+      } : null);
+      expect(state.streamingMarkdown).toBe(structured ? null : filteredMarkdown);
+      expect(state.latestAiImpacts).toEqual(structured
+        ? [{ characterName: '雪绒', impact: '被替换 成长', currentStateSummary: '持伞' }] : null);
+      expect(state.resultContext).toEqual({
+        generationMode: delivery, battleMode: mode,
+        scenarioDisplayName: mode === 'scenario' ? (structured ? '服务端情景' : '雨夜车站') : null,
+      });
+      expect(history).toEqual([
+        { id: 'prior', title: '前情', content: '旧约定仍有效' },
+        {
+          id: 'arena-generation:fixture-generation',
+          title: structured ? '被替换 雨夜' : 'SHIELD 雨夜',
+          content: structured ? filteredMarkdown : markdown,
+        },
+      ]);
+      expect(history[1].content).not.toMatch(/REASONING_ONLY|点评独立|MAHOSHOJO_ARENA_META/);
       respond(delivery);
       await act(async () => current.handleGenerate());
       expect(useNarrativeHistoryStore.getState().entries).toHaveLength(2);
