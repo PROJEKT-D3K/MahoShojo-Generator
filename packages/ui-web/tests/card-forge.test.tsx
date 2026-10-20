@@ -7,6 +7,36 @@ import { DENY_SNAPDOM_MEDIA, type capturePngBlob } from '../src/client/snapdomCa
 const face = { cardName: '蔷薇', cardType: 'character' as const, rarity: 'epic' as const, cost: 3, element: 'dark' as const, attack: 2, defense: 1, hp: 3, effects: [{ type: '被动', description: '效果' }], traits: [], flavorText: '', powerLevel: 'A', description: '', themeColor: '#ef4444' };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('shared forge real controls and capture lifecycle', () => {
+  it('keeps the named native custom picker focusable with a visible wrapper focus treatment', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
+    const onChange = vi.fn();
+    try {
+      await act(async () => root.render(<CardForgeThemeEditor color="#123456" onChange={onChange} />));
+      const custom = container.querySelector<HTMLInputElement>('input[aria-label="自定义主题色"]')!;
+      const wrapper = custom.closest('label')!;
+      expect(custom.type).toBe('color');
+      expect(custom.tabIndex).toBe(0);
+      expect(custom.disabled).toBe(false);
+      expect(custom.classList.contains('opacity-0')).toBe(true);
+      expect(wrapper.classList.contains('opacity-0')).toBe(false);
+      expect(wrapper.classList).toContain('focus-within:outline-2');
+      expect(wrapper.classList).toContain('focus-within:outline-offset-2');
+      expect(wrapper.classList).toContain('focus-within:outline-(--app-accent-strong)');
+      for (const value of ['#abcdef', '#123456']) {
+        custom.focus(); expect(document.activeElement).toBe(custom);
+        act(() => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(custom, value);
+          custom.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        expect(onChange).toHaveBeenLastCalledWith(value);
+        await act(async () => root.render(<CardForgeThemeEditor color={value} onChange={onChange} />));
+        expect(custom.value).toBe(value);
+        custom.blur(); expect(document.activeElement).not.toBe(custom);
+      }
+      expect(onChange.mock.calls).toEqual([['#abcdef'], ['#123456']]);
+    } finally { act(() => root.unmount()); container.remove(); }
+  });
   it('names every native preset, exposes case-insensitive selection, and leaves custom colors unselected', async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);

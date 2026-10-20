@@ -87,6 +87,8 @@ it('uses the real forge theme editor for preset and custom color states', () => 
   expect(blue.getAttribute('aria-pressed')).toBe('true');
   const custom = sample.querySelector<HTMLInputElement>('input[aria-label="自定义主题色"]')!;
   expect(custom.value).toBe('#3b82f6');
+  expect(custom.closest('label')?.classList).toContain('focus-within:outline-(--app-accent-strong)');
+  custom.focus(); expect(document.activeElement).toBe(custom);
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(custom, '#123456');
     custom.dispatchEvent(new Event('input', { bubbles: true }));

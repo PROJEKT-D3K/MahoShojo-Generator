@@ -33,7 +33,18 @@ describe('Desktop local forge host journey', () => {
       blue.focus(); expect(document.activeElement).toBe(blue);
       act(() => blue.click());
       expect(selectedNames()).toEqual(['主题色 #3b82f6']);
-      expect(container.querySelector<HTMLInputElement>('input[aria-label="自定义主题色"]')?.value).toBe('#3b82f6');
+      const custom = container.querySelector<HTMLInputElement>('input[aria-label="自定义主题色"]')!;
+      expect(custom.value).toBe('#3b82f6');
+      expect(custom.type).toBe('color'); expect(custom.tabIndex).toBe(0);
+      expect(custom.closest('label')?.classList).toContain('focus-within:outline-(--app-accent-strong)');
+      custom.focus(); expect(document.activeElement).toBe(custom);
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(custom, '#abcdef');
+        custom.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(custom.value).toBe('#abcdef');
+      expect(selectedNames()).toEqual([]);
+      expect(container.querySelector<HTMLElement>('.gc-card')?.style.getPropertyValue('--gc-theme')).toBe('#abcdef');
       await act(async () => choose(input, inputFile(JSON.stringify({ ...face, themeColor: '#123456' }))));
       expect(presets()).toHaveLength(8);
       expect(selectedNames()).toEqual([]);

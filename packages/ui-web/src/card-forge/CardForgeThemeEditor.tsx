@@ -29,7 +29,7 @@ export function CardForgeThemeEditor({ color, onChange }: { color: string; onCha
             />
           );
         })}
-        <label className="w-8 h-8 rounded-full border-2 border-gray-300 dark:border-gray-600 cursor-pointer flex items-center justify-center overflow-hidden relative">
+        <label className="w-8 h-8 rounded-full border-2 border-gray-300 dark:border-gray-600 cursor-pointer flex items-center justify-center overflow-hidden relative focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-(--app-accent-strong)">
           <input
             type="color"
             value={color}
