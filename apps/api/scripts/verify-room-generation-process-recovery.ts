@@ -134,7 +134,28 @@ const createPort = async (
   const generationService = createArenaGenerationService({
     store: runtime.getGenerationReplayStore(),
     terminalStore: terminalStore(),
-    executor,
+    executor: {
+      ...executor,
+      async prepare(input) {
+        // 与 Room port 使用相同的语义规范化，避免把 provider 密钥等原始字段算进 admission hash。
+        const pvpContext = input.payload.pvpContext;
+        const trustedPvpContext = pvpContext
+          && typeof pvpContext === 'object'
+          && !Array.isArray(pvpContext)
+          ? pvpContext as { roomId: string; matchId: string; roundId: string }
+          : null;
+        return {
+          executionPayload: input.payload,
+          semanticPayload: await canonicalizeNodeArenaGenerationSemanticPayload({
+            payload: input.payload,
+            signatures,
+            trustedInternalGuidance: typeof input.payload.internalGuidance === 'string'
+              ? input.payload.internalGuidance : null,
+            trustedPvpContext,
+          }),
+        };
+      },
+    },
     resolveActor: async () => ({ actorKey }),
     deriveGenerationId: deriveArenaGenerationId,
     hashPayload: hashArenaGenerationPayload,
@@ -451,10 +472,11 @@ const runParent = async (): Promise<void> => {
       durableState?.status !== 'producer_lost'
       || durableState.terminal?.status !== 'producer_lost'
       || durableState.leaseExpiresAt !== null
-      || durableState.snapshot?.status !== 'producer_lost'
+      // SIGKILL 后无法证明流完整，必须保留 uncertainty 标记并清除旧的 running snapshot。
+      || durableState.terminal.replayUncertain !== true
+      || durableState.snapshot !== null
       || !terminalEvent
       || durableState.lastEventId !== terminalEvent.id
-      || durableState.snapshot.lastEventId !== terminalEvent.id
     ) throw new Error('ROOM_GENERATION_PROCESS_DURABLE_TERMINAL_INVALID');
     const repeatedRead = await coordinator.read({
       roomId,
@@ -503,7 +525,8 @@ const runParent = async (): Promise<void> => {
       roomTerminal: checkpoint.snapshot.activeGeneration.state,
       durableFact: durableState.status,
       durableTerminalEvent: terminalEvent.type,
-      durableTerminalSnapshot: durableState.snapshot.status,
+      durableReplayUncertain: durableState.terminal.replayUncertain,
+      durableTerminalSnapshot: durableState.snapshot,
       terminalRetryProviderStarts: recoveryProviderStarts,
       secretKeysScanned: secretInspection.scannedKeys,
       secretPersisted: secretInspection.secretPersisted,
