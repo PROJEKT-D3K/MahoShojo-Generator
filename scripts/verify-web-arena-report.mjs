@@ -7,7 +7,7 @@ import { readFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
-import * as fixture from '../apps/web/tests/browser/arena-report-fixtures.mjs';
+import * as fixture from './fixtures/web-arena-report.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP = path.join(ROOT, 'apps/web');
@@ -293,7 +293,7 @@ export async function runAcceptance({ prepareOnly = false, executablePath } = {}
   const report = { scope: 'Synthetic production-component browser harness; not Next routing, live API, Tauri or Windows acceptance', status: 'running', outputDir, viewport: { width: 1440, height: 1100, deviceScaleFactor: 1 }, cases: [] };
   let browser, server, failure;
   try {
-    report.source = { commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim(), tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: ROOT, encoding: 'utf8' }).trim(), harnessChanges: execFileSync('git', ['status', '--porcelain', '--', 'scripts/verify-web-arena-report.mjs', 'apps/web/tests/browser', 'tests/web-arena-acceptance.test.ts'], { cwd: ROOT, encoding: 'utf8' }).trim() };
+    report.source = { commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim(), tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: ROOT, encoding: 'utf8' }).trim(), harnessChanges: execFileSync('git', ['status', '--porcelain', '--', 'scripts/verify-web-arena-report.mjs', 'scripts/fixtures/web-arena-report.mjs', 'apps/web/tests/browser', 'tests/web-arena-acceptance.test.ts'], { cwd: ROOT, encoding: 'utf8' }).trim() };
     const files = await (runtime.buildHarness ?? buildHarness)(outputDir);
     if (prepareOnly) { report.status = 'prepared-browser-not-run'; } else {
     server = await (runtime.startHarnessServer ?? startHarnessServer)(files);

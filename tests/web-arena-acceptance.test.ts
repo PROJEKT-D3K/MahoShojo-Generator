@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { buildHarness, classifyRequest, runAcceptance, startHarnessServer } from '../scripts/verify-web-arena-report.mjs';
-import { BODY, GENERATION_ID, GUIDANCE_A, MODEL, REPAIR_PATCH, SCENARIO_A, USAGE, makeReport, reportText } from '../apps/web/tests/browser/arena-report-fixtures.mjs';
+import { BODY, GENERATION_ID, GUIDANCE_A, MODEL, REPAIR_PATCH, SCENARIO_A, USAGE, makeReport, reportText } from '../scripts/fixtures/web-arena-report.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const requireWeb = createRequire(path.join(root, 'apps/web/package.json'));

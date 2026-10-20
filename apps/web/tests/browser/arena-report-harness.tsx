@@ -11,7 +11,7 @@ import { BattleResult } from '@/components/arena/components/BattleResult';
 import { GenerationModeSwitcher } from '@/components/arena/components/GenerationModeSwitcher';
 import { BattleModeSwitcher } from '@/components/arena/components/BattleModeSwitcher';
 import type { BattleStoreState } from '@/components/arena/types';
-import { GUIDANCE_A, SCENARIO_A, getHarnessConfiguration, scenario } from './arena-report-fixtures.mjs';
+import { GUIDANCE_A, SCENARIO_A, getHarnessConfiguration, scenario } from '../../../../scripts/fixtures/web-arena-report.mjs';
 
 const configuration = getHarnessConfiguration(window.location.search);
 const initial = useBattleStore.getInitialState();

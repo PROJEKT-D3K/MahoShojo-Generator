@@ -2,7 +2,7 @@ import { useRef } from 'react';
 
 import type { AuthIdentity } from '../../lib/auth-identity';
 import type { GenerationApiIntentDependencies, GenerationApiIntentLatch } from '../../lib/hono-api-client';
-import { getHarnessConfiguration } from './arena-report-fixtures.mjs';
+import { getHarnessConfiguration } from '../../../../scripts/fixtures/web-arena-report.mjs';
 
 const unexpected = (name: string): never => {
   throw new Error(`Arena harness does not permit this external port: ${name}`);
