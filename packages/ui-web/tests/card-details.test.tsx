@@ -15,6 +15,22 @@ describe('共源基础详情', () => {
     await act(async () => root.render(<BasicCardDetailsModal isOpen onClose={() => {}} card={{ ...card, type }} source={{ kind: 'cache', lastSuccessAt: '2026-03-01T00:00:00Z' }} renderMarkdown={markdown} />));
     expect(container.textContent).toContain('本机作者'); expect(container.textContent).toContain('缓存快照'); expect(container.textContent).toContain('正文'); expect(container.querySelector('[title="2026-01-01T01:02:00Z"]')).not.toBeNull(); expect(container.textContent).not.toContain('下载 JSON'); expect(container.textContent).not.toContain('存到本地库');
   });
+  it('详情正文采用共源滚动区域，键盘可聚焦阅读且长标题不挤占关闭操作', () => {
+    const longName = 'LongUnbrokenCardName'.repeat(8);
+    renderHtml(<BasicCardDetailsModal isOpen card={{ ...card, name: longName }} source={{ kind: 'local' }} onClose={() => {}} renderMarkdown={markdown} />);
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    const region = dialog.querySelector<HTMLElement>('[role="region"]')!;
+    expect(region).not.toBeNull();
+    expect(region.tabIndex).toBe(0);
+    expect(region.getAttribute('aria-labelledby')).toBe(dialog.getAttribute('aria-labelledby'));
+    expect(region.className).toContain('overscroll-contain');
+    region.focus();
+    expect(document.activeElement).toBe(region);
+    const title = dialog.querySelector('h2')!;
+    expect(title.className).toContain('truncate');
+    expect(title.getAttribute('title')).toBe(longName);
+    expect(dialog.className).toContain('max-h-[min(90dvh,calc(100dvh-2rem))]');
+  });
   it.each(['oops', 'null', '12', '"text"'])('无效正文 %s 明确报错', (data) => {
     const html = renderHtml(<CardDetailsBody data={data} renderMarkdown={markdown} />);
     expect(html).toContain('role="alert"'); expect(html).not.toContain('暂无详细设定');

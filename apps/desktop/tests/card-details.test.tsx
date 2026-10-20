@@ -23,6 +23,8 @@ afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlo
 describe('Desktop 真实基础详情', () => {
   it('本地 UUID 无在线请求，媒体不加载，链接走既有确认端口，动作按能力显示', async () => {
     await render(); expect(fetch).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled(); expect(container.querySelector('img')).toBeNull(); expect(container.textContent).toContain('本机未验证'); expect(container.textContent).toContain('标签 ID（未取得名称）'); expect(button('存到本地库')).toBeUndefined();
+    const region = container.querySelector<HTMLElement>('[role="region"]')!;
+    expect(region.tabIndex).toBe(0); region.focus(); expect(document.activeElement).toBe(region);
     await act(async () => container.querySelector<HTMLAnchorElement>('a')!.click()); expect(mocks.open).toHaveBeenCalledWith('https://example.com/a');
     await act(async () => container.querySelector<HTMLAnchorElement>('a[href="relative.md"]')!.click()); expect(mocks.open).toHaveBeenCalledWith('relative.md');
     await act(async () => button('下载 JSON').click()); expect(mocks.download).toHaveBeenCalledWith('桌面详情.json', JSON.stringify(JSON.parse(card.data), null, 2));

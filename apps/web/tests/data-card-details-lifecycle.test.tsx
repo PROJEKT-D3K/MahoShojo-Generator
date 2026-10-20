@@ -31,6 +31,14 @@ describe('Web 原详情实际消费 shared，宿主 metadata 有版本与生命�
   it.each([{ kind: 'local', label: '当前输入副本' }, { kind: 'cache', lastSuccessAt: date }, { kind: 'preset' }] satisfies CardDetailsSource[])('显式 %j 即使保留云 ID/时间/signature 也不联网或声称原生', async (source) => {
     await render(source); expect(fetch).not.toHaveBeenCalled(); expect(container.textContent).toContain('本机未验证'); expect(container.textContent).toContain('完整正文'); expect(container.textContent).not.toContain('服务器判断）：是'); expect(container.textContent).not.toContain('更多');
   });
+  it('共享正文区域可获得键盘焦点且使用同一详情标题', async () => {
+    await render({ kind: 'local' });
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    const region = dialog.querySelector<HTMLElement>('[role="region"]')!;
+    expect(region.tabIndex).toBe(0);
+    expect(region.getAttribute('aria-labelledby')).toBe(dialog.getAttribute('aria-labelledby'));
+    region.focus(); expect(document.activeElement).toBe(region);
+  });
   it('预设保持宿主的排位历史入口，只有点击才读取历史且不查 metadata', async () => {
     vi.mocked(fetch).mockResolvedValue(response({ success: true, entityType: 'preset', entityId: 'preset.json', queue: 'strict', items: [] }));
     await act(async () => root.render(<DataCardDetailsModal isOpen onClose={() => {}} card={card} source={{ kind: 'preset' }} ratingHistoryEntity={{ entityType: 'preset', entityId: 'preset.json' }} />));

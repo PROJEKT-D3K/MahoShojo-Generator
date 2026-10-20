@@ -4,7 +4,7 @@ import type { CardLibraryDetailsCard } from '../card-library/host';
 import Badge from '../card-library/Badge';
 import { buildTitleDisplay } from '../card-library/text';
 import { getFieldDisplayName } from '../creator/field-translations';
-import { useBaseModalAccessibility } from '../modal';
+import { BASE_MODAL_BODY_LAYOUT_CLASS_NAME, BASE_MODAL_ROOT_LAYOUT_CLASS_NAME, useBaseModalAccessibility } from '../modal';
 
 /** 来源只陈述这次正文的取得方式，不代表当前服务器权限或签名验证。 */
 export type CardDetailsSource =
@@ -81,13 +81,14 @@ export function BasicCardDetailsModal({ isOpen, onClose, card, source, renderMar
   if (!isOpen) return null;
   const { display, full } = buildTitleDisplay(card.name || '未命名');
   const typeLabel = { character: '角色', scenario: '剧本', history: '历史', questionnaire: '问卷' }[card.type] ?? '数据卡';
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-    <div ref={dialogRef} role="dialog" aria-modal={obscured ? undefined : 'true'} aria-hidden={obscured ? 'true' : undefined} aria-labelledby={titleId} tabIndex={-1} className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white text-gray-800">
+  return <div className={`${BASE_MODAL_ROOT_LAYOUT_CLASS_NAME} z-50 bg-black/50`}>
+    <div ref={dialogRef} role="dialog" aria-modal={obscured ? undefined : 'true'} aria-hidden={obscured ? 'true' : undefined} aria-labelledby={titleId} tabIndex={-1} className="flex max-h-[min(90dvh,calc(100dvh-2rem))] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white text-gray-800">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b p-6">
-        <div className="flex min-w-0 items-center gap-3"><Info className="h-5 w-5 shrink-0 text-purple-600" /><div className="min-w-0"><h2 id={titleId} className="text-xl font-bold" title={full}>{display}</h2><p className="mt-1 text-xs text-gray-500">类型：{typeLabel}</p></div></div>
-        <div className="relative flex items-center gap-2">{headerActions}<button type="button" ref={initialFocusRef} onClick={onClose} aria-label={`关闭${typeLabel}详情`} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"><X className="h-5 w-5" /></button></div>
+        <div className="flex min-w-0 items-center gap-3"><Info className="h-5 w-5 shrink-0 text-purple-600" /><div className="min-w-0"><h2 id={titleId} className="truncate text-xl font-bold" title={full}>{display}</h2><p className="mt-1 text-xs text-gray-500">类型：{typeLabel}</p></div></div>
+        <div className="relative flex shrink-0 items-center gap-2">{headerActions}<button type="button" ref={initialFocusRef} onClick={onClose} aria-label={`关闭${typeLabel}详情`} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"><X className="h-5 w-5" /></button></div>
       </div>
-      <div className="min-h-0 flex-1 space-y-6 overflow-auto p-6">
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 可滚动正文必须能独立获得键盘焦点，与 BaseModal 一致。 */}
+      <div className={`${BASE_MODAL_BODY_LAYOUT_CLASS_NAME} space-y-6 p-6`} role="region" aria-labelledby={titleId} tabIndex={0}>
         {beforeOverview}
         <section className="space-y-2">
           <h3 className="font-medium text-gray-700">概览</h3>
