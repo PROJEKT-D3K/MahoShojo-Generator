@@ -38,7 +38,8 @@ export type ArenaBattleResultContext = Readonly<{
   scenarioDisplayName: string | null;
 }>;
 export type StreamTransportMode = 'sse';
-export type BattleReportCardWidthMode = 'auto' | 'manual';
+import type { BattleReportCardWidthMode } from '@mahoshojo/ui-web/arena';
+export type { BattleReportCardWidthMode } from '@mahoshojo/ui-web/arena';
 
 import type {
   QuestionnaireSelection,

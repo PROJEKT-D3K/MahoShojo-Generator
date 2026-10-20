@@ -2,6 +2,8 @@ import { useState, type ReactNode } from 'react';
 
 import { MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlCard } from '../character-card';
 import { CardForgeThemeEditor } from '../card-forge';
+import { BattleReportCardWidthSettings } from '../arena/BattleReportCardWidthSettings';
+import { resolveBattleReportCardManualWidthPx, type BattleReportCardWidthSettingsValue } from '../arena/battle-report-card-width';
 import { StreamingBattleReportCard } from '../arena-report';
 import { ArenaWebResultView } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
@@ -239,6 +241,7 @@ function StoryReadErrorsSample() {
 }
 
 function ResultSurfacesSection() {
+  const [width, setWidth] = useState<BattleReportCardWidthSettingsValue>({ battleReportCardWidthMode: 'manual', battleReportCardWidthPx: 760 });
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-(--app-text-muted)">
@@ -249,7 +252,11 @@ function ResultSurfacesSection() {
       </div>
       <div className="max-w-3xl">
         <h3 className="mb-3 text-sm font-medium text-(--app-text-muted)">竞技场安全源码：共享品牌与元数据（示例用量）</h3>
-        <StreamingBattleReportCard content="<main>样板间战报</main>" mode="classic" disableExport
+        <div aria-label="战报卡片宽度样板">
+          <BattleReportCardWidthSettings value={width} onChange={patch => setWidth(current => ({ ...current, ...patch }))} />
+          <BattleReportCardWidthSettings value={width} onChange={() => {}} disabled />
+        </div>
+        <StreamingBattleReportCard cardWidthPx={resolveBattleReportCardManualWidthPx(width)} content="<main>样板间战报</main>" mode="classic" disableExport
           aiModel="showroom-example-model" aiUsage={{ promptTokens: 120, reasoningTokens: 30, completionTokens: 90 }}
           reporterInfo={{ name: '样板记者', publication: '样板日报' }}
           reportContent={<ArenaWebResultView source="<main>样板间战报</main>" ready

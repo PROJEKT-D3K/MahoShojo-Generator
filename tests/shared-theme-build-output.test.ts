@@ -56,6 +56,7 @@ const expectSharedOutput = (css: string, artifact: string): void => {
   for (const utility of SHARED_ONLY_UTILITIES) {
     expect(css, `${artifact} 缺少只在 ui-web 源码中出现的工具类 ${utility}`).toContain(`.${utility}`);
   }
+  expect(css, `${artifact} 缺少共源宽度原生单选的主题色`).toContain('.accent-\\(--app-accent-strong\\)');
   for (const token of SHARED_THEME_TOKENS) {
     expect(css, `${artifact} 缺少共源主题 token ${token}`).toContain(token);
   }

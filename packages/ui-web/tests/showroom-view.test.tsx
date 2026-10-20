@@ -112,3 +112,15 @@ it('uses the real forge theme editor for preset and custom color states', () => 
   });
   expect(presets().every((button) => button.getAttribute('aria-pressed') === 'false')).toBe(true);
 });
+
+
+it('uses production width controls with independent disabled groups and a live real report preview', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('[aria-label="战报卡片宽度样板"]')!;
+  const groups = sample.querySelectorAll('fieldset'); expect(groups).toHaveLength(2);
+  const card = container.querySelector<HTMLElement>('#showroom-result-surfaces .result-card.relative')!;
+  expect(card.style.maxWidth).toBe('760px');
+  const auto = groups[0].querySelector<HTMLInputElement>('input[type=radio]')!;
+  act(() => auto.click()); expect(card.style.maxWidth).toBe('100%');
+  for (const input of groups[1].querySelectorAll<HTMLInputElement>('input')) expect(input.disabled).toBe(true);
+});

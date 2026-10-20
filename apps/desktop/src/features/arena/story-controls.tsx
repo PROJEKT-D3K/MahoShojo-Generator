@@ -134,6 +134,7 @@ export function DesktopArenaStoryControls(props: {
   onNavigateExternal: BattleReportHostPorts['onNavigateExternal'];
   reportPorts?: BattleReportHostPorts;
   reportExporting?: boolean;
+  cardWidthPx?: number | null;
 }) {
   const { owner, draft } = props;
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
@@ -175,7 +176,7 @@ export function DesktopArenaStoryControls(props: {
       title: `章节预览｜第 ${selection.chapter.index} 章 · ${formatBattleStoryDisplayTitle(selection.chapter.title)}`,
       content: <BattleStoryContentPreview key={selection.chapterId} characterCount={selection.chapter.markdown.length}
         exportAction={<button type="button" className={secondary} onClick={() => props.download(`第${selection.chapter.index}章.md`, selection.chapter.markdown, 'text/markdown;charset=utf-8')}>导出本章完整正文</button>}>
-        <StreamingBattleReportCard mode={state.active?.mode} {...cardProps(selection.chapter.cardSnapshot, state.active?.mode)} content={selection.chapter.markdown} ports={ports} />
+        <StreamingBattleReportCard mode={state.active?.mode} {...cardProps(selection.chapter.cardSnapshot, state.active?.mode)} content={selection.chapter.markdown} cardWidthPx={props.cardWidthPx} ports={ports} />
       </BattleStoryContentPreview>,
       footer: <>
         <p className="text-xs text-gray-500">本章保存在当前设备；角色变化仅属于本故事的工作副本。</p>
@@ -298,7 +299,7 @@ export function DesktopArenaStoryControls(props: {
             <p className="font-semibold">本次第 {state.resultChapterIndex} 章 · {state.resultSaved ? '已保存' : generating ? '生成中' : '尚未保存'}</p>
             <BattleStoryContentPreview key={state.resultChapterIndex} characterCount={state.result.markdown.length}
               exportAction={<button type="button" className={secondary} onClick={exportResult}>导出当前完整正文</button>}>
-              <StreamingBattleReportCard {...cardProps(state.result.presentation)} aiUsage={normalizeUsage(state.result.presentation?.aiUsage ?? state.result.usage)} content={state.result.markdown} isStreaming={state.phase === 'generating'} onStopGeneration={hostedResult ? undefined : () => owner.cancel()}
+              <StreamingBattleReportCard {...cardProps(state.result.presentation)} cardWidthPx={props.cardWidthPx} aiUsage={normalizeUsage(state.result.presentation?.aiUsage ?? state.result.usage)} content={state.result.markdown} isStreaming={state.phase === 'generating'} onStopGeneration={hostedResult ? undefined : () => owner.cancel()}
                 aiReasoning={state.result.reasoning ? { status: generating ? 'thinking' : 'done', source: 'provider', text: state.result.reasoning } : null} ports={ports} />
             </BattleStoryContentPreview>
             {hostedResult && !state.resultSaved && !hosted?.outputDurable ? <p role="status">当前窗口原文，尚未耐久封存。正文与推理仅在当前窗口，请分别导出完整正文与推理原文；本机已封存的输入原件不包含这些最新输出。</p> : null}

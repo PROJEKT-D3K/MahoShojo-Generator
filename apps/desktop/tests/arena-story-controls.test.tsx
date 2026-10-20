@@ -14,15 +14,23 @@ const button=(text:string)=>[...container.querySelectorAll('button')].find((node
 const click=async(text:string)=>{expect(button(text)).toBeTruthy();await act(async()=>{button(text).click();});};
 beforeEach(()=>{(globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;container=document.createElement('div');document.body.append(container);root=createRoot(container);HTMLElement.prototype.scrollIntoView=vi.fn();vi.spyOn(window,'scrollTo').mockImplementation(()=>{});vi.spyOn(window,'confirm').mockReturnValue(true);});
 afterEach(()=>{act(()=>root.unmount());owner?.dispose();container.remove();vi.restoreAllMocks();});
-const mount=async(options:{draft?:ReturnType<typeof storyDraft>;product?:'battle'|'arena';rawText?:string;beforeTerminal?:()=>Promise<void>;beforeEnd?:()=>Promise<void>;budget?:number;unknown?:boolean;reportPorts?:import('@mahoshojo/ui-web/arena-report').BattleReportHostPorts}={})=>{
+const mount=async(options:{cardWidthPx?:number|null;draft?:ReturnType<typeof storyDraft>;product?:'battle'|'arena';rawText?:string;beforeTerminal?:()=>Promise<void>;beforeEnd?:()=>Promise<void>;budget?:number;unknown?:boolean;reportPorts?:import('@mahoshojo/ui-web/arena-report').BattleReportHostPorts}={})=>{
  const port=new StoryFixturePort(),execution=storyExecution(options.rawText,options.beforeTerminal),draft=options.draft??storyDraft(),download=vi.fn();let id=0;
  port.hideReceipts=!!options.unknown;port.loseEndReply=!!options.unknown;port.beforeEnd=options.beforeEnd;
  let generation=Promise.resolve();
  owner=new DesktopArenaStorySession({port,id:()=>`ui-${++id}`,exportMarkdown:async()=>({absolutePath:'complete.md',byteLength:10}),...(options.budget===undefined?{}:{prepareCommit:(input)=>prepareStoryStorageCommit(input,options.budget)})});owner.setExecutionScope('A');
- await act(async()=>{root.render(<DesktopArenaStoryControls reportPorts={options.reportPorts} owner={owner} product={options.product} draft={draft} disabled={false} unavailableReason={null} onStart={(chapterPlan)=>{generation=owner.start({draft,product:options.product??'battle',chapterPlan},execution.prepare);}} onContinue={(guidance)=>{generation=owner.continue(guidance,execution.prepare);}} download={download} onNavigateExternal={()=>{}}/>);await owner.initialize();});
+ await act(async()=>{root.render(<DesktopArenaStoryControls cardWidthPx={options.cardWidthPx} reportPorts={options.reportPorts} owner={owner} product={options.product} draft={draft} disabled={false} unavailableReason={null} onStart={(chapterPlan)=>{generation=owner.start({draft,product:options.product??'battle',chapterPlan},execution.prepare);}} onContinue={(guidance)=>{generation=owner.continue(guidance,execution.prepare);}} download={download} onNavigateExternal={()=>{}}/>);await owner.initialize();});
  return{port,execution,download,settleGeneration:()=>act(async()=>{await generation;})};
 };
 describe('continuous-story actual controlled surface',()=>{
+ it.each([null, 640, 920])('applies the current display width %s to current and saved chapters without storing it in the story', async cardWidthPx => {
+  const { port, execution, settleGeneration } = await mount({ cardWidthPx }); await click('新建连续战报'); await settleGeneration();
+  for (const region of ['[aria-label="本次章节结果"]', '[data-story-read-status="loaded"]']) {
+   expect(container.querySelector<HTMLElement>(`${region} .result-card`)?.style.maxWidth).toBe(cardWidthPx === null ? '100%' : `${cardWidthPx}px`);
+  }
+  expect(JSON.stringify(execution.requests)).not.toContain('cardWidth');
+  expect(JSON.stringify([...port.documents.values()])).not.toContain('cardWidth');
+ });
  it('shares native directory and chapter read errors without automatic retry or losing explicit read actions', async () => {
   const { port, execution, settleGeneration } = await mount(); await click('新建连续战报'); await settleGeneration();
   const head = owner.getSnapshot().active!, writes = port.begin.mock.calls.length;
@@ -62,11 +70,11 @@ describe('continuous-story actual controlled surface',()=>{
  });
  it('shows frozen chapter metadata and both current/saved image ports without rereading the edited draft', async () => {
   const draft = storyDraft(); draft.battleMode = 'scenario'; draft.scenario.content = { title: '原情景' };
-  const captured: Array<{ text: string | null; logo: string | undefined }> = [];
+  const captured: Array<{ text: string | null; logo: string | undefined; maxWidth: string }> = [];
   const saveImage = vi.fn(async (element: HTMLElement) => {
-   captured.push({ text: element.textContent, logo: element.querySelector<HTMLElement>('.logo-placeholder')?.style.display });
+   captured.push({ text: element.textContent, logo: element.querySelector<HTMLElement>('.logo-placeholder')?.style.display, maxWidth: element.style.maxWidth });
   });
-  const { execution, settleGeneration } = await mount({ draft, reportPorts: { saveImage, generatedBy: <span>已验证用户名</span> } });
+  const { execution, settleGeneration } = await mount({ draft, cardWidthPx: 760, reportPorts: { saveImage, generatedBy: <span>已验证用户名</span> } });
   await click('新建连续战报'); await settleGeneration();
   draft.scenario.content = { title: '当前草稿情景' }; draft.settings.userGuidance = '当前草稿引导';
   await act(async () => { await owner.refreshSessions(); });
@@ -79,7 +87,7 @@ describe('continuous-story actual controlled surface',()=>{
   }
   expect(saveImage).toHaveBeenCalledTimes(2); expect(execution.requests).toHaveLength(1);
   for (const image of captured) {
-   expect(image.text).toContain('已验证用户名'); expect(image.text).toContain('actual-model'); expect(image.logo).toBe('flex');
+   expect(image.text).toContain('已验证用户名'); expect(image.text).toContain('actual-model'); expect(image.logo).toBe('flex'); expect(image.maxWidth).toBe('760px');
   }
  });
  it('reads legacy saved card telemetry without losing false flags or borrowing missing metadata', async () => {

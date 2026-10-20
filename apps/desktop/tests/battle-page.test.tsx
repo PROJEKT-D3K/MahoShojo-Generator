@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { ARENA_REPORT_CARD_WIDTH_KEY } from '../src/features/arena/use-report-card-width';
 import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 /** Real Desktop route/shared views/session/B1 adapter; simulated IPC and loopback fixture, not OS/Tauri acceptance. */
 import { TextEncoder as NodeTextEncoder } from 'node:util';
@@ -2254,5 +2255,39 @@ describe('Desktop Quick ranking real routes', () => {
     await clickToggle(); expect(stored().combatants).toHaveLength(2);
     expect(stored().combatants.map(card => card.cardLibrarySelectionId)).toEqual(['local:quick-source', 'cache:quick-source']);
     expect(freshReads('quick-source')).toHaveLength(1); expect(usage()).toHaveLength(1);
+  });
+});
+
+
+describe('device report width across real Arena routes', () => {
+  it('edits only in arena, preserves independent drafts, and shares the choice with battle', async () => {
+    for (const key of [ARENA_DRAFT_KEY, ADVANCED_ARENA_DRAFT_KEY]) localStorage.setItem(key, JSON.stringify({ version: 1, draft: draft('daily', 'non-stream') }));
+    window.location.hash = '#/arena'; const router = await mount();
+    const snapshot = [localStorage.getItem(ARENA_DRAFT_KEY), localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)];
+    const width = () => container.querySelector<HTMLInputElement>('input[type=number][min="360"]');
+    const manual = [...container.querySelectorAll<HTMLInputElement>('input[type=radio]')].find(node => node.closest('label')?.textContent?.includes('手动指定宽度'))!;
+    expect(manual).toBeTruthy(); await act(async () => manual.click()); await settle(); expect(width()?.value).toBe('500');
+    const preset = [...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find(node => node.textContent?.includes('标准 · 760px'))!;
+    await act(async () => preset.click()); await settle(); expect(width()?.value).toBe('760');
+    expect([localStorage.getItem(ARENA_DRAFT_KEY), localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)]).toEqual(snapshot);
+    await click('生成战报'); await vi.waitFor(() => expect(container.querySelector<HTMLElement>('.result-card')?.style.maxWidth).toBe('760px'));
+    expect(JSON.stringify(received)).not.toContain('battleReportCardWidth');
+    await act(async () => router.navigate({ to: '/battle' })); await settle(); expect(container.textContent).not.toContain('战报卡片宽度');
+    await click('生成战报'); await vi.waitFor(() => expect(container.querySelector<HTMLElement>('.result-card')?.style.maxWidth).toBe('760px'));
+    await act(async () => router.navigate({ to: '/arena' })); await settle(); expect(width()?.value).toBe('760');
+    const auto = [...container.querySelectorAll<HTMLInputElement>('input[type=radio]')].find(node => node.closest('label')?.textContent?.includes('自动宽度'))!;
+    await act(async () => auto.click()); await settle(); expect(width()).toBeNull();
+    expect(JSON.parse(localStorage.getItem(ARENA_REPORT_CARD_WIDTH_KEY)!)).toEqual({ battleReportCardWidthMode: 'auto', battleReportCardWidthPx: 760 });
+    expect(container.querySelector<HTMLElement>('.result-card')?.style.maxWidth).toBe('100%');
+  });
+  it.each([['stream', 'web'], ['non-stream', 'web'], ['stream', 'markdown'], ['non-stream', 'markdown']] as const)('passes saved manual width to the real %s/%s report surface', async (generationMode, reportFormat) => {
+    localStorage.setItem(ARENA_REPORT_CARD_WIDTH_KEY, JSON.stringify({ battleReportCardWidthMode: 'manual', battleReportCardWidthPx: 640 }));
+    const value = draft('daily', generationMode); value.reportFormat = reportFormat; saveDraft(value); await mount(); await click('生成战报');
+    await vi.waitFor(() => {
+      if (reportFormat === 'web') expect(container.querySelector('[data-testid="arena-web-result"]')).not.toBeNull();
+      else expect(container.querySelector('.result-card')?.textContent).toContain(text);
+    });
+    expect(container.querySelector<HTMLElement>('.result-card')?.style.maxWidth).toBe('640px');
+    expect(JSON.stringify(received)).not.toContain('battleReportCardWidth');
   });
 });

@@ -1,3 +1,5 @@
+import { BattleReportCardWidthSettings, resolveBattleReportCardManualWidthPx } from '@mahoshojo/ui-web/arena';
+import { useDesktopReportCardWidth } from '../features/arena/use-report-card-width';
 import { createDesktopBattleReportPorts } from '../features/arena/report-ports';
 import { projectDesktopArenaReport } from '../features/arena/report-presentation';
 import { DesktopArenaErrorMessage, DesktopArenaFeedbackMessage } from '../features/arena/error-message';
@@ -166,6 +168,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const onMaterialDirty = useCallback((dirty: boolean) => { dirtyControls.current.material = dirty; }, []);
   const onAiDirty = useCallback((dirty: boolean) => { dirtyControls.current.ai = dirty; }, []);
   const onAdvancedDirty = useCallback((value: boolean) => { dirtyControls.current.advanced = value; }, []);
+  const reportCardWidth = useDesktopReportCardWidth();
+  const cardWidthPx = resolveBattleReportCardManualWidthPx(reportCardWidth.value);
   const draft = state.draft;
   const readinessMessage = useMemo(() => arenaReadinessMessage(draft, product), [draft, product]);
   const referenceCount = useMemo(() => arenaReferenceCount(draft), [draft]);
@@ -589,13 +593,13 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   };
   const ranking = state.hosted?.ranking;
   const result = (state.phase === 'generating' || state.rawText || state.reasoning || state.report) ? <section ref={resultRef} className="mt-6 space-y-4" aria-label="战报结果">
-    {state.resultFormat === 'web' ? <StreamingBattleReportCard {...reportProps} ports={reportPorts} disableExport reportContent={<DesktopArenaWebResult key={`${scope}:${state.generation?.intent.requestId ?? 'restored'}`} state={state} owner={packageOwner} disabled={disabled} />} />
+    {state.resultFormat === 'web' ? <StreamingBattleReportCard {...reportProps} cardWidthPx={cardWidthPx} ports={reportPorts} disableExport reportContent={<DesktopArenaWebResult key={`${scope}:${state.generation?.intent.requestId ?? 'restored'}`} state={state} owner={packageOwner} disabled={disabled} />} />
       : state.report && state.activeGenerationMode !== 'stream'
         ? <BattleReportCard report={{ ...state.report, scenario: reportProps.scenarioName, aiModel: reportProps.aiModel, aiUsage: reportProps.aiUsage ?? undefined,
           aiReasoning: reasoning, reporterInfo: reportProps.reporterInfo ?? state.report.reporterInfo,
           userGuidance: reportProps.userGuidance ?? undefined, characterGuidances: reportProps.characterGuidances ?? undefined,
-          adjudicationResults: reportProps.adjudicationResults ?? undefined, narrativeHistoryReadCount: reportProps.narrativeHistoryReadCount ?? undefined }} mode={reportProps.mode} ports={reportPorts} />
-        : <StreamingBattleReportCard {...reportProps} onStopGeneration={() => session.cancel()} ports={reportPorts} />}
+          adjudicationResults: reportProps.adjudicationResults ?? undefined, narrativeHistoryReadCount: reportProps.narrativeHistoryReadCount ?? undefined }} mode={reportProps.mode} cardWidthPx={cardWidthPx} ports={reportPorts} />
+        : <StreamingBattleReportCard {...reportProps} cardWidthPx={cardWidthPx} onStopGeneration={() => session.cancel()} ports={reportPorts} />}
     <details><summary>{state.hosted ? '服务器收到的正文（控制元数据单独保留）' : '完整原始输出（含元数据）'}</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all">{state.rawText}</pre></details>
     {state.hosted ? <div className="space-y-2" aria-label="服务器生成状态">
       <p role="status">{arenaRecoveryStatusLabel(state.hosted.connectionState)}。连接或恢复失败不表示服务器任务已停止。</p>
@@ -653,6 +657,10 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       renderMarkdown={content => <MarkdownBlock content={content} variant="light" externalMediaPolicy={DENY_EXTERNAL_MEDIA} onNavigateExternal={openContent} />} /> : null}
   </section> : null;
   const settings = <>
+          {product === 'arena' && !roomState.constrained ? <>
+            <BattleReportCardWidthSettings value={reportCardWidth.value} onChange={reportCardWidth.onChange} disabled={disabled} />
+            {reportCardWidth.error ? <p role="status" className="text-xs">{reportCardWidth.error}</p> : null}
+          </> : null}
           <ArenaDataSettingsPanel value={draft.settings} onChange={(patch) => update({ settings: { ...draft.settings, ...patch } })} disabled={disabled} footerNote={<p className="text-xs">设置与角色工作副本保存在本机草稿；原始库卡保持不变。</p>} />
           <NarrativeHistorySettings value={draft.settings} onChange={(patch) => update({ settings: { ...draft.settings, ...patch } })} disabled={disabled} persistenceNote="完成后追加正式历史。未完成草稿的自动保留请使用下面的独立本机开关。" readingNote="只有正式历史用于提示词，未完成草稿仅供查看和导出。" />
           <button type="button" className={secondary} disabled={disabled} onClick={() => setHistoryOpen(true)}>引用本地叙事历史</button>
@@ -733,7 +741,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
             : <DesktopArenaFeedbackMessage message={error} appearance={product === 'battle' ? 'lite' : 'full'} /> : null}
           {state.message ? state.phase === 'failed' ? <DesktopArenaFeedbackMessage message={state.message} appearance={product === 'battle' ? 'lite' : 'full'} generation /> : <p role="status">{state.message}</p> : null}
         </>,
-        community: null, result, storySession: <DesktopArenaStoryControls reportPorts={reportPorts} reportExporting={reportExporting} owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={strictActive ? '请先退出严格排位准备，再生成连续故事。' : hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
+        community: null, result, storySession: <DesktopArenaStoryControls cardWidthPx={cardWidthPx} reportPorts={reportPorts} reportExporting={reportExporting} owner={storyOwner} draft={draft} disabled={!guard.ready || busy} product={product} onNavigateStoryProduct={(original) => navigateByProductHref(router, original === 'arena' ? '/arena' : '/battle')} unavailableReason={strictActive ? '请先退出严格排位准备，再生成连续故事。' : hostedUnavailable ?? target.unavailableReason ?? (!target.modelId || !target.providerTarget ? '请选择可用的模型。' : null)} branchUnavailableReason={hostedTarget ? '分支仅支持客户端 Direct，请自行选择客户端模型。' : null} onStart={startStory} onContinue={continueStory} onBranch={branchStory} download={download} onNavigateExternal={openContent} />,
         homeLink: <BackHomeLink href="#/" onNavigate={() => navigateByProductHref(router, '/')} />,
         footer: <ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />,
   };

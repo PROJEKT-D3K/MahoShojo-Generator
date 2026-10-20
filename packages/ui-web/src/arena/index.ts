@@ -44,3 +44,12 @@ export { buildArenaEditorSections, type ArenaEditorSectionKind, type ArenaEditor
 
 export { ArenaCharacterDatabaseSelector, type ArenaCharacterDatabaseSelectorProps } from './ArenaCharacterDatabaseSelector';
 export { getArenaCardLibrarySelectionOptions, type ArenaCardLibraryPurpose } from './card-library-selection';
+
+export { BattleReportCardWidthSettings, type BattleReportCardWidthSettingsProps } from './BattleReportCardWidthSettings';
+export {
+  BATTLE_REPORT_CARD_WIDTH_MIN, BATTLE_REPORT_CARD_WIDTH_MAX, LEGACY_BATTLE_REPORT_CARD_WIDTH,
+  BATTLE_REPORT_CARD_WIDTH_PRESETS, DEFAULT_BATTLE_REPORT_CARD_WIDTH_MODE, DEFAULT_BATTLE_REPORT_CARD_WIDTH_PX,
+  normalizeBattleReportCardWidthMode, normalizeBattleReportCardWidthPx,
+  resolveBattleReportCardManualWidthPx, resolveBattleReportCardPresetWidth,
+  type BattleReportCardWidthMode, type BattleReportCardWidthSettingsValue,
+} from './battle-report-card-width';

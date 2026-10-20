@@ -10,7 +10,13 @@ import {
   resolveBattleReportCardPresetWidth,
 } from '@/components/arena/utils/battleReportCardWidth';
 
+import { BattleReportCardWidthSettings as WebControl } from '@/components/arena/components/BattleReportCardWidthSettings';
+import { BattleReportCardWidthSettings as SharedControl, normalizeBattleReportCardWidthPx as sharedNormalize } from '@mahoshojo/ui-web/arena';
+
 describe('battle report card width utils', () => {
+  it('uses the same production control and normalization as Desktop', () => {
+    expect(WebControl).toBe(SharedControl); expect(normalizeBattleReportCardWidthPx).toBe(sharedNormalize);
+  });
   it('auto 模式不返回手动宽度', () => {
     expect(
       resolveBattleReportCardManualWidthPx({
