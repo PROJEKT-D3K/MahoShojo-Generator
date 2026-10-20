@@ -208,6 +208,12 @@ export const DetailsPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [magicalGirlDetails, setMagicalGirlDetails] = useState<MagicalGirlDetails | null>(null);
+  // 仅记录已派发请求的来源；随机结果没有问卷来源，不从下一轮草稿补写。
+  const [resultContext, setResultContext] = useState<{
+    answers: QuestionnaireAnswerItem[];
+    questionTexts: string[];
+  } | null>(null);
+  const generationAttemptRef = useRef<{ dispatched: boolean } | null>(null);
   const [showImageModal, setShowImageModal] = useState(false);
   const [savedImageUrl, setSavedImageUrl] = useState<string | null>(null);
   const [showIntroduction, setShowIntroduction] = useState(true);
@@ -246,6 +252,13 @@ export const DetailsPage: React.FC = () => {
   const [selectedLanguage, setSelectedLanguage] = useState('zh-CN');
   const recommendedImageMode: ImageSaveMode = recommendedSaveModes(deviceType === 'mobile').imageSaveMode;
   const recommendedJsonMode: JsonSaveMode = recommendedSaveModes(deviceType === 'mobile').jsonSaveMode;
+
+  const cancelPendingGeneration = useCallback(() => {
+    if (generationAttemptRef.current && !generationAttemptRef.current.dispatched) {
+      generationAttemptRef.current = null;
+      setSubmitting(false);
+    }
+  }, []);
 
   const clearTransitionTimers = useCallback(() => {
     if (transitionTimerRef.current) {
@@ -385,34 +398,35 @@ export const DetailsPage: React.FC = () => {
     if (!magicalGirlDetails) return null;
     const serverAnswers = normalizeUserAnswers(
       magicalGirlDetails.userAnswers,
-      questionnaireItems.map((item) => item.question.question)
+      resultContext?.questionTexts ?? []
     );
     return {
       ...magicalGirlDetails,
-      userAnswers: serverAnswers.length > 0 ? serverAnswers : answerItems,
+      userAnswers: magicalGirlDetails.userAnswers != null ? serverAnswers : (resultContext?.answers ?? []),
     };
-  }, [magicalGirlDetails, answerItems, questionnaireItems]);
+  }, [magicalGirlDetails, resultContext]);
 
   const streamedGeneralCardForDisplay = useMemo(() => {
-    const markdown = streamingMarkdown ?? streamedGeneralCard?.content ?? null;
+    if (streamedGeneralCard) return streamedGeneralCard;
+    const markdown = streamingMarkdown;
     if (markdown === null) return null;
 
-    const fallbackName = answerItems[0]?.answer ?? '';
+    const fallbackName = resultContext?.answers[0]?.answer ?? '';
     const { card } = buildGeneralCharacterCardFromMarkdown({
       markdown,
       fallbackName,
       defaultName: '魔法少女',
     });
     return card;
-  }, [streamingMarkdown, streamedGeneralCard, answerItems]);
+  }, [streamingMarkdown, streamedGeneralCard, resultContext]);
 
   const streamPortraitPrompt = useMemo(() => {
     const name = typeof streamedGeneralCardForDisplay?.name === 'string' ? streamedGeneralCardForDisplay.name.trim() : '';
-    const contentRaw = (streamingMarkdown ?? streamedGeneralCard?.content ?? '').trim();
+    const contentRaw = (streamedGeneralCardForDisplay?.content ?? '').trim();
     const contentHead = contentRaw.length > 800 ? contentRaw.slice(0, 800) : contentRaw;
     const prefix = [name, contentHead].filter(Boolean).join(', ');
     return `${prefix ? `${prefix}, ` : ''}Xiabanmo, 二次元, 角色立绘`;
-  }, [streamedGeneralCardForDisplay, streamingMarkdown, streamedGeneralCard]);
+  }, [streamedGeneralCardForDisplay]);
 
   useEffect(() => {
     fetch('/languages.json')
@@ -527,13 +541,16 @@ export const DetailsPage: React.FC = () => {
   useEffect(() => {
     return () => {
       clearTransitionTimers();
+      generationAttemptRef.current = null;
     };
   }, [clearTransitionTimers]);
 
   useEffect(() => {
     clearTransitionTimers();
     setIsTransitioning(false);
-  }, [selectedQuestionnaires, clearTransitionTimers]);
+    // 切换问卷取消尚未派发的预检，不能在新问卷背后启动旧请求。
+    cancelPendingGeneration();
+  }, [selectedQuestionnaires, clearTransitionTimers, cancelPendingGeneration]);
 
   useEffect(() => {
     if (allowMultipleQuestionnaires) return;
@@ -659,6 +676,7 @@ export const DetailsPage: React.FC = () => {
   const beginResultNavigation = useGeneratedResultAutoScroll(resultSectionRef);
 
   const applySelection = (selection: QuestionnaireSelection) => {
+    cancelPendingGeneration();
     setSelectedQuestionnaires((prev) =>
       applyQuestionnaireSelection(prev, selection, {
         allowMultiple: allowMultipleQuestionnaires,
@@ -673,12 +691,14 @@ export const DetailsPage: React.FC = () => {
   };
 
   const handleRemoveSelection = (selectionId: string) => {
+    cancelPendingGeneration();
     clearTransitionTimers();
     setIsTransitioning(false);
     setSelectedQuestionnaires((prev) => removeQuestionnaireSelection(prev, selectionId));
   };
 
   const handleToggleSelectionLore = (selectionId: string, enabled: boolean) => {
+    cancelPendingGeneration();
     setSelectedQuestionnaires((prev) => setQuestionnaireSelectionLore(prev, selectionId, enabled));
   };
 
@@ -734,6 +754,7 @@ export const DetailsPage: React.FC = () => {
       setError(`问卷文件超过大小上限（${MAX_QUESTIONNAIRE_IMPORT_BYTES / 1024 / 1024} MiB）。`);
       return;
     }
+    cancelPendingGeneration();
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -792,6 +813,7 @@ export const DetailsPage: React.FC = () => {
   const handleAddPreset = async (presetId: string) => {
     const preset = presetEntries.find((item) => item.id === presetId);
     if (!preset) return;
+    cancelPendingGeneration();
     try {
       const response = await fetch(preset.path);
       if (!response.ok) throw new Error('加载预设问卷失败');
@@ -1129,10 +1151,12 @@ export const DetailsPage: React.FC = () => {
     reason?: string;
     origin?: string;
     backupItems?: ArrestedBackupDraftItem[];
+    isCurrent?: () => boolean;
   };
 
   const checkSensitiveWords = async (content: string, options?: SensitiveCheckOptions) => {
     const checkResult = await quickCheck(content);
+    if (options?.isCurrent && !options.isCurrent()) return true;
     if (checkResult.hasSensitiveWords) {
       if (options?.source === 'output') {
         const backupItems = options.backupItems ?? [];
@@ -1153,11 +1177,11 @@ export const DetailsPage: React.FC = () => {
     return false;
   }
 
-  const checkSensitiveWordsForAnswers = async (items: QuestionnaireAnswerItem[]): Promise<boolean> => {
+  const checkSensitiveWordsForAnswers = async (items: QuestionnaireAnswerItem[], isCurrent: () => boolean): Promise<boolean> => {
     for (const item of items) {
       const answer = item.answer?.trim();
       if (!answer) continue;
-      if (await checkSensitiveWords(answer)) {
+      if (await checkSensitiveWords(answer, { isCurrent })) {
         return true;
       }
     }
@@ -1219,6 +1243,7 @@ export const DetailsPage: React.FC = () => {
   }, [answersByKey, mergedQuestions, selectedQuestionnaires]);
 
   const handleSubmit = async (answersSnapshot?: Record<string, string>) => {
+    if (generationAttemptRef.current) return;
     if (isCooldown) {
       setError(`请等待 ${remainingTime} 秒后再生成`);
       return;
@@ -1250,20 +1275,16 @@ export const DetailsPage: React.FC = () => {
       overLimitForSubmit.length > 0,
     );
 
+    const attempt = { dispatched: false };
+    generationAttemptRef.current = attempt;
+    const isCurrentAttempt = () => generationAttemptRef.current === attempt;
     setSubmitting(true);
     setError(null);
-    setMagicalGirlDetails(null);
-    setStreamingMarkdown(null);
-    setStreamedGeneralCard(null);
-    setStreamingReasoning(null);
-    setNonStreamReasoning(null);
-    setStreamNotice(null);
-    setCharacterPortraitAsset(null);
     let nextCooldownMs = generatorCooldownMs;
 
-    if (await checkSensitiveWordsForAnswers(finalAnswerItems)) return;
-
     try {
+      if (await checkSensitiveWordsForAnswers(finalAnswerItems, isCurrentAttempt)) return;
+      if (!isCurrentAttempt()) return;
       console.log('提交答案:', finalAnswerItems);
       const customProviderPayload = buildCustomProviderRequestPayload(userProviderConfig);
 
@@ -1286,6 +1307,18 @@ export const DetailsPage: React.FC = () => {
       }
       const generationIntent = generationApiIntentLatch.tryAcquire();
       if (!generationIntent) return;
+      setResultContext({
+        answers: finalAnswerItems,
+        questionTexts: questionnaireItems.map((item) => item.question.question),
+      });
+      setMagicalGirlDetails(null);
+      setStreamingMarkdown(null);
+      setStreamedGeneralCard(null);
+      setStreamingReasoning(null);
+      setNonStreamReasoning(null);
+      setStreamNotice(null);
+      setCharacterPortraitAsset(null);
+      attempt.dispatched = true;
       const revealGeneratedResult = beginResultNavigation(generationIntent, streamController?.signal);
       const response = await generationIntent.dispatch(endpoint, {
         method: 'POST',
@@ -1414,6 +1447,7 @@ export const DetailsPage: React.FC = () => {
       setNonStreamReasoning(aiMeta?.aiReasoning ?? null);
       setError(null); // 成功时清除错误
     } catch (error) {
+      if (!isCurrentAttempt()) return;
       console.error('提交失败:', error);
 
       // 处理不同类型的错误
@@ -1441,10 +1475,13 @@ export const DetailsPage: React.FC = () => {
         setError('✨ 魔法失效了！生成详情时发生未知错误，请重试');
       }
     } finally {
-      streamAbortControllerRef.current = null;
-      setSubmitting(false);
-      // 依据当前通道实时覆盖冷却时间，确保自定义 AI 时降为 3 秒
-      startCooldown(nextCooldownMs);
+      if (isCurrentAttempt()) {
+        generationAttemptRef.current = null;
+        streamAbortControllerRef.current = null;
+        setSubmitting(false);
+      }
+      // 未派发的拒绝/取消不启动生成冷却；已派发请求保留既有冷却语义。
+      if (attempt.dispatched) startCooldown(nextCooldownMs);
     }
   };
 
@@ -1503,6 +1540,7 @@ export const DetailsPage: React.FC = () => {
                   type="button"
                   className={generationSubmitClassName}
                   onClick={() => {
+                    cancelPendingGeneration();
                     setSelectedQuestionnaires([]);
                     setSelectionReady(false);
                     setLoading(true);
@@ -1581,6 +1619,7 @@ export const DetailsPage: React.FC = () => {
                   try {
                     // 直接同步调用，移除 await
                     const data = generateRandomMagicalGirl();
+                    setResultContext(null);
                     setMagicalGirlDetails(data);
                     beginResultNavigation(data)();
                     setCharacterPortraitAsset(null);
@@ -1617,7 +1656,10 @@ export const DetailsPage: React.FC = () => {
                   expanded={showQuestionnaireSettings}
                   onToggleExpanded={() => setShowQuestionnaireSettings(!showQuestionnaireSettings)}
                   allowMultiple={allowMultipleQuestionnaires}
-                  onAllowMultipleChange={setAllowMultipleQuestionnaires}
+                  onAllowMultipleChange={(value) => {
+                    cancelPendingGeneration();
+                    setAllowMultipleQuestionnaires(value);
+                  }}
                   selections={selectedQuestionnaires}
                   shouldDisableRemove={shouldDisableRemove}
                   onRemoveSelection={handleRemoveSelection}
@@ -1779,7 +1821,7 @@ export const DetailsPage: React.FC = () => {
                     ⚠️ 已有 {overLimitItems.length} 条答案超过字数上限，继续提交将导致生成内容丧失原生性。
                   </div>
                 )}
-                {submitting && generationMode === 'stream' ? (
+                {submitting && generationAttemptRef.current?.dispatched && generationMode === 'stream' ? (
                   <div className="mt-4 flex justify-center">
                     <StreamStopButton
                       onClick={() => streamAbortControllerRef.current?.abort(STREAM_ABORT_REASON_USER)}
@@ -1814,7 +1856,7 @@ export const DetailsPage: React.FC = () => {
                 <>
                   <GeneralCharacterCard
                     general={streamedGeneralCardForDisplay}
-                    isStreaming={submitting}
+                    isStreaming={submitting && generationAttemptRef.current?.dispatched === true}
                     onStopGeneration={() => streamAbortControllerRef.current?.abort(STREAM_ABORT_REASON_USER)}
                     onSaveImage={handleSaveImage}
                     imageSaveMode={imageSaveMode}

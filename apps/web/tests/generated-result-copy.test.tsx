@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { magicalQuestionnaire } from '@/lib/questionnaire-presets';
 import { DETAILS_PREFERENCES_STORAGE_KEY } from '@/lib/settings/page-preferences';
 
-const mocks = vi.hoisted(() => ({ dispatch: vi.fn(), alert: vi.fn(), download: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), back: vi.fn() }), usePathname: () => '/', useSearchParams: () => new URLSearchParams() }));
+const mocks = vi.hoisted(() => ({ dispatch: vi.fn(), acquire: vi.fn(), quickCheck: vi.fn(), routerPush: vi.fn(), startCooldown: vi.fn(), alert: vi.fn(), download: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mocks.routerPush, replace: vi.fn(), refresh: vi.fn(), back: vi.fn() }), usePathname: () => '/', useSearchParams: () => new URLSearchParams() }));
 vi.mock('@/components/SaveToCloudButton', () => ({ default: ({ data, cardType }: { data: unknown; cardType?: string }) => <button data-card-json={JSON.stringify(data)} data-card-type={cardType}>保存到云端</button> }));
 vi.mock('@/components/BattleDataModal', () => ({ default: () => null }));
 vi.mock('@/components/DataCardDetailsModal', () => ({ default: () => null }));
-vi.mock('@/components/GeneralCharacterCard', () => ({ default: ({ general, isStreaming, onStopGeneration }: { general: { content: string }; isStreaming?: boolean; onStopGeneration?: () => void }) => <div aria-label="生成正文">{general.content}{isStreaming && <button onClick={onStopGeneration}>停止生成</button>}</div> }));
+vi.mock('@/components/GeneralCharacterCard', () => ({ default: ({ general, isStreaming, onStopGeneration }: { general: { content: string; name?: string }; isStreaming?: boolean; onStopGeneration?: () => void }) => <div aria-label="生成正文" data-card-name={general.name} data-streaming={String(Boolean(isStreaming))}>{general.content}{isStreaming && <button onClick={onStopGeneration}>停止生成</button>}</div> }));
 vi.mock('@/components/MagicalGirlCard', () => ({ default: ({ magicalGirl }: { magicalGirl: { codename: string } }) => <div aria-label="魔法少女结果">{magicalGirl.codename}</div> }));
 vi.mock('@/components/ai/AiReasoningPanel', () => ({ default: ({ reasoning }: { reasoning?: { text?: string } | null }) => reasoning?.text ? <div aria-label="思考内容">{reasoning.text}</div> : null }));
 vi.mock('@/lib/client/blobUrl', () => ({ downloadBlob: mocks.download }));
@@ -19,9 +19,9 @@ vi.mock('@/components/AiProviderSelector', () => ({ default: () => null }));
 vi.mock('@/components/ai/ProviderCooldownNotice', () => ({ ProviderCooldownNotice: () => null }));
 vi.mock('@/components/Footer', () => ({ default: () => null }));
 vi.mock('@/lib/auth', () => ({ authStorage: { getActivityHeaders: async () => ({}) } }));
-vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntentLatch: () => ({ tryAcquire: () => ({ dispatch: mocks.dispatch }) }) }));
-vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({ isCooldown: false, remainingTime: 0, startCooldown: vi.fn() }) }));
-vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: async (text: string) => ({ hasSensitiveWords: false, matchDetails: [], filteredText: text }) }));
+vi.mock('@/lib/use-generation-api-intent-latch', () => ({ useGenerationApiIntentLatch: () => ({ tryAcquire: mocks.acquire }) }));
+vi.mock('@/lib/cooldown', () => ({ useProviderModeCooldown: () => ({ isCooldown: false, remainingTime: 0, startCooldown: mocks.startCooldown }) }));
+vi.mock('@/lib/sensitive-word-filter', () => ({ quickCheck: mocks.quickCheck }));
 vi.mock('@/lib/shield-word-filter', () => ({ applyShieldWords: (text: string) => ({ filteredText: text }) }));
 
 import { DetailsPage } from '@/components/creation/DetailsPage';
@@ -36,6 +36,7 @@ const streamResponse = (tail = sse('done', { ok: true })) => new Response([
 ].join(''), { headers: { 'Content-Type': 'text/event-stream' } });
 
 const questionnaire = { ...magicalQuestionnaire, nativeAllowed: false, questions: [{ ...magicalQuestionnaire.questions[0]!, required: false }] };
+const otherQuestionnaire = { ...questionnaire, id: 'other-questionnaire', title: '新问卷', questions: [{ ...questionnaire.questions[0]!, id: 'other-name', question: '新问卷的名字？' }] };
 let host: HTMLDivElement, root: Root;
 let originalClipboard: PropertyDescriptor | undefined, originalExec: PropertyDescriptor | undefined;
 const button = (label: string) => {
@@ -70,14 +71,19 @@ beforeEach(() => {
   localStorage.setItem(DETAILS_PREFERENCES_STORAGE_KEY, JSON.stringify({ generationMode: 'stream' }));
   localStorage.setItem('mahoshojo.creator.build-rule-preference.v1', JSON.stringify({ version: 1, hasExplicitPreference: true, selectedRuleIds: [], primaryRuleId: null }));
   mocks.dispatch.mockReset().mockImplementation(async () => streamResponse());
+  mocks.acquire.mockReset().mockReturnValue({ dispatch: mocks.dispatch });
+  mocks.quickCheck.mockReset().mockImplementation(async (text: string) => ({ hasSensitiveWords: false, matchDetails: [], filteredText: text }));
+  mocks.routerPush.mockReset();
+  mocks.startCooldown.mockReset();
   mocks.download.mockReset();
   mocks.alert.mockReset(); vi.stubGlobal('alert', mocks.alert);
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
   vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
     const url = String(input);
     if (url === '/languages.json') return Response.json([{ code: 'zh-CN', name: '简体中文' }]);
-    if (url === '/questionnaires/presets/index.json') return Response.json({ presets: [{ id: questionnaire.id, kind: 'magical-girl', title: questionnaire.title, path: '/copy-questionnaire.json', isDefault: true }] });
+    if (url === '/questionnaires/presets/index.json') return Response.json({ presets: [{ id: questionnaire.id, kind: 'magical-girl', title: questionnaire.title, path: '/copy-questionnaire.json', isDefault: true }, { id: otherQuestionnaire.id, kind: 'magical-girl', title: otherQuestionnaire.title, path: '/other-questionnaire.json' }] });
     if (url === '/copy-questionnaire.json') return Response.json(questionnaire);
+    if (url === '/other-questionnaire.json') return Response.json(otherQuestionnaire);
     throw new Error(`Unexpected fetch: ${url}`);
   }));
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -226,4 +232,181 @@ it('Details remount restores the next draft without replaying the previous strea
   expect(host.querySelector('[aria-label="生成正文"]')).toBeNull();
   expect(host.querySelector('[aria-label="思考内容"]')).toBeNull();
   expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+});
+
+it('Details local random result does not gain answers from the next questionnaire draft', async () => {
+  await act(async () => root.render(<DetailsPage />));
+  await click(button('快速随机生成'));
+  const original = JSON.parse(button('保存到云端').dataset.cardJson!);
+  expect(original.userAnswers).toEqual([]);
+  expect(mocks.dispatch).not.toHaveBeenCalled();
+  await editAnswer('不属于随机结果的下次回答');
+  expect(JSON.parse(button('保存到云端').dataset.cardJson!).userAnswers).toEqual([]);
+  expect(mocks.dispatch).not.toHaveBeenCalled();
+});
+
+it('Details keeps the submitted fallback name when Markdown starts with a separator', async () => {
+  mocks.dispatch.mockResolvedValueOnce(new Response(sse('markdown', { chunk: '---\n\n## 角色介绍\n\n有实际正文' }) + sse('done', { ok: true }), { headers: { 'content-type': 'text/event-stream' } }));
+  await generate('Details');
+  const original = button('保存到云端').dataset.cardJson;
+  const portrait = host.querySelector('[aria-label="立绘提示"]')?.textContent;
+  expect(portrait).toContain('复制原件');
+  await editAnswer('下次回答');
+  expect(button('保存到云端').dataset.cardJson).toBe(original);
+  expect(host.querySelector('[aria-label="立绘提示"]')?.textContent).toBe(portrait);
+});
+
+async function chooseOtherQuestionnaire() {
+  const toggle = [...host.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.startsWith('问卷设置'))!;
+  await click(toggle);
+  const select = [...host.querySelectorAll('select')].find((item) => [...item.options].some((option) => option.value === otherQuestionnaire.id))!;
+  expect(select).toBeTruthy();
+  await act(async () => { select.value = otherQuestionnaire.id; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(host.querySelector('textarea.ui-web-questionnaire-answer-input')?.getAttribute('aria-label')).toBe('新问卷的名字？');
+}
+
+type SafetyResult = { hasSensitiveWords: boolean; matchDetails: never[]; filteredText: string };
+const safetyResult = (text: string, blocked = false): SafetyResult => ({ hasSensitiveWords: blocked, matchDetails: [], filteredText: text });
+
+it('Details random generation does not claim an existing restored questionnaire draft as its source', async () => {
+  localStorage.setItem('magicalGirlAnswersDraft', JSON.stringify({ version: 3, answerEntries: [{
+    key: `${questionnaire.id}::${questionnaire.questions[0]!.id}`, questionnaireId: questionnaire.id,
+    questionId: questionnaire.questions[0]!.id, question: questionnaire.questions[0]!.question, answer: '无关的已有草稿',
+  }] }));
+  await act(async () => root.render(<DetailsPage />));
+  await click(button('快速随机生成'));
+  expect(host.querySelector<HTMLTextAreaElement>('textarea.ui-web-questionnaire-answer-input')?.value).toBe('无关的已有草稿');
+  expect(JSON.parse(button('保存到云端').dataset.cardJson!).userAnswers).toEqual([]);
+  expect(mocks.dispatch).not.toHaveBeenCalled();
+});
+
+it.each([
+  { label: 'missing', fields: {}, expected: [{ question: questionnaire.questions[0]!.question, answer: '复制原件' }] },
+  { label: 'explicit empty', fields: { userAnswers: [] }, expected: [] },
+  { label: 'legacy server strings', fields: { userAnswers: ['服务端原回答'] }, expected: [{ question: questionnaire.questions[0]!.question, answer: '服务端原回答' }] },
+  { label: 'server-owned questions', fields: { userAnswers: [{ question: '结果原题目', answer: '结果原回答' }] }, expected: [{ question: '结果原题目', answer: '结果原回答' }] },
+])('Details preserves $label answer provenance after next draft and questionnaire edits', async ({ fields, expected }) => {
+  await prepare('Details'); await click(button('非流式'));
+  mocks.dispatch.mockResolvedValueOnce(Response.json({ codename: '服务端角色', ...fields }));
+  await click(button('提交'));
+  const original = button('保存到云端').dataset.cardJson!;
+  expect(JSON.parse(original).userAnswers).toMatchObject(expected);
+  expect(JSON.parse(original).userAnswers).toHaveLength(expected.length);
+  await editAnswer('下一轮草稿'); await chooseOtherQuestionnaire(); await editAnswer('新问卷草稿');
+  expect(button('保存到云端').dataset.cardJson).toBe(original);
+  expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+});
+
+it('Details keeps request fallback identity for a failed partial stream with no parsed name', async () => {
+  mocks.dispatch.mockResolvedValueOnce(new Response(sse('markdown', { chunk: '---\n\n已有部分正文' }) + sse('error', { error: '上游测试失败' }), { headers: { 'content-type': 'text/event-stream' } }));
+  await prepare('Details'); await click(button('提交'));
+  const preview = host.querySelector('[aria-label="生成正文"]')!;
+  expect(preview.getAttribute('data-card-name')).toBe('复制原件');
+  await editAnswer('下一轮姓名'); await click(button('非流式'));
+  expect(host.querySelector('[aria-label="生成正文"]')?.getAttribute('data-card-name')).toBe('复制原件');
+  expect(host.querySelector('[aria-label="立绘提示"]')?.textContent).toContain('复制原件');
+  expect([...host.querySelectorAll('button')].some((item) => item.textContent === '下载通用角色卡')).toBe(false);
+});
+
+it.each(['safety', 'latch', 'check-error', 'empty-answer'] as const)('Details retains the previous result when the next request is refused by %s', async (reason) => {
+  await generate('Details');
+  const original = button('保存到云端').dataset.cardJson;
+  mocks.startCooldown.mockClear(); mocks.acquire.mockClear();
+  await editAnswer(reason === 'empty-answer' ? '' : '待检查回答');
+  if (reason === 'safety') mocks.quickCheck.mockResolvedValueOnce(safetyResult('待检查回答', true));
+  if (reason === 'latch') mocks.acquire.mockReturnValueOnce(null);
+  if (reason === 'check-error') mocks.quickCheck.mockRejectedValueOnce(new Error('检查暂不可用'));
+  await click(button(reason === 'empty-answer' ? '跳过并提交' : '提交'));
+  expect(button('保存到云端').dataset.cardJson).toBe(original);
+  expect(host.querySelector('[aria-label="生成正文"]')?.textContent).toBe(markdown);
+  expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+  expect(mocks.startCooldown).not.toHaveBeenCalled();
+  if (reason !== 'latch') expect(mocks.acquire).not.toHaveBeenCalled();
+  expect(host.querySelector<HTMLTextAreaElement>('textarea.ui-web-questionnaire-answer-input')?.value).toBe(reason === 'empty-answer' ? '' : '待检查回答');
+  expect(button(reason === 'empty-answer' ? '跳过并提交' : '提交').disabled).toBe(false);
+});
+
+it('Details binds one delayed safety check, dispatched body and result fallback to the same request answers', async () => {
+  await generate('Details'); await click(button('非流式')); await editAnswer('本次请求回答');
+  const original = button('保存到云端').dataset.cardJson;
+  let finish!: (result: SafetyResult) => void;
+  mocks.quickCheck.mockImplementationOnce(() => new Promise<SafetyResult>((resolve) => { finish = resolve; }));
+  mocks.quickCheck.mockClear(); mocks.acquire.mockClear();
+  const submit = button('提交');
+  await act(async () => { submit.click(); submit.click(); });
+  expect(mocks.quickCheck).toHaveBeenCalledExactlyOnceWith('本次请求回答');
+  expect(mocks.acquire).not.toHaveBeenCalled();
+  expect(button('保存到云端').dataset.cardJson).toBe(original);
+  expect(host.querySelector('[aria-label="生成正文"]')?.getAttribute('data-streaming')).toBe('false');
+  await editAnswer('下一轮未提交回答');
+  mocks.dispatch.mockResolvedValueOnce(Response.json({ codename: '本次请求结果' }));
+  await act(async () => finish(safetyResult('本次请求回答')));
+  expect(mocks.acquire).toHaveBeenCalledTimes(1);
+  expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+  const body = JSON.parse(mocks.dispatch.mock.calls[1]![1].body);
+  expect(body.answers[0].answer).toBe('本次请求回答');
+  expect(JSON.parse(button('保存到云端').dataset.cardJson!).userAnswers[0].answer).toBe('本次请求回答');
+  expect(host.querySelector<HTMLTextAreaElement>('textarea.ui-web-questionnaire-answer-input')?.value).toBe('下一轮未提交回答');
+});
+
+it.each([false, true])('Details cancels an obsolete questionnaire preflight before a newer one (late blocked: %s)', async (blocked) => {
+  await generate('Details'); await editAnswer('旧问卷待检查');
+  const original = button('保存到云端').dataset.cardJson;
+  let finishOld!: (result: SafetyResult) => void, finishNew!: (result: SafetyResult) => void;
+  mocks.quickCheck.mockImplementationOnce(() => new Promise<SafetyResult>((resolve) => { finishOld = resolve; }));
+  mocks.acquire.mockClear();
+  await click(button('提交'));
+  await chooseOtherQuestionnaire();
+  expect(button('保存到云端').dataset.cardJson).toBe(original);
+  await editAnswer('新问卷本次回答');
+  mocks.quickCheck.mockImplementationOnce(() => new Promise<SafetyResult>((resolve) => { finishNew = resolve; }));
+  await click(button('提交'));
+  await act(async () => finishOld(safetyResult('旧问卷待检查', blocked)));
+  expect(mocks.acquire).not.toHaveBeenCalled();
+  expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+  expect(mocks.routerPush).not.toHaveBeenCalled();
+  expect(button('提交中...').disabled).toBe(true);
+  await act(async () => finishNew(safetyResult('新问卷本次回答')));
+  expect(mocks.acquire).toHaveBeenCalledTimes(1);
+  expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+  const body = JSON.parse(mocks.dispatch.mock.calls[1]![1].body);
+  expect(body.answers[0]).toMatchObject({ answer: '新问卷本次回答', questionnaireId: otherQuestionnaire.id });
+  expect(JSON.parse(button('保存到云端').dataset.cardJson!).userAnswers[0]).toMatchObject({ answer: '新问卷本次回答', question: otherQuestionnaire.questions[0]!.question });
+});
+
+it.each([false, true])('Details does not dispatch or redirect after leaving during preflight (late blocked: %s)', async (blocked) => {
+  await generate('Details'); await editAnswer('离开前的待检回答');
+  let finish!: (result: SafetyResult) => void;
+  mocks.quickCheck.mockImplementationOnce(() => new Promise<SafetyResult>((resolve) => { finish = resolve; }));
+  mocks.acquire.mockClear(); mocks.startCooldown.mockClear();
+  await click(button('提交')); await act(async () => root.render(null));
+  await act(async () => finish(safetyResult('离开前的待检回答', blocked)));
+  expect(mocks.acquire).not.toHaveBeenCalled();
+  expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+  expect(mocks.routerPush).not.toHaveBeenCalled();
+  expect(mocks.startCooldown).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('Details cancels the old preflight when a different preset starts loading (late blocked: %s)', async (blocked) => {
+  await generate('Details'); await editAnswer('旧问卷待检查');
+  const original = button('保存到云端').dataset.cardJson;
+  let finishCheck!: (result: SafetyResult) => void, finishLoad!: (response: Response) => void;
+  mocks.quickCheck.mockImplementationOnce(() => new Promise<SafetyResult>((resolve) => { finishCheck = resolve; }));
+  mocks.acquire.mockClear();
+  await click(button('提交'));
+  const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input, init) => String(input) === '/other-questionnaire.json'
+    ? new Promise<Response>((resolve) => { finishLoad = resolve; }) : originalFetch(input, init));
+  await click([...host.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.startsWith('问卷设置'))!);
+  const select = [...host.querySelectorAll('select')].find((item) => [...item.options].some((option) => option.value === otherQuestionnaire.id))!;
+  await act(async () => { select.value = otherQuestionnaire.id; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await act(async () => finishCheck(safetyResult('旧问卷待检查', blocked)));
+  expect(mocks.acquire).not.toHaveBeenCalled();
+  expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+  expect(mocks.routerPush).not.toHaveBeenCalled();
+  expect(button('保存到云端').dataset.cardJson).toBe(original);
+  await act(async () => finishLoad(Response.json(otherQuestionnaire)));
+  await editAnswer('新问卷本次回答'); await click(button('提交'));
+  expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(mocks.dispatch.mock.calls[1]![1].body).answers[0]).toMatchObject({ answer: '新问卷本次回答', questionnaireId: otherQuestionnaire.id });
 });
