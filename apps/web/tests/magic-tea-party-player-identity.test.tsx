@@ -2,7 +2,7 @@
 import { act, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MagicTeaPartySessionSetupPanel } from '@mahoshojo/ui-web/magic-tea-party';
+import { MagicTeaPartySessionSetupPanel } from '@/components/magic-tea-party/SessionSetupPanel';
 import { buildMagicTeaPartyMainPrompt } from '@mahoshojo/ai-core/magic-tea-party';
 import { useMagicTeaPartySessions, type UseMagicTeaPartySessionsResult } from '@/lib/magic-tea-party/useMagicTeaPartySessions';
 import { useMagicTeaPartyChat, type UseMagicTeaPartyChatResult } from '@/lib/magic-tea-party/useMagicTeaPartyChat';
@@ -32,13 +32,13 @@ const deferred = <T,>() => {
   const promise = new Promise<T>(yes => { resolve = yes; });
   return { promise, resolve };
 };
-function Harness() {
+function Harness({ disabled = false }: { disabled?: boolean }) {
   const current = useMagicTeaPartySessions({ userProviderConfig: provider, onGlobalError: host.error });
   const currentChat = useMagicTeaPartyChat({ activeSession: current.activeSession, activeSessionId: current.activeSessionId,
     messages: current.messages, setMessages: current.setMessages, persistSession: current.persistSession,
     preferences: current.preferences, userProviderConfig: provider, onGlobalError: host.error, router: { push: host.navigate } });
   useEffect(() => { state = current; chat = currentChat; }, [current, currentChat]);
-  return <MagicTeaPartySessionSetupPanel activeSession={current.activeSession} playerOptions={current.playerOptions}
+  return <MagicTeaPartySessionSetupPanel disabled={disabled} activeSession={current.activeSession} playerOptions={current.playerOptions}
     onOpenRoleModal={() => {}} onOpenScenarioModal={() => {}} onUploadRoles={() => {}} onUploadScenarios={() => {}}
     onUpdateRoles={current.updateActiveSessionRoles} onUpdateScenarios={current.updateActiveSessionScenarios}
     onUpdatePlayerRole={current.updatePlayerRole} onUpdateTitle={current.updateSessionTitle} onLockTitle={current.lockSessionTitle}
@@ -98,6 +98,50 @@ afterEach(async () => {
 });
 
 describe('Web current player identity across real owners and shared UI', () => {
+  it('associates the real Web setup labels and preserves native activation and title IME persistence', async () => {
+    const controls = [...container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input,textarea,select')];
+    const names = ['角色', '粘贴 / 拖拽导入角色卡（支持 SillyTavern PNG/JSON）', '情景', '粘贴 / 拖拽导入情景卡', '扮演方式', '会话标题'];
+    expect(controls).toHaveLength(6);
+    for (const [index, control] of controls.entries()) {
+      expect(control.labels).toHaveLength(1); expect(control.labels![0].textContent).toBe(names[index]);
+      expect(control.labels![0].control).toBe(control);
+      const activated = vi.fn(); control.addEventListener('click', activated);
+      await act(async () => control.labels![0].click()); expect(activated).toHaveBeenCalledOnce();
+      // Native label activation and focusability are separate checks in jsdom.
+      await act(async () => control.focus()); expect(document.activeElement).toBe(control);
+    }
+    expect((controls[0] as HTMLInputElement).accept).toBe('.json,.png');
+    const title = controls[5] as HTMLInputElement;
+    await act(async () => {
+      title.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(title, '输入法新标题');
+      title.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    });
+    expect((await getMagicTeaPartySession(session.id))?.title).toBe(session.title);
+    await act(async () => {
+      title.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+      await tick();
+      expect((await getMagicTeaPartySession(session.id))?.title).toBe('输入法新标题');
+    });
+    await waitFor(() => state.activeSession?.title === '输入法新标题');
+    await act(async () => {
+      title.blur();
+      expect((await getMagicTeaPartySession(session.id))?.title).toBe('输入法新标题');
+    });
+  });
+  it('keeps the real Web setup labels named and inert while the host disables editing', async () => {
+    await act(async () => root.render(<Harness disabled />));
+    const controls = [...container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input,textarea,select')];
+    expect(controls).toHaveLength(6);
+    for (const control of controls) {
+      expect(control.labels).toHaveLength(1); expect(control.disabled).toBe(true);
+      const activated = vi.fn(); control.addEventListener('click', activated);
+      await act(async () => { control.labels![0].click(); control.focus(); });
+      expect(activated).not.toHaveBeenCalled(); expect(document.activeElement).not.toBe(control);
+    }
+    expect((await getMagicTeaPartySession(session.id))?.title).toBe(session.title);
+    expect((await getMagicTeaPartySession(session.id))?.playerRoleId).toBe('a');
+  });
   it('clears a removed player atomically, permits reselection, and preserves historical speaker identity', async () => {
     const remove = [...container.querySelectorAll('button')].find(button => button.textContent === '×')!;
     await act(async () => { remove.click(); await tick(); await getMagicTeaPartySession(session.id); });

@@ -1,6 +1,6 @@
 'use client';
 
-import { type ChangeEvent, useEffect, useRef, useState } from 'react';
+import { type ChangeEvent, useEffect, useId, useRef, useState } from 'react';
 
 import { resolveMagicTeaPartyPlayerIdentity } from '@mahoshojo/domain/magic-tea-party/player-identity';
 import type { MagicTeaPartyRole, MagicTeaPartyScenario, MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
@@ -63,6 +63,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
     onDirtyChange,
   } = props;
 
+  const fieldId = useId();
   const roles = activeSession?.roles ?? [];
   const scenario = activeSession?.scenario;
   const auxScenarios = activeSession?.auxScenarios ?? [];
@@ -207,7 +208,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
           <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-semibold text-gray-600">角色</div>
+            <label htmlFor={`${fieldId}-role-file`} className="text-xs font-semibold text-gray-600">角色</label>
             <button
               type="button"
               className="text-xs text-pink-700 hover:underline"
@@ -217,7 +218,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
               {rolePickerLabel}
             </button>
           </div>
-          <input type="file" accept={roleFileAccept} multiple className="input-field" onChange={(event) => { if (canEdit) onUploadRoles(event); }} disabled={!canEdit} />
+          <input id={`${fieldId}-role-file`} type="file" accept={roleFileAccept} multiple className="input-field" onChange={(event) => { if (canEdit) onUploadRoles(event); }} disabled={!canEdit} />
           <div
             className="rounded-lg border border-dashed border-pink-200 bg-pink-50/40 p-3 text-xs text-gray-600"
             onDragOver={(event) => event.preventDefault()}
@@ -229,8 +230,9 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
               void onDropRoles(files);
             }}
           >
-            <div className="text-xs font-semibold text-gray-600">{roleImportHint}</div>
+            <label htmlFor={`${fieldId}-role-paste`} className="block text-xs font-semibold text-gray-600">{roleImportHint}</label>
             <textarea
+              id={`${fieldId}-role-paste`}
               className="input-field mt-2 h-20 resize-y"
               value={rolePasteText}
               onChange={(event) => { pasteVersions.current.roles += 1; setRolePasteText(event.target.value); onDirtyChange?.(Boolean(event.target.value || scenarioPasteText)); }}
@@ -283,7 +285,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
 
         <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-semibold text-gray-600">情景</div>
+            <label htmlFor={`${fieldId}-scenario-file`} className="text-xs font-semibold text-gray-600">情景</label>
             <button
               type="button"
               className="text-xs text-pink-700 hover:underline"
@@ -293,7 +295,7 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
               {scenarioPickerLabel}
             </button>
           </div>
-          <input type="file" accept=".json" multiple className="input-field" onChange={(event) => { if (canEdit) onUploadScenarios(event); }} disabled={!canEdit} />
+          <input id={`${fieldId}-scenario-file`} type="file" accept=".json" multiple className="input-field" onChange={(event) => { if (canEdit) onUploadScenarios(event); }} disabled={!canEdit} />
           <div
             className="rounded-lg border border-dashed border-pink-200 bg-pink-50/40 p-3 text-xs text-gray-600"
             onDragOver={(event) => event.preventDefault()}
@@ -305,8 +307,9 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
               void onDropScenarios(files);
             }}
           >
-            <div className="text-xs font-semibold text-gray-600">粘贴 / 拖拽导入情景卡</div>
+            <label htmlFor={`${fieldId}-scenario-paste`} className="block text-xs font-semibold text-gray-600">粘贴 / 拖拽导入情景卡</label>
             <textarea
+              id={`${fieldId}-scenario-paste`}
               className="input-field mt-2 h-20 resize-y"
               value={scenarioPasteText}
               onChange={(event) => { pasteVersions.current.scenarios += 1; setScenarioPasteText(event.target.value); onDirtyChange?.(Boolean(event.target.value || rolePasteText)); }}
@@ -377,8 +380,9 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="grid gap-1">
-          <label className="text-xs font-semibold text-gray-600">扮演方式</label>
+          <label htmlFor={`${fieldId}-player-role`} className="text-xs font-semibold text-gray-600">扮演方式</label>
           <select
+            id={`${fieldId}-player-role`}
             className="input-field"
             value={resolveMagicTeaPartyPlayerIdentity({ roles, playerRoleId: activeSession?.playerRoleId }).playerRoleId ?? ''}
             onChange={(event) => {
@@ -395,8 +399,9 @@ export function MagicTeaPartySessionSetupPanel(props: MagicTeaPartySessionSetupP
           </select>
         </div>
         <div className="grid gap-1">
-          <label className="text-xs font-semibold text-gray-600">会话标题</label>
+          <label htmlFor={`${fieldId}-title`} className="text-xs font-semibold text-gray-600">会话标题</label>
           <input
+            id={`${fieldId}-title`}
             className="input-field"
             value={titleDraft}
             onFocus={() => setIsTitleFocused(true)}

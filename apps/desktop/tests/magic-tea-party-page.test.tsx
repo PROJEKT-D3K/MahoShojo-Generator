@@ -88,6 +88,55 @@ const mount = async (href = '#/magic-tea-party') => {
   await act(async () => getDesktopAiConfigStore().refreshProfiles());
   return router;
 };
+const setupControlCases = [
+  ['角色', 'input[type="file"]', 0],
+  ['粘贴或拖入角色 JSON；PNG 与媒体附件暂不支持', 'textarea', 0],
+  ['情景', 'input[type="file"]', 1],
+  ['粘贴 / 拖拽导入情景卡', 'textarea', 1],
+  ['扮演方式', 'select', 0],
+  ['会话标题', 'input[placeholder="输入会话标题"]', 0],
+] as const;
+const setupPanel = () => container.querySelector('input[placeholder="输入会话标题"]')!.closest('fieldset')!;
+const setupControls = () => [...setupPanel().querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select')];
+
+it.each(setupControlCases)('gives the delivered setup control "%s" its native label and forwards label activation', async (name, selector, index) => {
+  await mount();
+  const control = setupPanel().querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(selector)[index]!;
+  const labels = [...(control.labels ?? [])];
+  expect(labels).toHaveLength(1);
+  const label = labels[0]!;
+  expect(label.textContent?.trim()).toBe(name);
+  expect(label.htmlFor).toBe(control.id);
+  expect(control.id).not.toBe('');
+  expect(label.control).toBe(control);
+  expect(window.document.getElementById(label.htmlFor)).toBe(control);
+  expect([...window.document.querySelectorAll('[id]')].filter(node => node.id === control.id)).toEqual([control]);
+  // 原生 label 是名称来源；不允许额外 ARIA 名称覆盖可见文案。
+  expect(control.getAttribute('aria-label')).toBeNull();
+  expect(control.getAttribute('aria-labelledby')).toBeNull();
+
+  const activated = vi.fn();
+  control.addEventListener('click', activated);
+  expect(control.matches(':disabled')).toBe(true);
+  await act(async () => { label.click(); control.focus(); });
+  expect(activated).not.toHaveBeenCalled();
+  expect(window.document.activeElement).not.toBe(control);
+
+  await click('新建会话');
+  expect(control.isConnected).toBe(true);
+  expect(control.matches(':disabled')).toBe(false);
+  const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  await act(async () => label.click());
+  expect(activated).toHaveBeenCalledTimes(1);
+  expect(activated.mock.calls[0]![0].target).toBe(control);
+  // jsdom 不实现标签默认聚焦；独立验证真实控件可聚焦，不安装 focus shim。
+  await act(async () => control.focus());
+  expect(window.document.activeElement).toBe(control);
+  await act(async () => control.blur());
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+  expect(streams).toBe(0);
+});
+
 it('shows the generated canonical reasoning through the delivered route and shared message panel', async () => {
   streamReasoning = '模型实际返回的思考😀';
   await mount(); await click('新建会话'); await click('生成开场');
@@ -253,10 +302,21 @@ it('keeps the player selected at send while credential preparation disables role
   expect(messages[0]).toMatchObject({ speakerId: role.id, content: '在途台词', meta: { speakerName: role.name } });
   expect(streams).toBe(1);
 });
-it('stages continuous title and display-name typing without per-character writes or disabling the fields', async () => {
+it('stages completed title IME and continuous display-name typing without per-character writes or disabling the fields', async () => {
   await mount(); await click('新建会话');
   const writes = () => native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
   const before = writes();
+  const title = container.querySelector<HTMLInputElement>('input[placeholder="输入会话标题"]')!;
+  await act(async () => { title.focus(); title.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })); });
+  await change('input[placeholder="输入会话标题"]', '输入法组合中的标题');
+  expect(title.value).toBe('输入法组合中的标题');
+  expect(container.textContent).toContain('当前会话：新茶会');
+  expect(container.textContent).not.toContain('当前会话：输入法组合中的标题');
+  expect(writes()).toBe(before); expect(document?.title).toBe('新茶会');
+  await act(async () => title.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })));
+  expect(container.textContent).toContain('当前会话：输入法组合中的标题');
+  await act(async () => title.blur());
+  expect(writes()).toBe(before); expect(document?.title).toBe('新茶会');
   for (const value of ['新', '新的', '新的标题😀']) {
     await change('input[placeholder="输入会话标题"]', value);
     expect(container.querySelector<HTMLInputElement>('input[placeholder="输入会话标题"]')!.matches(':disabled')).toBe(false);
@@ -278,6 +338,14 @@ it.each([false, true])('freezes the click intent while a real preset credential 
   });
   await click('发送'); expect(release).toBeTypeOf('function'); expect(streams).toBe(0);
   expect(composer.disabled).toBe(true); expect(button('新建').matches(':disabled')).toBe(true);
+  expect(setupControls()).toHaveLength(6);
+  for (const control of setupControls()) {
+    expect(control.matches(':disabled')).toBe(true);
+    const activated = vi.fn(); control.addEventListener('click', activated);
+    await act(async () => { control.labels![0]!.click(); control.focus(); });
+    expect(activated).not.toHaveBeenCalled();
+    expect(window.document.activeElement).not.toBe(control);
+  }
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(composer, '不得替换的新输入'); composer.dispatchEvent(new Event('input', { bubbles: true })); });
   await act(async () => { void router.navigate({ to: '/settings' }); });
   expect(container.textContent).toContain('茶会仍有生成');

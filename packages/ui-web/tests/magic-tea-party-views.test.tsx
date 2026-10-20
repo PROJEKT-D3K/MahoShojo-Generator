@@ -135,6 +135,43 @@ describe('controlled Tea views', () => {
     expect(send).toHaveBeenCalledTimes(1); expect(next).toHaveBeenCalledTimes(1);
   });
 
+  it('gives all six setup controls unique native labels across simultaneous instances', async () => {
+    const props = setupProps();
+    const panels = () => <><MagicTeaPartySessionSetupPanel key="a" {...props} />
+      <MagicTeaPartySessionSetupPanel key="b" {...props} activeSession={{ ...session, id: 's2' }} /></>;
+    await render(panels());
+    const controls = [...container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input,textarea,select')];
+    expect(controls).toHaveLength(12); expect(new Set(controls.map(control => control.id)).size).toBe(12);
+    const expected = ['角色', '粘贴 / 拖拽导入角色卡（JSON）', '情景', '粘贴 / 拖拽导入情景卡', '扮演方式', '会话标题'];
+    for (const [index, control] of controls.entries()) {
+      expect(control.id).not.toBe(''); expect(control.labels).toHaveLength(1);
+      const label = control.labels![0]; expect(label.textContent).toBe(expected[index % 6]); expect(label.control).toBe(control);
+      const activated = vi.fn(); control.addEventListener('click', activated);
+      await act(async () => label.click()); expect(activated).toHaveBeenCalledOnce();
+      // jsdom forwards native label activation but does not emulate the browser's focus default action.
+      await act(async () => control.focus()); expect(document.activeElement).toBe(control);
+    }
+    const ids = controls.map(control => control.id); await render(panels());
+    expect([...container.querySelectorAll('input,textarea,select')].map(control => control.id)).toEqual(ids);
+    expect(props.onUpdateTitle).not.toHaveBeenCalled(); expect(props.onUpdatePlayerRole).not.toHaveBeenCalled();
+    expect(props.onUploadRoles).not.toHaveBeenCalled(); expect(props.onUploadScenarios).not.toHaveBeenCalled();
+  });
+
+  it.each(['disabled', 'readOnly', 'no-session'] as const)('keeps named controls inert when %s', async mode => {
+    const props = setupProps(); await render(<MagicTeaPartySessionSetupPanel {...props}
+      activeSession={mode === 'no-session' ? null : session} disabled={mode === 'disabled'} readOnly={mode === 'readOnly'} />);
+    const controls = [...container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input,textarea,select')];
+    expect(controls).toHaveLength(6);
+    for (const control of controls) {
+      expect(control.labels).toHaveLength(1); expect(control.disabled).toBe(true);
+      const activated = vi.fn(); control.addEventListener('click', activated);
+      await act(async () => { control.labels![0].click(); control.focus(); });
+      expect(activated).not.toHaveBeenCalled(); expect(document.activeElement).not.toBe(control);
+    }
+    expect(props.onUpdateTitle).not.toHaveBeenCalled(); expect(props.onUpdatePlayerRole).not.toHaveBeenCalled();
+    expect(props.onUploadRoles).not.toHaveBeenCalled(); expect(props.onUploadScenarios).not.toHaveBeenCalled();
+  });
+
   it('keeps title IME completion and does not leak the prior title across session switches', async () => {
     const props = setupProps(); await render(<MagicTeaPartySessionSetupPanel {...props} />);
     const title = container.querySelector<HTMLInputElement>('input[placeholder="输入会话标题"]')!;
