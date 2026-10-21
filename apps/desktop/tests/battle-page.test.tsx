@@ -2063,7 +2063,7 @@ describe('Desktop Quick ranking real routes', () => {
           return { kind: request.kind, data: { success: true, items: values.map((item, index) => ({ ...item, rank: request.offset + index + 1 })) } };
         }
         if (request.kind === 'entityRating') return { kind: request.kind, data: { ...rankingFixture.responses.entityRating,
-          entityId: request.entityId, rating: 1300, games: 20 } };
+          entityType: request.entityType, entityId: request.entityId, queue: request.queue ?? 'strict', rating: 1300, games: 20 } };
         if (request.kind === 'tags' || request.kind === 'seasons') return { kind: request.kind, data: rankingFixture.responses[request.kind] };
         throw new Error(`Unexpected quick ranking kind: ${request.kind}`);
       }
@@ -2115,6 +2115,22 @@ describe('Desktop Quick ranking real routes', () => {
     expect(usage()).toHaveLength(1); expect(calls()).toHaveLength(0); expect(docs.size).toBe(0);
   });
 
+  it.each(['battle', 'arena'] as const)('/%s shows real selected entity scores and shared pair prediction without persisting observations', async product => {
+    fixture({ items: [rankingItem('first'), rankingItem('second')] });
+    window.location.hash = `#/${product}`; await mount(); await click('快速查看排行榜');
+    await clickToggle('first'); await clickToggle('second');
+    await act(async () => button('关闭', modal()).click()); await settle();
+    expect(container.textContent).toContain('预计胜率');
+    expect(container.textContent).toContain('50%');
+    expect(container.textContent).toContain('1300');
+    for (const entityId of ['first', 'second']) for (const queue of ['strict', 'free']) {
+      expect(reads()).toContainEqual({ kind: 'entityRating', entityType: 'data_card', entityId, queue });
+    }
+    expect(JSON.stringify(stored(product))).not.toContain('expectedPct');
+    expect(JSON.stringify(stored(product))).not.toContain('"rating"');
+    expect(calls()).toHaveLength(0); expect(docs.size).toBe(0);
+  });
+
   it.each(['battle', 'arena'] as const)('/%s toggles packaged presets but explains unavailable presets without fetching them', async product => {
     const preset = PRESET_LIST[0]!;
     fixture({ items: [rankingItem(preset.filename, { entityType: 'preset', displayName: '包内预设' }), rankingItem('unknown.json', { entityType: 'preset', displayName: '陌生预设' })] });
@@ -2125,7 +2141,8 @@ describe('Desktop Quick ranking real routes', () => {
     expect(stored(product).combatants[0]).toMatchObject({ filename: preset.filename, desktopSource: 'preset', isPreset: true, isValid: false,
       data: JSON.parse(readFileSync(resolve(process.cwd(), '../../content/presets', preset.filename), 'utf8')) });
     expect(prefilter().disabled).toBe(false); await act(async () => prefilter().click()); await settle();
-    expect(reads().some(request => request.kind === 'entityRating')).toBe(false);
+    expect(reads().some(request => request.kind === 'entityRating' && request.queue === undefined)).toBe(false);
+    expect(reads()).toContainEqual({ kind: 'entityRating', entityType: 'preset', entityId: preset.filename, queue: 'free' });
     await act(async () => prefilter().click()); await settle(); await clickToggle('包内预设');
     expect(stored(product).combatants).toHaveLength(0); expect(usage()).toHaveLength(0);
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('unknown.json'))).toBe(false);
@@ -2154,9 +2171,9 @@ describe('Desktop Quick ranking real routes', () => {
     await mount(); await click('快速查看排行榜'); expect(prefilter().disabled).toBe(true); await clickToggle();
     expect(prefilter().disabled).toBe(false);
     await change('input[placeholder="如 800"]', '1'); await settle();
-    expect(row('quick-source')).toBeUndefined(); expect(reads().some(request => request.kind === 'entityRating')).toBe(false);
+    expect(row('quick-source')).toBeUndefined(); expect(reads().some(request => request.kind === 'entityRating' && request.queue === undefined)).toBe(false);
     await act(async () => prefilter().click()); await settle();
-    const ratings = reads().filter(request => request.kind === 'entityRating');
+    const ratings = reads().filter(request => request.kind === 'entityRating' && request.queue === undefined);
     expect(ratings.length).toBeGreaterThan(0);
     for (const request of ratings) expect(request).toEqual({ kind: 'entityRating', entityType: 'data_card', entityId: 'quick-source' });
     expect(row('边界')).toBeTruthy(); expect(row('超出')).toBeUndefined(); expect(row('例外预设')).toBeTruthy();

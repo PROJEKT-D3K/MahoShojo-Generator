@@ -1,3 +1,4 @@
+import { useDesktopRosterRatings } from '../features/arena/use-roster-ratings';
 import { buildDesktopRosterExtras, snapshotDesktopRosterDetails, readDesktopRosterMetadata, type DesktopRosterMetadataSnapshot } from '../features/arena/roster-presentation';
 import { DesktopCardDetailsModal } from '../features/card-details/card-details-modal';
 import { BattleReportCardWidthSettings, resolveBattleReportCardManualWidthPx } from '@mahoshojo/ui-web/arena';
@@ -447,10 +448,11 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const selectedLibraryIds = library === 'character'
     ? draft.combatants.map(getCombatantCardLibrarySelectionId)
     : (library === 'auxScenario' ? draft.auxScenarios : library === 'material' ? draft.materials : []).map(getArenaReferenceSelectionId);
-  const rosterExtras = useMemo(() => draft.combatants.map(item => {
+  const rosterRatings = useDesktopRosterRatings(draft.combatants, JSON.stringify([scope, draft.battleMode, draft.reportFormat]), !roomState.constrained && !state.pendingRestore);
+  const rosterExtras = useMemo(() => draft.combatants.map((item, index) => {
     const metadata = readDesktopRosterMetadata(item, rosterMetadata);
-    return buildDesktopRosterExtras(item, () => setRosterDetails(snapshotDesktopRosterDetails(item)), metadata);
-  }), [draft.combatants, rosterMetadata]);
+    return buildDesktopRosterExtras(item, () => setRosterDetails(snapshotDesktopRosterDetails(item)), metadata, rosterRatings[index]);
+  }), [draft.combatants, rosterMetadata, rosterRatings]);
   const roster: ArenaRosterSectionModel = {
     rowExtras: row => rosterExtras[row.index],
     rows: draft.combatants.map((item, index) => ({ key: String(index), displayName: arenaItemName(item.data), typeLabel: getCombatantTypeLabel(item.type), guidance: item.characterGuidance ?? '', index, teamKey: item.teamId ? String(item.teamId) : null, isPlaceholder: false })),

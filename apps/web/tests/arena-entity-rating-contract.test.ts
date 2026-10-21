@@ -34,6 +34,20 @@ describe('existing entity-rating handler and public reader compatibility', () =>
     const directory = process.env.PUBLIC_RANKING_HANDLER_WIRE_DIR;
     if (directory) { mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, `${name}.json`), JSON.stringify(emitted)); }
   });
+  it.each(fixture.entityRatingTargets)('preserves the existing handler target: $request.entityType/$request.queue', async ({ request, response: expected }) => {
+    mocks.row.mockResolvedValue({ rating: expected.rating, games: expected.games });
+    let emitted: unknown;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, options: RequestInit) => {
+      expect(options).toMatchObject({ credentials: 'omit', redirect: 'error' });
+      const response = await handler(new Request(`https://example.test${path}`) as NextRequest);
+      emitted = await response.clone().json();
+      return response;
+    }));
+    await expect(readWebRanking(PublicRankingRequestSchema.parse(request))).resolves.toEqual(expected);
+    expect(mocks.row).toHaveBeenCalledWith({ synthetic: true }, request.queue, request.entityType, request.entityId);
+    const directory = process.env.PUBLIC_RANKING_HANDLER_WIRE_DIR;
+    if (directory) { mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, `${request.entityType}-${request.queue}.json`), JSON.stringify(emitted)); }
+  });
   it('applies the shared streamed budget and rejects identity substitution', async () => {
     expect(PublicRankingRequestSchema.safeParse(request).success).toBe(true);
     const budget = PUBLIC_RANKING_BODY_BUDGETS.entityRating;

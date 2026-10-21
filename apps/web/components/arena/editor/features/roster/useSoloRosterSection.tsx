@@ -1,7 +1,7 @@
 'use client';
 
 import { COMBATANT_TYPE_LABELS } from '@mahoshojo/domain/arena-file-parser';
-import { ArenaCombatantTags, ArenaCombatantTechScore } from '@mahoshojo/ui-web/arena';
+import { ArenaCombatantTags, ArenaCombatantTechScore, ArenaCombatantWinRate } from '@mahoshojo/ui-web/arena';
 
 import { useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,7 +9,7 @@ import { ArenaRankingQueueFeedback } from '@mahoshojo/ui-web/arena';
 
 import { TierBadge } from '@/components/ranking/TierBadge';
 import { TechBadge } from '@/components/ranking/TechBadge';
-import { computeEloExpectedScore } from '@/lib/arena/elo';
+import { predictArenaPair, type ArenaEloPrediction } from '@mahoshojo/domain/arena-elo';
 import { authStorage } from '@/lib/auth';
 import { downloadBlob } from '@/lib/client/blobUrl';
 import { computeTechIndex } from '@/lib/metrics/techIndex';
@@ -47,14 +47,6 @@ type ApiRating = {
   losses: number;
   draws: number;
   tier: string;
-};
-
-type EloWinRatePrediction = {
-  queue: Queue;
-  expectedScore: number;
-  expectedPct: number;
-  selfRating: number;
-  opponentRating: number;
 };
 
 type DataCardMetaResponse = {
@@ -303,7 +295,7 @@ export const useSoloRosterSectionModel = (input: {
   })();
 
   const eloPredictionByCombatantKey = useMemo(() => {
-    const map = new Map<string, EloWinRatePrediction>();
+    const map = new Map<string, ArenaEloPrediction>();
 
     if (combatants.length !== 2 || readableCombatants.length !== 2) return map;
 
@@ -326,31 +318,10 @@ export const useSoloRosterSectionModel = (input: {
     const playerFree = toFiniteNumber(playerParticipant?.queues.free.rating ?? playerMeta?.ratings.free?.rating);
     const opponentFree = toFiniteNumber(opponentParticipant?.queues.free.rating ?? opponentMeta?.ratings.free?.rating);
 
-    const queueToUse: Queue | null = playerStrict != null && opponentStrict != null ? 'strict' : playerFree != null && opponentFree != null ? 'free' : null;
-    if (!queueToUse) return map;
-
-    const playerRating = queueToUse === 'strict' ? playerStrict : playerFree;
-    const opponentRating = queueToUse === 'strict' ? opponentStrict : opponentFree;
-    if (playerRating == null || opponentRating == null) return map;
-
-    const playerExpectedScore = computeEloExpectedScore(playerRating, opponentRating);
-    const opponentExpectedScore = computeEloExpectedScore(opponentRating, playerRating);
-
-    map.set(playerKey, {
-      queue: queueToUse,
-      expectedScore: playerExpectedScore,
-      expectedPct: Math.round(playerExpectedScore * 100),
-      selfRating: playerRating,
-      opponentRating,
-    });
-
-    map.set(opponentKey, {
-      queue: queueToUse,
-      expectedScore: opponentExpectedScore,
-      expectedPct: Math.round(opponentExpectedScore * 100),
-      selfRating: opponentRating,
-      opponentRating: playerRating,
-    });
+    const predictions = predictArenaPair({ strict: playerStrict, free: playerFree }, { strict: opponentStrict, free: opponentFree });
+    if (!predictions) return map;
+    map.set(playerKey, predictions[0]);
+    map.set(opponentKey, predictions[1]);
 
     return map;
   }, [combatants.length, generationParticipantByEntityKey, metaByEntityKey, readableCombatants]);
@@ -419,17 +390,7 @@ export const useSoloRosterSectionModel = (input: {
             <ArenaCombatantTechScore techScore={techScore} />
             <ArenaRankingQueueFeedback queue="strict" result={generationParticipant?.queues.strict ?? null} fallbackRating={meta?.ratings.strict?.rating} />
             <ArenaRankingQueueFeedback queue="free" result={generationParticipant?.queues.free ?? null} fallbackRating={meta?.ratings.free?.rating} />
-            {(() => {
-              if (!prediction) return null;
-              const queueLabel = prediction.queue === 'strict' ? '严格' : '自由';
-              const title = `预计胜率（Elo · ${queueLabel}）：${prediction.expectedPct}%（${prediction.selfRating} vs ${prediction.opponentRating}）`;
-              return (
-                <span className="whitespace-nowrap" title={title}>
-                  预计胜率：<span className="font-mono font-semibold text-sky-700">{prediction.expectedPct}%</span>
-                  <span className="ml-1 text-gray-500">（{queueLabel}）</span>
-                </span>
-              );
-            })()}
+            {prediction ? <ArenaCombatantWinRate prediction={prediction} /> : null}
           </div>
           {!entityKey ? (
             <div className="mt-0.5 text-[11px] text-gray-500">提示：未登记为数据卡/预设时，无法参与排位计分。</div>

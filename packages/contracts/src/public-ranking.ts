@@ -22,7 +22,7 @@ export const PublicRankingRequestSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('seasons') }).strict(),
   z.object({ kind: z.literal('archive'), seasonId: PublicRankingSeasonIdSchema }).strict(),
   z.object({ kind: z.literal('ratingHistory'), entityType, entityId: text.trim().min(1) }).strict(),
-  z.object({ kind: z.literal('entityRating'), entityType: z.literal('data_card'), entityId: text.trim().min(1).max(200) }).strict(),
+  z.object({ kind: z.literal('entityRating'), entityType, entityId: text.trim().min(1).max(200), queue: queue.optional() }).strict(),
 ]);
 export type PublicRankingRequest = z.infer<typeof PublicRankingRequestSchema>;
 export const PublicRankingSeasonExtremeSchema = z.object({ rating: z.number(), games: z.number(), occurredAt: text, tier: z.enum(['无牌', '白牌', '字牌', '花牌', '权杖']) });
@@ -87,7 +87,7 @@ export type EntityRatingHistory = z.infer<typeof EntityRatingHistorySchema>;
 /** The existing endpoint clamps finite values to nonnegative integers, without a safe-integer cap. */
 const currentRatingNumber = z.number().nonnegative().refine(Number.isInteger, 'Expected an integer');
 export const PublicEntityRatingSchema = z.object({
-  success: z.literal(true), queue: z.literal('strict'), entityType: z.literal('data_card'), entityId: text,
+  success: z.literal(true), queue, entityType, entityId: text,
   found: z.boolean(), rating: currentRatingNumber, games: currentRatingNumber,
 });
 export type PublicEntityRating = z.infer<typeof PublicEntityRatingSchema>;
@@ -113,7 +113,7 @@ export function publicRankingPath(request: PublicRankingRequest): string {
   if (request.kind === 'tags') return '/api/tags';
   if (request.kind === 'seasons') return '/config/seasons.json';
   if (request.kind === 'archive') return `/data/seasons/archive_${PublicRankingSeasonIdSchema.parse(request.seasonId)}.json`;
-  if (request.kind === 'entityRating') return `/api/arena/entity-rating?${new URLSearchParams({ entityType: 'data_card', entityId: request.entityId.trim(), queue: 'strict' })}`;
+  if (request.kind === 'entityRating') return `/api/arena/entity-rating?${new URLSearchParams({ entityType: request.entityType, entityId: request.entityId.trim(), queue: request.queue ?? 'strict' })}`;
   if (request.kind === 'ratingHistory') return `/api/arena/entity-rating-history?${new URLSearchParams({ entityType: request.entityType, entityId: request.entityId.trim(), queue: 'strict' })}`;
   const f = request.filters;
   const params = new URLSearchParams({ queue: f.queue, sort: f.sort, order: f.order, includePresets: f.includePresets ? '1' : '0', isNative: f.isNative, limit: String(request.limit) });
@@ -131,7 +131,8 @@ export function publicRankingPath(request: PublicRankingRequest): string {
 export function parsePublicRankingResponse<R extends PublicRankingRequest>(request: R, raw: unknown): PublicRankingData<R['kind']> {
   const result = PublicRankingResponseSchema.parse(raw);
   if (result.kind !== request.kind
-    || (request.kind === 'entityRating' && result.kind === 'entityRating' && result.data.entityId !== request.entityId.trim())
+    || (request.kind === 'entityRating' && result.kind === 'entityRating' && (result.data.entityType !== request.entityType
+      || result.data.entityId !== request.entityId.trim() || result.data.queue !== (request.queue ?? 'strict')))
     || (request.kind === 'ratingHistory' && result.kind === 'ratingHistory' && (result.data.entityType !== request.entityType || result.data.entityId !== request.entityId.trim()))
     || (request.kind === 'archive' && result.kind === 'archive' && result.data.season.id !== request.seasonId)
     || (request.kind === 'leaderboard' && result.kind === 'leaderboard' && (result.data.items.length > Math.min(request.limit, 300 - request.offset)

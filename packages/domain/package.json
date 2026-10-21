@@ -280,7 +280,8 @@
     "./word-filter-utils": "./src/word-filter-utils.ts",
     "./shield-word-filter": "./src/shield-word-filter.ts",
     "./narrative-draft-storage": "./src/narrative-draft-storage.ts",
-    "./metrics/tech-index": "./src/metrics/tech-index.ts"
+    "./metrics/tech-index": "./src/metrics/tech-index.ts",
+    "./arena-elo": "./src/arena-elo.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

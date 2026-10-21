@@ -145,11 +145,13 @@ macro_rules! query_enum {
     };
 }
 query_enum!(Queue { Strict => "strict", Free => "free" });
+fn strict_queue() -> Queue {
+    Queue::Strict
+}
 query_enum!(Sort { Rating => "rating", Tech => "tech" });
 query_enum!(Order { Desc => "desc", Asc => "asc" });
 query_enum!(NativeFilter { Any => "any", Yes => "1", No => "0" });
 query_enum!(EntityType { DataCard => "data_card", Preset => "preset" });
-string_enum!(DataCardEntity { DataCard => "data_card" });
 string_enum!(StrictQueue { Strict => "strict" });
 string_enum!(RatingResult { Win => "win", Loss => "loss", Draw => "draw" });
 string_enum!(Tier { Unranked => "无牌", White => "白牌", Word => "字牌", Flower => "花牌", Wand => "权杖" });
@@ -196,9 +198,11 @@ enum Operation {
     },
     EntityRating {
         #[serde(rename = "entityType")]
-        entity_type: DataCardEntity,
+        entity_type: EntityType,
         #[serde(rename = "entityId")]
         entity_id: String,
+        #[serde(default = "strict_queue")]
+        queue: Queue,
     },
     RatingHistory {
         #[serde(rename = "entityType")]
@@ -259,16 +263,20 @@ impl PublicRankingRequest {
     fn route(&self) -> Result<(String, usize), CloudError> {
         let invalid = || CloudError::new(CloudErrorCode::InvalidRequest, "排行榜读取参数无效");
         let (filters, limit, path, extra, budget) = match &self.0 {
-            Operation::EntityRating { entity_id, .. } => {
+            Operation::EntityRating {
+                entity_type,
+                entity_id,
+                queue,
+            } => {
                 let id = trim_query(entity_id);
                 if id.is_empty() || id.encode_utf16().count() > 200 {
                     return Err(invalid());
                 }
                 let mut query = url::form_urlencoded::Serializer::new(String::new());
                 query.extend_pairs([
-                    ("entityType", "data_card"),
+                    ("entityType", entity_type.wire()),
                     ("entityId", id),
-                    ("queue", "strict"),
+                    ("queue", queue.wire()),
                 ]);
                 return Ok((
                     format!("{ENTITY_RATING_PATH}?{}", query.finish()),
@@ -618,8 +626,8 @@ impl SeasonArchive {
 object! {
     pub struct EntityRating {
         success: bool,
-        queue: StrictQueue,
-        entity_type: DataCardEntity,
+        queue: Queue,
+        entity_type: EntityType,
         entity_id: String,
         found: bool,
         #[serde(deserialize_with = "current_rating_number")]
@@ -687,11 +695,16 @@ pub async fn read_public_ranking(
     };
     match request.0 {
         Operation::EntityRating {
-            entity_type: DataCardEntity::DataCard,
+            entity_type,
             entity_id,
+            queue,
         } => {
             let data: EntityRating = serde_json::from_slice(&bytes).map_err(|_| incompatible())?;
-            if !data.success || data.entity_id != trim_query(&entity_id) {
+            if !data.success
+                || data.entity_type.wire() != entity_type.wire()
+                || data.entity_id != trim_query(&entity_id)
+                || data.queue.wire() != queue.wire()
+            {
                 return Err(incompatible());
             }
             Ok(PublicRankingResponse::EntityRating(data))
@@ -833,8 +846,15 @@ mod tests {
         status: u16,
         bytes: Vec<u8>,
     ) -> Result<PublicRankingResponse, CloudError> {
+        read_bytes_for_request(request(kind), status, bytes).await
+    }
+    async fn read_bytes_for_request(
+        request: PublicRankingRequest,
+        status: u16,
+        bytes: Vec<u8>,
+    ) -> Result<PublicRankingResponse, CloudError> {
         let (origin, _, task) = server(status, bytes, "").await;
-        let result = read_public_ranking(&CloudState::with_origin(&origin), request(kind)).await;
+        let result = read_public_ranking(&CloudState::with_origin(&origin), request).await;
         task.await.unwrap();
         result
     }
@@ -1488,7 +1508,7 @@ mod tests {
             value["entityId"] = json!(id);
             assert!(invalid_request(value));
         }
-        for kind in ["preset", "local", "cache"] {
+        for kind in ["local", "cache", "constructor"] {
             let mut value = fixture()["requests"]["entityRating"].clone();
             value["entityType"] = json!(kind);
             assert!(invalid_request(value));
@@ -1572,11 +1592,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn entity_rating_preserves_fixed_entity_and_queue_targets() {
+        for case in fixture()["entityRatingTargets"].as_array().unwrap() {
+            let req: PublicRankingRequest =
+                serde_json::from_value(case["request"].clone()).unwrap();
+            let (route, budget) = req.route().unwrap();
+            assert_eq!(budget, ENTITY_RATING_MAX_BYTES);
+            let url = url::Url::parse(&format!("https://example.test{route}")).unwrap();
+            assert_eq!(url.path(), ENTITY_RATING_PATH);
+            assert_eq!(
+                url.query_pairs().into_owned().collect::<Vec<_>>(),
+                ["entityType", "entityId", "queue"]
+                    .map(|key| (key.into(), case["request"][key].as_str().unwrap().into()))
+            );
+            let mut body = case["response"].clone();
+            add_private_fields(&mut body);
+            let output = read_bytes_for_request(req, 200, serde_json::to_vec(&body).unwrap())
+                .await
+                .unwrap();
+            let output = serde_json::to_value(output).unwrap();
+            for key in ["success", "queue", "entityType", "entityId", "found"] {
+                assert_eq!(output["data"][key], case["response"][key]);
+            }
+            for key in ["rating", "games"] {
+                assert_eq!(output["data"][key].as_f64(), case["response"][key].as_f64());
+            }
+            assert!(!output.to_string().contains("DO-NOT-LEAK"));
+            for (field, value) in [
+                (
+                    "queue",
+                    if case["request"]["queue"] == "strict" {
+                        "free"
+                    } else {
+                        "strict"
+                    },
+                ),
+                (
+                    "entityType",
+                    if case["request"]["entityType"] == "preset" {
+                        "data_card"
+                    } else {
+                        "preset"
+                    },
+                ),
+                ("entityId", "other"),
+            ] {
+                let req = serde_json::from_value(case["request"].clone()).unwrap();
+                let mut body = case["response"].clone();
+                body[field] = json!(value);
+                assert_eq!(
+                    read_bytes_for_request(req, 200, serde_json::to_vec(&body).unwrap())
+                        .await
+                        .unwrap_err()
+                        .code,
+                    CloudErrorCode::ProtocolMismatch,
+                    "mismatched {field}"
+                );
+            }
+            let req = serde_json::from_value(case["request"].clone()).unwrap();
+            let mut missing = case["response"].clone();
+            missing["found"] = json!(false);
+            missing["rating"] = json!(1000);
+            missing["games"] = json!(0);
+            assert!(
+                read_bytes_for_request(req, 200, serde_json::to_vec(&missing).unwrap())
+                    .await
+                    .is_ok()
+            );
+        }
+        for queue in [
+            json!("unknown"),
+            json!("constructor"),
+            json!(""),
+            Value::Null,
+            json!([]),
+            json!(0),
+        ] {
+            let mut value = fixture()["requests"]["entityRating"].clone();
+            value["queue"] = queue;
+            assert!(invalid_request(value));
+        }
+    }
+
+    #[tokio::test]
     async fn entity_rating_consumes_actual_web_handler_wire() {
         let Some(directory) = std::env::var_os("PUBLIC_RANKING_HANDLER_WIRE_INPUT") else {
             return;
         };
-        for name in ["found", "missing", "zero", "fraction", "large"] {
+        let mut cases = ["found", "missing", "zero", "fraction", "large"]
+            .map(|name| {
+                (
+                    name.to_string(),
+                    fixture()["requests"]["entityRating"].clone(),
+                )
+            })
+            .to_vec();
+        for case in fixture()["entityRatingTargets"].as_array().unwrap() {
+            cases.push((
+                format!(
+                    "{}-{}",
+                    case["request"]["entityType"].as_str().unwrap(),
+                    case["request"]["queue"].as_str().unwrap()
+                ),
+                case["request"].clone(),
+            ));
+        }
+        for (name, request) in cases {
             let bytes =
                 std::fs::read(std::path::PathBuf::from(&directory).join(format!("{name}.json")))
                     .unwrap();
@@ -1587,9 +1708,12 @@ mod tests {
                 games: Box<serde_json::value::RawValue>,
             }
             let numbers: OriginalNumbers = serde_json::from_slice(&bytes).unwrap();
-            let output =
-                serde_json::to_value(read_bytes("entityRating", 200, bytes).await.unwrap())
-                    .unwrap();
+            let output = serde_json::to_value(
+                read_bytes_for_request(serde_json::from_value(request).unwrap(), 200, bytes)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
             for key in ["success", "queue", "entityType", "entityId", "found"] {
                 assert_eq!(output["data"][key], expected[key]);
             }

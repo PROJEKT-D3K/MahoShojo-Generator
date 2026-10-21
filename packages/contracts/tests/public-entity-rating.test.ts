@@ -4,8 +4,8 @@ import { PUBLIC_RANKING_BODY_BUDGETS, PublicRankingRequestSchema, parsePublicRan
 
 const request = { kind: 'entityRating', entityType: 'data_card', entityId: 'public-card' } as const;
 const body = fixture.responses.entityRating;
-describe('current strict pivot rating is a fixed anonymous summary', () => {
-  it('allows only a bounded data-card target, never caller-controlled queue or transport', () => {
+describe('current entity rating is a fixed anonymous summary', () => {
+  it('keeps omitted queue compatible with strict pivot and rejects unbounded targets or transport', () => {
     const parsed = PublicRankingRequestSchema.parse({ ...request, entityId: ' \ufeff旧 / ?&+%😀\n' });
     const url = new URL(publicRankingPath(parsed), 'https://example.test');
     expect(url.pathname).toBe('/api/arena/entity-rating');
@@ -16,7 +16,21 @@ describe('current strict pivot rating is a fixed anonymous summary', () => {
     }
     for (const entityId of ['', ' \ufeff\n', '😀'.repeat(101)]) expect(PublicRankingRequestSchema.safeParse({ ...request, entityId }).success).toBe(false);
     expect(PublicRankingRequestSchema.safeParse({ ...request, entityId: '😀'.repeat(100) }).success).toBe(true);
-    for (const entityType of ['preset', 'local', 'cache']) expect(PublicRankingRequestSchema.safeParse({ ...request, entityType }).success).toBe(false);
+    for (const entityType of ['local', 'cache', 'constructor']) expect(PublicRankingRequestSchema.safeParse({ ...request, entityType }).success).toBe(false);
+  });
+  it.each(fixture.entityRatingTargets)('reads only the matching fixed entity and queue: $request.entityType/$request.queue', ({ request, response }) => {
+    const parsed = PublicRankingRequestSchema.parse(request);
+    const url = new URL(publicRankingPath(parsed), 'https://example.test');
+    expect(url.pathname).toBe('/api/arena/entity-rating');
+    expect([...url.searchParams]).toEqual([['entityType', request.entityType], ['entityId', request.entityId], ['queue', request.queue]]);
+    expect(parsePublicRankingResponse(parsed, { kind: 'entityRating', data: response })).toEqual(response);
+    for (const [key, value] of [['queue', request.queue === 'strict' ? 'free' : 'strict'], ['entityType', request.entityType === 'preset' ? 'data_card' : 'preset'], ['entityId', 'other']] as const) {
+      expect(() => parsePublicRankingResponse(parsed, { kind: 'entityRating', data: { ...response, [key]: value } })).toThrow();
+    }
+    expect(parsePublicRankingResponse(parsed, { kind: 'entityRating', data: { ...response, found: false, rating: 1000, games: 0 } })).toMatchObject({ found: false, rating: 1000, games: 0 });
+  });
+  it('rejects non-enum queues instead of treating them as strict', () => {
+    for (const queue of ['unknown', 'constructor', '', null, [], 0]) expect(PublicRankingRequestSchema.safeParse({ ...request, queue }).success).toBe(false);
   });
   it('projects required handler facts without imposing an invented safe-integer cap', () => {
     expect(parsePublicRankingResponse(request, { kind: 'entityRating', data: { ...body, cookie: 'DROP', privateMetadata: 'DROP' } })).toEqual(body);

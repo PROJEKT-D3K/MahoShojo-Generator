@@ -316,6 +316,76 @@
       "games": 7
     }
   },
+  "entityRatingTargets": [
+    {
+      "request": {
+        "kind": "entityRating",
+        "entityType": "data_card",
+        "entityId": "public-card",
+        "queue": "strict"
+      },
+      "response": {
+        "success": true,
+        "queue": "strict",
+        "entityType": "data_card",
+        "entityId": "public-card",
+        "found": true,
+        "rating": 1200,
+        "games": 7
+      }
+    },
+    {
+      "request": {
+        "kind": "entityRating",
+        "entityType": "data_card",
+        "entityId": "public-card",
+        "queue": "free"
+      },
+      "response": {
+        "success": true,
+        "queue": "free",
+        "entityType": "data_card",
+        "entityId": "public-card",
+        "found": true,
+        "rating": 1200,
+        "games": 7
+      }
+    },
+    {
+      "request": {
+        "kind": "entityRating",
+        "entityType": "preset",
+        "entityId": "魔法少女.json",
+        "queue": "strict"
+      },
+      "response": {
+        "success": true,
+        "queue": "strict",
+        "entityType": "preset",
+        "entityId": "魔法少女.json",
+        "found": true,
+        "rating": 1200,
+        "games": 7
+      }
+    },
+    {
+      "request": {
+        "kind": "entityRating",
+        "entityType": "preset",
+        "entityId": "魔法少女.json",
+        "queue": "free"
+      },
+      "response": {
+        "success": true,
+        "queue": "free",
+        "entityType": "preset",
+        "entityId": "魔法少女.json",
+        "found": true,
+        "rating": 1200,
+        "games": 7
+      }
+    }
+  ],
   "budgets": {
     "leaderboard": 1048576,
     "search": 262144,

@@ -122,7 +122,7 @@ describe('shared Arena roster section via solo adapter', () => {
     expect(alpha.textContent).toContain('自由：0（已计分；本局变化：Δ+0）');
     expect(alpha.textContent).toContain('技术值：77');
     expect(alpha.textContent).toContain('无牌');
-    expect(alpha.querySelector('[title="预计胜率（Elo · 严格）：44%（1210 vs 1250）"]')).not.toBeNull();
+    expect(alpha.querySelector('[title="预计胜率（Elo · 严格）：44%（1210 vs 1250）；实体评分观察值，不代表本次计分资格或正文已验签"]')).not.toBeNull();
     expect(alpha.textContent).not.toContain('需登录');
     expect(fetch).not.toHaveBeenCalled();
   });
