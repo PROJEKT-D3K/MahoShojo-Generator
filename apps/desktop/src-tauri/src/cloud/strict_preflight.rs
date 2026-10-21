@@ -321,13 +321,7 @@ fn assert_current(
     secrets: &dyn SecretStore,
     snapshot: &SessionSnapshot,
 ) -> Result<(), CloudError> {
-    let _guard = account_session_gate()?;
-    let current = secrets
-        .resolve(ACCOUNT_SESSION_REF)
-        .map_err(|e| CloudError::from_secret_store(&e))?;
-    if state.account_epoch.load(Ordering::SeqCst) != snapshot.epoch
-        || current.as_deref() != Some(snapshot.raw.as_str())
-    {
+    if !snapshot.is_current(state, secrets)? {
         return Err(CloudError::new(
             CloudErrorCode::StateMismatch,
             "账号已变化，旧预检结果已忽略",
@@ -461,6 +455,7 @@ mod tests {
             &StoredSession {
                 cookie: "better-auth.session_token=synthetic-only".to_string(),
                 activity_token: None,
+                auth_key: None,
                 session_expires_at: None,
                 account: CloudAccountRecord {
                     user_id: 42,
@@ -1033,5 +1028,35 @@ mod tests {
                 .is_err()
         );
         task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn derived_credentials_do_not_reject_inflight_success() {
+        let (origin, seen, release, server_task) =
+            server(200, fixture()["response"].to_string().into_bytes(), "").await;
+        let state = Arc::new(CloudState::with_origin(&origin));
+        let store = secrets();
+        let request_state = state.clone();
+        let request_store = store.clone();
+        let snapshot = load_session_snapshot(&state, store.as_ref())
+            .unwrap()
+            .unwrap();
+        let task = tokio::spawn(async move {
+            read_strict_preflight(&request_state, request_store.as_ref(), request()).await
+        });
+        seen.await.unwrap();
+        persist_session_credentials(
+            &state,
+            store.as_ref(),
+            &snapshot,
+            &SessionCredentials {
+                activity_token: Some("synthetic-only".into()),
+                auth_key: Some("synthetic-key".into()),
+            },
+        )
+        .unwrap();
+        let _ = release.send(());
+        assert!(task.await.unwrap().is_ok());
+        assert_eq!(store.deletes.load(Ordering::SeqCst), 0);
+        server_task.await.unwrap();
     }
 }

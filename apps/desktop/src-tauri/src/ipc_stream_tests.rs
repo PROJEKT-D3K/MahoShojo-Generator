@@ -83,7 +83,7 @@ impl Transport {
                 "account-session:web-v1",
                 &json!({
                     "cookie": "better-auth.session_token=SYNTHETIC-CHANNEL-TEST",
-                    "activityToken": "SYNTHETIC-ACTIVITY-TOKEN",
+                    "activityToken": "eyJ2IjoxLCJ1c2VySWQiOjQyLCJpc3N1ZWRBdCI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwiZXhwaXJlc0F0IjoiOTk5OS0wMS0wMVQwMDowMDowMFoiLCJzaWduYXR1cmUiOiJTWU5USEVUSUMtTk9ULUEtVkFMSUQtU0lHTkFUVVJFIn0",
                     "sessionExpiresAt": null,
                     "account": {"userId": 42, "username": "synthetic", "displayName": null},
                 })

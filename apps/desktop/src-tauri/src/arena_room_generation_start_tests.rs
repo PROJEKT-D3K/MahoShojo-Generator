@@ -1030,6 +1030,7 @@ fn other_owner(epoch: u64) -> Arc<AccountAccess> {
         epoch,
         CancellationToken::new(),
         "synthetic-second-owner".into(),
+        "synthetic-second-auth-key".into(),
         Arc::new(|| Ok(true)),
         Arc::new(|| Ok(true)),
     ))

@@ -941,7 +941,7 @@ impl ArenaState {
     }
     /// Hono 生产端运行在 bearer 模式，不解析 BA 会话 cookie。账号请求的凭据
     /// 是与 Web 端同源的 activity token——经 `/api/auth/verify` 以本会话换取，
-    /// 惰性获取一次后随 Flight 复用；不落盘、不出 native。
+    /// Flight 只在内存复用未过期缓存；下一次显式派发前按需刷新，不重放请求。
     async fn ensure_account_credential(
         &self,
         product: Product,
@@ -952,7 +952,9 @@ impl ArenaState {
         let expected_user_id = {
             let f = flight.lock().map_err(|_| stale())?;
             match f.actor {
-                Actor::Account { expected_user_id } if f.activity_token.is_none() => {
+                Actor::Account { expected_user_id }
+                    if cloud::activity_token_needs_refresh(f.activity_token.as_deref()) =>
+                {
                     expected_user_id
                 }
                 _ => return Ok(()),
@@ -963,7 +965,7 @@ impl ArenaState {
             .map_err(account_credential_error)?;
         self.is_current(product, flight, cloud, secrets)?;
         let mut f = flight.lock().map_err(|_| stale())?;
-        if f.activity_token.is_none() {
+        if cloud::activity_token_needs_refresh(f.activity_token.as_deref()) {
             f.secrets_to_redact.push(token.clone());
             f.activity_token = Some(token);
         }

@@ -517,3 +517,16 @@ node scripts/desktop-tavern-acceptance.mjs launch --state-root $State
 - `probe-mismatch`：明确拒绝，`observe` 中该场景没有业务 POST
 
 `mock-trace.json` 只记录有限路由/状态/事件数量/故障/提前连接关闭；连接关闭不证明 UI 或 IPC 取消正确。真实窗口行为须另行观察，不以这些文件宣称实机通过。build/launch 单次使用；失败或退出后保留隔离目录，重新验收使用新副本与 state，不清理日常环境。
+
+## Arena 账号凭据边界
+
+Native 登录以 Web origin 的会话 cookie 调用 `/api/auth/verify`，将返回的
+`activityToken` 与 `authKey` 一起保存在原系统凭据槽；旧会话缺字段时按需补取。
+Hono 托管生成使用 activity token，多人房间 HTTP 使用 `Authorization: Bearer <authKey>`，
+两者保留各自的账号断言，不向 Hono 发送 Web cookie，也不放宽 Room 的
+`allowActivityToken: false`。Web origin 的预检、战报与对账仍使用 cookie。
+
+派生凭据回填不改变账号或房间租约身份；回填与迟到响应都必须复验原账号代次和
+cookie/用户身份。activity token 的到期字段只用于下一次显式请求前的刷新提示，
+不是本地验签或授权依据；服务端仍负责认证。换证失败不会发送原业务请求，
+已经发出的生成或房间写操作不会因刷新而自动重放。凭据不进入 IPC、导出或日志。

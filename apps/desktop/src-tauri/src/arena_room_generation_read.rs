@@ -247,7 +247,7 @@ impl RoomInstance {
                     .execute_generation_read(
                         &request,
                         context.account.user_id,
-                        &context.account.cookie,
+                        &context.account.auth_key,
                         &cancel,
                         &target,
                     )

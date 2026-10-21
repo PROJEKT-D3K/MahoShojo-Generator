@@ -119,7 +119,7 @@ impl RoomHttp {
         &self,
         input: &HttpRequest,
         expected_user_id: u64,
-        cookie: &str,
+        auth_key: &str,
         cancel: &CancellationToken,
     ) -> Result<Value, RoomError> {
         let operation = input.operation;
@@ -138,7 +138,7 @@ impl RoomHttp {
         if cancel.is_cancelled() {
             return Err(RoomError::new("scope-changed", not_sent));
         }
-        let request = self.prepare(input, expected_user_id, cookie)?;
+        let request = self.prepare(input, expected_user_id, auth_key)?;
         // A polled send may have dispatched even when no response or headers arrive.
         let unknown = if operation.is_post() {
             "unknown"
@@ -165,15 +165,15 @@ impl RoomHttp {
         room: &str,
         wire: &std::sync::Arc<Vec<u8>>,
         owner: u64,
-        cookie: &str,
+        auth_key: &str,
         cancel: &CancellationToken,
     ) -> Result<Value, RoomError> {
         let invalid = || RoomError::new("invalid-request", "not-applied");
         if !protocol::canonical_path_id(room)
             || owner == 0
             || owner > MAX_SAFE_INTEGER
-            || cookie.is_empty()
-            || cookie.len() > 16 * 1024
+            || auth_key.is_empty()
+            || auth_key.len() > 16 * 1024
             || wire.len() > protocol::MAX_START_REQUEST_BYTES
         {
             return Err(invalid());
@@ -184,13 +184,14 @@ impl RoomHttp {
         let room = utf8_percent_encode(room, CANONICAL_PATH_ENCODE_SET);
         let mut url = self.origin.clone();
         url.set_path(&format!("/api/arena/rooms/v1/{room}/generations"));
-        let mut credential = header::HeaderValue::from_str(cookie).map_err(|_| invalid())?;
+        let mut credential =
+            header::HeaderValue::from_str(&format!("Bearer {auth_key}")).map_err(|_| invalid())?;
         credential.set_sensitive(true);
         let request = self
             .client
             .post(url)
             .header(header::ORIGIN, &self.caller)
-            .header(header::COOKIE, credential)
+            .header(header::AUTHORIZATION, credential)
             .header(header::ACCEPT, "application/json; arena-error-taxonomy=2")
             .header(header::ACCEPT_ENCODING, "identity")
             .header(PROTOCOL_HEADER, PROTOCOL_VERSION)
@@ -212,7 +213,7 @@ impl RoomHttp {
         &self,
         input: &HttpRequest,
         expected_user_id: u64,
-        cookie: &str,
+        auth_key: &str,
         cancel: &CancellationToken,
         target: &GenerationReadTarget,
     ) -> Result<GenerationReadResponse, RoomError> {
@@ -227,7 +228,7 @@ impl RoomHttp {
         {
             return Err(RoomError::new("invalid-request", "not-applicable"));
         }
-        let request = self.prepare(input, expected_user_id, cookie)?;
+        let request = self.prepare(input, expected_user_id, auth_key)?;
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(cancelled()),
@@ -272,7 +273,7 @@ impl RoomHttp {
         &self,
         input: &HttpRequest,
         owner: u64,
-        cookie: &str,
+        auth_key: &str,
     ) -> Result<reqwest::Request, RoomError> {
         let operation = input.operation;
         let outcome = if operation.is_post() {
@@ -283,8 +284,8 @@ impl RoomHttp {
         let invalid = || RoomError::new("invalid-request", outcome);
         if owner == 0
             || owner > MAX_SAFE_INTEGER
-            || cookie.is_empty()
-            || cookie.len() > 16 * 1024
+            || auth_key.is_empty()
+            || auth_key.len() > 16 * 1024
             || (input.resume_only && operation != Operation::Create)
             || (input.proposal_id.is_some()
                 != matches!(
@@ -396,13 +397,14 @@ impl RoomHttp {
         } else {
             Method::GET
         };
-        let mut credential = header::HeaderValue::from_str(cookie).map_err(|_| invalid())?;
+        let mut credential =
+            header::HeaderValue::from_str(&format!("Bearer {auth_key}")).map_err(|_| invalid())?;
         credential.set_sensitive(true);
         let mut request = self
             .client
             .request(method, url)
             .header(header::ORIGIN, &self.caller)
-            .header(header::COOKIE, credential)
+            .header(header::AUTHORIZATION, credential)
             .header(header::ACCEPT, "application/json; arena-error-taxonomy=2")
             .header(header::ACCEPT_ENCODING, "identity")
             .header(PROTOCOL_HEADER, PROTOCOL_VERSION)
@@ -834,7 +836,9 @@ mod tests {
         assert_eq!(request.url().query(), None);
         assert_eq!(request.url().fragment(), None);
         assert!(request.body().is_none());
-        assert!(request.headers()[header::COOKIE].is_sensitive());
+        assert!(request.headers()[header::AUTHORIZATION].is_sensitive());
+        assert!(!request.headers().contains_key(header::COOKIE));
+        assert!(!request.headers().contains_key("x-mahoshojo-activity-token"));
         assert_eq!(request.headers()[EXPECTED_USER_ID_HEADER], "v1:42");
         assert_eq!(request.headers()[PROTOCOL_HEADER], PROTOCOL_VERSION);
         assert_eq!(request.headers()[header::ACCEPT_ENCODING], "identity");
@@ -908,7 +912,7 @@ mod tests {
         ));
         assert!(request
             .to_ascii_lowercase()
-            .contains("cookie: session=private-generation-read\r\n"));
+            .contains("authorization: bearer session=private-generation-read\r\n"));
         assert!(request.ends_with("\r\n\r\n"));
         let spaced = format!(" \n{raw}\t\r\n");
         let response = generation_roundtrip(200, spaced.as_bytes().to_vec(), "")
@@ -1455,7 +1459,9 @@ mod tests {
                 .unwrap();
             assert_eq!(request.url().origin(), service_origin().unwrap().origin());
             assert_eq!(request.headers()[header::ORIGIN], caller_origin().unwrap());
-            assert!(request.headers()[header::COOKIE].is_sensitive());
+            assert!(request.headers()[header::AUTHORIZATION].is_sensitive());
+            assert!(!request.headers().contains_key(header::COOKIE));
+            assert!(!request.headers().contains_key("x-mahoshojo-activity-token"));
             assert_eq!(request.headers()[PROTOCOL_HEADER], PROTOCOL_VERSION);
             assert_eq!(request.headers()[EXPECTED_USER_ID_HEADER], "v1:42");
             assert_eq!(
@@ -1553,6 +1559,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generation_start_uses_bearer_without_cookie_or_activity_token() {
+        let (client, task) = server(500, b"{}".to_vec(), "").await;
+        let wire = std::sync::Arc::new(b"{}".to_vec());
+        assert!(client
+            .execute_generation_start(
+                "room_01JARENAEXAMPLE",
+                &wire,
+                42,
+                "SYNTHETIC-ROOM-KEY",
+                &CancellationToken::new()
+            )
+            .await
+            .is_err());
+        let request = String::from_utf8(task.await.unwrap())
+            .unwrap()
+            .to_ascii_lowercase();
+        let head = request.split("\r\n\r\n").next().unwrap();
+        assert!(head.starts_with("post /api/arena/rooms/v1/room_01jarenaexample/generations "));
+        assert!(head.contains("authorization: bearer synthetic-room-key"));
+        assert!(head.contains("x-mahoshojo-room-expected-user-id: v1:42"));
+        assert!(!head.contains("cookie:"));
+        assert!(!head.contains("x-mahoshojo-activity-token:"));
+    }
+
+    #[tokio::test]
     async fn all_seven_real_http_replies_validate_and_inject_private_lease() {
         for operation in [
             Operation::Discover,
@@ -1590,7 +1621,7 @@ mod tests {
                 .to_ascii_lowercase();
             assert!(head
                 .lines()
-                .any(|line| line == "cookie: session=private-lease"));
+                .any(|line| line == "authorization: bearer session=private-lease"));
             assert!(head
                 .lines()
                 .any(|line| line == "x-mahoshojo-room-expected-user-id: v1:42"));

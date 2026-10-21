@@ -7,7 +7,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const RID: &str = "arena_request_1234";
 const KEY: &str = "SYNTHETIC-PROVIDER-KEY-CANARY";
 const COOKIE: &str = "better-auth.session_token=SYNTHETIC-COOKIE-CANARY";
-const ACTIVITY: &str = "SYNTHETIC-ACTIVITY-TOKEN-CANARY";
+// 真实 wire 形状，远未来到期、假签名；绝不能作为真实服务凭据。
+const ACTIVITY: &str = "eyJ2IjoxLCJ1c2VySWQiOjQyLCJpc3N1ZWRBdCI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwiZXhwaXJlc0F0IjoiOTk5OS0wMS0wMVQwMDowMDowMFoiLCJzaWduYXR1cmUiOiJTWU5USEVUSUMtTk9ULUEtVkFMSUQtU0lHTkFUVVJFIn0";
 const VERIFY_TEST_PATH: &str = "/api/auth/verify";
 fn gid() -> String {
     format!("arena_{}", "a".repeat(64))
@@ -1508,7 +1509,7 @@ async fn explicit_same_actor_restore_rebinds_scope_without_lending_new_cookie_to
             .unwrap()
             .unwrap()
             .replace(COOKIE, "better-auth.session_token=NEW-SYNTHETIC-SESSION")
-            .replace(ACTIVITY, "SYNTHETIC-ACTIVITY-TOKEN-NEW");
+            .replace(ACTIVITY, "eyJ2IjoxLCJ1c2VySWQiOjQyLCJpc3N1ZWRBdCI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwiZXhwaXJlc0F0IjoiOTk5OS0wMS0wMVQwMDowMDowMFoiLCJzaWduYXR1cmUiOiJTWU5USEVUSUMtTkVXLVNJR05BVFVSRSJ9");
         secrets.set("account-session:web-v1", &current).unwrap();
         assert_eq!(
             control(
@@ -1564,7 +1565,7 @@ async fn explicit_same_actor_restore_rebinds_scope_without_lending_new_cookie_to
                 assert!(!r.headers.contains_key("cookie"));
                 assert_eq!(
                     r.headers.get(ACTIVITY_TOKEN_HEADER).unwrap(),
-                    "SYNTHETIC-ACTIVITY-TOKEN-NEW"
+                    "eyJ2IjoxLCJ1c2VySWQiOjQyLCJpc3N1ZWRBdCI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwiZXhwaXJlc0F0IjoiOTk5OS0wMS0wMVQwMDowMDowMFoiLCJzaWduYXR1cmUiOiJTWU5USEVUSUMtTkVXLVNJR05BVFVSRSJ9"
                 );
                 assert_eq!(r.headers.get(EXPECTED_USER_HEADER).unwrap(), "v1:42");
             } else {
@@ -2302,3 +2303,74 @@ mod json_tests;
 
 #[path = "arena_hosted_story_tests.rs"]
 mod story_tests;
+
+#[tokio::test]
+async fn expired_flight_refreshes_before_next_explicit_request_without_replaying_create() {
+    let srv = server_with_auth(4, 42, move |i, _| match i {
+        0 => capability(),
+        1 => Reply::sse(standard_wire()),
+        _ => status("completed"),
+    })
+    .await;
+    let cloud = CloudState::with_origin(&srv.origin);
+    let state = ArenaState::with_origin(srv.origin.clone());
+    let secrets = Secrets::default();
+    login(&secrets, 42);
+    stream(
+        &state,
+        &cloud,
+        &secrets,
+        create(true, false),
+        &Sink::default(),
+    )
+    .await
+    .unwrap();
+    let expired = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        json!({"v":1,"userId":42,"issuedAt":"2000-01-01T00:00:00Z","expiresAt":"2000-01-02T00:00:00Z","signature":"SYNTHETIC-ONLY"}).to_string());
+    state.flights.lock().unwrap()[&Product::Battle]
+        .lock()
+        .unwrap()
+        .activity_token = Some(expired.clone());
+    let mut stored: Value =
+        serde_json::from_str(&secrets.resolve("account-session:web-v1").unwrap().unwrap()).unwrap();
+    stored["activityToken"] = json!(expired);
+    secrets
+        .set("account-session:web-v1", &stored.to_string())
+        .unwrap();
+    control(&state, &cloud, &secrets, operation("lookup-request", true))
+        .await
+        .unwrap();
+    srv.task.await.unwrap();
+    let requests = srv.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.path == VERIFY_TEST_PATH)
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.method == "POST" && r.path != VERIFY_TEST_PATH)
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .last()
+            .unwrap()
+            .headers
+            .get(ACTIVITY_TOKEN_HEADER)
+            .unwrap(),
+        ACTIVITY
+    );
+    assert_eq!(
+        state.flights.lock().unwrap()[&Product::Battle]
+            .lock()
+            .unwrap()
+            .activity_token
+            .as_deref(),
+        Some(ACTIVITY)
+    );
+}

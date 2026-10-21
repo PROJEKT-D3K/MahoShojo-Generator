@@ -46,6 +46,7 @@ pub(crate) struct AccountAccess {
     pub(crate) epoch: u64,
     pub(crate) cancel: CancellationToken,
     cookie: String,
+    auth_key: String,
     current: AccountCheck,
     clear: AccountCheck,
 }
@@ -56,6 +57,7 @@ impl AccountAccess {
         epoch: u64,
         cancel: CancellationToken,
         cookie: String,
+        auth_key: String,
         current: AccountCheck,
         clear: AccountCheck,
     ) -> Self {
@@ -64,6 +66,7 @@ impl AccountAccess {
             epoch,
             cancel,
             cookie,
+            auth_key,
             current,
             clear,
         }
@@ -1244,7 +1247,7 @@ impl RoomInstance {
                         request.room_id.as_deref().expect("start room"),
                         start_wire.as_ref().expect("start wire"),
                         context.account.user_id,
-                        &context.account.cookie,
+                        &context.account.auth_key,
                         &context.cancel,
                     )
                     .await
@@ -1254,7 +1257,7 @@ impl RoomInstance {
                     .execute(
                         &request,
                         context.account.user_id,
-                        &context.account.cookie,
+                        &context.account.auth_key,
                         &context.cancel,
                     )
                     .await
@@ -2286,7 +2289,7 @@ impl RoomInstance {
             .execute(
                 &input,
                 context.account.user_id,
-                &context.account.cookie,
+                &context.account.auth_key,
                 cancel,
             )
             .await;
@@ -3268,6 +3271,7 @@ mod tests {
             epoch,
             cancel,
             "synthetic-room-cookie=canary".into(),
+            "synthetic-room-auth-key".into(),
             Arc::new(move || {
                 if current_error.load(Ordering::SeqCst) {
                     return Err(RoomError::new("storage-unavailable", "not-applicable"));

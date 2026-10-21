@@ -3,7 +3,7 @@
 //! 冻结的边界：
 //!
 //! - Desktop 访问项目自有服务的**唯一**通路是本模块：固定 origin、固定路由、
-//!   不跟随重定向、只注入账号会话 cookie。renderer 拿不到任意 URL / header 的
+//!   不跟随重定向，按固定目标注入会话 cookie 或服务端派生凭据。renderer 拿不到任意 URL / header 的
 //!   请求能力，也拿不到凭据明文。
 //! - 登录走 `desktop-auth-v1`：系统浏览器授权页 → loopback `127.0.0.1:<port>/callback`
 //!   一次性回跳（PKCE S256 + state）→ `/api/auth/native/exchange` 建立会话。
@@ -342,6 +342,9 @@ struct StoredSession {
     /// 与 cookie 同在 keyring，不出 native、不过 IPC。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     activity_token: Option<String>,
+    /// Room Hono 的既有 Bearer 凭据；只存于同一系统凭据槽，不出 IPC。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_key: Option<String>,
     session_expires_at: Option<String>,
     account: CloudAccountRecord,
 }
@@ -476,6 +479,74 @@ struct SessionSnapshot {
     session: StoredSession,
     raw: String,
     epoch: u64,
+}
+
+/// 派生凭据回填不是切号；调用方须同时比较账号 epoch。
+fn same_session_identity(raw: Option<&str>, observed: &StoredSession) -> bool {
+    raw.and_then(|raw| serde_json::from_str::<StoredSession>(raw).ok())
+        .is_some_and(|current| {
+            current.cookie == observed.cookie && current.account.user_id == observed.account.user_id
+        })
+}
+
+impl SessionSnapshot {
+    fn is_current(
+        &self,
+        state: &CloudState,
+        secrets: &dyn SecretStore,
+    ) -> Result<bool, CloudError> {
+        let _guard = account_session_gate()?;
+        let current = secrets
+            .resolve(ACCOUNT_SESSION_REF)
+            .map_err(|error| CloudError::from_secret_store(&error))?;
+        Ok(state.account_epoch.load(Ordering::SeqCst) == self.epoch
+            && same_session_identity(current.as_deref(), &self.session))
+    }
+}
+
+/// 未验签的 expiresAt 只用于刷新提示，绝不作为身份或权限证明。
+/// 真实有效性仍由 Hono 验签；不猜测签发端 TTL。
+pub(crate) fn activity_token_needs_refresh(token: Option<&str>) -> bool {
+    let Some(token) = token.filter(|token| token.len() <= 8 * 1024) else {
+        return true;
+    };
+    let Some(payload) = URL_SAFE_NO_PAD
+        .decode(token)
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+    else {
+        return true;
+    };
+    if payload.get("v").and_then(serde_json::Value::as_u64) != Some(1)
+        || !payload
+            .get("userId")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|id| (1..=9_007_199_254_740_991).contains(&id))
+        || !payload
+            .get("signature")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|signature| !signature.trim().is_empty())
+        || payload
+            .get("issuedAt")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .ok()
+            })
+            .is_none()
+    {
+        return true;
+    }
+    let Some(expires) = payload
+        .get("expiresAt")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+        })
+    else {
+        return true;
+    };
+    expires <= time::OffsetDateTime::now_utc()
 }
 
 fn load_session_snapshot(
@@ -659,7 +730,7 @@ pub(crate) fn arena_account_snapshot(
 /// Arena 托管生成发往 Hono 的账号凭据：生产端固定在 bearer 模式、不解析
 /// Better Auth 会话 cookie；这里用本会话 cookie 向 Web origin 换取带签名的
 /// activity token（与 Web 端访问托管生成的既有认证机制同源）。
-/// 会话记录里已存的 token 直接复用；缺失字段的旧会话现取后原子回写——
+/// 复用未过期的 token；缺失或过期时在显式派发前现取并原子回写——
 /// 回写只追加派生字段，不改变身份指纹，也不打断在途生成/房间租约。
 /// 凭据只经 native 内存与 keyring：不过 IPC、不进入 renderer。
 pub(crate) async fn arena_activity_token(
@@ -679,21 +750,74 @@ pub(crate) async fn arena_activity_token(
             "登录身份已变化",
         ));
     }
-    if let Some(token) = snapshot.session.activity_token {
-        return Ok(token);
+    if !activity_token_needs_refresh(snapshot.session.activity_token.as_deref()) {
+        return Ok(snapshot
+            .session
+            .activity_token
+            .clone()
+            .expect("fresh token"));
     }
-    let token = verify_activity_token(state, &snapshot.session).await?;
-    // 回写以记录未被并发替换为前提；失败不阻断本次生成（下次使用惰性重取）。
-    let _ = persist_activity_token(secrets, &snapshot.raw, &token);
+    let credentials = verify_session_credentials(state, &snapshot.session).await?;
+    let token = credentials
+        .activity_token
+        .clone()
+        .ok_or_else(|| CloudError::invalid_response("会话校验"))?;
+    if activity_token_needs_refresh(Some(&token)) {
+        return Err(CloudError::invalid_response("会话校验"));
+    }
+    persist_session_credentials(state, secrets, &snapshot, &credentials)?;
     Ok(token)
 }
 
-/// `/api/auth/verify`：会话 cookie → 已签名 activity token。
+/// 原租约覆盖等待换证的整个过程；同账号重登也不能复活旧 attach。
+pub(crate) async fn room_auth_key(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+    lease: &RoomAccountLease,
+) -> Result<String, CloudError> {
+    let stale = || CloudError::new(CloudErrorCode::StateMismatch, "登录身份已变化");
+    if !lease.is_current(state, secrets)? {
+        return Err(stale());
+    }
+    let snapshot = load_session_snapshot(state, secrets)?.ok_or_else(stale)?;
+    if snapshot.epoch != lease.epoch
+        || snapshot.session.cookie != lease.cookie
+        || snapshot.session.account.user_id != lease.user_id
+    {
+        return Err(stale());
+    }
+    let key = if let Some(key) = &snapshot.session.auth_key {
+        key.clone()
+    } else {
+        let credentials = tokio::select! {
+            biased;
+            _ = lease.cancel.cancelled() => return Err(stale()),
+            result = verify_session_credentials(state, &snapshot.session) => result?,
+        };
+        let key = credentials
+            .auth_key
+            .clone()
+            .ok_or_else(|| CloudError::invalid_response("会话校验"))?;
+        persist_session_credentials(state, secrets, &snapshot, &credentials)?;
+        key
+    };
+    if !lease.is_current(state, secrets)? {
+        return Err(stale());
+    }
+    Ok(key)
+}
+
+struct SessionCredentials {
+    activity_token: Option<String>,
+    auth_key: Option<String>,
+}
+
+/// `/api/auth/verify`：会话 cookie → activity token 与 Room Bearer authKey。
 /// 返回的 user.id 必须等于本地会话身份，否则视为身份漂移。
-async fn verify_activity_token(
+async fn verify_session_credentials(
     state: &CloudState,
     session: &StoredSession,
-) -> Result<String, CloudError> {
+) -> Result<SessionCredentials, CloudError> {
     let response = authed_request(
         &state.http,
         reqwest::Method::POST,
@@ -731,32 +855,51 @@ async fn verify_activity_token(
             "服务端会话身份已变化",
         ));
     }
-    match payload
-        .get("activityToken")
-        .and_then(serde_json::Value::as_str)
-    {
-        Some(token) if !token.is_empty() && token.len() <= 8 * 1024 => Ok(token.to_string()),
-        _ => Err(CloudError::invalid_response("会话校验")),
-    }
+    let credential = |field: &str| {
+        payload
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= 8 * 1024
+                    && !value.chars().any(char::is_whitespace)
+            })
+            .map(str::to_owned)
+    };
+    Ok(SessionCredentials {
+        activity_token: credential("activityToken"),
+        auth_key: credential("authKey"),
+    })
 }
 
-/// 把换得的 activity token 并回会话记录：仅在记录仍是观测到的那份时写入，
-/// 避免把凭据落到并发登录产生的新会话上。
-fn persist_activity_token(
+/// 原子区内按身份与 epoch 合并当前记录，不覆盖另一种凭据的并发回填。
+fn persist_session_credentials(
+    state: &CloudState,
     secrets: &dyn SecretStore,
-    observed_raw: &str,
-    token: &str,
+    observed: &SessionSnapshot,
+    credentials: &SessionCredentials,
 ) -> Result<(), CloudError> {
     let guard = account_session_gate()?;
     let current = secrets
         .resolve(ACCOUNT_SESSION_REF)
         .map_err(|error| CloudError::from_secret_store(&error))?;
-    if current.as_deref() != Some(observed_raw) {
-        return Ok(());
+    if state.account_epoch.load(Ordering::SeqCst) != observed.epoch
+        || !same_session_identity(current.as_deref(), &observed.session)
+    {
+        return Err(CloudError::new(
+            CloudErrorCode::StateMismatch,
+            "登录身份已变化",
+        ));
     }
-    let mut session: StoredSession = serde_json::from_str(observed_raw)
-        .map_err(|_| CloudError::new(CloudErrorCode::InternalError, "会话记录损坏"))?;
-    session.activity_token = Some(token.to_string());
+    let mut session: StoredSession =
+        serde_json::from_str(current.as_deref().expect("matched session"))
+            .map_err(|_| CloudError::new(CloudErrorCode::InternalError, "会话记录损坏"))?;
+    if let Some(token) = &credentials.activity_token {
+        session.activity_token = Some(token.clone());
+    }
+    if let Some(key) = &credentials.auth_key {
+        session.auth_key = Some(key.clone());
+    }
     write_session_record(&guard, secrets, &session)
 }
 
@@ -1157,6 +1300,7 @@ async fn exchange_grant(
     let mut session = StoredSession {
         cookie,
         activity_token: None,
+        auth_key: None,
         session_expires_at: Some(payload.session_expires_at),
         account: CloudAccountRecord {
             user_id: payload.account.user_id,
@@ -1164,10 +1308,11 @@ async fn exchange_grant(
             display_name: payload.account.display_name,
         },
     };
-    // 登录完成顺手换好 hosted 生成所需的 activity token。失败不阻断登录本身——
+    // 登录完成顺手换好 hosted 与 Room 所需的派生凭据。失败不阻断登录本身——
     // 会话 cookie 仍有效，首次 hosted 请求时按旧会话路径惰性补取并报真实错误。
-    if let Ok(token) = verify_activity_token(state, &session).await {
-        session.activity_token = Some(token);
+    if let Ok(credentials) = verify_session_credentials(state, &session).await {
+        session.activity_token = credentials.activity_token;
+        session.auth_key = credentials.auth_key;
     }
     Ok(session)
 }
@@ -4237,7 +4382,7 @@ async fn dispatch_cloud_route(
                 .map_err(|error| CloudError::from_secret_store(&error))?;
             if snapshot.as_ref().is_none_or(|snapshot| {
                 env.state.account_epoch.load(Ordering::SeqCst) != snapshot.epoch
-                    || current.as_deref() != Some(snapshot.raw.as_str())
+                    || !same_session_identity(current.as_deref(), &snapshot.session)
             }) {
                 return Err(CloudError::new(
                     CloudErrorCode::NotAuthenticated,
@@ -4532,6 +4677,7 @@ mod tests {
         let record = StoredSession {
             cookie: "better-auth.session_token=tok".to_string(),
             activity_token: Some("synthetic-activity-token".to_string()),
+            auth_key: None,
             session_expires_at: Some("2026-10-12T00:00:00Z".to_string()),
             account: CloudAccountRecord {
                 user_id: 7,
@@ -4749,6 +4895,7 @@ mod tests {
                         .unwrap_or(StoredSession {
                             cookie: "better-auth.session_token=native.tok".into(),
                             activity_token: Some("synthetic-activity-token".into()),
+                            auth_key: None,
                             session_expires_at: Some("2026-10-12T00:00:00.000Z".into()),
                             account: CloudAccountRecord {
                                 user_id: 7,
@@ -5416,6 +5563,7 @@ mod tests {
                 &StoredSession {
                     cookie: "better-auth.session_token=tok".to_string(),
                     activity_token: None,
+                    auth_key: None,
                     session_expires_at: None,
                     account: CloudAccountRecord {
                         user_id: 1,
@@ -7044,6 +7192,7 @@ mod tests {
                 &StoredSession {
                     cookie: "better-auth.session_token=native.tok".to_string(),
                     activity_token: None,
+                    auth_key: None,
                     session_expires_at: None,
                     account: CloudAccountRecord {
                         user_id: 7,
@@ -7101,6 +7250,7 @@ mod tests {
                 &StoredSession {
                     cookie: "better-auth.session_token=sublimation-test".to_string(),
                     activity_token: None,
+                    auth_key: None,
                     session_expires_at: None,
                     account: CloudAccountRecord {
                         user_id: 7,
@@ -7569,6 +7719,7 @@ mod tests {
                 &StoredSession {
                     cookie: "better-auth.session_token=native.tok".to_string(),
                     activity_token: None,
+                    auth_key: None,
                     session_expires_at: None,
                     account: CloudAccountRecord {
                         user_id: 7,
@@ -7987,6 +8138,7 @@ mod tests {
         StoredSession {
             cookie: "better-auth.session_token=native.tok".to_string(),
             activity_token: None,
+            auth_key: None,
             session_expires_at: Some("2026-10-12T00:00:00Z".to_string()),
             account: CloudAccountRecord {
                 user_id: 7,
@@ -8143,6 +8295,59 @@ mod tests {
                 }
             }
             assert_eq!(cache.get().stats().unwrap().summary_count, 0);
+        });
+    }
+
+    #[test]
+    fn card_library_owned_success_survives_derived_credential_writeback() {
+        rt().block_on(async {
+            let fixture = owned_fixture();
+            for suite in ["deletionResponses", "restoreResponses"] {
+                for wire in fixture["cardLibrary"][suite]["valid"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .take(8)
+                {
+                    let server = spawn_mock_server();
+                    let state = CloudState::with_origin(&server.origin);
+                    let secrets = MemorySecrets::new();
+                    let cache = TestCache::new("derived-credential-writeback");
+                    store_session(&secrets, &stored_test_session()).unwrap();
+                    let snapshot = load_session_snapshot(&state, &secrets).unwrap().unwrap();
+                    *server.card_response_override.lock().unwrap() =
+                        Some((200, wire["body"].to_string()));
+                    let (release, wait) = std::sync::mpsc::channel();
+                    *server.card_reply_gate.lock().unwrap() = Some(wait);
+                    let fill = async {
+                        tokio::time::timeout(Duration::from_secs(3), async {
+                            while server.last_card_request.lock().unwrap().is_none() {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                        })
+                        .await
+                        .unwrap();
+                        persist_session_credentials(
+                            &state,
+                            &secrets,
+                            &snapshot,
+                            &SessionCredentials {
+                                activity_token: Some("synthetic-only".into()),
+                                auth_key: Some("synthetic-key".into()),
+                            },
+                        )
+                        .unwrap();
+                        release.send(()).unwrap();
+                    };
+                    let request = serde_json::from_value(wire["request"].clone()).unwrap();
+                    let (result, ()) = tokio::join!(
+                        cloud_card_library_request(&state, &secrets, cache.get(), request),
+                        fill
+                    );
+                    assert_eq!(result.unwrap().status, 200);
+                    assert_eq!(server.card_request_count.load(Ordering::SeqCst), 1);
+                }
+            }
         });
     }
 
@@ -9774,3 +9979,7 @@ mod tests {
     include!("cloud_session_cleanup_tests.rs");
     include!("cloud_session_status_tests.rs");
 }
+
+#[cfg(test)]
+#[path = "cloud/session_credentials_tests.rs"]
+mod session_credentials_tests;

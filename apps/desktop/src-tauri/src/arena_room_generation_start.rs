@@ -932,7 +932,7 @@ impl RoomInstance {
         let request = cancel.request();
         // Prepare verifies the exact request and 64/65 KiB gates without network or provider reads.
         self.http
-            .prepare(&request, context.account.user_id, &context.account.cookie)?;
+            .prepare(&request, context.account.user_id, &context.account.auth_key)?;
         let public = json!({"intentId":cancel_id,"operation":"generationCancel","roomId":basis.room_id,"generationTarget":cancel.target(),"cancelMode":"starting-v1","startIntentId":link.start_intent_id});
         let fence = json!({"roomId":basis.room_id,"generationRequestId":basis.request_id,"cancelMode":"starting-v1","startIntentId":link.start_intent_id,"cancelIntentId":cancel_id});
         protocol::encode_attach_response(

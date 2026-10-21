@@ -159,16 +159,22 @@ fn map_cloud(error: cloud::CloudError) -> RoomError {
         CloudErrorCode::NotAuthenticated => "not-authenticated",
         CloudErrorCode::StateMismatch => "scope-changed",
         CloudErrorCode::StorageUnavailable => "storage-unavailable",
+        CloudErrorCode::NetworkError
+        | CloudErrorCode::Timeout
+        | CloudErrorCode::ServerUnavailable => "network-error",
+        CloudErrorCode::InvalidResponse => "invalid-response",
         _ => "internal-error",
     };
     RoomError::new(code, "not-applicable")
 }
 
-fn account(webview: &Webview, expected: u64) -> Result<Arc<AccountAccess>, RoomError> {
+fn account(
+    webview: &Webview,
+    lease: cloud::RoomAccountLease,
+    auth_key: String,
+) -> Result<Arc<AccountAccess>, RoomError> {
     let app = webview.app_handle();
     let secrets = app.state::<SharedSecretStore>().inner().clone();
-    let lease = cloud::room_account_lease(&app.state::<CloudState>(), secrets.as_ref(), expected)
-        .map_err(map_cloud)?;
     let current_lease = lease.clone();
     let current_app = app.clone();
     let current_secrets = secrets.clone();
@@ -179,6 +185,7 @@ fn account(webview: &Webview, expected: u64) -> Result<Arc<AccountAccess>, RoomE
         lease.epoch,
         lease.cancel.clone(),
         lease.cookie().to_owned(),
+        auth_key,
         Arc::new(move || {
             current_lease
                 .is_current(&current_app.state::<CloudState>(), current_secrets.as_ref())
@@ -215,7 +222,16 @@ pub(crate) async fn attach(
 ) -> Result<Response, RoomError> {
     let request = protocol::parse_attach(&request)?;
     let current = marker(&webview, false)?;
-    let access = account(&webview, request.expected_user_id)?;
+    let app = webview.app_handle();
+    let secrets = app.state::<SharedSecretStore>().inner().clone();
+    let lease = cloud::room_account_lease(
+        &app.state::<CloudState>(),
+        secrets.as_ref(),
+        request.expected_user_id,
+    )
+    .map_err(map_cloud)?;
+    // 先完成原有文档证明，再取凭据；空 transport key 从不交给 Room engine。
+    let access = account(&webview, lease.clone(), String::new())?;
     let challenge = crate::arena_room::random_id()?;
     let attempt_result = current
         .room
@@ -336,6 +352,14 @@ pub(crate) async fn attach(
         let message: Value = serde_json::from_str(&raw).map_err(|_| unavailable())?;
         on_event.send(message).map_err(|_| unavailable())
     });
+    let auth_key = cloud::room_auth_key(&app.state::<CloudState>(), secrets.as_ref(), &lease)
+        .await
+        .map_err(map_cloud)?;
+    let access = account(&webview, lease, auth_key)?;
+    let verified = marker(&webview, false)?;
+    if !Arc::ptr_eq(&verified, &current) {
+        return Err(unavailable());
+    }
     let attached = current.room.finish_attach(proof, access, notify)?;
     response(EngineReply::Json(protocol::encode_attach_response(
         &attached,
