@@ -10,8 +10,20 @@ fn main() {
     // 属于不入库的衍生资产（已 gitignore），不作为 ACL 事实来源——权威是上面的
     // 三方一致门禁。tauri-build 只写不清理，本地 build 后残留的 TOML 由结构门禁
     // 在目录存在时逐项比对抓出。
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
+    let mut attributes = tauri_build::Attributes::new();
+    // Windows/MSVC：Common-Controls v6 依赖改经链接器嵌入（见函数尾部的
+    // `/MANIFESTDEPENDENCY`）——tauri-build 默认把 app manifest 编进 .res 资源段，
+    // 资源只链接进 bin 目标，`cargo test` 的 lib 测试二进制拿不到 manifest，
+    // 会绑定 comctl32 v5（缺 v6-only 导出 `TaskDialogIndirect`），进程加载即
+    // 以 0xC0000139 失败。先关掉资源段嵌入，避免 bin 目标出现双 manifest。
+    let windows_msvc = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if windows_msvc {
+        attributes = attributes
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+    }
+    tauri_build::try_build(
+        attributes.app_manifest(tauri_build::AppManifest::new().commands(&[
             "desktop_runtime_info",
             "set_provider_secret",
             "has_provider_secret",
@@ -127,7 +139,19 @@ fn main() {
             "public_read_cache_clear",
             "public_read_cache_query",
             "public_read_cache_card",
-        ]),
-    ))
+        ])),
+    )
     .expect("failed to run tauri build script");
+    if windows_msvc {
+        // /MANIFESTDEPENDENCY 内联串中的空格会被链接器错解，改由
+        // /MANIFESTINPUT 指向清单文件（内容与 tauri-build 默认
+        // windows-app-manifest.xml 一致，见文件头注释）。
+        let manifest = std::path::PathBuf::from(
+            std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR should be set"),
+        )
+        .join("app.manifest");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+    }
 }

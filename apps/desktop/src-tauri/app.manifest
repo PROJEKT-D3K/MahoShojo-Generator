@@ -1,0 +1,19 @@
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- 与 tauri-build 默认 windows-app-manifest.xml 逐字段一致。
+       经 build.rs 的 /MANIFESTINPUT 链接器参数嵌入所有链接目标（含
+       cargo test 的 lib 测试二进制）；缺 manifest 的测试二进制会绑定
+       comctl32 v5，进程加载时因缺 TaskDialogIndirect 导出报
+       0xC0000139。 -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
