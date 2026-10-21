@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useMemo } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as techIndex from '@mahoshojo/domain/metrics/tech-index';
+import { buildDesktopRosterExtras } from '../src/features/arena/roster-presentation';
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { useDesktopRosterRatings, projectRosterRatingTargets } from '../src/features/arena/use-roster-ratings';
 import type { ArenaDraft } from '../src/features/arena/session';
@@ -21,6 +23,34 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 const render = async (props: Parameters<typeof Probe>[0]) => { await act(async () => root.render(<Probe {...props} />)); };
 
 describe('当前已选角色只读评分', () => {
+  it('无关 phase 更新保持投影引用和技术值计算次数，正文与评分变化仍重算', async () => {
+    const tech = vi.spyOn(techIndex, 'computeTechIndex');
+    const pending: (() => void)[] = [];
+    const read = vi.fn<Reader>(request => new Promise(resolve => pending.push(() => resolve(reply(request, 1555)))));
+    const cards = [card('a')];
+    const PresentationProbe = ({ cards, phase }: { cards: readonly Card[]; phase: string }) => {
+      const observations = useDesktopRosterRatings(cards, 'stable-owner', true, read);
+      useMemo(() => cards.map((value, index) => buildDesktopRosterExtras(value, () => {}, undefined, observations[index])), [cards, observations]);
+      output = observations;
+      return <span>{phase}</span>;
+    };
+    await act(async () => root.render(<PresentationProbe cards={cards} phase="idle" />));
+    const before = tech.mock.calls.length; const initialOutput = output;
+    expect(before).toBeGreaterThan(0);
+    await act(async () => root.render(<PresentationProbe cards={cards} phase="streaming" />));
+    expect(output).toBe(initialOutput); expect(tech).toHaveBeenCalledTimes(before);
+    await act(async () => pending.splice(0).forEach(resolve => resolve()));
+    expect(output[0]?.rating?.strict).toBe(1555);
+    expect(tech.mock.calls.length).toBeGreaterThan(before);
+    const afterRating = tech.mock.calls.length;
+    await act(async () => root.render(<PresentationProbe cards={cards} phase="completed" />));
+    expect(tech).toHaveBeenCalledTimes(afterRating);
+    const changed = [{ ...card('a'), data: { name: 'a', content: '修改后的正文' } }];
+    await act(async () => root.render(<PresentationProbe cards={changed} phase="completed" />));
+    expect(output[0]?.rating).toBeNull(); expect(tech.mock.calls.length).toBeGreaterThan(afterRating);
+    await act(async () => pending.splice(0).forEach(resolve => resolve()));
+  });
+
   it('双队列查询并共源预测，不把服务初始分当已存在评分', async () => {
     const read = vi.fn<Reader>(async request => reply(request, request.entityId === 'a' ? 1200 : 1000, !(request.queue === 'strict' && request.entityId === 'a')));
     await render({ cards: [card('a'), card('b')], read });

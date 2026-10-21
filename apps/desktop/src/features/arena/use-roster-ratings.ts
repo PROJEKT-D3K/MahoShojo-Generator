@@ -86,7 +86,11 @@ export function useDesktopRosterRatings(combatants: ArenaDraft['combatants'], sc
   }, [key, enabled, cache, read]);
   // 同一帧就拒绝旧 scope/正文的数据，不依赖 effect 事后清理。
   const ratings = enabled && state.key === key ? state.ratings : emptyRatings;
-  const rows = projected.map(target => target ? ratings.get(target.key) ?? null : null);
-  const predictions = rows.length === 2 && rows[0] && rows[1] ? predictArenaPair(rows[0], rows[1]) : null;
-  return rows.map((rating, index) => ({ hasSource: enabled && projected[index] !== null, rating, prediction: predictions?.[index] ?? null }));
+  // 保持无关 phase/流事件更新时的引用，避免调用方重复扫描未变化的整卡技术指标。
+  // ratings 已在本次渲染按 key 屏蔽旧 scope/正文；不能把该守卫移到 effect 中。
+  return useMemo(() => {
+    const rows = projected.map(target => target ? ratings.get(target.key) ?? null : null);
+    const predictions = rows.length === 2 && rows[0] && rows[1] ? predictArenaPair(rows[0], rows[1]) : null;
+    return rows.map((rating, index) => ({ hasSource: enabled && projected[index] !== null, rating, prediction: predictions?.[index] ?? null }));
+  }, [projected, ratings, enabled]);
 }
