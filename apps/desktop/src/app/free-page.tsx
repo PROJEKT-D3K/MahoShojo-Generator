@@ -356,7 +356,6 @@ function FreeForm({ session }: { session: FreeSession }) {
             {state.reasoning && <AiReasoningPanel reasoning={state.reasoning} />}
             <div ref={resultSectionRef}>
               {card && <section aria-label="生成结果" className="flex flex-col gap-3">
-                <p className="text-sm text-(--app-text-muted)">生成结果 · 未签名（自由生成为非原生卡）</p>
                 {cardKind === 'magical-girl' && <MagicalGirlCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} magicalGirl={card as unknown as MagicalGirlCardData} gradientStyle={MAGICAL_GIRL_CARD_GRADIENT} />}
                 {cardKind === 'canshou' && <CanshouCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} canshou={card as unknown as CanshouDetails} />}
                 {cardKind === 'general' && <GeneralCharacterCard generatedByBadge={<DesktopCharacterCardExportBadge />} captureExportGuard={captureDesktopCharacterCardExportGuard} general={card as unknown as GeneralCharacterCardData} />}
@@ -372,37 +371,43 @@ function FreeForm({ session }: { session: FreeSession }) {
                     <FreeJsonResult data={card} />
                   </FreeResultPanel>
                 )}
-                {resultCardType && <PrivateResultSave externalLeaveGuard={guard} data={card} cardType={resultCardType} onBusyChange={onCloudSavingChange} isBlocked={() => session.isBusy() || aiStore.isPreparingGeneration() || attachmentReadingRef.current} disabled={!guard.ready || busy || isReadingAttachments} className={generationActionClassNames.primary} />}
-                  <button className={generationActionClassNames.primary} disabled={!guard.ready || busy || state.saveStatus === 'saved' || state.saveStatus === 'already-present'} onClick={() => { if (guard.ready) void session.saveResult(); }}>{state.saving ? '正在保存…' : '保存到本地卡库'}</button>
-                {state.saveStatus === 'saved' && <p role="status">已保存到本地卡库。</p>}
-                {state.saveStatus === 'already-present' && <p role="status">本地卡库已存在相同内容，原记录保持不变。</p>}
-                {state.saveError && <p role="alert">{state.saveError}</p>}
-                <FreeResultPanel title="保存数据卡" label="保存原始数据">
-                  <div className="mt-3 flex flex-col gap-3">
-                    <SaveJsonButton
-                      data={card}
-                      mode={jsonSaveMode}
-                      recommendedMode={recommended.jsonSaveMode}
-                      resolveFileName={() => resultJsonName}
-                      downloadJson={downloadTextFile}
-                    />
+                <FreeResultPanel title="保存数据卡" label="保存数据卡">
+                  <div className="flex flex-col gap-3">
+                    <p className="text-sm text-(--app-text-muted)">生成结果 · 未签名（自由生成为非原生卡）</p>
+                    {resultCardType && <PrivateResultSave externalLeaveGuard={guard} data={card} cardType={resultCardType} onBusyChange={onCloudSavingChange} isBlocked={() => session.isBusy() || aiStore.isPreparingGeneration() || attachmentReadingRef.current} disabled={!guard.ready || busy || isReadingAttachments} className={generationActionClassNames.primary} />}
+                    <button className={generationActionClassNames.primary} disabled={!guard.ready || busy || state.saveStatus === 'saved' || state.saveStatus === 'already-present'} onClick={() => { if (guard.ready) void session.saveResult(); }}>{state.saving ? '正在保存…' : '保存到本地卡库'}</button>
+                    {state.saveStatus === 'saved' && <p role="status">已保存到本地卡库。</p>}
+                    {state.saveStatus === 'already-present' && <p role="status">本地卡库已存在相同内容，原记录保持不变。</p>}
+                    {state.saveError && <p role="alert">{state.saveError}</p>}
                   </div>
-                  <FreeResultActions sizeIndicator={(
-                  <JsonSizeIndicator
-                    data={card}
-                    maxBytes={MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES}
-                    hintText="按 UTF-8 字节估算，对照本地卡单条记录上限"
-                    warningText="⚠️ 接近本地卡单条上限（4 MiB），保存到本地卡库可能失败，请先精简数据。"
-                  />
-                  )}>
-                    {jsonSaveMode === 'text' && <button className={`${actionClass} flex-1`} onClick={() => downloadTextFile(resultJsonName, JSON.stringify(card, null, 2))}>下载 JSON 文件</button>}
-                    <ResultJsonCopyButton data={card} className={`${actionClass} flex-1`} onResult={(copied) => copied ? setActionInfo('✅ 数据卡 JSON 已复制到剪贴板') : setActionError('复制失败，请手动选择 JSON 内容后复制。')} />
-                  </FreeResultActions>
+                  <section aria-label="保存原始数据">
+                    <h3 className="mt-4 text-lg font-medium">导出与复制</h3>
+                    <div className="mt-3 flex flex-col gap-3">
+                      <SaveJsonButton
+                        data={card}
+                        mode={jsonSaveMode}
+                        recommendedMode={recommended.jsonSaveMode}
+                        resolveFileName={() => resultJsonName}
+                        downloadJson={downloadTextFile}
+                      />
+                    </div>
+                    <FreeResultActions sizeIndicator={(
+                      <JsonSizeIndicator
+                        data={card}
+                        maxBytes={MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES}
+                        hintText="按 UTF-8 字节估算，对照本地卡单条记录上限"
+                        warningText="⚠️ 接近本地卡单条上限（4 MiB），保存到本地卡库可能失败，请先精简数据。"
+                      />
+                    )}>
+                      {jsonSaveMode === 'text' && <button className={`${actionClass} flex-1`} onClick={() => downloadTextFile(resultJsonName, JSON.stringify(card, null, 2))}>下载 JSON 文件</button>}
+                      <ResultJsonCopyButton data={card} className={`${actionClass} flex-1`} onResult={(copied) => copied ? setActionInfo('✅ 数据卡 JSON 已复制到剪贴板') : setActionError('复制失败，请手动选择 JSON 内容后复制。')} />
+                    </FreeResultActions>
+                  </section>
                 </FreeResultPanel>
               </section>}
             </div>
             <GenerationMarkdownPreview active={showStreamPreview} text={state.rawText} />
-            {state.rawText && <details open={state.phase !== 'completed' && !showStreamPreview}><summary>原始输出正文</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-3">{state.rawText}</pre></details>}
+            {state.rawText && <details className="card !max-w-none" open={state.phase !== 'completed' && !showStreamPreview}><summary>原始输出正文</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-3">{state.rawText}</pre></details>}
         </>
       ) : null}
       footer={(

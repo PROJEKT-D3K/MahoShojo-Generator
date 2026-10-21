@@ -104,6 +104,8 @@ describe('Desktop Scenario route and session UI (native adapter mock)', () => {
     }
     expect(vi.mocked(fetch).mock.calls.length).toBe(fetchCount);
     const raw = [...container.querySelectorAll('details')].find((element) => element.querySelector('summary')?.textContent === '原始输出正文')!;
+    expect(raw.classList.contains('card')).toBe(true);
+    expect(raw.parentElement?.closest('.card')).toBeNull();
     expect(raw.querySelector('pre')?.textContent).toBe(markdown);
     expect(raw.open).toBe(ending === 'non-stream');
     expect(container.querySelector('[aria-label="生成结果"]')).toBeNull();

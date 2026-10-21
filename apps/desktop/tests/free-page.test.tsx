@@ -19,6 +19,9 @@ vi.mock('@mahoshojo/ui-web/free', async (original) => ({ ...await original<objec
 vi.mock('../src/platform/provider-profile-bridge', () => ({ listProviderProfileIds: async () => ['local'], getProviderProfile: mocks.profiles }));
 vi.mock('../src/platform/local-card-bridge', () => ({ IpcLocalCardRepository: class { putIfAbsent = mocks.save; } }));
 
+// 将真实懒加载页面的编译留在测试准备阶段，不占用生成/取消/保存的行为预算。
+import '../src/app/free-page';
+
 const generalCard = { templateId: '通用角色', name: '焰汐', content: '## 角色介绍\n\n怕水的火系少女' };
 const completed: FreeGenerationOutcome = {
   status: 'completed', mode: 'direct-local', card: generalCard, cardKind: 'general', rawText: JSON.stringify(generalCard),
@@ -106,6 +109,8 @@ describe('Desktop Free route and session UI (native adapter mock)', () => {
     }
     expect(vi.mocked(fetch).mock.calls.length).toBe(fetchCount);
     const raw = [...container.querySelectorAll('details')].find((element) => element.querySelector('summary')?.textContent === '原始输出正文')!;
+    expect(raw.classList.contains('card')).toBe(true);
+    expect(raw.parentElement?.closest('.card')).toBeNull();
     expect(raw.querySelector('pre')?.textContent).toBe(markdown);
     expect(raw.open).toBe(ending === 'non-stream');
     expect(container.querySelector('[aria-label="生成结果"]')).toBeNull();
@@ -171,7 +176,13 @@ describe('Desktop Free route and session UI (native adapter mock)', () => {
     const callInput = mocks.execute.mock.calls[0]![1] as { prompt: string; schema: string; language: string; attachments: unknown[] };
     expect(callInput).toMatchObject({ prompt: '怕水的火系少女', schema: 'general', language: 'zh-CN', attachments: [] });
     expect(container.textContent).toContain('焰汐');
-    expect(container.querySelector('[aria-label="生成结果"] > p')?.textContent).toBe('生成结果 · 未签名（自由生成为非原生卡）');
+    const saving = container.querySelector('[aria-label="保存数据卡"]')!;
+    expect(saving.classList.contains('card')).toBe(true);
+    expect(saving.parentElement?.closest('.card')).toBeNull();
+    expect(saving.textContent).toContain('生成结果 · 未签名（自由生成为非原生卡）');
+    expect(button('保存到云端').closest('.card')).toBe(saving);
+    expect(button('替换已有').closest('.card')).toBe(saving);
+    expect(button('保存到本地卡库').closest('.card')).toBe(saving);
     const exports = container.querySelector('[aria-label="保存原始数据"]')!;
     expect([...exports.querySelectorAll('button')].filter((item) => item.textContent?.includes('下载'))).toHaveLength(1);
     await click('💾 下载设定文件');
@@ -179,7 +190,23 @@ describe('Desktop Free route and session UI (native adapter mock)', () => {
     expect(button('复制到剪贴板')).toBeTruthy();
     await click('保存到本地卡库');
     expect(mocks.save).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain('已保存到本地卡库');
+    expect(saving.querySelector('[role="status"]')?.textContent).toBe('已保存到本地卡库。');
+  });
+
+  it('keeps failed local-save feedback on the result surface and allows retry without regeneration', async () => {
+    mocks.save.mockRejectedValueOnce(new Error('storage unavailable'));
+    window.localStorage.setItem(FREE_DRAFT_KEY, JSON.stringify(storedDraft('怕水的火系少女')));
+    await mount(); await click('生成数据卡');
+    const saving = container.querySelector('[aria-label="保存数据卡"]')!;
+    await click('保存到本地卡库');
+    expect(saving.querySelector('[role="alert"]')?.textContent).toBe('保存到本地卡库失败，生成结果仍保留。可以重试保存，无需重新生成。');
+    expect(button('保存到本地卡库').disabled).toBe(false);
+    expect(saving.querySelector('[aria-label="保存原始数据"]')).not.toBeNull();
+    await click('保存到本地卡库');
+    expect(saving.querySelector('[role="alert"]')).toBeNull();
+    expect(saving.querySelector('[role="status"]')?.textContent).toBe('已保存到本地卡库。');
+    expect(mocks.save).toHaveBeenCalledTimes(2);
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
   });
 
   it('keeps one download and full JSON copy when a mobile UA recommends text mode', async () => {

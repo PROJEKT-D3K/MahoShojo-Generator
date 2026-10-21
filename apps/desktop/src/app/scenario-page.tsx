@@ -405,7 +405,7 @@ function ScenarioForm({ session }: { session: ScenarioSession }) {
               </ScenarioResultSurface>}
             </div>
             <GenerationMarkdownPreview active={showStreamPreview} text={state.rawText} />
-            {state.rawText && <details open={state.phase !== 'completed' && !showStreamPreview}><summary>原始输出正文</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-3">{state.rawText}</pre></details>}
+            {state.rawText && <details className="card" open={state.phase !== 'completed' && !showStreamPreview}><summary>原始输出正文</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-3">{state.rawText}</pre></details>}
             <GeneralScenarioEditor
               draft={editorDraft}
               disabled={busy || blockedDraft}
