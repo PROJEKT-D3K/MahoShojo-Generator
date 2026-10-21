@@ -10,7 +10,7 @@ const card = { name: '甲', content: 'original', signature: 'original-signature'
 const report = { headline: '报告', reporterInfo: { name: '记者', publication: '刊物' }, mode: 'daily', article: { body: '报告原文', analysis: '分析' }, officialReport: { winner: '甲', conclusion: '结论' } };
 const companion = { version: 'arena-companion-v1', body: { report, updatedCombatants: [], generationId }, metadata: { reportFormat: 'markdown', outputContract: 'structured-report', mode: 'daily' } };
 const initial = createInitialArenaDraft();
-function fixture(product: 'battle' | 'arena' = 'battle', delivery: 'stream' | 'non-stream' = 'stream', values = new Map<string, string>(), recoverFirstCreate = false) {
+function fixture(product: 'battle' | 'arena' = 'battle', delivery: 'stream' | 'non-stream' = 'stream', values = new Map<string, string>(), recoverFirstCreate = false, repairMarkdown?: string) {
   let held = false, holdNative = false, holdRoleNative = false, generationActive = false, releaseNative: (() => void) | undefined, releaseRoleNative: (() => void) | undefined, release: (() => void) | undefined, failure: string | undefined, terminalFailure = false, generationFailure = false, streamFault: 'missing-end' | 'wrong-sequence' | 'malformed' | 'duplicate-end' | null = null, invalid = false, saveFailure = false;
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, raw: string) => { values.set(key, raw); }, removeItem: (key: string) => { values.delete(key); } };
   const records = new Map<string, LocalCardRecordV1>();
@@ -47,9 +47,9 @@ function fixture(product: 'battle' | 'arena' = 'battle', delivery: 'stream' | 'n
     }
     if (request.operation === 'create-stream' || request.operation === 'create-json') writes = { writeArenaHistory: request.body.writeArenaHistory, writeCurrentState: request.body.writeCurrentState };
     generationActive = true;
-    if (request.operation === 'create-json') { json(companion); if (holdNative) await new Promise<void>(done => { releaseNative = done; }); generationActive = false; if (generationFailure) throw new Error('late Native failure'); return; }
+    if (request.operation === 'create-json') { json(repairMarkdown ? { ...companion, body: { ...companion.body, report: { ...report, article: { ...report.article, body: repairMarkdown } } } } : companion); if (holdNative) await new Promise<void>(done => { releaseNative = done; }); generationActive = false; if (generationFailure) throw new Error('late Native failure'); return; }
     send({ kind: 'response', status: 200, generationId, generationRequestId: requestId, metadataState: 'missing', recoveryCredentialState: 'stored' });
-    const markdown = delivery === 'stream' ? '报告原文' : JSON.stringify(report);
+    const markdown = delivery === 'stream' ? repairMarkdown ?? '报告原文' : JSON.stringify(report);
     send({ kind: 'sse-fragment', final: true, text: `id: 1-0\nevent: markdown\ndata: ${JSON.stringify({ chunk: markdown })}\n\n` });
     send({ kind: 'sse-fragment', final: true, text: 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); if (!streamFault || streamFault === 'duplicate-end') send({ kind: 'stream-end' }); if (holdNative) await new Promise<void>(done => { releaseNative = done; }); generationActive = false;
     if (streamFault === 'wrong-sequence') send({ kind: 'stream-end', sequence: 90 });
@@ -239,4 +239,35 @@ it('Hosted 单卡先核当前展示引用，再保存内部可信 clone；同 ge
   const restored = fixture('battle', 'stream', f.values); restored.session.restoreDraft();
   expect(restored.session.canSaveCharacter(next)).toBe(false); expect(await restored.session.saveCharacter(next)).toBe(false);
   restored.session.dispose();
+});
+
+
+it('手工修复服务器角色后仅另存 unsigned 副本，不允许旧权威重试覆盖编辑', async () => {
+  const markdown = '# 修复测试\n\n' + '本次事件中角色共同经历了挑战。'.repeat(12) + '\n\n## 胜利者\n\n- 甲';
+  const f = fixture('battle', 'stream', new Map(), false, markdown);
+  await f.run();
+  const calls = f.invoke.mock.calls.length;
+  expect(f.session.canRetryHostedRoleUpdates()).toBe(true);
+  await f.session.applyManualRepair(JSON.stringify({ impacts: [{ combatantIndex: 0, characterName: '甲', impact: '手工影响' }] }), {
+    canApply: () => true, confirmTrustDowngrade: () => true, confirmCreateMissingEffects: () => true,
+  });
+  expect(f.session.canRetryHostedRoleUpdates()).toBe(false);
+  await f.session.retryHostedRoleUpdates({ invoke: f.invoke });
+  expect(f.invoke).toHaveBeenCalledTimes(calls);
+  expect(f.session.getSnapshot().draft.combatants[0]!.data).not.toHaveProperty('signature');
+  expect(await f.session.saveRepairedCharacters()).toBe(true);
+  expect([...f.records.values()][0]!.provenance).toEqual({ kind: 'unsigned', execution: 'edited' });
+  f.session.dispose();
+});
+
+
+it('非流式修复使用共享报告转换，而不要求原 article.body 自带标题与胜者', async () => {
+  const prose = '角色经历事件并在结束后共同成长。'.repeat(12);
+  const f = fixture('arena', 'non-stream', new Map(), false, prose);
+  await f.run();
+  expect(f.session.getSnapshot().markdown).toBe(prose);
+  await expect(f.session.applyManualRepair(JSON.stringify({ impacts: [{ combatantIndex: 0, characterName: '甲', impact: '新影响' }] }), {
+    canApply: () => true, confirmTrustDowngrade: () => true, confirmCreateMissingEffects: () => true,
+  })).resolves.toContain('已应用');
+  expect(f.session.getSnapshot().markdown).toBe(prose); f.session.dispose();
 });

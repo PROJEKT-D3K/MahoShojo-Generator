@@ -30,6 +30,7 @@
       "import": "./src/game-card-generation.ts",
       "default": "./src/game-card-generation.ts"
     },
+    "./arena-combatant-repair": "./src/arena-combatant-repair.ts",
     "./arena-repair-meta": {
       "types": "./src/arena-repair-meta.ts",
       "import": "./src/arena-repair-meta.ts",

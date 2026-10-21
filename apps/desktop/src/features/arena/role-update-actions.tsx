@@ -29,10 +29,11 @@ export function useArenaResultActionLocks(invoke: InvokeFn) {
 }
 
 type ResultLocks = ReturnType<typeof useArenaResultActionLocks>;
-export function DesktopArenaRoleUpdateActions({ data, selection, session, locks, disabled, isBlocked, guard, onDownload }: {
+export function DesktopArenaRoleUpdateActions({ data, selection, repairSelection, session, locks, disabled, isBlocked, guard, onDownload }: {
   data: Record<string, unknown>;
   selection: ArenaCharacterSaveSelection | null;
-  session: Pick<DesktopArenaSession, 'canSaveCharacter' | 'saveCharacter'>;
+  repairSelection?: ArenaCharacterSaveSelection | null;
+  session: Pick<DesktopArenaSession, 'canSaveCharacter' | 'saveCharacter'> & Partial<Pick<DesktopArenaSession, 'canSaveRepairedCharacter' | 'saveRepairedCharacters'>>;
   locks: ResultLocks;
   disabled: boolean;
   isBlocked: () => boolean;
@@ -45,6 +46,8 @@ export function DesktopArenaRoleUpdateActions({ data, selection, session, locks,
   return <div className="mt-2 space-y-2">
     <div className="flex flex-wrap justify-end gap-2">
       <button type="button" className="shrink-0 rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-600" onClick={onDownload}>下载更新设定</button>
+      {repairSelection && session.canSaveRepairedCharacter?.(repairSelection) ? <button type="button" className="random-button" disabled={disabled || locks.sourceLocked}
+        onClick={() => { if (!isBlocked() && !locks.isSourceLocked()) void session.saveRepairedCharacters?.(repairSelection); }}>另存此修复副本到本地库</button> : null}
       {selection && session.canSaveCharacter(selection) ? <button type="button" className="random-button" disabled={disabled || locks.sourceLocked}
         onClick={() => { if (!isBlocked() && !locks.isSourceLocked()) void session.saveCharacter(selection); }}>另存此角色到本地库</button> : null}
     </div>

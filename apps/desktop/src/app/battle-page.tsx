@@ -1,4 +1,5 @@
 import { projectDesktopGenerationRanking } from '../features/arena/generation-ranking-projection';
+import { DesktopManualRepairPanel } from '../features/arena/manual-repair-panel';
 import { useDesktopRosterRatings } from '../features/arena/use-roster-ratings';
 import { buildDesktopRosterExtras, snapshotDesktopRosterDetails, readDesktopRosterMetadata, type DesktopRosterMetadataSnapshot } from '../features/arena/roster-presentation';
 import { DesktopCardDetailsModal } from '../features/card-details/card-details-modal';
@@ -227,7 +228,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       roomOwner.detach(); storyOwner.detach(); session.detach(); return true;
     },
   );
-  const busy = reportExporting || Boolean(storyState.hosted?.stopping) || Boolean(storyState.hosted?.busy) || storyState.saving || storyState.exporting || storyState.phase === 'preparing' || storyState.phase === 'generating' || diagnosing || state.roleUpdates.status === 'updating' || state.phase === 'generating' || state.saving || state.importing || aiState.generationActive || advancedBusy || packageState.busy;
+  const busy = Boolean(state.repairing) || reportExporting || Boolean(storyState.hosted?.stopping) || Boolean(storyState.hosted?.busy) || storyState.saving || storyState.exporting || storyState.phase === 'preparing' || storyState.phase === 'generating' || diagnosing || state.roleUpdates.status === 'updating' || state.phase === 'generating' || state.saving || state.importing || aiState.generationActive || advancedBusy || packageState.busy;
   roomStartAllowed.current = () => !resultActionLocks.isSourceLocked() && guard.ready && !strictActiveRef.current && !session.isBusy() && !storyOwner.isBusy() && !storyOwner.hosted?.hasCandidate() && !storyOwner.getSnapshot().hosted?.slots[product] && !packageOwner.isBusy() && !preparing.current && !diagnosisFlight.current && !advancedBusyRef.current && !session.getSnapshot().pendingRestore && !aiStore.isPreparingGeneration() && !aiStore.getSnapshot().generationActive && !aiStore.getSnapshot().savingConnection && !aiStore.getSnapshot().savingCredential && !aiStore.getSnapshot().deletingConnection;
   const resultActionsDisabled = !guard.ready || busy || state.pendingRestore || roomState.constrained;
   const disabled = resultActionsDisabled || resultActionLocks.sourceLocked;
@@ -661,7 +662,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         {state.hosted.companionState === 'complete' ? <p role="status">完整非流式报告与附加元数据已保留；服务端判定 {state.hosted.companion?.metadata?.adjudicationResults?.length ?? 0} 条。完整导出包含全部原字段，状态面板不重复展开大体积 JSON。</p> : null}
       </div> : null}
     </section>
-    {state.phase === 'completed' && (state.hosted || roleUpdateItems.length > 0) ? <CombatantUpdatesPresentation
+    {state.phase === 'completed' && (state.hosted || roleUpdateItems.length > 0 || session.manualRepairGenerationId()) ? <CombatantUpdatesPresentation
       title="角色更新" description={`可下载/保存本次更新的角色设定（共 ${roleUpdateItems.length} 个）`}
       defaultOpen itemDefaultOpen={false} keepMounted
       emptyMessage={state.hosted ? '本次尚未产生可展示的角色更新。你可以点击“重试角色更新”，重试应用本次服务器已生成的历战记录/当前状态摘要。' : '本次没有可展示的角色变化。'}
@@ -673,12 +674,18 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       items={roleUpdateItems}
       renderActions={item => {
         const result = roleUpdatesByKey.get(item.key);
-        return result ? <DesktopArenaRoleUpdateActions key={result.key} data={result.data} selection={result.selection} session={session}
+        return result ? <DesktopArenaRoleUpdateActions key={result.key} data={result.data} selection={result.selection} repairSelection={result.repairSelection} session={session}
           locks={resultActionLocks} disabled={resultActionsDisabled} guard={guard}
           isBlocked={() => resultActionsDisabled || session.isBusy() || storyOwner.isBusy() || packageOwner.isBusy() || preparing.current || Boolean(diagnosisFlight.current) || advancedBusyRef.current || historyLoading.current || exportingReport.current > 0 || aiStore.isPreparingGeneration() || aiStore.getSnapshot().savingConnection || aiStore.getSnapshot().savingCredential || aiStore.getSnapshot().deletingConnection}
           onDownload={() => download(`${result.displayName}.json`, JSON.stringify(result.data, null, 2), 'application/json')} /> : null;
       }}
       renderBeforeItems={<>
+        {session.manualRepairGenerationId() && !roomOwner.isConstrained() ? <DesktopManualRepairPanel
+          key={`${scope}:${session.manualRepairGenerationId()}`} session={session}
+          disabled={resultActionsDisabled || resultActionLocks.sourceLocked || session.isBusy()}
+          canApply={() => guard.ready && !resultActionLocks.isSourceLocked() && cloudStore.getCredentialEpoch() === accountCredentialEpoch && !roomOwner.isConstrained()
+            && !storyOwner.isBusy() && !packageOwner.isBusy() && !preparing.current && !diagnosisFlight.current && !advancedBusyRef.current && !historyLoading.current
+            && exportingReport.current === 0 && !aiStore.isPreparingGeneration() && !aiStore.getSnapshot().savingConnection && !aiStore.getSnapshot().savingCredential && !aiStore.getSnapshot().deletingConnection} /> : null}
         {state.roleUpdates.message ? <p role="status">{state.roleUpdates.message}</p> : null}
         {resultActionLocks.sourceLocked ? <p role="status">云端操作保留了当前角色结果。请先完成或关闭原表单；结果不确定时按提示核对，再修改输入、重新生成或重试角色更新。本地原件仍可导出。</p> : null}
       </>}
@@ -689,7 +696,9 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       <div className="flex flex-wrap gap-3">
         {session.canAppendHostedHistory() ? <button className={secondary} type="button" disabled={disabled} onClick={() => { if (!resultActionLocks.isSourceLocked()) session.appendHostedHistory(); }}>将本次正文加入活动历史</button> : null}
         <button className={secondary} type="button" onClick={() => { void exportAll(); }}>完整导出 JSON</button>
-        {(state.candidates?.characterEffects.length || session.hasHostedCharacterCopies()) ? <button className={secondary} type="button" disabled={disabled} onClick={() => { if (!resultActionLocks.isSourceLocked()) void session.save('characters'); }}>另存战后角色副本</button> : null}
+        {!state.repairs && (state.candidates?.characterEffects.length || session.hasHostedCharacterCopies()) ? <button className={secondary} type="button" disabled={disabled} onClick={() => { if (!resultActionLocks.isSourceLocked()) void session.save('characters'); }}>另存战后角色副本</button> : null}
+        {state.repairs ? <button className={secondary} type="button" disabled={disabled || !session.canSaveRepairedCharacter()}
+          onClick={() => { if (!resultActionLocks.isSourceLocked()) void session.saveRepairedCharacters(); }}>另存修复角色副本</button> : null}
         {draft.narrativeHistoryEntries.length ? <button className={secondary} type="button" disabled={disabled} onClick={() => { if (!resultActionLocks.isSourceLocked()) void session.save('history'); }}>保存叙事历史到本地库</button> : null}
       </div>
       <ArenaBackupNotice feedback={backupFeedback} />

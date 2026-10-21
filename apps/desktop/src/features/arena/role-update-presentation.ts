@@ -4,10 +4,13 @@ import { arenaItemName } from './input';
 import type { ArenaSessionState } from './session';
 
 /** 仅投影结果快照供展示/下载；key 不赋予本地保存或云端写入资格。 */
-export function projectDesktopRoleUpdates(state: Pick<ArenaSessionState, 'hosted' | 'hostedGenerationId' | 'roleUpdates' | 'candidates'>) {
+export function projectDesktopRoleUpdates(state: Pick<ArenaSessionState, 'hosted' | 'hostedGenerationId' | 'roleUpdates' | 'candidates' | 'repairs'>) {
   const hosted = Boolean(state.hosted);
   const generationId = hosted ? state.hostedGenerationId : state.candidates?.generationId;
-  const items = hosted ? state.roleUpdates.items : state.candidates?.characterEffects ?? [];
+  const originals = hosted ? state.roleUpdates.items : state.candidates?.characterEffects ?? [];
+  const repaired = new Map(state.repairs?.items.map(item => [item.combatantIndex, item]) ?? []);
+  const items = [...originals.map(item => repaired.get(item.combatantIndex) ?? item),
+    ...[...repaired.values()].filter(item => !originals.some(original => original.combatantIndex === item.combatantIndex))];
   return items.map(item => {
     const history = item.data.arena_history as { entries?: { impact?: unknown }[] } | undefined;
     const impact = Array.isArray(history?.entries) ? history.entries.at(-1)?.impact : null;
@@ -22,7 +25,8 @@ export function projectDesktopRoleUpdates(state: Pick<ArenaSessionState, 'hosted
       impact: typeof impact === 'string' ? impact : null,
       currentStateSummary: typeof summary === 'string' ? summary : null,
       data: item.data,
-      selection: generationId ? { generationId, combatantIndex: item.combatantIndex, data: item.data } : null,
+      repairSelection: repaired.has(item.combatantIndex) && state.repairs ? { generationId: state.repairs.generationId, combatantIndex: item.combatantIndex, data: item.data } : null,
+      selection: !repaired.has(item.combatantIndex) && generationId ? { generationId, combatantIndex: item.combatantIndex, data: item.data } : null,
     };
   });
 }

@@ -2368,6 +2368,11 @@ it('角色云端未知结果期间，草稿清除与连续故事入口不能确�
   await click('保存到云端'); await click('保存');
   await vi.waitFor(() => expect(document.body.textContent).toContain('结果不确定'));
   await click('取消');
+  const repairToggle = [...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].find(node => node.textContent?.startsWith('自定义修复本次角色变化'))!;
+  await act(async () => repairToggle.click()); await settle();
+  expect(container.querySelector<HTMLTextAreaElement>('[data-arena-combatant-updates] textarea')!.disabled).toBe(true);
+  expect(button('应用修复').disabled).toBe(true);
+  await click('应用修复');
   await click('完整导出 JSON'); const before = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
   const notice = container.querySelector('[aria-label="本机草稿提示"]')!;
   expect(button('清除草稿', notice).disabled).toBe(true);
@@ -2379,4 +2384,122 @@ it('角色云端未知结果期间，草稿清除与连续故事入口不能确�
   expect(received).toHaveLength(1); expect(storyPort.heads()).toHaveLength(0);
   expect(mocks.invoke.mock.calls.filter(([command, args]) => command === 'cloud_card_library_request' && args.request.routeId === 'data-cards.create')).toHaveLength(1);
   failingDraft.mockRestore();
+});
+
+// Manual repair stays on real routes, default session/domain and local-library IPC.
+// Only the external Provider/Native peer and file download sink are synthetic.
+describe('manual repair on actual battle and arena routes', () => {
+  const generationId = `arena_${'f'.repeat(64)}`;
+  const longBody = '甲与乙共同面对挑战，并在事件结束后保留各自的设定。'.repeat(12);
+  const repairInput = (impact = '手工修复后的影响') => JSON.stringify({ impacts: [{ combatantIndex: 0, characterName: '甲', impact }] });
+  const repairToggle = () => [...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')].find(node => node.textContent?.startsWith('自定义修复本次角色变化'))!;
+  const openRepair = async () => { expect(repairToggle()).toBeTruthy(); if (repairToggle().getAttribute('aria-expanded') === 'false') { await act(async () => repairToggle().click()); await settle(); } };
+  const editRepair = async (value: string) => change('[data-arena-combatant-updates] textarea', value);
+  const openRole = async () => {
+    const toggle = container.querySelector<HTMLButtonElement>('section[aria-label="甲的战后变化"] button[aria-expanded]')!;
+    expect(toggle).toBeTruthy(); if (toggle.getAttribute('aria-expanded') === 'false') { await act(async () => toggle.click()); await settle(); }
+    return container.querySelector<HTMLElement>('section[aria-label="甲的战后变化"]')!;
+  };
+  const completeExport = async () => { await click('完整导出 JSON'); return JSON.parse(mocks.download.mock.calls.at(-1)![1]); };
+  const installHostedRepairPeer = (failReconcileOnce = false) => {
+    vi.stubGlobal('TextEncoder', class extends NodeTextEncoder { encode(input?: string) { return Uint8Array.from(super.encode(input)); } });
+    const original = mocks.invoke.getMockImplementation()!;
+    const peer = withFixtureStreamReceipt(async (_command: string, args: Record<string, any>) => {
+      const request = args.request, channel = args.onEvent; let sequence = 0;
+      const send = (value: Record<string, unknown>) => channel.onmessage({ requestId: request.requestId, sequence: sequence++, ...value });
+      const respond = (body: unknown, status = 200) => {
+        send({ kind: 'json-response', status, generationId, generationRequestId: request.requestId, recoveryCredentialState: 'stored' });
+        send({ kind: 'json-fragment', text: JSON.stringify(body), final: true }); send({ kind: 'json-end' });
+      };
+      if (request.operation === 'reconcile') {
+        if (failReconcileOnce) { failReconcileOnce = false; respond({ version: 'arena-reconciliation-v1', generationId, code: 'FINALIZATION_PENDING', error: '等待服务器结算' }, 409); return; }
+        respond({ version: 'arena-reconciliation-v1', generationId, success: true, warnings: [], updatedCombatants: [{ combatantIndex: 0, isNative: true,
+          data: { ...request.combatants[0].data, signature: 'synthetic-official-signature', metadata: { signature: 'legacy-signature' },
+            arena_history: { entries: [{ id: 1, impact: '服务器原影响', metadata: { generation_id: generationId } }] }, current_state: { summary: '安心', generation_id: generationId } } }] });
+        return;
+      }
+      respond({ version: 'arena-companion-v1', body: { generationId, updatedCombatants: [], report: {
+        headline: '车站重逢', reporterInfo: { name: '记者', publication: '刊物' }, mode: 'daily', article: { body: longBody, analysis: '彼此扶持' }, officialReport: { winner: '甲', conclusion: '合作' },
+      } }, metadata: { reportFormat: 'markdown', outputContract: 'structured-report', mode: 'daily' } });
+    });
+    mocks.invoke.mockImplementation((command, args, options) => command === 'arena_hosted_stream' && ['create-json', 'reconcile'].includes(args.request.operation)
+      ? peer(command, args) : original(command, args, options));
+  };
+  const prepare = async (product: 'battle' | 'arena', hosted = false, effects = true, failReconcileOnce = false) => {
+    markdownSuffix = longBody;
+    const input = draft('daily', 'non-stream'); input.settings.writeArenaHistory = effects; input.settings.writeCurrentState = effects;
+    localStorage.setItem(product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: input }));
+    window.location.hash = `#/${product}`; if (hosted) installHostedRepairPeer(failReconcileOnce);
+    const router = await mount(); if (hosted) await click('服务器');
+    await click('生成战报'); await vi.waitFor(() => expect(repairToggle()).toBeTruthy()); await settle(); await openRepair();
+    return router;
+  };
+
+  for (const product of ['battle', 'arena'] as const) it.each([false, true])(`/${product} hosted=%s applies, displays, downloads and explicitly saves unsigned without replacing original candidates`, async hosted => {
+    await prepare(product, hosted);
+    const before = await completeExport(), callsBefore = mocks.invoke.mock.calls.filter(([command]) => ['stream_direct_ai', 'stream_target_ai', 'arena_hosted_stream'].includes(command)).length;
+    await editRepair(repairInput()); expect(docs.size).toBe(0);
+    vi.mocked(window.confirm).mockReturnValue(true); await click('应用修复');
+    await vi.waitFor(() => expect(container.textContent).toContain('已应用 1 位角色的非原生修复'));
+    const role = await openRole(); expect(role.textContent).toContain('手工修复后的影响'); expect(role.textContent).toContain('未签名');
+    expect(docs.size).toBe(0); await click('下载更新设定', role);
+    const downloaded = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+    expect(downloaded).not.toHaveProperty('signature'); expect(downloaded.metadata ?? {}).not.toHaveProperty('signature');
+    expect(downloaded.arena_history.entries.at(-1).impact).toBe('手工修复后的影响');
+    await click('另存此修复副本到本地库', role); await vi.waitFor(() => expect(docs.size).toBe(1));
+    expect([...docs.values()][0]!.provenance).toEqual({ kind: 'unsigned', execution: 'edited' }); expect([...docs.values()][0]!.data).toEqual(downloaded);
+    const after = await completeExport(); expect(after.candidates).toEqual(before.candidates); expect(after.result.roleUpdates).toEqual(before.result.roleUpdates);
+    expect(after.result.repairs.items[0].data).toEqual(downloaded); expect(after.draft.combatants[1]).toEqual(before.draft.combatants[1]);
+    if (hosted) { expect(button('重试角色更新').disabled).toBe(true); await click('重试角色更新'); }
+    expect(mocks.invoke.mock.calls.filter(([command]) => ['stream_direct_ai', 'stream_target_ai', 'arena_hosted_stream'].includes(command))).toHaveLength(callsBefore);
+  });
+
+  it.each([false, true])('late Hosted retry seeds only untouched drafts; userEdited=%s', async userEdited => {
+    await prepare('battle', true, true, true);
+    const textarea = () => container.querySelector<HTMLTextAreaElement>('[data-arena-combatant-updates] textarea')!;
+    expect(textarea().value).toBe('');
+    if (userEdited) await editRepair(repairInput('用户先输入的草稿'));
+    await click('重试角色更新'); await vi.waitFor(() => expect(container.textContent).toContain('角色更新已应用'));
+    await vi.waitFor(() => expect(textarea().value).toContain(userEdited ? '用户先输入的草稿' : '服务器原影响'));
+    expect(textarea().value).not.toContain(userEdited ? '服务器原影响' : '用户先输入的草稿');
+    expect(docs.size).toBe(0);
+  });
+
+  it('no-op changes neither roster trust nor save records', async () => {
+    await prepare('battle'); const before = await completeExport(); vi.mocked(window.confirm).mockClear();
+    await click('应用修复'); await vi.waitFor(() => expect(container.textContent).toContain('未改变其信任状态'));
+    expect(window.confirm).not.toHaveBeenCalled(); expect((await completeExport()).draft).toEqual(before.draft); expect(docs.size).toBe(0);
+  });
+
+  it('missing effect asks explicitly and cancel leaves the original native-looking source untouched', async () => {
+    await prepare('battle', false, false); const before = await completeExport(); await editRepair(repairInput());
+    vi.mocked(window.confirm).mockReturnValueOnce(true).mockReturnValueOnce(false);
+    await click('应用修复'); await vi.waitFor(() => expect(container.textContent).toContain('已取消，角色未修改'));
+    expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('创建明确标记的自定义 effect'));
+    expect((await completeExport()).draft).toEqual(before.draft); expect(docs.size).toBe(0);
+    vi.mocked(window.confirm).mockReturnValue(true); await click('应用修复');
+    await vi.waitFor(() => expect(container.textContent).toContain('已应用 1 位角色'));
+    expect((await completeExport()).draft.combatants[0].data.arena_history.entries).toHaveLength(1);
+  });
+
+  it('new report resets the repair draft; pending old apply is discarded when the route owner unmounts', async () => {
+    await prepare('battle'); await editRepair(repairInput()); await click('应用修复');
+    await vi.waitFor(() => expect(container.textContent).toContain('已应用 1 位角色'));
+    vi.mocked(window.confirm).mockReturnValue(true);
+    const prepared = vi.spyOn(getDesktopAiConfigStore(), 'withPreparedGeneration');
+    await click('生成战报'); expect(prepared).toHaveBeenCalledOnce();
+    await act(async () => { await prepared.mock.results[0]!.value; });
+    expect(received).toHaveLength(2); await settle(); await openRepair();
+    expect(container.querySelector<HTMLTextAreaElement>('[data-arena-combatant-updates] textarea')!.value).not.toContain('手工修复后的影响');
+    const before = localStorage.getItem(ARENA_DRAFT_KEY);
+    // Force a trust-bearing current source by using a new real route/Hosted result, not a fake session.
+    await act(async () => root.unmount()); root = createRoot(container);
+    await prepare('arena', true); await editRepair(repairInput());
+    const gate = deferred<boolean>(); vi.mocked(window.confirm).mockImplementation(() => gate.promise as unknown as boolean);
+    await click('应用修复'); expect(button('生成战报').disabled).toBe(true);
+    const stored = localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY);
+    await act(async () => root.unmount()); root = createRoot(container);
+    await act(async () => gate.resolve(true)); await settle();
+    expect(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)).toBe(stored); expect(localStorage.getItem(ARENA_DRAFT_KEY)).toBe(before); expect(docs.size).toBe(0);
+  });
 });

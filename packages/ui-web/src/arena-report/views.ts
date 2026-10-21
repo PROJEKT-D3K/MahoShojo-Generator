@@ -9,3 +9,4 @@ export { ArenaWebReplayControlsView, type ArenaWebReplayControlsViewProps } from
 export { WebReportConsentDialogView, type WebReportConsentDialogViewProps } from './WebReportConsentDialogView';
 
 export { CombatantUpdatesPresentation, type CombatantUpdatesPresentationProps, type CombatantUpdatePresentationItem } from './CombatantUpdatesPresentation';
+export { CombatantRepairPanel } from './CombatantRepairPanel';
