@@ -430,6 +430,6 @@
     "eslint": "^9",
     "typescript": "^5",
     "vitest": "^4.1.7",
-    "miniflare": "5.20260820.0-alpha"
+    "miniflare": "5.20261006.1-alpha"
   }
 }
