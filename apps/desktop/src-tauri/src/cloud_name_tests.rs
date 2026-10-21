@@ -67,6 +67,7 @@ fn name_native_json_preserves_signed_response_and_optional_cookie() {
             if logged_in {
                 store_session(&secrets, &StoredSession {
                     cookie: "better-auth.session_token=synthetic-name-session".into(),
+                    activity_token: None,
                     session_expires_at: None,
                     account: CloudAccountRecord { user_id: 7, username: "test".into(), display_name: None },
                 }).unwrap();

@@ -75,7 +75,10 @@ async fn json_identity_funding_and_complete_body_remain_original_across_channel(
                     json_delivery::PROTOCOL_VERSION
                 );
                 assert_eq!(r.body.contains(KEY), byok);
-                assert_eq!(r.headers.contains_key("cookie"), account);
+                // 账号请求用 activity token + 断言，BA cookie 不发往 Hono。
+                assert!(!r.headers.contains_key("cookie"));
+                assert_eq!(r.headers.contains_key(ACTIVITY_TOKEN_HEADER), account);
+                assert_eq!(r.headers.contains_key(EXPECTED_USER_HEADER), account);
                 if account {
                     json_reply(200, sent.clone())
                 } else {
@@ -556,10 +559,13 @@ async fn json_header_wait_exceeds_fifteen_seconds_while_same_actor_lookup_stop_r
             .count(),
         1
     );
+    // Hono 端永收不到 BA cookie：账号请求用 activity token + 断言。
     assert!(requests
         .iter()
         .filter(|r| r.path != CAPABILITY_PATH)
-        .all(|r| r.headers.get("cookie").map(String::as_str) == Some(COOKIE)));
+        .all(|r| !r.headers.contains_key("cookie")
+            && r.headers.get(ACTIVITY_TOKEN_HEADER).map(String::as_str) == Some(ACTIVITY)
+            && r.headers.get(EXPECTED_USER_HEADER).map(String::as_str) == Some("v1:42")));
 }
 
 #[tokio::test]

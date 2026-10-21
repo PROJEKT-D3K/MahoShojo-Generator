@@ -460,6 +460,7 @@ mod tests {
             secrets.as_ref(),
             &StoredSession {
                 cookie: "better-auth.session_token=synthetic-only".to_string(),
+                activity_token: None,
                 session_expires_at: None,
                 account: CloudAccountRecord {
                     user_id: 42,

@@ -21,6 +21,9 @@ const CAPABILITY_PATH: &str = "/api/hosted/dr-readiness";
 const CREATE_PATH: &str = "/api/arena/generate-stream";
 const ACTOR_HEADER: &str = "x-mahoshojo-generation-actor-token";
 const EXPECTED_USER_HEADER: &str = "x-mahoshojo-arena-expected-user-id";
+// Hono 生产端固定在 bearer 模式、不解析 Better Auth 会话 cookie；账号请求改发
+// Web 端同源的 activity token（由 cloud::arena_activity_token 以会话换取）。
+const ACTIVITY_TOKEN_HEADER: &str = "x-mahoshojo-activity-token";
 const INPUT_BYTES: usize = 12 * 1024 * 1024;
 const OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const EVENT_BYTES: usize = 6 * OUTPUT_BYTES + 64 * 1024;
@@ -67,6 +70,26 @@ fn network() -> ArenaError {
         "network-error",
         "Arena 网络结果未知，请查找原请求；不要重新创建",
     )
+}
+/// 会话换取 activity token 发生在任何 Hono 请求派发之前，失败语义是
+/// 「未派发」：凭据不可用归到 scope-changed，传输失败归到 network-error，
+/// 两者都不携带服务端原文。
+fn account_credential_error(source: cloud::CloudError) -> ArenaError {
+    match source.code {
+        cloud::CloudErrorCode::NotAuthenticated
+        | cloud::CloudErrorCode::StateMismatch
+        | cloud::CloudErrorCode::StorageUnavailable => error(
+            "scope-changed",
+            "登录会话已失效或发生变化，请重新登录后再生成",
+        ),
+        cloud::CloudErrorCode::NetworkError
+        | cloud::CloudErrorCode::Timeout
+        | cloud::CloudErrorCode::ServerUnavailable => error(
+            "network-error",
+            "账号会话校验未完成，生成未派发，请检查网络后重试",
+        ),
+        _ => error("invalid-response", "会话校验响应不符合协议，生成未派发"),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
@@ -422,6 +445,9 @@ struct Flight {
     actor: Actor,
     account_fingerprint: String,
     cookie: Option<String>,
+    // Hono 方向账号请求的凭据（activity token）。由 capability 惰性换取；
+    // cookie 字段仍保留给 Web origin 的 reconciliation 通路。
+    activity_token: Option<String>,
     anonymous: Option<AnonymousRecord>,
     memory_only: bool,
     capability_verified: bool,
@@ -703,17 +729,17 @@ impl ArenaState {
                     if let Some(cancel) = &old.subscription {
                         cancel.cancel();
                     }
-                    let cookie = if matches!(actor, Actor::Account { .. }) {
-                        snapshot.cookie
+                    let (cookie, activity_token) = if matches!(actor, Actor::Account { .. }) {
+                        (snapshot.cookie, snapshot.activity_token)
                     } else {
-                        None
+                        (None, None)
                     };
                     let mut secrets_to_redact = old.secrets_to_redact.clone();
-                    if let Some(old_cookie) = &old.cookie {
-                        secrets_to_redact.retain(|s| s != old_cookie);
+                    for stale_secret in [&old.cookie, &old.activity_token].into_iter().flatten() {
+                        secrets_to_redact.retain(|s| s != stale_secret);
                     }
-                    if let Some(cookie) = &cookie {
-                        secrets_to_redact.push(cookie.clone());
+                    for fresh_secret in [&cookie, &activity_token].into_iter().flatten() {
+                        secrets_to_redact.push(fresh_secret.clone());
                     }
                     let next = Arc::new(Mutex::new(Flight {
                         revoked: false,
@@ -722,6 +748,8 @@ impl ArenaState {
                         actor: old.actor.clone(),
                         account_fingerprint: snapshot.fingerprint,
                         cookie,
+                        // 与 cookie 同源自重读快照：缺失时由 capability 惰性补取。
+                        activity_token,
                         anonymous: old.anonymous.clone(),
                         memory_only: old.memory_only,
                         capability_verified: false,
@@ -846,14 +874,15 @@ impl ArenaState {
         } else {
             None
         };
-        let cookie = if matches!(actor, Actor::Account { .. }) {
-            snapshot.cookie
+        let (cookie, activity_token) = if matches!(actor, Actor::Account { .. }) {
+            (snapshot.cookie, snapshot.activity_token)
         } else {
-            None
+            (None, None)
         };
         let secrets_to_redact = cookie
             .iter()
             .cloned()
+            .chain(activity_token.iter().cloned())
             .chain(anonymous.iter().flat_map(|r| {
                 [Some(r.bootstrap.clone()), r.token.clone()]
                     .into_iter()
@@ -867,6 +896,7 @@ impl ArenaState {
             actor: actor.clone(),
             account_fingerprint: snapshot.fingerprint,
             cookie,
+            activity_token,
             anonymous,
             memory_only: false,
             capability_verified: false,
@@ -891,22 +921,52 @@ impl ArenaState {
         require_json_reconciliation: bool,
     ) -> Result<(), ArenaError> {
         self.is_current(product, flight, cloud, secrets)?;
-        {
+        let needs_probe = {
             let f = flight.lock().map_err(|_| stale())?;
-            if f.capability_verified
+            !(f.capability_verified
                 && (!require_json || f.json_capability_verified)
-                && !require_json_reconciliation
-            {
-                return Ok(());
-            }
+                && !require_json_reconciliation)
+        };
+        if needs_probe {
+            let json_capable = self
+                .probe_capability(require_json, require_json_reconciliation, false)
+                .await?;
+            self.is_current(product, flight, cloud, secrets)?;
+            let mut f = flight.lock().map_err(|_| stale())?;
+            f.capability_verified = true;
+            f.json_capability_verified = json_capable;
         }
-        let json_capable = self
-            .probe_capability(require_json, require_json_reconciliation, false)
-            .await?;
+        self.ensure_account_credential(product, flight, cloud, secrets)
+            .await
+    }
+    /// Hono 生产端运行在 bearer 模式，不解析 BA 会话 cookie。账号请求的凭据
+    /// 是与 Web 端同源的 activity token——经 `/api/auth/verify` 以本会话换取，
+    /// 惰性获取一次后随 Flight 复用；不落盘、不出 native。
+    async fn ensure_account_credential(
+        &self,
+        product: Product,
+        flight: &Arc<Mutex<Flight>>,
+        cloud: &CloudState,
+        secrets: &dyn SecretStore,
+    ) -> Result<(), ArenaError> {
+        let expected_user_id = {
+            let f = flight.lock().map_err(|_| stale())?;
+            match f.actor {
+                Actor::Account { expected_user_id } if f.activity_token.is_none() => {
+                    expected_user_id
+                }
+                _ => return Ok(()),
+            }
+        };
+        let token = cloud::arena_activity_token(cloud, secrets, expected_user_id)
+            .await
+            .map_err(account_credential_error)?;
         self.is_current(product, flight, cloud, secrets)?;
         let mut f = flight.lock().map_err(|_| stale())?;
-        f.capability_verified = true;
-        f.json_capability_verified = json_capable;
+        if f.activity_token.is_none() {
+            f.secrets_to_redact.push(token.clone());
+            f.activity_token = Some(token);
+        }
         Ok(())
     }
     async fn probe_capability(
@@ -995,11 +1055,12 @@ impl ArenaState {
         let mut builder = self.http.request(method, format!("{}{path}", self.origin));
         match &f.actor {
             Actor::Account { expected_user_id } => {
+                let token = f.activity_token.as_deref().ok_or_else(stale)?;
+                let mut credential = reqwest::header::HeaderValue::from_str(token)
+                    .map_err(|_| error("invalid-request", "Arena 账号凭据无效"))?;
+                credential.set_sensitive(true);
                 builder = builder
-                    .header(
-                        reqwest::header::COOKIE,
-                        f.cookie.as_deref().ok_or_else(stale)?,
-                    )
+                    .header(ACTIVITY_TOKEN_HEADER, credential)
                     .header(EXPECTED_USER_HEADER, format!("v1:{expected_user_id}"));
             }
             Actor::Anonymous => {

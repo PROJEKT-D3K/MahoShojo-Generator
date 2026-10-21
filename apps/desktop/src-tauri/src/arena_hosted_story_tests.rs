@@ -312,11 +312,14 @@ async fn story_real_sqlite_loopback_product_actor_funding_matrix_preserves_raw_i
                 assert_eq!(sent.path, "/api/arena/session/generate-next");
                 assert_eq!(sent.headers[story::PROTOCOL_HEADER], "arena-story-v1");
                 assert_eq!(sent.headers["accept"], "text/event-stream");
-                assert_eq!(sent.headers.contains_key("cookie"), account);
+                // 账号请求用 activity token + 断言，BA cookie 不发往 Hono。
+                assert!(!sent.headers.contains_key("cookie"));
+                assert_eq!(sent.headers.contains_key(ACTIVITY_TOKEN_HEADER), account);
                 assert_eq!(sent.headers.contains_key(EXPECTED_USER_HEADER), account);
                 assert_eq!(sent.headers.contains_key(ACTOR_HEADER), !account);
                 if account {
                     assert_eq!(sent.headers[EXPECTED_USER_HEADER], "v1:42");
+                    assert_eq!(sent.headers[ACTIVITY_TOKEN_HEADER], ACTIVITY);
                 }
                 assert_eq!(sent.body.contains(KEY), byok);
                 let original: BTreeMap<&str, &RawValue> =

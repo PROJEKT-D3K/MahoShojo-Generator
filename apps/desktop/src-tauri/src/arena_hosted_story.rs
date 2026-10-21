@@ -485,6 +485,7 @@ fn reserve_preflight<'a>(
         actor: a.clone(),
         account_fingerprint: epoch.into(),
         cookie: None,
+        activity_token: None,
         anonymous: None,
         memory_only: false,
         capability_verified: false,

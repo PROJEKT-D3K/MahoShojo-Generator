@@ -1,12 +1,14 @@
 //! Real production transport + synthetic loopback; no OS keyring, remote endpoint or Tauri facade.
 use super::*;
 use crate::secret::SecretStoreError;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const RID: &str = "arena_request_1234";
 const KEY: &str = "SYNTHETIC-PROVIDER-KEY-CANARY";
 const COOKIE: &str = "better-auth.session_token=SYNTHETIC-COOKIE-CANARY";
+const ACTIVITY: &str = "SYNTHETIC-ACTIVITY-TOKEN-CANARY";
+const VERIFY_TEST_PATH: &str = "/api/auth/verify";
 fn gid() -> String {
     format!("arena_{}", "a".repeat(64))
 }
@@ -48,6 +50,10 @@ impl SecretStore for Secrets {
     }
 }
 fn login(secrets: &Secrets, user: u64) {
+    secrets.set("account-session:web-v1",&json!({"cookie":COOKIE,"activityToken":ACTIVITY,"sessionExpiresAt":null,"account":{"userId":user,"username":"synthetic","displayName":null}}).to_string()).unwrap();
+}
+/// 模拟 activityToken 字段补写前的旧版会话：hosted 账号请求会触发惰性换证。
+fn login_legacy(secrets: &Secrets, user: u64) {
     secrets.set("account-session:web-v1",&json!({"cookie":COOKIE,"sessionExpiresAt":null,"account":{"userId":user,"username":"synthetic","displayName":null}}).to_string()).unwrap();
 }
 #[derive(Default)]
@@ -190,6 +196,30 @@ async fn server(
         requests,
         task,
     }
+}
+/// 账号 Flight 在 capability 里先按会话向 Web origin 换一次 activity token；
+/// 该调用不占 Arena 请求序号——`count` 需要把 verify 次数一起算进来。
+fn verify_reply(user: u64) -> Reply {
+    Reply::json(
+        200,
+        json!({"success":true,"user":{"id":user},"activityToken":ACTIVITY}),
+    )
+}
+async fn server_with_auth(
+    count: usize,
+    user: u64,
+    handler: impl Fn(usize, &Request) -> Reply + Send + Sync + 'static,
+) -> Server {
+    let verified = Arc::new(AtomicUsize::new(0));
+    server(count, move |i, r| {
+        if r.method == "POST" && r.path == VERIFY_TEST_PATH {
+            verified.fetch_add(1, Ordering::SeqCst);
+            verify_reply(user)
+        } else {
+            handler(i - verified.load(Ordering::SeqCst), r)
+        }
+    })
+    .await
 }
 fn create(account: bool, byok: bool) -> ArenaRequest {
     let mut v = fixture()["validOperations"][0].clone();
@@ -557,8 +587,10 @@ async fn real_loopback_four_identity_funding_combinations_create_only_keys() {
             assert!(!requests[0].headers.contains_key(ACTOR_HEADER));
             for (i, r) in requests.iter().enumerate() {
                 if i > 0 {
-                    assert_eq!(r.headers.contains_key("cookie"), account);
+                    // Hono 端永收不到 BA cookie：账号请求用 activity token + 断言。
+                    assert!(!r.headers.contains_key("cookie"));
                     assert_eq!(r.headers.contains_key(EXPECTED_USER_HEADER), account);
+                    assert_eq!(r.headers.contains_key(ACTIVITY_TOKEN_HEADER), account);
                     assert_eq!(r.headers.contains_key(ACTOR_HEADER), !account);
                 }
                 assert_eq!(r.body.contains(KEY), i == 1 && byok);
@@ -567,7 +599,7 @@ async fn real_loopback_four_identity_funding_combinations_create_only_keys() {
             assert_eq!(requests[1].method, "POST");
             assert_eq!(requests[3].method, "DELETE");
             let raw = serde_json::to_string(&*sink.events.lock().unwrap()).unwrap();
-            for secret in [KEY, COOKIE, "SYNTHETIC-SIGNATURE", "bootstrap."] {
+            for secret in [KEY, COOKIE, "SYNTHETIC-SIGNATURE", "bootstrap.", ACTIVITY] {
                 assert!(!raw.contains(secret));
             }
             assert!(sink.wire().contains("正文🪄"));
@@ -1475,7 +1507,8 @@ async fn explicit_same_actor_restore_rebinds_scope_without_lending_new_cookie_to
             .resolve("account-session:web-v1")
             .unwrap()
             .unwrap()
-            .replace(COOKIE, "better-auth.session_token=NEW-SYNTHETIC-SESSION");
+            .replace(COOKIE, "better-auth.session_token=NEW-SYNTHETIC-SESSION")
+            .replace(ACTIVITY, "SYNTHETIC-ACTIVITY-TOKEN-NEW");
         secrets.set("account-session:web-v1", &current).unwrap();
         assert_eq!(
             control(
@@ -1527,10 +1560,13 @@ async fn explicit_same_actor_restore_rebinds_scope_without_lending_new_cookie_to
         assert_eq!(requests.iter().filter(|r| r.method == "POST").count(), 1);
         for r in &requests[3..] {
             if account {
+                // 换绑后的 Flight 用新会话自己的 activity token，不沿用旧凭据。
+                assert!(!r.headers.contains_key("cookie"));
                 assert_eq!(
-                    r.headers.get("cookie").unwrap(),
-                    "better-auth.session_token=NEW-SYNTHETIC-SESSION"
+                    r.headers.get(ACTIVITY_TOKEN_HEADER).unwrap(),
+                    "SYNTHETIC-ACTIVITY-TOKEN-NEW"
                 );
+                assert_eq!(r.headers.get(EXPECTED_USER_HEADER).unwrap(), "v1:42");
             } else {
                 assert!(!r.headers.contains_key("cookie"));
                 assert_eq!(r.headers.get(ACTOR_HEADER), old_token.as_ref());
@@ -1992,7 +2028,6 @@ async fn final_post_envelope_with_request_id_and_key_accepts_exact_limit_rejects
     let secrets = Secrets::default();
     login(&secrets, 42);
     secrets.set("preset:kourichat:api-key", KEY).unwrap();
-    let cloud = CloudState::new().unwrap();
     let mut request = fixture()["validOperations"][0].clone();
     request["presetConfig"] = json!({"providerId":"kourichat","modelId":"gemini-3.8-flash"});
     request["body"]["userGuidance"] = json!("");
@@ -2022,6 +2057,7 @@ async fn final_post_envelope_with_request_id_and_key_accepts_exact_limit_rejects
         Reply::sse(standard_wire())
     })
     .await;
+    let cloud = CloudState::new().unwrap();
     let state = ArenaState::with_origin(srv.origin.clone());
     stream(
         &state,
@@ -2126,6 +2162,139 @@ async fn source_limit_meta_recipe_traverses_real_http_and_channel_without_loss()
         std::fs::write(path, serde_json::to_vec(&*events).unwrap()).unwrap();
     }
     eprintln!("ARENA_META_HTTP_BOUNDARY source_bytes={} wire_bytes={wire_bytes} channel_messages={} raw_utf16_units={}", source.len(), events.len(), data["raw"].as_str().unwrap().encode_utf16().count());
+}
+
+/// 旧版会话（无 activityToken 字段）首次 hosted 请求时向 Web origin 现取并回写；
+/// 之后的控件请求复用同一 Flight 内的 token，不重复 verify。
+#[tokio::test]
+async fn legacy_session_lazily_fetches_activity_token_once_and_persists_it() {
+    let srv = server_with_auth(4, 42, move |i, _| match i {
+        0 => capability(),
+        1 => Reply::sse(standard_wire()),
+        _ => status("completed"),
+    })
+    .await;
+    let cloud = CloudState::with_origin(&srv.origin);
+    let state = ArenaState::with_origin(srv.origin.clone());
+    let secrets = Secrets::default();
+    login_legacy(&secrets, 42);
+    stream(
+        &state,
+        &cloud,
+        &secrets,
+        create(true, false),
+        &Sink::default(),
+    )
+    .await
+    .unwrap();
+    control(&state, &cloud, &secrets, operation("lookup-request", true))
+        .await
+        .unwrap();
+    srv.task.await.unwrap();
+    let requests = srv.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.path == VERIFY_TEST_PATH)
+            .count(),
+        1
+    );
+    for r in requests.iter().filter(|r| r.path != VERIFY_TEST_PATH) {
+        assert!(!r.headers.contains_key("cookie"));
+        if r.path != CAPABILITY_PATH {
+            assert_eq!(r.headers.get(ACTIVITY_TOKEN_HEADER).unwrap(), ACTIVITY);
+            assert_eq!(r.headers.get(EXPECTED_USER_HEADER).unwrap(), "v1:42");
+        }
+    }
+    let stored: Value =
+        serde_json::from_str(&secrets.resolve("account-session:web-v1").unwrap().unwrap()).unwrap();
+    assert_eq!(stored["activityToken"], ACTIVITY);
+    assert_eq!(stored["cookie"], COOKIE);
+    assert_eq!(stored["account"]["userId"], 42);
+}
+
+/// verify 的不同失败各自落在诚实错误码上：会话类失败是未派发的 scope-changed，
+/// 协议异常是 invalid-response；任何情况下都不静默降级为匿名、不补发 create。
+#[tokio::test]
+async fn legacy_session_verify_failures_never_dispatch_or_downgrade() {
+    for (status, body, expected) in [
+        (401u16, json!({"error":"unauthorized"}), "scope-changed"),
+        (
+            200u16,
+            json!({"success":true,"user":{"id":99},"activityToken":ACTIVITY}),
+            "scope-changed",
+        ),
+        (
+            200u16,
+            json!({"success":true,"user":{"id":42}}),
+            "invalid-response",
+        ),
+        (500u16, json!({}), "network-error"),
+    ] {
+        let srv = server(2, move |i, r| {
+            if r.method == "POST" && r.path == VERIFY_TEST_PATH {
+                Reply::json(status, body.clone())
+            } else if i == 0 {
+                capability()
+            } else {
+                Reply::sse(standard_wire())
+            }
+        })
+        .await;
+        let cloud = CloudState::with_origin(&srv.origin);
+        let state = ArenaState::with_origin(srv.origin.clone());
+        let secrets = Secrets::default();
+        login_legacy(&secrets, 42);
+        let error = stream(
+            &state,
+            &cloud,
+            &secrets,
+            create(true, false),
+            &Sink::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, expected);
+        assert_eq!(error.dispatch_state, "not-dispatched");
+        srv.task.await.unwrap();
+        let requests = srv.requests.lock().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.path.starts_with(CREATE_PATH))
+                .count(),
+            0
+        );
+        // 失败的 verify 不得回写 token：会话记录保持旧形态。
+        let stored: Value =
+            serde_json::from_str(&secrets.resolve("account-session:web-v1").unwrap().unwrap())
+                .unwrap();
+        assert!(stored.get("activityToken").is_none());
+    }
+}
+
+/// verify 不可达（连接拒绝）按 network-error 处理，不删会话、不派发 create。
+#[tokio::test]
+async fn legacy_session_verify_unreachable_keeps_session_and_dispatches_nothing() {
+    let srv = server(1, |_, _| capability()).await;
+    let cloud = CloudState::with_origin("http://127.0.0.1:1");
+    let state = ArenaState::with_origin(srv.origin.clone());
+    let secrets = Secrets::default();
+    login_legacy(&secrets, 42);
+    let error = stream(
+        &state,
+        &cloud,
+        &secrets,
+        create(true, false),
+        &Sink::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "network-error");
+    assert_eq!(error.dispatch_state, "not-dispatched");
+    srv.task.await.unwrap();
+    assert_eq!(srv.requests.lock().unwrap().len(), 1);
+    assert!(secrets.resolve("account-session:web-v1").unwrap().is_some());
 }
 
 #[path = "arena_hosted_json_tests.rs"]

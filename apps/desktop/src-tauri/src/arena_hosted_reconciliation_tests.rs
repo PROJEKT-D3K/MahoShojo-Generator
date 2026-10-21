@@ -1169,7 +1169,8 @@ async fn actual_native_create_json_request_can_feed_the_server_integration_consu
         );
         assert_eq!(request.headers[rec::PROTOCOL_HEADER], rec::PROTOCOL_VERSION);
         assert_eq!(request.headers[EXPECTED_USER_HEADER], "v1:123");
-        assert_eq!(request.headers["cookie"], COOKIE);
+        assert_eq!(request.headers[ACTIVITY_TOKEN_HEADER], ACTIVITY);
+        assert!(!request.headers.contains_key("cookie"));
         assert!(!request.headers.contains_key(ACTOR_HEADER));
         assert!(!request.body.contains(KEY));
         let body: Value = serde_json::from_str(&request.body).unwrap();

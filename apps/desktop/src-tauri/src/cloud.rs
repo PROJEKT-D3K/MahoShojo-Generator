@@ -83,6 +83,7 @@ fn is_allowed_dev_origin(origin: &str) -> bool {
 const AUTHORIZE_PATH: &str = "/auth/desktop";
 const EXCHANGE_PATH: &str = "/api/auth/native/exchange";
 const GET_SESSION_PATH: &str = "/api/auth/get-session";
+const VERIFY_PATH: &str = "/api/auth/verify";
 const SIGN_OUT_PATH: &str = "/api/auth/sign-out";
 const ME_PROFILE_PATH: &str = "/api/me/profile";
 const ME_PROFILE_AVATAR_PATH: &str = "/api/me/profile/avatar";
@@ -335,6 +336,12 @@ pub struct CloudOnlineStatus {
 struct StoredSession {
     /// `name=value` 形式的完整会话 cookie 对（BA 签名值）。
     cookie: String,
+    /// 托管生成发往 Hono 的账号凭据（`x-mahoshojo-activity-token`）。生产 Hono
+    /// 固定 bearer 模式、不解析 BA cookie；该值由 `/api/auth/verify` 以本会话
+    /// cookie 换取，TTL 与会话同阶。缺失字段的旧会话在首次使用时惰性补取。
+    /// 与 cookie 同在 keyring，不出 native、不过 IPC。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    activity_token: Option<String>,
     session_expires_at: Option<String>,
     account: CloudAccountRecord,
 }
@@ -408,7 +415,22 @@ fn clear_session_if_current(
     let current = secrets
         .resolve(ACCOUNT_SESSION_REF)
         .map_err(|error| CloudError::from_secret_store(&error))?;
-    if current.as_deref() != Some(raw) {
+    // 惰性回写 activityToken 会改动序列化字节：此时比较身份凭据而非字节本身。
+    let same_identity = match current.as_deref() {
+        Some(current) if current == raw => true,
+        Some(current) => match (
+            serde_json::from_str::<StoredSession>(current),
+            serde_json::from_str::<StoredSession>(raw),
+        ) {
+            (Ok(current), Ok(observed)) => {
+                current.cookie == observed.cookie
+                    && current.account.user_id == observed.account.user_id
+            }
+            _ => false,
+        },
+        None => false,
+    };
+    if !same_identity {
         return Ok(false);
     }
     if let Some((state, _)) = epoch {
@@ -519,7 +541,17 @@ impl RoomAccountLease {
         let raw = secrets
             .resolve(ACCOUNT_SESSION_REF)
             .map_err(|error| CloudError::from_secret_store(&error))?;
-        Ok(raw.as_deref() == Some(self.raw.as_str()))
+        // activityToken 的惰性回写只改派生字段：租约仍按身份凭据（cookie+用户）判同。
+        let current = raw
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<StoredSession>(raw).ok());
+        Ok(match (raw.as_deref(), current) {
+            (Some(raw), _) if raw == self.raw => true,
+            (_, Some(current)) => {
+                current.cookie == self.cookie && current.account.user_id == self.user_id
+            }
+            _ => false,
+        })
     }
 
     pub(crate) fn clear_if_current(
@@ -582,6 +614,7 @@ fn read_profile_session_snapshot(
 pub(crate) struct ArenaAccountSnapshot {
     pub user_id: Option<u64>,
     pub cookie: Option<String>,
+    pub activity_token: Option<String>,
     pub fingerprint: String,
 }
 
@@ -593,10 +626,6 @@ pub(crate) fn arena_account_snapshot(
         .resolve(ACCOUNT_SESSION_REF)
         .map_err(|_| CloudError::new(CloudErrorCode::StorageUnavailable, "账号凭据存储不可用"))?;
     let epoch = state.account_epoch.load(Ordering::SeqCst);
-    let fingerprint = format!(
-        "{epoch}:{:x}",
-        Sha256::digest(raw.as_deref().unwrap_or_default().as_bytes())
-    );
     let session = raw
         .as_deref()
         .map(serde_json::from_str::<StoredSession>)
@@ -604,11 +633,131 @@ pub(crate) fn arena_account_snapshot(
         .map_err(|_| {
             CloudError::new(CloudErrorCode::NotAuthenticated, "账号凭据损坏，请重新登录")
         })?;
+    // 指纹只覆盖身份凭据（cookie+到期+账号）：派生的 activityToken 惰性回写
+    // 会改动序列化字节，但不得据此判定会话已切换。
+    let material = session.as_ref().map_or_else(
+        || raw.clone().unwrap_or_default().into_bytes(),
+        |s| {
+            format!(
+                "{}\u{0}{}\u{0}{}",
+                s.cookie,
+                s.session_expires_at.as_deref().unwrap_or_default(),
+                s.account.user_id
+            )
+            .into_bytes()
+        },
+    );
+    let fingerprint = format!("{epoch}:{:x}", Sha256::digest(&material));
     Ok(ArenaAccountSnapshot {
         user_id: session.as_ref().map(|s| s.account.user_id),
-        cookie: session.map(|s| s.cookie),
+        cookie: session.as_ref().map(|s| s.cookie.clone()),
+        activity_token: session.and_then(|s| s.activity_token),
         fingerprint,
     })
+}
+
+/// Arena 托管生成发往 Hono 的账号凭据：生产端固定在 bearer 模式、不解析
+/// Better Auth 会话 cookie；这里用本会话 cookie 向 Web origin 换取带签名的
+/// activity token（与 Web 端访问托管生成的既有认证机制同源）。
+/// 会话记录里已存的 token 直接复用；缺失字段的旧会话现取后原子回写——
+/// 回写只追加派生字段，不改变身份指纹，也不打断在途生成/房间租约。
+/// 凭据只经 native 内存与 keyring：不过 IPC、不进入 renderer。
+pub(crate) async fn arena_activity_token(
+    state: &CloudState,
+    secrets: &dyn SecretStore,
+    expected_user_id: u64,
+) -> Result<String, CloudError> {
+    let Some(snapshot) = load_session_snapshot(state, secrets)? else {
+        return Err(CloudError::new(
+            CloudErrorCode::NotAuthenticated,
+            "需要登录账号",
+        ));
+    };
+    if snapshot.session.account.user_id != expected_user_id {
+        return Err(CloudError::new(
+            CloudErrorCode::StateMismatch,
+            "登录身份已变化",
+        ));
+    }
+    if let Some(token) = snapshot.session.activity_token {
+        return Ok(token);
+    }
+    let token = verify_activity_token(state, &snapshot.session).await?;
+    // 回写以记录未被并发替换为前提；失败不阻断本次生成（下次使用惰性重取）。
+    let _ = persist_activity_token(secrets, &snapshot.raw, &token);
+    Ok(token)
+}
+
+/// `/api/auth/verify`：会话 cookie → 已签名 activity token。
+/// 返回的 user.id 必须等于本地会话身份，否则视为身份漂移。
+async fn verify_activity_token(
+    state: &CloudState,
+    session: &StoredSession,
+) -> Result<String, CloudError> {
+    let response = authed_request(
+        &state.http,
+        reqwest::Method::POST,
+        &state.origin,
+        VERIFY_PATH,
+        session,
+    )
+    .timeout(SHORT_REQUEST_TIMEOUT)
+    .send()
+    .await
+    .map_err(|error| CloudError::network("会话校验", &error))?;
+    let status = response.status().as_u16();
+    if !response.status().is_success() {
+        let code = match status {
+            401 | 403 => CloudErrorCode::NotAuthenticated,
+            400 | 404 => CloudErrorCode::InvalidResponse,
+            _ => CloudErrorCode::ServerUnavailable,
+        };
+        return Err(CloudError::new(
+            code,
+            format!("会话校验被拒绝（HTTP {status}）"),
+        ));
+    }
+    let payload = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|_| CloudError::invalid_response("会话校验"))?;
+    let verified_user = payload
+        .get("user")
+        .and_then(|user| user.get("id"))
+        .and_then(serde_json::Value::as_u64);
+    if verified_user != Some(session.account.user_id) {
+        return Err(CloudError::new(
+            CloudErrorCode::StateMismatch,
+            "服务端会话身份已变化",
+        ));
+    }
+    match payload
+        .get("activityToken")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(token) if !token.is_empty() && token.len() <= 8 * 1024 => Ok(token.to_string()),
+        _ => Err(CloudError::invalid_response("会话校验")),
+    }
+}
+
+/// 把换得的 activity token 并回会话记录：仅在记录仍是观测到的那份时写入，
+/// 避免把凭据落到并发登录产生的新会话上。
+fn persist_activity_token(
+    secrets: &dyn SecretStore,
+    observed_raw: &str,
+    token: &str,
+) -> Result<(), CloudError> {
+    let guard = account_session_gate()?;
+    let current = secrets
+        .resolve(ACCOUNT_SESSION_REF)
+        .map_err(|error| CloudError::from_secret_store(&error))?;
+    if current.as_deref() != Some(observed_raw) {
+        return Ok(());
+    }
+    let mut session: StoredSession = serde_json::from_str(observed_raw)
+        .map_err(|_| CloudError::new(CloudErrorCode::InternalError, "会话记录损坏"))?;
+    session.activity_token = Some(token.to_string());
+    write_session_record(&guard, secrets, &session)
 }
 
 /* ── HTTP 客户端与请求构造 ─────────────────────────────────────────────── */
@@ -884,7 +1033,7 @@ impl CloudState {
 
     /// 测试专用：把 origin 指向 mock server。
     #[cfg(test)]
-    fn with_origin(origin: &str) -> Self {
+    pub(crate) fn with_origin(origin: &str) -> Self {
         Self {
             http: build_cloud_client().expect("test cloud client"),
             origin: origin.to_string(),
@@ -1005,15 +1154,22 @@ async fn exchange_grant(
         ));
     }
 
-    Ok(StoredSession {
+    let mut session = StoredSession {
         cookie,
+        activity_token: None,
         session_expires_at: Some(payload.session_expires_at),
         account: CloudAccountRecord {
             user_id: payload.account.user_id,
             username: payload.account.username,
             display_name: payload.account.display_name,
         },
-    })
+    };
+    // 登录完成顺手换好 hosted 生成所需的 activity token。失败不阻断登录本身——
+    // 会话 cookie 仍有效，首次 hosted 请求时按旧会话路径惰性补取并报真实错误。
+    if let Ok(token) = verify_activity_token(state, &session).await {
+        session.activity_token = Some(token);
+    }
+    Ok(session)
 }
 
 /* ── 命令实现 ──────────────────────────────────────────────────────────── */
@@ -4217,7 +4373,6 @@ pub async fn cloud_messages_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hosted_preset::de_optional_non_null;
     pub use crate::hosted_preset::HostedPresetConfig as CloudHostedPresetConfig;
     use crate::secret::{SecretStore, SecretStoreError};
     use std::collections::BTreeMap;
@@ -4376,6 +4531,7 @@ mod tests {
         let secrets = MemorySecrets::new();
         let record = StoredSession {
             cookie: "better-auth.session_token=tok".to_string(),
+            activity_token: Some("synthetic-activity-token".to_string()),
             session_expires_at: Some("2026-10-12T00:00:00Z".to_string()),
             account: CloudAccountRecord {
                 user_id: 7,
@@ -4592,6 +4748,7 @@ mod tests {
                         .clone()
                         .unwrap_or(StoredSession {
                             cookie: "better-auth.session_token=native.tok".into(),
+                            activity_token: Some("synthetic-activity-token".into()),
                             session_expires_at: Some("2026-10-12T00:00:00.000Z".into()),
                             account: CloudAccountRecord {
                                 user_id: 7,
@@ -5258,6 +5415,7 @@ mod tests {
                 &secrets,
                 &StoredSession {
                     cookie: "better-auth.session_token=tok".to_string(),
+                    activity_token: None,
                     session_expires_at: None,
                     account: CloudAccountRecord {
                         user_id: 1,
@@ -6885,6 +7043,7 @@ mod tests {
                 &secrets,
                 &StoredSession {
                     cookie: "better-auth.session_token=native.tok".to_string(),
+                    activity_token: None,
                     session_expires_at: None,
                     account: CloudAccountRecord {
                         user_id: 7,
@@ -6941,6 +7100,7 @@ mod tests {
                 &secrets,
                 &StoredSession {
                     cookie: "better-auth.session_token=sublimation-test".to_string(),
+                    activity_token: None,
                     session_expires_at: None,
                     account: CloudAccountRecord {
                         user_id: 7,
@@ -7408,6 +7568,7 @@ mod tests {
                 &secrets,
                 &StoredSession {
                     cookie: "better-auth.session_token=native.tok".to_string(),
+                    activity_token: None,
                     session_expires_at: None,
                     account: CloudAccountRecord {
                         user_id: 7,
@@ -7825,6 +7986,7 @@ mod tests {
     fn stored_test_session() -> StoredSession {
         StoredSession {
             cookie: "better-auth.session_token=native.tok".to_string(),
+            activity_token: None,
             session_expires_at: Some("2026-10-12T00:00:00Z".to_string()),
             account: CloudAccountRecord {
                 user_id: 7,
