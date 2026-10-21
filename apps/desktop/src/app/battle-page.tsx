@@ -1,3 +1,4 @@
+import { projectDesktopGenerationRanking } from '../features/arena/generation-ranking-projection';
 import { useDesktopRosterRatings } from '../features/arena/use-roster-ratings';
 import { buildDesktopRosterExtras, snapshotDesktopRosterDetails, readDesktopRosterMetadata, type DesktopRosterMetadataSnapshot } from '../features/arena/roster-presentation';
 import { DesktopCardDetailsModal } from '../features/card-details/card-details-modal';
@@ -453,10 +454,14 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     ? draft.combatants.map(getCombatantCardLibrarySelectionId)
     : (library === 'auxScenario' ? draft.auxScenarios : library === 'material' ? draft.materials : []).map(getArenaReferenceSelectionId);
   const rosterRatings = useDesktopRosterRatings(draft.combatants, JSON.stringify([scope, draft.battleMode, draft.reportFormat]), !roomState.constrained && !state.pendingRestore);
+  const rankingProjection = useMemo(() => projectDesktopGenerationRanking({
+    current: draft.combatants, frozen: state.generation?.input.combatants,
+    ranking: state.hosted?.ranking, hostedGenerationId: state.hostedGenerationId,
+  }), [draft.combatants, state.generation, state.hosted?.ranking, state.hostedGenerationId]);
   const rosterExtras = useMemo(() => draft.combatants.map((item, index) => {
     const metadata = readDesktopRosterMetadata(item, rosterMetadata);
-    return buildDesktopRosterExtras(item, () => setRosterDetails(snapshotDesktopRosterDetails(item)), metadata, rosterRatings[index]);
-  }), [draft.combatants, rosterMetadata, rosterRatings]);
+    return buildDesktopRosterExtras(item, () => setRosterDetails(snapshotDesktopRosterDetails(item)), metadata, rosterRatings[index], rankingProjection.rows[index]);
+  }), [draft.combatants, rosterMetadata, rosterRatings, rankingProjection]);
   const roster: ArenaRosterSectionModel = {
     rowExtras: row => rosterExtras[row.index],
     rows: draft.combatants.map((item, index) => ({ key: String(index), displayName: arenaItemName(item.data), typeLabel: getCombatantTypeLabel(item.type), guidance: item.characterGuidance ?? '', index, teamKey: item.teamId ? String(item.teamId) : null, isPlaceholder: false })),
@@ -637,15 +642,18 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           : state.hosted.ranking.state === 'pending' ? '服务器返回本次排位仍待结算；当前未继续查询。'
           : '已取得本次服务器排位结算反馈。'}</p>
         {ranking?.success && ranking.state === 'ready' ? (
-          ranking.participants.length ? <ul className="space-y-2" aria-label="本次参战者排位结算">
-            {ranking.participants.map((participant, index) => <li key={`${ranking.generationId}:${index}`}>
-              <p className="font-semibold break-words">{participant.displayName.trim() || `参战者 ${index + 1}`}</p>
-              <div className="flex flex-wrap gap-x-3 gap-y-1">
-                <ArenaRankingQueueFeedback queue="strict" result={participant.queues.strict} />
-                <ArenaRankingQueueFeedback queue="free" result={participant.queues.free} />
-              </div>
-            </li>)}
-          </ul> : <p>服务器未返回参战者结算明细，不能据此判断是否计分。</p>
+          rankingProjection.unmatched.length ? <div>
+            <p className="text-sm text-gray-500">以下明细未关联到当前角色栏，仍保留本局生成时的结算结果。</p>
+            <ul className="space-y-2" aria-label="本次参战者排位结算">
+              {rankingProjection.unmatched.map(({ participant, index }) => <li key={`${ranking.generationId}:${index}`}>
+                <p className="font-semibold break-words">{participant.displayName.trim() || `参战者 ${index + 1}`}</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  <ArenaRankingQueueFeedback queue="strict" result={participant.queues.strict} />
+                  <ArenaRankingQueueFeedback queue="free" result={participant.queues.free} />
+                </div>
+              </li>)}
+            </ul>
+          </div> : !ranking.participants.length ? <p>服务器未返回参战者结算明细，不能据此判断是否计分。</p> : null
         ) : null}
         {state.hosted.metadataState !== 'available' ? <p role="status">本次判定、记者等附加元数据未取得；服务器可能已经执行判定，恢复时不会在本机重掷。</p> : null}
         {state.hosted.recoveryCredentialState === 'memory-only' ? <p role="alert">匿名恢复凭据保存失败，当前任务可继续；关闭应用后可能无法恢复，请完整导出。</p> : null}

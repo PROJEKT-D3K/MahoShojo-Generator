@@ -1,6 +1,6 @@
 'use client';
 
-import { COMBATANT_TYPE_LABELS } from '@mahoshojo/domain/arena-file-parser';
+import { COMBATANT_TYPE_LABELS, getCombatantRankingEntityKey as buildEntityKeyForCombatant } from '@mahoshojo/domain/arena-file-parser';
 import { ArenaCombatantTags, ArenaCombatantTechScore, ArenaCombatantWinRate } from '@mahoshojo/ui-web/arena';
 
 import { useMemo, useRef, useState } from 'react';
@@ -72,15 +72,6 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 };
 
 const toFiniteNumber = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
-
-const buildEntityKeyForCombatant = (combatant: CombatantData): string | null => {
-  if (combatant.isPreset) {
-    const id = (combatant.filename ?? '').toString().trim();
-    return id ? `preset:${id}` : null;
-  }
-  const id = (combatant.sourceDataCardId ?? '').toString().trim();
-  return id ? `data_card:${id}` : null;
-};
 
 const pickTierBadge = (ratings?: { strict: ApiRating | null; free: ApiRating | null } | null): { tier: string; label: string } | null => {
   if (ratings?.strict?.tier) return { tier: ratings.strict.tier, label: '严格' };

@@ -44,6 +44,12 @@ export interface CombatantData {
   sourceDataCardFavoriteCount?: number;
 }
 
+/** 排位实体的展示身份；不证明来源可信、正文未变或任何计分/发送资格。 */
+export const getCombatantRankingEntityKey = (combatant: Pick<CombatantData, 'isPreset' | 'filename' | 'sourceDataCardId'>): string | null => {
+  const id = (combatant.isPreset ? combatant.filename ?? '' : combatant.sourceDataCardId ?? '').toString().trim();
+  return id ? `${combatant.isPreset ? 'preset' : 'data_card'}:${id}` : null;
+};
+
 /** Legacy online inputs retain their cloud UI identity; names and card-body fields cannot supply it. */
 export const getCombatantCardLibrarySelectionId = (value: unknown): string | null => {
   if (!value || typeof value !== 'object') return null;

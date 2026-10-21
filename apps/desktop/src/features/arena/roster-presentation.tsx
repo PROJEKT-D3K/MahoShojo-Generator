@@ -1,3 +1,4 @@
+import type { GenerationRankingParticipant } from '@mahoshojo/contracts/arena-generation-ranking';
 import type { ArenaEloPrediction, ArenaQueueRatings } from '@mahoshojo/domain/arena-elo';
 import { getCombatantTypeLabel, getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
 import { computeTechIndex } from '@mahoshojo/domain/metrics/tech-index';
@@ -16,7 +17,7 @@ export function readDesktopRosterMetadata(card: Combatant, snapshots: ReadonlyMa
 }
 
 /** 指标只用于展示；不改变正文、签名、来源资格或发送给模型的输入。 */
-export function buildDesktopRosterExtras(card: Combatant, onShowDetails: () => void, metadata?: DesktopRosterDisplayMetadata, observation?: { hasSource: boolean; rating: ArenaQueueRatings | null; prediction: ArenaEloPrediction | null }): ArenaRosterRowExtras {
+export function buildDesktopRosterExtras(card: Combatant, onShowDetails: () => void, metadata?: DesktopRosterDisplayMetadata, observation?: { hasSource: boolean; rating: ArenaQueueRatings | null; prediction: ArenaEloPrediction | null }, generationParticipant?: GenerationRankingParticipant | null): ArenaRosterRowExtras {
   let localTech: ReturnType<typeof computeTechIndex> | null = null;
   try { localTech = computeTechIndex(card.data); } catch { /* 辅助指标失败不能阻断正文与详情。 */ }
   const techScore = metadata?.techScore ?? localTech?.techScore ?? null;
@@ -28,14 +29,22 @@ export function buildDesktopRosterExtras(card: Combatant, onShowDetails: () => v
       {metadata?.strictTier ? <><TierBadge tier={metadata.strictTier} /><span className="text-[10px] text-gray-500">(严格)</span></> : null}
       {techLevel ? <TechBadge mode="level" techScore={techScore} techLevel={techLevel} /> : null}
     </span>,
-    ranking: <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0" title={observation?.hasSource ? '当前实体评分观察值，不代表此正文版本或本次计分资格' : undefined}>
+    ranking: <><div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0" title={observation?.hasSource ? '当前实体评分观察值，不代表此正文版本或本次计分资格' : undefined}>
       <ArenaCombatantTechScore techScore={techScore} />
       {observation?.hasSource ? <>
         <ArenaRankingQueueFeedback queue="strict" result={null} fallbackRating={observation.rating?.strict} />
         <ArenaRankingQueueFeedback queue="free" result={null} fallbackRating={observation.rating?.free} />
       </> : null}
       {observation?.prediction ? <ArenaCombatantWinRate prediction={observation.prediction} /> : null}
-    </div>,
+    </div>
+      {generationParticipant ? <div className="space-y-1" aria-label="本局排位结算（生成时）" title="本局生成时该实体的结算历史，不代表更新后的正文获计分或具有严格排位资格">
+        <p className="text-xs text-gray-500">本局排位结算（生成时）</p>
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          <ArenaRankingQueueFeedback queue="strict" result={generationParticipant.queues.strict} />
+          <ArenaRankingQueueFeedback queue="free" result={generationParticipant.queues.free} />
+        </div>
+      </div> : null}
+    </>,
   };
 }
 

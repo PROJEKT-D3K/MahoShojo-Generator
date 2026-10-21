@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { PRESET_LIST } from '@mahoshojo/domain/presets';
+import { rankingParticipant, rankingQueue, readyRanking } from './helpers/generation-ranking-fixture';
+import { isDesktopStrictSource } from '../src/features/arena/strict-source';
 import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 /** Real router/shared DOM/session/Hosted adapter/C0/bridge → synthetic IPC → loopback HTTP.
  * Not Rust, real Tauri, OS credential, production account or model acceptance. */
@@ -311,6 +314,58 @@ describe('Desktop Hosted real-route loopback journey', () => {
     expect(roleRequests).toHaveLength(0); expect(controlRequests).toHaveLength(0); expect(docs.size).toBe(0);
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'save_local_card')).toBe(false);
     expect(consoleError.mock.calls.some(args => args.some(value => typeof value === 'string' && /same key|unique.*key/i.test(value)))).toBe(false);
+  });
+
+  it.each(['battle', 'arena'] as const)('/%s keeps generation settlement in entity rows after Hosted body updates, reorder and reselection; restore retains unmatched details', async product => {
+    const original = draft();
+    original.combatants = [];
+    original.settings = { ...original.settings, writeCurrentState: true };
+    const preset = PRESET_LIST.find(item => item.name === '翠雀')!;
+    const opponent = PRESET_LIST.find(item => item.name === '白玫')!;
+    const feedback = readyRanking([
+      rankingParticipant(`preset:${opponent.filename}`, { displayName: '白玫', queues: { strict: rankingQueue({ rating: 987, delta: -13 }), free: rankingQueue({ eventStatus: 'pending' }) } }),
+      rankingParticipant(`preset:${preset.filename}`, { displayName: '翠雀' }),
+    ], generationId);
+    rankingFeedback = feedback; saveDraft(original, product); await mount(product);
+    for (const name of ['翠雀', '白玫']) {
+      await act(async () => container.querySelector<HTMLButtonElement>(`[aria-label="选择预设角色：${name}"]`)!.click());
+      await vi.waitFor(() => expect(container.querySelector(`[aria-label="移除 ${name}"]`)).not.toBeNull());
+    }
+    await restoreAndSelectStream();
+    const prepared = vi.spyOn(getDesktopAiConfigStore(), 'withPreparedGeneration');
+    await click('生成战报');
+    expect(prepared).toHaveBeenCalledOnce();
+    const generation = prepared.mock.results[0];
+    if (generation?.type !== 'return') throw new Error('页面未返回生成任务');
+    await act(async () => { await generation.value; });
+    expect(container.textContent).toContain('角色更新已应用'); expect(button('生成战报')!.disabled).toBe(false);
+    await openSection('已选角色 / 分队');
+    const row = (name: string) => container.querySelector(`[aria-label="移除 ${name}"]`)!.closest('.group')!;
+    const history = (name: string) => row(name).querySelector('[aria-label="本局排位结算（生成时）"]')!;
+    expect(history('翠雀').textContent).toContain('严格：0');
+    expect(history('白玫').textContent).toContain('严格：987');
+    expect(history('白玫').textContent).toContain('结算中');
+    expect(history('翠雀').textContent).toContain('本局变化：Δ+0');
+    expect(container.querySelector('[aria-label="本次参战者排位结算"]')).toBeNull();
+    const updated = await exportResult();
+    const frozenPreset = updated.generation.input.combatants.find((item: ArenaDraft['combatants'][number]) => item.filename === preset.filename);
+    const currentPreset = updated.draft.combatants.find((item: ArenaDraft['combatants'][number]) => item.filename === preset.filename);
+    expect(isDesktopStrictSource(frozenPreset)).toBe(true); expect(isDesktopStrictSource(currentPreset)).toBe(false);
+    expect(currentPreset.data).toHaveProperty('current_state'); expect(currentPreset.desktopSource).toBeUndefined();
+    const requestsBefore = httpRequests.length;
+    await act(async () => row('白玫').querySelector<HTMLButtonElement>('[aria-label="上移 白玫"]')!.click()); await settle();
+    expect(history('白玫').textContent).toContain('严格：987'); expect(history('翠雀').textContent).toContain('严格：0');
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="移除 翠雀"]')!.click()); await settle();
+    expect(container.querySelector('[aria-label="本次参战者排位结算"]')?.textContent).toContain('翠雀');
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="选择预设角色：翠雀"]')!.click()); await settle();
+    expect(history('翠雀').textContent).toContain('本局变化：Δ+0');
+    expect(container.querySelector('[aria-label="本次参战者排位结算"]')).toBeNull();
+    expect(httpRequests).toHaveLength(requestsBefore); expect(roleRequests).toHaveLength(1); expect(streamRequests).toHaveLength(1);
+    // A real remount restores the persisted result but intentionally has no frozen generation input.
+    await act(async () => root.unmount()); root = createRoot(container); await mount(product);
+    expect(container.querySelectorAll('[aria-label="本局排位结算（生成时）"]')).toHaveLength(0);
+    expect(container.querySelector('[aria-label="本次参战者排位结算"]')?.querySelectorAll('li')).toHaveLength(2);
+    expect((await exportResult()).result.hosted.ranking).toEqual(feedback);
   });
 
   it.each(matrix)('/$product $mode $format $delivery account=$account funding=$funding uses controls → create → explicit save → reopen', async ({ product, mode, format, account, funding, delivery }) => {

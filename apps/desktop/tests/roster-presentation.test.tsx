@@ -1,3 +1,4 @@
+import { rankingParticipant, rankingQueue } from './helpers/generation-ranking-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { COMBATANT_TYPE_LABELS, getCombatantTypeLabel } from '@mahoshojo/domain/arena-file-parser';
@@ -45,4 +46,23 @@ describe('已选角色展示', () => {
     expect(snapshotDesktopRosterDetails({ ...value, isPreset: true, desktopSource: 'preset' }).source.kind).toBe('preset');
     expect(snapshotDesktopRosterDetails({ ...value, isPreset: true }).source.kind).toBe('local');
   });
+});
+
+// 真实共享反馈组件，不替换队列语义；历史与当前观察/预测各自保留。
+it.each(['applied', 'pending', 'skipped', 'failed', 'missing'] as const)('本局历史双队列 %s 不冒充当前正文资格，也不改当前预测', eventStatus => {
+  const participant = rankingParticipant('data_card:a', { queues: {
+    strict: rankingQueue({ eventStatus, skipReason: 'winner-empty' }),
+    free: rankingQueue({ eventStatus, skipReason: 'winner-empty' }),
+  } });
+  const prediction = { queue: 'strict' as const, selfRating: 1200, opponentRating: 1000, expectedScore: 0.76, expectedPct: 76 };
+  const observation = { hasSource: true, rating: { strict: 1200, free: 1000 }, prediction };
+  const baseline = render(buildDesktopRosterExtras(card(), vi.fn(), undefined, observation).ranking);
+  const markup = render(buildDesktopRosterExtras(card(), vi.fn(), undefined, observation, participant).ranking);
+  expect(markup).toContain(baseline);
+  expect(markup).toContain('本局排位结算（生成时）');
+  expect(markup).toContain('不代表更新后的正文获计分或具有严格排位资格');
+  expect(markup).toContain('严格：0'); expect(markup).toContain('自由：0');
+  expect(markup).not.toContain('无牌');
+  const labels = { applied: '本局变化：Δ+0', pending: '结算中', skipped: '未计分', failed: '结算失败', missing: '暂无结算记录，状态待确认' };
+  expect(markup).toContain(labels[eventStatus]);
 });
