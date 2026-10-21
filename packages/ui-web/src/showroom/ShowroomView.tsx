@@ -4,7 +4,7 @@ import { CHARACTER_CARD_EXPORTER_LABEL, MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlC
 import { CardForgeThemeEditor } from '../card-forge';
 import { BattleReportCardWidthSettings } from '../arena/BattleReportCardWidthSettings';
 import { resolveBattleReportCardManualWidthPx, type BattleReportCardWidthSettingsValue } from '../arena/battle-report-card-width';
-import { GeneratedByUserBadgeView, StreamingBattleReportCard } from '../arena-report';
+import { CombatantUpdatesPresentation, GeneratedByUserBadgeView, StreamingBattleReportCard } from '../arena-report';
 import { ArenaWebResultView } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
@@ -265,6 +265,10 @@ function ResultSurfacesSection() {
           reportContent={<ArenaWebResultView source="<main>样板间战报</main>" ready
             execution={{ available: false, reason: '样板间只展示安全文本，不运行生成代码。' }} />} />
       </div>
+      <CombatantUpdatesPresentation keepMounted itemDefaultOpen={false} title="角色更新：首次展开后保留操作状态"
+        items={[{ key: 'showroom-role-update', displayName: '样板角色', impact: '本次历战影响' }]}
+        renderMarkdown={content => <p>{content}</p>}
+        renderActions={() => <label className="input-group"><span className="input-label">折叠前后保留的草稿</span><input aria-label="折叠前后保留的草稿" className="input-field" defaultValue="可修改后折叠验证" /></label>} />
       <div className={PANEL_CLASS} aria-label="完整结果 JSON 复制样板">
         <h3 className="text-sm font-medium text-(--app-text-muted)">复制完整结果 JSON</h3>
         <ResultJsonCopyButton data={SHOWROOM_MAGICAL_GIRL} className={generationActionClassNames.secondary} onResult={setCopyResult} />

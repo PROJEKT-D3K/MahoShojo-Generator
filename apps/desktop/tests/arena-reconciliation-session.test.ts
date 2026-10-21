@@ -214,3 +214,29 @@ describe('new Hosted roles freeze original policy and preserve independent repor
     f.failSave(false); expect(await f.session.save('characters')).toBe(true); expect(f.records.size).toBe(1); expect(f.requests).toHaveLength(2); f.session.dispose();
   });
 });
+
+it('Hosted 单卡先核当前展示引用，再保存内部可信 clone；同 generation 新响应拒绝旧引用', async () => {
+  const f = fixture(); await f.run();
+  const item = f.session.getSnapshot().roleUpdates.items[0]!;
+  const selection = { generationId, combatantIndex: item.combatantIndex, data: item.data };
+  expect(f.session.canSaveCharacter(selection)).toBe(true);
+  expect(await f.session.saveCharacter({ ...selection, data: structuredClone(item.data) })).toBe(false);
+  // 即使调用者持有当前展示对象，也不能把调用者的数据替代已冻结的可信保存候选。
+  item.data.displayOnlyFixture = 'not-authoritative';
+  expect(await f.session.saveCharacter(selection)).toBe(true);
+  expect([...f.records.values()][0]!.data).not.toHaveProperty('displayOnlyFixture');
+  expect([...f.records.values()][0]!.provenance.kind).toBe('official-signed');
+  await f.session.retryHostedRoleUpdates({ invoke: f.invoke });
+  expect(f.session.canSaveCharacter(selection)).toBe(false);
+  expect(await f.session.saveCharacter(selection)).toBe(false);
+  const refreshed = f.session.getSnapshot().roleUpdates.items[0]!;
+  const next = { generationId, combatantIndex: refreshed.combatantIndex, data: refreshed.data };
+  expect(f.session.canSaveCharacter(next)).toBe(true);
+  f.session.setScope('account-B');
+  expect(f.session.canSaveCharacter(next)).toBe(false);
+  expect(await f.session.saveCharacter(next)).toBe(false);
+  f.session.dispose();
+  const restored = fixture('battle', 'stream', f.values); restored.session.restoreDraft();
+  expect(restored.session.canSaveCharacter(next)).toBe(false); expect(await restored.session.saveCharacter(next)).toBe(false);
+  restored.session.dispose();
+});

@@ -18,7 +18,8 @@ type CollapsibleSectionProps = {
   autoOpen?: boolean;
   collapsible?: boolean;
   disabled?: boolean;
-  keepMounted?: boolean;
+  /** true mounts immediately; after-open mounts lazily and retains state after the first expansion. */
+  keepMounted?: boolean | 'after-open';
   storageKey?: string;
   variant?: CollapsibleSectionVariant;
   className?: string;
@@ -94,6 +95,10 @@ export function CollapsibleSection({
 
   const isCollapsible = collapsible && !disabled;
   const isOpen = collapsible ? (controlledOpen ?? open) : true;
+  const [hasOpened, setHasOpened] = useState(isOpen);
+  useEffect(() => {
+    if (keepMounted === 'after-open' && isOpen) setHasOpened(true);
+  }, [isOpen, keepMounted]);
   const rootClassName =
     variant === 'panel'
       ? [
@@ -180,7 +185,7 @@ export function CollapsibleSection({
         <div id={contentId} className={resolvedContentClassName}>
           {children}
         </div>
-      ) : keepMounted ? (
+      ) : keepMounted === true || (keepMounted === 'after-open' && hasOpened) ? (
         <div id={contentId} className={resolvedContentClassName} hidden>
           {children}
         </div>

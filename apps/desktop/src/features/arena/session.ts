@@ -60,6 +60,7 @@ export const createInitialArenaDraft = (): ArenaDraft => ({
     isNarrativeHistoryUnlimited: false, writeNarrativeHistory: false },
   narrativeHistoryEntries: [], historyReferences: [], adjudicationEvents: [],
 });
+export type ArenaCharacterSaveSelection = { readonly generationId: string; readonly combatantIndex: number; readonly data: Record<string, unknown> };
 export type ArenaSessionPhase = 'idle' | 'generating' | 'completed' | 'failed' | 'cancelled';
 export interface ArenaSessionState extends ArenaDirectPartial {
   draft: ArenaDraft; generation: { input: ArenaDraft; intent: ArenaDirectIntent | ArenaHostedIntent; scopeKey: string; startedAt: string; adjudicationResults: AdjudicationResult[]; profileId: string; providerTarget: DesktopAiExecutionOptions['providerTarget'] } | null; phase: ArenaSessionPhase; activeGenerationMode: ArenaDraft['generationMode'] | null; report: ArenaBattleReport | null;
@@ -153,7 +154,7 @@ export class DesktopArenaSession {
   private hostedResultScope: string | null = null;
   private roleController: AbortController | null = null;
   private roleContext: { pointer: DesktopArenaHostedRecoveryPointer; generationId: string; scope: string; epoch: number } | null = null;
-  private roleCandidates: { scopeKey: string; occurredAt: string; items: readonly { data: Record<string, unknown>; provenance: LocalCardProvenance }[] } | null = null;
+  private roleCandidates: { scopeKey: string; generationId: string; occurredAt: string; items: readonly { combatantIndex: number; data: Record<string, unknown>; provenance: LocalCardProvenance }[] } | null = null;
   private resultMode: ArenaDirectIntent['mode'] | 'hosted' | undefined;
   private completedNarrativeRequestId: string | null = null;
   readonly narrativeDrafts: ReturnType<typeof createNarrativeDraftController>;
@@ -450,9 +451,9 @@ export class DesktopArenaSession {
       const items = response.updatedCombatants;
       const projected = applyArenaReconciliationUpdates(this.state.draft.combatants, items);
       const occurredAt = (this.dependencies.now ?? (() => new Date().toISOString()))();
-      if (items.length) this.roleCandidates = { scopeKey: context.scope, occurredAt, items: items.map(item => {
+      if (items.length) this.roleCandidates = { scopeKey: context.scope, generationId: context.generationId, occurredAt, items: items.map(item => {
         const signature = typeof item.data.signature === 'string' && item.data.signature ? item.data.signature : null;
-        return { data: clone(item.data), provenance: signature
+        return { combatantIndex: item.combatantIndex, data: clone(item.data), provenance: signature
           ? { kind: item.isNative ? 'official-signed' : 'signature-unverified', signature, execution: 'hosted' }
           : { kind: 'unsigned', execution: 'hosted' } };
       }) };
@@ -501,7 +502,25 @@ export class DesktopArenaSession {
   private clearHostedSoftTimeout() { if (this.state.hosted?.softTimeoutWarning) this.publish({ hosted: { ...this.state.hosted, softTimeoutWarning: null } }); }
   cancel() { this.roleController?.abort(); this.clearHostedSoftTimeout(); this.controller?.abort(this.resultMode === 'hosted' ? ARENA_HOSTED_USER_STOP : undefined); this.importController?.abort(); }
   detach() { this.roleController?.abort(); this.clearHostedSoftTimeout(); this.controller?.abort(ARENA_HOSTED_DETACH); this.importController?.abort(); }
-  async save(kind: 'history' | 'characters'): Promise<boolean> {
+  private resolveCharacterSave(selection: ArenaCharacterSaveSelection) {
+    if (this.disposed || this.isBusy() || this.state.pendingRestore || this.state.phase !== 'completed') return null;
+    if (this.resultMode === 'hosted') {
+      const candidates = this.roleCandidates;
+      if (!candidates || candidates.scopeKey !== this.scopeKey || candidates.generationId !== selection.generationId || this.state.hostedGenerationId !== selection.generationId) return null;
+      const displayed = this.state.roleUpdates.items.find(item => item.combatantIndex === selection.combatantIndex);
+      if (displayed?.data !== selection.data) return null;
+      return candidates.items.find(item => item.combatantIndex === selection.combatantIndex) ?? null;
+    }
+    const candidates = this.state.candidates;
+    if (!candidates || candidates.scopeKey !== this.scopeKey || candidates.generationId !== selection.generationId) return null;
+    return candidates.characterEffects.find(item => item.combatantIndex === selection.combatantIndex && item.data === selection.data) ?? null;
+  }
+  canSaveCharacter = (selection: ArenaCharacterSaveSelection) => this.resolveCharacterSave(selection) !== null;
+  saveCharacter(selection: ArenaCharacterSaveSelection): Promise<boolean> { return this.saveSelected('characters', selection); }
+  save(kind: 'history' | 'characters'): Promise<boolean> { return this.saveSelected(kind); }
+  private async saveSelected(kind: 'history' | 'characters', selection?: ArenaCharacterSaveSelection): Promise<boolean> {
+    const selected = selection ? this.resolveCharacterSave(selection) : null;
+    if (selection && !selected) return false;
     if (this.disposed || this.isBusy() || this.state.pendingRestore) return false;
     const scope = this.scopeKey, epoch = this.epoch, candidates = this.state.candidates, hostedCandidates = this.roleCandidates;
     if (kind === 'characters' && (!candidates || candidates.scopeKey !== scope) && (!hostedCandidates || hostedCandidates.scopeKey !== scope)) return false;
@@ -512,8 +531,8 @@ export class DesktopArenaSession {
     const executionMode = kind === 'history' && this.dependencies.product === 'arena' ? undefined : this.resultMode;
     const items = kind === 'history'
       ? [{ cardType: 'history' as const, title: 'Arena 叙事历史', data: { templateId: 'narrative-history', version: 1, title: 'Arena 叙事历史', updatedAt: occurredAt, entries } }]
-      : hostedCandidates ? hostedCandidates.items.map(item => ({ cardType: 'character' as const, title: String(item.data.codename || item.data.name || '战后角色'), data: clone(item.data), provenance: item.provenance }))
-      : candidates!.characterEffects.map((effect) => ({ cardType: 'character' as const, title: String(effect.data.codename || effect.data.name || '战后角色'), data: clone(effect.data) }));
+      : hostedCandidates ? hostedCandidates.items.filter(item => !selected || item === selected).map(item => ({ cardType: 'character' as const, title: String(item.data.codename || item.data.name || '战后角色'), data: clone(item.data), provenance: item.provenance }))
+      : candidates!.characterEffects.filter(effect => !selected || effect === selected).map((effect) => ({ cardType: 'character' as const, title: String(effect.data.codename || effect.data.name || '战后角色'), data: clone(effect.data) }));
     this.publish({ saving: true, saveStatus: 'idle', saveError: null });
     try {
       for (const item of items) {

@@ -6,7 +6,8 @@ import { ArenaReconciliationRequestSchema } from '@mahoshojo/contracts/arena-rec
 import type { GenerationRankingParticipant, GenerationRankingQueueResult, GenerationRankingResponse } from '@mahoshojo/contracts/arena-generation-ranking';
 import { ARENA_COMPANION_PROTOCOL_VERSION, ARENA_COMPANION_PROTOCOL_HEADER, ArenaCompanionEnvelopeSchema, type ArenaCompanionEnvelope } from '@mahoshojo/contracts/arena-companion';
 import { DesktopArenaHostedJsonCreateRequestSchema, DesktopArenaHostedJsonChannelEventSchema, DesktopArenaHostedAnyRecoveryPointerSchema, type DesktopArenaHostedJsonCreateRequest } from '@mahoshojo/contracts/desktop-arena-hosted-json';
-import { act, StrictMode } from 'react';
+import { act as reactAct, StrictMode } from 'react';
+import { createReactActScope } from './helpers/react-act-scope';
 import { createRoot, type Root } from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
 import { createServer, type Server } from 'node:http';
@@ -19,6 +20,8 @@ import { DesktopArenaHostedChannelEventSchema, DesktopArenaHostedControlRequestS
   type DesktopArenaHostedControlRequest, type DesktopArenaHostedRecoveryHint, type DesktopArenaHostedStreamRequest } from '@mahoshojo/contracts/desktop-arena-hosted';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
 import { createDesktopRouter } from '../src/app/router';
+// 真实 lazy 页面的编译属于测试准备，不占用单条交互旅程预算。
+import '../src/app/battle-page';
 import { ADVANCED_ARENA_DRAFT_KEY, ARENA_DRAFT_KEY, createInitialArenaDraft, type ArenaDraft } from '../src/features/arena/session';
 import { ARENA_HOSTED_RECOVERY_KEYS } from '../src/features/arena/hosted-recovery';
 import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop-ai-config-store';
@@ -35,6 +38,8 @@ const markdown = '# 车站重逢\n\n甲与乙共同守护车站。';
 const web = '<!doctype html><html><head><title>车站重逢</title></head><body><script>globalThis.hostedMustNotRun=true</script><img src="https://untrusted.invalid/tracker.png"/>甲与乙共同守护车站。</body></html>';
 const draftKey = (product: Product) => product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY;
 let root: Root, container: HTMLDivElement, server: Server, endpoint: string;
+let actScope: ReturnType<typeof createReactActScope>;
+const act = <T,>(callback: () => T | Promise<T>) => actScope.act(callback);
 let holdFirstChunk = false, nativeResponseCount = 0;
 let saveBarrier: Promise<void> | null = null;
 let releaseSave: (() => void) | null = null;
@@ -106,7 +111,7 @@ beforeAll(async () => {
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 afterAll(async () => { await new Promise<void>(done => server.close(() => done())); });
-const button = (text: string, scope: ParentNode = document) => [...scope.querySelectorAll<HTMLButtonElement>('button')].find(entry => entry.textContent?.trim() === text);
+const button = (text: string, scope: ParentNode = document) => [...scope.querySelectorAll<HTMLButtonElement>('button')].find(entry => (entry.getAttribute('aria-label') ?? entry.textContent)?.trim() === text);
 const settle = async () => { await act(async () => { await new Promise(done => setTimeout(done, 25)); }); };
 const openRecoveryTools = async () => { const toggle = button('问题排查'); if (toggle?.getAttribute('aria-expanded') === 'false') { await act(async () => toggle.click()); await settle(); } };
 const click = async (text: string, scope?: ParentNode) => { if (text === '检查恢复条件') await openRecoveryTools(); expect(button(text, scope), text).toBeTruthy(); await act(async () => button(text, scope)!.click()); await settle(); };
@@ -115,8 +120,11 @@ const openSection = async (name: string) => {
   if (section?.getAttribute('aria-expanded') === 'false') { await act(async () => section.click()); await settle(); }
 };
 const mount = async (product: Product = 'battle') => {
-  window.location.hash = `#/${product}`; const router = createDesktopRouter(); await router.load(); await act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
-  await vi.waitFor(() => expect(container.textContent).toContain('生成战报')); await settle(); return router;
+  const scope = actScope; const mountedRoot = root; const mountedContainer = container;
+  window.location.hash = `#/${product}`; const router = createDesktopRouter(); await router.load();
+  await scope.act(async () => mountedRoot.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
+  await vi.waitFor(() => expect(mountedContainer.textContent).toContain('生成战报'));
+  await scope.act(async () => { await new Promise(done => setTimeout(done, 25)); }); return router;
 };
 const configure = (funding: Funding = 'system') => {
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5,
@@ -138,7 +146,8 @@ const restoreAndSelectStream = async () => {
   await click('流式'); expect(button('生成战报')!.disabled, container.textContent ?? '').toBe(false);
 };
 const releaseAll = () => { released.splice(0).forEach(finish => finish()); };
-beforeEach(() => {
+beforeEach((context) => {
+  actScope = createReactActScope(context.signal);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks(); localStorage.clear(); holdFirstChunk = false; nativeResponseCount = 0; saveBarrier = null; releaseSave = null; accountId = null; hold = false; failSave = false; activeCloseHandles = 0; webOverride = null; failureCode = null;
   companion = null; rankingFeedback = undefined; reportTelemetry = null; roleRequests = []; streamRequests = []; controlRequests = []; httpRequests = []; docs = new Map(); released = []; pendingNative = new Set(); configure(); resetDesktopCloudSessionStoreForTests();
@@ -228,7 +237,12 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.open = true; }; HTMLDialogElement.prototype.close = function () { this.open = false; };
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
-afterEach(async () => { await act(async () => { root.unmount(); releaseAll(); releaseSave?.(); if (saveBarrier) await saveBarrier; await Promise.allSettled([...pendingNative]); }); expect(activeCloseHandles).toBe(0); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(async () => {
+  releaseAll(); releaseSave?.();
+  await actScope.drain();
+  await reactAct(async () => { root.unmount(); if (saveBarrier) await saveBarrier; await Promise.allSettled([...pendingNative]); });
+  expect(activeCloseHandles).toBe(0); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
 const matrix = (['battle', 'arena'] as const).flatMap(product =>
   (['classic', 'kizuna', 'daily', 'scenario'] as const).flatMap(mode =>
     (['markdown', 'web'] as const).flatMap(format =>
@@ -445,7 +459,14 @@ describe('Hosted non-stream lifecycle through the real route', () => {
     hold = true; saveDraft(draft()); await mount(); await click('生成战报');
     await vi.waitFor(() => expect(httpRequests.filter(request => request.path === '/api/generate-battle-story')).toHaveLength(1));
     expect(nativeResponseCount).toBe(0); expect(activeCloseHandles).toBe(1);
-    await act(async () => { button('请求服务器停止')!.click(); button('请求服务器停止')?.click(); });
+    const stop = button('请求服务器停止')!;
+    expect(stop.getAttribute('aria-label')).toBe('请求服务器停止');
+    expect(stop.getAttribute('title')).toBe('请求服务器停止');
+    expect(stop.textContent?.trim()).toBe('⏹');
+    expect(stop.classList.contains('rounded-full')).toBe(true);
+    expect(container.querySelector('[aria-label="生成状态与原始输出"]')?.classList.contains('card')).toBe(true);
+    expect(container.querySelector('[aria-label="保存与导出"]')?.textContent).toContain('完整导出 JSON');
+    await act(async () => { stop.click(); stop.click(); });
     await vi.waitFor(async () => { await settle(); expect(button('请求服务器停止')).toBeUndefined(); });
     expect(controlRequests.map(request => request.operation)).toEqual(['lookup-request', 'stop']);
     expect(controlRequests.every(request => request.requestId === streamRequests[0]!.requestId)).toBe(true);
@@ -727,6 +748,18 @@ it.each(roleMatrix)('new /$product $delivery role policy history=$history state=
   expect(roleRequests).toHaveLength(history || state ? 1 : 0); expect(container.querySelector('[data-arena-combatant-updates="v1"]')).not.toBeNull();
   if (history || state) {
     expect(container.textContent).toContain('角色更新已应用'); expect(container.textContent).toContain('官方签名（服务器更新）');
+    const beforeDownload = await exportResult();
+    const roleToggle = container.querySelector<HTMLButtonElement>('section[aria-label$="的战后变化"] button[aria-expanded]')!;
+    expect(roleToggle.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => roleToggle.click());
+    expect(roleToggle.getAttribute('aria-expanded')).toBe('true');
+    await click('下载更新设定');
+    expect(JSON.parse(mocks.download.mock.calls.at(-1)![1])).toEqual(beforeDownload.result.roleUpdates.items[0].data);
+    expect(docs.size).toBe(0); expect(roleRequests).toHaveLength(1);
+    await click('另存此角色到本地库');
+    await vi.waitFor(() => expect(docs.size).toBe(1));
+    expect([...docs.values()][0]!.provenance.kind).toBe('official-signed');
+    await vi.waitFor(() => expect(button('另存战后角色副本')!.disabled).toBe(false));
     expect(button('另存战后角色副本')).toBeDefined(); await click('另存战后角色副本');
     await vi.waitFor(async () => { await settle(); expect(docs.size).toBe(2); });
     expect([...docs.values()].every(item => item.provenance.kind === 'official-signed')).toBe(true);

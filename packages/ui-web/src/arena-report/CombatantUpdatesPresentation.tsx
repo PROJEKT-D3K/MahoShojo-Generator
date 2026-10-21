@@ -20,6 +20,8 @@ export type CombatantUpdatesPresentationProps = {
   readonly items: readonly CombatantUpdatePresentationItem[];
   readonly defaultOpen?: boolean;
   readonly itemDefaultOpen?: boolean;
+  /** 两层内容首次展开后保留，避免折叠清除表单/未知结果；从未展开的内容不挂载。 */
+  readonly keepMounted?: boolean;
   readonly storageKey?: string;
   readonly emptyMessage?: string | null;
   readonly headerRight?: ReactNode;
@@ -42,6 +44,7 @@ export function CombatantUpdatesPresentation({
   items,
   defaultOpen = true,
   itemDefaultOpen = true,
+  keepMounted = false,
   storageKey,
   emptyMessage = '本场没有可公开的角色变化。',
   headerRight,
@@ -65,6 +68,7 @@ export function CombatantUpdatesPresentation({
         title={title}
         description={description}
         defaultOpen={defaultOpen}
+        keepMounted={keepMounted ? 'after-open' : false}
         storageKey={storageKey}
         variant="plain"
         titleClassName="text-lg font-bold text-gray-800"
@@ -90,6 +94,7 @@ export function CombatantUpdatesPresentation({
                   </span>
                 )}
                 defaultOpen={itemDefaultOpen}
+                keepMounted={keepMounted ? 'after-open' : false}
                 variant="panel"
               >
                 {item.impact ? (

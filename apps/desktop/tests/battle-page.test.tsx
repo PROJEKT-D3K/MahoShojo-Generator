@@ -72,7 +72,7 @@ beforeAll(async () => {
   endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/chat/completions`;
 });
 afterAll(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); });
-const button = (text: string, scope: ParentNode = document) => [...scope.querySelectorAll('button')].find((entry) => entry.textContent?.trim() === text)!;
+const button = (text: string, scope: ParentNode = document) => [...scope.querySelectorAll('button')].find((entry) => (entry.getAttribute('aria-label') ?? entry.textContent)?.trim() === text)!;
 const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); }); };
 const openRecoveryTools = async () => { const toggle = button('问题排查'); if (toggle?.getAttribute('aria-expanded') === 'false') { await act(async () => toggle.click()); await settle(); } };
 const click = async (text: string, scope?: ParentNode) => { if (text === '检查恢复条件') await openRecoveryTools(); expect(button(text, scope), text).toBeTruthy(); await act(async () => button(text, scope).click()); await settle(); };
@@ -325,7 +325,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
     expect(calls()).toHaveLength(0);
     await act(async () => (page().querySelector('a[href="#/ranking"]') as HTMLAnchorElement).click());
     await vi.waitFor(() => expect(window.location.hash).toBe('#/ranking')); await settle();
-    expect(container.querySelector('h1')?.textContent).toBe('排位排行榜');
+    await vi.waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('排位排行榜'));
   });
 
   it.each(['battle', 'arena'] as const)('/%s ordinary guide links respect an in-flight generation leave decision', async product => {
@@ -398,6 +398,20 @@ describe('Desktop /battle journey against loopback fixture', () => {
       await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
       expect(received.at(-1)!.requestKind).toBe('arena'); expect(JSON.parse(received.at(-1)!.arenaInputJson!).mode).toBe(mode);
       expect(docs.size).toBe(0); expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(text);
+      expect(container.querySelector('[data-arena-combatant-updates="v1"]')).not.toBeNull();
+      expect(button('重试角色更新')).toBeUndefined();
+      await click('完整导出 JSON');
+      const beforeDownload = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+      const roleToggle = container.querySelector<HTMLButtonElement>('section[aria-label$="的战后变化"] button[aria-expanded]')!;
+      expect(roleToggle.getAttribute('aria-expanded')).toBe('false');
+      await act(async () => roleToggle.click());
+      expect(roleToggle.getAttribute('aria-expanded')).toBe('true');
+      await click('下载更新设定');
+      expect(JSON.parse(mocks.download.mock.calls.at(-1)![1])).toEqual(beforeDownload.candidates.characterEffects[0].data);
+      expect(docs.size).toBe(0);
+      await click('另存此角色到本地库');
+      await vi.waitFor(() => expect(docs.size).toBe(1));
+      await vi.waitFor(() => expect(button('另存战后角色副本').disabled).toBe(false));
       await click('另存战后角色副本');
       await vi.waitFor(() => { expect(docs.size).toBe(2); expect(button('保存叙事历史到本地库').disabled).toBe(false); });
       await click('保存叙事历史到本地库');
@@ -1226,8 +1240,11 @@ describe('Desktop Hosted story routes through prepared targets and default binde
     else await vi.waitFor(() => expect(received).toHaveLength(1));
     const stop = button('生成战报').nextElementSibling as HTMLButtonElement;
     expect(stop.tagName).toBe('BUTTON'); expect(stop.disabled).toBe(false);
-    expect(stop.textContent).toBe(location === 'hosted' ? '请求服务器停止' : '取消生成');
-    await act(async () => stop.click()); await settle();
+    expect(stop.getAttribute('aria-label')).toBe(location === 'hosted' ? '请求服务器停止' : '取消生成');
+    expect(stop.getAttribute('title')).toBe(stop.getAttribute('aria-label'));
+    expect(stop.textContent?.trim()).toBe('⏹');
+    expect(stop.classList.contains('rounded-full')).toBe(true);
+    await act(async () => { stop.click(); stop.click(); }); await settle();
     if (location === 'hosted') gate.resolve(); else releaseDirect();
     await settle();
     expect(storyPort.heads()).toHaveLength(0); expect(hostedStory.commands(STORY_PENDING_IPC.save)).toHaveLength(0);
@@ -2326,4 +2343,40 @@ describe('device report width across real Arena routes', () => {
     expect(container.querySelector<HTMLElement>('.result-card')?.style.maxWidth).toBe('640px');
     expect(JSON.stringify(received)).not.toContain('battleReportCardWidth');
   });
+});
+
+it('角色云端未知结果期间，草稿清除与连续故事入口不能确认或丢弃原结果', async () => {
+  cloudAccount = { userId: 7, username: 'fixture-user-seven' };
+  saveDraft(draft('daily', 'non-stream'));
+  const originalInvoke = mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command, args) => command === 'cloud_card_library_request'
+    ? Promise.resolve(args.request.routeId === 'user-capacity.query'
+      ? { status: 200, body: { success: true, capacity: 10, usedSlots: 0 } }
+      : { status: 503, body: {} })
+    : originalInvoke(command, args));
+  await mount();
+  const originalSet = Storage.prototype.setItem;
+  const failingDraft = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+    if (key === ARENA_DRAFT_KEY) throw new Error('fixture draft disk full');
+    originalSet.call(this, key, value);
+  });
+  await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
+  const roleToggle = container.querySelector<HTMLButtonElement>('section[aria-label$="的战后变化"] button[aria-expanded]')!;
+  expect(roleToggle.getAttribute('aria-expanded')).toBe('false');
+  await act(async () => roleToggle.click()); await settle();
+  expect(roleToggle.getAttribute('aria-expanded')).toBe('true');
+  await click('保存到云端'); await click('保存');
+  await vi.waitFor(() => expect(document.body.textContent).toContain('结果不确定'));
+  await click('取消');
+  await click('完整导出 JSON'); const before = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+  const notice = container.querySelector('[aria-label="本机草稿提示"]')!;
+  expect(button('清除草稿', notice).disabled).toBe(true);
+  vi.mocked(window.confirm).mockClear();
+  await click('清除草稿', notice); await click('新建连续战报');
+  expect(window.confirm).not.toHaveBeenCalled();
+  await click('完整导出 JSON'); const after = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+  expect(after.result.rawText).toBe(before.result.rawText); expect(after.candidates).toEqual(before.candidates);
+  expect(received).toHaveLength(1); expect(storyPort.heads()).toHaveLength(0);
+  expect(mocks.invoke.mock.calls.filter(([command, args]) => command === 'cloud_card_library_request' && args.request.routeId === 'data-cards.create')).toHaveLength(1);
+  failingDraft.mockRestore();
 });

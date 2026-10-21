@@ -396,3 +396,41 @@ describe('safe failure evidence survives Arena export and restore', () => {
     expect(JSON.parse(reopened.exportDocument()).result.failureDiagnostic).toBeNull(); reopened.dispose();
   });
 });
+
+describe('逐卡本地另存只从当前 owner 候选选择', () => {
+  it('generation/index/reference 仅定位候选；克隆、旧 generation、换 scope 均不能写入', async () => {
+    const f = build(), draft = makeDraft(); f.session.updateDraft(draft);
+    await f.session.generate(native(valid(false)), draft, intent());
+    const candidates = f.session.getSnapshot().candidates!, effect = candidates.characterEffects[0]!;
+    const selected = { generationId: candidates.generationId, combatantIndex: effect.combatantIndex, data: effect.data };
+    expect(f.session.canSaveCharacter(selected)).toBe(true);
+    expect(await f.session.saveCharacter({ ...selected, generationId: 'old-generation' })).toBe(false);
+    expect(await f.session.saveCharacter({ ...selected, data: structuredClone(selected.data) })).toBe(false);
+    expect(await f.session.saveCharacter({ ...selected, combatantIndex: 999 })).toBe(false);
+    expect(f.records.size).toBe(0);
+    expect(await f.session.saveCharacter(selected)).toBe(true);
+    expect(f.records.size).toBe(1);
+    expect([...f.records.values()][0]!.data).toEqual(effect.data);
+    expect([...f.records.values()][0]!.provenance).toMatchObject({ kind: 'unsigned' });
+    expect(await f.session.saveCharacter(selected)).toBe(true); expect(f.records.size).toBe(1);
+    f.session.setScope('other-account');
+    expect(f.session.canSaveCharacter(selected)).toBe(false);
+    expect(await f.session.saveCharacter(selected)).toBe(false); expect(f.records.size).toBe(1);
+    f.session.dispose();
+  });
+  it('沿用回收站与完整文档大小保护；不通过单卡入口覆盖旧记录', async () => {
+    const f = build(), draft = makeDraft(); f.session.updateDraft(draft);
+    await f.session.generate(native(valid(false)), draft, intent());
+    const candidates = f.session.getSnapshot().candidates!, effect = candidates.characterEffects[0]!;
+    const selected = { generationId: candidates.generationId, combatantIndex: effect.combatantIndex, data: effect.data };
+    expect(await f.session.saveCharacter(selected)).toBe(true);
+    const saved = [...f.records.values()][0]!;
+    f.records.set(saved.id, { ...saved, deletedAt: '2026-10-21T00:00:00Z' });
+    expect(await f.session.saveCharacter(selected)).toBe(false);
+    expect(f.session.getSnapshot().saveError).toContain('回收站');
+    effect.data.oversizedFixture = '大'.repeat(4 * 1024 * 1024);
+    expect(await f.session.saveCharacter(selected)).toBe(false);
+    expect(f.session.getSnapshot().saveError).toContain('4 MiB'); expect(f.records.size).toBe(1);
+    f.session.dispose();
+  });
+});

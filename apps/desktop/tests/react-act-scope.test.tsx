@@ -53,3 +53,29 @@ it('preserves callback failures and rejects new work after cleanup', async () =>
   await expect(scope.act(() => { called = true; })).rejects.toThrow('React test scope is closed');
   expect(called).toBe(false);
 });
+
+
+it('rejects a captured scope after a late load without touching the next root', async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const controller = new AbortController();
+  const scope = createReactActScope(controller.signal);
+  let release!: () => void;
+  const load = new Promise<void>(resolve => { release = resolve; });
+  let rendered = false;
+  const body = (async () => { await load; await scope.act(() => { rendered = true; }); })();
+  const reason = new Error('load exceeded original test budget');
+  const rejection = expect(body).rejects.toBe(reason);
+  controller.abort(reason); await scope.drain();
+  const nextScope = createReactActScope(new AbortController().signal);
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await nextScope.act(() => root.render(<p>next</p>));
+    release(); await rejection;
+    expect(rendered).toBe(false);
+    expect(container.textContent).toBe('next');
+  } finally {
+    await nextScope.drain();
+    await reactAct(async () => root.unmount()); container.remove();
+  }
+});
