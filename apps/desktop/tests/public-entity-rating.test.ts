@@ -13,6 +13,17 @@ describe('Desktop current entity rating bridge', () => {
     invoke.mockResolvedValue({ kind: 'entityRating', data: { ...fixture.responses.entityRating, entityId: 'other' } });
     await expect(readPublicRanking(invoke, request)).rejects.toMatchObject({ code: 'invalid-response' });
   });
+  it('兼容新旧 Native 的可选段位，不改变固定读取通道', async () => {
+    const invoke = vi.fn();
+    for (const tier of [undefined, null, '女王', '无牌']) {
+      const data = { ...fixture.responses.entityRating, ...(tier === undefined ? {} : { tier }) };
+      invoke.mockResolvedValue({ kind: 'entityRating', data });
+      await expect(readPublicRanking(invoke, request)).resolves.toEqual(data);
+    }
+    expect(invoke.mock.calls.every(([command]) => command === 'cloud_public_ranking_read')).toBe(true);
+    invoke.mockResolvedValue({ kind: 'entityRating', data: { ...fixture.responses.entityRating, tier: 'unknown' } });
+    await expect(readPublicRanking(invoke, request)).rejects.toMatchObject({ code: 'invalid-response' });
+  });
   it.each(fixture.entityRatingTargets)('forwards only the fixed target and checks all echoes: $request.entityType/$request.queue', async ({ request, response }) => {
     const parsed = PublicRankingRequestSchema.parse(request);
     const invoke = vi.fn().mockResolvedValue({ kind: 'entityRating', data: response });
@@ -34,7 +45,7 @@ describe('Desktop current entity rating bridge', () => {
   it.skipIf(!process.env.PUBLIC_RANKING_NATIVE_WIRE_INPUT)('consumes actual Web handler → Native loopback Serialize wires through the real bridge', async () => {
     const directory = process.env.PUBLIC_RANKING_NATIVE_WIRE_INPUT!;
     const cases = [
-      ...['entityRating', ...['found', 'missing', 'zero', 'fraction', 'large'].map(name => `entityRating-handler-${name}`)].map(name => ({ name, request })),
+      ...['entityRating', ...['found', 'missing', 'zero', 'fraction', 'large', 'queen', 'nonqueen', 'unknown'].map(name => `entityRating-handler-${name}`)].map(name => ({ name, request })),
       ...fixture.entityRatingTargets.map(({ request }) => ({ name: `entityRating-handler-${request.entityType}-${request.queue}`, request })),
     ];
     for (const { name, request } of cases) {

@@ -89,6 +89,8 @@ const currentRatingNumber = z.number().nonnegative().refine(Number.isInteger, 'E
 export const PublicEntityRatingSchema = z.object({
   success: z.literal(true), queue, entityType, entityId: text,
   found: z.boolean(), rating: currentRatingNumber, games: currentRatingNumber,
+  // 旧服务或完整段位暂不可用时省略；客户端仍可使用独立的评分事实。
+  tier: z.enum(['无牌', '白牌', '字牌', '花牌', '权杖', '女王']).nullable().optional(),
 });
 export type PublicEntityRating = z.infer<typeof PublicEntityRatingSchema>;
 export const PublicRankingResponseSchema = z.discriminatedUnion('kind', [

@@ -623,6 +623,7 @@ impl SeasonArchive {
         }
     }
 }
+string_enum!(CurrentTier { Unranked => "无牌", White => "白牌", Word => "字牌", Flower => "花牌", Wand => "权杖", Queen => "女王" });
 object! {
     pub struct EntityRating {
         success: bool,
@@ -634,6 +635,8 @@ object! {
         rating: f64,
         #[serde(deserialize_with = "current_rating_number")]
         games: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tier: Option<CurrentTier>,
     }
 }
 #[derive(Debug, Serialize)]
@@ -1611,7 +1614,14 @@ mod tests {
                 .await
                 .unwrap();
             let output = serde_json::to_value(output).unwrap();
-            for key in ["success", "queue", "entityType", "entityId", "found"] {
+            for key in [
+                "success",
+                "queue",
+                "entityType",
+                "entityId",
+                "found",
+                "tier",
+            ] {
                 assert_eq!(output["data"][key], case["response"][key]);
             }
             for key in ["rating", "games"] {
@@ -1674,19 +1684,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn entity_rating_optional_tier_compatibility() {
+        // 冻结旧结构：新增字段必须被旧版普通 object 忽略。
+        object! { struct LegacyEntityRating {
+            success: bool, queue: Queue, entity_type: EntityType, entity_id: String,
+            found: bool,
+            #[serde(deserialize_with = "current_rating_number")]
+            rating: f64,
+            #[serde(deserialize_with = "current_rating_number")]
+            games: f64,
+        } }
+        let old = fixture()["responses"]["entityRating"].clone();
+        assert!(serde_json::from_str::<EntityRating>(&old.to_string()).is_ok());
+        for tier in [
+            Value::Null,
+            json!("无牌"),
+            json!("白牌"),
+            json!("字牌"),
+            json!("花牌"),
+            json!("权杖"),
+            json!("女王"),
+        ] {
+            let mut next = old.clone();
+            next["tier"] = tier.clone();
+            let legacy: LegacyEntityRating = serde_json::from_str(&next.to_string()).unwrap();
+            assert!(serde_json::to_value(legacy).unwrap().get("tier").is_none());
+            let current: EntityRating = serde_json::from_str(&next.to_string()).unwrap();
+            assert_eq!(serde_json::to_value(current).unwrap()["tier"], tier);
+        }
+        for tier in [
+            json!("Queen"),
+            json!("unknown"),
+            json!(""),
+            json!(1),
+            json!({}),
+            json!([]),
+        ] {
+            let mut next = old.clone();
+            next["tier"] = tier;
+            assert!(serde_json::from_str::<EntityRating>(&next.to_string()).is_err());
+        }
+    }
+
     #[tokio::test]
     async fn entity_rating_consumes_actual_web_handler_wire() {
         let Some(directory) = std::env::var_os("PUBLIC_RANKING_HANDLER_WIRE_INPUT") else {
             return;
         };
-        let mut cases = ["found", "missing", "zero", "fraction", "large"]
-            .map(|name| {
-                (
-                    name.to_string(),
-                    fixture()["requests"]["entityRating"].clone(),
-                )
-            })
-            .to_vec();
+        let mut cases = [
+            "found", "missing", "zero", "fraction", "large", "queen", "nonqueen", "unknown",
+        ]
+        .map(|name| {
+            (
+                name.to_string(),
+                fixture()["requests"]["entityRating"].clone(),
+            )
+        })
+        .to_vec();
         for case in fixture()["entityRatingTargets"].as_array().unwrap() {
             cases.push((
                 format!(
@@ -1714,7 +1769,14 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-            for key in ["success", "queue", "entityType", "entityId", "found"] {
+            for key in [
+                "success",
+                "queue",
+                "entityType",
+                "entityId",
+                "found",
+                "tier",
+            ] {
                 assert_eq!(output["data"][key], expected[key]);
             }
             for (key, raw) in [("rating", numbers.rating), ("games", numbers.games)] {

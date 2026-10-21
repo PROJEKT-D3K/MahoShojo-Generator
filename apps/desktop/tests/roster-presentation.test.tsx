@@ -38,6 +38,43 @@ describe('已选角色展示', () => {
     expect(readDesktopRosterMetadata({ ...value, data: { ...value.data, content: '编辑后' } }, snapshots)).toBeUndefined();
     snapshots.clear(); expect(readDesktopRosterMetadata(value, snapshots)).toBeUndefined();
   });
+  it.each([
+    ['女王', '花牌', '女王', '严格'],
+    ['无牌', '女王', '无牌', '严格'],
+    [null, '女王', '女王', '自由'],
+  ] as const)('当前段位严格优先仅一枚徽章：%s / %s', (strict, free, expected, label) => {
+    const extras = buildDesktopRosterExtras(card(), vi.fn(), { techScore: 0, techLevel: null, strictTier: '白牌' }, {
+      hasSource: true, rating: { strict: 1600, free: 1600, tiers: { strict, free } }, prediction: null,
+    });
+    const markup = render(extras.rankingBadge);
+    expect(markup).toContain(`>${expected}</span>`);
+    expect(markup).toContain(`(${label})`);
+    expect(markup.match(/>(?:无牌|白牌|字牌|花牌|权杖|女王)<\/span>/g)).toHaveLength(1);
+    expect(markup).not.toContain('选卡时快照');
+    expect(markup).toContain('当前实体段位观察值');
+  });
+  it('旧服务缺段位只回退明确标注的选卡快照，不从分数推断完整段位', () => {
+    const observation = { hasSource: true, rating: { strict: 1700, free: 1600 }, prediction: null };
+    const metadata = { techScore: 0, techLevel: null, strictTier: '花牌' };
+    const withSnapshot = render(buildDesktopRosterExtras(card(), vi.fn(), metadata, observation).rankingBadge);
+    expect(withSnapshot).toContain('花牌'); expect(withSnapshot).toContain('严格·选卡时快照');
+    const absent = render(buildDesktopRosterExtras(card(), vi.fn(), undefined, observation).rankingBadge);
+    expect(absent).not.toMatch(/无牌|白牌|字牌|花牌|权杖|女王/);
+    const disabled = render(buildDesktopRosterExtras(card(), vi.fn(), metadata, {
+      ...observation, hasSource: false, rating: { ...observation.rating, tiers: { strict: '女王', free: '女王' } },
+    }).rankingBadge);
+    expect(disabled).toContain('严格·选卡时快照'); expect(disabled).not.toContain('女王');
+  });
+  it('当前徽章与本局历史分开，历史段位不冒充当前观察值', () => {
+    const participant = rankingParticipant('data_card:a', { queues: {
+      strict: rankingQueue({ rating: 1600, tier: '女王', delta: 10 }), free: rankingQueue(),
+    } });
+    const observation = { hasSource: true, rating: { strict: 1100, free: 1000, tiers: { strict: '字牌' as const, free: '白牌' as const } }, prediction: null };
+    const extras = buildDesktopRosterExtras(card(), vi.fn(), undefined, observation, participant);
+    expect(render(extras.rankingBadge)).toContain('字牌'); expect(render(extras.rankingBadge)).not.toContain('女王');
+    expect(render(extras.ranking)).toContain('严格：1100'); expect(render(extras.ranking)).toContain('严格：1600');
+    expect(render(extras.ranking)).toContain('本局排位结算（生成时）'); expect(render(extras.ranking)).toContain('本局变化：Δ+10');
+  });
   it('详情冻结选中正文，后续改动或删除不能改为另一行', () => {
     const value = card(); const details = snapshotDesktopRosterDetails(value);
     value.data.content = '已变化';

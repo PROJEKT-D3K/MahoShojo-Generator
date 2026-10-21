@@ -2,6 +2,8 @@ import { getRequestUrl } from '@/lib/request-url';
 import type { NextRequest } from 'next/server';
 
 import { getDrizzleDbFromRuntime } from '@/lib/db/drizzle';
+import { applyQueenTier, computeArenaBaseTier, type ArenaTier } from '@mahoshojo/domain/arena-tier';
+import { queryArenaPublicQueenEntityByQueue } from '@/lib/db/repositories/data-card-meta';
 import { getArenaRatingByEntity } from '@/lib/db/repositories/arena-read';
 
 type ApiSuccessResponse = {
@@ -12,6 +14,7 @@ type ApiSuccessResponse = {
   found: boolean;
   rating: number;
   games: number;
+  tier?: ArenaTier;
 };
 
 type ApiErrorResponse = { success: false; error: string };
@@ -63,6 +66,20 @@ async function handler(req: NextRequest): Promise<Response> {
       rating,
       games,
     };
+
+    if (row) {
+      const baseTier = computeArenaBaseTier(rating, games);
+      if (baseTier !== '权杖') body.tier = baseTier;
+      else {
+        try {
+          const queen = await queryArenaPublicQueenEntityByQueue(db, queue);
+          body.tier = applyQueenTier(baseTier, queen?.entityType === entityType && queen.entityId === entityId);
+        } catch (error) {
+          // 女王身份未知时不能伪装成已知非女王；评分读取仍然成功。
+          console.warn('entity-rating 段位暂不可用:', error);
+        }
+      }
+    }
 
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   } catch (error) {

@@ -8,7 +8,7 @@ import type { ArenaDraft } from './session';
 
 type Entity = { entityType: 'preset' | 'data_card'; entityId: string };
 type Target = Entity & { key: string; observationKey: string };
-export type RosterRatingObservation = ArenaQueueRatings & { failed: boolean };
+export type RosterRatingObservation = ArenaQueueRatings & { failed: boolean; tiers: { strict: PublicEntityRating['tier']; free: PublicEntityRating['tier'] } };
 type Reader = (request: Entity & { kind: 'entityRating'; queue: 'strict' | 'free' }, signal: AbortSignal) => Promise<PublicEntityRating>;
 const emptyRatings: ReadonlyMap<string, RosterRatingObservation> = new Map();
 const STALE_MS = 60_000;
@@ -54,7 +54,7 @@ export function useDesktopRosterRatings(combatants: ArenaDraft['combatants'], sc
       while (!controller.signal.aborted) {
         const task = work[cursor++];
         if (!task) return;
-        const value = ratings.get(task.target.key) ?? { strict: null, free: null, failed: false };
+        const value = ratings.get(task.target.key) ?? { strict: null, free: null, failed: false, tiers: { strict: null, free: null } };
         ratings.set(task.target.key, value);
         try {
           // IPC 发出后 AbortSignal 只能拒收，不能取消原生 HTTP；跨轮也共享四个在飞槽。
@@ -68,6 +68,7 @@ export function useDesktopRosterRatings(combatants: ArenaDraft['combatants'], sc
           if (controller.signal.aborted) return;
           // 服务的 found=false 会返回初始 1000；这里必须保留“没有评分”的语义。
           value[task.queue] = result.found && Number.isFinite(result.rating) ? result.rating : null;
+          value.tiers[task.queue] = result.found ? result.tier ?? null : null;
         } catch {
           if (controller.signal.aborted) return;
           value.failed = true;

@@ -26,7 +26,7 @@ describe('当前已选角色只读评分', () => {
   it('无关 phase 更新保持投影引用和技术值计算次数，正文与评分变化仍重算', async () => {
     const tech = vi.spyOn(techIndex, 'computeTechIndex');
     const pending: (() => void)[] = [];
-    const read = vi.fn<Reader>(request => new Promise(resolve => pending.push(() => resolve(reply(request, 1555)))));
+    const read = vi.fn<Reader>(request => new Promise(resolve => pending.push(() => resolve({ ...reply(request, 1555), tier: '女王' }))));
     const cards = [card('a')];
     const PresentationProbe = ({ cards, phase }: { cards: readonly Card[]; phase: string }) => {
       const observations = useDesktopRosterRatings(cards, 'stable-owner', true, read);
@@ -41,6 +41,7 @@ describe('当前已选角色只读评分', () => {
     expect(output).toBe(initialOutput); expect(tech).toHaveBeenCalledTimes(before);
     await act(async () => pending.splice(0).forEach(resolve => resolve()));
     expect(output[0]?.rating?.strict).toBe(1555);
+    expect(output[0]?.rating?.tiers).toEqual({ strict: '女王', free: '女王' });
     expect(tech.mock.calls.length).toBeGreaterThan(before);
     const afterRating = tech.mock.calls.length;
     await act(async () => root.render(<PresentationProbe cards={cards} phase="completed" />));
@@ -49,6 +50,20 @@ describe('当前已选角色只读评分', () => {
     await act(async () => root.render(<PresentationProbe cards={changed} phase="completed" />));
     expect(output[0]?.rating).toBeNull(); expect(tech.mock.calls.length).toBeGreaterThan(afterRating);
     await act(async () => pending.splice(0).forEach(resolve => resolve()));
+  });
+
+  it('消费可选双队列段位；旧服务缺字段仍保留评分/预测，found=false 不制造段位', async () => {
+    const read = vi.fn<Reader>(async request => ({ ...reply(request, 1600), tier: request.queue === 'strict' ? '女王' : '花牌' }));
+    await render({ cards: [card('a'), card('b')], read });
+    expect(output[0]?.rating?.tiers).toEqual({ strict: '女王', free: '花牌' });
+    expect(output[0]?.prediction?.expectedPct).toBe(50);
+    const oldRead = vi.fn<Reader>(async request => reply(request, 1600));
+    await render({ cards: [card('a'), card('b')], scope: 'old-api', read: oldRead });
+    expect(output[0]?.rating).toMatchObject({ strict: 1600, free: 1600, tiers: { strict: null, free: null }, failed: false });
+    expect(output[0]?.prediction?.expectedPct).toBe(50);
+    const missingRead = vi.fn<Reader>(async request => ({ ...reply(request, 1000, false), tier: '无牌' }));
+    await render({ cards: [card('a')], scope: 'missing', read: missingRead });
+    expect(output[0]?.rating).toEqual({ strict: null, free: null, failed: false, tiers: { strict: null, free: null } });
   });
 
   it('双队列查询并共源预测，不把服务初始分当已存在评分', async () => {
@@ -141,7 +156,7 @@ describe('当前已选角色只读评分', () => {
     await render({ cards: ['a', 'b', 'c'].map(card), read }); expect(read).toHaveBeenCalledTimes(4);
     await act(async () => pending.splice(0).forEach(resolve => resolve()));
     await act(async () => pending.splice(0).forEach(resolve => resolve()));
-    expect(maximum).toBe(4); expect(read).toHaveBeenCalledTimes(6); expect(output[1]?.rating).toEqual({ strict: null, free: null, failed: true });
+    expect(maximum).toBe(4); expect(read).toHaveBeenCalledTimes(6); expect(output[1]?.rating).toEqual({ strict: null, free: null, failed: true, tiers: { strict: null, free: null } });
     await render({ cards: Array.from({ length: 33 }, (_, index) => card(String(index))), read }); expect(read).toHaveBeenCalledTimes(6);
   });
 });

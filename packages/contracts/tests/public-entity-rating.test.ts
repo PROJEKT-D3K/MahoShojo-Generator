@@ -1,3 +1,4 @@
+import { z } from '../src/zod';
 import { describe, expect, it } from 'vitest';
 import fixture from '../fixtures/public-ranking.json';
 import { PUBLIC_RANKING_BODY_BUDGETS, PublicRankingRequestSchema, parsePublicRankingResponse, publicRankingPath } from '../src/public-ranking';
@@ -5,6 +6,16 @@ import { PUBLIC_RANKING_BODY_BUDGETS, PublicRankingRequestSchema, parsePublicRan
 const request = { kind: 'entityRating', entityType: 'data_card', entityId: 'public-card' } as const;
 const body = fixture.responses.entityRating;
 describe('current entity rating is a fixed anonymous summary', () => {
+  it('accepts old missing/null tier, validates canonical new tiers, and preserves the old decoder projection', () => {
+    // 冻结新增字段之前的普通 object 解码形状，不用新版 schema 模拟旧客户端。
+    const oldDecoder = z.object({ success: z.literal(true), queue: z.enum(['strict', 'free']), entityType: z.enum(['data_card', 'preset']), entityId: z.string(), found: z.boolean(), rating: z.number().nonnegative().refine(Number.isInteger), games: z.number().nonnegative().refine(Number.isInteger) });
+    expect(oldDecoder.parse({ ...body, tier: '女王' })).toEqual(body);
+    expect(parsePublicRankingResponse(request, { kind: 'entityRating', data: body })).toEqual(body);
+    for (const tier of [null, '无牌', '白牌', '字牌', '花牌', '权杖', '女王']) {
+      expect(parsePublicRankingResponse(request, { kind: 'entityRating', data: { ...body, tier } })).toMatchObject({ tier });
+    }
+    for (const tier of ['Queen', 'unknown', '', 1, {}, []]) expect(() => parsePublicRankingResponse(request, { kind: 'entityRating', data: { ...body, tier } })).toThrow();
+  });
   it('keeps omitted queue compatible with strict pivot and rejects unbounded targets or transport', () => {
     const parsed = PublicRankingRequestSchema.parse({ ...request, entityId: ' \ufeff旧 / ?&+%😀\n' });
     const url = new URL(publicRankingPath(parsed), 'https://example.test');
