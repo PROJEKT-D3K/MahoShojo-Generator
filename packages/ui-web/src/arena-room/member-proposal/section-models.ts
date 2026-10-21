@@ -1,3 +1,4 @@
+import { COMBATANT_TYPE_LABELS } from '@mahoshojo/domain/arena-file-parser';
 import { MAX_COMBATANTS, MAX_ARENA_REFERENCE_ITEMS, type DataCardRef } from '@mahoshojo/contracts/arena-room';
 import type { ArenaMemberProposalActions } from '@mahoshojo/multiplayer-core/member-proposal';
 import { ARENA_ROOM_PRESET_CATALOG } from '@mahoshojo/multiplayer-core/preset-catalog';
@@ -38,7 +39,7 @@ export function buildArenaMemberRosterModel({ state, actions, disabled, resolveN
   return {
     rows: state.combatants.map((item, index) => ({ key: item.key, displayName: nameOf(item, 'character', resolveName),
       referenceTitle: item.reference ? `${item.source === 'preset' ? '预设' : '在线'}:${item.name}` : undefined,
-      typeLabel: item.type ?? (item.source === 'preset' ? '内置预设' : item.access === 'stub' ? '房主本地角色' : '在线角色'),
+      typeLabel: item.type ? COMBATANT_TYPE_LABELS[item.type] : (item.source === 'preset' ? '内置预设' : item.access === 'stub' ? '房主本地角色' : '在线角色'),
       guidance: item.characterGuidance, index, teamKey: item.teamKey, isPlaceholder: false })),
     teams: state.teams.map(team => ({ key: team.key, name: team.name, memberKeys: team.combatantKeys, collapsed: collapsedTeams.has(team.key) })),
     capabilities: { reorderRows: true, removeRows: true, editGuidance: true, ranking: false, addPlaceholders: false, clearRoster: false,

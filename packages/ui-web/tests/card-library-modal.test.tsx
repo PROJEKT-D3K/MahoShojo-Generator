@@ -139,6 +139,7 @@ test('选择本地记录：载荷无服务器身份，不触发在线读取', as
 
   expect(onSelectCard).toHaveBeenCalledTimes(1);
   const payload = onSelectCard.mock.calls[0]![0] as Record<string, unknown>;
+  expect(onSelectCard.mock.calls[0]![1]).not.toHaveProperty('displayMetadata');
   expect(payload._storageLocation).toBe('local');
   expect(payload._cardId).toBe('');
   // 本地内容在下游不得生成 online content reference（ADR §8 / LIB-012）。
@@ -582,6 +583,7 @@ test('缓存快照行选择：cache 作用域、无服务器身份、不触发�
   expect(payload.codename).toBe('card-c');
   expect(context).toMatchObject({ selectionId: 'cache:card-c', storageLocation: 'cache' });
   expect(context).not.toHaveProperty('cloudCardUpdatedAt');
+  expect(context).not.toHaveProperty('displayMetadata');
   expect(cache.loadCachedCard).toHaveBeenCalledWith('card-c', expect.anything());
   // 降级中不重撞刚失败的在线路径；正文读取走缓存通道。
   expect(online.fetchPublicCardById).not.toHaveBeenCalled();
@@ -1402,4 +1404,39 @@ test('宿主空态中 disabled fieldset 的后代不成为卡库 Tab 环绕目�
   act(() => { first.focus(); first.dispatchEvent(event); });
   expect(event.defaultPrevented).toBe(true);
   expect(document.activeElement).toBe(dialog.querySelector('[data-enabled]'));
+});
+
+
+test.each(['single', 'deck'] as const)('已取得线上指标随 %s 选择传递展示快照，不传递原生信任且不增加请求', async (mode) => {
+  const meta = { techScore: 33, techLevel: 'L2', strictTier: '白牌', isNative: true };
+  const card = { ...publicCard('metrics'), data: JSON.stringify({ codename: 'metrics', displayMetadata: { techScore: 999 } }) };
+  const metadata = deferred<{ metrics: typeof meta }>();
+  const fetchCardMetaBatch = vi.fn(() => metadata.promise);
+  const { host } = createHost([], {
+    auth: { status: 'authenticated', userId: 1, userBadges: [] },
+    online: {
+      fetchPublicCards: vi.fn(async () => ({ ok: true as const, status: 200, data: { success: true, cards: [card], total: 1, nextOffset: null } })),
+      fetchCardMetaBatch,
+      getDeckCards: vi.fn(async () => ({ cards: [{ isAccessible: true, card }] })),
+    },
+  });
+  host.slots.DecksModal = ({ onImportDeck }) => <button onClick={() => onImportDeck('deck')}>import-metrics-deck</button>;
+  const selected = vi.fn();
+  await render({ host, isOpen: true, onClose: vi.fn(), selectedType: 'character', initialTab: 'public',
+    ...(mode === 'single' ? { onSelectCard: selected } : { selectionMode: 'multi', onToggleCard: selected, selectedCardIds: [] }) });
+  await settle();
+  await act(async () => { metadata.resolve({ metrics: meta }); });
+  await settle();
+  expect(fetchCardMetaBatch).toHaveBeenCalledTimes(1);
+  await click(mode === 'single' ? document.body.querySelector('[role="button"][aria-label="选择公开角色 metrics"]')!
+    : [...document.body.querySelectorAll('button')].find(button => button.textContent === 'import-metrics-deck')!);
+  await settle();
+  expect(selected).toHaveBeenCalledTimes(1);
+  const context = selected.mock.calls[0]![mode === 'single' ? 1 : 2] as CardLibrarySelectionContext;
+  expect(context.displayMetadata).toEqual({ techScore: 33, techLevel: 'L2', strictTier: '白牌' });
+  expect(context.displayMetadata).not.toHaveProperty('isNative');
+  expect(context.rawSourceData?.displayMetadata).toEqual({ techScore: 999 });
+  meta.techScore = 99;
+  expect(context.displayMetadata?.techScore).toBe(33);
+  expect(fetchCardMetaBatch).toHaveBeenCalledTimes(1);
 });

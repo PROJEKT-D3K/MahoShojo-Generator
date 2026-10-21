@@ -1,5 +1,8 @@
 'use client';
 
+import { COMBATANT_TYPE_LABELS } from '@mahoshojo/domain/arena-file-parser';
+import { ArenaCombatantTags, ArenaCombatantTechScore } from '@mahoshojo/ui-web/arena';
+
 import { useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArenaRankingQueueFeedback } from '@mahoshojo/ui-web/arena';
@@ -33,12 +36,6 @@ import type {
   ArenaRosterSectionModel,
   ArenaRosterTeamView,
 } from './roster-contract';
-
-const COMBATANT_TYPE_LABELS: Record<CombatantData['type'], string> = {
-  'magical-girl': '魔法少女',
-  canshou: '残兽',
-  'general-character': '通用角色',
-};
 
 type Queue = 'strict' | 'free';
 
@@ -402,16 +399,7 @@ export const useSoloRosterSectionModel = (input: {
     const prediction = eloPredictionByCombatantKey.get(row.key);
 
     return {
-      tags: (
-        <>
-          {data.isValid ? <span className="text-green-600 whitespace-nowrap">(原生)</span> : null}
-          {data.isPreset ? <span className="text-purple-600 whitespace-nowrap">(预设)</span> : null}
-          {data.isNonStandard ? (
-            <span className="text-orange-500 font-semibold whitespace-nowrap">(非规范格式)</span>
-          ) : null}
-          {data.wasCorrected ? <span className="text-yellow-600 whitespace-nowrap">(格式已修正)</span> : null}
-        </>
-      ),
+      tags: <ArenaCombatantTags combatant={data} />,
       copied: Boolean(copiedStatus[getCombatantKey(data)]),
       onShowDetails: () => onShowDetails(data),
       onDownload: data.wasCorrected ? () => downloadJson(data) : undefined,
@@ -428,9 +416,7 @@ export const useSoloRosterSectionModel = (input: {
       ranking: (
         <>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
-            <span className="whitespace-normal break-words sm:whitespace-nowrap">
-              技术值：{typeof techScore === 'number' ? techScore : '-'}
-            </span>
+            <ArenaCombatantTechScore techScore={techScore} />
             <ArenaRankingQueueFeedback queue="strict" result={generationParticipant?.queues.strict ?? null} fallbackRating={meta?.ratings.strict?.rating} />
             <ArenaRankingQueueFeedback queue="free" result={generationParticipant?.queues.free ?? null} fallbackRating={meta?.ratings.free?.rating} />
             {(() => {

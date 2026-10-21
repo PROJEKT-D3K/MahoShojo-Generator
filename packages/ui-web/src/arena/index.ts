@@ -53,3 +53,5 @@ export {
   resolveBattleReportCardManualWidthPx, resolveBattleReportCardPresetWidth,
   type BattleReportCardWidthMode, type BattleReportCardWidthSettingsValue,
 } from './battle-report-card-width';
+
+export { ArenaCombatantTags, ArenaCombatantTechScore } from './presentation/ArenaCombatantMetadata';

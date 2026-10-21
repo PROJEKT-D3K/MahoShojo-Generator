@@ -9,6 +9,13 @@ import {
 } from './arena-character-validator';
 
 export type CombatantType = 'magical-girl' | 'canshou' | 'general-character';
+/** 面向用户的类型名称；传输仍使用稳定的 canonical type。 */
+export const COMBATANT_TYPE_LABELS: Readonly<Record<CombatantType, string>> = {
+  'magical-girl': '魔法少女', canshou: '残兽', 'general-character': '通用角色',
+};
+export function getCombatantTypeLabel(type: string): string {
+  return Object.prototype.hasOwnProperty.call(COMBATANT_TYPE_LABELS, type) ? COMBATANT_TYPE_LABELS[type as CombatantType] : '未知角色';
+}
 export interface CombatantData {
   type: CombatantType;
   data: any;

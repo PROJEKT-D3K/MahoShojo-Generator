@@ -1331,6 +1331,11 @@ export function CardLibraryModal({
         : isCacheRow && cachedResolved?.viaCache !== false
           ? { selectionId: `cache:${cardId}`, storageLocation: 'cache' }
           : { selectionId: `cloud:${cardId}`, storageLocation: 'cloud', cloudCardId: cardId, cloudCardUpdatedAt: payload._updatedAt };
+      // 仅转交已取得的线上展示值；不额外请求，也不从正文扩展字段推导指标。
+      const displayMeta = selectionContext.storageLocation === 'cloud' ? cardMetaById[cardId] : undefined;
+      if (displayMeta) {
+        selectionContext.displayMetadata = { techScore: displayMeta.techScore, techLevel: displayMeta.techLevel, strictTier: displayMeta.strictTier };
+      }
       selectionContext.rawSourceData = mapPublicDataCardRowToSourceData(full);
       selectionContext.rowSelectionId = rowSelectionId;
       selectionContext.signal = signal;
@@ -1401,6 +1406,11 @@ export function CardLibraryModal({
             rawSourceData: mapPublicDataCardRowToSourceData(card),
           };
 
+          const displayMeta = cardMetaById[cardId];
+          if (displayMeta) {
+            selectionContext.displayMetadata = { techScore: displayMeta.techScore, techLevel: displayMeta.techLevel, strictTier: displayMeta.strictTier };
+          }
+
           const result = canToggle ? onToggleCard?.(payload, true, selectionContext) : onSelectCard?.(payload, selectionContext);
           const applied = result && typeof result.then === 'function' ? await result : result;
           if (signal.aborted || latestAccountKeyRef.current !== ownerKey) return;
@@ -1430,7 +1440,7 @@ export function CardLibraryModal({
     } finally {
       if (selectionFlightRef.current === token) { selectionFlightRef.current = null; setSelectionPending(false); }
     }
-  }, [isOpen, sourceIdentityMode, allowDeckImport, canToggle, effectiveAllowedTypeSet, host.online, host.platform, maxSelected, onSelectCard, onToggleCard, selectedCount, selectedIdSet, selectionMode]);
+  }, [isOpen, sourceIdentityMode, allowDeckImport, canToggle, cardMetaById, effectiveAllowedTypeSet, host.online, host.platform, maxSelected, onSelectCard, onToggleCard, selectedCount, selectedIdSet, selectionMode]);
 
   const handleDownloadCard = useCallback(async (card: any) => {
     const downloadJson = host.platform.downloadJson;

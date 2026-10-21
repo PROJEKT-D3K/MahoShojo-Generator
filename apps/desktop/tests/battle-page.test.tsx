@@ -27,6 +27,8 @@ import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop
 import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { arenaWebPackageFixture, wrappedArenaWebPackageFile } from './fixtures/arena-web-package';
 import { createDesktopRouter } from '../src/app/router';
+// 编译真实 lazy 页面属于测试准备，不占用单条交互旅程的 10 秒预算；不替换路由或组件。
+import '../src/app/battle-page';
 import { deferred, installStoryCrypto, StoryFixturePort, storyFixtureInvoke } from './helpers/story-fixture';
 import { HostedStoryFixture } from './helpers/hosted-story-fixture';
 import { branchPageFixture } from './helpers/arena-story-branch-page-fixture';
@@ -487,6 +489,21 @@ describe('Desktop /battle journey against loopback fixture', () => {
     // The original stub continues to serve only bundled fixture paths after its one deferred call.
     expect(fetch).toBe(baseFetch); await act(async () => select().click()); await settle();
     expect(JSON.parse(localStorage.getItem(ARENA_DRAFT_KEY)!).draft.combatants).toHaveLength(1);
+  });
+  it('已选预设共源类型、技术值与详情焦点，不改正文或触发模型', async () => {
+    await mount();
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="选择预设角色：翠雀"]')!.click()); await settle();
+
+    const roster = container.querySelector('[data-sensitive-roster-metadata]')?.closest('li') ?? container;
+    expect(roster.textContent).toContain('(魔法少女)'); expect(roster.textContent).toContain('(预设)'); expect(roster.textContent).toContain('技术值：');
+    const beforeDetails = localStorage.getItem(ARENA_DRAFT_KEY);
+    const detailsButton = button('详情'); detailsButton.focus();
+    await click('详情'); expect(document.body.textContent).toContain('此客户端内置预设版本');
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭角色详情');
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))); await settle();
+    expect(document.body.textContent).not.toContain('此客户端内置预设版本'); expect(localStorage.getItem(ARENA_DRAFT_KEY)).toBe(beforeDetails);
+    expect(document.activeElement).toBe(detailsButton);
+    expect(calls()).toHaveLength(0);
   });
   it('loads bundled character/scenario presets and uploads materials through the shared controls', async () => {
     await mount(); const firstPreset = document.querySelector<HTMLButtonElement>('[aria-label="选择预设角色：翠雀"]')!;
@@ -2075,7 +2092,7 @@ describe('Desktop Quick ranking real routes', () => {
   };
 
   it.each(['battle', 'arena'] as const)('/%s reads anonymously, admits exact public source and removes without rereading or another usage', async product => {
-    fixture(); window.location.hash = `#/${product}`; await mount();
+    fixture({ items: [rankingItem('quick-source', { techScore: 73, techLevel: 'L4' })] }); window.location.hash = `#/${product}`; await mount();
     const accountReads = () => mocks.invoke.mock.calls.filter(([command]) => ['cloud_auth_status', 'cloud_cached_account'].includes(command)).length;
     const accountCount = accountReads(); expect(reads()).toHaveLength(0);
     await click('快速查看排行榜');
@@ -2088,6 +2105,8 @@ describe('Desktop Quick ranking real routes', () => {
     expect(stored(product).combatants[0]).toMatchObject({ desktopSource: 'online', sourceDataCardId: 'quick-source', sourceDataCardUpdatedAt: publicRow().updated_at,
       cardLibrarySelectionId: 'cloud:quick-source', isPreset: false, isValid: false, data: JSON.parse(publicRow().data) });
     expect(stored(product).combatants[0]).not.toHaveProperty('signal');
+    expect(container.textContent).toContain('技术值：73');
+    expect(stored(product).combatants[0]).not.toHaveProperty('displayMetadata');
     expect(freshReads('quick-source')).toHaveLength(1);
     expect(usage()).toEqual([{ routeId: 'data-card-stats.report', body: { cardId: 'quick-source', type: 'usage' } }]);
     expect(toggle().textContent).toBe('移除/已加入'); await clickToggle();

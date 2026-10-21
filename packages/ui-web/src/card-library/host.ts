@@ -307,6 +307,8 @@ export interface CardLibrarySelectionContext {
   cloudCardUpdatedAt?: string;
   /** 原卡 JSON 正文的独立副本。与 battle payload 的 _cardName 等展示元数据分离，保留同名扩展。 */
   rawSourceData?: Record<string, unknown>;
+  /** 已有线上查询的展示快照；不代表所选正文已验签或具有排位资格。本地/缓存不携带。 */
+  displayMetadata?: Pick<CardLibraryCardMeta, 'techScore' | 'techLevel' | 'strictTier'>;
 }
 
 /** 本机本地库通路：设备拥有，不要求登录、不依赖网络。 */

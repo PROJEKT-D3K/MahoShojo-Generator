@@ -48,7 +48,8 @@ export function DesktopArenaRankingModal({ isOpen, onClose, host, combatants, ma
     if (!nextSelected) return onToggleCharacter(undefined, false, context);
     const { row, ref } = await readDesktopMemberPublicCard(host.online, item.entityId, 'character', signal);
     const payload = mapPublicDataCardRowToBattleSelectionPayload(row);
-    const applied = await onToggleCharacter(payload, true, { ...context, cloudCardId: ref.id, cloudCardUpdatedAt: ref.versionToken, rawSourceData: mapPublicDataCardRowToSourceData(row) });
+    const applied = await onToggleCharacter(payload, true, { ...context, cloudCardId: ref.id, cloudCardUpdatedAt: ref.versionToken, rawSourceData: mapPublicDataCardRowToSourceData(row),
+      displayMetadata: { techScore: item.techScore, techLevel: item.techLevel, strictTier: null } });
     if (applied === false || signal.aborted) return false;
     if (!host.platform.marks.isUsed(ref.id)) {
       void host.online.reportCardStat(ref.id, 'usage').then(ok => { if (ok) host.platform.marks.markUsed(ref.id); }).catch(() => undefined);

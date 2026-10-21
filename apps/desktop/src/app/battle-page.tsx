@@ -1,3 +1,5 @@
+import { buildDesktopRosterExtras, snapshotDesktopRosterDetails, readDesktopRosterMetadata, type DesktopRosterMetadataSnapshot } from '../features/arena/roster-presentation';
+import { DesktopCardDetailsModal } from '../features/card-details/card-details-modal';
 import { BattleReportCardWidthSettings, resolveBattleReportCardManualWidthPx } from '@mahoshojo/ui-web/arena';
 import { useDesktopReportCardWidth } from '../features/arena/use-report-card-width';
 import { createDesktopBattleReportPorts } from '../features/arena/report-ports';
@@ -15,7 +17,7 @@ import { ARENA_CANONICAL_CAPABILITIES } from '@mahoshojo/contracts/arena-capabil
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { SCENARIO_PRESET_LIST } from '@mahoshojo/domain/scenario-presets';
 import { normalizeCustomStoryLength } from '@mahoshojo/domain/story-length';
-import { getCombatantCardLibrarySelectionId, parseCombatantsFromText } from '@mahoshojo/domain/arena-file-parser';
+import { getCombatantTypeLabel, getCombatantCardLibrarySelectionId, parseCombatantsFromText } from '@mahoshojo/domain/arena-file-parser';
 import { buildArenaMaterialState, type ArenaMaterialState } from '@mahoshojo/domain/arena-materials';
 import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-operations';
 import { getArenaCardLibrarySelectionOptions, AdvancedArenaHeader, ArenaPageLinks, ArenaRankingLinks, AdvancedArenaPageView, ArenaEditorWorkspaceLayout, buildArenaEditorSections, BattleLitePageView, BattleLiteHeader, ArenaRosterSection, ArenaRankingQueueFeedback, ArenaRosterImportPanel, ArenaMaterialSection, ArenaScenarioSection, BattleModeSelector, ArenaCharacterDatabaseSelector, StoryOptionsPanel, CharacterPresetPicker, ArenaDataSettingsPanel, NarrativeHistorySettings, type ArenaRosterSectionModel, type ArenaScenarioSectionModel, type StoryLengthOption } from '@mahoshojo/ui-web/arena';
@@ -126,6 +128,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const libraryEpoch = useRef(0);
   const closeLibrary = () => { libraryEpoch.current += 1; setLibrary(null); };
   const [rankingOpen, setRankingOpen] = useState(false);
+  const [rosterDetails, setRosterDetails] = useState<ReturnType<typeof snapshotDesktopRosterDetails> | null>(null);
+
   const [isMatchingCharacter, setIsMatchingCharacter] = useState(false);
   const matchingRequest = useRef<symbol | null>(null);
   const [recoveryHint, setRecoveryHint] = useState<{ value: DesktopArenaHostedRecoveryHint; repair: ArenaHostedRecoveryReplacement; epoch: number } | null>(null);
@@ -179,6 +183,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const providerCredentialIntent = aiStore.getCredentialIntentRevision();
   const scope = JSON.stringify({ account: cloudState.account?.userId ?? null, credentialEpoch: accountCredentialEpoch, strictActive, selection: aiState.selection,
     profiles: aiState.profiles, models: aiState.modelsByProfileId, presets: aiState.presetsByProviderId, overrides: aiState.generationOverrides });
+  const rosterMetadata = useMemo(() => new Map<string, DesktopRosterMetadataSnapshot>(), [scope]);
+  useEffect(() => { setRosterDetails(null); }, [scope]);
+  useEffect(() => {
+    const ids = new Set(draft.combatants.map(getCombatantCardLibrarySelectionId));
+    for (const id of rosterMetadata.keys()) if (!ids.has(id)) rosterMetadata.delete(id);
+  }, [draft.combatants, rosterMetadata]);
   useLayoutEffect(() => { matchingRequest.current = null; setIsMatchingCharacter(false); }, [scope]);
   useEffect(() => () => { matchingRequest.current = null; }, []);
   const strictSnapshotKey = useMemo(() => ({}), [draft, scope, state.phase, state.generation, cloudState.verification, cloudState.authFlow.kind, providerCredentialIntent, strictRevision]);
@@ -347,10 +357,12 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const parseSelectedCharacters = async (context: CardLibrarySelectionContext, warnings: string[]) => {
     const parsed = await parseCharacters(JSON.stringify(context.rawSourceData), warnings);
     const { selectionId, onlineId } = resolveArenaLibrarySource(context);
-    return (onlineId ? retainDesktopArenaSelectionSource(parsed, context.rawSourceData, { kind: 'online', cardId: onlineId }) : parsed)
+    const selected = (onlineId ? retainDesktopArenaSelectionSource(parsed, context.rawSourceData, { kind: 'online', cardId: onlineId }) : parsed)
       .map(item => ({ ...item, cardLibrarySelectionId: selectionId,
         adjudicationSourceKey: `library:${selectionId}`,
         ...(onlineId && context.cloudCardUpdatedAt?.trim() ? { sourceDataCardUpdatedAt: context.cloudCardUpdatedAt.trim() } : {}) }));
+    if (onlineId && context.displayMetadata) for (const item of selected) rosterMetadata.set(selectionId, { body: JSON.stringify(item.data), metadata: { ...context.displayMetadata } });
+    return selected;
   };
   const randomMatchCharacter = async () => {
     if (disabled || matchingRequest.current || draft.combatants.length >= limits.maxCombatants) return;
@@ -435,11 +447,16 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const selectedLibraryIds = library === 'character'
     ? draft.combatants.map(getCombatantCardLibrarySelectionId)
     : (library === 'auxScenario' ? draft.auxScenarios : library === 'material' ? draft.materials : []).map(getArenaReferenceSelectionId);
+  const rosterExtras = useMemo(() => draft.combatants.map(item => {
+    const metadata = readDesktopRosterMetadata(item, rosterMetadata);
+    return buildDesktopRosterExtras(item, () => setRosterDetails(snapshotDesktopRosterDetails(item)), metadata);
+  }), [draft.combatants, rosterMetadata]);
   const roster: ArenaRosterSectionModel = {
-    rows: draft.combatants.map((item, index) => ({ key: String(index), displayName: arenaItemName(item.data), typeLabel: item.type, guidance: item.characterGuidance ?? '', index, teamKey: item.teamId ? String(item.teamId) : null, isPlaceholder: false })),
+    rowExtras: row => rosterExtras[row.index],
+    rows: draft.combatants.map((item, index) => ({ key: String(index), displayName: arenaItemName(item.data), typeLabel: getCombatantTypeLabel(item.type), guidance: item.characterGuidance ?? '', index, teamKey: item.teamId ? String(item.teamId) : null, isPlaceholder: false })),
     teams: draft.teams.map((team) => ({ key: String(team.id), name: team.name, memberKeys: draft.combatants.flatMap((item, index) => item.teamId === team.id ? [String(index)] : []), collapsed: collapsedTeams.has(String(team.id)) })),
     disabled, combatantCountLabel: `${draft.combatants.length}/${limits.maxCombatants}`, combatantCapReached: draft.combatants.length >= limits.maxCombatants,
-    capabilities: { reorderRows: true, removeRows: true, editGuidance: true, ranking: false, addPlaceholders: false, clearRoster: true, createTeams: true, renameTeams: true, removeTeams: true, reorderTeams: true, assignTeamMembers: true, reorderTeamMembers: true, collapseTeams: true },
+    capabilities: { reorderRows: true, removeRows: true, editGuidance: true, ranking: true, addPlaceholders: false, clearRoster: true, createTeams: true, renameTeams: true, removeTeams: true, reorderTeams: true, assignTeamMembers: true, reorderTeamMembers: true, collapseTeams: true },
     actions: {
       moveRow: (from, to) => update({ combatants: moveArenaItem(draft.combatants, from, to) }),
       removeRow: (key) => update(product === 'arena' ? removeAdvancedCombatants(draft, [Number(key)]) : { combatants: draft.combatants.filter((_, index) => index !== Number(key)) }),
@@ -746,6 +763,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         footer: <ProductFooter assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />,
   };
   return <>
+    {rosterDetails && !roomState.constrained ? <DesktopCardDetailsModal isOpen onClose={() => setRosterDetails(null)} {...rosterDetails} /> : null}
     {product === 'arena' ? <AdvancedArenaPageView
       header={<AdvancedArenaHeader Link={libraryHost.platform.Link} draftSharing="independent" illustrationAvailable={false} logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={320} height={90} alt="魔法少女竞技场" />} />}
       links={<><ArenaRankingLinks Link={libraryHost.platform.Link} onOpenRankingModal={roomState.constrained ? undefined : () => setRankingOpen(true)} /><ArenaPageLinks Link={libraryHost.platform.Link} variant="full" onNavigateExternal={openFixed} /></>} beforeWorkspace={<>{sessionNotice}<DesktopArenaRoomPanel createReportPorts={onError => createDesktopBattleReportPorts({ username: cloudState.verification === 'verified' ? cloudState.account?.username : null, onNavigateExternal: openContent, onError, onExportingChange: onReportExportingChange })} languages={languages} owner={roomOwner} draft={draft} isDraftCurrent={value => session.getSnapshot().draft === value} disabled={!guard.ready || busy || state.pendingRestore || strictActive} authenticated={cloudState.verification === 'verified' && cloudState.authFlow.kind === 'idle' && !!cloudState.account} displayName={cloudState.account?.username ?? '玩家'} onAuthenticate={() => { void cloudStore.requestAuth(); }} /><DesktopRoomStoryDraft roomOwner={roomOwner} localSession={session} languages={languages} isEditingAllowed={() => roomStartAllowed.current()} /></>} result={<fieldset disabled={roomState.constrained} hidden={roomState.constrained}>{result}{slots.storySession}</fieldset>} homeLink={slots.homeLink} footer={slots.footer}>
