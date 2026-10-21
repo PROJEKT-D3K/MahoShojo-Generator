@@ -89,12 +89,8 @@ export type ArenaGenerationRepairContext = Readonly<{
 export type { CombatantData } from '@mahoshojo/domain/arena-file-parser';
 import type { CombatantData } from '@mahoshojo/domain/arena-file-parser';
 
-export interface RandomCombatantPlaceholder {
-  type: 'random-magical-girl' | 'random-canshou';
-  id: string;
-  filename: string;
-  teamId?: number;
-}
+export type { ArenaRandomCombatantPlaceholder as RandomCombatantPlaceholder } from '@mahoshojo/domain/arena-random-combatants';
+import type { ArenaRandomCombatantPlaceholder as RandomCombatantPlaceholder } from '@mahoshojo/domain/arena-random-combatants';
 
 export type Combatant = CombatantData | RandomCombatantPlaceholder;
 

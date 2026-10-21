@@ -1,3 +1,4 @@
+import { isArenaRealCombatant } from './roster-types';
 import { ArenaRoomHostRuntimeGenerationSchema, StoryLengthSchema, type ArenaRoomSharedConfig } from '@mahoshojo/contracts/arena-room';
 import {
   createArenaRoomSourceProjector,
@@ -58,6 +59,7 @@ async function prepareDesktopRoomBundle(draft: ArenaDraft, empty = false): Promi
   { ok: true; sharedConfig: ArenaRoomSharedConfig; bundle: ArenaRoomHostWorkspaceBundle } | { ok: false; issues: readonly string[] }
 > {
   if (empty) { const bundle = projector.createArenaRoomCanonicalEmptyDraftBundle(); return { ok: true, sharedConfig: bundle.sharedConfig, bundle }; }
+  if (!draft.combatants.every(isArenaRealCombatant)) return { ok: false, issues: ['随机占位符不能发布到多人房间，请先在单人对战中生成完整角色。'] };
   try {
     const source: ArenaRoomSourceState = {
       battleMode: draft.battleMode,

@@ -2503,3 +2503,72 @@ describe('manual repair on actual battle and arena routes', () => {
     expect(localStorage.getItem(ADVANCED_ARENA_DRAFT_KEY)).toBe(stored); expect(localStorage.getItem(ARENA_DRAFT_KEY)).toBe(before); expect(docs.size).toBe(0);
   });
 });
+
+// Random placeholders exercise the real shared roster and Desktop submission boundary.
+describe('桌面随机占位符共源旅程', () => {
+  const stored = (product: 'battle' | 'arena') => JSON.parse(localStorage.getItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY)!);
+  it.each(['battle', 'arena'] as const)('/%s 空列表可添加两种占位符，提交前一次物化且重试沿用同一正文', async product => {
+    const empty = createInitialArenaDraft();
+    // Isolate random identity from the existing, separately tested post-battle history updates.
+    localStorage.setItem(product === 'battle' ? ARENA_DRAFT_KEY : ADVANCED_ARENA_DRAFT_KEY, JSON.stringify({ version: 1,
+      draft: { ...empty, settings: { ...empty.settings, writeArenaHistory: false, writeCurrentState: false } } }));
+    window.location.hash = `#/${product}`; await mount();
+    await click('+ 添加随机魔法少女'); await click('+ 添加随机残兽');
+    const pending = stored(product);
+    expect(pending.version).toBe(2);
+    expect(pending.draft.combatants.map((item: { type: string }) => item.type)).toEqual(['random-magical-girl', 'random-canshou']);
+    expect(pending.draft.combatants.every((item: object) => !('data' in item))).toBe(true);
+    expect(button('生成战报').disabled).toBe(false); expect(calls()).toHaveLength(0);
+    await click('生成战报'); await vi.waitFor(() => expect(received, container.querySelector('.error-message')?.textContent ?? '').toHaveLength(1));
+    await vi.waitFor(() => expect(container.textContent).toContain('生成完成。')); await settle();
+    const installed = stored(product).draft.combatants;
+    expect(stored(product).version).toBe(1);
+    expect(installed.map((item: { type: string }) => item.type)).toEqual(['magical-girl', 'canshou']);
+    expect(installed.every((item: { isValid: boolean; isPreset: boolean }) => !item.isValid && !item.isPreset && !('id' in item) && !('desktopSource' in item))).toBe(true);
+    const firstInput = JSON.parse(received[0]!.arenaInputJson!);
+    expect(firstInput.combatants.map((item: { data: unknown }) => item.data)).toEqual(installed.map((item: { data: unknown }) => item.data));
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await click('生成战报'); await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(JSON.parse(received[1]!.arenaInputJson!).combatants).toEqual(firstInput.combatants);
+  });
+
+  it('普通 Hosted 共用物化入口，只向原生桥提交冻结实卡，失败后不重抽', async () => {
+    localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 2, selection: { executionPreference: 'server', clientConnectionId: 'loopback' }, hiddenPresetIds: [] }));
+    const native = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args, options) => {
+      if (command === 'arena_hosted_stream' && ['create-json', 'create-stream'].includes(args.request.operation))
+        throw { code: 'capability-unavailable', message: 'synthetic dispatch boundary', dispatchState: 'not-dispatched', intentOwnership: 'current-owned' };
+      return native(command, args, options);
+    });
+    const creates = () => mocks.invoke.mock.calls.filter(([command, args]) => command === 'arena_hosted_stream' && ['create-json', 'create-stream'].includes(args.request.operation));
+    await mount(); await click('+ 添加随机魔法少女'); await click('+ 添加随机残兽');
+    await click('生成战报'); await vi.waitFor(() => expect(creates(), container.querySelector('.error-message')?.textContent ?? '').toHaveLength(1)); await settle();
+    const installed = stored('battle').draft.combatants;
+    expect(installed.map((item: { type: string }) => item.type)).toEqual(['magical-girl', 'canshou']);
+    expect(JSON.stringify(creates()[0]![1].request)).not.toContain('random-magical-girl');
+    expect(JSON.stringify(creates()[0]![1].request)).not.toContain('random-canshou');
+    vi.mocked(window.confirm).mockReturnValue(true);
+    await click('生成战报'); await vi.waitFor(() => expect(creates()).toHaveLength(2));
+    expect(stored('battle').draft.combatants).toEqual(installed);
+    expect(creates()[1]![1].request.body.combatants).toEqual(creates()[0]![1].request.body.combatants);
+    expect(creates()[0]![1].request.body.combatants.map((item: { data: unknown }) => item.data)).toEqual(installed.map((item: { data: unknown }) => item.data));
+    expect(received).toHaveLength(0);
+  });
+
+  it('取消替换现有结果不物化', async () => {
+    saveDraft(draft('daily', 'non-stream')); await mount(); await click('生成战报');
+    await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
+    await click('+ 添加随机魔法少女'); const before = stored('battle').draft.combatants;
+    await click('生成战报'); expect(window.confirm).toHaveBeenCalled();
+    expect(stored('battle').draft.combatants).toEqual(before); expect(received).toHaveLength(1);
+  });
+
+  it('32 人满额按钮禁用，移除后可继续添加', async () => {
+    const full = { ...createInitialArenaDraft(), combatants: Array.from({ length: 32 }, (_, index) => ({ type: 'random-canshou', id: `slot-${index}`, filename: '随机残兽' })) };
+    localStorage.setItem(ARENA_DRAFT_KEY, JSON.stringify({ version: 2, draft: full })); await mount();
+    expect(button('+ 添加随机魔法少女').disabled).toBe(true); expect(button('+ 添加随机残兽').disabled).toBe(true);
+    const remove = container.querySelector<HTMLButtonElement>('button[aria-label="移除 随机残兽"]')!;
+    expect(remove).toBeTruthy(); await act(async () => remove.click()); await settle();
+    expect(stored('battle').draft.combatants).toHaveLength(31); expect(button('+ 添加随机残兽').disabled).toBe(false);
+  });
+});

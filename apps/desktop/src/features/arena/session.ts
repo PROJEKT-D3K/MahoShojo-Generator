@@ -1,5 +1,7 @@
 import { normalizeArenaRepairDraft, prepareAndApplyArenaCombatantRepair } from '@mahoshojo/ai-core/arena-combatant-repair';
 import { precheckArenaBattleReportForRepair } from '@mahoshojo/ai-core/arena-repair-meta';
+import { materializeArenaRandomCombatants, isArenaRandomCombatantPlaceholder } from '@mahoshojo/domain/arena-random-combatants';
+import { isArenaRealCombatant, requireArenaRealCombatants, type ArenaDraftCombatant } from './roster-types';
 import { readArenaReportPresentationSnapshot, snapshotDesktopArenaReport } from './report-presentation';
 import { parseArenaFailureDiagnostic, type ArenaFailureDiagnostic, type ArenaFailureStage } from './failure-diagnostic';
 import { ArenaHostedBridgeError } from '../../platform/arena-hosted-bridge';
@@ -51,9 +53,9 @@ const clone = <T,>(value: T): T => structuredClone(value);
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 export type ArenaAuxiliaryScenario = ArenaDirectInput['auxScenarios'][number] & { id?: string; fileName?: string | null; isPreset?: boolean; adjudicationSourceKey?: string; cardLibrarySelectionId?: string };
 export type ArenaHistoryOriginal = { id: string; name: string; text: string; importedAt: string };
-export type ArenaDraft = Omit<ArenaDirectInput, 'auxScenarios' | 'combatants' | 'scenario'> & { combatants: readonly (ArenaDirectInput['combatants'][number] & { desktopSource?: 'online' | 'preset'; cardLibrarySelectionId?: string })[]; scenario: ArenaDirectInput['scenario'] & { isPreset?: boolean }; generationMode: 'stream' | 'non-stream'; historyReferences: ArenaDirectInput['narrativeHistoryEntries']; auxScenarios: readonly ArenaAuxiliaryScenario[]; selectedQuestionnaires?: QuestionnaireSelection[]; historyOriginals?: ArenaHistoryOriginal[]; historySort?: NarrativeHistorySort; historyUpdatedAt?: string | null; narrativeDrafts?: readonly NarrativeDraft[] };
+export type ArenaDraft = Omit<ArenaDirectInput, 'auxScenarios' | 'combatants' | 'scenario'> & { combatants: readonly ArenaDraftCombatant[]; scenario: ArenaDirectInput['scenario'] & { isPreset?: boolean }; generationMode: 'stream' | 'non-stream'; historyReferences: ArenaDirectInput['narrativeHistoryEntries']; auxScenarios: readonly ArenaAuxiliaryScenario[]; selectedQuestionnaires?: QuestionnaireSelection[]; historyOriginals?: ArenaHistoryOriginal[]; historySort?: NarrativeHistorySort; historyUpdatedAt?: string | null; narrativeDrafts?: readonly NarrativeDraft[] };
 const withoutNarrativeDrafts = (draft: ArenaDraft): ArenaDraft => { const next = { ...draft }; delete next.narrativeDrafts; return next; };
-export const createInitialArenaDraft = (): ArenaDraft => ({
+export const createInitialArenaDraft = (): ArenaDraft & { combatants: readonly ArenaDirectInput['combatants'][number][] } => ({
   combatants: [], teams: [], battleMode: 'classic', reportFormat: 'markdown', arenaFreeRankingEnabled: false,
   scenario: { content: null, fileName: null }, scenarioDisplayName: null, auxScenarios: [], materials: [],
   selectedLanguage: 'zh-CN', storyLength: 'default', customStoryLength: '', generationMode: 'non-stream',
@@ -101,7 +103,7 @@ export const validateArenaDraft = (value: unknown, product: DesktopArenaProduct 
     || (draft.historySort !== undefined && !['prompt_order', 'updated_desc', 'updated_asc', 'created_desc', 'created_asc'].includes(draft.historySort))
     || (draft.historyUpdatedAt !== undefined && draft.historyUpdatedAt !== null && typeof draft.historyUpdatedAt !== 'string')) throw new Error('Arena 历史编辑草稿不合法');
   if (draft.combatants.length > ARENA_CANONICAL_CAPABILITIES.maxCombatants || draft.auxScenarios.length + draft.materials.length > ARENA_CANONICAL_CAPABILITIES.maxReferenceItemsSanity
-    || !draft.combatants.every((item) => record(item) && record(item.data) && typeof item.type === 'string' && ['magical-girl', 'canshou', 'general-character'].includes(item.type) && typeof item.filename === 'string' && typeof item.isValid === 'boolean' && typeof item.isPreset === 'boolean'
+    || !draft.combatants.every((item) => isArenaRandomCombatantPlaceholder(item) ? Object.keys(item).every(key => ['type', 'id', 'filename', 'teamId'].includes(key)) && item.id.trim().length > 0 && item.id.length <= 200 && item.filename.length > 0 && (item.teamId === undefined || Number.isSafeInteger(item.teamId) && item.teamId > 0) : record(item) && record(item.data) && typeof item.type === 'string' && ['magical-girl', 'canshou', 'general-character'].includes(item.type) && typeof item.filename === 'string' && typeof item.isValid === 'boolean' && typeof item.isPreset === 'boolean'
       && (item.cardLibrarySelectionId === undefined || typeof item.cardLibrarySelectionId === 'string' && /^(cloud|local|cache):.+$/.test(item.cardLibrarySelectionId))
       && (item.desktopSource === undefined || item.desktopSource === 'online' || item.desktopSource === 'preset')
       && (item.teamId === undefined || (Number.isSafeInteger(item.teamId) && item.teamId > 0)) && (item.characterGuidance === undefined || typeof item.characterGuidance === 'string'))
@@ -116,7 +118,7 @@ export const validateArenaDraft = (value: unknown, product: DesktopArenaProduct 
 export const inheritedArenaAdjudication = (draft: ArenaDraft, product: DesktopArenaProduct = 'battle') => {
   // Advanced imports maintain editable, source-marked events. Never re-add deleted/edited source events at dispatch.
   if (product === 'arena') return { events: [...draft.adjudicationEvents], skippedLegacy: 0 };
-  const sources = [...draft.combatants.map((item) => item.data), ...(draft.battleMode === 'scenario' && draft.scenario.content ? [draft.scenario.content] : [])];
+  const sources = [...draft.combatants.filter(isArenaRealCombatant).map((item) => item.data), ...(draft.battleMode === 'scenario' && draft.scenario.content ? [draft.scenario.content] : [])];
   const events = [...draft.adjudicationEvents]; let skippedLegacy = 0;
   for (const source of sources) {
     if (!record(source) || !Array.isArray(source.adjudicationEvents)) continue;
@@ -131,15 +133,16 @@ const projectArenaLibraryMaterial = (value: unknown): unknown => {
   const { cardLibrarySelectionId: _selectionId, ...material } = value;
   return material;
 };
-export const buildDesktopArenaInput = (draft: ArenaDraft, product: DesktopArenaProduct = 'battle'): ArenaDirectInput => ({ ...withoutNarrativeDrafts(draft), combatants: draft.combatants.map(projectDesktopArenaCombatant), materials: draft.materials.map(projectArenaLibraryMaterial), scenario: { ...draft.scenario, fileName: draft.scenario.isPreset === true ? draft.scenario.fileName : null }, ...(draft.selectedQuestionnaires ? buildArenaQuestionnaireRequest(draft.selectedQuestionnaires) : {}), adjudicationEvents: inheritedArenaAdjudication(draft, product).events, narrativeHistoryEntries: [...draft.historyReferences, ...draft.narrativeHistoryEntries] });
-export const arenaReferenceCount = (draft: ArenaDraft): number => { const input = buildArenaGenerationInputSnapshot(buildDesktopArenaInput(draft)); return (input.materials?.length ?? 0) + (input.auxScenarios?.length ?? 0) + (input.questionnaires?.length ?? 0) + (input.narrativeHistory?.length ?? 0); };
-export const arenaReadinessMessage = (draft: ArenaDraft, product: DesktopArenaProduct = 'battle'): string | null => {
+export const buildDesktopArenaInput = (draft: ArenaDraft, product: DesktopArenaProduct = 'battle'): ArenaDirectInput => ({ ...withoutNarrativeDrafts(draft), combatants: requireArenaRealCombatants(draft.combatants).map(projectDesktopArenaCombatant), materials: draft.materials.map(projectArenaLibraryMaterial), scenario: { ...draft.scenario, fileName: draft.scenario.isPreset === true ? draft.scenario.fileName : null }, ...(draft.selectedQuestionnaires ? buildArenaQuestionnaireRequest(draft.selectedQuestionnaires) : {}), adjudicationEvents: inheritedArenaAdjudication(draft, product).events, narrativeHistoryEntries: [...draft.historyReferences, ...draft.narrativeHistoryEntries] });
+export const arenaReferenceCount = (draft: ArenaDraft): number => { const input = buildArenaGenerationInputSnapshot(buildDesktopArenaInput({ ...draft, combatants: draft.combatants.filter(isArenaRealCombatant) })); return (input.materials?.length ?? 0) + (input.auxScenarios?.length ?? 0) + (input.questionnaires?.length ?? 0) + (input.narrativeHistory?.length ?? 0); };
+export const arenaReadinessMessage = (draft: ArenaDraft, product: DesktopArenaProduct = 'battle', editorPreview = false): string | null => {
+  if (!editorPreview && draft.combatants.some(item => !isArenaRealCombatant(item))) return '随机角色尚未生成。';
   const issue = evaluateArenaBasicGenerationReadiness({ battleMode: draft.battleMode, combatantCount: draft.combatants.length, hasScenario: !!draft.scenario.content })[0];
   if (issue?.code === 'GENERATION_SCENARIO_REQUIRED') return '请先选择主情景。';
   if (issue) return `当前模式至少需要 ${ARENA_CANONICAL_CAPABILITIES.minCombatantsByMode[draft.battleMode]} 位角色。`;
-  const payload = buildArenaGenerationInputSnapshot(buildDesktopArenaInput(draft, product));
+  const payload = buildArenaGenerationInputSnapshot(buildDesktopArenaInput(editorPreview ? { ...draft, combatants: draft.combatants.filter(isArenaRealCombatant) } : draft, product));
   try { countBattleStoryCommitJsonBytes(payload, ARENA_CANONICAL_RESOURCE_LIMITS.requestBodyBytes); } catch { return '输入超过 Arena 资源上限或格式不受支持；请调整输入，内容不会被截断。'; }
-  if (!validateArenaAiInputJson(JSON.stringify(payload))) return '输入超过 Arena 资源上限或格式不受支持；请调整输入，内容不会被截断。';
+  if (!(editorPreview && draft.combatants.some(item => !isArenaRealCombatant(item))) && !validateArenaAiInputJson(JSON.stringify(payload))) return '输入超过 Arena 资源上限或格式不受支持；请调整输入，内容不会被截断。';
   return null;
 };
 
@@ -171,7 +174,7 @@ export class DesktopArenaSession {
   private get legacyNarrativeKey() { return `${this.draftKey}.narrative-legacy.v1`; }
   readonly hostedRecovery: DesktopArenaHostedRecovery;
   private get draftKey() { return this.dependencies.product === 'arena' ? ADVANCED_ARENA_DRAFT_KEY : ARENA_DRAFT_KEY; }
-  constructor(private readonly dependencies: { product?: DesktopArenaProduct; repository: CardRepository; storage: GenerationDraftStorage; execute?: typeof executeArenaDirect; executeHosted?: typeof executeArenaHosted; resumeHosted?: typeof resumeArenaHosted; hostedTestPorts?: Pick<ArenaHostedContext, 'createChannel' | 'wait' | 'maxReconnectAttempts'>; resolveWebPackage?: ArenaDirectHostContext['resolveWebPackage']; requestId?: () => string; now?: () => string; random?: () => number }) {
+  constructor(private readonly dependencies: { product?: DesktopArenaProduct; repository: CardRepository; storage: GenerationDraftStorage; execute?: typeof executeArenaDirect; executeHosted?: typeof executeArenaHosted; resumeHosted?: typeof resumeArenaHosted; hostedTestPorts?: Pick<ArenaHostedContext, 'createChannel' | 'wait' | 'maxReconnectAttempts'>; resolveWebPackage?: ArenaDirectHostContext['resolveWebPackage']; requestId?: () => string; now?: () => string; random?: () => number; materializeRandomCombatants?: typeof materializeArenaRandomCombatants }) {
     this.legacyNarrativeSourceKey = this.legacyNarrativeKey;
     this.narrativeDrafts = createNarrativeDraftController(createNarrativeDraftRepository(dependencies.storage as NarrativeDraftStoragePort, `mahoshojo.desktop.arena.${dependencies.product ?? 'battle'}.narrative-drafts`));
     this.hostedRecovery = new DesktopArenaHostedRecovery(dependencies.storage, dependencies.product ?? 'battle');
@@ -187,8 +190,9 @@ export class DesktopArenaSession {
         if (record(saved) && record(saved.draft) && Object.prototype.hasOwnProperty.call(saved.draft, 'narrativeDrafts')) {
           this.legacyNarrativeRaw = raw; this.legacyNarrativeSourceKey = this.draftKey;
         }
-        if (!record(saved) || saved.version !== 1) throw new Error('version');
+        if (!record(saved) || (saved.version !== 1 && saved.version !== 2)) throw new Error('version');
         const draft = validateArenaDraft(saved.draft, this.dependencies.product);
+        if (saved.version === 1 && draft.combatants.some(item => !isArenaRealCombatant(item))) throw new Error('version');
         if (saved.output !== undefined && (!record(saved.output) || typeof saved.output.phase !== 'string' || !['idle', 'completed', 'failed', 'cancelled'].includes(saved.output.phase)
           || (saved.output.completedRequestId !== undefined && (typeof saved.output.completedRequestId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/u.test(saved.output.completedRequestId)))
           || (saved.output.executionMode !== undefined && saved.output.executionMode !== 'direct-local' && saved.output.executionMode !== 'direct-remote' && saved.output.executionMode !== 'hosted')
@@ -224,6 +228,17 @@ export class DesktopArenaSession {
     if (this.dependencies.storage.getItem(this.legacyNarrativeKey) !== this.legacyNarrativeRaw) throw new Error('legacy-copy-failed');
     this.legacyNarrativeSourceKey = this.legacyNarrativeKey;
     if (this.narrativeDrafts.getState().legacy !== null) this.narrativeDrafts.loadLegacyDrafts(this.legacyNarrativeSourceKey);
+  }
+  /** 用户确认后一次物化；任何异常均不安装半成品，失败重试沿已安装正文。 */
+  materializeRandomPlaceholders(expected: ArenaDraft): ArenaDraft {
+    if (this.disposed || this.isBusy() || this.state.pendingRestore || this.state.draft !== expected) throw new Error('当前草稿已经变化，请重新确认。');
+    const placeholders = expected.combatants.filter(isArenaRandomCombatantPlaceholder);
+    if (!placeholders.length) return expected;
+    const generated = (this.dependencies.materializeRandomCombatants ?? materializeArenaRandomCombatants)(placeholders);
+    const next = validateArenaDraft({ ...expected, combatants: [...expected.combatants.filter(isArenaRealCombatant), ...generated] }, this.dependencies.product);
+    const error = arenaReadinessMessage(next, this.dependencies.product); if (error) throw new Error(error);
+    this.updateDraft(next);
+    return this.state.draft;
   }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -261,7 +276,7 @@ export class DesktopArenaSession {
     this.completedNarrativeRequestId = typeof saved.output?.completedRequestId === 'string' ? saved.output.completedRequestId : null;
     this.resultMode = saved.output?.executionMode === 'hosted' ? 'hosted' : saved.output?.executionMode === 'direct-remote' ? 'direct-remote' : saved.output?.executionMode === 'direct-local' ? 'direct-local' : undefined;
     const hosted = parseArenaHostedDetails(saved.output?.hosted, typeof saved.output?.hostedGenerationId === 'string' ? saved.output.hostedGenerationId : null);
-    this.publish({ repairs: null, failureDiagnostic: parseArenaFailureDiagnostic(saved.output?.failureDiagnostic), roleUpdates: { status: 'restored', message: '本机草稿中的签名字段未经本机验证；恢复不会自动同步角色。', items: [] }, hosted, hostedGenerationId: typeof saved.output?.hostedGenerationId === 'string' ? saved.output.hostedGenerationId : null, draft: { ...saved.draft, ...(this.narrativeDrafts.getState().drafts.length ? { narrativeDrafts: this.narrativeDrafts.getState().drafts } : {}), scenario: { ...saved.draft.scenario, isPreset: false }, combatants: saved.draft.combatants.map(item => ({ ...clearDesktopArenaSource(item), isValid: false })) }, pendingRestore: false, restored: true, generation: null, draftSaved: true,
+    this.publish({ repairs: null, failureDiagnostic: parseArenaFailureDiagnostic(saved.output?.failureDiagnostic), roleUpdates: { status: 'restored', message: '本机草稿中的签名字段未经本机验证；恢复不会自动同步角色。', items: [] }, hosted, hostedGenerationId: typeof saved.output?.hostedGenerationId === 'string' ? saved.output.hostedGenerationId : null, draft: { ...saved.draft, ...(this.narrativeDrafts.getState().drafts.length ? { narrativeDrafts: this.narrativeDrafts.getState().drafts } : {}), scenario: { ...saved.draft.scenario, isPreset: false }, combatants: saved.draft.combatants.map(item => isArenaRealCombatant(item) ? { ...clearDesktopArenaSource(item), isValid: false } : item) }, pendingRestore: false, restored: true, generation: null, draftSaved: true,
       rawText: String(saved.output?.rawText ?? ''), markdown: String(saved.output?.markdown ?? ''), reasoning: String(saved.output?.reasoning ?? ''),
       presentation: readArenaReportPresentationSnapshot(saved.output?.presentation),
       resultFormat: saved.output?.reportFormat === 'web' ? 'web' : 'markdown', renderSnapshot: parseBattleReportRenderSnapshotV1(saved.output?.renderSnapshot),
@@ -280,7 +295,7 @@ export class DesktopArenaSession {
     if (this.disposed || this.draftBlocked || this.state.pendingRestore) return;
     try { this.preserveLegacyNarrativeDrafts(); const { draft, rawText, markdown, reasoning, phase } = this.state;
       const inputDraft = { ...draft }; delete inputDraft.narrativeDrafts;
-      const raw = JSON.stringify({ version: 1, draft: inputDraft, output: { rawText, markdown, reasoning, presentation: snapshotDesktopArenaReport(this.state) ?? undefined, failureDiagnostic: parseArenaFailureDiagnostic(this.state.failureDiagnostic), hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, executionMode: this.resultMode, generationMode: this.state.activeGenerationMode, phase: phase === 'generating' ? 'cancelled' : phase,
+      const raw = JSON.stringify({ version: inputDraft.combatants.every(isArenaRealCombatant) ? 1 : 2, draft: inputDraft, output: { rawText, markdown, reasoning, presentation: snapshotDesktopArenaReport(this.state) ?? undefined, failureDiagnostic: parseArenaFailureDiagnostic(this.state.failureDiagnostic), hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, executionMode: this.resultMode, generationMode: this.state.activeGenerationMode, phase: phase === 'generating' ? 'cancelled' : phase,
         ...(this.completedNarrativeRequestId ? { completedRequestId: this.completedNarrativeRequestId } : {}) } });
       if (raw.length > MAX_DRAFT_CHARACTERS) throw new Error('limit');
       this.dependencies.storage.setItem(this.draftKey, raw); this.publish({ draftSaved: true, draftError: null });
@@ -441,7 +456,8 @@ export class DesktopArenaSession {
     const context = this.roleContext;
     if (!context || !this.canRetryHostedRoleUpdates() || this.isBusy() || this.state.pendingRestore) return;
     const controller = new AbortController(); this.roleController = controller;
-    const submitted = clone(this.state.draft.combatants);
+    if (this.state.draft.combatants.some(item => !isArenaRealCombatant(item))) { this.publish({ roleUpdates: { ...this.state.roleUpdates, message: '当前草稿包含尚未生成的随机角色，不能更新旧战报角色。' } }); this.roleController = null; return; }
+    const submitted = clone(requireArenaRealCombatants(this.state.draft.combatants));
     const snapshot = JSON.stringify(projectArenaReconciliationCombatants(submitted));
     const isCurrent = () => this.current(context.scope, context.epoch) && this.roleContext === context
       && this.state.phase === 'completed' && this.state.hostedGenerationId === context.generationId && !controller.signal.aborted;
@@ -452,10 +468,10 @@ export class DesktopArenaSession {
       const response = await reconcileArenaHosted(options.invoke, { product: context.pointer.product, requestId: context.pointer.requestId, actor: context.pointer.actor }, payload,
         { signal: controller.signal, createChannel: this.dependencies.hostedTestPorts?.createChannel });
       if (!isCurrent()) return;
-      if (JSON.stringify(projectArenaReconciliationCombatants(this.state.draft.combatants)) !== snapshot) throw new Error('角色更新上下文已变化，已丢弃过期的服务器响应。');
+      if (JSON.stringify(projectArenaReconciliationCombatants(requireArenaRealCombatants(this.state.draft.combatants))) !== snapshot) throw new Error('角色更新上下文已变化，已丢弃过期的服务器响应。');
       if (!('success' in response)) throw new Error(response.error || '角色更新暂不可用，可按原任务重试。');
       const items = response.updatedCombatants;
-      const projected = applyArenaReconciliationUpdates(this.state.draft.combatants, items);
+      const projected = applyArenaReconciliationUpdates(requireArenaRealCombatants(this.state.draft.combatants), items);
       const occurredAt = (this.dependencies.now ?? (() => new Date().toISOString()))();
       if (items.length) this.roleCandidates = { scopeKey: context.scope, generationId: context.generationId, occurredAt, items: items.map(item => {
         const signature = typeof item.data.signature === 'string' && item.data.signature ? item.data.signature : null;
@@ -491,7 +507,7 @@ export class DesktopArenaSession {
     this.publish({ draft: { ...this.state.draft, narrativeHistoryEntries: entries, historyUpdatedAt: occurredAt }, draftSaved: false }); this.retryDraftSave();
   }
   private complete(input: ArenaDraft, outcome: Extract<ArenaDirectOutcome, { status: 'completed' }>, occurredAt: string) {
-    const source = { combatants: input.combatants, report: outcome.report as unknown as Record<string, unknown>, impacts: outcome.impacts,
+    const source = { combatants: requireArenaRealCombatants(input.combatants), report: outcome.report as unknown as Record<string, unknown>, impacts: outcome.impacts,
       userGuidance: input.settings.userGuidance, scenario: input.battleMode === 'scenario' ? input.scenario.content : null,
       writeArenaHistory: input.settings.writeArenaHistory && (input.reportFormat !== 'web' || outcome.metaStatus === 'valid'), writeCurrentState: input.settings.writeCurrentState && (input.reportFormat !== 'web' || outcome.metaStatus === 'valid'),
       writeNarrativeHistory: input.settings.writeNarrativeHistory,
@@ -520,7 +536,8 @@ export class DesktopArenaSession {
   }): Promise<string> {
     const generationId = this.manualRepairGenerationId();
     if (!generationId || this.isBusy() || !ports.canApply()) throw new Error('当前结果不可修复，请先完成正在进行的操作。');
-    const scope = this.scopeKey, epoch = this.epoch, roster = this.state.draft.combatants, generation = this.state.generation;
+    if (!this.state.draft.combatants.every(isArenaRealCombatant)) throw new Error('当前名单含尚未生成的随机角色，不能应用旧战报修复；已有结果仍可下载或另存。');
+    const scope = this.scopeKey, epoch = this.epoch, roster = requireArenaRealCombatants(this.state.draft.combatants), generation = this.state.generation;
     const reportMarkdown = this.state.markdown, structuredReport = this.state.report;
     const repairReportMarkdown = this.state.activeGenerationMode === 'non-stream' && this.state.resultFormat === 'markdown' && structuredReport
       ? toBattleReportMarkdown(structuredReport) : reportMarkdown;
@@ -649,7 +666,7 @@ export class DesktopArenaSession {
       phase: 'idle', rawText: '', markdown: '', reasoning: '', reportFormat: 'markdown', renderSnapshot: null,
       hosted: null, report: null, ...pending.output, failureDiagnostic: parseArenaFailureDiagnostic(pending.output?.failureDiagnostic),
     } : { phase: this.state.phase, repairs: this.state.repairs, presentation: snapshotDesktopArenaReport(this.state) ?? undefined, failureDiagnostic: parseArenaFailureDiagnostic(this.state.failureDiagnostic), roleUpdates: this.state.roleUpdates, hosted: this.state.hosted, hostedGenerationId: this.state.hostedGenerationId, reportFormat: this.state.resultFormat, renderSnapshot: this.state.renderSnapshot, rawText: this.state.rawText, markdown: this.state.markdown, reasoning: this.state.reasoning, report: this.state.report, usage: this.state.usage };
-    return JSON.stringify({ version: 1, product: this.dependencies.product ?? 'battle', hostedRecovery: this.hostedRecovery.getSnapshot(),
+    return JSON.stringify({ version: (pending?.exportDraft ?? this.state.draft).combatants.every(isArenaRealCombatant) ? 1 : 2, product: this.dependencies.product ?? 'battle', hostedRecovery: this.hostedRecovery.getSnapshot(),
       draft: pending?.exportDraft ?? this.state.draft, generation: pending ? null : this.state.generation, result, candidates: pending ? null : this.state.candidates,
       // Only unreadable, protected originals need a separate raw backup; normal reports are not duplicated.
       ...(this.draftBlocked && this.legacyNarrativeRaw !== null ? { protectedLocalDraft: { format: 'arena-local-draft-raw', raw: this.legacyNarrativeRaw } } : {}),

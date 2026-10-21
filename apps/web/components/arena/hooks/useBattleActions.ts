@@ -2,6 +2,10 @@
 
 import { useCallback, useRef } from 'react';
 import { getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
+import {
+  isArenaRandomCombatantPlaceholder,
+  materializeArenaRandomCombatants,
+} from '@mahoshojo/domain/arena-random-combatants';
 import type { CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 
 import {
@@ -21,7 +25,6 @@ import {
   mapDataCardRuntimeSourceInfo,
   mapPublicDataCardRowToBattleSelectionPayload,
 } from '@/lib/data-card-read-mappers';
-import { generateRandomCanshou, generateRandomMagicalGirl } from '@/lib/random-character-generator';
 import { verifyArenaContentOrigin as verifyOrigin } from '@/lib/arena/verify-origin';
 
 import { useBattleStore } from '../stores/useBattleStore';
@@ -51,21 +54,7 @@ const arenaReferenceLimitMessage = `参考项（辅助情景、素材和问卷�
 
 export const materializeRandomCombatants = (
   placeholders: readonly RandomCombatantPlaceholder[],
-): CombatantData[] => placeholders.map((placeholder) => {
-  const data = placeholder.type === 'random-magical-girl'
-    ? generateRandomMagicalGirl()
-    : generateRandomCanshou();
-  return {
-    type: data.codename ? 'magical-girl' : 'canshou',
-    data,
-    filename: `${placeholder.filename} - ${data.codename || data.name}`,
-    // 本地随机生成器不持有签名能力，不得自行授予原生标记。
-    isValid: false,
-    isPreset: false,
-    isNonStandard: false,
-    teamId: placeholder.teamId,
-  };
-});
+): CombatantData[] => materializeArenaRandomCombatants(placeholders);
 
 export const useBattleActions = () => {
   const pendingLibrarySelections = useRef(new Map<string, symbol>());
@@ -792,11 +781,11 @@ export const useBattleActions = () => {
   );
 
   const handleResolveRandomPlaceholders = useCallback(async () => {
-    const placeholders = combatants.filter((item): item is RandomCombatantPlaceholder => 'id' in item);
+    const placeholders = combatants.filter(isArenaRandomCombatantPlaceholder);
     if (placeholders.length === 0) return;
     setError('正在生成随机角色...');
     const newCombatantData = materializeRandomCombatants(placeholders);
-    const existing = combatants.filter((item): item is CombatantData => !('id' in item));
+    const existing = combatants.filter((item): item is CombatantData => !isArenaRandomCombatantPlaceholder(item));
     setCombatants([...existing, ...newCombatantData]);
     setError(null);
   }, [combatants, setCombatants, setError]);

@@ -5,10 +5,9 @@ import { getCombatantTypeLabel, getCombatantCardLibrarySelectionId } from '@maho
 import { computeTechIndex } from '@mahoshojo/domain/metrics/tech-index';
 import { ArenaCombatantTags, ArenaCombatantTechScore, ArenaCombatantWinRate, ArenaRankingQueueFeedback, type ArenaRosterRowExtras } from '@mahoshojo/ui-web/arena';
 import { TechBadge, TierBadge, type CardLibraryDetailsModalProps } from '@mahoshojo/ui-web/card-library';
-import type { ArenaDraft } from './session';
 import { arenaItemName } from './input';
 
-type Combatant = ArenaDraft['combatants'][number];
+type Combatant = import('./roster-types').ArenaRealCombatant;
 export type DesktopRosterDisplayMetadata = { techScore: number | null; techLevel: string | null; strictTier: string | null };
 
 export type DesktopRosterMetadataSnapshot = { body: string; metadata: DesktopRosterDisplayMetadata };

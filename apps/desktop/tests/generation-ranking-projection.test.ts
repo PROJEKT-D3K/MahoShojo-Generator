@@ -6,7 +6,7 @@ import { clearDesktopArenaSource, isDesktopStrictSource, projectDesktopArenaComb
 import type { ArenaDraft } from '../src/features/arena/session';
 import { rankingParticipant, readyRanking } from './helpers/generation-ranking-fixture';
 
-const card = (id: string): ArenaDraft['combatants'][number] => ({
+const card = (id: string): Extract<ArenaDraft['combatants'][number], { data: unknown }> => ({
   type: 'general-character', filename: '同名.json', isPreset: false, isValid: false, desktopSource: 'online', sourceDataCardId: id,
   data: { name: '同名角色', content: '原文' },
 });
@@ -16,6 +16,10 @@ const project = (patch: Partial<Parameters<typeof projectDesktopGenerationRankin
 });
 
 describe('生成时排位历史的展示关联', () => {
+  it('占位符不冒充排位实体，也不移动已有角色的结算索引', () => {
+    const placeholder = { type: 'random-canshou' as const, id: 'slot', filename: '随机残兽' };
+    expect(project({ current: [placeholder, b, a] }).rows).toEqual([null, pb, pa]);
+  });
   it('展示 key 与 Web 相同，预设优先且 trim，不取姓名/正文/卡库选择身份', () => {
     expect(getCombatantRankingEntityKey(card(' a '))).toBe('data_card:a');
     expect(getCombatantRankingEntityKey({ ...a, isPreset: true, filename: ' x.json ' })).toBe('preset:x.json');

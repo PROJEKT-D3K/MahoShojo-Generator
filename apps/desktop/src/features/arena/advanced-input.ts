@@ -1,3 +1,4 @@
+import { isArenaRealCombatant } from './roster-types';
 import { ARENA_CANONICAL_CAPABILITIES } from '@mahoshojo/contracts/arena-capabilities';
 import { AdjudicatorEventSchema } from '@mahoshojo/domain/data-card-schemas';
 import { appendAdjudicationEventsFromSource, applyAdjudicationEventSourceRemoval, buildAdjudicationSourceKey, getCombatantAdjudicationSourceKey, getScenarioAdjudicationSourceKey, prepareAdjudicationEventImport, removeAdjudicationEventsForKeys } from '@mahoshojo/domain/arena-adjudication-events';
@@ -23,13 +24,13 @@ export function addAdvancedCombatants(draft: ArenaDraft, items: ArenaDraft['comb
   const accepted = skipExistingFilenames ? items.filter((item) => !filenames.has(item.filename)) : items;
   if (accepted.length !== items.length) onWarning?.(`已跳过 ${items.length - accepted.length} 位重复文件名角色；原角色正文未变。`);
   let next = addArenaCombatants(draft, accepted);
-  for (const item of items) next = appendAdvancedSourceEvents(next, item.data.adjudicationEvents, arenaItemName(item.data), getCombatantAdjudicationSourceKey(item), onWarning);
+  for (const item of items.filter(isArenaRealCombatant)) next = appendAdvancedSourceEvents(next, item.data.adjudicationEvents, arenaItemName(item.data), getCombatantAdjudicationSourceKey(item), onWarning);
   return next;
 }
 export function removeAdvancedCombatants(draft: ArenaDraft, indices: readonly number[]): ArenaDraft {
   const removing = new Set(indices);
   return { ...draft, combatants: draft.combatants.filter((_, index) => !removing.has(index)),
-    adjudicationEvents: removeAdjudicationEventsForKeys(draft.adjudicationEvents, draft.combatants.filter((_, index) => removing.has(index)).map(getCombatantAdjudicationSourceKey)) };
+    adjudicationEvents: removeAdjudicationEventsForKeys(draft.adjudicationEvents, draft.combatants.filter((_, index) => removing.has(index)).filter(isArenaRealCombatant).map(getCombatantAdjudicationSourceKey)) };
 }
 export function setAdvancedMainScenario(draft: ArenaDraft, content: Record<string, unknown> | null, filename: string | null, onWarning?: (message: string) => void, sourceIdentity?: string): ArenaDraft {
   const sourceKey = content ? sourceIdentity ?? buildAdjudicationSourceKey({ sourceFileName: filename, sourceLabel: arenaItemName(content) }) : null;

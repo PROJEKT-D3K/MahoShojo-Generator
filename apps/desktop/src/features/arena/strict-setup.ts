@@ -1,3 +1,4 @@
+import { isArenaRealCombatant } from './roster-types';
 import type { PublicSeasonMeta } from '@mahoshojo/contracts/public-ranking';
 import { buildStrictSetupMissingReasons, deriveSeasonStrictRules } from '@mahoshojo/domain/arena-strict-setup';
 import { buildArenaQuestionnaireRequest } from '@mahoshojo/domain/arena-questionnaire-request';
@@ -18,7 +19,7 @@ export interface DesktopStrictSetupInput {
 export function describeDesktopStrictSetup(input: DesktopStrictSetupInput, season: PublicSeasonMeta) {
   const { draft } = input;
   const rules = deriveSeasonStrictRules(season);
-  const presets = draft.combatants.filter(isDesktopStrictSource);
+  const presets = draft.combatants.filter(isArenaRealCombatant).filter(isDesktopStrictSource);
   const questionnaires: readonly unknown[] | undefined = draft.selectedQuestionnaires
     ? buildArenaQuestionnaireRequest(draft.selectedQuestionnaires).questionnaires
     : draft.questionnaires;
@@ -53,7 +54,7 @@ export function describeDesktopStrictSetup(input: DesktopStrictSetupInput, seaso
   if (!input.modelId || input.modelUnavailable) reasons.push('当前 AI 模型配置尚不可用');
   if (draft.combatants.length !== 2) reasons.push('严格计分需 2 人对战');
   if (presets.length !== draft.combatants.length) reasons.push('本地、缓存或导入副本的线上角色身份尚未确认');
-  if (draft.combatants.some((card) => card.characterGuidance?.trim()) && !presets.some((card) => card.characterGuidance?.trim())) {
+  if (draft.combatants.filter(isArenaRealCombatant).some((card) => card.characterGuidance?.trim()) && !presets.some((card) => card.characterGuidance?.trim())) {
     reasons.push('需清空「角色行动引导」');
   }
   if (rules.mode === 'scenario' && season.specialRules?.scenarioPresetFilename?.trim() && !rules.scenarioPresetFilename) {

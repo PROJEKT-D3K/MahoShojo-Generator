@@ -8,7 +8,7 @@ import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { useDesktopRosterRatings, projectRosterRatingTargets } from '../src/features/arena/use-roster-ratings';
 import type { ArenaDraft } from '../src/features/arena/session';
 
-type Card = ArenaDraft['combatants'][number];
+type Card = Extract<ArenaDraft['combatants'][number], { data: unknown }>;
 type Reader = NonNullable<Parameters<typeof useDesktopRosterRatings>[3]>;
 const card = (id: string): Card => ({ type: 'general-character', filename: `${id}.json`, data: { name: id, content: '所选正文' }, isValid: false, isPreset: false, desktopSource: 'online', sourceDataCardId: id, cardLibrarySelectionId: `cloud:${id}` });
 const reply = (request: Parameters<Reader>[0], rating = 1200, found = true) => ({ success: true as const, entityType: request.entityType, entityId: request.entityId, queue: request.queue, found, rating, games: found ? 2 : 0 });

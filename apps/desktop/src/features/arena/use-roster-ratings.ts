@@ -1,3 +1,4 @@
+import { isArenaRealCombatant } from './roster-types';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ARENA_CANONICAL_CAPABILITIES } from '@mahoshojo/contracts/arena-capabilities';
 import type { PublicEntityRating } from '@mahoshojo/contracts/public-ranking';
@@ -17,7 +18,7 @@ const STALE_MS = 60_000;
 export function projectRosterRatingTargets(combatants: ArenaDraft['combatants']): readonly (Target | null)[] {
   if (combatants.length > ARENA_CANONICAL_CAPABILITIES.maxCombatants) return combatants.map(() => null);
   return combatants.map(card => {
-    if (!isDesktopStrictSource(card)) return null;
+    if (!isArenaRealCombatant(card) || !isDesktopStrictSource(card)) return null;
     const entityType = card.desktopSource === 'preset' ? 'preset' : 'data_card';
     const entityId = entityType === 'preset' ? card.filename : card.sourceDataCardId!.trim();
     const key = `${entityType}:${entityId}`;

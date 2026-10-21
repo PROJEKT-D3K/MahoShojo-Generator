@@ -1,3 +1,4 @@
+import { materializeArenaRandomCombatants } from '@mahoshojo/domain/arena-random-combatants';
 import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -28,7 +29,8 @@ function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feed
     if (failSave) throw new Error('disk failed'); if (records.has(record.id)) return { alreadyPresent: true }; records.set(record.id, record); return { written: true };
   }) } as unknown as CardRepository;
   const random = vi.fn(() => 0);
-  const session = new DesktopArenaSession({ product, repository, storage: saved, now: () => now, requestId: () => feedback.nativeEvents?.[0]?.requestId ?? 'hosted-session-1', random,
+  const materializeRandomCombatants = vi.fn(materializeArenaRandomCombatants);
+  const session = new DesktopArenaSession({ product, repository, storage: saved, now: () => now, requestId: () => feedback.nativeEvents?.[0]?.requestId ?? 'hosted-session-1', random, materializeRandomCombatants,
     hostedTestPorts: { createChannel: () => ({ onmessage: () => undefined }), wait: async () => undefined, maxReconnectAttempts: 0 } }); session.setScope('actor-A:target-A'); session.setNarrativeDraftScope('account:A'); session.narrativeDrafts.setAutoRetain(true);
   const operations: DesktopArenaHostedOperation[] = [];
   const invoke = vi.fn(withFixtureStreamReceipt(async (command: string, args?: Record<string, unknown>) => {
@@ -52,7 +54,7 @@ function fixture(product: 'battle' | 'arena' = 'battle', saved = storage(), feed
       : 'id: 2-0\nevent: done\ndata: {"status":"completed","ok":true}\n\n' }); send({ kind: 'stream-end' });
     if (feedback.rejectAfterDone) throw new Error('late-native-secret-canary');
   }));
-  return { session, saved, records, repository, invoke, operations, random, setHold: () => { hold = true; }, failSave: () => { failSave = true; }, recoverSave: () => { failSave = false; } };
+  return { session, saved, records, repository, invoke, operations, random, materializeRandomCombatants, setHold: () => { hold = true; }, failSave: () => { failSave = true; }, recoverSave: () => { failSave = false; } };
 }
 
 describe('same Arena session with Hosted completion ownership', () => {
@@ -132,6 +134,17 @@ describe('same Arena session with Hosted completion ownership', () => {
     expect(next.operations[1]).not.toHaveProperty('after'); expect(next.operations[1]).not.toHaveProperty('presetConfig');
     expect(next.session.getSnapshot().phase).toBe('completed'); expect(next.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(0);
     next.session.appendHostedHistory(); next.session.appendHostedHistory(); expect(next.session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1); next.session.dispose();
+  });
+  it('随机角色的 Hosted 重开只恢复原身份，不重新生成角色或创建任务', async () => {
+    const first = fixture(); first.session.updateDraft({ ...draft(), combatants: [{ type: 'random-canshou', id: 'slot', filename: '随机残兽' }], settings: { ...draft().settings, writeNarrativeHistory: false } });
+    const input = first.session.materializeRandomPlaceholders(first.session.getSnapshot().draft);
+    await first.session.generateHosted({ invoke: first.invoke }, input, intent, actor);
+    expect(first.materializeRandomCombatants).toHaveBeenCalledTimes(1); first.session.dispose();
+    const next = fixture('battle', first.saved); next.session.restoreDraft();
+    await next.session.restoreHosted({ invoke: next.invoke }, 'hosted-session-1');
+    expect(next.operations.map(op => op.operation)).toEqual(['lookup-request', 'resume']);
+    expect(next.materializeRandomCombatants).not.toHaveBeenCalled();
+    expect(next.session.getSnapshot().draft.combatants).toEqual(input.combatants); next.session.dispose();
   });
   it('save failure preserves full output and retries the same unsigned history document', async () => {
     const f = fixture(); f.session.updateDraft(draft()); await f.session.generateHosted({ invoke: f.invoke }, draft(), intent, actor);

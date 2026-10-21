@@ -36,6 +36,25 @@ async function fixture(writeEffects = true) {
 }
 
 describe('Desktop explicit unsigned manual repair', () => {
+  it('未物化占位只阻断当前名单修复，旧生成与修复候选仍可独立保存', async () => {
+    const f = await fixture();
+    const original = projectDesktopRoleUpdates(f.session.getSnapshot())[0]!.selection!;
+    await f.session.applyManualRepair(patch(), ports());
+    const repaired = projectDesktopRoleUpdates(f.session.getSnapshot())[0]!.repairSelection!;
+    const before = f.session.getSnapshot();
+    f.session.updateDraft({ ...before.draft, combatants: [...before.draft.combatants,
+      { type: 'random-canshou', id: 'slot', filename: '随机残兽' }] });
+    const withPlaceholder = f.session.getSnapshot();
+    await expect(f.session.applyManualRepair(patch('不可写入'), ports())).rejects.toThrow('当前名单含尚未生成的随机角色');
+    expect(f.session.getSnapshot().draft).toBe(withPlaceholder.draft);
+    expect(f.session.getSnapshot().candidates).toBe(before.candidates);
+    expect(f.session.getSnapshot().repairs).toBe(before.repairs);
+    expect(f.session.canSaveCharacter(original)).toBe(true);
+    expect(f.session.canSaveRepairedCharacter(repaired)).toBe(true);
+    expect(await f.session.saveRepairedCharacters(repaired)).toBe(true);
+    expect(await f.session.saveCharacter(original)).toBe(true);
+    f.session.dispose();
+  });
   it('updates only working copies; exports and independent saves use edited data, D2 does not', async () => {
     const f = await fixture(), before = f.session.getSnapshot(), original = projectDesktopRoleUpdates(before)[0]!.selection!;
     const untouched = before.draft.combatants[1];

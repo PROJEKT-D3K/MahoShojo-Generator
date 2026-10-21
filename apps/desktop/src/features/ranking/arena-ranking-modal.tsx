@@ -1,3 +1,4 @@
+import { isArenaRealCombatant } from '../arena/roster-types';
 import { useEffect, useMemo, useState } from 'react';
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
 import { getCombatantCardLibrarySelectionId } from '@mahoshojo/domain/arena-file-parser';
@@ -14,6 +15,7 @@ export function projectDesktopRankingRoster(combatants: ArenaDraft['combatants']
   const rankableRosterEntities: ArenaRankingRosterEntity[] = [];
   const selectedEntityKeys = new Set<string>();
   for (const card of combatants) {
+    if (!isArenaRealCombatant(card)) continue;
     const selectionId = getCombatantCardLibrarySelectionId(card);
     if (card.isPreset) selectedEntityKeys.add(`preset:${card.filename}`);
     else if (selectionId?.startsWith('cloud:')) selectedEntityKeys.add(`data_card:${selectionId.slice('cloud:'.length)}`);

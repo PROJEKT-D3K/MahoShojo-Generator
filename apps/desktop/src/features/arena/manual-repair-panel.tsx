@@ -1,3 +1,4 @@
+import { isArenaRealCombatant } from './roster-types';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { CombatantRepairPanel } from '@mahoshojo/ui-web/arena-report';
 import type { ArenaSessionState, DesktopArenaSession } from './session';
@@ -5,6 +6,7 @@ import type { ArenaSessionState, DesktopArenaSession } from './session';
 export function seedDesktopManualRepairDraft(state: ArenaSessionState, generationId: string | null): string {
   if (!generationId) return '';
   const impacts = state.draft.combatants.flatMap((item, combatantIndex) => {
+    if (!isArenaRealCombatant(item)) return [];
     const history = item.data.arena_history as { entries?: { impact?: string; metadata?: { generation_id?: string } }[] } | undefined;
     const entries = Array.isArray(history?.entries) ? history.entries.filter(entry => entry?.metadata?.generation_id === generationId) : [];
     const current = item.data.current_state as { summary?: string; generation_id?: string } | undefined;

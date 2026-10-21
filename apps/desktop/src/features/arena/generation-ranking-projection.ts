@@ -1,7 +1,9 @@
+import { isArenaRandomCombatantPlaceholder, type ArenaRandomCombatantPlaceholder } from '@mahoshojo/domain/arena-random-combatants';
 import type { GenerationRankingParticipant, GenerationRankingResponse } from '@mahoshojo/contracts/arena-generation-ranking';
 import { getCombatantRankingEntityKey, type CombatantData } from '@mahoshojo/domain/arena-file-parser';
 
-type EntitySource = Pick<CombatantData, 'isPreset' | 'filename' | 'sourceDataCardId'>;
+type EntitySource = Pick<CombatantData, 'isPreset' | 'filename' | 'sourceDataCardId'> | ArenaRandomCombatantPlaceholder;
+const entityKey = (card: EntitySource) => isArenaRandomCombatantPlaceholder(card) ? null : getCombatantRankingEntityKey(card);
 
 const countKeys = (keys: readonly (string | null)[]) => {
   const counts = new Map<string, number>();
@@ -22,9 +24,9 @@ export function projectDesktopGenerationRanking(input: {
   const unmatched = participants.map((participant, index) => ({ participant, index }));
   if (!input.frozen || !input.hostedGenerationId || ranking?.generationId !== input.hostedGenerationId) return { rows, unmatched };
 
-  const currentKeys = input.current.map(getCombatantRankingEntityKey);
+  const currentKeys = input.current.map(entityKey);
   const currentCounts = countKeys(currentKeys);
-  const frozenCounts = countKeys(input.frozen.map(getCombatantRankingEntityKey));
+  const frozenCounts = countKeys(input.frozen.map(entityKey));
   const participantCounts = countKeys(participants.map(participant => participant.entityKey?.trim() || null));
   return { rows, unmatched: unmatched.filter(({ participant }) => {
     const key = participant.entityKey?.trim();

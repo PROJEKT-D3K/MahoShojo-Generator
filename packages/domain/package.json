@@ -41,6 +41,11 @@
       "import": "./src/arena-types.ts",
       "default": "./src/arena-types.ts"
     },
+    "./arena-random-combatants": {
+      "types": "./src/arena-random-combatants.ts",
+      "import": "./src/arena-random-combatants.ts",
+      "default": "./src/arena-random-combatants.ts"
+    },
     "./game-card": {
       "types": "./src/game-card.ts",
       "import": "./src/game-card.ts",

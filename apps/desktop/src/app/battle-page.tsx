@@ -1,5 +1,6 @@
 import { projectDesktopGenerationRanking } from '../features/arena/generation-ranking-projection';
 import { DesktopManualRepairPanel } from '../features/arena/manual-repair-panel';
+import { isArenaRealCombatant } from '../features/arena/roster-types';
 import { useDesktopRosterRatings } from '../features/arena/use-roster-ratings';
 import { buildDesktopRosterExtras, snapshotDesktopRosterDetails, readDesktopRosterMetadata, type DesktopRosterMetadataSnapshot } from '../features/arena/roster-presentation';
 import { DesktopCardDetailsModal } from '../features/card-details/card-details-modal';
@@ -181,7 +182,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
   const reportCardWidth = useDesktopReportCardWidth();
   const cardWidthPx = resolveBattleReportCardManualWidthPx(reportCardWidth.value);
   const draft = state.draft;
-  const readinessMessage = useMemo(() => arenaReadinessMessage(draft, product), [draft, product]);
+  const readinessMessage = useMemo(() => arenaReadinessMessage(draft, product, true), [draft, product]);
   const referenceCount = useMemo(() => arenaReferenceCount(draft), [draft]);
   const inheritedAdjudication = useMemo(() => inheritedArenaAdjudication(draft, product), [draft, product]);
   // Do not include credential presence probes or preparing-state changes: they do not change target identity.
@@ -301,7 +302,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     const epoch = ownerEpoch.current;
     const currentSelection = () => epoch === ownerEpoch.current && !selectionSignal?.aborted && !roomOwner.isConstrained();
     const original = session.getSnapshot().draft;
-    const indices = original.combatants.flatMap((item, index) => item.isPreset && item.filename === filename ? [index] : []);
+    const indices = original.combatants.flatMap((item, index) => isArenaRealCombatant(item) && item.isPreset && item.filename === filename ? [index] : []);
     if (!nextSelected) {
       if (!indices.length) return false;
       const combatants = original.combatants.filter((_, index) => !indices.includes(index));
@@ -328,7 +329,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
           const items = retainDesktopArenaSelectionSource(await parseCharacters(text, warnings), parseArenaJson(text), { kind: 'preset', filename });
           return current => {
             if (signal.aborted || !currentSelection()) throw new DOMException('Aborted', 'AbortError');
-            if (current.combatants.some(item => item.isPreset && item.filename === filename)) return current;
+            if (current.combatants.some(item => isArenaRealCombatant(item) && item.isPreset && item.filename === filename)) return current;
             const next = applyCharacters(current, items, warnings); applied = true; return next;
           };
         } finally { signal.removeEventListener('abort', abort); selectionSignal?.removeEventListener('abort', abort); }
@@ -340,7 +341,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     return applied && currentSelection() ? undefined : false;
   };
   const togglePreset = (filename: string) => {
-    void selectPreset(filename, !session.getSnapshot().draft.combatants.some(item => item.isPreset && item.filename === filename)).catch(() => undefined);
+    void selectPreset(filename, !session.getSnapshot().draft.combatants.some(item => isArenaRealCombatant(item) && item.isPreset && item.filename === filename)).catch(() => undefined);
   };
   const loadScenario = (read: (signal: AbortSignal) => Promise<string>, filename: string | null = null, auxiliary = false, sourceIdentity?: string, isPreset = false) => performImport(async (signal) => {
     const content = parseArenaScenario(await read(signal)); return (current) => {
@@ -368,7 +369,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
       .map(item => ({ ...item, cardLibrarySelectionId: selectionId,
         adjudicationSourceKey: `library:${selectionId}`,
         ...(onlineId && context.cloudCardUpdatedAt?.trim() ? { sourceDataCardUpdatedAt: context.cloudCardUpdatedAt.trim() } : {}) }));
-    if (onlineId && context.displayMetadata) for (const item of selected) rosterMetadata.set(selectionId, { body: JSON.stringify(item.data), metadata: { ...context.displayMetadata } });
+    if (onlineId && context.displayMetadata) for (const item of selected.filter(isArenaRealCombatant)) rosterMetadata.set(selectionId, { body: JSON.stringify(item.data), metadata: { ...context.displayMetadata } });
     return selected;
   };
   const randomMatchCharacter = async () => {
@@ -460,20 +461,21 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     ranking: state.hosted?.ranking, hostedGenerationId: state.hostedGenerationId,
   }), [draft.combatants, state.generation, state.hosted?.ranking, state.hostedGenerationId]);
   const rosterExtras = useMemo(() => draft.combatants.map((item, index) => {
+    if (!isArenaRealCombatant(item)) return {};
     const metadata = readDesktopRosterMetadata(item, rosterMetadata);
     return buildDesktopRosterExtras(item, () => setRosterDetails(snapshotDesktopRosterDetails(item)), metadata, rosterRatings[index], rankingProjection.rows[index]);
   }), [draft.combatants, rosterMetadata, rosterRatings, rankingProjection]);
   const roster: ArenaRosterSectionModel = {
     rowExtras: row => rosterExtras[row.index],
-    rows: draft.combatants.map((item, index) => ({ key: String(index), displayName: arenaItemName(item.data), typeLabel: getCombatantTypeLabel(item.type), guidance: item.characterGuidance ?? '', index, teamKey: item.teamId ? String(item.teamId) : null, isPlaceholder: false })),
+    rows: draft.combatants.map((item, index) => ({ key: String(index), displayName: isArenaRealCombatant(item) ? arenaItemName(item.data) : item.filename, typeLabel: isArenaRealCombatant(item) ? getCombatantTypeLabel(item.type) : '随机占位符', guidance: isArenaRealCombatant(item) ? item.characterGuidance ?? '' : '', index, teamKey: item.teamId ? String(item.teamId) : null, isPlaceholder: !isArenaRealCombatant(item) })),
     teams: draft.teams.map((team) => ({ key: String(team.id), name: team.name, memberKeys: draft.combatants.flatMap((item, index) => item.teamId === team.id ? [String(index)] : []), collapsed: collapsedTeams.has(String(team.id)) })),
     disabled, combatantCountLabel: `${draft.combatants.length}/${limits.maxCombatants}`, combatantCapReached: draft.combatants.length >= limits.maxCombatants,
-    capabilities: { reorderRows: true, removeRows: true, editGuidance: true, ranking: true, addPlaceholders: false, clearRoster: true, createTeams: true, renameTeams: true, removeTeams: true, reorderTeams: true, assignTeamMembers: true, reorderTeamMembers: true, collapseTeams: true },
+    capabilities: { reorderRows: true, removeRows: true, editGuidance: true, ranking: true, addPlaceholders: true, clearRoster: true, createTeams: true, renameTeams: true, removeTeams: true, reorderTeams: true, assignTeamMembers: true, reorderTeamMembers: true, collapseTeams: true },
     actions: {
       moveRow: (from, to) => update({ combatants: moveArenaItem(draft.combatants, from, to) }),
       removeRow: (key) => update(product === 'arena' ? removeAdvancedCombatants(draft, [Number(key)]) : { combatants: draft.combatants.filter((_, index) => index !== Number(key)) }),
-      setGuidance: (key, value) => update({ combatants: draft.combatants.map((item, index) => index === Number(key) ? { ...item, characterGuidance: value } : item) }),
-      addPlaceholder: reject, clearRoster: () => update(product === 'arena' ? removeAdvancedCombatants(draft, draft.combatants.map((_, index) => index)) : { combatants: [] }),
+      setGuidance: (key, value) => update({ combatants: draft.combatants.map((item, index) => index === Number(key) && isArenaRealCombatant(item) ? { ...item, characterGuidance: value } : item) }),
+      addPlaceholder: type => { if (disabled || draft.combatants.length >= limits.maxCombatants) return; update({ combatants: [...draft.combatants, { type, id: crypto.randomUUID(), filename: type === 'random-magical-girl' ? '随机魔法少女' : '随机残兽' }] }); }, clearRoster: () => update(product === 'arena' ? removeAdvancedCombatants(draft, draft.combatants.map((_, index) => index)) : { combatants: [] }),
       createTeam: () => { const id = Math.max(0, ...draft.teams.map((team) => team.id)) + 1; update({ teams: [...draft.teams, { id, name: `分队 ${id}` }] }); return String(id); },
       renameTeam: (key, name) => update({ teams: draft.teams.map((team) => String(team.id) === key ? { ...team, name } : team) }),
       removeTeam: (key) => update({ teams: draft.teams.filter((team) => String(team.id) !== key), combatants: draft.combatants.map((item) => String(item.teamId) === key ? Object.fromEntries(Object.entries(item).filter(([field]) => field !== 'teamId')) as typeof item : item) }),
@@ -520,7 +522,8 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     if (hostedTarget && recovery.blocked && !repair) { setError(recovery.error); return; }
     if (previousRequest && !window.confirm(repair ? '本机找到了上次服务器生成的恢复记录。确认放弃找回上次战报并开始新生成？旧服务器任务不会停止，新的恢复记录保存成功后才会替换原记录。' : '已有服务器恢复记录。确认以新请求替换？这会放弃原记录的页面恢复入口，不会停止旧服务器任务。')) return;
     if (state.rawText && !window.confirm('开始新生成将替换当前结果，请先保存或完整导出。继续？')) return;
-    const sourceDraft = session.getSnapshot().draft;
+    let sourceDraft: ArenaDraft;
+    try { sourceDraft = session.materializeRandomPlaceholders(session.getSnapshot().draft); } catch (cause) { reportError(cause); return; }
     const checked = strictCheckRef.current, strictKey = strictSnapshotKey, strictIntent = strictActiveRef.current, credentialEpoch = cloudStore.getCredentialEpoch();
     const snapshot = structuredClone(sourceDraft); const frozen = { ...snapshot, customStoryLength: normalizeCustomStoryLength(snapshot.customStoryLength) };
     const readiness = arenaReadinessMessage(frozen, product); if (readiness) { setError(readiness); return; }
@@ -740,7 +743,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         header: <><BattleLiteHeader Link={libraryHost.platform.Link} draftSharing="independent" illustrationAvailable={false} logo={<ThemeImage lightSrc="/arena-black.svg" darkSrc="/arena-white.svg" width={300} height={84} alt="魔法少女竞技场" />} />{sessionNotice}</>,
         rankingLinks: <ArenaRankingLinks Link={libraryHost.platform.Link} onOpenRankingModal={roomState.constrained ? undefined : () => setRankingOpen(true)} />,
         pageLinks: <ArenaPageLinks Link={libraryHost.platform.Link} variant="lite" />,
-        presets: <><CharacterPresetPicker grouped={characterPresets} magicalGirlPage={magicalGirlPage} onMagicalGirlPageChange={setMagicalGirlPage} canshouPage={canshouPage} onCanshouPageChange={setCanshouPage} disabled={disabled} maxSelected={limits.maxCombatants} selectedCountOverride={draft.combatants.length} selectedFilenames={draft.combatants.filter((item) => item.isPreset).map((item) => item.filename)} loadingFilename={state.importing ? loadingPresetFilename : null} onToggle={(preset) => togglePreset(preset.filename)} onDownload={presetDownload.download} downloadDisabled={presetDownload.downloading} />
+        presets: <><CharacterPresetPicker grouped={characterPresets} magicalGirlPage={magicalGirlPage} onMagicalGirlPageChange={setMagicalGirlPage} canshouPage={canshouPage} onCanshouPageChange={setCanshouPage} disabled={disabled} maxSelected={limits.maxCombatants} selectedCountOverride={draft.combatants.length} selectedFilenames={draft.combatants.filter((item) => isArenaRealCombatant(item) && item.isPreset).map((item) => item.filename)} loadingFilename={state.importing ? loadingPresetFilename : null} onToggle={(preset) => togglePreset(preset.filename)} onDownload={presetDownload.download} downloadDisabled={presetDownload.downloading} />
           {presetDownload.feedback && <p role={presetDownload.feedback.kind === 'error' ? 'alert' : 'status'} className={`mb-4 text-sm ${presetDownload.feedback.kind === 'error' ? 'text-red-600' : 'text-gray-600'}`}>{presetDownload.feedback.message}</p>}</>,
         database: <><ArenaCharacterDatabaseSelector className="!mb-0" title={null} layout={product === 'battle' ? 'column' : 'row'}
           onOpenCharacterModal={() => openLibrary('character')} onRandomMatchCharacter={() => { void randomMatchCharacter(); }}
@@ -751,7 +754,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
             提示：浏览在线角色库可选择公开/私有数据卡；随机匹配仅从公开角色库中抽取。
           </div></>,
         localImport: <ArenaRosterImportPanel disabled={disabled} limitReached={draft.combatants.length >= limits.maxCombatants} onUpload={uploadCharacters} onPaste={pasteCharacters} onDirtyChange={onRosterDirty} />,
-        roster: <ArenaRosterSection model={roster} onDirtyChange={onRosterTeamDirty} />,
+        roster: <ArenaRosterSection model={roster} emptyLabel="尚未添加角色" onDirtyChange={onRosterTeamDirty} />,
         mode: <BattleModeSelector value={draft.battleMode} onChange={(battleMode) => { if (product === 'arena' && draft.battleMode === 'scenario' && battleMode !== 'scenario' && dirtyControls.current.scenario && !window.confirm('切换模式会关闭情景编辑，放弃尚未导入的情景文本？')) return; update({ battleMode }); }} disabled={disabled} />,
         scenario: <ArenaScenarioSection model={scenario} presentation={product === 'battle' ? { variant: 'lite', hasMain: !!draft.scenario.content, summary: draft.scenarioDisplayName ?? '未选择' } : undefined} onDirtyChange={onScenarioDirty} />,
         materials: <ArenaMaterialSection onDirtyChange={onMaterialDirty} model={{ disabled, items: materials.map((item, index) => ({ key: String(index), name: item.name, sourceLabel: item.sourceType, fileName: item.fileName })),
@@ -819,7 +822,7 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
         { kind: 'generationMode', description: 'Markdown 或 Web 源码；流式/非流式', defaultOpen: true, content: slots.generationMode },
         { kind: 'generationActions', description: '一次冻结，一个请求', collapsible: false, content: <div hidden={roomState.constrained}>{slots.actions}</div> },
       ])} /></fieldset>
-    </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
+    </AdvancedArenaPageView> : <BattleLitePageView isGenerating={disabled} presetCountLabel={String(draft.combatants.filter((item) => isArenaRealCombatant(item) && item.isPreset).length)} combatantCountLabel={`${draft.combatants.length}/${limits.maxCombatants}`}
       showScenario={draft.battleMode === 'scenario'} hasScenario={!!draft.scenario.content} materialCount={draft.materials.length} referenceItemCount={referenceCount} maxReferenceItems={limits.maxReferenceItemsSanity}
       copy={{ modeDescription: '不同模式决定故事风格', storyOptionsDescription: '设置故事方向、历史读写和 AI 目标' }} slots={slots} />}
     <DesktopArenaRankingModal key={scope} isOpen={rankingOpen && !roomState.constrained} onClose={() => setRankingOpen(false)} host={libraryHost}

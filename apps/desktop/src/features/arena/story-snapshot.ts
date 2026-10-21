@@ -1,3 +1,4 @@
+import { requireArenaRealCombatants } from './roster-types';
 import {
   buildBattleStoryDeterministicDigest, buildBattleStorySummaryFallback,
   type BattleStoryChapterPlan,
@@ -31,7 +32,7 @@ const object = (value: unknown): Record<string, unknown> => {
  * activity/history-reference lists are deliberately not extra implicit chapter inputs. */
 export const captureDesktopStorySeed = (draft: ArenaDraft, product: DesktopArenaProduct): StorySessionSnapshot['seed'] => {
   return {
-    combatants: draft.combatants.map((combatant) => ({ type: combatant.type, data: combatant.data, isNative: combatant.isValid, isPreset: combatant.isPreset, filename: combatant.isPreset ? combatant.filename : null, teamId: typeof combatant.teamId === 'number' ? combatant.teamId : null, characterGuidance: typeof combatant.characterGuidance === 'string' ? combatant.characterGuidance : null, sourceDataCardId: combatant.sourceDataCardId, sourceDataCardUpdatedAt: combatant.sourceDataCardUpdatedAt })),
+    combatants: requireArenaRealCombatants(draft.combatants).map((combatant) => ({ type: combatant.type, data: combatant.data, isNative: combatant.isValid, isPreset: combatant.isPreset, filename: combatant.isPreset ? combatant.filename : null, teamId: typeof combatant.teamId === 'number' ? combatant.teamId : null, characterGuidance: typeof combatant.characterGuidance === 'string' ? combatant.characterGuidance : null, sourceDataCardId: combatant.sourceDataCardId, sourceDataCardUpdatedAt: combatant.sourceDataCardUpdatedAt })),
     scenario: draft.battleMode === 'scenario' ? draft.scenario.content : null,
     auxScenarios: draft.battleMode === 'scenario' ? draft.auxScenarios.map((scenario) => scenario.content) : [],
     materials: [...draft.materials],
