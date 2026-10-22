@@ -9,6 +9,7 @@ import {
   BEGIN_WEB_PACKAGE_INSTANCE_COMMAND,
   DesktopWebPackageInstanceError,
   OPEN_WEB_PACKAGE_INSTANCE_COMMAND,
+  openFreeHtmlInIsolatedWebview,
   openWebPackageInstanceInIsolatedWebview,
 } from '../src/platform/webpkg-instance-bridge';
 
@@ -369,5 +370,72 @@ describe('Web Package bridge owner lifecycle', () => {
     current = false; begin.reject({ code: 'webpkg-window-unavailable', message: 'stale native failure' });
     expect(await result).toMatchObject({ name: 'AbortError' });
     expect(ipc.rawCalls).toHaveLength(0);
+  });
+});
+
+describe('自由 HTML 受限 webview 桥接', () => {
+  it('提取归一化完整文档，固定自由 HTML 策略与单文件，不发送附言或伪造包身份', async () => {
+    const document = '<!doctype html>\n<html><body>中文<script>const contentKind = "web-package";</script></body></html>';
+    const source = `前言\n\`\`\`html\n${document.replace(/\n/g, '\r\n')}\n\`\`\`\n后记`;
+    const ipc = makeIpc(okHandlers());
+    await expect(openFreeHtmlInIsolatedWebview(ipc.invoke, ipc.rawInvoke, source, '自由文档'))
+      .resolves.toEqual({ instanceId: 'wpk-7', webviewLabel: 'webpkg-wpk-7' });
+    expect(ipc.structuredCalls[0]).toEqual({ command: BEGIN_WEB_PACKAGE_INSTANCE_COMMAND, args: { request: {
+      contentKind: 'free-html', entry: 'index.html', title: '自由文档',
+      files: [{ path: 'index.html', mediaType: 'text/html', byteLength: encode(document).byteLength }],
+    } } });
+    expect(ipc.rawCalls).toHaveLength(1);
+    expect(ipc.rawCalls[0]?.bytes).toEqual(encode(document));
+    expect(ipc.rawCalls[0]?.headers).toEqual({ 'x-webpkg-instance': 'wpk-7', 'x-webpkg-path': 'index.html', 'x-webpkg-offset': '0' });
+    expect(ipc.structuredCalls[1]).toEqual({ command: OPEN_WEB_PACKAGE_INSTANCE_COMMAND, args: { request: { instanceId: 'wpk-7' } } });
+  });
+
+  it.each(['', '<div>仅片段</div>', '<html><body>尚未完成', '<html><script>const text = "</html>";'])
+  ('不完整输出不创建实例：%s', async (source) => {
+    const ipc = makeIpc(okHandlers());
+    await expect(openFreeHtmlInIsolatedWebview(ipc.invoke, ipc.rawInvoke, source, '不完整输出'))
+      .rejects.toMatchObject({ code: 'webpkg-invalid', message: expect.stringContaining('未识别完整 HTML') });
+    expect(ipc.structuredCalls).toHaveLength(0);
+    expect(ipc.rawCalls).toHaveLength(0);
+  });
+
+  it('自由 HTML 同样按字节分块并核对累计回执', async () => {
+    const document = `<html><body>${'a'.repeat(MAX_DESKTOP_WEBPKG_APPEND_CHUNK_BYTES)}</body></html>`;
+    const ipc = makeIpc(okHandlers());
+    await openFreeHtmlInIsolatedWebview(ipc.invoke, ipc.rawInvoke, document, '跨块');
+    expect(ipc.rawCalls.map((call) => call.headers['x-webpkg-offset'])).toEqual(['0', String(MAX_DESKTOP_WEBPKG_APPEND_CHUNK_BYTES)]);
+    expect(ipc.rawCalls.map((call) => call.bytes.byteLength)).toEqual([MAX_DESKTOP_WEBPKG_APPEND_CHUNK_BYTES, '<html><body></body></html>'.length]);
+    const bad = makeIpc(okHandlers(false));
+    await expect(openFreeHtmlInIsolatedWebview(bad.invoke, bad.rawInvoke, document, '错误回执'))
+      .rejects.toMatchObject({ code: 'webpkg-resource-mismatch' });
+    expect(bad.rawCalls).toHaveLength(1);
+    expect(bad.structuredCalls.map(({ command }) => command)).toEqual([BEGIN_WEB_PACKAGE_INSTANCE_COMMAND]);
+  });
+
+  it('过期 owner 不 begin，begin 迟到后不 append', async () => {
+    const ipc = makeIpc(okHandlers());
+    await expect(openFreeHtmlInIsolatedWebview(ipc.invoke, ipc.rawInvoke, '<html></html>', '过期', () => false))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(ipc.structuredCalls).toHaveLength(0);
+    const begin = deferred<{ instanceId: string }>();
+    const late = makeIpc({ structured: () => begin.promise });
+    let current = true;
+    const result = openFreeHtmlInIsolatedWebview(late.invoke, late.rawInvoke, '<html></html>', '迟到', () => current).catch((error: unknown) => error);
+    current = false; begin.resolve({ instanceId: 'wpk-7' });
+    expect(await result).toMatchObject({ name: 'AbortError' });
+    expect(late.structuredCalls.map(({ command }) => command)).toEqual([BEGIN_WEB_PACKAGE_INSTANCE_COMMAND]);
+    expect(late.rawCalls).toHaveLength(0);
+  });
+
+  it('已发 open 的迟到成功不冒称撤销窗口，也不自动重发', async () => {
+    const open = deferred<{ label: string }>();
+    const normal = okHandlers();
+    const ipc = makeIpc({ ...normal, structured: (command) => command === OPEN_WEB_PACKAGE_INSTANCE_COMMAND ? open.promise : normal.structured(command) });
+    let current = true;
+    const result = openFreeHtmlInIsolatedWebview(ipc.invoke, ipc.rawInvoke, '<html></html>', '迟到打开', () => current).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(ipc.structuredCalls).toHaveLength(2));
+    current = false; open.resolve({ label: 'webpkg-wpk-7' });
+    expect(await result).toMatchObject({ name: 'AbortError', message: expect.stringContaining('窗口可能已建立') });
+    expect(ipc.structuredCalls.map(({ command }) => command)).toEqual([BEGIN_WEB_PACKAGE_INSTANCE_COMMAND, OPEN_WEB_PACKAGE_INSTANCE_COMMAND]);
   });
 });

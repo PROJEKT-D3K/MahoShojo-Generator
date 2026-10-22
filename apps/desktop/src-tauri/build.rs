@@ -52,6 +52,7 @@ fn main() {
             "begin_web_package_instance",
             "append_web_package_resource",
             "open_web_package_instance",
+            "control_web_package_instance",
             "begin_arena_story_pending",
             "append_arena_story_pending_part",
             "query_arena_story_pending_upload",

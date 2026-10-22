@@ -34,6 +34,7 @@ let record: LocalWebPackageRecordV1;
 const page = (title = '当前合成包') => ({ items: [{ ...record, title }], nextCursor: null });
 const flush = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)); }); };
 const openButton = () => [...container.querySelectorAll('button')].find((button) => button.textContent === '在受限 webview 中打开')!;
+const freeHtmlButton = () => [...container.querySelectorAll('button')].find((button) => button.textContent === '运行合成 HTML')!;
 const commands = () => ports.invoke.mock.calls.map(([command]) => command);
 const dialog = () => document.querySelector('[role="dialog"]');
 const consentButton = (label = '继续使用 Web') => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === label)!;
@@ -269,4 +270,75 @@ describe('Web package diagnostics owner lifecycle', () => {
     expect(commands().filter((command) => command === 'open_web_package_instance')).toHaveLength(1);
   });
 
+});
+
+describe('自由 HTML 合成诊断', () => {
+  it('通过真实自由文档桥发送单文件，确认前与主界面均不执行内容', async () => {
+    ports.list.mockResolvedValue({ items: [], nextCursor: null });
+    await mount(); await act(async () => freeHtmlButton().click()); await waitForConsent();
+    expect(dialog()?.textContent).toContain('运行自由 HTML（诊断）');
+    expect(dialog()?.textContent).toContain('自由 HTML 受限策略');
+    expect(dialog()?.querySelector('input')).toBeNull();
+    expect(ports.readArchive).not.toHaveBeenCalled();
+    expect(ports.invoke).not.toHaveBeenCalled();
+    expect(container.querySelector('iframe,script')).toBeNull();
+    await accept();
+    expect(commands()).toEqual(['begin_web_package_instance', 'append_web_package_resource', 'open_web_package_instance']);
+    const request = ports.invoke.mock.calls[0]![1].request;
+    expect(request).toMatchObject({ contentKind: 'free-html', entry: 'index.html', title: '自由 HTML 合成验收' });
+    expect(request.files).toEqual([{ path: 'index.html', mediaType: 'text/html', byteLength: expect.any(Number) }]);
+    const bytes = ports.invoke.mock.calls[1]![1] as Uint8Array;
+    const html = new TextDecoder().decode(bytes);
+    expect(request.files[0].byteLength).toBe(bytes.byteLength);
+    expect(html).toContain('id="d4-free-html-counter"');
+    expect(html).toContain("addEventListener('click'");
+    expect(html).not.toMatch(/https?:\/\//);
+    expect(container.textContent).toContain('已在受限 webview 打开（webpkg-wpk-7）：自由 HTML 合成验收');
+    expect(container.querySelector('iframe,script')).toBeNull();
+  });
+
+  it('取消零 IPC、每次重新确认且同刻重复点击只创建一个实例', async () => {
+    await mount(); await act(async () => freeHtmlButton().click()); await waitForConsent();
+    await act(async () => consentButton('取消').click()); await flush();
+    expect(ports.invoke).not.toHaveBeenCalled();
+    expect(ports.readArchive).not.toHaveBeenCalled();
+    const open = freeHtmlButton();
+    await act(async () => { open.click(); open.click(); }); await waitForConsent();
+    expect(openButton().disabled).toBe(true);
+    const confirm = consentButton();
+    await act(async () => { confirm.click(); confirm.click(); }); await flush();
+    expect(commands().filter((command) => command === 'begin_web_package_instance')).toHaveLength(1);
+    expect(commands().filter((command) => command === 'open_web_package_instance')).toHaveLength(1);
+    await act(async () => freeHtmlButton().click()); await waitForConsent();
+    expect(commands().filter((command) => command === 'begin_web_package_instance')).toHaveLength(1);
+    await accept();
+    expect(commands().filter((command) => command === 'open_web_package_instance')).toHaveLength(2);
+  });
+
+  it('旧包确认不能授权下一次自由文档，卸载的自由文档确认也不能 begin', async () => {
+    await mount(); await act(async () => openButton().click()); await waitForConsent();
+    const expired = ports.consentViews.at(-1)!;
+    await act(async () => consentButton('取消').click()); await flush();
+    await act(async () => freeHtmlButton().click()); await waitForConsent();
+    await act(async () => { expired.onAccept(); expired.onCancel(); });
+    expect(dialog()?.textContent).toContain('运行自由 HTML（诊断）');
+    expect(ports.invoke).not.toHaveBeenCalled();
+    const freeConsent = ports.consentViews.at(-1)!;
+    await unmount();
+    await act(async () => freeConsent.onAccept()); await flush();
+    expect(ports.invoke).not.toHaveBeenCalled();
+  });
+
+  it('确认同刻卸载零 IPC；begin 派发后的卸载阻止迟到回执继续上传', async () => {
+    await mount(); await act(async () => freeHtmlButton().click()); await waitForConsent();
+    await act(async () => { consentButton().click(); root!.unmount(); root = null; }); await flush();
+    expect(ports.invoke).not.toHaveBeenCalled();
+    root = createRoot(container); await mount();
+    const begin = deferred<{ instanceId: string }>();
+    ports.invoke.mockImplementation(async () => begin.promise);
+    await act(async () => freeHtmlButton().click()); await accept();
+    expect(commands()).toEqual(['begin_web_package_instance']);
+    await unmount(); begin.resolve({ instanceId: 'wpk-7' }); await flush();
+    expect(commands()).toEqual(['begin_web_package_instance']);
+  });
 });

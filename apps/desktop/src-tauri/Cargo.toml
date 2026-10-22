@@ -68,6 +68,11 @@ http-range = "0.1.5"
 open = "5"
 getrandom = "0.3"
 
+[target.'cfg(windows)'.dependencies]
+# Wry 0.57 already locks this MIT crate. Direct access installs the native page-close
+# callback before any untrusted document loads; no plugin or additional dependency tree.
+webview2-com = "=0.39.1"
+
 [profile.dev]
 incremental = true
 

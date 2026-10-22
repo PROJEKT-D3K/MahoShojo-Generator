@@ -857,6 +857,16 @@ async fn open_web_package_instance(
     instances.open(&app, &request.instance_id, std::time::Instant::now())
 }
 
+/// Trusted main UI controls only a registry-owned, already serving work window.
+#[tauri::command]
+async fn control_web_package_instance(
+    app: tauri::AppHandle,
+    instances: State<'_, webpkg_instance::WebPackageInstances>,
+    request: webpkg_instance::ControlInstanceRequest,
+) -> Result<webpkg_instance::ControlInstanceOutcome, webpkg_instance::WebpkgError> {
+    instances.control(&app, request)
+}
+
 /// webpkg raw 请求的 header 读取。缺失或非法一律 `webpkg-invalid`——
 /// 不猜、不回退，与 `export_id_header` 同一纪律。
 fn webpkg_header(
@@ -2116,6 +2126,7 @@ pub fn run() {
             begin_web_package_instance,
             append_web_package_resource,
             open_web_package_instance,
+            control_web_package_instance,
             begin_arena_story_pending,
             append_arena_story_pending_part,
             query_arena_story_pending_upload,

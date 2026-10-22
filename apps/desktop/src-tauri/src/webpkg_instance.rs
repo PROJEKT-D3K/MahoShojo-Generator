@@ -32,6 +32,8 @@
 //! 而为取消维护一份幂等语义，成本高于让 TTL 自然到期。
 
 use std::collections::{HashMap, HashSet};
+#[cfg(any(windows, test))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -482,6 +484,58 @@ pub struct OpenInstanceOutcome {
     pub label: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ControlInstanceRequest {
+    Status {
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+    },
+    Focus {
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+    },
+    Reload {
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+    },
+    Close {
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+    },
+    SetFullscreen {
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+        fullscreen: bool,
+    },
+}
+
+impl ControlInstanceRequest {
+    fn instance_id(&self) -> &str {
+        match self {
+            Self::Status { instance_id }
+            | Self::Focus { instance_id }
+            | Self::Reload { instance_id }
+            | Self::Close { instance_id }
+            | Self::SetFullscreen { instance_id, .. } => instance_id,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum ControlInstanceOutcome {
+    Open {
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+        fullscreen: bool,
+    },
+    Closed {
+        #[serde(rename = "instanceId")]
+        instance_id: String,
+    },
+}
+
 impl Default for WebPackageInstances {
     fn default() -> Self {
         Self {
@@ -493,6 +547,70 @@ impl Default for WebPackageInstances {
 }
 
 impl WebPackageInstances {
+    /// Only Serving windows are addressable. The caller never supplies a label or URL.
+    fn control_label(&self, instance_id: &str) -> Result<Option<String>, WebpkgError> {
+        if !is_valid_instance_id(instance_id) {
+            return Err(WebpkgError::Invalid);
+        }
+        let inner = self.inner.lock().map_err(|_| WebpkgError::Failure)?;
+        match inner.instances.get(instance_id) {
+            Some(InstanceState::Open {
+                label,
+                phase: OpenPhase::Serving,
+                ..
+            }) => Ok(Some(label.clone())),
+            Some(_) => Err(WebpkgError::InstanceIncomplete),
+            None => Ok(None),
+        }
+    }
+
+    pub fn control(
+        &self,
+        app: &AppHandle,
+        request: ControlInstanceRequest,
+    ) -> Result<ControlInstanceOutcome, WebpkgError> {
+        let instance_id = request.instance_id().to_string();
+        // The lock is released before every window API; Destroyed re-enters this registry.
+        let window = self
+            .control_label(&instance_id)?
+            .and_then(|label| app.get_webview_window(&label));
+        let Some(window) = window else {
+            self.remove_by_label(&label_for_instance(&instance_id));
+            return match request {
+                ControlInstanceRequest::Status { .. } | ControlInstanceRequest::Close { .. } => {
+                    Ok(ControlInstanceOutcome::Closed { instance_id })
+                }
+                _ => Err(WebpkgError::InstanceMissing),
+            };
+        };
+        match request {
+            ControlInstanceRequest::Status { .. } => {}
+            ControlInstanceRequest::Focus { .. } => window
+                .set_focus()
+                .map_err(|_| WebpkgError::WindowUnavailable)?,
+            ControlInstanceRequest::Reload { .. } => window
+                .reload()
+                .map_err(|_| WebpkgError::WindowUnavailable)?,
+            ControlInstanceRequest::SetFullscreen { fullscreen, .. } => window
+                .set_fullscreen(fullscreen)
+                .map_err(|_| WebpkgError::WindowUnavailable)?,
+            ControlInstanceRequest::Close { .. } => {
+                window
+                    .destroy()
+                    .map_err(|_| WebpkgError::WindowUnavailable)?;
+                self.remove_by_label(window.label());
+                return Ok(ControlInstanceOutcome::Closed { instance_id });
+            }
+        }
+        let fullscreen = window
+            .is_fullscreen()
+            .map_err(|_| WebpkgError::WindowUnavailable)?;
+        Ok(ControlInstanceOutcome::Open {
+            instance_id,
+            fullscreen,
+        })
+    }
+
     /// 目标会话本身已过期时给出 `webpkg-instance-stale` 并当场回收。
     ///
     /// 这个分支存在于 `evict_expired` 之前：`stale` 与 `missing` 对调用方是两种
@@ -970,6 +1088,128 @@ struct StagedFileRef {
 
 /// 创建受限 webview。所有 hardening 接线都聚在这一个函数里——结构门禁据此断言
 /// 源码形状，而不是靠人记得"这个 webview 是不是忘了什么"。
+fn menu_operation(instance_id: &str, menu_id: &str) -> Option<&'static str> {
+    ["fullscreen", "exit-fullscreen", "reload", "close"]
+        .into_iter()
+        .find(|action| menu_id == format!("webpkg-{instance_id}-{action}"))
+}
+
+// Windows starts with an inert Native-owned document, so an inline window.close()
+// cannot run before the top-level close callback has been installed. This exception
+// is exact, one-shot, and permanently revoked before the first work navigation.
+#[cfg(any(windows, test))]
+fn take_native_bootstrap_navigation(url: &url::Url, allowed: &AtomicBool) -> bool {
+    url.as_str() == "about:blank" && allowed.swap(false, Ordering::SeqCst)
+}
+
+#[cfg(any(windows, test))]
+fn finish_native_bootstrap(
+    allowed: &AtomicBool,
+    installed: Result<(), WebpkgError>,
+    navigate: impl FnOnce() -> Result<(), WebpkgError>,
+    show: impl FnOnce() -> Result<(), WebpkgError>,
+    destroy: impl FnOnce(),
+) -> Result<(), WebpkgError> {
+    // Revoke even when the initial blank navigation was never delivered. Neither a
+    // late bootstrap navigation nor a work-authored about:blank gets this exception.
+    allowed.store(false, Ordering::SeqCst);
+    let ready = installed.and_then(|()| navigate()).and_then(|()| show());
+    if ready.is_err() {
+        destroy();
+    }
+    ready
+}
+
+#[cfg(windows)]
+fn install_windows_window_handlers(window: &tauri::WebviewWindow) -> Result<(), WebpkgError> {
+    use webview2_com::{
+        AcceleratorKeyPressedEventHandler,
+        Microsoft::Web::WebView2::Win32::{
+            COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_PHYSICAL_KEY_STATUS,
+        },
+        WindowCloseRequestedEventHandler,
+    };
+
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let close_owner = window.clone();
+    let keyboard_owner = window.clone();
+    window
+        .with_webview(move |webview| {
+            // Wry's handler destroys only its child HWND. Keep this callback bound
+            // to the Native top-level window, not to an untrusted URL or DOM value.
+            let installed = unsafe {
+                let controller = webview.controller();
+                controller.CoreWebView2().and_then(|core| {
+                    let handler =
+                        WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
+                            // WebviewWindow::destroy dispatches to the top-level Window even
+                            // after Wry has destroyed its child HWND. No UI-thread wait.
+                            let _ = close_owner.destroy();
+                            Ok(())
+                        }));
+                    let mut token = 0;
+                    core.add_WindowCloseRequested(&handler, &mut token)?;
+                    let keys =
+                        AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+                            let Some(args) = args else { return Ok(()) };
+                            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN;
+                            let mut key = 0;
+                            let mut physical = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
+                            args.KeyEventKind(&mut kind)?;
+                            args.VirtualKey(&mut key)?;
+                            args.PhysicalKeyStatus(&mut physical)?;
+                            let Some(toggle) = native_fullscreen_key(
+                                key,
+                                kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                                physical.WasKeyDown.as_bool(),
+                            ) else {
+                                return Ok(());
+                            };
+                            // Consume repeats too; the host menu has no competing Windows
+                            // accelerator for these keys. Work DOM never owns fullscreen exit.
+                            args.SetHandled(true)?;
+                            if let Some(toggle) = toggle {
+                                let owner = keyboard_owner.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let fullscreen = if toggle {
+                                        let Ok(current) = owner.is_fullscreen() else {
+                                            return;
+                                        };
+                                        !current
+                                    } else {
+                                        false
+                                    };
+                                    let _ = owner.set_fullscreen(fullscreen);
+                                });
+                            }
+                            Ok(())
+                        }));
+                    controller.add_AcceleratorKeyPressed(&keys, &mut token)
+                    // The CoreWebView/controller own handlers until destruction. The
+                    // captured Tauri handles contain dispatchers, never a COM reference.
+                })
+            };
+            let _ = sender.send(installed.is_ok());
+        })
+        .map_err(|_| WebpkgError::WindowUnavailable)?;
+    // open_web_package_instance is async: only its worker waits here. Never pump or
+    // block the UI thread. Timeout/disconnect leaves the work unloaded and fails closed.
+    match receiver.recv_timeout(Duration::from_secs(10)) {
+        Ok(true) => Ok(()),
+        _ => Err(WebpkgError::WindowUnavailable),
+    }
+}
+
+// Outer None: unrelated event. Inner None: consume a repeat without another toggle.
+// Some(true/false): toggle / exit. Pure policy is shared with the regression tests.
+#[cfg(any(windows, test))]
+fn native_fullscreen_key(key: u32, key_down: bool, repeat: bool) -> Option<Option<bool>> {
+    if !key_down || !matches!(key, 0x7A | 0x1B) {
+        return None;
+    }
+    Some(if repeat { None } else { Some(key == 0x7A) })
+}
+
 fn build_webpkg_window(
     app: &AppHandle,
     instance_id: &str,
@@ -978,12 +1218,111 @@ fn build_webpkg_window(
     url: &str,
     navigable_documents: HashSet<String>,
 ) -> Result<(), WebpkgError> {
+    use tauri::menu::{Menu, MenuItem, Submenu};
+    // Native chrome remains available even when the work DOM captures keys or obscures its own UI.
+    let fullscreen = MenuItem::with_id(
+        app,
+        format!("webpkg-{instance_id}-fullscreen"),
+        "切换全屏",
+        true,
+        if cfg!(windows) { None } else { Some("F11") },
+    )
+    .map_err(|_| WebpkgError::WindowUnavailable)?;
+    let exit_fullscreen = MenuItem::with_id(
+        app,
+        format!("webpkg-{instance_id}-exit-fullscreen"),
+        "退出全屏",
+        true,
+        if cfg!(windows) { None } else { Some("Escape") },
+    )
+    .map_err(|_| WebpkgError::WindowUnavailable)?;
+    let reload = MenuItem::with_id(
+        app,
+        format!("webpkg-{instance_id}-reload"),
+        "重新加载（重置交互进度）",
+        true,
+        Some("CmdOrCtrl+R"),
+    )
+    .map_err(|_| WebpkgError::WindowUnavailable)?;
+    let close = MenuItem::with_id(
+        app,
+        format!("webpkg-{instance_id}-close"),
+        "关闭作品",
+        true,
+        Some("CmdOrCtrl+W"),
+    )
+    .map_err(|_| WebpkgError::WindowUnavailable)?;
+    let submenu = Submenu::with_items(
+        app,
+        "作品",
+        true,
+        &[&fullscreen, &exit_fullscreen, &reload, &close],
+    )
+    .map_err(|_| WebpkgError::WindowUnavailable)?;
+    let menu = Menu::with_items(app, &[&submenu]).map_err(|_| WebpkgError::WindowUnavailable)?;
+    let menu_instance = instance_id.to_string();
+    let menu_label = label.to_string();
     let parsed = url::Url::parse(url).map_err(|_| WebpkgError::WindowUnavailable)?;
+    // Wry rewrites custom schemes only during build, not load_url/navigate.
+    // Derived only from the Native-generated, frozen entry URL, before creating
+    // any window so even URL preparation failure cannot leave an orphan.
+    #[cfg(windows)]
+    let mapped = url::Url::parse(&format!("http://{WINDOWS_RESOURCE_HOST}{}", parsed.path()))
+        .map_err(|_| WebpkgError::WindowUnavailable)?;
     let nav_instance = instance_id.to_string();
-    // `External` 的 API 契约是 http/https；自定义 scheme 必须走 `CustomProtocol`——
-    // 虽然当前实现在内部兼容透传，依赖"恰好能跑"会让一次上游收紧变成无提示回归。
-    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::CustomProtocol(parsed))
+    #[cfg(windows)]
+    let bootstrap_allowed = std::sync::Arc::new(AtomicBool::new(true));
+    #[cfg(windows)]
+    let nav_bootstrap_allowed = bootstrap_allowed.clone();
+    #[cfg(windows)]
+    let initial_url = WebviewUrl::External(
+        url::Url::parse("about:blank").map_err(|_| WebpkgError::WindowUnavailable)?,
+    );
+    #[cfg(not(windows))]
+    let initial_url = WebviewUrl::CustomProtocol(parsed);
+    // Windows initially loads only Native-owned inert about:blank; the work URL
+    // remains unloaded until both native handlers are installed and acknowledged.
+    let window = WebviewWindowBuilder::new(app, label, initial_url)
+        .menu(menu)
+        .on_menu_event(move |window, event| {
+            // Tauri broadcasts events with each listener's own window, not the source window.
+            // Only the instance-specific menu ID identifies the intended target.
+            if window.label() != menu_label {
+                return;
+            }
+            let Some(action) = menu_operation(&menu_instance, event.id().as_ref()) else {
+                return;
+            };
+            let instance_id = menu_instance.clone();
+            let app = window.app_handle().clone();
+            let label = menu_label.clone();
+            tauri::async_runtime::spawn(async move {
+                let request = match action {
+                    "fullscreen" => {
+                        let Some(window) = app.get_webview_window(&label) else {
+                            return;
+                        };
+                        let Ok(current) = window.is_fullscreen() else {
+                            return;
+                        };
+                        ControlInstanceRequest::SetFullscreen {
+                            instance_id,
+                            fullscreen: !current,
+                        }
+                    }
+                    "exit-fullscreen" => ControlInstanceRequest::SetFullscreen {
+                        instance_id,
+                        fullscreen: false,
+                    },
+                    "reload" => ControlInstanceRequest::Reload { instance_id },
+                    "close" => ControlInstanceRequest::Close { instance_id },
+                    _ => return,
+                };
+                let _ = app.state::<WebPackageInstances>().control(&app, request);
+            });
+        })
         .title(title)
+        .visible(!cfg!(windows))
         .inner_size(1024.0, 720.0)
         .resizable(true)
         // 受限渲染面的持久化边界：不与别的会话共享 profile，关闭即清。
@@ -992,7 +1331,13 @@ fn build_webpkg_window(
         // 包内顶层导航也只放行 declared `text/html`——`sandbox` 是响应级 policy，
         // 不带它的可执行 Document（SVG/XML 等）一旦成为新顶层 Document，受限页面的
         // opaque origin 就丢了。
-        .on_navigation(move |url| is_allowed_navigation(url, &nav_instance, &navigable_documents))
+        .on_navigation(move |url| {
+            #[cfg(windows)]
+            if take_native_bootstrap_navigation(url, &nav_bootstrap_allowed) {
+                return true;
+            }
+            is_allowed_navigation(url, &nav_instance, &navigable_documents)
+        })
         // 包不得弹出新窗口——弹窗会是一个没有 capability、但仍携带包内容的新渲染面，
         // DESK-013 的"独立 webview"只有一个。
         .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Deny)
@@ -1015,6 +1360,23 @@ fn build_webpkg_window(
                 .remove_by_label(&cleanup_label);
         }
     });
+    #[cfg(windows)]
+    {
+        let installed = install_windows_window_handlers(&window);
+        finish_native_bootstrap(
+            &bootstrap_allowed,
+            installed,
+            || {
+                window
+                    .navigate(mapped)
+                    .map_err(|_| WebpkgError::WindowUnavailable)
+            },
+            || window.show().map_err(|_| WebpkgError::WindowUnavailable),
+            || {
+                let _ = window.destroy();
+            },
+        )?;
+    }
     Ok(())
 }
 
@@ -1126,6 +1488,183 @@ fn not_found_response() -> http::Response<std::borrow::Cow<'static, [u8]>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bootstrap_only_allows_one_exact_native_blank_and_never_changes_work_navigation() {
+        let allowed = AtomicBool::new(true);
+        for candidate in [
+            "about:blank#work",
+            "about:blank?work",
+            "about:srcdoc",
+            "data:text/html,test",
+        ] {
+            assert!(!take_native_bootstrap_navigation(
+                &url::Url::parse(candidate).unwrap(),
+                &allowed
+            ));
+        }
+        let blank = url::Url::parse("about:blank").unwrap();
+        assert!(take_native_bootstrap_navigation(&blank, &allowed));
+        assert!(!take_native_bootstrap_navigation(&blank, &allowed));
+        assert!(!is_allowed_navigation(&blank, "wpk-1", &HashSet::new()));
+
+        // Racing callbacks cannot both consume the initial Native navigation allowance.
+        let allowed = std::sync::Arc::new(AtomicBool::new(true));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let allowed = allowed.clone();
+                let barrier = barrier.clone();
+                let blank = blank.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    take_native_bootstrap_navigation(&blank, &allowed)
+                })
+            })
+            .collect();
+        let accepted = threads
+            .into_iter()
+            .map(|thread| usize::from(thread.join().unwrap()))
+            .sum::<usize>();
+        assert_eq!(accepted, 1);
+    }
+
+    #[test]
+    fn native_fullscreen_keys_ignore_keyup_and_consume_repeats_once() {
+        assert_eq!(native_fullscreen_key(0x7A, true, false), Some(Some(true)));
+        assert_eq!(native_fullscreen_key(0x1B, true, false), Some(Some(false)));
+        for key in [0x7A, 0x1B] {
+            assert_eq!(native_fullscreen_key(key, false, false), None);
+            assert_eq!(native_fullscreen_key(key, true, true), Some(None));
+        }
+        assert_eq!(native_fullscreen_key(0x52, true, false), None);
+        assert_eq!(native_fullscreen_key(0x57, true, false), None);
+    }
+
+    #[test]
+    fn bootstrap_revokes_blank_before_work_and_destroys_on_each_setup_failure() {
+        use std::cell::RefCell;
+        for failure in [None, Some("install"), Some("navigate"), Some("show")] {
+            let allowed = AtomicBool::new(true);
+            let calls = RefCell::new(Vec::new());
+            let result = finish_native_bootstrap(
+                &allowed,
+                if failure == Some("install") {
+                    Err(WebpkgError::WindowUnavailable)
+                } else {
+                    Ok(())
+                },
+                || {
+                    assert!(!take_native_bootstrap_navigation(
+                        &url::Url::parse("about:blank").unwrap(),
+                        &allowed
+                    ));
+                    calls.borrow_mut().push("navigate");
+                    if failure == Some("navigate") {
+                        Err(WebpkgError::WindowUnavailable)
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    calls.borrow_mut().push("show");
+                    if failure == Some("show") {
+                        Err(WebpkgError::WindowUnavailable)
+                    } else {
+                        Ok(())
+                    }
+                },
+                || calls.borrow_mut().push("destroy"),
+            );
+            assert!(!allowed.load(Ordering::SeqCst));
+            assert_eq!(result.is_err(), failure.is_some());
+            let expected = match failure {
+                Some("install") => vec!["destroy"],
+                Some("navigate") => vec!["navigate", "destroy"],
+                Some("show") => vec!["navigate", "show", "destroy"],
+                _ => vec!["navigate", "show"],
+            };
+            assert_eq!(*calls.borrow(), expected);
+        }
+    }
+
+    #[test]
+    fn broadcast_menu_events_only_control_their_own_instance() {
+        for action in ["fullscreen", "exit-fullscreen", "reload", "close"] {
+            let event_id = format!("webpkg-wpk-1-{action}");
+            assert_eq!(menu_operation("wpk-1", &event_id), Some(action));
+            assert_eq!(menu_operation("wpk-2", &event_id), None);
+            assert_eq!(menu_operation("wpk-1", &format!("webpkg-{action}")), None);
+        }
+    }
+
+    #[test]
+    fn control_dto_rejects_window_labels_urls_scripts_and_ambiguous_fullscreen() {
+        for action in ["status", "focus", "reload", "close"] {
+            let value = serde_json::json!({"instanceId": "wpk-7", "action": action});
+            assert!(serde_json::from_value::<ControlInstanceRequest>(value.clone()).is_ok());
+            for field in ["label", "url", "script", "fullscreen"] {
+                let mut extra = value.clone();
+                extra[field] = serde_json::json!("main-ui");
+                assert!(serde_json::from_value::<ControlInstanceRequest>(extra).is_err());
+            }
+        }
+        for fullscreen in [true, false] {
+            assert!(serde_json::from_value::<ControlInstanceRequest>(serde_json::json!({"instanceId": "wpk-7", "action": "set-fullscreen", "fullscreen": fullscreen})).is_ok());
+        }
+        for value in [
+            serde_json::json!({"instanceId": "wpk-7", "action": "navigate"}),
+            serde_json::json!({"instanceId": "wpk-7", "action": "set-fullscreen"}),
+            serde_json::json!({"instanceId": "wpk-7", "action": "set-fullscreen", "fullscreen": "true"}),
+        ] {
+            assert!(serde_json::from_value::<ControlInstanceRequest>(value).is_err());
+        }
+        assert_eq!(
+            serde_json::to_value(ControlInstanceOutcome::Closed {
+                instance_id: "wpk-7".into()
+            })
+            .unwrap(),
+            serde_json::json!({"instanceId": "wpk-7", "status": "closed"})
+        );
+    }
+
+    #[test]
+    fn control_only_resolves_serving_instances_and_releases_its_lock() {
+        let registry = WebPackageInstances::default();
+        assert!(matches!(
+            registry.control_label("main-ui"),
+            Err(WebpkgError::Invalid)
+        ));
+        assert_eq!(registry.control_label("wpk-999").unwrap(), None);
+        let id = begin(
+            &registry,
+            "index.html",
+            vec![declared("index.html", "text/html", 0)],
+        )
+        .unwrap()
+        .instance_id;
+        assert!(matches!(
+            registry.control_label(&id),
+            Err(WebpkgError::InstanceIncomplete)
+        ));
+        promote_to_open(&registry, &id, OpenPhase::Opening);
+        assert!(matches!(
+            registry.control_label(&id),
+            Err(WebpkgError::InstanceIncomplete)
+        ));
+        {
+            let mut inner = registry.inner.lock().unwrap();
+            let Some(InstanceState::Open { phase, .. }) = inner.instances.get_mut(&id) else {
+                panic!("open instance");
+            };
+            *phase = OpenPhase::Serving;
+        }
+        let label = registry.control_label(&id).unwrap().unwrap();
+        assert_eq!(label, label_for_instance(&id));
+        assert!(registry.inner.try_lock().is_ok());
+        registry.remove_by_label(&label);
+        assert_eq!(registry.control_label(&id).unwrap(), None);
+    }
 
     const FIXTURE: &str =
         include_str!("../../../../packages/contracts/fixtures/desktop-web-package-instance.json");

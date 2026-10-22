@@ -35,6 +35,7 @@
     "allow-begin-web-package-instance",
     "allow-append-web-package-resource",
     "allow-open-web-package-instance",
+    "allow-control-web-package-instance",
     "allow-begin-arena-story-pending",
     "allow-append-arena-story-pending-part",
     "allow-query-arena-story-pending-upload",

@@ -893,6 +893,18 @@ export type DesktopOpenWebPackageInstanceResponse = z.infer<
   typeof DesktopOpenWebPackageInstanceResponseSchema
 >;
 
+/** Trusted main UI only; never accepts a window label, navigation URL or script. */
+export const DesktopControlWebPackageInstanceRequestSchema = z.discriminatedUnion('action', [
+  z.object({ instanceId: DesktopWebPackageInstanceIdSchema, action: z.enum(['status', 'focus', 'reload', 'close']) }).strict(),
+  z.object({ instanceId: DesktopWebPackageInstanceIdSchema, action: z.literal('set-fullscreen'), fullscreen: z.boolean() }).strict(),
+]);
+export type DesktopControlWebPackageInstanceRequest = z.infer<typeof DesktopControlWebPackageInstanceRequestSchema>;
+export const DesktopControlWebPackageInstanceResponseSchema = z.discriminatedUnion('status', [
+  z.object({ instanceId: DesktopWebPackageInstanceIdSchema, status: z.literal('open'), fullscreen: z.boolean() }).strict(),
+  z.object({ instanceId: DesktopWebPackageInstanceIdSchema, status: z.literal('closed') }).strict(),
+]);
+export type DesktopControlWebPackageInstanceResponse = z.infer<typeof DesktopControlWebPackageInstanceResponseSchema>;
+
 /**
  * webpkg 会话失败的公开投影。与 `export-*` 同规则：`webpkg-instance-stale` 意味着
  * staging TTL 已过（或新一轮 begin 顶替），正确处理是重新走完整流程，不是重试一次 append。

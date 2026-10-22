@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { FileCode2 } from 'lucide-react';
 
 import { WebReportConsentDialogView } from '@mahoshojo/ui-web/arena-report';
 import type { LocalWebPackageRecordV1 } from '@mahoshojo/local-library/web-package-record';
@@ -11,6 +12,7 @@ import {
 import { IpcWebPackageRepository } from '../../platform/web-package-bridge';
 import {
   DesktopWebPackageInstanceError,
+  openFreeHtmlInIsolatedWebview,
   openWebPackageInstanceInIsolatedWebview,
 } from '../../platform/webpkg-instance-bridge';
 import type { RawInvokeFn, StructuredInvokeFn } from '../../platform/local-archive-bridge';
@@ -49,19 +51,27 @@ const tauriRawInvoke: RawInvokeFn = (command, body, options) =>
   invoke(command, body as never, options as never);
 
 const PACKAGE_LIST_LIMIT = 50;
+const FREE_HTML_DIAGNOSTIC_ID = Symbol('free-html-diagnostic');
+// 固定小型本地夹具：只验证自由 HTML 桥、页面显示及脚本交互，不发网络请求。
+const FREE_HTML_DIAGNOSTIC_DOCUMENT = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>自由 HTML 合成验收</title></head>
+<body><h1>自由 HTML 合成验收</h1><p>此页不含外部资源。点击按钮验证脚本交互。</p>
+<button id="d4-free-html-increment" type="button">点击计数</button><p id="d4-free-html-counter">0</p>
+<script>document.getElementById('d4-free-html-increment').addEventListener('click', () => {
+const counter = document.getElementById('d4-free-html-counter'); counter.textContent = String(Number(counter.textContent) + 1);
+});</script></body></html>`;
 
 type PendingConsent = {
   readonly name: string;
-  readonly version: string;
   readonly isCurrent: () => boolean;
   readonly resolve: (accepted: boolean) => void;
-};
+} & ({ readonly kind: 'web-package'; readonly version: string } | { readonly kind: 'free-html' });
 
 export const WebPackageDiagnosticsPanel = () => {
   const packages = useMemo(() => new IpcWebPackageRepository(tauriInvoke), []);
   const [records, setRecords] = useState<readonly LocalWebPackageRecordV1[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | symbol | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [consent, setConsent] = useState<PendingConsent | null>(null);
@@ -143,6 +153,7 @@ export const WebPackageDiagnosticsPanel = () => {
         // 先重验并冻结实际包，再逐次确认；不信任列表标题，也不持久保存执行许可。
         const accepted = await new Promise<boolean>((resolve) => {
           const pending: PendingConsent = {
+            kind: 'web-package',
             name: base.manifest.name,
             version: base.manifest.version,
             isCurrent: operation.isCurrent,
@@ -176,6 +187,30 @@ export const WebPackageDiagnosticsPanel = () => {
     [packages, startOperation],
   );
 
+  const openFreeHtmlDiagnostic = async (): Promise<void> => {
+    const operation = startOperation();
+    if (!operation) return;
+    setBusyId(FREE_HTML_DIAGNOSTIC_ID);
+    setError(null);
+    setNotice(null);
+    try {
+      const accepted = await new Promise<boolean>((resolve) => {
+        const pending: PendingConsent = { kind: 'free-html', name: '自由 HTML 合成验收', isCurrent: operation.isCurrent, resolve };
+        pendingConsent.current = pending;
+        setConsent(pending);
+      });
+      if (!accepted || !operation.isCurrent()) return;
+      const opened = await openFreeHtmlInIsolatedWebview(
+        tauriInvoke, tauriRawInvoke, FREE_HTML_DIAGNOSTIC_DOCUMENT, '自由 HTML 合成验收', operation.isCurrent,
+      );
+      if (operation.isCurrent()) setNotice(`已在受限 webview 打开（${opened.webviewLabel}）：自由 HTML 合成验收`);
+    } catch (cause) {
+      if (operation.isCurrent()) setError(describeError(cause));
+    } finally {
+      if (operation.finish()) setBusyId(null);
+    }
+  };
+
   return (
     <section
       className="rounded-lg border border-(--app-border) bg-(--app-surface) p-4"
@@ -200,6 +235,16 @@ export const WebPackageDiagnosticsPanel = () => {
           刷新列表
         </button>
       </header>
+
+      <div className="mt-4 rounded border border-(--app-border) p-3 text-sm">
+        <h3 className="font-medium">自由 HTML 合成验收</h3>
+        <p className="mt-1 text-(--app-text-muted)">打开应用内置的小型 HTML 页面，验证显示与点击计数；不读取本地包、不加载外部资源。</p>
+        <button type="button" className="mt-3 flex items-center gap-2 rounded border border-(--app-border) px-3 py-2 text-sm"
+          disabled={loading || busyId !== null} onClick={() => void openFreeHtmlDiagnostic()}>
+          <FileCode2 size={16} aria-hidden="true" />
+          {busyId === FREE_HTML_DIAGNOSTIC_ID ? (consent ? '等待运行确认…' : '正在打开合成 HTML…') : '运行合成 HTML'}
+        </button>
+      </div>
 
       {loading && <p role="status" className="mt-3 text-sm">正在读取本地 Web 包…</p>}
       {error && <p role="alert" className="mt-3 text-sm text-(--app-accent-strong)">{error}</p>}
@@ -235,13 +280,15 @@ export const WebPackageDiagnosticsPanel = () => {
       )}
       {consent ? <WebReportConsentDialogView
         open
-        title="运行 Web 包（诊断）"
-        executionDescription={<>将按导入原样运行「{consent.name}」（版本 {consent.version}），不含生成覆盖层。仅确认本次运行，每次打开都需重新确认。</>}
+        title={consent.kind === 'free-html' ? '运行自由 HTML（诊断）' : '运行 Web 包（诊断）'}
+        executionDescription={consent.kind === 'free-html'
+          ? <>将运行「{consent.name}」固定页面，使用自由 HTML 受限策略；本夹具不包含外部资源。仅确认本次运行，每次打开都需重新确认。</>
+          : <>将按导入原样运行「{consent.name}」（版本 {consent.version}），不含生成覆盖层。仅确认本次运行，每次打开都需重新确认。</>}
         onCancel={() => settleConsent(consent, false)}
         onAccept={() => settleConsent(consent, true)}
       /> : null}
       <p className="mt-3 text-xs text-(--app-text-muted)">
-        只按导入原样打开（不含生成覆盖层）；真实 webview 的隔离验收需在运行中的桌面应用里确认。
+        本地包只按导入原样打开（不含生成覆盖层）；合成 HTML 只验证自由文档路径。真实 webview 的隔离验收需在运行中的桌面应用里确认。
         离开诊断页只停止尚未派发的步骤；已派发的打开仍可能建立窗口，请单独关闭。
       </p>
     </section>

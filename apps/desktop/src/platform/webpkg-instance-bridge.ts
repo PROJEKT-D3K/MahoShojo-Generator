@@ -18,6 +18,7 @@ import {
   buildWebPackageInstanceUrl,
   type WebPackageResourceSnapshot,
 } from '@mahoshojo/web-package';
+import { normalizeArenaWebOutput } from '@mahoshojo/ai-core/arena-generation';
 
 import type { RawInvokeFn, StructuredInvokeFn } from './local-archive-bridge';
 
@@ -124,6 +125,45 @@ export const openWebPackageInstanceInIsolatedWebview = async (
   snapshot: WebPackageResourceSnapshot,
   title: string,
   isCurrent: () => boolean = () => true,
+): Promise<OpenedWebPackageInstance> => openResourcesInIsolatedWebview(
+  invoke, rawInvoke, snapshot, title, 'web-package', isCurrent,
+);
+
+/**
+ * 自由 HTML 的窄入口：仅提取完整文档，固定单文件与政策类型，不伪造 Web Package 身份。
+ * 完整 HTML 只是 framing，不是安全认证；authoritative final 与逐次确认由宿主负责。
+ * 不接受来自文档的资源表、contentKind、窗口 label 或 URL。
+ */
+export const openFreeHtmlInIsolatedWebview = async (
+  invoke: StructuredInvokeFn,
+  rawInvoke: RawInvokeFn,
+  source: string,
+  title: string,
+  isCurrent: () => boolean = () => true,
+): Promise<OpenedWebPackageInstance> => {
+  const { document } = normalizeArenaWebOutput(source);
+  if (!document) {
+    throw new DesktopWebPackageInstanceError(
+      BEGIN_WEB_PACKAGE_INSTANCE_COMMAND, 'webpkg-invalid', '未识别完整 HTML 文档，不能创建隔离运行实例。',
+    );
+  }
+  const files = new Map([['index.html', { mediaType: 'text/html', bytes: new TextEncoder().encode(document) }]]);
+  return openResourcesInIsolatedWebview(invoke, rawInvoke, { entry: 'index.html', files }, title, 'free-html', isCurrent);
+};
+
+type IsolatedWebResources = Readonly<{
+  entry: string;
+  files: ReadonlyMap<string, Readonly<{ mediaType: string; bytes: Uint8Array }>>;
+}>;
+
+/** 类型只由上面两个可信适配入口选择；不导出接受任意政策的通用运行口。 */
+const openResourcesInIsolatedWebview = async (
+  invoke: StructuredInvokeFn,
+  rawInvoke: RawInvokeFn,
+  resources: IsolatedWebResources,
+  title: string,
+  contentKind: 'web-package' | 'free-html',
+  isCurrent: () => boolean,
 ): Promise<OpenedWebPackageInstance> => {
   // 本地 owner 失效只停止尚未派发的步骤；不扩 Native 错误码，也不冒充撤销已发的 open。
   let openDispatched = false;
@@ -135,15 +175,14 @@ export const openWebPackageInstanceInIsolatedWebview = async (
     }
   };
   assertCurrent();
-  const declaredFiles = [...snapshot.files.entries()].map(([path, file]) => ({
+  const declaredFiles = [...resources.files.entries()].map(([path, file]) => ({
     path,
     mediaType: file.mediaType,
     byteLength: file.bytes.byteLength,
   }));
   const request = DesktopBeginWebPackageInstanceRequestSchema.parse({
-    // 此桥只消费已物化的包快照，策略类型不由调用方或快照的额外字段决定。
-    contentKind: 'web-package',
-    entry: snapshot.entry,
+    contentKind,
+    entry: resources.entry,
     title,
     files: declaredFiles,
   });
@@ -160,7 +199,7 @@ export const openWebPackageInstanceInIsolatedWebview = async (
     throw cause instanceof DesktopWebPackageInstanceError ? cause : toWebpkgError(BEGIN_WEB_PACKAGE_INSTANCE_COMMAND, cause);
   }
 
-  for (const [path, file] of snapshot.files) {
+  for (const [path, file] of resources.files) {
     // `x-webpkg-path` 的编码与资源 URL 同一条规则——借 `buildWebPackageInstanceUrl` 取
     // 逐段编码结果而不是就地重写一份 encodeURIComponent 逻辑：两侧各写一份编码器，
     // 漂移的症状是"文件已声明、路径合法、resolver 永远 404"，离根因很远。
