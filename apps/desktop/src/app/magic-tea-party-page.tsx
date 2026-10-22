@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react';
 import { Link } from '@tanstack/react-router';
 import { invoke } from '@tauri-apps/api/core';
-import { CardLibraryModal, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
+import { ChevronRight, ChevronUp, Download, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
+import { Button, CardLibraryModal, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import {
   useSessionSidebarPreference, MagicTeaPartyPageView, MagicTeaPartyHero, MagicTeaPartySessionList, MagicTeaPartySessionSetupPanel,
@@ -132,12 +133,15 @@ export default function MagicTeaPartyPage() {
         activeSessionId={session?.id ?? null} onCreateSession={() => run(owner.create)} onSelectSession={id => run(() => owner.select(id))}
         onDeleteSession={deleteActive} pinnedCollapsed={pinnedCollapsed} recentCollapsed={recentCollapsed}
         onPinnedCollapsedChange={setPinnedCollapsed} onRecentCollapsedChange={setRecentCollapsed} busy={disabled} listScope="loaded"
-        pagination={<div className="flex gap-3 text-xs"><button disabled={disabled} onClick={() => run(() => owner.refreshDirectory())}>刷新首页</button><button disabled={disabled || !state.directoryCursor} onClick={() => run(() => owner.refreshDirectory(true))}>下一批会话</button></div>} />
+        pagination={<div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={disabled} onClick={() => run(() => owner.refreshDirectory())}><RefreshCw className="size-4 shrink-0" aria-hidden="true" />刷新首页</Button>
+          <Button size="sm" disabled={disabled || !state.directoryCursor} onClick={() => run(() => owner.refreshDirectory(true))}><ChevronRight className="size-4 shrink-0" aria-hidden="true" />下一批会话</Button>
+        </div>} />
       <MagicTeaPartyTransferPanel activeTitle={session?.title ?? null} busy={disabled} error={null} notice={state.notice}
         onImportFile={importArchive} onExportSession={() => exportArchive('json')} onExportSessionJsonl={() => exportArchive('jsonl')} onExportArchive={() => exportArchive('archive')} />
       <fieldset disabled={disabled} className="min-w-0"><DesktopAiProviderPanel generationMode="stream" showConnectionTest={false} onDirtyChange={setProviderDirty}
         copy={{ serverOutput: { stream: '茶会使用客户端连接', nonStream: '茶会使用客户端连接' }, emptyProfilesHint: '选择客户端 Direct 连接', serverFootnote: '文本茶会尚不支持服务器执行', payloadNoun: '茶会正文' }} /></fieldset>
-      <div className="text-xs text-gray-500">请主动选择客户端执行位置。生成选项会调用当前模型并消耗 Token；点选行动会直接发送，保留输入框草稿。手动生成摘要也会消耗 Token；自动摘要需在当前会话单独开启，不自动补充更新草案或选项请求。媒体附件导入会在写入前拒绝。卡片图片与链接只作资料保存，不自动下载。Tavern 额外系统提示等仅保留原件，沿现有通用卡正文投影。</div>
+      <div className="text-xs text-(--app-text-muted)">请主动选择客户端执行位置。生成选项会调用当前模型并消耗 Token；点选行动会直接发送，保留输入框草稿。手动生成摘要也会消耗 Token；自动摘要需在当前会话单独开启，不自动补充更新草案或选项请求。媒体附件导入会在写入前拒绝。卡片图片与链接只作资料保存，不自动下载。Tavern 额外系统提示等仅保留原件，沿现有通用卡正文投影。</div>
       <MagicTeaPartyOutputPreferencesPanel activeSession={session} preferences={TEA_PREFERENCES} disabled={disabled || !session}
         outputPlanSupported={false} choicesHint="控制同次 JSONL 输出；两种正文模式均可手动生成选项" onChange={patch => { if (currentScope() !== renderScope || disabled) return; if (patch.userDisplayName !== undefined) owner.stageName(patch.userDisplayName); else run(() => owner.updateSettings(patch)); }} />
     </aside>}
@@ -154,10 +158,10 @@ export default function MagicTeaPartyPage() {
       onUpdatePlayerRole={playerRoleId => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ playerRoleId })); }} onUpdateTitle={title => { if (currentScope() === renderScope && !disabled) owner.stageTitle(title); }}
       onLockTitle={() => run(() => owner.update({ titleMeta: { source: 'manual' } }))} onCreateSession={() => run(owner.create)} />}
     beforeChat={<>
-      {roleHasDraft && !editingRole ? <p role="status" className="text-xs text-amber-700">有未保存的角色修改，重新打开对应角色可继续编辑。</p> : null}
-      <section hidden={!editingRole && !roleHasDraft} className="rounded-xl border border-pink-100 bg-white p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2"><h2 ref={roleHeading} tabIndex={-1} className="text-sm font-semibold text-gray-800">会话角色编辑</h2>
-          <button type="button" className="text-xs text-pink-700 hover:underline" disabled={state.busy} onClick={() => { setEditingRoleId(null); roleTrigger.current?.focus(); }}>收起角色编辑</button></div>
+      {roleHasDraft && !editingRole ? <p role="status" className="text-sm text-(--app-text-muted)">有未保存的角色修改，重新打开对应角色可继续编辑。</p> : null}
+      <section hidden={!editingRole && !roleHasDraft} className="rounded-xl border border-(--app-border-strong) bg-(--app-surface) p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2"><h2 ref={roleHeading} tabIndex={-1} className="text-sm font-semibold text-(--app-text)">会话角色编辑</h2>
+          <Button size="sm" disabled={state.busy} onClick={() => { setEditingRoleId(null); roleTrigger.current?.focus(); }}><ChevronUp className="size-4 shrink-0" aria-hidden="true" />收起角色编辑</Button></div>
         <MagicTeaPartyRoleEditor scope={JSON.stringify([session?.id, state.record?.instance])}
           role={editingRole} disabled={disabled} allowDiscardAll
           onDirtyChange={dirty => { roleDirty.current = dirty; setRoleHasDraft(dirty); }} onBusyChange={busy => { roleSaving.current = busy; }}
@@ -188,22 +192,30 @@ export default function MagicTeaPartyPage() {
         onClear={() => { if (!disabled && currentScope() === renderScope) run(owner.clearSummary); }}
         onChange={value => { if ((!disabled || state.isAutoSummarizing) && (!preparing.current || state.isAutoSummarizing) && currentScope() === renderScope) owner.stageSummary(value); }}
         onSave={() => { if (!disabled && currentScope() === renderScope) run(owner.saveDraft); }} dirty={state.summaryDraft !== null}>
-        {state.summaryDraft !== null ? <button className="text-xs text-pink-700 underline" onClick={() => downloadTextFile('magic-tea-party.unsaved-summary.txt', owner.unsavedSummaryText(), 'text/plain')}>导出未保存摘要</button> : null}
+        {state.summaryDraft !== null ? <Button size="sm" onClick={() => downloadTextFile('magic-tea-party.unsaved-summary.txt', owner.unsavedSummaryText(), 'text/plain')}><Download className="size-4 shrink-0" aria-hidden="true" />导出未保存摘要</Button> : null}
       </MagicTeaPartySummaryBody>
-      {confirmed ? <div role="alert" className="rounded-xl border border-red-200 p-3 text-sm">确认删除当前会话及全部消息？整库备份是恢复来源。
-        <button className="ml-3 underline" disabled={disabled} onClick={() => { const confirmation = confirmDelete; setConfirmDelete(null); if (confirmation) run(() => owner.delete(confirmation.incarnation, confirmation.id, confirmation.instance, confirmation.revision)); }}>确认删除</button>
-        <button className="ml-3 underline" onClick={() => setConfirmDelete(null)}>取消</button></div> : null}
-      {state.pending !== 'none' ? <div role="alert" className="rounded-xl border border-amber-200 p-3 text-sm">
-        {state.pending === 'unknown' ? '保存回执未知：先核对原操作，不会重复调用模型。' : '有未保存结果，保留于当前页面。'}
-        <div className="flex gap-3"><button disabled={state.busy} onClick={() => run(owner.resolvePending)}>核对原保存</button>
-          <button disabled={state.busy || state.pending === 'unknown'} onClick={() => run(owner.retryPending)}>重试原保存</button>
-          <button disabled={state.busy || state.pending === 'unknown'} onClick={() => { if (window.confirm('确认放弃当前易失结果？已提交的数据库内容不会删除。')) run(owner.abandonPending); }}>明确放弃易失结果</button>
-          <button onClick={() => downloadTextFile('magic-tea-party.unsaved.txt', owner.unsavedText(), 'text/plain')}>导出未保存内容</button></div>
+      {confirmed ? <div role="alert" className="space-y-3 rounded-xl border border-(--app-border-strong) bg-(--app-surface) p-4 text-sm">确认删除当前会话及全部消息？整库备份是恢复来源。
+        <div className="flex flex-wrap gap-2">
+          <Button variant="danger" size="sm" disabled={disabled} onClick={() => { const confirmation = confirmDelete; setConfirmDelete(null); if (confirmation) run(() => owner.delete(confirmation.incarnation, confirmation.id, confirmation.instance, confirmation.revision)); }}><Trash2 className="size-4 shrink-0" aria-hidden="true" />确认删除</Button>
+          <Button size="sm" onClick={() => setConfirmDelete(null)}><X className="size-4 shrink-0" aria-hidden="true" />取消</Button>
+        </div>
       </div> : null}
-      <div className="flex gap-3 text-xs text-gray-500"><span>当前显示一个有界消息页；完整导出按固定版本读取全部消息</span>
-        <button disabled={disabled || !session} onClick={() => run(() => owner.nextMessages(true))}>首批消息</button>
-        <button disabled={disabled || !state.messageCursor} onClick={() => run(() => owner.nextMessages())}>下一批消息</button>
-        <button disabled={disabled || !session} onClick={() => run(owner.saveDraft)}>保存会话草稿</button>
+      {state.pending !== 'none' ? <div role="alert" className="space-y-3 rounded-xl border border-(--app-border-strong) bg-(--app-surface) p-4 text-sm">
+        {state.pending === 'unknown' ? '保存回执未知：先核对原操作，不会重复调用模型。' : '有未保存结果，保留于当前页面。'}
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={state.busy} onClick={() => run(owner.resolvePending)}><Search className="size-4 shrink-0" aria-hidden="true" />核对原保存</Button>
+          <Button size="sm" disabled={state.busy || state.pending === 'unknown'} onClick={() => run(owner.retryPending)}><RefreshCw className="size-4 shrink-0" aria-hidden="true" />重试原保存</Button>
+          <Button variant="danger" size="sm" disabled={state.busy || state.pending === 'unknown'} onClick={() => { if (window.confirm('确认放弃当前易失结果？已提交的数据库内容不会删除。')) run(owner.abandonPending); }}><Trash2 className="size-4 shrink-0" aria-hidden="true" />明确放弃易失结果</Button>
+          <Button size="sm" onClick={() => downloadTextFile('magic-tea-party.unsaved.txt', owner.unsavedText(), 'text/plain')}><Download className="size-4 shrink-0" aria-hidden="true" />导出未保存内容</Button>
+        </div>
+      </div> : null}
+      <div className="space-y-2">
+        <p className="text-xs text-(--app-text-muted)">消息分批显示，完整导出会包含全部消息。</p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={disabled || !session} onClick={() => run(() => owner.nextMessages(true))}><ChevronUp className="size-4 shrink-0" aria-hidden="true" />首批消息</Button>
+          <Button size="sm" disabled={disabled || !state.messageCursor} onClick={() => run(() => owner.nextMessages())}><ChevronRight className="size-4 shrink-0" aria-hidden="true" />下一批消息</Button>
+          <Button variant="primary" size="sm" disabled={disabled || !session} onClick={() => run(owner.saveDraft)}><Save className="size-4 shrink-0" aria-hidden="true" />保存会话草稿</Button>
+        </div>
       </div>
     </>}
     chat={<>

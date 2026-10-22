@@ -11,7 +11,7 @@ import type { NarrativeHistorySort } from '@mahoshojo/domain/narrative-history-o
 import { CardLibraryModal, type BattleSelectionPayload, type CardLibrarySelectionContext } from '@mahoshojo/ui-web/card-library';
 import { NarrativeHistoryPicker } from '@mahoshojo/ui-web/narrative-history';
 import { MagicalGirlCard, CanshouCard, GeneralCharacterCard, resolveMagicalGirlGradient } from '@mahoshojo/ui-web/character-card';
-import { AiReasoningPanel, GenerationModeSwitcher, JsonSizeIndicator, SaveJsonButton, TokenIndicator, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
+import { AiReasoningPanel, ErrorMessageBox, GenerationModeSwitcher, JsonSizeIndicator, ResultJsonCopyButton, SaveJsonButton, TokenIndicator, useResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { generationActionClassNames, generationSubmitClassName } from '@mahoshojo/ui-web/generation-actions';
 import { SublimationPageFrame, SublimationPageHeader, SublimationSourceInput, SublimationTargetField, SublimationGuidanceField, SublimationNarrativeField, SublimationPreserveFields, SublimationCurrentStateFieldset, SublimationArenaHistoryStrategyFieldset, getDefaultPreserveFields, getPersonalityPreset } from '@mahoshojo/ui-web/sublimation';
 import { ScenarioLanguageField } from '@mahoshojo/ui-web/scenario';
@@ -65,6 +65,7 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
   const importEpoch = useRef(0);
   const [confirmation, setConfirmation] = useState<'unsaved' | 'uncertain' | null>(null);
   const confirmDialog = useRef<HTMLDialogElement>(null);
+  const confirmCancelButton = useRef<HTMLButtonElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historySource, setHistorySource] = useState<SublimationHistorySource | null>(null);
@@ -89,7 +90,10 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
   );
   useResultAutoScroll(resultRef, state.card !== null, { restored: state.resultRestored });
   useEffect(() => {
-    if (confirmation && !confirmDialog.current?.open) confirmDialog.current?.showModal();
+    if (confirmation && !confirmDialog.current?.open) {
+      confirmDialog.current?.showModal();
+      confirmCancelButton.current?.focus();
+    }
     else if (!confirmation && confirmDialog.current?.open) confirmDialog.current.close();
   }, [confirmation]);
   useEscapeLayer({
@@ -187,11 +191,11 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
       <SublimationPageHeader onNavigate={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} loreEnabled={true} />
       <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
         <span>{state.draftError ? '草稿保存不可用，当前输入仍保留' : state.draftSavedAt ? '已自动保存到本机草稿' : '填写后自动保存到本机草稿'}</span>
-        <button className={actionClass} disabled={busy} onClick={() => { if (cloudSavingRef.current) return; if (window.confirm('清除本机升华草稿及当前生成结果？已保存的本地卡和源卡不会删除。')) { session.discardDraft(); setPaste(''); setSelectedHistoryIds([]); } }}>清除草稿</button>
+        <button className={generationActionClassNames.destructive} disabled={busy} onClick={() => { if (cloudSavingRef.current) return; if (window.confirm('清除本机升华草稿及当前生成结果？已保存的本地卡和源卡不会删除。')) { session.discardDraft(); setPaste(''); setSelectedHistoryIds([]); } }}>清除草稿</button>
       </div>
       <QuestionnaireDraftPanel draftError={state.draftError} draftBlocked={session.isDraftBlocked()} busy={busy} actionClass={actionClass} onRetrySave={() => session.retryDraftSave()} />
-      {!guard.ready && !guard.message && <p role="status">正在初始化窗口关闭保护…</p>}
-      {guard.message && <p role="alert">{guard.message}</p>}
+      {!guard.ready && !guard.message && <p role="status" className="mb-3 text-sm text-(--app-text-muted)">正在初始化窗口关闭保护…</p>}
+      {guard.message && <ErrorMessageBox message={guard.message} />}
       <fieldset disabled={busy || blocked} className="min-w-0">
         <legend className="sr-only">升华素材与选项</legend>
         <SublimationSourceInput
@@ -205,7 +209,7 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
         <SublimationTargetField targetTemplate={draft.targetTemplate} sourceTemplateLabel={sourceTemplateLabel} hasCrossTemplateSelection={!!draft.originalData && sourceTemplate !== draft.targetTemplate} disabled={busy || !draft.originalData} onChange={(value) => updateDraft({ targetTemplate: value, fieldsToPreserve: sourceTemplate === value ? getDefaultPreserveFields(value) : [] })} />
         <DesktopSublimationLoreSelector supplementalLore={{ text: draft.loreText, onChange: (loreText) => updateDraft({ loreText }) }} selections={draft.selectedQuestionnaires ?? []} onChange={(selectedQuestionnaires) => updateDraft({ selectedQuestionnaires })} disabled={busy || blocked} onLoadingChange={(loading) => { loreLoadingRef.current = loading; setLoreLoading(loading); }} />
         {preparation.warnings.map((warning) => <p key={warning} role="status" className="text-sm text-amber-700">{warning}</p>)}
-        {preparation.error && <p role="alert">{preparation.error}</p>}
+        {preparation.error && <ErrorMessageBox message={preparation.error} />}
         <SublimationGuidanceField value={draft.userGuidance} disabled={busy} onChange={(userGuidance) => updateDraft({ userGuidance })} />
         <SublimationNarrativeField value={draft.narrativeHistory} disabled={busy} onChange={(narrativeHistory) => updateDraft({ narrativeHistory })}>
           <div className="mt-2 flex flex-wrap gap-2"><input aria-label="上传叙事历史" type="file" accept=".txt,.md,.json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void importFile(file, true); }} /><button className={actionClass} onClick={() => setHistoryOpen(true)}>从本地叙事历史选择</button></div>
@@ -230,12 +234,13 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
         {aiState.generationActive && aiStore.isPreparingGeneration() && <button className={actionClass} onClick={() => { aiStore.cancelPreparingGeneration(); setActionInfo('尚未派发的生成已取消；已保存的 API Key 将保留。'); }}>取消准备</button>}
       </div>
       <TokenIndicator text={[JSON.stringify(draft.originalData ?? {}), draft.userGuidance, draft.narrativeHistory, draft.selectedHistoryReference].filter(Boolean).join('\n\n')} />
-      {actionError && <p role="alert">{actionError}</p>}{actionInfo && <p role="status">{actionInfo}</p>}
-      {state.message && <p role={state.phase === 'uncertain' ? 'alert' : 'status'}>{state.message}</p>}
+      {actionError && <ErrorMessageBox message={actionError} />}
+      {actionInfo && <p role="status" className="mt-3 text-sm text-(--app-text-muted)">{actionInfo}</p>}
+      {state.message && (state.phase === 'uncertain' ? <ErrorMessageBox message={state.message} /> : <p role="status" className="mt-3 text-sm text-(--app-text-muted)">{state.message}</p>)}
       <dialog ref={confirmDialog} aria-labelledby="sublimation-confirm-title" className="m-auto max-w-lg rounded-lg border bg-(--app-surface) p-5 text-(--app-text) backdrop:bg-black/40" onCancel={(event) => { event.preventDefault(); if (!session.isBusy()) setConfirmation(null); }}>
         <h2 id="sublimation-confirm-title" className="text-xl font-semibold">重新升华？</h2><p className="my-3">{confirmation === 'unsaved' ? '当前结果尚未保存到本地卡库。重新升华将替换当前结果，即使失败或取消也无法恢复。可以先保存当前结果。' : '无法确认上次请求是否在服务器执行，它可能已完成并计费。再次升华可能产生重复调用与费用。'}</p>
-        {state.saveError && <p role="alert">{state.saveError}</p>}
-        <div className="flex flex-wrap gap-2"><button autoFocus className={actionClass} disabled={busy} onClick={() => setConfirmation(null)}>取消</button>{confirmation === 'unsaved' && <button className={actionClass} disabled={busy} onClick={async () => { if (await session.saveResult()) { setConfirmation(null); generate(true); } }}>保存后重新升华</button>}<button className={actionClass} disabled={busy} onClick={() => { setConfirmation(null); generate(true); }}>确定重新升华</button></div>
+        {state.saveError && <ErrorMessageBox message={state.saveError} />}
+        <div className="flex flex-wrap gap-2"><button ref={confirmCancelButton} className={actionClass} disabled={busy} onClick={() => setConfirmation(null)}>取消</button>{confirmation === 'unsaved' && <button className={actionClass} disabled={busy} onClick={async () => { if (await session.saveResult()) { setConfirmation(null); generate(true); } }}>保存后重新升华</button>}<button className={actionClass} disabled={busy} onClick={() => { setConfirmation(null); generate(true); }}>确定重新升华</button></div>
       </dialog>
     </div>
     <div ref={resultRef}>
@@ -247,8 +252,11 @@ function SublimationForm({ session, repository }: { session: SublimationSession;
         <div className="card"><h3 className="text-lg font-semibold">保存升华结果</h3><p className="mb-3 text-xs text-gray-500">另存新卡，原始角色与本地历史不会被覆盖。</p>
           {resultCardType && <PrivateResultSave externalLeaveGuard={guard} data={card} cardType={resultCardType} onBusyChange={onCloudSavingChange} isBlocked={() => session.isBusy() || aiStore.isPreparingGeneration() || importingRef.current || loreLoadingRef.current} disabled={!guard.ready || busy} className={generationActionClassNames.primary} />}
                   <button className={generationActionClassNames.primary} disabled={!guard.ready || busy || state.saveStatus === 'saved' || state.saveStatus === 'already-present'} onClick={() => void session.saveResult()}>{state.saving ? '正在保存…' : '保存到本地卡库'}</button>
-          {state.saveStatus === 'saved' && <p role="status">已保存到本地卡库。</p>}{state.saveStatus === 'already-present' && <p role="status">本地卡库已存在相同内容，原记录保持不变。</p>}{state.saveError && <p role="alert">{state.saveError}</p>}
-          <div className="mt-3 flex flex-col gap-3"><SaveJsonButton data={card} mode="download" recommendedMode="download" resolveFileName={() => buildSafeFileName(`升华_${sourceName(card)}`, 'json', '升华结果')} downloadJson={downloadTextFile} /><button className={actionClass} onClick={() => { void Promise.resolve().then(() => navigator.clipboard.writeText(JSON.stringify(card, null, 2))).then(() => setActionInfo('数据卡 JSON 已复制到剪贴板')).catch(() => setActionError('复制失败，请手动选择 JSON 内容后复制。')); }}>复制到剪贴板</button></div>
+          {state.saveStatus === 'saved' && <p role="status" className="mt-3 text-sm text-(--app-text-muted)">已保存到本地卡库。</p>}{state.saveStatus === 'already-present' && <p role="status" className="mt-3 text-sm text-(--app-text-muted)">本地卡库已存在相同内容，原记录保持不变。</p>}{state.saveError && <ErrorMessageBox message={state.saveError} />}
+          <div className="mt-3 flex flex-col gap-3">
+            <SaveJsonButton data={card} mode="download" recommendedMode="download" resolveFileName={() => buildSafeFileName(`升华_${sourceName(card)}`, 'json', '升华结果')} downloadJson={downloadTextFile} />
+            <ResultJsonCopyButton data={card} className={actionClass} onResult={(copied) => copied ? setActionInfo('数据卡 JSON 已复制到剪贴板') : setActionError('复制失败，请手动选择 JSON 内容后复制。')} />
+          </div>
           <JsonSizeIndicator data={card} maxBytes={MAX_DESKTOP_LOCAL_CARD_DOCUMENT_BYTES} hintText="按 UTF-8 字节估算，对照本地卡单条记录上限" warningText="接近本地卡单条上限（4 MiB），保存可能失败，请先精简数据。" />
           <details><summary>查看升华 JSON</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words">{JSON.stringify(card, null, 2)}</pre></details>
         </div>

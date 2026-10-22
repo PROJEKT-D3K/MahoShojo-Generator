@@ -185,6 +185,44 @@ describe('Desktop Sublimation real page/session/executor with fake IPC (not nati
     expect(documents.get(sourceRecord.id)).toEqual(sourceRecord); expect(documents.get(historyRecord.id)).toEqual(historyRecord);
     await click('💾 下载设定文件'); expect(mocks.download.mock.calls[0]![1]).toBe(JSON.stringify(saved.data, null, 2)); await click('复制到剪贴板'); expect(mocks.copy).toHaveBeenCalledWith(JSON.stringify(saved.data, null, 2));
   });
+  it('copies the current result through the shared fallback when the native clipboard rejects', async () => {
+    writeDraft({ originalData: source });
+    await mount(); await click('开始升华');
+    const result = stored().output.card;
+    mocks.copy.mockRejectedValueOnce(new Error('clipboard unavailable'));
+    const execCommand = vi.fn(() => {
+      expect(document.body.querySelector<HTMLTextAreaElement>('textarea[readonly]')?.value).toBe(JSON.stringify(result, null, 2));
+      return true;
+    });
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand });
+    try {
+      await click('复制到剪贴板');
+      expect(execCommand).toHaveBeenCalledWith('copy');
+      expect(container.textContent).toContain('数据卡 JSON 已复制到剪贴板');
+      expect(document.body.querySelector('textarea[readonly]')).toBeNull();
+      expect(stored().output.card).toEqual(result);
+      expect(generationCalls()).toHaveLength(1);
+    } finally { Reflect.deleteProperty(document, 'execCommand'); }
+  });
+  it('does not retry clipboard fallback or report stale feedback after the copied result is cleared', async () => {
+    writeDraft({ originalData: source });
+    await mount(); await click('开始升华');
+    let rejectCopy!: (reason: Error) => void;
+    mocks.copy.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectCopy = reject; }));
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand });
+    try {
+      await click('复制到剪贴板');
+      vi.mocked(window.confirm).mockReturnValueOnce(true);
+      await click('清除草稿');
+      expect(container.querySelector('[aria-label="升华结果"]')).toBeNull();
+      await act(async () => rejectCopy(new Error('late clipboard failure')));
+      expect(execCommand).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain('数据卡 JSON 已复制到剪贴板');
+      expect(container.textContent).not.toContain('复制失败，请手动选择 JSON 内容后复制。');
+      expect(generationCalls()).toHaveLength(1);
+    } finally { Reflect.deleteProperty(document, 'execCommand'); }
+  });
   it.each(['client', 'server'] as const)('%s stream previews, cancels and restores retained raw text without replay', async (location) => {
     preference(location); writeDraft({ originalData: source, targetTemplate: 'general', generationMode: 'stream' }); outputMode = 'stream'; hold = true;
     await mount(); await click('开始升华'); expect(generationCalls()).toHaveLength(1); expect(container.querySelector('[aria-label="流式正文预览"]')?.textContent).toContain('守护归来的人'); expect(container.querySelector('[aria-label="升华结果"]')).toBeNull();
@@ -198,7 +236,9 @@ describe('Desktop Sublimation real page/session/executor with fake IPC (not nati
   });
   it('server JSON is official only for the live response; unsaved overwrite is confirmed and restored signature is unverified', async () => {
     preference('server'); writeDraft({ originalData: source }); await mount(); await click('开始升华'); expect(generationCalls()[0]![0]).toBe('hosted_ai_request'); expect(container.querySelector('[aria-label="升华结果"]')?.textContent).toContain('官方签名（服务器生成）');
-    await click('重新升华'); expect(generationCalls()).toHaveLength(1); expect(container.querySelector('dialog')?.open).toBe(true); await click('取消', container.querySelector('dialog')!);
+    await click('重新升华'); expect(generationCalls()).toHaveLength(1); expect(container.querySelector('dialog')?.open).toBe(true);
+    expect(document.activeElement).toBe(button('取消', container.querySelector('dialog')!));
+    await click('取消', container.querySelector('dialog')!);
     await remount(); expect(container.querySelector('[aria-label="升华结果"]')?.textContent).toContain('含签名字段（本机未验证）'); expect(generationCalls()).toHaveLength(1);
   });
   it('history and save errors preserve the snapshot, draft and result for retry', async () => {

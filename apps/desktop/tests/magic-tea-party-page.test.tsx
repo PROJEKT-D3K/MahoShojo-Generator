@@ -297,6 +297,9 @@ it.each([false, true])('keeps the player selection unchanged while the role-remo
   expect(document).toMatchObject(unknown ? { roles: [], playerRoleId: null } : { roles: [role], playerRoleId: role.id });
   const pending = structuredClone(writes()[0]);
   expect(pending).toMatchObject({ request: { action: 'update', session: { roles: [], playerRoleId: null, draft: '保留草稿' } } });
+  expect(button('重试原保存').disabled).toBe(unknown);
+  expect(button('明确放弃易失结果').disabled).toBe(unknown);
+  expect(button('导出未保存内容').disabled).toBe(false);
   await click(unknown ? '核对原保存' : '重试原保存');
   expect(writes()).toEqual(unknown ? [pending] : [pending, pending]);
   expect(select.value).toBe(''); expect(select.disabled).toBe(false);
