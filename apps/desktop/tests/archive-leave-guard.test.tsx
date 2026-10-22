@@ -54,7 +54,7 @@ const mount = async (strict = false) => {
   await settle();
   return router;
 };
-const exportButton = () => [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('导出整库'))!;
+const exportButton = () => [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('导出卡片与 Web 包归档'))!;
 
 describe('真实归档页面的离开保护（native API mock，仍需真机验收）', () => {
   it('同 tick 开始导出即阻止路径/query、刷新与窗口关闭，完成后恢复', async () => {

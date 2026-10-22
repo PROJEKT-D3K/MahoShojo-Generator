@@ -238,6 +238,7 @@ pub fn open_in_memory() -> Result<BlobStore, BlobError> {
 }
 
 impl BlobStore {
+    #[cfg(test)]
     fn with_connection<T>(
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, BlobError>,
@@ -253,6 +254,18 @@ impl BlobStore {
     /// 之后所有"已存在即成功"的判断都建立在错误的前提上。
     pub fn write(
         &self,
+        digest: &str,
+        bytes: &[u8],
+        now: &str,
+    ) -> Result<BlobWriteOutcome, BlobError> {
+        let connection = lock_connection(&self.connection).map_err(|_| BlobError::Failure)?;
+        self.write_locked(&connection, digest, bytes, now)
+    }
+
+    /// The caller holds the shared connection through blob publication and its owner transaction.
+    pub(crate) fn write_locked(
+        &self,
+        connection: &Connection,
         digest: &str,
         bytes: &[u8],
         now: &str,
@@ -274,20 +287,20 @@ impl BlobStore {
                 // 长度相同才值得读回来校验：这是"已存在即成功"这条规则的实质。
                 let existing = std::fs::read(&target).map_err(|_| BlobError::Failure)?;
                 if digest_of(&existing) == digest {
-                    self.touch(digest, existing.len() as i64, now)?;
+                    Self::record_locked(connection, digest, existing.len() as i64, now)?;
                     return Ok(BlobWriteOutcome::AlreadyPresent);
                 }
                 // 路径由摘要派生，因此"已存在但摘要不符"是确定的存储损坏。
                 // 手上这份字节已验证过就是该摘要的内容，覆盖它不可能丢数据——因此自愈，
                 // 但**必须**让调用方知道（`DESK-056`）。
                 write_atomically(&target, bytes)?;
-                self.record(digest, byte_length, now)?;
+                Self::record_locked(connection, digest, byte_length, now)?;
                 return Ok(BlobWriteOutcome::Repaired);
             }
             Ok(_) => {
                 // 长度不同：同样不可能是正确内容（摘要相同则长度必相同）。
                 write_atomically(&target, bytes)?;
-                self.record(digest, byte_length, now)?;
+                Self::record_locked(connection, digest, byte_length, now)?;
                 return Ok(BlobWriteOutcome::Repaired);
             }
             Err(_) => {}
@@ -297,30 +310,20 @@ impl BlobStore {
         // 磁盘故障）？两者对用户的意义完全不同：后者意味着这台设备的库已经不健康，需要
         // 一次完整性检查（`DESK-065` 的审计）。报 `stored` 会把这种修复说成正常写入，
         // 于是健康告警漏掉整整一类问题。
-        let outcome = match self.exists_in_metadata_unchecked(digest) {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM blob WHERE digest=?1)",
+                [digest],
+                |r| r.get(0),
+            )
+            .map_err(|_| BlobError::Failure)?;
+        let outcome = match exists {
             true => BlobWriteOutcome::Repaired,
             false => BlobWriteOutcome::Stored,
         };
         write_atomically(&target, bytes)?;
-        self.record(digest, byte_length, now)?;
+        Self::record_locked(connection, digest, byte_length, now)?;
         Ok(outcome)
-    }
-
-    /// metadata 里是否已有该 digest。
-    ///
-    /// 与 [`Self::exists_in_metadata`] 的区别是不做 digest 语法解析：调用方已经校验过，
-    /// 这里只是为"该报 `stored` 还是 `repaired`"取一个事实。
-    fn exists_in_metadata_unchecked(&self, digest: &str) -> bool {
-        self.with_connection(|connection| {
-            Ok(connection
-                .query_row(
-                    "SELECT 1 FROM blob WHERE digest = ?1",
-                    rusqlite::params![digest],
-                    |_| Ok(()),
-                )
-                .is_ok())
-        })
-        .unwrap_or(false)
     }
 
     /// 读取一个 blob，并**校验**它的摘要。
@@ -381,44 +384,22 @@ impl BlobStore {
         Ok(self.metadata(digest)?.map(|row| row.byte_length))
     }
 
-    /// 更新最后引用时间（让 GC 的"很久没用"判断有意义）；metadata 缺失时按孤儿补记。
-    ///
-    /// `byte_length` 必须是**实际**长度。补记成 0 会让"这个 blob 有多大"变成一个谎，而
-    /// 配额估算与进度显示都建立在这个数字上。
-    fn touch(&self, digest: &str, byte_length: i64, now: &str) -> Result<(), BlobError> {
-        self.with_connection(|connection| {
-            let changed = connection
-                .execute(
-                    "UPDATE blob SET last_referenced_at = ?2 WHERE digest = ?1",
-                    rusqlite::params![digest, now],
-                )
-                .map_err(|_| BlobError::Failure)?;
-            if changed == 0 {
-                // 文件在、metadata 不在：一次崩溃中断的写入留下的孤儿。
-                // 补记而不是报错，让这次写入正常完成——孤儿状态本身是允许的。
-                insert_metadata(connection, digest, byte_length, now)?;
-            }
-            Ok(())
-        })
-    }
-
-    /// 写入或更新 metadata。
-    ///
-    /// `created_at` 在重写时保持首次落盘时间：它是"这个 blob 何时进入本机"的事实，
-    /// 被一次自愈覆盖改掉就丢了。
-    fn record(&self, digest: &str, byte_length: i64, now: &str) -> Result<(), BlobError> {
-        self.with_connection(|connection| {
-            let changed = connection
-                .execute(
-                    "UPDATE blob SET byte_length = ?2, last_referenced_at = ?3 WHERE digest = ?1",
-                    rusqlite::params![digest, byte_length, now],
-                )
-                .map_err(|_| BlobError::Failure)?;
-            if changed == 0 {
-                insert_metadata(connection, digest, byte_length, now)?;
-            }
-            Ok(())
-        })
+    fn record_locked(
+        connection: &Connection,
+        digest: &str,
+        byte_length: i64,
+        now: &str,
+    ) -> Result<(), BlobError> {
+        let changed = connection
+            .execute(
+                "UPDATE blob SET byte_length = ?2, last_referenced_at = ?3 WHERE digest = ?1",
+                rusqlite::params![digest, byte_length, now],
+            )
+            .map_err(|_| BlobError::Failure)?;
+        if changed == 0 {
+            insert_metadata(connection, digest, byte_length, now)?;
+        }
+        Ok(())
     }
 }
 

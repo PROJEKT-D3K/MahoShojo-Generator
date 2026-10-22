@@ -2777,7 +2777,7 @@ fn history_pending_save_commits_revision_five_as_third_active_chapter() {
 // Produce valid pending records through the existing API, then copy only columns
 // actually present in the historical schema. Never open/migrate the destination.
 pub(crate) fn seed_historical_backup(destination: &Connection, version: i64, save_attempt: bool) {
-    assert!((6..=11).contains(&version));
+    assert!((6..=crate::store::SCHEMA_VERSION).contains(&version));
     let (_root, library) = fixture();
     let store = library.stories();
     let (frozen, parts) = candidate(Product::Battle, true);

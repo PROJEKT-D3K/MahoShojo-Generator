@@ -142,12 +142,12 @@ pub fn scalar_i64(connection: &Connection, sql: &str) -> Result<i64, StoreError>
 /// D1 引入 `provider_profile`（版本 1）；D2.0 在**同一个库**上增加本地卡（版本 2）；
 /// D2.1 增加内容寻址 blob 与 Web 包记录（版本 3、4）。刻意不新开数据库文件：Profile、
 /// 本地卡、Web 包与 blob 同属一台设备上的用户资产，分库会让备份、迁移与"重开应用"各自多一套路径。
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 pub(crate) fn supported_schema_version() -> i64 {
     #[cfg(test)]
     if CANDIDATE_HISTORY_SCHEMA.get() {
-        return 12;
+        return 13;
     }
     SCHEMA_VERSION
 }
@@ -155,7 +155,7 @@ pub(crate) fn supported_schema_version() -> i64 {
 thread_local! { static CANDIDATE_HISTORY_SCHEMA: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// Explicit synthetic-library test scope. Release builds contain neither this
-/// switch nor an environment/IPC override; ordinary open continues to reject candidate 12.
+/// switch nor an environment/IPC override; ordinary open continues to reject candidate 13.
 #[cfg(test)]
 pub(crate) fn with_history_schema_for_test<T>(run: impl FnOnce() -> T) -> T {
     struct Reset(bool);
@@ -309,7 +309,7 @@ pub fn migrate(connection: &Connection) -> Result<(), StoreError> {
 fn migrate_verified(connection: &Connection) -> Result<(), StoreError> {
     apply_steps(connection, MIGRATION_STEPS)?;
     #[cfg(test)]
-    if supported_schema_version() == 12 && user_version(connection)? < 12 {
+    if supported_schema_version() == 13 && user_version(connection)? < 13 {
         migrate_history_candidate_for_test(connection)?;
     }
     Ok(())
@@ -359,6 +359,10 @@ const MIGRATION_STEPS: &[MigrationStep] = &[
     MigrationStep {
         version: 11,
         sql: crate::magic_tea_party::MIGRATION_11,
+    },
+    MigrationStep {
+        version: 12,
+        sql: crate::image_asset::MIGRATION_12,
     },
 ];
 
@@ -452,15 +456,15 @@ pub fn timestamp_sort_key(updated_at: &str) -> Result<i64, StoreError> {
 /// 启动仍是"未应用"状态。
 fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), StoreError> {
     #[cfg(test)]
-    if step.version == 12 {
-        crate::arena_story::branch::resource_probe::mark("migration12.begin.before");
+    if step.version == 13 {
+        crate::arena_story::branch::resource_probe::mark("migration13.begin.before");
     }
     connection
         .execute_batch("BEGIN IMMEDIATE")
         .map_err(|_| StoreError::Failure)?;
     #[cfg(test)]
-    if step.version == 12 {
-        crate::arena_story::branch::resource_probe::mark("migration12.begin.after");
+    if step.version == 13 {
+        crate::arena_story::branch::resource_probe::mark("migration13.begin.after");
     }
 
     let outcome = (|| {
@@ -469,29 +473,29 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
             crate::arena_story::branch::history::verify_schema(connection, step.version - 1)
                 .map_err(|_| StoreError::InvalidDocument)?;
         }
-        if step.version == 12 {
+        if step.version == 13 {
             #[cfg(test)]
-            crate::arena_story::branch::resource_probe::mark("migration12.pre-audit.before");
-            crate::magic_tea_party::verify_schema(connection, 11)?;
-            crate::arena_story::branch::history::verify_schema(connection, 11)
+            crate::arena_story::branch::resource_probe::mark("migration13.pre-audit.before");
+            crate::magic_tea_party::verify_schema(connection, step.version - 1)?;
+            crate::arena_story::branch::history::verify_schema(connection, step.version - 1)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::branch::audit::audit_relations(connection)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::pending::audit(connection)
                 .map_err(|_| StoreError::InvalidDocument)?;
             #[cfg(test)]
-            crate::arena_story::branch::resource_probe::mark("migration12.pre-audit.after");
+            crate::arena_story::branch::resource_probe::mark("migration13.pre-audit.after");
         }
         #[cfg(test)]
-        if step.version == 12 {
-            crate::arena_story::branch::resource_probe::mark("migration12.sql.before");
+        if step.version == 13 {
+            crate::arena_story::branch::resource_probe::mark("migration13.sql.before");
         }
         connection
             .execute_batch(step.sql)
             .map_err(|_| StoreError::Failure)?;
         #[cfg(test)]
-        if step.version == 12 {
-            crate::arena_story::branch::resource_probe::mark("migration12.sql.after");
+        if step.version == 13 {
+            crate::arena_story::branch::resource_probe::mark("migration13.sql.after");
         }
         connection
             .execute(
@@ -507,11 +511,11 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
             crate::arena_story::branch::history::verify_schema(connection, step.version)
                 .map_err(|_| StoreError::InvalidDocument)?;
         }
-        if step.version == 12 {
+        if step.version == 13 {
             #[cfg(test)]
-            crate::arena_story::branch::resource_probe::mark("migration12.post-audit.before");
-            crate::magic_tea_party::verify_schema(connection, 12)?;
-            crate::arena_story::branch::history::verify_schema(connection, 12)
+            crate::arena_story::branch::resource_probe::mark("migration13.post-audit.before");
+            crate::magic_tea_party::verify_schema(connection, 13)?;
+            crate::arena_story::branch::history::verify_schema(connection, 13)
                 .map_err(|_| StoreError::InvalidDocument)?;
             crate::arena_story::branch::history::audit_relations(connection)
                 .map_err(|_| StoreError::InvalidDocument)?;
@@ -526,7 +530,7 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
                 return Err(StoreError::InvalidDocument);
             }
             #[cfg(test)]
-            crate::arena_story::branch::resource_probe::mark("migration12.post-audit.after");
+            crate::arena_story::branch::resource_probe::mark("migration13.post-audit.after");
         }
         Ok(())
     })();
@@ -536,8 +540,8 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
         return Err(error);
     }
     #[cfg(test)]
-    if step.version == 12 {
-        crate::arena_story::branch::resource_probe::mark("migration12.commit.before");
+    if step.version == 13 {
+        crate::arena_story::branch::resource_probe::mark("migration13.commit.before");
     }
     if connection.execute_batch("COMMIT").is_err() {
         // Deferred FK or disk failures can surface only at COMMIT. Do not leave
@@ -546,8 +550,8 @@ fn apply_step(connection: &Connection, step: &MigrationStep) -> Result<(), Store
         return Err(StoreError::Failure);
     }
     #[cfg(test)]
-    if step.version == 12 {
-        crate::arena_story::branch::resource_probe::mark("migration12.commit.after");
+    if step.version == 13 {
+        crate::arena_story::branch::resource_probe::mark("migration13.commit.after");
     }
     Ok(())
 }
@@ -565,20 +569,20 @@ fn rollback_migration(connection: &Connection) -> Result<(), StoreError> {
     }
 }
 
-/// Candidate-only entry. Normal open remains at Tea schema 11 until history compatibility
+/// Candidate-only entry. Normal open remains at image schema 12 until history compatibility
 /// tests and activation review are complete; never accepts a user-supplied SQL step.
 #[cfg(test)]
 pub(crate) fn migrate_history_candidate_for_test(
     connection: &Connection,
 ) -> Result<(), StoreError> {
-    if user_version(connection)? != 11 {
+    if user_version(connection)? != 12 {
         return Err(StoreError::Unavailable);
     }
     apply_step(
         connection,
         &MigrationStep {
-            version: 12,
-            sql: crate::arena_story::branch::schema::MIGRATION_12,
+            version: 13,
+            sql: crate::arena_story::branch::schema::MIGRATION_13,
         },
     )
 }
@@ -867,7 +871,7 @@ mod tests {
 
         let versions = applied_migrations(&store.connection.lock().expect("lock"))
             .expect("migration journal must be readable");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 
         // 重复打开同一个库不会重复执行迁移。
         let reopened = LocalStore::open_in_memory().expect("reopen");
@@ -899,7 +903,7 @@ mod tests {
         };
         let schema = legacy_schema(&c);
         let journal = old_journal(&c);
-        migrate(&c).unwrap();
+        super::migrate_to_version_for_test(&c, 11);
         assert_eq!(user_version(&c), Ok(11));
         assert_eq!(
             applied_migrations(&c).unwrap(),
@@ -930,7 +934,7 @@ mod tests {
         crate::arena_story::branch::history::verify_schema(&c, 11).unwrap();
         assert_eq!(crate::arena_story::branch::history::enabled(&c), Ok(false));
         let changes = c.total_changes();
-        migrate(&c).unwrap();
+        super::migrate_to_version_for_test(&c, 11);
         assert_eq!(c.total_changes(), changes);
     }
 
@@ -976,7 +980,7 @@ mod tests {
         );
         let versions = applied_migrations(&store.connection.lock().expect("lock"))
             .expect("migration journal must be readable");
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1070,7 +1074,7 @@ mod tests {
             assert_eq!(store.schema_version().expect("version"), SCHEMA_VERSION);
             let versions = applied_migrations(&store.connection.lock().expect("lock"))
                 .expect("journal must be readable");
-            assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+            assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         }
 
         // 第三次打开：全部已完成，不重复执行。
@@ -1078,7 +1082,7 @@ mod tests {
             let store = LocalStore::open(&LocalStorePaths::under(&root)).expect("third open");
             assert_eq!(
                 applied_migrations(&store.connection.lock().expect("lock")).expect("journal"),
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
             );
         }
 

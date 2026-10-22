@@ -10,8 +10,14 @@
 
 D5.1-IMG-1a：`ai-core/image-generation` 提供宿主无关的图片创建/查询/停止等待生命周期，
 `ui-web/image-generation` 提供生产反馈与结果视图，并由样板间直接渲染。Web 三渠道与工坊已实际回用；
-网络、凭据、参数和持久化仍归宿主，恢复只查询原任务。Desktop 图片执行与本地资产尚未接入，
+网络、凭据、参数和持久化仍归宿主，恢复只查询原任务。Desktop 图片执行尚未接入，
 完整渠道表单和 Prompt 规则仍待后继共源，见[实施报告](../docs/reports/2026-10-22_223500_图片任务生命周期共源与Web回用.md)。
+
+D5.1-IMG-2a：`contracts/local-image-assets` 定义不可变原图身份、元数据与窄 IPC；
+`local-library/image-assets` 提供仓储端口、头部预算与字节完整性校验，保持平台无关。
+`ui-web/local-images` 由双端 `/local-library` 真实消费；浏览器实际解码位于独立
+`ui-web/local-images/browser-image` 叶子。IndexedDB、SQLite/blob、真实解码与文件出口由宿主实现。
+本片是独立图片库，角色/报告/茶会关联、生成任务持久化与带图 portable archive 仍待后继。
 
 D3.1a 增加 `@mahoshojo/ai-core/magical-girl-details-generation` 显式入口：结构化/Markdown Prompt、
 输出 schema 与未签名角色卡构造由 Web Hosted 和 Desktop Direct 共用；问卷答案分组/精简规则在

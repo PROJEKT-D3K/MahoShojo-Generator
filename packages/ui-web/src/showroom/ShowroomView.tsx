@@ -21,6 +21,7 @@ import type { HomeAssetSource } from '../home/feature-catalog';
 import { BaseModal } from '../modal';
 import { ProductFooter } from '../shell';
 import { SHOWROOM_MAGICAL_GIRL } from './fixtures';
+import { LocalImagesSample } from './LocalImagesSample';
 import { SHOWROOM_SECTIONS, type ShowroomSectionId } from './sections';
 
 export interface ShowroomViewProps {
@@ -337,6 +338,7 @@ function ResultSurfacesSection() {
       <WindowReportSample />
       <StoryReadErrorsSample />
       <ImageGenerationSample />
+      <LocalImagesSample />
       <div className="grid min-w-0 gap-3 md:grid-cols-2" aria-label="竞技场操作反馈样板">
         {(['full', 'lite'] as const).map(appearance => <div key={appearance} className={appearance === 'lite' ? 'battle-lite-shell min-w-0' : 'min-w-0'}>
           <h3 className="text-sm font-medium text-(--app-text-muted)">{appearance === 'lite' ? '简化版' : '完整版'}操作反馈</h3>

@@ -1,0 +1,21 @@
+{
+  "description": "Synthetic 2x3 RGBA PNG, no private content",
+  "payload": {
+    "encoding": "base64",
+    "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAYAAAC56t6BAAAAFElEQVR4nGP4z8Dwn+E/QwMDBgMAj5oKeCEtq6AAAAAASUVORK5CYII=",
+    "byteLength": 77
+  },
+  "asset": {
+    "schemaVersion": 1,
+    "id": "image-df5bb0d08a710f8e7ef96409c1f44b148f73680ea7a741a8b80bfdb03a80abd9",
+    "digest": "sha256:df5bb0d08a710f8e7ef96409c1f44b148f73680ea7a741a8b80bfdb03a80abd9",
+    "title": "合成测试图片",
+    "mimeType": "image/png",
+    "byteLength": 77,
+    "width": 2,
+    "height": 3,
+    "createdAt": "2026-10-22T00:00:00.000Z",
+    "deletedAt": null,
+    "source": "uploaded"
+  }
+}

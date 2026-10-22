@@ -29,6 +29,10 @@ const invokeNative: InvokeFn = (command, args) => invoke(command, args as never)
 
 /** 桶的用户文案——按契约常量的含义写，不按 kind 字面直译。 */
 const BUCKET_LABELS: Record<DesktopLocalLibraryAuditKind, string> = {
+  'image-record-without-reference': '图片记录缺少内容引用',
+  'image-record-invalid': '图片记录元数据不一致',
+  'image-reference-file-missing': '图片找不到内容文件',
+  'image-reference-bytes-mismatch': '图片内容的摘要或长度不符',
   'reference-file-missing': '包找不到内容文件',
   'reference-bytes-mismatch': '内容文件与记录的摘要或长度不符',
   'record-without-reference': '包记录缺少内容引用（表现为打不开）',
@@ -38,6 +42,7 @@ const BUCKET_LABELS: Record<DesktopLocalLibraryAuditKind, string> = {
 };
 
 const DAMAGE_KINDS: ReadonlySet<string> = new Set([
+  'image-record-without-reference', 'image-record-invalid', 'image-reference-file-missing', 'image-reference-bytes-mismatch',
   'reference-file-missing',
   'reference-bytes-mismatch',
   'record-without-reference',
@@ -48,6 +53,13 @@ const shortDigest = (digest: string): string => (digest.length > 12 ? `${digest.
 /** 一条 finding 的一行定位信息；报告本身不携带文件路径（`DESK-057`）。 */
 const describeFinding = (finding: DesktopLocalLibraryAuditFinding): string => {
   switch (finding.kind) {
+    case 'image-record-without-reference':
+    case 'image-record-invalid':
+      return `图片 ${finding.imageId}`;
+    case 'image-reference-file-missing':
+      return `图片 ${finding.imageId} → 内容 ${shortDigest(finding.digest)}`;
+    case 'image-reference-bytes-mismatch':
+      return `图片 ${finding.imageId} → 内容 ${shortDigest(finding.digest)}：记录 ${formatBytes(finding.expectedByteLength)} / 实际 ${formatBytes(finding.actualByteLength)}`;
     case 'reference-file-missing':
       return `包 ${finding.packageId} → 内容 ${shortDigest(finding.digest)}`;
     case 'reference-bytes-mismatch':
@@ -182,7 +194,7 @@ export const LocalLibraryAuditPanel = ({ enabled, maintenanceBusy, acquireOperat
       {summary !== null && (
         <div className="mt-3 flex flex-col gap-3 text-sm">
           <p className="text-(--app-text-muted)">
-            本次检查覆盖 {summary.webPackageCount} 个包 / {summary.referencedBlobCount} 份引用内容 / {summary.blobMetadataCount} 条内容记录。
+            本次检查覆盖 {summary.webPackageCount} 个包 / {summary.imageAssetCount} 张图片 / {summary.referencedBlobCount} 份引用内容 / {summary.blobMetadataCount} 条内容记录。
           </p>
           {summary.buckets.length === 0 ? (
             <p role="status">未发现不一致。</p>
@@ -190,7 +202,7 @@ export const LocalLibraryAuditPanel = ({ enabled, maintenanceBusy, acquireOperat
             <>
               {summary.hasDamage && (
                 <p role="alert" className="text-(--app-accent-strong)">
-                  发现可能影响使用的问题：受影响的包会打不开或内容不符。归档导出会跳过打不开的内容。
+                  发现可能影响使用的问题：受影响的包或图片可能打不开或内容不符。请保留原记录并检查原件；卡片与 Web 包归档不包含图片库。
                 </p>
               )}
               <ul className="flex flex-col gap-3">

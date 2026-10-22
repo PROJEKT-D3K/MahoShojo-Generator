@@ -3,10 +3,12 @@
 import { useEffect, useMemo } from 'react';
 import { LocalArchivePanel, useLocalArchiveView } from '@mahoshojo/ui-web/local-archive';
 import { LocalLibraryPageLayout, LocalCardsPanel, useLocalCardsController, type LocalCardsHost } from '@mahoshojo/ui-web/local-cards';
+import { LocalImagesPanel, useLocalImagesController } from '@mahoshojo/ui-web/local-images';
 
 import { LocalLibraryStatusNote } from '@/components/shared/LocalLibraryStatusNote';
 import { createWebArchiveHost, WEB_LIBRARY_ARCHIVE_LIMITS } from '@/lib/local-library/archive-host';
 import { getLocalCardRepository } from '@/lib/local-library/card-repository';
+import { createWebImageHost } from '@/lib/local-library/image-assets';
 
 /**
  * 设备级本地库页面。
@@ -31,6 +33,8 @@ export function LocalLibraryPage() {
     describeError: (cause) => (cause instanceof Error ? cause.message : '本地库操作失败，请重试。'),
   }), []);
   const cards = useLocalCardsController(cardsHost);
+  const imagesHost = useMemo(() => createWebImageHost(), []);
+  const images = useLocalImagesController(imagesHost);
   const archiveBusy = archive.model.exporting || archive.model.inspecting || archive.model.applying;
   const { reload } = cards.controller.actions;
 
@@ -45,6 +49,8 @@ export function LocalLibraryPage() {
 
       <LocalCardsPanel model={cards.model} actions={cards.controller.actions} disabled={archiveBusy} />
 
+      <LocalImagesPanel model={images.model} actions={images.controller.actions} disabled={archiveBusy} />
+
       <LocalArchivePanel {...archive} />
 
       <section className="rounded-lg border border-(--app-border) bg-(--app-surface) p-4">
@@ -52,7 +58,7 @@ export function LocalLibraryPage() {
         <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-(--app-text-muted)">
           <li>
             <strong className="font-medium">整库备份与灾难恢复</strong>：上面的导出是 portable archive，
-            用于换设备与跨浏览器搬运；它不是「把整台设备的状态快照下来」的备份。恢复流程尚未交付。
+            只携带卡片与 Web 包，不包含独立图片；它不是「把整台设备的状态快照下来」的备份。Web 暂无整库快照与恢复，图片可单图导出后在另一端上传。
           </li>
           <li>
             <strong className="font-medium">Web 包回收站</strong>：从本机删除 Web 包是彻底移除，没有回收站。

@@ -143,6 +143,7 @@ pub fn collect(
                  WHERE NOT EXISTS (
                      SELECT 1 FROM web_package_archive_ref AS ref WHERE ref.digest = blob.digest
                  )
+                 AND NOT EXISTS (SELECT 1 FROM image_asset_blob_ref AS ref WHERE ref.digest = blob.digest)
                  ORDER BY blob.digest",
             )
             .map_err(|_| GarbageCollectionError::Failure)?;
@@ -184,7 +185,8 @@ pub fn collect(
             .execute(
                 "DELETE FROM blob
                  WHERE digest = ?1
-                   AND NOT EXISTS (SELECT 1 FROM web_package_archive_ref WHERE digest = ?1)",
+                   AND NOT EXISTS (SELECT 1 FROM web_package_archive_ref WHERE digest = ?1)
+                   AND NOT EXISTS (SELECT 1 FROM image_asset_blob_ref WHERE digest = ?1)",
                 rusqlite::params![digest],
             )
             .map_err(|_| GarbageCollectionError::Failure)?;

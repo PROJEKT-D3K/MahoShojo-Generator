@@ -153,7 +153,7 @@ describe('Desktop 本地库数据卡列表与回收站（IPC mock，仍需真机
     // 审计面板持有的是页面级同一把维护锁：卡写入口在 fieldset disabled 下随之禁用。
     expect(button('移入回收站…')?.disabled).toBe(true);
     await act(async () => {
-      finish({ findings: [], schemaVersion: 4, referencedBlobCount: 1, blobMetadataCount: 1, webPackageCount: 0 });
+      finish({ findings: [], schemaVersion: 4, referencedBlobCount: 1, blobMetadataCount: 1, webPackageCount: 0, imageAssetCount: 0 });
     });
     await waitFor(() => button('移入回收站…')?.disabled === false);
     expect(container.textContent).toContain('未发现不一致');
@@ -164,7 +164,7 @@ describe('Desktop 本地库数据卡列表与回收站（IPC mock，仍需真机
     host.runExport.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     await mount();
     expect(button('移入回收站…')?.disabled).toBe(false);
-    await click(button('导出整库'));
+    await click(button('导出卡片与 Web 包归档'));
     expect(button('移入回收站…')?.disabled).toBe(true);
     await act(async () => { finish({ location: 'archive.zip', byteLength: 1, entryCount: 1 }); });
     await waitFor(() => button('移入回收站…')?.disabled === false);

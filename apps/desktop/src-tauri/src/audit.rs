@@ -53,10 +53,30 @@ use crate::store::{lock_connection, StoreError};
     rename_all_fields = "camelCase"
 )]
 pub enum AuditFinding {
+    ImageRecordWithoutReference {
+        image_id: String,
+    },
+    ImageReferenceFileMissing {
+        image_id: String,
+        digest: String,
+    },
+    ImageReferenceBytesMismatch {
+        image_id: String,
+        digest: String,
+        expected_byte_length: i64,
+        actual_byte_length: i64,
+        length_matches: bool,
+    },
+    ImageRecordInvalid {
+        image_id: String,
+    },
     /// 引用行存在，但它指向的 blob 文件不在磁盘上。
     ///
     /// 这是**损坏**，不是孤儿：用户在界面上仍看得见这个包，但点开打不开。
-    ReferenceFileMissing { package_id: String, digest: String },
+    ReferenceFileMissing {
+        package_id: String,
+        digest: String,
+    },
     /// 文件在，但重算的摘要或长度与 metadata 不符。
     ///
     /// 与上一桶分开：症状都是"打不开"，但成因不同——一个是文件被清理工具或磁盘故障删掉，
@@ -72,11 +92,18 @@ pub enum AuditFinding {
         length_matches: bool,
     },
     /// 有 metadata，无任何引用。可回收候选。
-    UnreferencedMetadata { digest: String },
+    UnreferencedMetadata {
+        digest: String,
+    },
     /// 有文件，无 metadata。崩溃窗口产物，**允许存在**。
-    OrphanFile { digest: String, byte_length: i64 },
+    OrphanFile {
+        digest: String,
+        byte_length: i64,
+    },
     /// 包记录存在但没有引用行。外键方向允许这种状态。
-    RecordWithoutReference { package_id: String },
+    RecordWithoutReference {
+        package_id: String,
+    },
     /// `PRAGMA foreign_key_check` 报出的违规。
     ForeignKeyViolation {
         table: String,
@@ -91,6 +118,10 @@ impl AuditFinding {
     #[allow(dead_code, reason = "D2.2b 之后由渲染层与 command 分组消费")]
     pub fn kind(&self) -> &'static str {
         match self {
+            AuditFinding::ImageRecordWithoutReference { .. } => "image-record-without-reference",
+            AuditFinding::ImageReferenceFileMissing { .. } => "image-reference-file-missing",
+            AuditFinding::ImageReferenceBytesMismatch { .. } => "image-reference-bytes-mismatch",
+            AuditFinding::ImageRecordInvalid { .. } => "image-record-invalid",
             AuditFinding::ReferenceFileMissing { .. } => "reference-file-missing",
             AuditFinding::ReferenceBytesMismatch { .. } => "reference-bytes-mismatch",
             AuditFinding::UnreferencedMetadata { .. } => "unreferenced-metadata",
@@ -108,7 +139,11 @@ impl AuditFinding {
     pub fn is_user_visible_damage(&self) -> bool {
         matches!(
             self,
-            AuditFinding::ReferenceFileMissing { .. }
+            AuditFinding::ImageRecordWithoutReference { .. }
+                | AuditFinding::ImageReferenceFileMissing { .. }
+                | AuditFinding::ImageReferenceBytesMismatch { .. }
+                | AuditFinding::ImageRecordInvalid { .. }
+                | AuditFinding::ReferenceFileMissing { .. }
                 | AuditFinding::ReferenceBytesMismatch { .. }
                 | AuditFinding::RecordWithoutReference { .. }
         )
@@ -129,6 +164,7 @@ pub struct AuditReport {
     pub referenced_blob_count: i64,
     pub blob_metadata_count: i64,
     pub web_package_count: i64,
+    pub image_asset_count: i64,
 }
 
 impl AuditReport {
@@ -223,10 +259,12 @@ pub fn audit(
     // 而纯 SQL 那一半是廉价且原子的；混在一起会让"审计很慢"变成无差别的事实。
     let mut findings = Vec::new();
     let web_package_count = scalar(&guard, "SELECT COUNT(*) FROM local_web_package")?;
+    let image_asset_count = scalar(&guard, "SELECT COUNT(*) FROM local_image_asset")?;
     let blob_metadata_count = scalar(&guard, "SELECT COUNT(*) FROM blob")?;
 
     // 桶一、二：每条引用行都指向一个必须存在、且内容与 metadata 一致的 blob。
-    let referenced_blob_count = audit_referenced_blobs(&guard, paths, &mut findings)?;
+    let referenced_blob_count = audit_referenced_blobs(&guard, paths, &mut findings)?
+        + audit_images(&guard, paths, &mut findings)?;
 
     // 桶三：有 metadata、无引用。
     findings.extend(audit_unreferenced(&guard)?);
@@ -249,11 +287,77 @@ pub fn audit(
         referenced_blob_count,
         blob_metadata_count,
         web_package_count,
+        image_asset_count,
     })
 }
 
 fn scalar(connection: &rusqlite::Connection, sql: &str) -> Result<i64, AuditError> {
     crate::store::scalar_i64(connection, sql).map_err(|_| AuditError::Failure)
+}
+
+fn audit_images(
+    connection: &rusqlite::Connection,
+    paths: &BlobPaths,
+    findings: &mut Vec<AuditFinding>,
+) -> Result<i64, AuditError> {
+    use rusqlite::OptionalExtension;
+    use std::io::Read;
+    for asset in crate::image_asset::all_assets(connection).map_err(|_| AuditError::Failure)? {
+        if crate::image_asset::validate_asset(&asset).is_err() {
+            findings.push(AuditFinding::ImageRecordInvalid {
+                image_id: asset.id.clone(),
+            });
+            continue;
+        }
+        let reference:Option<(String,Option<i64>)>=connection.query_row(
+            "SELECT r.digest,b.byte_length FROM image_asset_blob_ref r LEFT JOIN blob b ON b.digest=r.digest WHERE r.image_id=?1",
+            [&asset.id],|r|Ok((r.get(0)?,r.get(1)?)),
+        ).optional().map_err(|_|AuditError::Failure)?;
+        let Some((digest, length)) = reference else {
+            findings.push(AuditFinding::ImageRecordWithoutReference { image_id: asset.id });
+            continue;
+        };
+        if digest != asset.digest || length != Some(asset.byte_length as i64) {
+            findings.push(AuditFinding::ImageRecordInvalid {
+                image_id: asset.id.clone(),
+            });
+            continue;
+        }
+        let file = blob_path(paths, &digest)
+            .ok()
+            .and_then(|path| std::fs::File::open(path).ok());
+        let Some(file) = file else {
+            findings.push(AuditFinding::ImageReferenceFileMissing {
+                image_id: asset.id,
+                digest,
+            });
+            continue;
+        };
+        let actual = file.metadata().map_err(|_| AuditError::Failure)?.len();
+        let expected = length.unwrap_or(-1);
+        let matches = actual == expected as u64;
+        let mut bytes = Vec::new();
+        let correct = matches
+            && actual <= crate::image_asset::MAX_BYTES as u64
+            && file
+                .take(crate::image_asset::MAX_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .is_ok()
+            && bytes.len() as u64 == actual
+            && digest_of(&bytes) == digest;
+        if !correct {
+            findings.push(AuditFinding::ImageReferenceBytesMismatch {
+                image_id: asset.id,
+                digest,
+                expected_byte_length: expected.max(0),
+                actual_byte_length: actual as i64,
+                length_matches: matches,
+            });
+        } else if crate::image_asset::check_shape(&asset, &bytes).is_err() {
+            findings.push(AuditFinding::ImageRecordInvalid { image_id: asset.id });
+        }
+    }
+    scalar(connection, "SELECT COUNT(*) FROM image_asset_blob_ref")
 }
 
 /// 桶一、二：引用行的目标必须存在，且摘要与长度都对得上。
@@ -351,6 +455,7 @@ fn audit_unreferenced(connection: &rusqlite::Connection) -> Result<Vec<AuditFind
              WHERE NOT EXISTS (
                  SELECT 1 FROM web_package_archive_ref AS ref WHERE ref.digest = blob.digest
              )
+             AND NOT EXISTS (SELECT 1 FROM image_asset_blob_ref AS ref WHERE ref.digest = blob.digest)
              ORDER BY blob.digest",
         )
         .map_err(|_| AuditError::Failure)?;
@@ -502,6 +607,10 @@ impl FindingDigest for AuditFinding {
             | AuditFinding::OrphanFile { digest, .. } => digest,
             AuditFinding::RecordWithoutReference { package_id } => package_id,
             AuditFinding::ForeignKeyViolation { table, .. } => table,
+            AuditFinding::ImageRecordWithoutReference { image_id }
+            | AuditFinding::ImageRecordInvalid { image_id }
+            | AuditFinding::ImageReferenceFileMissing { image_id, .. }
+            | AuditFinding::ImageReferenceBytesMismatch { image_id, .. } => image_id,
         }
     }
 }

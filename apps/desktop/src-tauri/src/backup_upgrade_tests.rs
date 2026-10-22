@@ -1,4 +1,4 @@
-//! Synthetic file-open tests for the Tea11 and candidate-history12 backup barriers.
+//! Synthetic file-open tests for the image12 and candidate-history13 backup barriers.
 use super::*;
 
 fn install_historical(root: &Path, version: i64) -> String {
@@ -105,12 +105,12 @@ fn pre_upgrade_snapshot_preserves_each_original_schema_and_uncheckpointed_wal() 
         assert_eq!(
             backup_ids(root),
             before,
-            "already 11 does not back up again"
+            "already current does not back up again"
         );
         let reopened = LocalLibrary::open(root).unwrap();
         assert_eq!(
             verify_sqlite(&reopened.connection().lock().unwrap()),
-            Ok(11)
+            Ok(SCHEMA_VERSION)
         );
     }
 }
@@ -279,7 +279,7 @@ fn pre_upgrade_migration_failure_retains_old_backup_and_real_restore_can_reupgra
     let restored = LocalLibrary::open(root).unwrap();
     assert_eq!(
         verify_sqlite(&restored.connection().lock().unwrap()),
-        Ok(11)
+        Ok(SCHEMA_VERSION)
     );
     assert_pending(
         &restored.connection().lock().unwrap(),
@@ -355,8 +355,11 @@ fn pre_upgrade_fresh_is_narrow_and_formal11_reopen_does_not_backup_again() {
         let _instance = InstanceGuard::acquire(root).unwrap();
         let previous = install_historical(root, version);
         let live = LocalLibrary::open(root).unwrap();
-        assert_eq!(verify_sqlite(&live.connection().lock().unwrap()), Ok(11));
-        if version < 11 {
+        assert_eq!(
+            verify_sqlite(&live.connection().lock().unwrap()),
+            Ok(SCHEMA_VERSION)
+        );
+        if version < SCHEMA_VERSION {
             let backup = added_backup(root, &[previous]);
             assert_eq!(
                 verify_sqlite(
@@ -458,11 +461,11 @@ fn synthetic_history11_cannot_open_migrate_or_backup_as_tea11() {
                     .unwrap();
             }
             c.execute_batch("BEGIN IMMEDIATE").unwrap();
-            c.execute_batch(branch::schema::MIGRATION_12).unwrap();
+            c.execute_batch(branch::schema::MIGRATION_13).unwrap();
             c.execute_batch("INSERT OR IGNORE INTO schema_migration VALUES (11,'old-history'); PRAGMA user_version=11; COMMIT").unwrap();
             // Reproduce the unpublished history11 shape, and also prove that
             // merely adding valid Tea tables cannot disguise the history columns.
-            branch::history::verify_schema(&c, 12).unwrap();
+            branch::history::verify_schema(&c, 13).unwrap();
             let main = fs::read(root.join(DATABASE_FILE)).unwrap();
             let wal_bytes = fs::read(root.join("library.sqlite-wal")).ok();
             let data = originals(&c, 11, true);
@@ -537,7 +540,7 @@ fn tea_rows(c: &Connection) -> Vec<Vec<Vec<Value>>> {
 }
 
 #[test]
-fn candidate12_failure_rolls_back_to_nonempty_tea11_with_verified_prebackup() {
+fn candidate13_failure_rolls_back_to_nonempty_tea11_with_verified_prebackup() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let _instance = InstanceGuard::acquire(root).unwrap();
@@ -554,7 +557,7 @@ fn candidate12_failure_rolls_back_to_nonempty_tea11_with_verified_prebackup() {
         Ok(10)
     );
     let c = Connection::open(root.join(DATABASE_FILE)).unwrap();
-    c.execute_batch("CREATE TRIGGER migration_journal_fault BEFORE INSERT ON schema_migration WHEN NEW.version=12 BEGIN SELECT RAISE(ABORT,'candidate failure'); END;").unwrap();
+    c.execute_batch("CREATE TRIGGER migration_journal_fault BEFORE INSERT ON schema_migration WHEN NEW.version=13 BEGIN SELECT RAISE(ABORT,'candidate failure'); END;").unwrap();
     let data = originals(&c, 11, true);
     let expected_tea = tea_rows(&c);
     let schema = rows(
@@ -567,7 +570,7 @@ fn candidate12_failure_rolls_back_to_nonempty_tea11_with_verified_prebackup() {
         Some(StoreError::Failure)
     );
     assert!(c.is_autocommit());
-    assert_eq!(verify_sqlite(&c), Ok(11));
+    assert_eq!(verify_sqlite(&c), Ok(SCHEMA_VERSION));
     assert_eq!(originals(&c, 11, true), data);
     assert_eq!(tea_rows(&c), expected_tea);
     assert_eq!(
@@ -580,7 +583,7 @@ fn candidate12_failure_rolls_back_to_nonempty_tea11_with_verified_prebackup() {
     let prebackup = added_backup(root, &before);
     let snapshot =
         open_immutable_database(&Path::new(&prebackup.absolute_path).join(DATABASE_FILE)).unwrap();
-    assert_eq!(verify_sqlite(&snapshot), Ok(11));
+    assert_eq!(verify_sqlite(&snapshot), Ok(SCHEMA_VERSION));
     assert_eq!(tea_rows(&snapshot), expected_tea);
     assert_eq!(originals(&snapshot, 11, true), data);
     drop(snapshot);
@@ -591,14 +594,14 @@ fn candidate12_failure_rolls_back_to_nonempty_tea11_with_verified_prebackup() {
     with_history_schema_for_test(|| {
         let live = LocalLibrary::open(root).unwrap();
         let c = live.connection().lock().unwrap();
-        assert_eq!(verify_sqlite(&c), Ok(12));
+        assert_eq!(verify_sqlite(&c), Ok(13));
         assert_eq!(tea_rows(&c), expected_tea);
     });
     let retry_backup = added_backup(root, &before);
     let snapshot =
         open_immutable_database(&Path::new(&retry_backup.absolute_path).join(DATABASE_FILE))
             .unwrap();
-    assert_eq!(verify_sqlite(&snapshot), Ok(11));
+    assert_eq!(verify_sqlite(&snapshot), Ok(SCHEMA_VERSION));
     assert_eq!(tea_rows(&snapshot), expected_tea);
     drop(snapshot);
     let before = backup_ids(root);
@@ -636,7 +639,7 @@ fn nonempty_tea11_candidate_prebackup_failure_leaves_db_wal_and_pending_untouche
         with_history_schema_for_test(|| LocalLibrary::open(root).err()),
         Some(StoreError::UpgradeBackup(_))
     ));
-    assert_eq!(verify_sqlite(&c), Ok(11));
+    assert_eq!(verify_sqlite(&c), Ok(SCHEMA_VERSION));
     assert_eq!(originals(&c, 11, true), expected);
     assert_eq!(tea_rows(&c), expected_tea);
     assert_eq!(fs::read(root.join(DATABASE_FILE)).unwrap(), main);

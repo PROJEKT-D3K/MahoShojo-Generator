@@ -44,6 +44,9 @@ it('keeps preflight, cancellation and one confirmed import while shared buttons 
   host.applyArchive.mockReturnValue(pending.promise);
   const submit = vi.fn((event: React.FormEvent) => event.preventDefault());
   await act(async () => root.render(<form onSubmit={submit}><LocalArchiveSection host={host} maxArchiveBytes={1024} /></form>));
+  expect(button('export-start').textContent).toBe('导出卡片与 Web 包归档');
+  expect(container.textContent).toContain('独立图片不在此归档中');
+  expect(container.textContent).not.toContain('导出整库');
   expect(button('import-confirm')).toBeNull();
 
   await click('import-pick');

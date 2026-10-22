@@ -40,6 +40,7 @@ export interface LocalLibraryAuditSummary {
   readonly referencedBlobCount: number;
   readonly blobMetadataCount: number;
   readonly webPackageCount: number;
+  readonly imageAssetCount: number;
 }
 
 export const AUDIT_LOCAL_LIBRARY_COMMAND = 'audit_local_library' as const;
@@ -107,6 +108,7 @@ export const summarizeLocalLibraryAudit = (
     referencedBlobCount: parsed.referencedBlobCount,
     blobMetadataCount: parsed.blobMetadataCount,
     webPackageCount: parsed.webPackageCount,
+    imageAssetCount: parsed.imageAssetCount,
   };
 };
 

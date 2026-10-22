@@ -57,6 +57,7 @@ struct AuditReportFixture {
     referenced_blob_count: i64,
     blob_metadata_count: i64,
     web_package_count: i64,
+    image_asset_count: i64,
 }
 
 #[derive(Deserialize, serde::Serialize)]
@@ -101,6 +102,23 @@ fn parse() -> Fixture {
 fn audit_buckets_match_the_typescript_authority_in_a_stable_order() {
     let fixture = parse();
     let ours: Vec<&str> = [
+        AuditFinding::ImageRecordWithoutReference {
+            image_id: String::new(),
+        },
+        AuditFinding::ImageRecordInvalid {
+            image_id: String::new(),
+        },
+        AuditFinding::ImageReferenceFileMissing {
+            image_id: String::new(),
+            digest: String::new(),
+        },
+        AuditFinding::ImageReferenceBytesMismatch {
+            image_id: String::new(),
+            digest: String::new(),
+            expected_byte_length: 0,
+            actual_byte_length: 0,
+            length_matches: false,
+        },
         AuditFinding::ReferenceFileMissing {
             package_id: String::new(),
             digest: String::new(),
@@ -149,6 +167,23 @@ fn damage_kinds_match_the_typescript_authority() {
     let section = fixture.maintenance;
 
     let ours: Vec<&str> = [
+        AuditFinding::ImageRecordWithoutReference {
+            image_id: String::new(),
+        },
+        AuditFinding::ImageRecordInvalid {
+            image_id: String::new(),
+        },
+        AuditFinding::ImageReferenceFileMissing {
+            image_id: String::new(),
+            digest: String::new(),
+        },
+        AuditFinding::ImageReferenceBytesMismatch {
+            image_id: String::new(),
+            digest: String::new(),
+            expected_byte_length: 0,
+            actual_byte_length: 0,
+            length_matches: false,
+        },
         AuditFinding::ReferenceFileMissing {
             package_id: String::new(),
             digest: String::new(),

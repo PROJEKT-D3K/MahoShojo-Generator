@@ -71,11 +71,29 @@ const asReport = (
     referencedBlobCount: 1,
     blobMetadataCount: 1,
     webPackageCount: 1,
+    imageAssetCount: 0,
     ...overrides,
   }) as DesktopLocalLibraryAuditReport;
 
 describe('桌面本地库审计', () => {
   const fixture = readFixture();
+
+  it('图片损坏进入不可清理的损坏桶并保留图片规模', () => {
+    const imageId = `image-${'a'.repeat(64)}`;
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const findings: DesktopLocalLibraryAuditFinding[] = [
+      { kind: 'image-record-without-reference', imageId },
+      { kind: 'image-reference-file-missing', imageId, digest },
+      { kind: 'image-reference-bytes-mismatch', imageId, digest, expectedByteLength: 10, actualByteLength: 10, lengthMatches: true },
+      { kind: 'image-record-invalid', imageId: 'corrupt-id' },
+    ];
+    for (const finding of findings) {
+      const summary = summarizeLocalLibraryAudit(asReport([finding], { imageAssetCount: 3 }));
+      expect(summary.hasDamage).toBe(true);
+      expect(summary.hasReclaimableSpace).toBe(false);
+      expect(summary.imageAssetCount).toBe(3);
+    }
+  });
 
   it('空报告按"没有该类问题"呈现，且保留规模分母', () => {
     const summary = summarizeLocalLibraryAudit(

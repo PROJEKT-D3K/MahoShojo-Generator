@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./local-image-assets": "./src/local-image-assets.ts",
     "./admin": {
       "types": "./src/admin.ts",
       "import": "./src/admin.ts",

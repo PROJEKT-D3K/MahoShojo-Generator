@@ -1,4 +1,5 @@
 import { z } from './zod';
+import { LocalImageIdSchema } from './local-image-assets';
 
 import { AnnouncementListSchema } from './announcements';
 import { OnlineDataCardTypeSchema } from './data-cards';
@@ -468,6 +469,12 @@ export type DesktopListWebPackagesResponse = z.infer<typeof DesktopListWebPackag
 
 /** 审计的一个发现。`kind` 是桶，`digest` / `packageId` 是定位信息。 */
 export const DesktopLocalLibraryAuditFindingSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('image-record-without-reference'), imageId: LocalImageIdSchema }).strict(),
+  // Invalid rows can contain even an empty ID; diagnostics must remain readable in that case.
+  z.object({ kind: z.literal('image-record-invalid'), imageId: z.string() }).strict(),
+  z.object({ kind: z.literal('image-reference-file-missing'), imageId: LocalImageIdSchema, digest: DesktopLocalCardDigestSchema }).strict(),
+  z.object({ kind: z.literal('image-reference-bytes-mismatch'), imageId: LocalImageIdSchema, digest: DesktopLocalCardDigestSchema,
+    expectedByteLength: z.number().int().nonnegative(), actualByteLength: z.number().int().nonnegative(), lengthMatches: z.boolean() }).strict(),
   z
     .object({
       kind: z.literal('reference-file-missing'),
@@ -528,6 +535,10 @@ export type DesktopLocalLibraryAuditFinding = z.infer<
 
 /** 审计的桶标识。UI 按它分组统计。 */
 export const DESKTOP_LOCAL_LIBRARY_AUDIT_KINDS = [
+  'image-record-without-reference',
+  'image-record-invalid',
+  'image-reference-file-missing',
+  'image-reference-bytes-mismatch',
   'reference-file-missing',
   'reference-bytes-mismatch',
   'unreferenced-metadata',
@@ -547,6 +558,10 @@ export type DesktopLocalLibraryAuditKind = (typeof DESKTOP_LOCAL_LIBRARY_AUDIT_K
  * "包打不开"）。单独把它算作损坏会让同一件事被报告两次。
  */
 export const DESKTOP_LOCAL_LIBRARY_AUDIT_DAMAGE_KINDS = [
+  'image-record-without-reference',
+  'image-record-invalid',
+  'image-reference-file-missing',
+  'image-reference-bytes-mismatch',
   'reference-file-missing',
   'reference-bytes-mismatch',
   'record-without-reference',
@@ -563,6 +578,7 @@ export const DesktopLocalLibraryAuditReportSchema = z
     referencedBlobCount: z.number().int().nonnegative(),
     blobMetadataCount: z.number().int().nonnegative(),
     webPackageCount: z.number().int().nonnegative(),
+    imageAssetCount: z.number().int().nonnegative(),
   })
   .strict();
 export type DesktopLocalLibraryAuditReport = z.infer<

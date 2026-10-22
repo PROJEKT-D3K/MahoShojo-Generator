@@ -150,6 +150,22 @@ const collectModuleGraph = (entryFile: string): string[] => {
 };
 
 describe('server-safe shared entrypoints stay free of React hooks', () => {
+  it('keeps local image contracts and byte verification pure, with host-free client views', async () => {
+    for (const [name, entry] of [['contracts', 'local-image-assets'], ['local-library', 'image-assets']]) {
+      const root = path.resolve(PACKAGE_ROOT, '..', name);
+      const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+      expect(manifest.exports[`./${entry}`]).toBe(`./src/${entry}.ts`);
+      const result = await build({ entryPoints: [path.join(root, `src/${entry}.ts`)], bundle: true,
+        platform: 'browser', format: 'esm', write: false, metafile: true, logLevel: 'silent' });
+      const files = Object.keys(result.metafile!.inputs).map(file => file.replaceAll('\\', '/'));
+      expect(files.some(file => /(?:apps|ui-web|hosted-runtime)\//u.test(file))).toBe(false);
+      expect(findHookCalls(result.outputFiles[0].text)).toEqual([]);
+    }
+    const result = await build({ entryPoints: [path.join(SRC, 'local-images/index.ts')], bundle: true,
+      platform: 'browser', format: 'esm', write: false, metafile: true, logLevel: 'silent' });
+    const files = Object.keys(result.metafile!.inputs).map(file => file.replaceAll('\\', '/'));
+    expect(files.some(file => /(?:apps|hosted-runtime|@tauri-apps|next)\//u.test(file))).toBe(false);
+  });
   it('keeps image generation views on a browser-safe client entry separate from the pure task lifecycle', async () => {
     const manifest = JSON.parse(readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
     expect(manifest.exports['./image-generation']).toBe('./src/image-generation/index.tsx');

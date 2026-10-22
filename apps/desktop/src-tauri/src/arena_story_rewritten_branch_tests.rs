@@ -1,4 +1,4 @@
-//! Candidate-12 compatibility through the actual native writers, not SQL-created
+//! Candidate-13 compatibility through the actual native writers, not SQL-created
 //! ideal branch rows. The TypeScript pipe independently checks domain projection.
 use super::*;
 use crate::arena_story::branch::tail_rewrite::tests::{continue_after, rewrite_for_branch};

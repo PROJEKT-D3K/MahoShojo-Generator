@@ -215,6 +215,8 @@ pub(crate) fn backup_before_history_upgrade(
     if !(1..target).contains(&version) {
         return Err(BackupError::UnsupportedVersion);
     }
+    // Reject mislabeled history/image schemas before reserving any backup directory.
+    verify_sqlite_schema(connection)?;
     create_pre_upgrade_backup(data_root, connection).map(|_| ())
 }
 
@@ -411,6 +413,10 @@ fn verify_components(
         verify_no_package_without_reference(&database)?;
     }
     let db_blobs = read_schema_blobs(&database, schema_version)?;
+    if schema_version >= 12 {
+        crate::image_asset::verify_files(&database, blobs_root)
+            .map_err(|_| BackupError::Corrupt)?;
+    }
     if db_blobs.len() > MAX_BLOB_ENTRIES || db_blobs.len() != manifest.blobs.len() {
         return Err(BackupError::Corrupt);
     }
@@ -480,6 +486,10 @@ fn build_backup(
 
     let snapshot = open_immutable_database(&database_temp_path)?;
     let snapshot_schema = verify_sqlite(&snapshot)?;
+    if snapshot_schema >= 12 {
+        crate::image_asset::verify_files(&snapshot, BlobPaths::under(data_root).root())
+            .map_err(|_| BackupError::Corrupt)?;
+    }
     let blobs = read_schema_blobs(&snapshot, snapshot_schema)?;
     if snapshot_schema >= 4 {
         verify_no_package_without_reference(&snapshot)?;
@@ -702,6 +712,7 @@ pub(crate) fn verify_sqlite_schema(connection: &Connection) -> Result<i64, Backu
         return Err(BackupError::Corrupt);
     }
     crate::magic_tea_party::verify_schema(connection, version).map_err(|_| BackupError::Corrupt)?;
+    crate::image_asset::verify_schema(connection, version).map_err(|_| BackupError::Corrupt)?;
     // Check the actual tables/columns for this historical schema, not just its labels.
     for (introduced, table, columns) in [
         (1, "schema_migration", "version, applied_at"),
@@ -784,16 +795,19 @@ pub(crate) fn verify_sqlite(connection: &Connection) -> Result<i64, BackupError>
     if rows.next().map_err(|_| BackupError::Corrupt)?.is_some() {
         return Err(BackupError::Corrupt);
     }
-    if version == 12 {
+    if version == 13 {
         crate::arena_story::branch::history::audit_relations(connection)
             .map_err(|_| BackupError::Corrupt)?;
-    } else if (9..=11).contains(&version) {
+    } else if (9..=12).contains(&version) {
         crate::arena_story::branch::audit::audit_relations(connection)
             .map_err(|_| BackupError::Corrupt)?;
     } else if version >= 5 {
         // Historical backups keep the strict v1-only reader. Never infer branch
         // support from a receipt discriminant in a schema 5–8 file.
         crate::arena_story::audit_relations(connection).map_err(|_| BackupError::Corrupt)?;
+    }
+    if version >= 12 {
+        crate::image_asset::verify_relations(connection).map_err(|_| BackupError::Corrupt)?;
     }
     if version >= 6 {
         crate::arena_story::pending::audit(connection).map_err(|_| BackupError::Corrupt)?;
@@ -1567,7 +1581,7 @@ mod tests {
         crate::restore::recover_pending(root).unwrap();
         let restored = LocalLibrary::open(root).unwrap();
         let c = restored.connection().lock().unwrap();
-        assert_eq!(verify_sqlite(&c), Ok(11));
+        assert_eq!(verify_sqlite(&c), Ok(SCHEMA_VERSION));
         assert_eq!(
             before,
             crate::arena_story::branch::schema::tests::all_column_hashes(&c)

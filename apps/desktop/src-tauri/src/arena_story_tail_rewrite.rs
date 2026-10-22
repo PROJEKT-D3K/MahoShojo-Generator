@@ -1,4 +1,4 @@
-//! Schema-12 candidate behind the explicit version gate. A rewrite preserves every historical record
+//! Schema-13 candidate behind the explicit version gate. A rewrite preserves every historical record
 //! and receipt, replacing only the current tail and its working checkpoint.
 use super::{authority, chapter_index, checkpoint_index, materialize, optional_id, required};
 use crate::arena_story::read::{RecordDescriptor, RecordKind};
@@ -189,7 +189,7 @@ fn schema_gate(c: &Connection) -> Result<(), StoryError> {
     if !super::history::enabled(c)? {
         return Err(StoryError::Invalid);
     }
-    super::history::verify_schema(c, 12)
+    super::history::verify_schema(c, 13)
 }
 fn proof(
     c: &Connection,

@@ -1,5 +1,5 @@
-//! Real historical files restored through the startup boundary into candidate 12.
-//! All data is synthetic; release opens and the formal Tea schema-11 matrix keep history closed.
+//! Real historical files restored through the startup boundary into candidate 13.
+//! All data is synthetic; release opens and the formal image schema-12 matrix keep history closed.
 use super::*;
 use crate::arena_story::{branch, pending, StoryError};
 use crate::maintenance::InstanceGuard;
@@ -26,7 +26,7 @@ fn rows(connection: &Connection, sql: &str) -> Vec<Vec<Value>> {
         .unwrap()
 }
 
-// Explicit historical projections make the old-byte claim independent of new 12
+// Explicit historical projections make the old-byte claim independent of new 13
 // columns. Restore fences and unpublished-upload reclamation are checked separately.
 fn originals(c: &Connection, version: i64, include_uploads: bool) -> Vec<Vec<Vec<Value>>> {
     let mut queries = vec![
@@ -287,9 +287,9 @@ fn assert_pending(c: &Connection, version: i64, opened: bool, format: u32) {
 }
 
 fn assert_candidate(c: &Connection, version: i64, format: u32) {
-    assert_eq!(verify_sqlite(c), Ok(12));
-    assert_eq!(applied_migrations(c).unwrap(), (1..=12).collect::<Vec<_>>());
-    branch::history::verify_schema(c, 12).unwrap();
+    assert_eq!(verify_sqlite(c), Ok(13));
+    assert_eq!(applied_migrations(c).unwrap(), (1..=13).collect::<Vec<_>>());
+    branch::history::verify_schema(c, 13).unwrap();
     branch::history::audit_relations(c).unwrap();
     assert!(rows(c, "PRAGMA foreign_key_check").is_empty());
     assert_eq!(
@@ -316,8 +316,8 @@ fn assert_candidate(c: &Connection, version: i64, format: u32) {
 }
 
 #[test]
-fn populated_historical_schemas_restore_into_candidate12_with_both_manifests() {
-    assert_eq!(crate::store::supported_schema_version(), 11);
+fn populated_historical_schemas_restore_into_candidate13_with_both_manifests() {
+    assert_eq!(crate::store::supported_schema_version(), 12);
     for version in 1..=SCHEMA_VERSION {
         for format in [1, MANIFEST_VERSION] {
             let temp = tempfile::tempdir().unwrap();
@@ -428,7 +428,7 @@ fn populated_historical_schemas_restore_into_candidate12_with_both_manifests() {
                 verify_backup(root, &safety).unwrap();
                 safety
             });
-            assert_eq!(crate::store::supported_schema_version(), 11);
+            assert_eq!(crate::store::supported_schema_version(), 12);
             assert_eq!(
                 LocalLibrary::open(root).err(),
                 Some(StoreError::Unavailable)
@@ -442,11 +442,11 @@ fn populated_historical_schemas_restore_into_candidate12_with_both_manifests() {
 }
 
 #[test]
-fn restored_old_backup_journal_failure_rolls_back_only_candidate12_and_retries() {
+fn restored_old_backup_journal_failure_rolls_back_only_candidate13_and_retries() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let _instance = InstanceGuard::acquire(root).unwrap();
-    // Version 8 forces the real 9/10/11 commits before the injected 12 failure.
+    // Version 8 forces the real 9/10/11/12 commits before the injected 13 failure.
     let version = 8;
     with_history_schema_for_test(|| {
         let live = LocalLibrary::open(root).unwrap();
@@ -456,7 +456,7 @@ fn restored_old_backup_journal_failure_rolls_back_only_candidate12_and_retries()
         let id = populated_backup(root, version, MANIFEST_VERSION);
         let directory = root.join(BACKUPS_DIRECTORY).join(&id);
         let c = Connection::open(directory.join(DATABASE_FILE)).unwrap();
-        c.execute_batch("CREATE TRIGGER migration_journal_fault BEFORE INSERT ON schema_migration WHEN NEW.version=12 BEGIN SELECT RAISE(ABORT,'synthetic journal failure'); END;").unwrap();
+        c.execute_batch("CREATE TRIGGER migration_journal_fault BEFORE INSERT ON schema_migration WHEN NEW.version=13 BEGIN SELECT RAISE(ABORT,'synthetic journal failure'); END;").unwrap();
         let expected = originals(&c, version, false);
         let uploads = originals(&c, version, true);
         drop(c);
@@ -475,20 +475,20 @@ fn restored_old_backup_journal_failure_rolls_back_only_candidate12_and_retries()
         assert_eq!(LocalLibrary::open(root).err(), Some(StoreError::Failure));
         let c = Connection::open(root.join(DATABASE_FILE)).unwrap();
         assert!(c.is_autocommit());
-        assert_eq!(verify_sqlite(&c), Ok(11));
+        assert_eq!(verify_sqlite(&c), Ok(12));
         assert_eq!(
             applied_migrations(&c).unwrap(),
-            (1..=11).collect::<Vec<_>>()
+            (1..=12).collect::<Vec<_>>()
         );
-        branch::history::verify_schema(&c, 11).unwrap();
+        branch::history::verify_schema(&c, 12).unwrap();
         assert_eq!(originals(&c, version, true), uploads);
         assert_pending(&c, version, false, MANIFEST_VERSION);
-        assert!(rows(&c, "SELECT name FROM sqlite_master WHERE name LIKE '%_v12'").is_empty());
+        assert!(rows(&c, "SELECT name FROM sqlite_master WHERE name LIKE '%_v13'").is_empty());
         assert!(rows(&c, "PRAGMA foreign_key_check").is_empty());
         verify_backup(root, &id).unwrap();
         verify_backup(root, &safety).unwrap();
         let old = open_immutable_database(&old).unwrap();
-        assert_eq!(verify_sqlite(&old), Ok(12));
+        assert_eq!(verify_sqlite(&old), Ok(13));
         assert_eq!(
             rows(&old, "SELECT id FROM provider_profile"),
             vec![vec![Value::Text("pre-restore".into())]]
@@ -510,7 +510,7 @@ fn restored_old_backup_journal_failure_rolls_back_only_candidate12_and_retries()
         assert_eq!(backup_bytes(&directory), bytes);
         verify_backup(root, &id).unwrap();
     });
-    assert_eq!(crate::store::supported_schema_version(), 11);
+    assert_eq!(crate::store::supported_schema_version(), 12);
 }
 
 #[path = "backup_upgrade_tests.rs"]

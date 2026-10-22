@@ -60,6 +60,7 @@ pub struct LocalLibrary {
     cards: LocalCardStore,
     packages: WebPackageStore,
     blobs: BlobStore,
+    images: crate::image_asset::ImageAssetStore,
 }
 
 impl LocalLibrary {
@@ -107,6 +108,7 @@ impl LocalLibrary {
             cards: LocalCardStore::new(Arc::clone(&connection)),
             packages: WebPackageStore::new(Arc::clone(&connection)),
             blobs: blob_store,
+            images: crate::image_asset::ImageAssetStore::new(Arc::clone(&connection)),
             connection,
             data_root,
         })
@@ -159,6 +161,10 @@ impl LocalLibrary {
 
     pub fn packages(&self) -> &WebPackageStore {
         &self.packages
+    }
+
+    pub fn images(&self) -> &crate::image_asset::ImageAssetStore {
+        &self.images
     }
 
     pub fn blobs(&self) -> &BlobStore {

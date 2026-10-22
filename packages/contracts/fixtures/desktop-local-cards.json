@@ -50,6 +50,10 @@
   "maintenance": {
     "$comment": "D2.2 完整性审计与 GC 的跨运行时契约。TypeScript 侧用 zod 校验，Rust 侧 include_str! 后断言自身枚举与之逐项一致。",
     "auditKinds": [
+      "image-record-without-reference",
+      "image-record-invalid",
+      "image-reference-file-missing",
+      "image-reference-bytes-mismatch",
       "reference-file-missing",
       "reference-bytes-mismatch",
       "unreferenced-metadata",
@@ -58,6 +62,10 @@
       "foreign-key-violation"
     ],
     "auditDamageKinds": [
+      "image-record-without-reference",
+      "image-record-invalid",
+      "image-reference-file-missing",
+      "image-reference-bytes-mismatch",
       "reference-file-missing",
       "reference-bytes-mismatch",
       "record-without-reference"
@@ -78,7 +86,8 @@
       "schemaVersion": 4,
       "referencedBlobCount": 0,
       "blobMetadataCount": 0,
-      "webPackageCount": 0
+      "webPackageCount": 0,
+      "imageAssetCount": 0
     },
     "auditFindingReferenceFileMissing": {
       "$case": "桶一：引用存在但文件缺失。用户看得见这个包、点开打不开。",

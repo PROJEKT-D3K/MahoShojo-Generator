@@ -71,7 +71,7 @@ export const LocalArchivePanel = ({ model, actions, limits }: LocalArchiveView) 
   // 用户会去检查自己的库，而不是去查存储初始化为什么失败。
   if (model.storageError !== null) {
     return (
-      <Panel title="本地库归档">
+      <Panel title="卡片与 Web 包归档">
         <ErrorNote testId="archive-storage-error" message={`本地库存储不可用：${model.storageError}`} />
         <p className="mt-2 text-sm text-(--app-text-muted)">
           导入与导出都需要读取本机存储。当前无法访问存储，因此没有可导出的内容。
@@ -85,9 +85,10 @@ export const LocalArchivePanel = ({ model, actions, limits }: LocalArchiveView) 
 
   return (
     <div className="flex flex-col gap-4" data-testid="local-archive-panel">
-      <Panel title="导出整库">
+      <Panel title="卡片与 Web 包归档">
         <p className="text-sm text-(--app-text-muted)">
           把本机的数据卡与 Web 包打包成一个归档文件。单个归档上限 {formatBytes(limits.maxArchiveBytes)}。
+          独立图片不在此归档中，请使用图片库的单图导出。
           <br />
           归档<strong>不包含</strong> AI Provider 凭据、账号信息或服务器凭据；换设备后需要重新配置这些。
         </p>
@@ -98,7 +99,7 @@ export const LocalArchivePanel = ({ model, actions, limits }: LocalArchiveView) 
           onClick={actions.startExport}
           className="mt-3 min-h-11 px-4"
         >
-          {model.exporting ? '正在导出…' : '导出整库'}
+          {model.exporting ? '正在导出…' : '导出卡片与 Web 包归档'}
         </Button>
         {model.exportProgress !== null && <ExportProgress progress={model.exportProgress} />}
         {model.exportError !== null && (

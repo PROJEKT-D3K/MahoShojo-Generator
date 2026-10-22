@@ -10,12 +10,14 @@ import { isBinaryPayload } from '@mahoshojo/local-library/web-package-record';
  */
 
 export const LOCAL_LIBRARY_DB_NAME = 'mahoshojo-local-library' as const;
-export const LOCAL_LIBRARY_DB_VERSION = 1;
+export const LOCAL_LIBRARY_DB_VERSION = 2;
 
 export const LOCAL_LIBRARY_STORE_NAMES = {
   dataCards: 'data-cards',
   webPackages: 'web-packages',
   webPackageArchives: 'web-package-archives',
+  imageAssets: 'image-assets',
+  imageAssetBytes: 'image-asset-bytes',
   meta: 'meta',
 } as const;
 
@@ -78,6 +80,14 @@ const openLocalLibraryDbInternal = (): Promise<IDBDatabase> =>
       // ZIP 字节与记录分表：列表查询不必反序列化包内容。
       if (!db.objectStoreNames.contains(LOCAL_LIBRARY_STORE_NAMES.webPackageArchives)) {
         db.createObjectStore(LOCAL_LIBRARY_STORE_NAMES.webPackageArchives, { keyPath: 'digest' });
+      }
+
+      // 独立图片记录与原始字节同库保存；两者由仓储在单个 IDB 事务中共同写入/删除。
+      if (!db.objectStoreNames.contains(LOCAL_LIBRARY_STORE_NAMES.imageAssets)) {
+        db.createObjectStore(LOCAL_LIBRARY_STORE_NAMES.imageAssets, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(LOCAL_LIBRARY_STORE_NAMES.imageAssetBytes)) {
+        db.createObjectStore(LOCAL_LIBRARY_STORE_NAMES.imageAssetBytes, { keyPath: 'id' });
       }
 
       if (!db.objectStoreNames.contains(LOCAL_LIBRARY_STORE_NAMES.meta)) {

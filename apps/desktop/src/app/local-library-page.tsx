@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useRouter } from '@tanstack/react-router';
 import { LocalArchivePanel, createLocalArchiveController } from '@mahoshojo/ui-web/local-archive';
 import { LocalLibraryPageLayout, LocalCardsPanel, useLocalCardsController, type LocalCardsActions, type LocalCardsHost } from '@mahoshojo/ui-web/local-cards';
+import { LocalImagesPanel, useLocalImagesController, type LocalImagesActions } from '@mahoshojo/ui-web/local-images';
 
 import { useLeaveGuard } from './useLeaveGuard';
 import { LocalLibraryAuditPanel } from '../features/audit/LocalLibraryAuditPanel';
@@ -13,6 +14,7 @@ import {
   createDesktopArchiveHost,
 } from '../platform/desktop-archive-host';
 import { IpcLocalCardRepository, describeLocalCardError } from '../platform/local-card-bridge';
+import { createDesktopImageHost } from '../platform/local-image-bridge';
 
 /**
  * 在维护互斥内触发一个同步置位的操作，并在它的控制器回到空闲时释放互斥。
@@ -72,6 +74,8 @@ export function DesktopLocalLibrary() {
     describeError: describeLocalCardError,
   }), []);
   const cards = useLocalCardsController(cardsHost);
+  const imagesHost = useMemo(() => createDesktopImageHost(), []);
+  const images = useLocalImagesController(imagesHost, false);
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   const maintenanceBusyRef = useRef(false);
   const acquireOperation = useCallback((): boolean => {
@@ -97,6 +101,8 @@ export function DesktopLocalLibrary() {
   const runArchiveAction = (action: () => void): void => runExclusive(action, archiveBusy, controller.subscribe);
   const runCardAction = (action: () => void): void =>
     runExclusive(action, cards.controller.isBusy, cards.controller.subscribe);
+  const runImageAction = (action: () => void): void =>
+    runExclusive(action, images.controller.isBusy, images.controller.subscribe);
   useEffect(() => { controller.actions.probeStorage(); }, [controller]);
   const { reload: reloadCards } = cards.controller.actions;
   // 归档导入写入的是同一个库：结果一出来就重读，避免列表停在导入前的快照。
@@ -104,7 +110,7 @@ export function DesktopLocalLibrary() {
     if (model.report !== null) reloadCards();
   }, [model.report, reloadCards]);
   const guard = useLeaveGuard(
-    () => maintenanceBusyRef.current || archiveBusy() || cards.controller.isBusy(),
+    () => maintenanceBusyRef.current || archiveBusy() || cards.controller.isBusy() || images.controller.isBusy(),
     '本地库维护操作仍在进行，请等待完成后再离开或关闭窗口。',
     '窗口关闭保护初始化失败，本地库维护操作暂不可用。请重新打开页面后重试。',
   );
@@ -120,11 +126,28 @@ export function DesktopLocalLibrary() {
     restore: (id) => runCardAction(() => cards.controller.actions.restore(id)),
     purge: (id) => runCardAction(() => cards.controller.actions.purge(id)),
   };
+  const imageActions: LocalImagesActions = {
+    ...images.controller.actions,
+    reload: () => runImageAction(images.controller.actions.reload),
+    loadMore: () => runImageAction(images.controller.actions.loadMore),
+    setView: view => runImageAction(() => images.controller.actions.setView(view)),
+    upload: (title, file) => runImageAction(() => images.controller.actions.upload(title, file)),
+    preview: asset => runImageAction(() => images.controller.actions.preview(asset)),
+    exportImage: asset => runImageAction(() => images.controller.actions.exportImage(asset)),
+    remove: id => runImageAction(() => images.controller.actions.remove(id)),
+    restore: id => runImageAction(() => images.controller.actions.restore(id)),
+    purge: id => runImageAction(() => images.controller.actions.purge(id)),
+  };
+  useEffect(() => {
+    if (guard.ready && !maintenanceBusy && images.controller.model.status === 'idle') {
+      runMaintenanceExclusive(acquireOperation, releaseOperation, images.controller.actions.reload, images.controller.isBusy, images.controller.subscribe);
+    }
+  }, [guard.ready, maintenanceBusy, images.controller, acquireOperation, releaseOperation]);
 
   return (
     <LocalLibraryPageLayout notes={(
         <p className="text-sm text-(--app-text-muted)">
-          问卷中已保存到本地卡库的角色会参与归档与备份；问卷草稿、未保存结果和部分生成正文不在其中，仅保留在当前应用的草稿存储中。
+          问卷中已保存到本地卡库的角色会参与归档与备份；独立图片（含图片回收站）由整库备份覆盖，不在卡片与 Web 包归档中。问卷草稿、未保存结果和部分生成正文仅保留在草稿存储中。
         </p>
     )}>
       {!guard.ready && !guard.message && <p role="status">正在初始化窗口关闭保护…</p>}
@@ -136,6 +159,7 @@ export function DesktopLocalLibrary() {
         onEdit={(record) => { void router.navigate({ to: '/character-manager', search: { card: record.id } }); }}
         canEdit={isEditableLocalCard}
       />
+      <LocalImagesPanel model={images.model} actions={imageActions} disabled={!guard.ready || maintenanceBusy} />
       <fieldset disabled={!guard.ready || maintenanceBusy} className="min-w-0">
         <LocalArchivePanel model={model} actions={archiveActions} limits={{ maxArchiveBytes: DESKTOP_LIBRARY_ARCHIVE_LIMITS.fileBytes }} />
       </fieldset>
@@ -145,7 +169,7 @@ export function DesktopLocalLibrary() {
         <h2 className="mb-1 text-sm font-medium text-(--app-text-muted)">还没有的</h2>
         <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-(--app-text-muted)">
           <li>
-            <strong className="font-medium">Web 包管理</strong>：Web 包目前只能通过整库归档与备份携带；角色与情景卡的编辑、单卡导入导出在“角色管理”。
+            <strong className="font-medium">Web 包管理</strong>：Web 包目前只能通过卡片与 Web 包归档及整库备份携带；角色与情景卡的编辑、单卡导入导出在“角色管理”。
           </li>
         </ul>
       </section>

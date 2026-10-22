@@ -35,6 +35,9 @@ mod export;
 mod external_link;
 mod gc;
 mod hosted_preset;
+mod image_asset;
+#[cfg(test)]
+mod image_asset_ipc_tests;
 mod ipc_stream;
 #[cfg(test)]
 mod ipc_stream_tests;
@@ -536,6 +539,152 @@ mod base64_bytes {
             .decode()
             .map_err(D::Error::custom)
     }
+}
+
+fn image_access(
+    library: &LocalLibrary,
+    pending: &PendingRestore,
+    write: bool,
+) -> Result<Option<maintenance::WritePermit>, image_asset::ImageError> {
+    if pending
+        .0
+        .lock()
+        .map_err(|_| image_asset::ImageError::Unavailable)?
+        .is_some()
+    {
+        return Err(image_asset::ImageError::RestorePending);
+    }
+    if write {
+        Ok(Some(
+            library
+                .enter_write()
+                .map_err(|_| image_asset::ImageError::Maintenance)?,
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn save_local_image_asset<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: serde_json::Value,
+) -> Result<image_asset::SaveResult, image_asset::ImageError> {
+    let request: image_asset::SaveRequest =
+        serde_json::from_value(request).map_err(|_| image_asset::ImageError::Invalid)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = app.state::<LocalLibrary>();
+        let pending = app.state::<PendingRestore>();
+        let _permit = image_access(&library, &pending, true)?;
+        library.images().save(library.blobs(), request)
+    })
+    .await
+    .map_err(|_| image_asset::ImageError::Failed)?
+}
+
+#[tauri::command]
+async fn list_local_image_assets<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: serde_json::Value,
+) -> Result<image_asset::Page, image_asset::ImageError> {
+    let request: image_asset::ListRequest =
+        serde_json::from_value(request).map_err(|_| image_asset::ImageError::Invalid)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = app.state::<LocalLibrary>();
+        let pending = app.state::<PendingRestore>();
+        let _permit = image_access(&library, &pending, false)?;
+        library.images().list(request)
+    })
+    .await
+    .map_err(|_| image_asset::ImageError::Failed)?
+}
+
+#[tauri::command]
+async fn read_local_image_asset<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: serde_json::Value,
+) -> Result<tauri::ipc::Response, image_asset::ImageError> {
+    let request: image_asset::IdRequest =
+        serde_json::from_value(request).map_err(|_| image_asset::ImageError::Invalid)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = app.state::<LocalLibrary>();
+        let pending = app.state::<PendingRestore>();
+        let _permit = image_access(&library, &pending, false)?;
+        library
+            .images()
+            .read(library.data_root(), &request.id)
+            .map(|(_, bytes)| tauri::ipc::Response::new(bytes))
+    })
+    .await
+    .map_err(|_| image_asset::ImageError::Failed)?
+}
+
+#[tauri::command]
+async fn delete_local_image_asset<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: serde_json::Value,
+) -> Result<(), image_asset::ImageError> {
+    let request: image_asset::IdRequest =
+        serde_json::from_value(request).map_err(|_| image_asset::ImageError::Invalid)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = app.state::<LocalLibrary>();
+        let pending = app.state::<PendingRestore>();
+        let _permit = image_access(&library, &pending, true)?;
+        library.images().transition(&request.id, false)
+    })
+    .await
+    .map_err(|_| image_asset::ImageError::Failed)?
+}
+
+#[tauri::command]
+async fn restore_local_image_asset<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: serde_json::Value,
+) -> Result<(), image_asset::ImageError> {
+    let request: image_asset::IdRequest =
+        serde_json::from_value(request).map_err(|_| image_asset::ImageError::Invalid)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = app.state::<LocalLibrary>();
+        let pending = app.state::<PendingRestore>();
+        let _permit = image_access(&library, &pending, true)?;
+        library.images().transition(&request.id, true)
+    })
+    .await
+    .map_err(|_| image_asset::ImageError::Failed)?
+}
+
+#[tauri::command]
+async fn purge_local_image_asset<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: serde_json::Value,
+) -> Result<(), image_asset::ImageError> {
+    let request: image_asset::IdRequest =
+        serde_json::from_value(request).map_err(|_| image_asset::ImageError::Invalid)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = app.state::<LocalLibrary>();
+        let pending = app.state::<PendingRestore>();
+        let _permit = image_access(&library, &pending, true)?;
+        library.images().purge(&request.id)
+    })
+    .await
+    .map_err(|_| image_asset::ImageError::Failed)?
+}
+
+#[tauri::command]
+async fn export_local_image_asset<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: serde_json::Value,
+) -> Result<image_asset::ExportResult, image_asset::ImageError> {
+    let request: image_asset::IdRequest =
+        serde_json::from_value(request).map_err(|_| image_asset::ImageError::Invalid)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = app.state::<LocalLibrary>();
+        let pending = app.state::<PendingRestore>();
+        let _permit = image_access(&library, &pending, false)?;
+        library.images().export(library.data_root(), &request.id)
+    })
+    .await
+    .map_err(|_| image_asset::ImageError::Failed)?
 }
 
 /// 保存一条本地 Web 包及其 ZIP 字节。
@@ -2116,6 +2265,13 @@ pub fn run() {
             delete_local_card,
             restore_local_card,
             purge_local_card,
+            save_local_image_asset,
+            list_local_image_assets,
+            read_local_image_asset,
+            delete_local_image_asset,
+            restore_local_image_asset,
+            purge_local_image_asset,
+            export_local_image_asset,
             save_web_package,
             get_web_package,
             list_web_packages,

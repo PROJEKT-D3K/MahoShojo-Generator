@@ -1493,7 +1493,7 @@ mod tests {
                             .unwrap();
                     }
                     c.execute_batch("BEGIN IMMEDIATE").unwrap();
-                    c.execute_batch(crate::arena_story::branch::schema::MIGRATION_12)
+                    c.execute_batch(crate::arena_story::branch::schema::MIGRATION_13)
                         .unwrap();
                     c.execute_batch("INSERT OR IGNORE INTO schema_migration VALUES (11,'old-history'); PRAGMA user_version=11; COMMIT").unwrap();
                     let intent = committed_intent(root, pending_fenced);

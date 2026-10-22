@@ -75,7 +75,7 @@ describe('local backup page integration', () => {
     await act(async () => {
       button('创建备份').dispatchEvent(new MouseEvent('click', { bubbles: true }));
       // 同一轮同步派发，证明互斥由同步 lock 保证，而非等待按钮重新渲染。
-      button('导出整库').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button('导出卡片与 Web 包归档').dispatchEvent(new MouseEvent('click', { bubbles: true }));
       close({ preventDefault: prevented });
       void router.navigate({ to: '/settings' });
     });
@@ -101,7 +101,7 @@ describe('local backup page integration', () => {
     await mount();
 
     await act(async () => {
-      button('导出整库').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button('导出卡片与 Web 包归档').dispatchEvent(new MouseEvent('click', { bubbles: true }));
       button('创建备份').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
@@ -166,18 +166,19 @@ describe('local backup page integration', () => {
     expect(bridge.invoke).toHaveBeenCalledWith(PREPARE_LOCAL_RESTORE_COMMAND, {
       request: { backupId: backupFixture.summary.backupId },
     });
-    // 本地数据卡列表的读取与壳级公开缓存策略推送（D5.1-K1，StrictMode 下
+    // 本地数据卡/图片列表的读取与壳级公开缓存策略推送（D5.1-K1，StrictMode 下
     // 出现两次幂等 apply）都跟备份流程无关，不计入：list backups, prepare, failed exit。
     expect(
       bridge.invoke.mock.calls.filter(
         ([command]) =>
-          command !== LIST_LOCAL_CARDS_COMMAND && command !== PUBLIC_READ_CACHE_APPLY_POLICY_COMMAND,
+          command !== LIST_LOCAL_CARDS_COMMAND && command !== 'list_local_image_assets' && command !== PUBLIC_READ_CACHE_APPLY_POLICY_COMMAND,
       ),
     ).toHaveLength(3);
     expect(container.textContent).toContain('恢复前备份为 local-library-20261002T040000Z');
     expect(container.textContent).toContain('无法退出应用');
     expect(button('创建备份').disabled).toBe(true);
-    expect(button('导出整库').matches(':disabled')).toBe(true);
+    expect(button('导出卡片与 Web 包归档').matches(':disabled')).toBe(true);
+    expect(button('刷新图片').disabled).toBe(true);
 
     await act(async () => { button('退出应用并继续恢复').dispatchEvent(new MouseEvent('click', { bubbles: true })); });
     await settle();
@@ -205,6 +206,7 @@ describe('local backup page integration', () => {
     expect(container.textContent).not.toContain('private detail');
     expect(bridge.invoke).toHaveBeenCalledWith(EXIT_AFTER_LOCAL_RESTORE_COMMAND, undefined);
     expect(button('创建备份').disabled).toBe(true);
-    expect(button('导出整库').matches(':disabled')).toBe(true);
+    expect(button('导出卡片与 Web 包归档').matches(':disabled')).toBe(true);
+    expect(button('刷新图片').disabled).toBe(true);
   });
 });

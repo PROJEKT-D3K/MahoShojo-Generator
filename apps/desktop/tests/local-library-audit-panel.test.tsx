@@ -42,6 +42,7 @@ const cleanReport: DesktopLocalLibraryAuditReport = {
   referencedBlobCount: 3,
   blobMetadataCount: 3,
   webPackageCount: 2,
+  imageAssetCount: 0,
 } as DesktopLocalLibraryAuditReport;
 
 let root: Root;
@@ -116,7 +117,7 @@ describe('本地库完整性面板（IPC mock）', () => {
     await click(button('检查完整性'));
     await waitFor(() => container.textContent?.includes('未发现不一致') === true);
     expect(bridge.invoke).toHaveBeenCalledWith(AUDIT_LOCAL_LIBRARY_COMMAND, undefined);
-    expect(container.textContent).toContain('本次检查覆盖 2 个包 / 3 份引用内容 / 3 条内容记录');
+    expect(container.textContent).toContain('本次检查覆盖 2 个包 / 0 张图片 / 3 份引用内容 / 3 条内容记录');
     expect(button('清理可回收空间')?.disabled).toBe(true);
   });
 
@@ -128,7 +129,7 @@ describe('本地库完整性面板（IPC mock）', () => {
     await mount();
     await click(button('检查完整性'));
     await waitFor(() => container.textContent?.includes('发现可能影响使用的问题') === true);
-    expect(container.querySelector('p[role="alert"]')?.textContent).toContain('归档导出会跳过打不开的内容');
+    expect(container.querySelector('p[role="alert"]')?.textContent).toContain('卡片与 Web 包归档不包含图片库');
     expect(container.textContent).toContain('包找不到内容文件（1 条）');
     expect(container.textContent).toContain('无记录的文件（可回收空间）（1 条）');
     // 可回收候选存在 → 清理入口开放。

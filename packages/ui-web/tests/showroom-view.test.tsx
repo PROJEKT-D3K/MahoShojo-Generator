@@ -28,6 +28,8 @@ it('renders every registered section, the real result card, and a working modal 
   // 结果卡分区渲染的是真实 MagicalGirlCard（.result-card 来自 product-shell.css）。
   expect(container.querySelector('#showroom-result-surfaces .result-card')).not.toBeNull();
   const results = container.querySelector('#showroom-result-surfaces')!;
+  expect(results.querySelector('[data-testid="local-images-panel"]')).not.toBeNull();
+  expect(results.textContent).toContain('独立保存在这台设备上的原图');
   expect(results.textContent).toContain('模型：showroom-example-model');
   expect(results.textContent).toContain('输入 120｜推理 30｜输出 60');
   expect(results.querySelector('img[src="/arena-white.svg"]')).not.toBeNull();

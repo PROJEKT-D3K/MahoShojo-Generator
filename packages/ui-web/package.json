@@ -238,6 +238,8 @@
     "./card-details": "./src/card-details/index.ts",
     "./name-generation": "./src/name-generation/index.ts",
     "./image-generation": "./src/image-generation/index.tsx",
+    "./local-images": "./src/local-images/index.ts",
+    "./local-images/browser-image": "./src/local-images/browser-image.ts",
     "./cooldown": "./src/cooldown/index.ts",
     "./error-help": {
       "types": "./src/details-controls/error-help.ts",

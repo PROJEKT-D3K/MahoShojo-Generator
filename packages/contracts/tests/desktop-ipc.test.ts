@@ -505,6 +505,7 @@ describe('Desktop 本地库维护 IPC 契约（D2.2）', () => {
     expect(Object.keys(parsed).sort()).toEqual([
       'blobMetadataCount',
       'findings',
+      'imageAssetCount',
       'referencedBlobCount',
       'schemaVersion',
       'webPackageCount',

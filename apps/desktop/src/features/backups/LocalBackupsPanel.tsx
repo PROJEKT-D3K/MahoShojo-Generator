@@ -161,7 +161,7 @@ export const LocalBackupsPanel = ({ enabled, maintenanceBusy, acquireOperation, 
         <div>
           <h2 id="local-backups-heading" className="text-sm font-medium">本地整库备份</h2>
           <p className="mt-1 text-sm text-(--app-text-muted)">
-            备份包含本地卡、Web 包、回收站记录，以及 Provider 配置与凭据引用；不包含系统凭据、未迁移的草稿与历史。
+            备份包含本地卡、Web 包、图片库及各自回收站记录，以及 Provider 配置与凭据引用；不包含系统凭据、未迁移的草稿与历史。
             恢复后如凭据缺失，请到设置重新录入。
           </p>
         </div>
