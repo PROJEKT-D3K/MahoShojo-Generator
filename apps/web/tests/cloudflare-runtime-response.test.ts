@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { assertHealthyCloudflareResponse } from '../apps/web/scripts/cloudflare-runtime-response.mjs';
+import { assertHealthyCloudflareResponse } from '../scripts/cloudflare-runtime-response.mjs';
 
 describe('Cloudflare runtime response gate', () => {
   const response = () => new Response(null, { headers: { 'content-type': 'text/html' } });
