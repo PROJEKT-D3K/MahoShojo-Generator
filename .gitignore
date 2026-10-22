@@ -50,6 +50,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# 测试与审查产物
+coverage/
+playwright-report/
+blob-report/
+test-results/
+# Playwright MCP 会话截图/日志
+.playwright-mcp/
+
 # env files (can opt-in for committing if needed)
 .env*
 env.test
