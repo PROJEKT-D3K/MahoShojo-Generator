@@ -633,7 +633,10 @@ export function DesktopBattleForm({ session, repository, product = 'battle', web
     || (!state.repairs && (!!state.candidates?.characterEffects.length || session.hasHostedCharacterCopies()))
     || !!state.repairs || draft.narrativeHistoryEntries.length > 0;
   const result = (state.phase === 'generating' || state.rawText || state.reasoning || state.report) ? <section ref={resultRef} className="mt-6 space-y-4" aria-label="战报结果">
-    {state.resultFormat === 'web' ? <StreamingBattleReportCard {...reportProps} cardWidthPx={cardWidthPx} ports={reportPorts} disableExport reportContent={<DesktopArenaWebResult key={`${scope}:${state.generation?.intent.requestId ?? 'restored'}`} state={state} owner={packageOwner} disabled={disabled} />} />
+    {state.resultFormat === 'web' ? <DesktopArenaWebResult key={`${scope}:${state.generation?.intent.requestId ?? 'restored'}`} state={state} owner={packageOwner} disabled={disabled}>
+      {(content, actions, showingWeb) => <StreamingBattleReportCard {...reportProps} cardWidthPx={cardWidthPx} ports={reportPorts}
+        disableExport={showingWeb || !!state.renderSnapshot?.webPackage} reportContent={content} additionalActions={actions} />}
+    </DesktopArenaWebResult>
       : state.report && state.activeGenerationMode !== 'stream'
         ? <BattleReportCard report={{ ...state.report, scenario: reportProps.scenarioName, aiModel: reportProps.aiModel, aiUsage: reportProps.aiUsage ?? undefined,
           aiReasoning: reasoning, reporterInfo: reportProps.reporterInfo ?? state.report.reporterInfo,

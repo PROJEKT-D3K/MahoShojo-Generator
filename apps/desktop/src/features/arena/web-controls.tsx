@@ -4,11 +4,12 @@ import { normalizeArenaWebOutput, resolveWebDisplayTitle } from '@mahoshojo/ai-c
 import { BUILTIN_WEB_PACKAGE_PRESETS, prepareWebPackageReplay, resolveWebPackageTargetExtension, type WebPackageReplayOutcome } from '@mahoshojo/web-package';
 import { scanWebPackageBase, scanWebPackageInstance, type WebPackageRiskProfile } from '@mahoshojo/web-package/security';
 import { ArenaWebPackageSection, type ArenaWebPackageOptionView, type ArenaWebPackageSectionModel } from '@mahoshojo/ui-web/arena';
-import { ArenaWebResultView, ArenaWebReplayControlsView, WebPackageRiskSummary } from '@mahoshojo/ui-web/arena-report';
+import { ArenaWebReplayControlsView, WebPackageRiskSummary } from '@mahoshojo/ui-web/arena-report';
 import { buildSafeFileName } from '@mahoshojo/ui-web/client';
 import { downloadBinaryFile, downloadTextFile } from '../../platform/download-text-file';
 import type { ArenaSessionState } from './session';
 import { DesktopArenaWebPackages } from './web-packages';
+import { DesktopWebReport, type DesktopWebReportChildren } from './DesktopWebReport';
 
 function BaseRisk({ owner, packageRef }: { owner: DesktopArenaWebPackages; packageRef: WebPackageRef }) {
   const [profile, setProfile] = useState<WebPackageRiskProfile | null>(null);
@@ -80,7 +81,7 @@ export function DesktopArenaWebPackageControls({ owner, selectedRef, disabled, o
   return <ArenaWebPackageSection model={model} host={{ renderRisk: (ref) => <BaseRisk owner={owner} packageRef={ref} />, libraryStatus: !state.loaded && !state.error ? <p role="status">正在读取本地 Web 包…</p> : null }} />;
 }
 
-export function DesktopArenaWebResult({ state, owner, disabled }: { state: ArenaSessionState; owner: DesktopArenaWebPackages; disabled: boolean }) {
+export function DesktopArenaWebResult({ state, owner, disabled, children }: { state: ArenaSessionState; owner: DesktopArenaWebPackages; disabled: boolean; children: DesktopWebReportChildren }) {
   const packageState = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
   const artifact = state.renderSnapshot?.webPackage;
   const ready = state.phase === 'completed';
@@ -89,19 +90,27 @@ export function DesktopArenaWebResult({ state, owner, disabled }: { state: Arena
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const [compatibilityRef, setCompatibilityRef] = useState<WebPackageRef | undefined>();
   const [selectedDigest, setSelectedDigest] = useState('');
-  const [resolution, setResolution] = useState<WebPackageReplayOutcome | null>(null);
+  const [resolved, setResolution] = useState<{
+    artifact: typeof artifact; content: string; revision: number; compatibilityRef: WebPackageRef | undefined; outcome: WebPackageReplayOutcome;
+  } | null>(null);
+  const resolution = resolved && resolved.artifact === artifact && resolved.content === state.markdown
+    && resolved.revision === packageState.revision && resolved.compatibilityRef === compatibilityRef ? resolved.outcome : null;
   const [profile, setProfile] = useState<WebPackageRiskProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let current = true; setResolution(null); setProfile(null); setError(null);
     if (!ready || !artifact) return;
     void prepareWebPackageReplay({ artifact, generatedContent: state.markdown, ...(compatibilityRef ? { allowCompatibility: true, compatibilityRef } : {}) }, { resolveExact: owner.resolveExact, findCandidatesById: owner.findCandidatesById }).then((value) => {
-      if (!current) return; setResolution(value);
+      if (!current) return; setResolution({ artifact, content: state.markdown, revision: packageState.revision, compatibilityRef, outcome: value });
       if (value.instance) { try { setProfile(scanWebPackageInstance(value.instance)); } catch { setError('安全预检不可用；不能据此认为内容安全。'); } }
     }).catch(() => { if (current) setError('精确 Web 包校验失败，源码仍可导出。'); });
     return () => { current = false; };
   }, [artifact, compatibilityRef, owner, packageState.revision, ready, state.markdown]);
-  const title = resolveWebDisplayTitle({ headline: state.report?.headline, html: artifact ? undefined : state.markdown });
+  const title = useMemo(() => resolveWebDisplayTitle({ headline: state.report?.headline, html: artifact ? undefined : state.markdown }),
+    [state.report?.headline, artifact, state.markdown]);
+  const instance = artifact ? resolution?.instance ?? null : undefined;
+  const source = useMemo(() => ({ content: state.markdown, title, ready, instance, captureCurrent: owner.captureScope }),
+    [state.markdown, title, ready, instance, owner]);
   const downloadSource = () => {
     const isHtml = !artifact && Boolean(normalized.document), extension = artifact ? resolveWebPackageTargetExtension(artifact.targetMediaType) : isHtml ? 'html' : 'txt';
     if (isHtml || artifact && ['text/html', 'text/javascript', 'application/javascript', 'text/css', 'image/svg+xml'].includes(artifact.targetMediaType)) {
@@ -115,10 +124,10 @@ export function DesktopArenaWebResult({ state, owner, disabled }: { state: Arena
     const current = owner.captureScope(), bytes = await owner.exportBase(artifact.packageRef, false);
     if (bytes && current() && alive.current) downloadBinaryFile(buildSafeFileName(`${artifact.packageRef.id}@${artifact.packageRef.version}_Base`, 'zip', 'Web包'), bytes, 'application/zip');
   };
-  return <ArenaWebResultView source={state.markdown} ready={ready} title={title} prelude={artifact ? '' : normalized.prelude} epilogue={artifact ? '' : normalized.epilogue} riskProfile={profile}
+  return <DesktopWebReport source={source} disabled={disabled} prelude={artifact ? '' : normalized.prelude} epilogue={artifact ? '' : normalized.epilogue} riskProfile={profile}
     status={<>{artifact && ready ? <ArenaWebReplayControlsView status={resolution?.status ?? null} message={resolution?.message} description="兼容只验证当前工作副本，不改历史记录，也不会执行内容；重新导入仅在本页暂存。" copy={{ confirmCompatibilityLabel: '确认兼容校验此版本' }} candidates={resolution?.candidates ?? []} selectedCandidateDigest={selectedDigest || (resolution?.candidates?.length === 1 ? resolution.candidates[0]!.digest : '')}
       onSelectCandidate={setSelectedDigest} onConfirmCompatibility={(ref) => { if (!disabled && !owner.isBusy()) setCompatibilityRef(ref); }} disabled={disabled} importing={packageState.busy} importFeedback={packageState.error || packageState.diagnostics.length ? { message: packageState.error ?? '', hint: '', diagnostics: packageState.diagnostics } : null}
-      onImportFile={async (file) => { if (!file || disabled || owner.isBusy()) return 'cancelled'; const current = owner.captureScope(), imported = await owner.importFile(file, false); if (!current() || 'cancelled' in imported) return 'cancelled'; if ('failed' in imported) return 'failed'; }} /> : null}{error ? <p role="alert">{error}</p> : null}<p role="status">{!ready ? '尚未取得合格完成结果；仅保留安全文本。' : artifact ? resolution?.message ?? (resolution?.status === 'exact' ? '已验证精确包与生成目标；当前桌面端暂不支持运行 Web 战报。' : '正在验证精确包与生成目标…') : normalized.document ? '已识别完整 HTML；这不是安全认证，当前桌面端暂不支持运行 Web 战报。' : '未识别完整 HTML，保留安全源码，不能运行。'}</p></>}
+      onImportFile={async (file) => { if (!file || disabled || owner.isBusy()) return 'cancelled'; const current = owner.captureScope(), imported = await owner.importFile(file, false); if (!current() || 'cancelled' in imported) return 'cancelled'; if ('failed' in imported) return 'failed'; }} /> : null}{error ? <p role="alert">{error}</p> : null}<p role="status">{!ready ? '尚未取得合格完成结果；仅保留安全文本。' : artifact ? resolution?.message ?? (resolution?.status === 'exact' ? '已验证精确包与生成目标；内容校验不构成安全认证。' : '正在验证精确包与生成目标…') : normalized.document ? '已识别完整 HTML；内容识别不构成安全认证。' : '未识别完整 HTML，保留安全源码，不能运行。'}</p></>}
     actions={[{ id: 'download-web-source', label: artifact ? '下载生成目标' : normalized.document ? '下载 HTML' : '下载源码文本', disabled: !ready, onClick: downloadSource }, ...(artifact ? [{ id: 'download-web-base', label: '下载精确 Base ZIP（不含生成目标）', disabled: disabled || resolution?.status !== 'exact', onClick: () => { void downloadBase().catch(() => { if (alive.current) setError('Base ZIP 导出失败，原文仍保留。'); }); } }] : [])]}
-    execution={{ available: false, reason: '当前桌面端暂不支持运行 Web 战报，不会在主界面执行网页。生成、校验、保存与导出可正常使用。' }} />;
+  >{children}</DesktopWebReport>;
 }

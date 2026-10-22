@@ -170,7 +170,9 @@ describe('Desktop current room report adapter', () => {
     const source = '<!doctype html><html><body><script>window.__roomExecuted = true</script><img src="https://example.com/remote.png"></body></html>';
     await render({ ...generation, phase: 'completed', markdown: source, finalAuthoritative: true, generationRecordId: 'record-1', result: { version: 1, format: 'stream-web', mode: 'daily',
       ai: { model: 'room-web-model', usage: { promptTokens: 12, reasoningTokens: 3, completionTokens: 8 } } } });
-    expect(container.querySelector('[data-testid="arena-web-result"] pre')?.textContent).toBe(source);
+    expect(container.querySelector('[aria-label="Web 战报源码（安全文本）"]')?.textContent).toContain(source);
+    expect(button('普通显示')?.getAttribute('aria-pressed')).toBe('true');
+    expect(container.querySelectorAll('.result-card')).toHaveLength(1);
     expect(container.querySelector('.result-card')?.textContent).toContain('模型：room-web-model');
     expect(container.querySelector('.result-card')?.textContent).toContain('tokens：输入 12｜推理 3｜输出 5');
     expect(container.querySelector('.result-card img[src="/daily-mode.svg"]')).not.toBeNull();
