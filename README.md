@@ -89,7 +89,7 @@
 
 ### 环境要求
 
-- Node.js 24.22.1（本地默认版本见 `.node-version`）；也支持 22.23.4 及以上的 Node 22 补丁版。API 镜像保持 Node 22，包管理器版本不变。
+- Node.js 24.22.1（本地默认版本见 `.node-version`）；也支持 22.23.4 及以上的 Node 22 补丁版。API 镜像保持 Node 22。
 - pnpm 11.28.6（可通过 Corepack 启用）
 - Vitest（当前测试运行器）
 - AI 提供商 API Key (推荐使用 Google Gemini 系列)

@@ -10,7 +10,7 @@
 
 1.  **安装 Node.js 与 pnpm**
 
-      * 本项目使用 pnpm 作为包管理器与脚本调度入口，推荐 Node.js v24.14.0，最低要求 Node.js 22。
+      * 本项目使用 pnpm 作为包管理器与脚本调度入口，开发/构建推荐 Node.js v24.22.1；也支持 v22.23.4 及以上的 Node 22 版本，API 镜像继续使用此 Node 22 安全线。
       * 安装 Node.js 后，可通过 Corepack 启用固定版本：`corepack prepare pnpm@11.28.6 --activate`。
       * 当前测试运行器已迁移到 Vitest，运维脚本入口统一通过 `pnpm` 调度；本地运行、测试和常规维护不再需要安装 Bun。
 
