@@ -26,7 +26,22 @@ export function ArenaWebDisplayModeSelectorView({ value, onChange, disabled, web
   return <SegmentedControl label="显示方式" value={value} options={options} disabled={disabled} onChange={onChange} />;
 }
 
-const BUTTON_CLASS = 'flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-(--app-radius-sm) border border-white/40 text-white transition-colors duration-150 hover:border-white/65 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white motion-reduce:transition-none [html[data-motion=reduce]_&]:transition-none forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText]';
+export const ARENA_WEB_CONTROL_CLASS_NAME = 'inline-flex min-h-11 max-w-full items-center justify-center gap-2 rounded-(--app-radius-sm) border border-white/40 px-3 py-2 text-sm font-medium text-white transition-colors duration-150 enabled:hover:border-white/65 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none [html[data-motion=reduce]_&]:transition-none forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText]';
+
+/** Presentation only: the host retains ownership of the isolated window and its lifecycle. */
+export function ArenaWebWindowStatusView({ message, children }: { message: string | null; children?: ReactNode }) {
+  return <section aria-label="独立 Web 作品窗口" className="min-w-0 space-y-3 rounded-(--app-radius-md) border border-white/20 bg-white/5 p-4 text-white">
+    <div className="flex items-start gap-3">
+      <PanelsTopLeft size={20} aria-hidden="true" className="mt-1 shrink-0" />
+      <div className="min-w-0 space-y-1 wrap-anywhere">
+        <h3 className="text-base font-semibold">独立作品窗口</h3>
+        {message ? <p role="status" className="text-sm">{message}</p> : null}
+        <p className="text-sm text-white/80">使用下方控件返回作品、切换沉浸或重新加载。作品在隔离窗口运行，交互进度不会自动保存。</p>
+      </div>
+    </div>
+    {children}
+  </section>;
+}
 
 /** Shared control only; the host decides whether this controls a DOM viewer or a native isolated window. */
 export function ArenaWebImmersiveButton({ immersive, onClick, disabled, buttonRef }: {
@@ -36,8 +51,8 @@ export function ArenaWebImmersiveButton({ immersive, onClick, disabled, buttonRe
   buttonRef?: Ref<HTMLButtonElement>;
 }) {
   return <button ref={buttonRef} type="button" onClick={onClick} disabled={disabled}
-    className={`${BUTTON_CLASS} gap-2 whitespace-nowrap bg-white/10 px-3 text-xs hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60`}>
-    {immersive ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
+    className={`${ARENA_WEB_CONTROL_CLASS_NAME} shrink-0 whitespace-nowrap bg-white/10 enabled:hover:bg-white/20`}>
+    {immersive ? <Minimize size={16} aria-hidden="true" className="shrink-0" /> : <Maximize size={16} aria-hidden="true" className="shrink-0" />}
     {immersive ? '退出沉浸' : '沉浸体验'}
   </button>;
 }
@@ -110,7 +125,7 @@ export function ArenaWebViewer({ children, immersive, onToggleImmersive, content
       </div>
     </header>
     <button type="button" hidden={expanded} aria-label="展开 Web 战报工具栏" aria-expanded={expanded}
-      className={`${BUTTON_CLASS} absolute top-2 right-2 z-1 bg-black/65 hover:bg-black/80 sm:top-3 sm:right-3 ${expanded ? 'hidden' : ''} ${immersive ? 'top-[max(8px,env(safe-area-inset-top))] right-[max(8px,env(safe-area-inset-right))] sm:top-[max(12px,env(safe-area-inset-top))] sm:right-[max(12px,env(safe-area-inset-right))]' : ''}`}
+      className={`${ARENA_WEB_CONTROL_CLASS_NAME} absolute top-2 right-2 z-1 min-w-11 bg-black/65 enabled:hover:bg-black/80 sm:top-3 sm:right-3 ${expanded ? 'hidden' : ''} ${immersive ? 'top-[max(8px,env(safe-area-inset-top))] right-[max(8px,env(safe-area-inset-right))] sm:top-[max(12px,env(safe-area-inset-top))] sm:right-[max(12px,env(safe-area-inset-right))]' : ''}`}
       onClick={event => { focusOnExpandRef.current = event.detail === 0; setKeyboardFocus(event.detail === 0); setExpanded(true); }}>
       <ChevronDown size={20} aria-hidden="true" />
     </button>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Download, RotateCw } from 'lucide-react';
 import type { NewsReport } from '@/components/BattleReportCard';
 import { MarkdownBlock } from './DeferredArenaRenderers';
 import { ArenaWebDisplayModeSelectorView, ArenaWebViewer, ARENA_WEB_FRAME_CLASS_NAME, useArenaWebImmersive, type ArenaWebDisplayMode, ArenaReportFormatSelectorView, ArenaWebNotes, ArenaWebSourceView, ArenaWebReportActions, ArenaWebReplayControlsView, WebReportConsentDialogView, type ArenaWebReportAction } from '@mahoshojo/ui-web/arena-report-views';
@@ -379,10 +380,10 @@ export function ArenaWebReport({ content, ready, roomId, aiModel, aiUsage, displ
     downloadBlob(blob, buildSafeFileName(stem, extension, '魔法少女速报'));
   };
   const reportActions: ArenaWebReportAction[] = immersive ? [] : [
-    ...(showingWeb ? [{ id: 'reload', label: '↻ 重新加载', onClick: () => setReload((value) => value + 1), ariaLabel: '重新加载 Web 战报', title: '重新加载 Web 战报' }] : []),
-    ...(matchingResolution?.base ? [{ id: 'package', label: '⬇ 下载 Web 包 ZIP', disabled: !ready, onClick: () => { void downloadPackage(); } }] : []),
-    ...(webPackage ? [{ id: 'target', label: '⬇ 下载生成目标', disabled: !ready, onClick: downloadTarget }] : []),
-    { id: 'html', label: '🌐 下载 HTML', disabled: !ready || !webDocument || Boolean(webPackage) && packageLocation?.kind !== 'srcdoc', onClick: downloadHtml },
+    ...(showingWeb ? [{ id: 'reload', label: '重新加载', icon: <RotateCw />, onClick: () => setReload((value) => value + 1), ariaLabel: '重新加载 Web 战报', title: '重新加载 Web 战报' }] : []),
+    ...(matchingResolution?.base ? [{ id: 'package', label: '下载 Web 包 ZIP', icon: <Download />, disabled: !ready, onClick: () => { void downloadPackage(); } }] : []),
+    ...(webPackage ? [{ id: 'target', label: '下载生成目标', icon: <Download />, disabled: !ready, onClick: downloadTarget }] : []),
+    { id: 'html', label: '下载 HTML', icon: <Download />, disabled: !ready || !webDocument || Boolean(webPackage) && packageLocation?.kind !== 'srcdoc', onClick: downloadHtml },
   ];
   return (
     <>

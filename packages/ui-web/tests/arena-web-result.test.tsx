@@ -19,6 +19,19 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 describe('Arena Web safe report chrome', () => {
+  it('preserves long fenced HTML as focusable source text without executing or truncating it', async () => {
+    const html = `<script>${'neverExecute();'.repeat(300)}</script>`;
+    await act(async () => root.render(<StreamingBattleReportCard content={`代码：\`inline\`\n\n\`\`\`html\n${html}\n\`\`\``} />));
+    const pre = container.querySelector('pre')!;
+    expect(pre.querySelector('code')?.textContent).toBe(`${html}\n`);
+    expect(pre.querySelector('code')?.classList.contains('language-html')).toBe(true);
+    expect(container.querySelector('script')).toBeNull();
+    expect(pre.getAttribute('aria-label')).toBe('战报代码块');
+    pre.focus();
+    expect(document.activeElement).toBe(pre);
+    expect([...container.querySelectorAll('code')].some(node => node.textContent === 'inline')).toBe(true);
+  });
+
   it('owns the existing result-card surface for white actions and notes, regardless of the host page theme', async () => {
     await render({ prelude: '安全附言' });
     const card = container.querySelector('[data-testid="arena-web-result"]')!;

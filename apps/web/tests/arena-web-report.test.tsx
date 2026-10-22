@@ -214,12 +214,12 @@ describe('Web 战报的本地执行许可', () => {
     // Builtin 与本地包都通过同一个静态运行页，不在主站 srcdoc 继承 CSP。
     expect(frame.getAttribute('src')).toContain('/__web-package__/runner?instance=');
     expect(frame.getAttribute('srcdoc')).toBeNull();
-    await click('⬇ 下载生成目标');
+    await click('下载生成目标');
     expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), expect.stringMatching(/\.html$/));
     const [targetBlob, targetName] = vi.mocked(downloadBlob).mock.calls[0]!;
     expect(targetName).toBe('index.html');
     expect(await targetBlob.text()).toBe(content);
-    const htmlButton = [...document.querySelectorAll('button')].find((item) => item.textContent === '🌐 下载 HTML')!;
+    const htmlButton = [...document.querySelectorAll('button')].find((item) => item.textContent === '下载 HTML')!;
     expect(htmlButton.disabled).toBe(false);
     await act(async () => root.render(render(true, { ...artifact, generatedDigest: `sha256:${'0'.repeat(64)}` })));
     await waitForReact(() => {
@@ -565,14 +565,14 @@ describe('Web 战报的本地执行许可', () => {
   it('仅完整战报可下载 HTML；取消执行后仍可下载，保留脚本并移除机器 meta', async () => {
     const content = `${source}\n<!-- MAHOSHOJO_ARENA_META {"version":1,"report":{"winner":"甲"}} -->`;
     await act(async () => root.render(viewer('download', false, content)));
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(downloadBlob).not.toHaveBeenCalled();
     await act(async () => root.render(viewer('download', true, content)));
     await click('取消');
     expect(container.querySelector('legend')?.textContent).toBe('显示方式');
     expect(container.querySelector('[data-testid="ordinary"]')?.nextElementSibling?.classList.contains('buttons-container')).toBe(true);
     expect(container.textContent).toContain('不再受本站沙箱保护');
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(document.querySelector('iframe')).toBeNull();
     expect(downloadBlob).toHaveBeenCalledOnce();
     const [blob, filename] = vi.mocked(downloadBlob).mock.calls[0];
@@ -587,11 +587,11 @@ describe('Web 战报的本地执行许可', () => {
     expect(downloaded).toBe(source);
     await click('Web 显示');
     await click('继续使用 Web');
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(downloadBlob).toHaveBeenCalledTimes(2);
     expect(document.querySelector('iframe')?.getAttribute('sandbox')).toBe('allow-scripts');
     await act(async () => root.render(viewer('download', false, content)));
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(downloadBlob).toHaveBeenCalledTimes(2);
   });
 
@@ -605,7 +605,7 @@ describe('Web 战报的本地执行许可', () => {
         </section>}
       </ArenaWebReport>
     ));
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(vi.mocked(downloadBlob).mock.calls[0]?.[1]).toBe('魔法少女速报_月下决战：白百合与黑曜.html');
   });
 
@@ -613,7 +613,7 @@ describe('Web 战报的本地执行许可', () => {
     window.localStorage.setItem('arena.web-report-consent.v1.room.title-fallback', 'accepted');
     const titled = '<!doctype html><html><head><title>月下决战：白百合与黑曜</title></head><body>x</body></html>';
     await act(async () => root.render(viewer('title-fallback', true, titled)));
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(vi.mocked(downloadBlob).mock.calls[0]?.[1]).toBe('魔法少女速报_月下决战：白百合与黑曜.html');
   });
 
@@ -629,7 +629,7 @@ describe('Web 战报的本地执行许可', () => {
         scenarioName: '雨夜车站',
       }} />
     ));
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(vi.mocked(downloadBlob).mock.calls[0]?.[1]).toBe('魔法少女速报_月下决战.html');
   });
 
@@ -652,7 +652,7 @@ describe('Web 战报的本地执行许可', () => {
     expect(notes.textContent).toContain('下面是本场特别战报');
     expect(notes.textContent).toContain('希望你喜欢这场战斗');
 
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     const [blob] = vi.mocked(downloadBlob).mock.calls[0];
     const downloaded = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -825,8 +825,8 @@ describe('Web 战报的本地执行许可', () => {
     await click('Web 显示');
     expect(document.querySelector('iframe')).toBeTruthy();
     const oldFrame = document.querySelector('iframe');
-    expect(container.querySelector('.buttons-container')?.textContent).toContain('↻ 重新加载');
-    await click('↻ 重新加载');
+    expect(container.querySelector('.buttons-container')?.textContent).toContain('重新加载');
+    await click('重新加载');
     expect(document.querySelector('iframe')).not.toBe(oldFrame);
     await act(async () => root.render(viewer('final-only', false, content)));
     expect(document.querySelector('iframe')).toBeNull();

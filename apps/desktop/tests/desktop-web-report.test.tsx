@@ -43,6 +43,11 @@ describe('Desktop shared Web display controls', () => {
     await click('Web 显示'); await click('继续使用 Web'); expect(opens()).toHaveLength(1);
     expect(button('Web 显示').getAttribute('aria-pressed')).toBe('true');
     expect(container.querySelector('iframe,script,webview')).toBeNull();
+    expect(container.querySelector('[aria-label="独立 Web 作品窗口"] [role="status"]')?.textContent).toBe(owner.getSnapshot().message);
+    await click('聚焦作品窗口');
+    expect(invoke.mock.calls.at(-1)).toEqual(['control_web_package_instance', { request: { instanceId: 'wpk-1', action: 'focus' } }]);
+    await click('重新加载');
+    expect(invoke.mock.calls.at(-1)).toEqual(['control_web_package_instance', { request: { instanceId: 'wpk-1', action: 'reload' } }]);
     await click('沉浸体验'); expect(button('退出沉浸')).toBeTruthy(); expect(opens()).toHaveLength(1);
     await click('普通显示'); expect(closes()).toHaveLength(1); expect(button('普通显示').getAttribute('aria-pressed')).toBe('true');
     await click('Web 显示'); expect(opens()).toHaveLength(1); expect(document.body.textContent).toContain('启用 Web 战报');

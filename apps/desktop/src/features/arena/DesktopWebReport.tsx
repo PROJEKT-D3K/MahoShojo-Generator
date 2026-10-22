@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { ExternalLink, Play, RefreshCw, RotateCw, X } from 'lucide-react';
 import { normalizeArenaWebOutput } from '@mahoshojo/ai-core/arena-generation';
 import {
   ArenaWebDisplayModeSelectorView, ArenaWebImmersiveButton, ArenaWebNotes, ArenaWebReportActions,
-  ArenaWebSourceView, WebReportConsentDialogView, WebPackageRiskSummary, type ArenaWebReportAction,
+  ArenaWebSourceView, ArenaWebWindowStatusView, WebReportConsentDialogView, WebPackageRiskSummary, type ArenaWebReportAction,
 } from '@mahoshojo/ui-web/arena-report-views';
 import type { WebPackageRiskProfile } from '@mahoshojo/web-package/security';
 import { DesktopWebReportExecution, type DesktopWebReportSource } from './web-execution';
@@ -46,19 +47,17 @@ export function DesktopWebReport({ source, children, actions = [], status, riskP
       : source.instance === null ? 'Web 包尚未通过精确内容校验，暂不能运行。'
         : source.instance === undefined && !normalizeArenaWebOutput(source.content).document ? '未识别完整 HTML，保留安全文本，不能运行。' : undefined);
   const run = () => { if (!reason && !disabled) owner.requestRun(); };
-  const runAction: ArenaWebReportAction = { id: 'run-web-report', label: '运行 Web 战报', onClick: run,
+  const runAction: ArenaWebReportAction = { id: 'run-web-report', label: '运行 Web 战报', icon: <Play />, onClick: run,
     disabled: disabled || !!reason || !owner.canRun() || state.busy };
   const controls: ArenaWebReportAction[] = state.instanceId ? [
-    { id: 'web-focus', label: '↗ 聚焦作品窗口', disabled: state.busy || state.phase !== 'open', onClick: () => { void owner.control('focus'); } },
-    { id: 'web-reload', label: '↻ 重新加载', title: '重新加载会重置作品内的交互进度', disabled: state.busy || state.phase !== 'open', onClick: () => { void owner.control('reload'); } },
-    { id: 'web-check', label: '检查运行状态', disabled: state.busy, onClick: () => { void owner.control('status'); } },
-    { id: 'web-close', label: '关闭作品', disabled: state.busy, onClick: () => { void owner.control('close'); } },
+    { id: 'web-focus', label: '聚焦作品窗口', icon: <ExternalLink />, disabled: state.busy || state.phase !== 'open', onClick: () => { void owner.control('focus'); } },
+    { id: 'web-reload', label: '重新加载', icon: <RotateCw />, title: '重新加载会重置作品内的交互进度', disabled: state.busy || state.phase !== 'open', onClick: () => { void owner.control('reload'); } },
+    { id: 'web-check', label: '检查运行状态', icon: <RefreshCw />, disabled: state.busy, onClick: () => { void owner.control('status'); } },
+    { id: 'web-close', label: '关闭作品', icon: <X />, disabled: state.busy, onClick: () => { void owner.control('close'); } },
   ] : [runAction];
-  const content = showingWeb ? <div className="space-y-3 p-4" aria-label="独立 Web 作品窗口">
-    <p role="status">{state.message}</p>
-    <p className="text-sm">作品在独立隔离窗口中运行，不会在主界面执行网页。作品菜单提供全屏、重新加载与关闭；交互进度不会自动保存。</p>
+  const content = showingWeb ? <ArenaWebWindowStatusView message={state.message}>
     <ArenaWebNotes prelude={prelude} epilogue={epilogue} />
-  </div> : source.instance !== undefined || !source.ready ? <ArenaWebSourceView source={source.content} /> : undefined;
+  </ArenaWebWindowStatusView> : source.instance !== undefined || !source.ready ? <ArenaWebSourceView source={source.content} /> : undefined;
   const reportActions = <><ArenaWebReportActions actions={[...actions, ...controls]} />
     {state.instanceId && state.phase === 'open' ? <ArenaWebImmersiveButton immersive={state.fullscreen} disabled={state.busy}
       onClick={() => { void owner.control('set-fullscreen', !state.fullscreen); }} /> : null}</>;

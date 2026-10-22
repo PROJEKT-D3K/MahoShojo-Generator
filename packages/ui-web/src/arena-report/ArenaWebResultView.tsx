@@ -1,11 +1,12 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { FileText, PanelsTopLeft } from 'lucide-react';
+import { FileText, PanelsTopLeft, Play } from 'lucide-react';
 import type { WebPackageRiskProfile } from '@mahoshojo/web-package/security';
 import { SegmentedControl, type SegmentedOption } from '../details-controls/SegmentedControl';
 import { WebPackageRiskSummary } from './WebPackageRiskSummary';
 import { WEB_REPORT_SURFACE_BACKGROUND } from './report-surface';
+import { ARENA_WEB_CONTROL_CLASS_NAME } from './ArenaWebViewer';
 
 const FORMAT_OPTIONS: readonly SegmentedOption<'markdown' | 'web'>[] = [
   { value: 'markdown', label: 'Markdown', icon: <FileText />, description: '以正文为主的战报，支持标题、表格与公式，适合阅读和保存图片。' },
@@ -54,12 +55,13 @@ export function ArenaWebNotes({ prelude, epilogue, renderNote }: ArenaWebNotesPr
 }
 
 export function ArenaWebSourceView({ source, label = 'Web 战报源码（安全文本）' }: Readonly<{ source: string; label?: string }>) {
-  return <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words p-4 text-sm" aria-label={label}>{source}</pre>;
+  return <pre className="min-w-0 max-w-full max-h-[70vh] overflow-auto whitespace-pre-wrap wrap-anywhere p-4 text-sm" aria-label={label}>{source}</pre>;
 }
 
 export type ArenaWebReportAction = Readonly<{
   id: string;
   label: string;
+  icon?: ReactNode;
   onClick(): void;
   disabled?: boolean;
   title?: string;
@@ -69,8 +71,9 @@ export type ArenaWebReportAction = Readonly<{
 /** The host owns synchronous locks, scope fencing, errors and every download/save/run effect. */
 export function ArenaWebReportActions({ actions }: Readonly<{ actions: readonly ArenaWebReportAction[] }>) {
   return <>{actions.map((action) => <button key={action.id} type="button" disabled={action.disabled} onClick={action.onClick} title={action.title} aria-label={action.ariaLabel}
-    className="save-button flex-1 bg-white/10 hover:bg-white/20 text-white py-2 px-4 rounded transition-all disabled:cursor-not-allowed disabled:opacity-60">
-    {action.label}
+    className={`${ARENA_WEB_CONTROL_CLASS_NAME} min-w-0 bg-white/10 enabled:hover:bg-white/20`}>
+    {action.icon ? <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center [&>svg]:size-4">{action.icon}</span> : null}
+    <span className="min-w-0 wrap-anywhere">{action.label}</span>
   </button>)}</>;
 }
 
@@ -95,7 +98,7 @@ export type ArenaWebResultViewProps = Readonly<{
 export function ArenaWebResultView({ source, ready, title, sourceLabel, prelude = '', epilogue = '', status, riskProfile, actions = [], execution }: ArenaWebResultViewProps) {
   const capability = execution ?? { available: false as const, reason: '当前环境暂不支持运行 Web 战报，可查看源码、保存与导出。' };
   const runAction: ArenaWebReportAction = {
-    id: 'run-web-report', label: capability.label ?? '运行 Web 战报',
+    id: 'run-web-report', label: capability.label ?? '运行 Web 战报', icon: <Play />,
     disabled: !ready || !capability.available || capability.disabled,
     onClick: () => { if (ready && capability.available && !capability.disabled) capability.onRun(); },
   };

@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react';
+import { Download, ExternalLink, RefreshCw, RotateCw, X } from 'lucide-react';
 
 import { CHARACTER_CARD_EXPORTER_LABEL, MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlCard } from '../character-card';
 import { CardForgeThemeEditor } from '../card-forge';
 import { BattleReportCardWidthSettings } from '../arena/BattleReportCardWidthSettings';
 import { resolveBattleReportCardManualWidthPx, type BattleReportCardWidthSettingsValue } from '../arena/battle-report-card-width';
 import { CombatantUpdatesPresentation, GeneratedByUserBadgeView, StreamingBattleReportCard } from '../arena-report';
-import { ArenaWebResultView, ArenaWebDisplayModeSelectorView, ArenaWebViewer, ARENA_WEB_FRAME_CLASS_NAME, useArenaWebImmersive, type ArenaWebDisplayMode } from '../arena-report/views';
+import { ArenaWebResultView, ArenaWebDisplayModeSelectorView, ArenaWebReportActions, ArenaWebImmersiveButton, ArenaWebWindowStatusView, ArenaWebViewer, ARENA_WEB_FRAME_CLASS_NAME, useArenaWebImmersive, type ArenaWebDisplayMode } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
 import { ResultJsonCopyButton } from '../details-controls/ResultJsonCopyButton';
@@ -85,6 +86,27 @@ function WebViewerSample() {
         <label className="input-group"><span className="input-label">沉浸切换保留内容</span><input aria-label="沉浸切换保留内容" className="input-field" defaultValue="进出沉浸后仍保留" /></label>
       </div>
     </ArenaWebViewer> : <StreamingBattleReportCard content="# 普通显示\n\n同一战报的普通卡片样板。" />}
+  </section>;
+}
+
+function WindowReportSample() {
+  const [immersive, setImmersive] = useState(false);
+  const [message, setMessage] = useState('作品正在独立隔离窗口中运行。');
+  return <section className="min-w-0" aria-label="Web 战报窗口控件与长源码样板">
+    <StreamingBattleReportCard content="" mode="classic" disableExport
+      aiModel="showroom-example-model" aiUsage={{ promptTokens: 120, completionTokens: 90 }}
+      reportContent={<ArenaWebWindowStatusView message={message} />}
+      additionalActions={<>
+        <ArenaWebReportActions actions={[
+          { id: 'download', label: '下载 HTML', icon: <Download />, onClick: () => setMessage('下载操作样板；不导出文件。') },
+          { id: 'focus', label: '聚焦作品窗口', icon: <ExternalLink />, onClick: () => setMessage('聚焦操作样板；不创建窗口。') },
+          { id: 'reload', label: '重新加载', icon: <RotateCw />, onClick: () => setMessage('重新加载操作样板；不执行网页。') },
+          { id: 'status', label: '检查运行状态', icon: <RefreshCw />, onClick: () => setMessage('状态检查样板。') },
+          { id: 'close', label: '关闭作品', icon: <X />, disabled: true, onClick: () => {} },
+        ]} />
+        <ArenaWebImmersiveButton immersive={immersive} onClick={() => setImmersive(value => !value)} />
+      </>} />
+    <StreamingBattleReportCard content={`# 长源码与长文本\n\n${'long-unbroken-content-'.repeat(30)}\n\n\`\`\`html\n<main data-source="${'long-source-'.repeat(80)}">安全文本</main>\n\`\`\``} />
   </section>;
 }
 
@@ -311,6 +333,7 @@ function ResultSurfacesSection() {
         {copyResult !== null && <p role="status">{copyResult ? '完整结果 JSON 已复制到剪贴板' : '复制失败，请检查剪贴板权限。'}</p>}
       </div>
       <WebViewerSample />
+      <WindowReportSample />
       <StoryReadErrorsSample />
       <div className="grid min-w-0 gap-3 md:grid-cols-2" aria-label="竞技场操作反馈样板">
         {(['full', 'lite'] as const).map(appearance => <div key={appearance} className={appearance === 'lite' ? 'battle-lite-shell min-w-0' : 'min-w-0'}>

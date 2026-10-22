@@ -386,11 +386,17 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
                 {children}
             </li>
         ),
-        // code -> 行内代码或代码块 (可选：做成一种特殊的强调样式)
-        code: ({ children, ...props }) => (
-            <span className="font-mono text-xs bg-gray-800 px-1 py-0.5 rounded text-pink-200" {...props}>
+        // Preserve long source lines inside a bounded, keyboard-scrollable region.
+        pre: ({ children }) => (
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Scroll regions need a tab stop for keyboard horizontal scrolling.
+            <pre role="region" tabIndex={0} aria-label="战报代码块" className="my-3 max-w-full overflow-x-auto whitespace-pre rounded-(--app-radius-sm) bg-black/20 p-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white [&>code]:bg-transparent [&>code]:p-0">
                 {children}
-            </span>
+            </pre>
+        ),
+        code: ({ children, className, ...props }) => (
+            <code className={`font-mono text-xs bg-gray-800 px-1 py-0.5 rounded text-pink-200 ${className ?? ''}`} {...props}>
+                {children}
+            </code>
         ),
         table: ({ children }) => (
             <div className="my-3 overflow-x-auto rounded-lg border border-white/15 bg-black/15">
@@ -510,7 +516,7 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
     return (
         <div
             ref={cardRef}
-            className={`result-card relative${showingWeb ? ' before:hidden' : ''}`}
+            className={`result-card relative min-w-0 wrap-anywhere${showingWeb ? ' before:hidden' : ''}`}
             style={{
                 background: showingWeb
                     ? WEB_REPORT_SURFACE_BACKGROUND
@@ -529,7 +535,11 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
                 {embeddedHeader ? reportContent : null}
                 <div style={showingWeb ? { padding: '1rem' } : undefined}>
                     {/* 顶部 Logo */}
-                    {!embeddedHeader && <img
+                    {!embeddedHeader && showingWeb && <div className="mb-3 flex items-center justify-between gap-4">
+                        <img src="/arena-white.svg" width={140} height={45} alt="魔法少女竞技场" className="h-auto w-32 min-w-0 max-w-full sm:w-40" />
+                        {modeDisplay && <img src={modeDisplay.logo} alt={modeDisplay.text} className="h-auto w-24 min-w-0 opacity-80" />}
+                    </div>}
+                    {!embeddedHeader && !showingWeb && <img
                         src="/arena-white.svg"
                         style={{ marginBottom: '0rem', marginTop: '0.5rem' }}
                         width={280}
@@ -539,7 +549,7 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
 
                     {/* 模式 Logo (绝对定位) */}
                     <div style={{ position: 'relative', width: '100%' }}>
-                        {modeDisplay && (
+                        {modeDisplay && (!showingWeb || embeddedHeader) && (
                             <img
                                 src={modeDisplay.logo}
                                 alt={modeDisplay.text}
@@ -683,7 +693,7 @@ export const StreamingBattleReportCard: React.FC<StreamingBattleReportCardProps>
                     )}
 
                     {/* 底部按钮 */}
-                    {((!disableExport && (canShowImageAction || ports.downloadMarkdown)) || additionalActions != null) && <div className="buttons-container flex flex-wrap gap-2 justify-center mt-6 pt-4 border-t border-gray-700" style={{ alignItems: 'stretch' }}>
+                    {((!disableExport && (canShowImageAction || ports.downloadMarkdown)) || additionalActions != null) && <div className="buttons-container flex flex-wrap items-stretch gap-2 justify-center mt-6 pt-4 border-t border-gray-700">
                         {!disableExport && canShowImageAction && (
                             <button
                                 onClick={isStreaming && onStopGeneration ? onStopGeneration : handleSaveImage}

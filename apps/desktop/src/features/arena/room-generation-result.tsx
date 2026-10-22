@@ -1,3 +1,4 @@
+import { Download } from 'lucide-react';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { normalizeArenaWebOutput, resolveWebDisplayTitle } from '@mahoshojo/ai-core/arena-generation';
 import type { ArenaRoomGenerationResult } from '@mahoshojo/contracts/arena-room';
@@ -78,7 +79,7 @@ export function DesktopRoomGenerationResult({ generation, generationKey, onRetry
         exportAction={<button type="button" className={generationActionClassNames.secondary} onClick={exportFull}>导出当前完整正文</button>}>
         {web ? <DesktopWebReport source={webSource} prelude={normalized.prelude} epilogue={normalized.epilogue}
           unavailableReason={packageResult ? '房间 Web 包尚未接入精确包运行校验，当前仅展示安全文本；不会按自由 HTML 运行包目标。' : undefined}
-          actions={[{ id: 'export-room-web-source', label: '导出安全源码文本', onClick: exportFull }]}>{renderReport}</DesktopWebReport>
+          actions={[{ id: 'export-room-web-source', icon: <Download />, label: '导出安全源码文本', onClick: exportFull }]}>{renderReport}</DesktopWebReport>
           : renderReport(undefined, undefined, false)}
       </BattleStoryContentPreview>
     </div>
