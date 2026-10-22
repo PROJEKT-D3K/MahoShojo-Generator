@@ -26,7 +26,8 @@ describe('desktop branded first paint', () => {
     expect(bootIndex).toBeGreaterThan(rootIndex);
     // 首帧必须先于 bundle：脚本执行后 React 会接管并清空这些节点。
     expect(moduleIndex).toBeGreaterThan(bootIndex);
-    expect(html).toContain('src="/favicon.svg"');
+    expect(html).toContain("background-image: url('/logo.svg')");
+    expect(html).toContain("background-image: url('/logo-white.svg')");
   });
 
   it('colors the boot screen from the resolved color mode instead of a fixed white', () => {

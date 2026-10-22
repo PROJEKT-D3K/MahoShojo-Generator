@@ -79,26 +79,24 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 14px;
         background: linear-gradient(135deg, #ffffff 0%, #ffffff 25%, #ffe3f6 86%, #fecfef 100%);
-        color: #3f4653;
         font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
       }
       html[data-color-mode='dark'] .desktop-boot {
         background: linear-gradient(155deg, #0b1220 0%, #0b1220 42%, #241827 68%, #6f294d 88%, #d8578b 100%);
-        color: #e2e8f0;
       }
       .desktop-boot-logo {
-        width: 72px;
-        height: 72px;
-        border-radius: 50%;
-        box-shadow: 0 10px 32px rgba(216, 87, 139, 0.28);
+        width: min(220px, 72vw);
+        aspect-ratio: 1478 / 981;
+        background-image: url('/logo.svg');
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: contain;
+        filter: drop-shadow(0 10px 32px rgba(216, 87, 139, 0.28));
         animation: desktop-boot-pulse 1.6s ease-in-out infinite;
       }
-      .desktop-boot-name {
-        font-size: 15px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
+      html[data-color-mode='dark'] .desktop-boot-logo {
+        background-image: url('/logo-white.svg');
       }
       @keyframes desktop-boot-pulse {
         0%,
@@ -125,8 +123,7 @@
   <body>
     <div id="root">
       <div class="desktop-boot" aria-hidden="true">
-        <img class="desktop-boot-logo" src="/favicon.svg" alt="" />
-        <div class="desktop-boot-name">MahoShojo Generator</div>
+        <div class="desktop-boot-logo"></div>
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>
