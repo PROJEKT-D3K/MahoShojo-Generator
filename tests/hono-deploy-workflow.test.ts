@@ -10,6 +10,19 @@ const productionWorkflow = () => [
 const previewWorkflow = () => readFileSync(resolve('.github/workflows/preview-deploy.yml'), 'utf8');
 
 describe('Hono deployment workflows', () => {
+  test('Cloudflare artifact 打包前必须通过真实 Worker 运行时检查', () => {
+    const manifest = JSON.parse(readFileSync(resolve('apps/web/package.json'), 'utf8'));
+    const workflow = readFileSync(resolve('.github/workflows/cloudflare-build.yml'), 'utf8');
+
+    expect(manifest.scripts['build:cf']).toMatch(/&& pnpm run verify:cloudflare-runtime$/u);
+    expect(manifest.scripts['verify:cloudflare-runtime']).toBe('node scripts/verify-cloudflare-runtime.mjs');
+    const buildIndex = workflow.indexOf('run: pnpm --filter @mahoshojo/web run build:cf');
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(buildIndex).toBeLessThan(
+      workflow.indexOf('- name: Package Cloudflare bundle'),
+    );
+  });
+
   test('production 不重复整仓 ci:verify，保留部署特有验证并按 Hono → Cloudflare 顺序发布', () => {
     const workflow = productionWorkflow();
 

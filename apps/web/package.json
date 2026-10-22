@@ -11,7 +11,8 @@
     "build:next": "pnpm run generate:content && pnpm run clean:next && pnpm run typecheck:build && next build --webpack && node scripts/check-hosted-dr-client-bundle.mjs --dir .next/static",
     "build": "pnpm run build:next",
     "check:wrangler:d1": "node scripts/check-wrangler-d1-config.mjs",
-    "build:cf": "pnpm run generate:content && pnpm run check:arena-room-origins && pnpm run check:wrangler:d1 && opennextjs-cloudflare build && opennextjs-cloudflare populateCache local && node scripts/check-hosted-dr-client-bundle.mjs --dir .open-next/assets/_next/static",
+    "build:cf": "pnpm run generate:content && pnpm run check:arena-room-origins && pnpm run check:wrangler:d1 && opennextjs-cloudflare build && opennextjs-cloudflare populateCache local && node scripts/check-hosted-dr-client-bundle.mjs --dir .open-next/assets/_next/static && pnpm run verify:cloudflare-runtime",
+    "verify:cloudflare-runtime": "node scripts/verify-cloudflare-runtime.mjs",
     "preview": "pnpm run build:cf && opennextjs-cloudflare preview",
     "deploy": "pnpm run build:cf && opennextjs-cloudflare deploy",
     "start": "next start",
@@ -40,7 +41,7 @@
     "@mahoshojo/ui-web": "workspace:*",
     "@mahoshojo/web-package": "workspace:*",
     "@next/third-parties": "16.3.8",
-    "@opennextjs/cloudflare": "1.20.9",
+    "@opennextjs/cloudflare": "1.20.12",
     "@tanstack/react-query": "^5.90.12",
     "@types/mdast": "^4.0.4",
     "@zumer/snapdom": "^1.9.7",
@@ -101,6 +102,7 @@
     "playwright": "1.62.1",
     "tailwindcss": "^4",
     "typescript": "^5",
+    "miniflare": "5.20261006.1-alpha",
     "vitest": "^4.1.7",
     "wrangler": "^4.149.0"
   }
