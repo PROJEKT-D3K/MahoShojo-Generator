@@ -2,14 +2,17 @@ import { captureDesktopCharacterCardExportGuard, DesktopCharacterCardExportBadge
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link, useRouter, useSearch } from '@tanstack/react-router';
+import { FolderOpen, Library, LogOut, RotateCcw, Trash2 } from 'lucide-react';
 import { setDataCardFieldValue, type DataCardFieldAddon, type DataCardFieldPath } from '@mahoshojo/ui-web/card-editor';
 import { CanshouCard, GeneralCharacterCard, MagicalGirlCard, resolveMagicalGirlGradient } from '@mahoshojo/ui-web/character-card';
-import { LOCAL_CARD_TYPE_LABELS, LocalCardsPanel, useLocalCardsController, type LocalCardsHost } from '@mahoshojo/ui-web/local-cards';
+import { LOCAL_CARD_TYPE_LABELS } from '@mahoshojo/ui-web/local-cards';
 import { buildSafeFileName, type PageDraftBlockedReason } from '@mahoshojo/ui-web/client';
 import { BackHomeLink, ProductFooter } from '@mahoshojo/ui-web/shell';
 import type { HomeAssetSource } from '@mahoshojo/ui-web/home';
 import {
   CardLibraryModal,
+  Button,
+  buttonClassName,
   type BattleSelectionPayload,
   type CardLibrarySelectionContext,
 } from '@mahoshojo/ui-web/card-library';
@@ -93,10 +96,6 @@ const DESKTOP_CHARACTER_MANAGER_CAPABILITIES: CharacterManagerCapabilities = {
 
 const CharacterManagerLink = ({ href, ...props }: CharacterManagerLinkProps) => <Link to={href} {...props} />;
 
-const actionClass =
-  'min-h-11 rounded-lg border border-(--app-border-strong) px-4 py-2 text-sm hover:bg-(--app-surface-90) disabled:cursor-not-allowed disabled:opacity-50';
-const inputClass = 'min-h-11 w-full rounded-lg border border-(--app-border-strong) bg-transparent px-3 py-2 text-sm';
-
 const snapshotOf = (draft: CardDraft): string => JSON.stringify([draft.cardType, draft.title, draft.data]);
 
 /** 单卡导出文件名——与共享卡库 `handleDownloadCard` 同一共享实现（剥非法字符、基名截断 80 字符、保留中文）。 */
@@ -143,8 +142,6 @@ export function DesktopCharacterManager() {
   const search = useSearch({ strict: false });
   const cardParam = typeof search.card === 'string' ? search.card : undefined;
   const repository = useMemo(() => new IpcLocalCardRepository((command, args) => invoke(command, args as never)), []);
-  const cardsHost = useMemo<LocalCardsHost>(() => ({ store: repository, describeError: describeLocalCardError }), [repository]);
-  const cards = useLocalCardsController(cardsHost);
   const cardLibraryHost = useDesktopCardLibraryHost();
   const { state: cloudSession, store: cloudSessionStore } = useDesktopCloudSession();
   const [draft, setDraft] = useState<CardDraft | null>(null);
@@ -290,8 +287,7 @@ export function DesktopCharacterManager() {
     setPasteOpen(false);
     setCopied(false);
     setNotice(null);
-    cards.controller.actions.reload();
-  }, [cards.controller.actions]);
+  }, []);
 
   // 页面草稿恢复：与 `?card=` 直达按身份裁决（D5.1-P2-r5-r2）——
   // - `storedDraft.originalId === cardParam`：同一编辑会话的刷新，恢复草稿叠到
@@ -552,7 +548,7 @@ export function DesktopCharacterManager() {
     setNotice({ tone: 'status', text: '浏览器内的本地草稿已清空（当前编辑内容与本地库记录不受影响）。' });
   }, [draftBlocked]);
 
-  // 「我的数据卡」：本地行直接以 `?card=` 打开记录（走既有加载与离开保护），
+  // 「从卡库载入」：本地行直接以 `?card=` 打开记录（走既有加载与离开保护），
   // 云端行按内容副本载入为未保存草稿——不持有云端身份，不做写回。
   // 公开缓存快照行（'cache'）同样落入副本草稿路径：它是冻结输入而不是
   // 已验证的线上引用，提示语如实区分快照与云端身份（DESK-CACHE-007）。
@@ -611,7 +607,6 @@ export function DesktopCharacterManager() {
         setBaseline(snapshotOf(saved));
         // 名称替换基线跟随保存后的记录：「原始」即本地库当前内容。
         setOriginalData(deepCopyData(saved.data));
-        cards.controller.actions.reload();
         savedId = result.record.id;
       }
     } catch (cause) {
@@ -629,7 +624,6 @@ export function DesktopCharacterManager() {
   const restoreFromRecycleBin = async (id: string) => {
     try {
       await repository.restore(id);
-      cards.controller.actions.reload();
       // 恢复的就是当前正文（同一摘要），直接打开恢复后的记录，不再把草稿当成待放弃的修改。
       unsavedGuardRef.current = false;
       openRecord(id);
@@ -643,7 +637,6 @@ export function DesktopCharacterManager() {
       await repository.delete(id);
       setReplacedOriginalId(null);
       setNotice({ tone: 'status', text: '原记录已移入回收站，可在本地库恢复。' });
-      cards.controller.actions.reload();
     } catch (cause) {
       setNotice({ tone: 'alert', text: describeLocalCardError(cause) });
     }
@@ -683,6 +676,16 @@ export function DesktopCharacterManager() {
           ? 'unauthenticated'
           : 'unknown';
   const cloudUnreachable = cloudSession.verification === 'unreachable';
+  const libraryActions = !loading && !saving && !cloudBusy ? (
+    <div className="flex flex-wrap gap-2">
+      <Button onClick={() => setLibraryOpen(true)}>
+        <FolderOpen size={16} aria-hidden="true" />从卡库载入
+      </Button>
+      <Link to="/local-library" className={buttonClassName({ variant: 'link' })}>
+        <Library size={16} aria-hidden="true" />管理本地库
+      </Link>
+    </div>
+  ) : null;
 
   const draftTemplate = draft === null ? 'unknown' : inferDataCardTemplate(draft.data);
   const editorTitle = draft === null
@@ -712,15 +715,15 @@ export function DesktopCharacterManager() {
                 <span className="text-sm text-pink-700">{activeCloudAccount.displayName ?? activeCloudAccount.username}</span>
               )}
               actions={activeCloudAccount === null ? null : (
-                <button
+                <Button size="sm"
                   onClick={() => void cloudSessionStore.signOut()}
-                  className="px-3 py-1.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
                 >
+                  <LogOut size={14} aria-hidden="true" />
                   退出登录
-                </button>
+                </Button>
               )}
-              myDataCards={draftRestoreReady && !loading && !saving && !cloudBusy ? {
-                // 未登录仍保留本地/公开库入口；已验证账号打开真实共源管理面。
+              myDataCards={activeCloudAccount !== null && draftRestoreReady && !loading && !saving && !cloudBusy ? {
+                // 云端管理入口始终保持账号语义；本地/公开库从导入区独立打开。
                 onOpen: () => {
                   const request = ++requestRef.current;
                   const openingUserId = cloudSessionStore.getSnapshot().account?.userId ?? null;
@@ -729,7 +732,6 @@ export function DesktopCharacterManager() {
                     const current = cloudSessionStore.getSnapshot();
                     if (openingUserId !== null && current.account?.userId !== openingUserId) return;
                     if (current.account !== null && current.verification === 'verified') setManageScope(`${current.account.userId}:${cloudSessionStore.getCredentialEpoch()}`);
-                    else if (current.account === null) setLibraryOpen(true);
                     else setNotice({ tone: 'alert', text: '云端账号尚未验证，请重试连接；本地编辑与导出不受影响。' });
                   });
                 },
@@ -745,7 +747,6 @@ export function DesktopCharacterManager() {
                 onAction: () => void (cloudUnreachable ? cloudSessionStore.refresh() : cloudSessionStore.requestAuth()),
               }}
             />
-            {activeCloudAccount !== null && draftRestoreReady && !loading && !saving && !cloudBusy && <button type="button" className={`${actionClass} mt-3`} onClick={() => setLibraryOpen(true)}>浏览本地与公开库</button>}
           </CharacterManagerPageHeader>
 
           {!guard.ready && !guard.message && <p role="status">正在初始化窗口关闭保护…</p>}
@@ -758,7 +759,7 @@ export function DesktopCharacterManager() {
             saveAndExportText={(
               <>保存写入这台设备的本地库；也可以把当前编辑中的内容下载为 <code>.json</code> 文件或复制到剪贴板。登录后还可选择公开或私有上传，并确认替换已有云端卡。</>
             )}
-            loadExtraText={<>也可以通过上方「我的数据卡」从本地库或云端数据卡载入。</>}
+            loadExtraText={<>也可以通过「从卡库载入」选择本地或公开数据卡；登录后，上方「我的数据卡」可管理并载入自己的云端卡。</>}
             extraSections={(
               <div>
                 <h4 className="font-semibold text-gray-800">关于本地保存：</h4>
@@ -825,9 +826,12 @@ export function DesktopCharacterManager() {
                 }}
                 fileLabel="上传 .json 设定文件（支持角色、情景、万途通用卡）"
                 fileExtra={(
-                  <p className="mt-2 text-xs text-gray-500">
-                    载入后可先编辑，确认保存后才写入本地库；同内容的卡不会重复保存。
-                  </p>
+                  <div className="mt-3 space-y-2">
+                    {libraryActions}
+                    <p className="text-xs text-(--app-text-muted)">
+                      本地卡无需登录；公开库需要联网。载入后可先编辑，确认保存后才写入本地库；同内容的卡不会重复保存。
+                    </p>
+                  </div>
                 )}
                 pasteOpen={pasteOpen}
                 onPasteOpenChange={setPasteOpen}
@@ -835,12 +839,6 @@ export function DesktopCharacterManager() {
                 onPasteChange={(value) => { requestRef.current += 1; setPasted(value); }}
                 onPasteLoad={() => importText(pasted)}
                 pasteBusy={false}
-              />
-              <LocalCardsPanel
-                model={cards.model}
-                actions={cards.controller.actions}
-                onEdit={(record) => openRecord(record.id)}
-                canEdit={isEditableLocalCard}
               />
             </>
           ) : (
@@ -857,29 +855,32 @@ export function DesktopCharacterManager() {
                 )}
                 headerExtra={(
                   <>
+                    <div className="mb-3">{libraryActions}</div>
                     <div className="grid gap-3 sm:grid-cols-[1fr,auto]">
                       <label htmlFor={titleId} className="flex flex-col gap-1 text-sm">
-                        记录标题
-                        <input id={titleId} value={draft.title} maxLength={512} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className={inputClass} />
+                        <span id={`${titleId}-label`}>记录标题</span>
+                        <input id={titleId} aria-labelledby={`${titleId}-label`} value={draft.title} maxLength={512} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className="input-field" />
                       </label>
                       <label htmlFor={typeId} className="flex flex-col gap-1 text-sm">
-                        类型{draft.original === null ? '' : '（创建后不可修改）'}
+                        <span id={`${typeId}-label`}>类型{draft.original === null ? '' : '（创建后不可修改）'}</span>
                         {draft.original === null ? (
                           <select
                             id={typeId}
+                            aria-labelledby={`${typeId}-label`}
                             value={draft.cardType}
                             disabled={saving}
                             onChange={(event) => { if (!savingRef.current) setDraft({ ...draft, cardType: event.target.value as LocalCardType }); }}
-                            className={inputClass}
+                            className="input-field"
                           >
                             {EDITABLE_CARD_TYPES.map((type) => <option key={type} value={type}>{LOCAL_CARD_TYPE_LABELS[type]}</option>)}
                           </select>
                         ) : (
                           <input
                             id={typeId}
+                            aria-labelledby={`${typeId}-label`}
                             value={LOCAL_CARD_TYPE_LABELS[draft.cardType]}
                             readOnly
-                            className={`${inputClass} cursor-not-allowed opacity-70`}
+                            className="input-field cursor-not-allowed opacity-70"
                           />
                         )}
                       </label>
@@ -910,24 +911,26 @@ export function DesktopCharacterManager() {
                       <div role="status" className="text-sm">
                         <p>{replacedOriginalId === null ? '已保存到本地库。' : '正文已改变，已另存为一条新记录；原记录仍在本地库。'}</p>
                         {replacedOriginalId !== null && (
-                          <button type="button" className={`${actionClass} mt-2`} onClick={() => void moveOriginalToRecycleBin(replacedOriginalId)}>
+                          <Button variant="danger" className="mt-2" onClick={() => void moveOriginalToRecycleBin(replacedOriginalId)}>
+                            <Trash2 size={16} aria-hidden="true" />
                             将原记录移入回收站
-                          </button>
+                          </Button>
                         )}
                       </div>
                     )}
                     {outcome?.kind === 'exists' && (
                       <div role="status" className="text-sm">
                         <p>本地库已有内容相同的记录，未重复保存。</p>
-                        <button type="button" className={`${actionClass} mt-2`} onClick={() => openRecord(outcome.id)}>打开已有记录</button>
+                        <Button className="mt-2" onClick={() => openRecord(outcome.id)}><FolderOpen size={16} aria-hidden="true" />打开已有记录</Button>
                       </div>
                     )}
                     {outcome?.kind === 'in-recycle-bin' && (
                       <div role="status" className="text-sm">
                         <p>内容相同的记录在回收站中。保存不会自动恢复它。</p>
-                        <button type="button" className={`${actionClass} mt-2`} onClick={() => void restoreFromRecycleBin(outcome.id)}>
+                        <Button className="mt-2" onClick={() => void restoreFromRecycleBin(outcome.id)}>
+                          <RotateCcw size={16} aria-hidden="true" />
                           从回收站恢复并打开
-                        </button>
+                        </Button>
                       </div>
                     )}
                     {outcome?.kind === 'document-too-large' && (

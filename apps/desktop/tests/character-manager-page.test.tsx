@@ -267,14 +267,17 @@ const scenarioRecordData = (record: LocalCardRecordV1) => {
 };
 
 describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', () => {
-  it('与 Web 同一产品骨架：品牌 Logo、使用指南、我的数据卡与内容模板入口齐全', async () => {
+  it('与 Web 同一产品骨架：品牌 Logo、使用指南、独立选卡与内容模板入口齐全', async () => {
     window.history.replaceState(null, '', '#/character-manager');
     await mount();
     await waitFor(() => container.querySelector('img[src="/character-manager.svg"]') !== null);
     expect(container.querySelector('img[src="/character-manager-white.svg"]')).not.toBeNull();
     expect(container.textContent).toContain('在这里查看、编辑和维护你的角色档案');
     expect(container.textContent).toContain('使用指南');
-    expect(button('我的数据卡')).not.toBeUndefined();
+    expect(button('从卡库载入')).not.toBeUndefined();
+    expect(button('我的数据卡')).toBeUndefined();
+    expect(container.querySelector('[data-testid="local-cards-panel"]')).toBeNull();
+    expect([...container.querySelectorAll('a')].find((link) => link.textContent === '管理本地库')?.getAttribute('href')).toMatch(/#\/local-library$/);
     expect(container.textContent).toContain('内容模板');
     // 空页面没有可持久化的内容：不写「空草稿」，也就不显示「已自动保存」。
     expect(container.textContent).not.toContain('已自动保存');
@@ -387,16 +390,18 @@ describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', 
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it('「我的数据卡」打开共享选择器，默认落在本地页签并列出本地记录', async () => {
+  it('未登录时从卡库载入不触发云验证，默认显示本地记录', async () => {
+    resetDesktopCloudSessionStoreForTests();
     window.location.hash = '#/character-manager';
     await mount();
-    await waitFor(() => button('我的数据卡') !== undefined);
-    await click(button('我的数据卡'));
-    // 打开选择器是一次主动使用：顺手探测一次会话（DESK-ONLINE-013）。
-    await waitFor(() => bridge.invoke.mock.calls.some((call) => call[0] === 'cloud_auth_status'));
-    // Modal 内容渲染在页面 DOM 中（非 portal），等待本地列表出现记录标题。
+    await waitFor(() => button('从卡库载入') !== undefined);
+    const authRequests = bridge.invoke.mock.calls.filter(([command]) => command === 'cloud_auth_status').length;
+    await click(button('从卡库载入'));
     await waitFor(() => document.body.textContent?.includes('星光') === true);
-    expect(document.body.textContent).toContain('本地');
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('本地');
+    expect(button('我的数据卡')).toBeUndefined();
+    expect(bridge.invoke.mock.calls.filter(([command]) => command === 'cloud_auth_status')).toHaveLength(authRequests);
   });
 
   it('从本地库进入编辑，只改标题时原记录整卡替换，未保存修改受离开保护', async () => {
@@ -653,7 +658,7 @@ describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', 
     root = createRoot(container);
     window.location.hash = '#/character-manager';
     await mount();
-    await waitFor(() => button('我的数据卡') !== undefined);
+    await waitFor(() => button('从卡库载入') !== undefined);
     await settle();
     expect(container.textContent).not.toContain('编辑角色: 草稿角色');
     expect(container.textContent).not.toContain('已恢复本地草稿');
@@ -750,10 +755,10 @@ describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', 
     await mount();
     await settle();
 
-    // 仲裁未完成：模板选择、导入、本地卡列表与「我的数据卡」一律不可达，
+    // 仲裁未完成：模板选择、导入与「从卡库载入」一律不可达，
     // 用户无法在旧草稿落定前开始新操作。
     expect(container.textContent).toContain('正在恢复页面草稿或读取目标数据卡');
-    expect(button('我的数据卡')).toBeUndefined();
+    expect(button('从卡库载入')).toBeUndefined();
     expect(button('▶ 展开文本粘贴区域 (手机端推荐)')).toBeUndefined();
     expect(button('编辑')).toBeUndefined();
     expect(container.textContent).not.toContain('内容模板');
@@ -762,7 +767,7 @@ describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', 
     await releaseGets();
     await waitFor(() => container.textContent?.includes('编辑角色: 草稿角色') === true);
     expect(container.textContent).toContain('已恢复本地草稿');
-    expect(button('我的数据卡')).not.toBeUndefined();
+    expect(button('从卡库载入')).not.toBeUndefined();
   });
 
   it('StrictMode 双挂载下仲裁结论仍唯一生效', async () => {
@@ -963,7 +968,7 @@ describe('Desktop 本地角色管理（IPC mock，仍需真机重启验收）', 
     await waitFor(() => release !== undefined);
     try {
       expect(container.querySelector('fieldset select')!.matches(':disabled')).toBe(true);
-      expect(button('我的数据卡')).toBeUndefined();
+      expect(button('从卡库载入')).toBeUndefined();
       for (const label of ['情景标题', '简短描述', '总章节数', '规划模式', '发展方向 1', '事件描述', '成功/失败']) {
         expect(scenarioField(label).matches(':disabled'), `${label} 不应被本地保存禁用`).toBe(false);
       }
@@ -1150,7 +1155,7 @@ it('没有旧草稿的初始 URL 读取落定前不开放编辑入口', async ()
   await waitFor(() => bridge.invoke.mock.calls.some(([command]) => command === GET_LOCAL_CARD_COMMAND));
   expect(container.querySelector('textarea')).toBeNull();
   expect(container.textContent).not.toContain('内容模板');
-  expect(button('我的数据卡')).toBeUndefined();
+  expect(button('从卡库载入')).toBeUndefined();
   await release();
   await waitFor(() => container.querySelector('#editor-field-appearance__outfit') !== null);
 });
@@ -1202,7 +1207,7 @@ it.each(['success', 'failure'] as const)('保存%s后保留在途期间的新标
   await click(button('保存到本地库'));
   await waitFor(() => release !== undefined);
   expect(container.querySelector('fieldset select')!.matches(':disabled')).toBe(true);
-  expect(button('我的数据卡')).toBeUndefined();
+  expect(button('从卡库载入')).toBeUndefined();
   await type(fieldByLabel('记录标题'), '保存期间的新标题');
   await act(async () => release());
   await waitFor(() => button('保存到本地库') !== undefined);
@@ -1236,7 +1241,7 @@ it('没有旧草稿的目标卡读取失败后重新开放导入入口', async (
   window.location.hash = '#/character-manager?card=missing';
   await mountStrict();
   await waitFor(() => container.textContent?.includes('本地库中没有这张数据卡') === true);
-  expect(button('我的数据卡')).toBeDefined();
+  expect(button('从卡库载入')).toBeDefined();
   await expandPasteArea();
   await type(container.querySelector<HTMLTextAreaElement>('textarea')!, '{"codename":"失败后新输入"}');
   await click(button('从文本加载数据'));

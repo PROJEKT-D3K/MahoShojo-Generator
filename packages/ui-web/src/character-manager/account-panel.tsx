@@ -35,8 +35,8 @@ export interface CharacterManagerAccountPanelProps {
   readonly welcomePrefix?: ReactNode;
   readonly userDisplay?: ReactNode;
   /**
-   * 「我的数据卡」CTA。无论登录与否都由宿主决定是否提供——Web 只在已登录时给
-   * （与既有一致）；Desktop 始终给，因为该入口同时覆盖本机本地库。
+   * 「我的数据卡」CTA。由宿主按账号状态决定是否提供，始终指向云端卡管理；
+   * 本地/公开卡的载入入口由导入或编辑区域承载，不复用此账号动作。
    */
   readonly myDataCards?: CharacterManagerMyDataCardsAction;
   /** 未登录分支文案与动作。 */
