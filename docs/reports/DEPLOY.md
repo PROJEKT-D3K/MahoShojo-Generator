@@ -11,7 +11,7 @@
 1.  **安装 Node.js 与 pnpm**
 
       * 本项目使用 pnpm 作为包管理器与脚本调度入口，推荐 Node.js v24.14.0，最低要求 Node.js 22。
-      * 安装 Node.js 后，可通过 Corepack 启用固定版本：`corepack prepare pnpm@11.3.0 --activate`。
+      * 安装 Node.js 后，可通过 Corepack 启用固定版本：`corepack prepare pnpm@11.28.6 --activate`。
       * 当前测试运行器已迁移到 Vitest，运维脚本入口统一通过 `pnpm` 调度；本地运行、测试和常规维护不再需要安装 Bun。
 
 2.  **获取 AI 提供商 API Key**
@@ -152,7 +152,7 @@ pnpm build
 
 #### 第 7 步：配置 Cloudflare D1 Binding（Auth/ORM 必需）
 
-部署到 Cloudflare Pages 时，请在项目环境变量中设置 `PNPM_VERSION=11.3.0`，确保平台使用与仓库 `packageManager` 一致的 pnpm 版本。
+部署到 Cloudflare Pages 时，请在项目环境变量中设置 `PNPM_VERSION=11.28.6`，确保平台使用与仓库 `packageManager` 一致的 pnpm 版本。
 
 如果你要启用 Better Auth 与 Drizzle（推荐），需要在 `wrangler.toml` 中配置 `DB` 绑定。
 

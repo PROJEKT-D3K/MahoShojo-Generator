@@ -77,7 +77,7 @@
 * **框架**: Next.js 15（App Router 页面与 Route Handlers）, React 19
 * **主服务 API**: Hono（Node.js）+ Redis（Arena 多人房间与可恢复生成运行时）
 * **语言**: TypeScript
-* **包管理器**: pnpm 11.3.0
+* **包管理器**: pnpm 11.28.6
 * **运行时**: Node.js 22.23.4+ / 24.22.1+（仅 22、24 两条 LTS 线；开发、构建与脚本）, Cloudflare Pages/Workers (Web 前端与容灾备用路径，Edge Runtime)
 * **数据库**: Cloudflare D1（主库）+ Cloudflare R2（大对象存储）
 * **AI**: Vercel AI SDK, 支持 OpenAI/Google Gemini 等多种模型
@@ -90,7 +90,7 @@
 ### 环境要求
 
 - Node.js 24.22.1（本地默认版本见 `.node-version`）；也支持 22.23.4 及以上的 Node 22 补丁版。API 镜像保持 Node 22，包管理器版本不变。
-- pnpm 11.3.0（可通过 Corepack 启用）
+- pnpm 11.28.6（可通过 Corepack 启用）
 - Vitest（当前测试运行器）
 - AI 提供商 API Key (推荐使用 Google Gemini 系列)
 - Cloudflare Turnstile Site Key & Secret Key
@@ -144,7 +144,7 @@ pnpm preview
 
 访问 [http://localhost:3000](http://localhost:3000) 查看应用。
 
-Cloudflare Pages 部署环境变量需显式设置 `PNPM_VERSION=11.3.0`，避免构建平台使用默认 pnpm 版本。
+Cloudflare Pages 部署环境变量需显式设置 `PNPM_VERSION=11.28.6`，避免构建平台使用默认 pnpm 版本。
 
 ## 📋 路线图
 
