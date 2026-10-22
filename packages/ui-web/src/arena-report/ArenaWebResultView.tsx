@@ -93,7 +93,7 @@ export type ArenaWebResultViewProps = Readonly<{
 
 /** Safe result chrome: never interprets output as DOM, loads resources, or supplies a renderer. */
 export function ArenaWebResultView({ source, ready, title, sourceLabel, prelude = '', epilogue = '', status, riskProfile, actions = [], execution }: ArenaWebResultViewProps) {
-  const capability = execution ?? { available: false as const, reason: '隔离运行待验：D4 门禁尚未完成，目前仅可查看安全文本、保存与导出。' };
+  const capability = execution ?? { available: false as const, reason: '当前环境暂不支持运行 Web 战报，可查看源码、保存与导出。' };
   const runAction: ArenaWebReportAction = {
     id: 'run-web-report', label: capability.label ?? '运行 Web 战报',
     disabled: !ready || !capability.available || capability.disabled,

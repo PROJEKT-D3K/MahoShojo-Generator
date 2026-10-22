@@ -89,6 +89,9 @@ const expectSharedOutput = (css: string, artifact: string): void => {
   };
   // 字体声明一致仍不等于实际字形一致；此处只守住构建后的显式回退契约。
   const family = (value: string | undefined) => value?.replace(/[\s'"]/g, '');
+  // 宽屏 Arena 结果不能落回通用 .card 的 500px；规则必须随共享闭包进入两个真实产物。
+  expect(declarationsFor('.arena-page-shell .card')['max-width'], artifact).toBe('none');
+  expect(declarationsFor('.battle-lite-shell .card')['max-width'], artifact).toBe('none');
   const sans = 'Arial,MicrosoftYaHei,PingFangSC,NotoSansCJKSC,NotoSansSC,sans-serif';
   const mono = 'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,LiberationMono,CourierNew,MicrosoftYaHei,PingFangSC,NotoSansCJKSC,NotoSansSC,monospace';
   expect(family(declarationsFor(':root')['--app-font-sans']), artifact).toBe(sans);

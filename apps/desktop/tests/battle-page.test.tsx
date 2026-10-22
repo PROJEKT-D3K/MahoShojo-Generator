@@ -400,7 +400,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
       expect(docs.size).toBe(0); expect(container.querySelector('[aria-label="战报结果"]')?.textContent).toContain(text);
       expect(container.querySelector('[data-arena-combatant-updates="v1"]')).not.toBeNull();
       expect(button('重试角色更新')).toBeUndefined();
-      await click('完整导出 JSON');
+      await click('下载会话备份');
       const beforeDownload = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
       const roleToggle = container.querySelector<HTMLButtonElement>('section[aria-label$="的战后变化"] button[aria-expanded]')!;
       expect(roleToggle.getAttribute('aria-expanded')).toBe('false');
@@ -416,7 +416,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
       await vi.waitFor(() => { expect(docs.size).toBe(2); expect(button('保存叙事历史到本地库').disabled).toBe(false); });
       await click('保存叙事历史到本地库');
       await vi.waitFor(() => { expect(docs.size).toBe(3); expect(button('保存叙事历史到本地库').disabled).toBe(false); });
-      await click('完整导出 JSON'); expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).result.rawText).toContain('车站重逢');
+      await click('下载会话备份'); expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).result.rawText).toContain('车站重逢');
       await act(async () => router.navigate({ to: '/local-library' })); await settle(); expect(window.location.hash).toContain('/local-library');
       await act(async () => router.navigate({ to: '/battle' })); await settle(); await click('引用本地叙事历史');
       await vi.waitFor(() => expect(document.body.textContent).toContain('车站重逢')); expect(calls()).toHaveLength(output === 'stream' ? 2 : 1);
@@ -620,7 +620,7 @@ describe('Desktop /battle journey against loopback fixture', () => {
   });
   it('EOF/failure and disk failure retain full export; retry stores once without replay', async () => {
     saveDraft(draft('daily', 'stream')); await mount(); eof = true; await click('生成战报');
-    await vi.waitFor(() => expect(container.textContent).toContain('生成连接或流协议失败')); expect(docs.size).toBe(0); await click('完整导出 JSON');
+    await vi.waitFor(() => expect(container.textContent).toContain('生成连接或流协议失败')); expect(docs.size).toBe(0); await click('下载会话备份');
     expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).result.rawText).toContain(text);
     eof = false; vi.mocked(window.confirm).mockReturnValue(true); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
     failSave = true; await click('保存叙事历史到本地库'); expect(container.textContent).toContain('完整原文仍在内存');
@@ -774,7 +774,7 @@ describe('Desktop Web source journey with execution closed', () => {
       expect(button('运行 Web 战报').disabled).toBe(true);
       expect(mocks.invoke.mock.calls.some(([command]) => /^(begin_web_package_instance|append_web_package_resource|open_web_package_instance)$/.test(command))).toBe(false);
       expect(JSON.parse(received.at(-1)!.arenaInputJson!).reportFormat).toBe('web');
-      await click('完整导出 JSON'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+      await click('下载会话备份'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
       expect(exported.result.renderSnapshot.reportFormat).toBe('web'); expect(exported.result.rawText).toContain('MAHOSHOJO_ARENA_META'); expect(exported.result.markdown).not.toContain('MAHOSHOJO_ARENA_META');
       await click('保存叙事历史到本地库'); expect([...docs.values()].some((record) => record.cardType === 'history')).toBe(true);
       await act(async () => router.navigate({ to: '/local-library' })); await settle();
@@ -792,7 +792,7 @@ describe('Desktop Web source journey with execution closed', () => {
       expect(preset, document.body.textContent ?? '').toBeTruthy(); await act(async () => preset!.click()); await settle();
       await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
       expect(JSON.parse(received.at(-1)!.arenaInputJson!).webPackageRef).toEqual(BUILTIN_WEB_PACKAGE_PRESETS[0]!.packageRef);
-      await click('完整导出 JSON'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+      await click('下载会话备份'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
       expect(exported.result.renderSnapshot.webPackage.targetPath).toBe('index.html'); expect(exported.result.markdown).toBe(webHtml + '\n');
       expect(button('运行 Web 战报').disabled).toBe(true); expect(activeCloseHandles).toBe(1);
       expect(mocks.invoke.mock.calls.some(([command]) => /^(begin_web_package_instance|append_web_package_resource|open_web_package_instance)$/.test(command))).toBe(false);
@@ -827,7 +827,7 @@ describe('Desktop Web source journey with execution closed', () => {
     const picker = document.querySelector<HTMLInputElement>('input[type="file"][accept*="zip"]')!; Object.defineProperty(picker, 'files', { configurable: true, value: [file] });
     await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true }))); await vi.waitFor(() => expect(localStorage.getItem(ARENA_DRAFT_KEY)).toContain(base.ref.digest)); await settle();
     expect(packageDocs.size).toBe(0); await click('生成战报'); await vi.waitFor(() => expect(container.textContent).toContain('生成完成。'));
-    await click('完整导出 JSON'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+    await click('下载会话备份'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
     expect(exported.result.markdown).toBe(normalized); expect(exported.result.rawText).toBe(webTextOverride);
     expect(exported.result.renderSnapshot.webPackage).toMatchObject({ packageRef: base.ref, targetPath: base.manifest.generation.target, targetMediaType: mediaType });
     expect(container.querySelector('iframe,script,style')).toBeNull(); expect((globalThis as { generatedMustNotRun?: boolean }).generatedMustNotRun).toBeUndefined();
@@ -867,7 +867,7 @@ describe('Desktop Web source journey with execution closed', () => {
     if (ending === 'cancel') { await click('取消生成'); release?.(); }
     if (ending === 'target') { expect(() => getDesktopAiConfigStore().selectExecutionLocation('server')).toThrow('生成期间'); await click('取消生成'); release?.(); await vi.waitFor(() => expect(getDesktopAiConfigStore().getSnapshot().generationActive).toBe(false)); await act(async () => getDesktopAiConfigStore().selectExecutionLocation('server')); await settle(); }
     await vi.waitFor(() => expect(button('取消生成')).toBeUndefined());
-    await click('完整导出 JSON'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+    await click('下载会话备份'); const exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
     expect(exported.result.rawText).toContain('webShouldNotRun'); expect(exported.result.phase).not.toBe('completed'); expect(exported.result.renderSnapshot).toBeNull(); expect(exported.candidates).toBeNull();
     expect(exported.draft.narrativeHistoryEntries).toEqual([]); expect(docs.size).toBe(0); expect(calls()).toHaveLength(1);
     expect(container.querySelector('iframe,script,img[src*="untrusted.invalid"]')).toBeNull(); expect(button('运行 Web 战报').disabled).toBe(true);
@@ -891,11 +891,11 @@ describe('Desktop Web source journey with execution closed', () => {
     const select = document.querySelector<HTMLSelectElement>('[data-testid="arena-web-replay-controls"] select')!;
     await act(async () => { select.value = third.base.ref.digest; select.dispatchEvent(new Event('change', { bubbles: true })); }); await click('确认兼容校验此版本');
     await vi.waitFor(() => expect(document.body.textContent).toContain('当前使用的是不同版本'));
-    await click('完整导出 JSON'); let exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]); expect(exported.result.renderSnapshot.webPackage.packageRef).toEqual(original.base.ref);
+    await click('下载会话备份'); let exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]); expect(exported.result.renderSnapshot.webPackage.packageRef).toEqual(original.base.ref);
     expect(button('运行 Web 战报').disabled).toBe(true); expect(button('下载精确 Base ZIP（不含生成目标）').disabled).toBe(true);
     await openGenerationOptions(); await click('更换 Web 包'); const local = [...document.querySelectorAll<HTMLButtonElement>('button')].find((entry) => entry.textContent?.trim().startsWith('本地库'))!; await act(async () => local.click()); await settle(); await uploadWebZip(original.file);
     await vi.waitFor(() => expect(document.body.textContent).toContain('已验证精确包与生成目标'));
-    await click('完整导出 JSON'); exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]); expect(exported.result.renderSnapshot.webPackage.packageRef).toEqual(original.base.ref);
+    await click('下载会话备份'); exported = JSON.parse(mocks.download.mock.calls.at(-1)![1]); expect(exported.result.renderSnapshot.webPackage.packageRef).toEqual(original.base.ref);
     expect(packageDocs.size).toBe(0); expect(mocks.invoke.mock.calls.some(([command]) => command === 'open_web_package_instance')).toBe(false);
   });
 
@@ -2042,6 +2042,7 @@ describe('session backup feedback in the real route', () => {
     await mount();
     const notice = container.querySelector('[aria-label="本机草稿提示"]')!;
     expect(notice.textContent).toContain('旧草稿无法读取，原数据已保留');
+    expect([...container.querySelectorAll('button')].filter(node => node.textContent === '下载会话备份')).toHaveLength(1);
     expect(notice.compareDocumentPosition(button('生成战报')) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     await click('下载会话备份', notice);
     expect(JSON.parse(mocks.download.mock.calls.at(-1)![1]).protectedLocalDraft.raw).toBe(original);
@@ -2373,13 +2374,13 @@ it('角色云端未知结果期间，草稿清除与连续故事入口不能确�
   expect(container.querySelector<HTMLTextAreaElement>('[data-arena-combatant-updates] textarea')!.disabled).toBe(true);
   expect(button('应用修复').disabled).toBe(true);
   await click('应用修复');
-  await click('完整导出 JSON'); const before = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+  await click('下载会话备份'); const before = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
   const notice = container.querySelector('[aria-label="本机草稿提示"]')!;
   expect(button('清除草稿', notice).disabled).toBe(true);
   vi.mocked(window.confirm).mockClear();
   await click('清除草稿', notice); await click('新建连续战报');
   expect(window.confirm).not.toHaveBeenCalled();
-  await click('完整导出 JSON'); const after = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
+  await click('下载会话备份'); const after = JSON.parse(mocks.download.mock.calls.at(-1)![1]);
   expect(after.result.rawText).toBe(before.result.rawText); expect(after.candidates).toEqual(before.candidates);
   expect(received).toHaveLength(1); expect(storyPort.heads()).toHaveLength(0);
   expect(mocks.invoke.mock.calls.filter(([command, args]) => command === 'cloud_card_library_request' && args.request.routeId === 'data-cards.create')).toHaveLength(1);
@@ -2400,7 +2401,7 @@ describe('manual repair on actual battle and arena routes', () => {
     expect(toggle).toBeTruthy(); if (toggle.getAttribute('aria-expanded') === 'false') { await act(async () => toggle.click()); await settle(); }
     return container.querySelector<HTMLElement>('section[aria-label="甲的战后变化"]')!;
   };
-  const completeExport = async () => { await click('完整导出 JSON'); return JSON.parse(mocks.download.mock.calls.at(-1)![1]); };
+  const completeExport = async () => { await click('下载会话备份'); return JSON.parse(mocks.download.mock.calls.at(-1)![1]); };
   const installHostedRepairPeer = (failReconcileOnce = false) => {
     vi.stubGlobal('TextEncoder', class extends NodeTextEncoder { encode(input?: string) { return Uint8Array.from(super.encode(input)); } });
     const original = mocks.invoke.getMockImplementation()!;

@@ -1,6 +1,7 @@
 import { parseArenaFailureDiagnostic } from './failure-diagnostic';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Button } from '@mahoshojo/ui-web/card-library';
+import { Download } from 'lucide-react';
 import { copyTextToClipboard } from '@mahoshojo/ui-web/client';
 import { DisclosureButton } from '@mahoshojo/ui-web/disclosure';
 import { sanitizeArenaHostedErrorCode } from './hosted-error-diagnostic';
@@ -56,6 +57,16 @@ export function ArenaBackupNotice({ feedback }: { feedback: ArenaBackupFeedback 
   </p> : null;
 }
 
+/** 常规操作区与受保护草稿提示复用同一备份面，只由宿主选择当前可达的位置。 */
+export function ArenaSessionBackup({ feedback, onExport }: { feedback: ArenaBackupFeedback; onExport(): void }) {
+  return <section aria-label="会话备份" className="space-y-2 rounded-xl border border-(--app-border-strong) bg-(--app-surface-80) p-4">
+    <h3 className="font-semibold">保存一份会话备份</h3>
+    <p className="text-(--app-text-muted)">下载 JSON 文件，保留当前角色、输入草稿、已收到的结果和恢复状态，便于留档或排查问题。备份可能包含私人设定，分享前请检查内容。</p>
+    <Button onClick={onExport}><Download className="h-4 w-4" aria-hidden="true" />下载会话备份</Button>
+    <ArenaBackupNotice feedback={feedback} />
+  </section>;
+}
+
 type Props = {
   scopeKey: string;
   pointer: { state: string; actor: { kind: 'anonymous' | 'account' } } | null;
@@ -68,6 +79,8 @@ type Props = {
   hint: DesktopArenaHostedRecoveryHint | null;
   diagnostic: string | null;
   backupFeedback: ArenaBackupFeedback;
+  /** 草稿受保护时备份位于上方未被禁用的提示区。 */
+  showBackup?: boolean;
   onRestore(): void;
   onDiagnose(): void;
   onDiscard(): void;
@@ -102,15 +115,10 @@ export function DesktopArenaRecoveryControls(props: Props) {
       <p>{props.recoveryError}</p>
       {props.blocked ? <Button variant="danger" size="sm" disabled={props.disabled} onClick={props.onDiscard}>清除损坏的恢复记录</Button> : null}
     </div> : null}
-    <section aria-label="会话备份" className="space-y-2 rounded-xl border p-4" style={{ borderColor: 'var(--app-border-strong)', background: 'var(--app-surface-80)' }}>
-      <h3 className="font-semibold">保存一份会话备份</h3>
-      <p className="text-[color:var(--app-text-muted)]">下载 JSON 文件，保留当前角色、输入草稿、已收到的结果和恢复状态，便于留档或排查问题。备份可能包含私人设定，分享前请检查内容。</p>
-      <Button size="sm" onClick={props.onExport}>下载会话备份</Button>
-      <ArenaBackupNotice feedback={props.backupFeedback} />
-    </section>
+    {props.showBackup !== false ? <ArenaSessionBackup feedback={props.backupFeedback} onExport={props.onExport} /> : null}
     {props.showRecoveryCheck || props.diagnostic ? <section aria-label="问题排查" className="space-y-3">
       <DisclosureButton open={toolsOpen} onToggle={() => setToolsOpen(value => !value)}>问题排查</DisclosureButton>
-      {toolsOpen ? <div className="space-y-4 rounded-xl border p-4" style={{ borderColor: 'var(--app-border-strong)', background: 'var(--app-surface-80)' }}>
+      {toolsOpen ? <div className="space-y-4 rounded-xl border border-(--app-border-strong) bg-(--app-surface-80) p-4">
         {props.diagnostic ? <section aria-label="安全错误摘要" className="space-y-2">
           <p className="text-[color:var(--app-text-muted)]">反馈问题时可复制这份摘要，其中不包含角色正文、账号、请求编号或密钥。</p>
           <pre className="whitespace-pre-wrap break-words text-xs">{props.diagnostic}</pre>

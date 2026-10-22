@@ -29,7 +29,7 @@ describe('Arena Web safe report chrome', () => {
     expect(content.contains(button('运行 Web 战报'))).toBe(true);
     expect(content.querySelector('[data-testid="arena-web-notes"]')).not.toBeNull();
     expect(content.querySelector('.text-gray-500')).toBeNull();
-    const notices = [...content.querySelectorAll('p')].filter((node) => node.textContent?.includes('隔离运行待验') || node.textContent?.includes('导出的 HTML'));
+    const notices = [...content.querySelectorAll('p')].filter((node) => node.textContent?.includes('当前环境暂不支持运行 Web 战报') || node.textContent?.includes('导出的 HTML'));
     expect(notices).toHaveLength(2);
     expect(notices.every((node) => node.classList.contains('text-white/90'))).toBe(true);
     expect(card.querySelector('iframe,script,img')).toBeNull();
@@ -50,7 +50,7 @@ describe('Arena Web safe report chrome', () => {
     await render({ prelude: '[打开](https://external.test) ![图片](https://external.test/b.png)', epilogue: '<img onerror="alert(1)" src="x">' });
     expect(container.querySelector('pre')?.textContent).toBe(source);
     expect(button('运行 Web 战报').disabled).toBe(true);
-    expect(container.textContent).toContain('隔离运行待验');
+    expect(container.textContent).toContain('当前环境暂不支持运行 Web 战报');
     await act(async () => button('AI 附言').click());
     expect(container.textContent).toContain('![图片](https://external.test/b.png)');
     expect(container.textContent).toContain('<img onerror="alert(1)" src="x">');

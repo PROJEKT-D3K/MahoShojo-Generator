@@ -11,6 +11,9 @@ import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
 import { ResultJsonCopyButton } from '../details-controls/ResultJsonCopyButton';
 import { ErrorMessageBox } from '../details-controls/ErrorMessageBox';
 import { ArenaFeedbackView, resolveArenaFeedbackTone } from '../arena/ArenaFeedbackView';
+import { AdvancedArenaPageView } from '../arena/AdvancedArenaPageView';
+import { BattleLitePageView } from '../arena/BattleLitePageView';
+import { GenerationModeSwitcher, type GenerationMode } from '../details-controls/GenerationModeSwitcher';
 import { generationActionClassNames } from '../generation-actions';
 import type { HomeAssetSource } from '../home/feature-catalog';
 import { BaseModal } from '../modal';
@@ -179,20 +182,26 @@ function ControlsSection() {
 
 function FormsSection() {
   const [forgeColor, setForgeColor] = useState('#ff6b9d');
+  const [generationMode, setGenerationMode] = useState<GenerationMode>('non-stream');
   return (
     <div className={`${PANEL_CLASS} flex flex-col gap-5`}>
       <div className="max-w-md">
         <div className="input-group">
-          <label className="input-label" htmlFor="showroom-input">输入标签（.input-label）</label>
-          <input id="showroom-input" className="input-field" type="text" placeholder="占位文本走 --app-text-subtle" />
+          <label id="showroom-input-label" className="input-label" htmlFor="showroom-input">输入标签（.input-label）</label>
+          <input id="showroom-input" aria-labelledby="showroom-input-label" className="input-field" type="text" placeholder="占位文本走 --app-text-subtle" />
         </div>
         <div className="input-group mb-0">
-          <label className="input-label" htmlFor="showroom-input-filled">已填写输入</label>
-          <input id="showroom-input-filled" className="input-field" type="text" defaultValue="示例输入内容" readOnly />
+          <label id="showroom-input-filled-label" className="input-label" htmlFor="showroom-input-filled">已填写输入</label>
+          <input id="showroom-input-filled" aria-labelledby="showroom-input-filled-label" className="input-field" type="text" defaultValue="示例输入内容" readOnly />
         </div>
       </div>
       <div role="group" aria-label="卡牌工坊主题色样板">
         <CardForgeThemeEditor color={forgeColor} onChange={setForgeColor} />
+      </div>
+      <div className="grid gap-4 md:grid-cols-2" aria-label="生成方式说明样板">
+        <GenerationModeSwitcher label="默认生成说明" value={generationMode} onChange={setGenerationMode} />
+        <GenerationModeSwitcher label="宿主生成说明" value={generationMode} onChange={setGenerationMode}
+          helper="连接中断时只找回同一次生成的内容；停止任务需要服务器确认。" />
       </div>
       <div className="flex flex-col gap-2 border-t border-(--app-border) pt-4">
         <h3 className="text-sm font-medium text-(--app-text-muted)">battle-lite 共享类</h3>
@@ -246,6 +255,18 @@ function ResultSurfacesSection() {
   const [width, setWidth] = useState<BattleReportCardWidthSettingsValue>({ battleReportCardWidthMode: 'manual', battleReportCardWidthPx: 760 });
   return (
     <div className="flex flex-col gap-3">
+      <div aria-label="竞技场结果布局样板">
+        <AdvancedArenaPageView header={<h3>完整版竞技场</h3>} result={<section className="card"><h4>结果状态</h4><p>结果卡随页面展开，使用共源 Arena 布局。</p></section>}>
+          <p className="text-sm text-(--app-text-muted)">共享页框的实际结果插槽</p>
+        </AdvancedArenaPageView>
+        <BattleLitePageView isGenerating={false} presetCountLabel="0" combatantCountLabel="0" showScenario={false} hasScenario={false}
+          materialCount={0} referenceItemCount={0} maxReferenceItems={256} slots={{
+            header: <h3>简版竞技场</h3>, rankingLinks: null, pageLinks: null, presets: null, database: null,
+            localImport: null, roster: null, mode: null, scenario: null, materials: null, storyOptions: null,
+            generationMode: null, actions: null, community: null, storySession: null, homeLink: null, footer: null,
+            result: <section className="card"><h4>结果状态</h4><p>简版结果卡同样使用完整可用宽度。</p></section>,
+          }} />
+      </div>
       <p className="text-sm text-(--app-text-muted)">
         以下为共享 <code>MagicalGirlCard</code> 真实组件（fixture 数据 + <code>MAGICAL_GIRL_CARD_GRADIENT</code>）：
       </p>

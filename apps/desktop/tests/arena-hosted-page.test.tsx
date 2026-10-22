@@ -142,7 +142,7 @@ const draft = (mode: ArenaDraft['battleMode'] = 'daily', format: ArenaDraft['rep
   settings: { ...createInitialArenaDraft().settings, writeArenaHistory: false, writeCurrentState: false, writeNarrativeHistory: true },
 });
 const saveDraft = (value: ArenaDraft, product: Product = 'battle') => localStorage.setItem(draftKey(product), JSON.stringify({ version: 1, draft: value }));
-const exportResult = async () => { await click('完整导出 JSON'); return JSON.parse(mocks.download.mock.calls.at(-1)![1]); };
+const exportResult = async () => { await click('下载会话备份'); return JSON.parse(mocks.download.mock.calls.at(-1)![1]); };
 const restoreAndSelectStream = async () => {
   await openSection('⚡ 生成方式');
   expect(button('生成战报')!.disabled).toBe(false); expect(button('非流式')!.disabled).toBe(false); expect(button('非流式')!.getAttribute('aria-pressed')).toBe('true');
@@ -520,7 +520,8 @@ describe('Hosted non-stream lifecycle through the real route', () => {
     expect(stop.textContent?.trim()).toBe('⏹');
     expect(stop.classList.contains('rounded-full')).toBe(true);
     expect(container.querySelector('[aria-label="生成状态与原始输出"]')?.classList.contains('card')).toBe(true);
-    expect(container.querySelector('[aria-label="保存与导出"]')?.textContent).toContain('完整导出 JSON');
+    expect([...container.querySelectorAll('button')].filter(node => node.textContent === '下载会话备份')).toHaveLength(1);
+    expect(container.querySelector('[aria-label="保存与导出"]')).toBeNull();
     await act(async () => { stop.click(); stop.click(); });
     await vi.waitFor(async () => { await settle(); expect(button('请求服务器停止')).toBeUndefined(); });
     expect(controlRequests.map(request => request.operation)).toEqual(['lookup-request', 'stop']);

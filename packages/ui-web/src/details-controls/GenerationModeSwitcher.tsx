@@ -18,7 +18,8 @@ export function GenerationModeSwitcher(props: {
    * 「生成方式」下方的业务说明（DESK-AIP-009.4）。
    * - `true` / 缺省：沿用内置战报默认文案（仅战报类页面适用）；
    * - `false` / `null`：不渲染 helper——非战报页必须关闭默认战报文案；
-   * - 其他 ReactNode：渲染宿主提供的上下文说明。
+   * - 字符串：沿用同一提示框，渲染宿主提供的上下文说明；
+   * - 其他 ReactNode：保留宿主自带的完整说明布局。
    */
   helper?: boolean | ReactNode;
   /**
@@ -43,20 +44,19 @@ export function GenerationModeSwitcher(props: {
 
   const renderHelper = () => {
     if (helper === false || helper === null) return null;
-    if (helper !== undefined && helper !== true) return helper;
-    if (value === 'stream') {
-      return (
-        <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800 dark:bg-yellow-900/30 dark:border-yellow-700 dark:text-yellow-200">
+    if (helper !== undefined && helper !== true && typeof helper !== 'string') return helper;
+    const tone = value === 'stream'
+      ? 'bg-yellow-50 border-yellow-200 text-yellow-800 dark:bg-yellow-900/30 dark:border-yellow-700 dark:text-yellow-200'
+      : 'bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-200';
+    return (
+      <div className={`mt-2 rounded-lg border p-3 text-sm leading-relaxed wrap-anywhere forced-colors:border ${tone}`}>
+        {typeof helper === 'string' ? <p>{helper}</p> : value === 'stream' ? <>
           <p className="font-bold">你已选择【流式生成（实验性）】！</p>
           <p className="mt-1">实验性功能：会实时输出正文，体验更好，但也可能出现中断、格式异常、解析失败等问题。</p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-200">
-        <p className="font-bold">你已选择【非流式生成】！</p>
-        <p className="mt-1">传统生成方式：等待片刻后一次性返回完整战报（胜者解析更稳定）。</p>
+        </> : <>
+          <p className="font-bold">你已选择【非流式生成】！</p>
+          <p className="mt-1">传统生成方式：等待片刻后一次性返回完整战报（胜者解析更稳定）。</p>
+        </>}
       </div>
     );
   };

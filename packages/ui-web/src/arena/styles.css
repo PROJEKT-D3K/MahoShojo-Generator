@@ -1,3 +1,13 @@
+/* Arena 页框与结果卡的宽度闭包由双端共享；简版同样不继承通用单栏卡片的限宽。 */
+.arena-page-shell .card {
+  max-width: none;
+  margin-top: var(--app-space-6);
+}
+
+.battle-lite-shell .card {
+  max-width: none;
+}
+
 .battle-lite-shell {
   --battle-lite-panel-bg: rgba(255, 255, 255, 0.86);
   --battle-lite-panel-border: rgba(226, 232, 240, 0.9);

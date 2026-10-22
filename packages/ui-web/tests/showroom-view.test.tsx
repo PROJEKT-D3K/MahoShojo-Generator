@@ -43,6 +43,27 @@ it('renders every registered section, the real result card, and a working modal 
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 });
 
+it('keeps host generation copy inside the same mode-aware notice as the default copy', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('[aria-label="生成方式说明样板"]')!;
+  const hostCopy = [...sample.querySelectorAll('p')].find(node => node.textContent?.startsWith('连接中断时'))!;
+  const defaultCopy = [...sample.querySelectorAll('p')].find(node => node.textContent?.startsWith('你已选择'))!;
+  expect(hostCopy.parentElement?.className).toBe(defaultCopy.parentElement?.className);
+  expect(hostCopy.parentElement?.classList.contains('text-sm')).toBe(true);
+  const stream = [...sample.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find(node => node.textContent === '流式')!;
+  act(() => stream.click());
+  expect(hostCopy.parentElement?.classList.contains('bg-yellow-50')).toBe(true);
+  expect(hostCopy.textContent).toContain('停止任务需要服务器确认');
+  expect(sample.textContent).toContain('你已选择【流式生成');
+});
+
+it('renders production full and lite Arena frames with result cards in their real slots', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('[aria-label="竞技场结果布局样板"]')!;
+  expect(sample.querySelector('.arena-page-shell > .card')).not.toBeNull();
+  expect(sample.querySelector('.battle-lite-shell .card')).not.toBeNull();
+});
+
 it('uses production story error views with multiline copy, an explicit read action and the real branch modal', () => {
   act(() => root.render(<ShowroomView />));
   const sample = container.querySelector('[aria-label="故事读取错误样板"]')!;

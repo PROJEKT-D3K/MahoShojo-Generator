@@ -74,11 +74,6 @@ body {
 /* 暗色表单控件规则、`.container`、`.card`、`.title`、`body.announcement-visible`
    已上移至 `@mahoshojo/ui-web/product-shell.css`（D5.1-P1）。 */
 
-.arena-page-shell .card {
-  max-width: none;
-  margin-top: 1.5rem;
-}
-
 @layer components {
 
   /* 魔法少女主题样式 `.magic-background*` 已上移至 product-shell.css。 */
