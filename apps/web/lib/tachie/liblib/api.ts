@@ -32,10 +32,12 @@ export const generateText2Image = async (
   accessKey: string,
   secretKey: string,
   prompt: string,
-  options?: LibLibTachieGenerateOptions
+  options?: LibLibTachieGenerateOptions,
+  signal?: AbortSignal,
 ): Promise<string> => {
   const response = await fetch("/api/tachie/generate", {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
     },
@@ -69,10 +71,12 @@ export const generateText2Image = async (
 export const getGenerateStatus = async (
   accessKey: string,
   secretKey: string,
-  generateUuid: string
+  generateUuid: string,
+  signal?: AbortSignal,
 ): Promise<StatusResponse["data"]> => {
   const response = await fetch("/api/tachie/status", {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
     },

@@ -3,6 +3,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { CardForgeThemeEditor, CardForgePageView, CardForgeWorkspace } from '@mahoshojo/ui-web/card-forge';
+import { ImageGenerationFeedback } from '@mahoshojo/ui-web/image-generation';
+import { generateTachieWithProgress, type TachieGenerationRequest, type TachieGenerationResult } from '@/lib/tachie/manager';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
 import { useSearchParams } from 'next/navigation';
 import { GameCardFaceDataSchema } from '@mahoshojo/contracts/game-card';
@@ -176,7 +178,10 @@ export function CardForgePage() {
   const [imageTab, setImageTab] = useState<'upload' | 'tachie'>('upload');
   const [tachiePrompt, setTachiePrompt] = useState('');
   const [tachieStatus, setTachieStatus] = useState<'idle' | 'generating' | 'success' | 'error'>('idle');
-  const [tachieError, setTachieError] = useState<string | null>(null);
+  const [tachieResult, setTachieResult] = useState<TachieGenerationResult | null>(null);
+  const [tachieProgress, setTachieProgress] = useState(0);
+  const [tachieProgressStatus, setTachieProgressStatus] = useState('');
+  const pendingTachieRequest = useRef<TachieGenerationRequest | null>(null);
 
   const [userProviderConfig, setUserProviderConfig] = useState<UserAIProviderConfig | null>(null);
 
@@ -196,6 +201,13 @@ export function CardForgePage() {
   const beginResultNavigation = useGeneratedResultAutoScroll(resultRef);
   const genAbortRef = useRef<AbortController | null>(null);
   const tachieAbortRef = useRef<AbortController | null>(null);
+
+  const invalidateTachie = useCallback(() => {
+    tachieAbortRef.current?.abort(); tachieAbortRef.current = null;
+    pendingTachieRequest.current = null;
+    setTachieStatus('idle'); setTachieResult(null);
+  }, []);
+  useEffect(() => { invalidateTachie(); }, [sourceCardJson, invalidateTachie]);
 
   useEffect(() => {
     const saved = loadTachieCredentials();
@@ -237,7 +249,7 @@ export function CardForgePage() {
   useEffect(() => {
     return () => {
       genAbortRef.current?.abort();
-      tachieAbortRef.current?.abort();
+      tachieAbortRef.current?.abort(); tachieAbortRef.current = null;
     };
   }, []);
 
@@ -316,6 +328,7 @@ export function CardForgePage() {
         throw new Error('卡面生成结果校验失败，请重试。');
       }
 
+      invalidateTachie();
       setFaceData(applyShieldWordsToGameCardFaceData(parsedFace.data).faceData);
       setSourceCardKind(json.sourceCardKind ?? null);
       setThemeColorOverride(null);
@@ -331,7 +344,7 @@ export function CardForgePage() {
       setGenErrorStatus(errorStatus);
       setGenStatus('error');
     }
-  }, [beginResultNavigation, generationApiIntentLatch, sourceCardJson, customInstructions, userProviderConfig]);
+  }, [beginResultNavigation, generationApiIntentLatch, sourceCardJson, customInstructions, userProviderConfig, invalidateTachie]);
 
   const handleStopGeneration = useCallback(() => {
     genAbortRef.current?.abort(STREAM_ABORT_REASON_USER);
@@ -366,9 +379,11 @@ export function CardForgePage() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    invalidateTachie();
     setImageSizeWarning(getImageSizeWarning(file.size));
     const reader = new FileReader();
     reader.onload = () => {
+      invalidateTachie();
       setImageUrl(String(reader.result ?? ''));
       setImageSource('uploaded');
       setImageTransform(DEFAULT_IMAGE_TRANSFORM);
@@ -379,98 +394,47 @@ export function CardForgePage() {
 
   const normalizedModelscopeToken = normalizeModelScopeToken(modelscopeToken);
 
-  const handleTachieGenerate = useCallback(async () => {
-    if (!tachiePrompt.trim()) {
-      setTachieError('请输入提示词');
-      setTachieStatus('error');
-      return;
+  const handleTachieGenerate = useCallback(async (resume = false) => {
+    if (tachieAbortRef.current) return;
+    const frozen = resume ? pendingTachieRequest.current : {
+      source: 'modelscope', modelscopeToken: normalizedModelscopeToken,
+      modelscopeModel, modelscopeSize, prompt: `${tachiePrompt.trim()}, 二次元, 精致立绘`,
+    } satisfies TachieGenerationRequest;
+    if (!frozen || (resume && !tachieResult?.generateUuid)) return;
+    if (!resume && (!tachiePrompt.trim() || !normalizedModelscopeToken)) {
+      setTachieResult({ success: false, error: !tachiePrompt.trim() ? '请输入提示词' : '请填写 ModelScope API 令牌' });
+      setTachieStatus('error'); return;
     }
-    if (!normalizedModelscopeToken) {
-      setTachieError('请填写 ModelScope API 令牌');
-      setTachieStatus('error');
-      return;
-    }
-    setTachieStatus('generating');
-    setTachieError(null);
-
-    const abortController = new AbortController();
-    tachieAbortRef.current?.abort();
-    tachieAbortRef.current = abortController;
-
-    if (rememberTachieCreds) {
-      saveTachieCredentials({
-        modelscopeToken: normalizedModelscopeToken,
-        modelscopeModel: modelscopeModel.trim() || DEFAULT_MODELSCOPE_MODEL,
-        modelscopeSize,
-      });
-    }
-
+    const controller = new AbortController();
+    tachieAbortRef.current = controller;
+    pendingTachieRequest.current = frozen;
+    const resumeTaskId = resume ? tachieResult?.generateUuid : undefined;
+    setTachieStatus('generating'); setTachieResult(null); setTachieProgress(0);
+    setTachieProgressStatus(resume ? '正在查询原任务…' : '正在提交生成任务…');
     try {
-      const authHeader = await authStorage.getAuthHeader();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authHeader) headers['Authorization'] = authHeader;
-
-      const resp = await fetch('/api/tachie/generate', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          source: 'modelscope',
-          modelscopeToken: normalizedModelscopeToken,
-          prompt: `${tachiePrompt.trim()}, 二次元, 精致立绘`,
-          modelscopeModel: modelscopeModel.trim() || DEFAULT_MODELSCOPE_MODEL,
-          modelscopeSize,
-        }),
-        signal: abortController.signal,
+      if (!resume && rememberTachieCreds) saveTachieCredentials({
+        modelscopeToken: normalizedModelscopeToken, modelscopeModel: modelscopeModel.trim() || DEFAULT_MODELSCOPE_MODEL, modelscopeSize,
       });
-
-      const { payload } = await readJsonOrTextFromResponse(resp);
-      const json = payload as { error?: string; message?: string; details?: string; generateUuid?: string; taskId?: string };
-
-      if (!resp.ok) {
-        const errorMessage = resolveApiErrorMessage({
-          payload,
-          fallback: `立绘生成请求失败 (${resp.status})`,
-        });
-        throw new Error(errorMessage);
-      }
-
-      const generateUuid = json.generateUuid ?? json.taskId;
-      if (!generateUuid) {
-        throw new Error('未获取到生成任务 ID');
-      }
-
-      const statusResp = await fetch(
-        `/api/tachie/status?uuid=${encodeURIComponent(generateUuid)}&source=modelscope`,
-        {
-          headers: authHeader ? { Authorization: authHeader } : {},
-          signal: abortController.signal,
-        },
-      );
-      const statusJson = await statusResp.json();
-
-      if (statusJson.imageUrl) {
-        setImageUrl(statusJson.imageUrl);
-        setImageSource('generated');
-        setImageTransform(DEFAULT_IMAGE_TRANSFORM);
-        setImageAspectRatio(DEFAULT_GAME_CARD_IMAGE_ASPECT_RATIO);
+      const result = await generateTachieWithProgress({ ...frozen, signal: controller.signal, resumeTaskId }, (progress, status) => {
+        if (tachieAbortRef.current !== controller) return;
+        setTachieProgress(progress); setTachieProgressStatus(status);
+      });
+      if (tachieAbortRef.current !== controller) return;
+      setTachieResult(result);
+      if (result.success && result.imageUrl) {
+        setImageUrl(result.imageUrl); setImageSource('generated');
+        setImageTransform(DEFAULT_IMAGE_TRANSFORM); setImageAspectRatio(DEFAULT_GAME_CARD_IMAGE_ASPECT_RATIO);
         setTachieStatus('success');
-      } else {
-        setTachieError('立绘生成中，请稍后在此页面刷新或使用上传方式');
-        setTachieStatus('error');
-      }
-    } catch (err) {
-      if (isAbortErrorLike(err) || abortController.signal.aborted) {
-        setTachieStatus('idle');
-        return;
-      }
-      setTachieError(err instanceof Error ? err.message : String(err));
+      } else setTachieStatus('error');
+      if (result.outcome !== 'stopped' && result.outcome !== 'unresolved') pendingTachieRequest.current = null;
+    } catch (error) {
+      if (tachieAbortRef.current !== controller) return;
+      setTachieResult({ success: false, error: error instanceof Error ? error.message : '生成失败' });
       setTachieStatus('error');
+    } finally {
+      if (tachieAbortRef.current === controller) tachieAbortRef.current = null;
     }
-  }, [tachiePrompt, normalizedModelscopeToken, modelscopeModel, modelscopeSize, rememberTachieCreds]);
-
-  const handleStopTachie = useCallback(() => {
-    tachieAbortRef.current?.abort(STREAM_ABORT_REASON_USER);
-  }, []);
+  }, [tachiePrompt, normalizedModelscopeToken, modelscopeModel, modelscopeSize, rememberTachieCreds, tachieResult]);
 
   const handleExportJson = useCallback(async () => {
     if (!effectiveFaceData || isExportingJson) return;
@@ -506,6 +470,7 @@ export function CardForgePage() {
   }, [effectiveFaceData, imageAspectRatio, imageSource, imageTransform, imageUrl, isExportingJson]);
 
   const handleImportJson = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    invalidateTachie();
     const input = event.currentTarget;
     const file = input.files?.[0];
     input.value = '';
@@ -517,6 +482,8 @@ export function CardForgePage() {
       if (importedSafety.hasSensitiveWords) {
         throw new Error('导入的卡面含敏感词，已拒绝载入。');
       }
+      // Import may have awaited file I/O/safety while a new image task started.
+      invalidateTachie();
       setFaceData(applyShieldWordsToGameCardFaceData(imported.faceData).faceData);
       setImageUrl(imported.imageUrl);
       setImageSource(imported.imageSource);
@@ -710,6 +677,7 @@ export function CardForgePage() {
                     <button
                       type="button"
                       onClick={() => {
+                        invalidateTachie();
                         setImageUrl(null);
                         setImageSource(null);
                         setImageSizeWarning(null);
@@ -813,29 +781,18 @@ export function CardForgePage() {
                       style={{ resize: 'vertical' }}
                     />
                   </div>
-                  {tachieStatus === 'generating' ? (
-                    <StreamStopButton onClick={handleStopTachie} label="停止生成" className="w-full text-sm" />
-                  ) : (
-                    <button
-                      onClick={handleTachieGenerate}
-                      disabled={!normalizedModelscopeToken}
-                      className="generate-button w-full text-sm"
-                    >
-                      生成立绘
-                    </button>
-                  )}
-                  {tachieStatus === 'error' && tachieError && (
-                    <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
-                      {tachieError}
-                    </div>
-                  )}
-                  {tachieStatus === 'success' && (
-                    <div className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-xs text-green-700 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300">
-                      立绘生成成功！
-                    </div>
-                  )}
-                  <p className="text-xs text-gray-400 dark:text-gray-500">
-                    注：立绘生成通过 ModelScope 异步执行，可能需要等待一段时间。如生成未立即完成，可稍后重试或使用上传方式。
+                  <button type="button" onClick={() => void handleTachieGenerate()}
+                    disabled={tachieStatus === 'generating' || !normalizedModelscopeToken}
+                    className="generate-button w-full text-sm">生成立绘</button>
+                  <ImageGenerationFeedback busy={tachieStatus === 'generating'} progress={tachieProgress}
+                    statusText={tachieProgressStatus} error={tachieResult?.error} taskId={tachieResult?.generateUuid}
+                    outcome={tachieResult?.outcome} onStop={() => tachieAbortRef.current?.abort()}
+                    onResume={tachieStatus !== 'generating' && tachieResult?.generateUuid && pendingTachieRequest.current
+                      && (tachieResult.outcome === 'stopped' || tachieResult.outcome === 'unresolved')
+                      ? () => void handleTachieGenerate(true) : undefined} />
+                  {tachieStatus === 'success' && <p role="status" className="text-sm text-(--app-text)">立绘生成成功！</p>}
+                  <p className="text-xs text-(--app-text-muted)">
+                    ModelScope 异步生成；停止等待不会取消远端任务。查询失败可继续查询原任务，无需再次生图。
                   </p>
                 </div>
               )}

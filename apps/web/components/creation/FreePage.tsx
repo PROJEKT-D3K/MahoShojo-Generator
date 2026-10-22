@@ -597,6 +597,7 @@ export function FreePage() {
                     <div className="text-center">
                       <h3 className="text-lg font-medium text-blue-900 mb-4">生成立绘</h3>
                       <CharacterPortraitAssetPanel
+                        ownerKey={resultContext ?? streamedGeneralCard}
                         prompt={promptForPortrait}
                         onPortraitAssetChange={setCharacterPortraitAsset}
                       />
@@ -660,6 +661,7 @@ export function FreePage() {
             <div className="text-center">
               <h3 className="text-lg font-medium text-blue-900 mb-4">生成立绘</h3>
               <CharacterPortraitAssetPanel
+                ownerKey={resultData}
                 prompt={`${JSON.stringify(safe.appearance)} , Xiabanmo, 二次元, 魔法少女`}
                 onPortraitAssetChange={setCharacterPortraitAsset}
               />
@@ -688,6 +690,7 @@ export function FreePage() {
             <div className="text-center">
               <h3 className="text-lg font-medium text-blue-900 mb-4">生成立绘</h3>
               <CharacterPortraitAssetPanel
+                ownerKey={resultData}
                 prompt={promptForPortrait}
                 onPortraitAssetChange={setCharacterPortraitAsset}
               />
@@ -718,6 +721,7 @@ export function FreePage() {
             <div className="text-center">
               <h3 className="text-lg font-medium text-blue-900 mb-4">生成立绘</h3>
               <CharacterPortraitAssetPanel
+                ownerKey={resultData}
                 prompt={promptForPortrait}
                 onPortraitAssetChange={setCharacterPortraitAsset}
               />

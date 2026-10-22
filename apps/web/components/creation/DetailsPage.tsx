@@ -1868,6 +1868,7 @@ export const DetailsPage: React.FC = () => {
                     <div className="text-center">
                       <h3 className="text-lg font-medium text-gray-800" style={{ marginBottom: '1rem' }}>生成立绘</h3>
                       <CharacterPortraitAssetPanel
+                        ownerKey={resultContext ?? streamedGeneralCard}
                         prompt={streamPortraitPrompt}
                         onPortraitAssetChange={setCharacterPortraitAsset}
                       />
@@ -1982,6 +1983,7 @@ export const DetailsPage: React.FC = () => {
                 <div className="text-center">
                   <h3 className="text-lg font-medium text-gray-800" style={{ marginBottom: '1rem' }}>生成立绘</h3>
                   <CharacterPortraitAssetPanel
+                    ownerKey={magicalGirlDetails}
                     prompt={`${JSON.stringify(magicalGirlDetails.appearance)} , Xiabanmo, 二次元, 魔法少女`}
                     onPortraitAssetChange={setCharacterPortraitAsset}
                   />

@@ -43,6 +43,22 @@ it('renders every registered section, the real result card, and a working modal 
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 });
 
+it('renders production image feedback with explicit stop/resume, unknown submission and a seed-zero result', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('[aria-label="图片生成任务与结果样板"]')!;
+  expect(sample.querySelectorAll('progress')).toHaveLength(2);
+  expect([...sample.querySelectorAll('progress')].map(node => node.getAttribute('value'))).toEqual(['35', null]);
+  expect(sample.textContent).toContain('勿立即重复生成');
+  expect(sample.textContent).toContain('种子值: 0');
+  expect(sample.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
+  const button = (text: string) => [...sample.querySelectorAll('button')].find(node => node.textContent === text)!;
+  act(() => button('停止等待（已提交的任务可能仍会计费）').click());
+  expect(sample.textContent).toContain('任务 ID：showroom-existing-image-task');
+  expect(sample.querySelectorAll('progress')).toHaveLength(1);
+  act(() => button('继续查询原任务').click());
+  expect(sample.querySelectorAll('progress')).toHaveLength(2);
+});
+
 it('keeps host generation copy inside the same mode-aware notice as the default copy', () => {
   act(() => root.render(<ShowroomView />));
   const sample = container.querySelector('[aria-label="生成方式说明样板"]')!;

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./token-usage": "./src/token-usage.ts",
+    "./image-generation": "./src/image-generation.ts",
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts",

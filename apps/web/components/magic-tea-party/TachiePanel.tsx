@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import TachieGenerator from '@/components/TachieGenerator';
 import { ErrorMessage } from '@/components/ErrorMessage';
@@ -191,7 +191,7 @@ const buildSuggestedPrompt = (params: {
   return truncateText(parts.join('\n'), MAX_PROMPT_CHARS);
 };
 
-export function MagicTeaPartyTachiePanel(props: {
+interface MagicTeaPartyTachiePanelProps {
   preferences: MagicTeaPartyPreferences;
   session: Pick<MagicTeaPartySession, 'id'> & {
     roles: MagicTeaPartyRole[];
@@ -203,7 +203,13 @@ export function MagicTeaPartyTachiePanel(props: {
   anchorMessageId?: string | null;
   onAnchorMessageIdChange?: (value: string | null) => void;
   onAssetsUpdated?: (assets: MagicTeaPartyTachieAsset[]) => void;
-}) {
+}
+
+export function MagicTeaPartyTachiePanel(props: MagicTeaPartyTachiePanelProps) {
+  return <SessionTachiePanel key={props.session.id} {...props} />;
+}
+
+function SessionTachiePanel(props: MagicTeaPartyTachiePanelProps) {
   const roleNameLookup = useMemo(() => {
     const map = new Map((props.session.roles ?? []).map((role) => [role.id, role.name]));
     return (roleId: string) => map.get(roleId) || '';
@@ -241,6 +247,17 @@ export function MagicTeaPartyTachiePanel(props: {
     setReferenceTextInternal(value);
   };
   const anchorMessageId = typeof props.anchorMessageId === 'string' ? props.anchorMessageId : props.anchorMessageId === null ? null : anchorMessageIdInternal;
+  // 图片目标由会话/角色/消息决定；提示词、风格和模型编辑不把同一目标变成新 owner。
+  const imageOwnerKey = JSON.stringify([
+    sessionId, kind, kind === 'tachie' ? mainRoleId : includedRoleIds.slice().sort(), anchorMessageId,
+  ]);
+  const ownerToken = useMemo(() => ({ key: imageOwnerKey }), [imageOwnerKey]);
+  const activeOwner = useRef<object | null>(ownerToken);
+  activeOwner.current = ownerToken;
+  useEffect(() => {
+    activeOwner.current = ownerToken;
+    return () => { if (activeOwner.current === ownerToken) activeOwner.current = null; };
+  }, [ownerToken]);
   const setAnchorMessageId = (value: string | null) => {
     if (typeof props.onAnchorMessageIdChange === 'function') {
       props.onAnchorMessageIdChange(value);
@@ -347,6 +364,7 @@ export function MagicTeaPartyTachiePanel(props: {
   const negativePromptNodeIdForRequest = parseNodeId(activeWorkflowSettings.negativePromptNodeId);
 
   const saveAsset = async (result: { imageUrl: string; prompt?: string; seed?: number; auditStatus?: number; generateUuid?: string }) => {
+    if (activeOwner.current !== ownerToken) return;
     setAssetError(null);
     try {
       const now = Date.now();
@@ -370,6 +388,7 @@ export function MagicTeaPartyTachiePanel(props: {
           prompt: (usedPrompt || '').slice(0, 20_000),
         })
       );
+      if (activeOwner.current !== ownerToken) return;
 
       const assetId = randomUUID();
       let blobSize: number | undefined;
@@ -411,9 +430,11 @@ export function MagicTeaPartyTachiePanel(props: {
       await cleanupMagicTeaPartyTachieCache({ sessionId, limits: cacheLimits });
 
       const finalAssets = await listMagicTeaPartyTachieAssets(sessionId);
+      if (activeOwner.current !== ownerToken) return;
       setAssets(finalAssets);
       onAssetsUpdated?.(finalAssets);
     } catch (error) {
+      if (activeOwner.current !== ownerToken) return;
       setAssetError(error instanceof Error ? error.message : '保存缓存失败');
     }
   };
@@ -423,9 +444,11 @@ export function MagicTeaPartyTachiePanel(props: {
     try {
       await deleteMagicTeaPartyTachieAsset(assetId);
       const nextAll = await listMagicTeaPartyTachieAssets(sessionId);
+      if (activeOwner.current !== ownerToken) return;
       setAssets(nextAll);
       onAssetsUpdated?.(nextAll);
     } catch (error) {
+      if (activeOwner.current !== ownerToken) return;
       setAssetError(error instanceof Error ? error.message : '删除失败');
     }
   };
@@ -434,9 +457,11 @@ export function MagicTeaPartyTachiePanel(props: {
     setAssetError(null);
     try {
       await deleteMagicTeaPartyTachieAssets(sessionId);
+      if (activeOwner.current !== ownerToken) return;
       setAssets([]);
       onAssetsUpdated?.([]);
     } catch (error) {
+      if (activeOwner.current !== ownerToken) return;
       setAssetError(error instanceof Error ? error.message : '清理失败');
     }
   };
@@ -449,9 +474,11 @@ export function MagicTeaPartyTachiePanel(props: {
       if (targets.length === 0) return;
       await deleteMagicTeaPartyTachieAssetsByIds(targets.map((asset) => asset.id));
       const nextAll = await listMagicTeaPartyTachieAssets(sessionId);
+      if (activeOwner.current !== ownerToken) return;
       setAssets(nextAll);
       onAssetsUpdated?.(nextAll);
     } catch (error) {
+      if (activeOwner.current !== ownerToken) return;
       setAssetError(error instanceof Error ? error.message : '清理失败');
     }
   };
@@ -865,6 +892,7 @@ export function MagicTeaPartyTachiePanel(props: {
 
       <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
         <TachieGenerator
+          ownerKey={imageOwnerKey}
           textProviderStorageNamespace="magic-tea-party.customProvider"
           prompt={styleId === 'vn' && kind === 'illustration' ? `${promptForGenerator}\n（额外约束：更强调镜头感与氛围，画面层次丰富）` : promptForGenerator}
           recommendedPrompt={styleId === 'vn' && kind === 'illustration' ? `${suggestedPrompt}\n（额外约束：更强调镜头感与氛围，画面层次丰富）` : suggestedPrompt}

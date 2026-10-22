@@ -8,6 +8,11 @@
 
 后续发布型 package 再单独设计稳定的 `dist` exports，不把当前 source export 当作发布约定。
 
+D5.1-IMG-1a：`ai-core/image-generation` 提供宿主无关的图片创建/查询/停止等待生命周期，
+`ui-web/image-generation` 提供生产反馈与结果视图，并由样板间直接渲染。Web 三渠道与工坊已实际回用；
+网络、凭据、参数和持久化仍归宿主，恢复只查询原任务。Desktop 图片执行与本地资产尚未接入，
+完整渠道表单和 Prompt 规则仍待后继共源，见[实施报告](../docs/reports/2026-10-22_223500_图片任务生命周期共源与Web回用.md)。
+
 D3.1a 增加 `@mahoshojo/ai-core/magical-girl-details-generation` 显式入口：结构化/Markdown Prompt、
 输出 schema 与未签名角色卡构造由 Web Hosted 和 Desktop Direct 共用；问卷答案分组/精简规则在
 `domain/questionnaire`。Hosted 模型设置、原生问卷许可、限流和签名不进入客户端共享核。

@@ -1131,7 +1131,7 @@ export function TavernImportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                   <div className="text-sm font-semibold text-pink-700">生成立绘（LibLib / ModelScope，可选）</div>
                   <div className="mt-2 text-xs text-gray-600">提示：立绘生成会直接调用对应平台 API；凭据仅存于本地。</div>
                   <div className="mt-3">
-                    <TachieGenerator prompt={tachiePrompt} />
+                    <TachieGenerator ownerKey={outputDataCard} prompt={tachiePrompt} />
                   </div>
                 </div>
               ) : null}

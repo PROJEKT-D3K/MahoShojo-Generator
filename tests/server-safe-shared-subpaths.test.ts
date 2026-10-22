@@ -150,6 +150,15 @@ const collectModuleGraph = (entryFile: string): string[] => {
 };
 
 describe('server-safe shared entrypoints stay free of React hooks', () => {
+  it('keeps image generation views on a browser-safe client entry separate from the pure task lifecycle', async () => {
+    const manifest = JSON.parse(readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
+    expect(manifest.exports['./image-generation']).toBe('./src/image-generation/index.tsx');
+    const bundled = await build({ entryPoints: [path.join(SRC, 'image-generation/index.tsx')],
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true, logLevel: 'silent' });
+    const files = Object.keys(bundled.metafile!.inputs);
+    expect(files.some(file => file.includes('/apps/') || file.includes('/hosted-runtime/'))).toBe(false);
+    expect(SERVER_SAFE_ENTRYPOINTS).not.toContain('image-generation/index.tsx');
+  });
   it('keeps Tavern cloud projection pure and its controlled UI on the client barrel', async () => {
     const domainRoot = path.resolve(PACKAGE_ROOT, '../domain');
     const manifest = JSON.parse(readFileSync(path.join(domainRoot, 'package.json'), 'utf8'));
@@ -258,6 +267,21 @@ describe('server-safe shared entrypoints stay free of React hooks', () => {
       .toEqual([webPath]);
     expect(inputs.some(([file]) => /(?:packages\/(?:hosted-runtime|hosted-api|ui-web)\/|node_modules\/(?:react|react-dom|next|@tauri-apps)\/)/u.test(file)))
       .toBe(false);
+    expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
+    expect(Object.values(bundled.metafile!.outputs).flatMap((output) => output.imports)).toEqual([]);
+  });
+
+  it('image task lifecycle exports remain browser-safe without host or credential dependencies', async () => {
+    const aiCoreRoot = path.resolve(PACKAGE_ROOT, '../ai-core');
+    const pkg = JSON.parse(readFileSync(path.join(aiCoreRoot, 'package.json'), 'utf8'));
+    expect(pkg.exports['./image-generation']).toBe('./src/image-generation.ts');
+    const bundled = await build({
+      entryPoints: [path.join(aiCoreRoot, pkg.exports['./image-generation'])],
+      bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true,
+    });
+    const inputs = Object.keys(bundled.metafile!.inputs);
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].endsWith('packages/ai-core/src/image-generation.ts')).toBe(true);
     expect(findHookCalls(bundled.outputFiles[0].text)).toEqual([]);
     expect(Object.values(bundled.metafile!.outputs).flatMap((output) => output.imports)).toEqual([]);
   });

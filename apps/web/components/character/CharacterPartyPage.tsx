@@ -658,6 +658,7 @@ export function CharacterPartyPage() {
                     <div className="mt-3">
                       {tachiePrompt.trim() ? (
                         <CharacterPortraitAssetPanel
+                          ownerKey={mergedData}
                           prompt={tachiePrompt}
                           onPortraitAssetChange={setCharacterPortraitAsset}
                         />

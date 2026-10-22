@@ -851,6 +851,7 @@ export const CharacterManagerPage: React.FC = () => {
     const [isTachieVisible, setIsTachieVisible] = useState(false);
     const [tachiePrompt, setTachiePrompt] = useState('');
     const [characterPortraitAsset, setCharacterPortraitAsset] = useState<CharacterCardPortraitAsset | null>(null);
+    const [portraitOwner, setPortraitOwner] = useState<unknown>(null);
 
     useEffect(() => {
         const readState = readCharacterManagerPageDraftState();
@@ -865,6 +866,7 @@ export const CharacterManagerPage: React.FC = () => {
         setPastedJson(restored.payload.pastedJson);
         setCharacterData(restored.payload.characterData);
         setOriginalData(restored.payload.originalData);
+        setPortraitOwner(restored.payload.originalData);
         setIsNative(restored.payload.isNative);
         setHasLostNativeness(false);
         setSelectedTemplate(restored.payload.selectedTemplate);
@@ -901,6 +903,7 @@ export const CharacterManagerPage: React.FC = () => {
     }, [pastedJson, characterData, originalData, isNative, selectedTemplate, draftRestoreReady, draftBlocked]);
 
     const resetEditor = useCallback(() => {
+        setPortraitOwner(null);
         setCharacterData(null);
         setOriginalData(null);
         setPastedJson('');
@@ -1083,6 +1086,7 @@ export const CharacterManagerPage: React.FC = () => {
             if (wantuImport.kind === 'success') {
                 setValidationResult(wantuImport.validationResult);
                 setCharacterData(wantuImport.data);
+                setPortraitOwner(wantuImport.data);
                 setOriginalData(JSON.parse(JSON.stringify(wantuImport.data)));
                 setIsNative(false);
                 setSelectedTemplate(wantuImport.selectedTemplate);
@@ -1132,6 +1136,7 @@ export const CharacterManagerPage: React.FC = () => {
             const { isValid } = await verificationResponse.json();
 
             setCharacterData(data);
+            setPortraitOwner(data);
             setOriginalData(JSON.parse(JSON.stringify(data))); // 深拷贝作为原始备份
             setIsNative(isValid);
             setSelectedTemplate(inferredTemplate);
@@ -1149,6 +1154,7 @@ export const CharacterManagerPage: React.FC = () => {
             const text = err instanceof Error ? err.message : '解析JSON失败。';
             setMessage({ type: 'error', text: `加载失败: ${text}` });
             setCharacterData(null);
+            setPortraitOwner(null);
             setOriginalData(null);
             setIsNative(false);
             setSelectedTemplate('unknown');
@@ -1172,6 +1178,7 @@ export const CharacterManagerPage: React.FC = () => {
             if (!characterData) {
                 const blank = createBlankDataCard(targetTemplate);
                 setCharacterData(blank);
+                setPortraitOwner(blank);
                 setOriginalData(JSON.parse(JSON.stringify(blank)));
                 setIsNative(false);
                 setHasLostNativeness(false);
@@ -1182,6 +1189,7 @@ export const CharacterManagerPage: React.FC = () => {
                 const sourceTemplate = inferTemplate(characterData);
                 const { data: converted, warnings } = convertDataCard(characterData, targetTemplate, sourceTemplate);
                 setCharacterData(converted);
+                setPortraitOwner(converted);
                 setOriginalData(JSON.parse(JSON.stringify(converted)));
                 setSelectedTemplate(targetTemplate);
                 setValidationResult(validateDataCard(converted));
@@ -1987,6 +1995,7 @@ export const CharacterManagerPage: React.FC = () => {
                             {isTachieVisible && characterData && (
                                 <div className="mt-4 pt-4 border-t">
                                     <CharacterPortraitAssetPanel
+                                        ownerKey={portraitOwner}
                                         prompt={tachiePrompt}
                                         onPortraitAssetChange={setCharacterPortraitAsset}
                                     />

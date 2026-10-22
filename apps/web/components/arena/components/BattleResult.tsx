@@ -233,6 +233,7 @@ export function BattleResult({ onSaveImage }: BattleResultProps) {
       {shouldShowIllustrationPanel && (
         <BattleIllustrationPanel
           key={illustrationPanelKey}
+          ownerKey={lastGenerationId ?? (generationMode === 'stream' ? streamingMarkdown : newsReport)}
           headline={generationMode === 'stream' ? null : (newsReport?.headline ?? null)}
           reportBody={generationMode === 'stream' ? null : (newsReport?.article?.body ?? null)}
           reportMarkdown={generationMode === 'stream' ? (streamingMarkdown ?? null) : null}

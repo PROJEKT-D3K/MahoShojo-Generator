@@ -1,221 +1,111 @@
-import { generateText2Image, getGenerateStatus, calculateProgress } from "./liblib";
-import { getStatusDescription, GenerateStatus } from "./liblib/types";
-import { generateModelScopeText2Image, getModelScopeTaskStatus } from "./modelscope/api";
-import { generateNovelAIImage, DEFAULT_NOVELAI_SETTINGS, type NovelAISettings } from './novelai';
+import { runImageGeneration, type ImageGenerationPort, type ImageGenerationResult } from '@mahoshojo/ai-core/image-generation';
+import { generateText2Image, getGenerateStatus, calculateProgress } from './liblib';
+import { getStatusDescription, GenerateStatus } from './liblib/types';
+import { generateModelScopeText2Image, getModelScopeTaskStatus } from './modelscope/api';
+import { normalizeModelScopeToken } from './modelscope/error';
+import { createNovelAIImageGenerator, DEFAULT_NOVELAI_SETTINGS, type NovelAISettings } from './novelai';
 
-export type TachieSource = "liblib" | "modelscope" | "novelai";
+export type TachieSource = 'liblib' | 'modelscope' | 'novelai';
 export type TachieGenerateMode = 'tachie' | 'illustration';
 
+/** Web-only credentials and settings. The shared lifecycle never receives credentials. */
 export interface TachieGenerationRequest {
-    source: TachieSource;
-    accessKey?: string;
-    secretKey?: string;
-    modelscopeToken?: string;
-    modelscopeModel?: string;
-    modelscopeSize?: string;
-    novelaiToken?: string;
-    novelaiSettings?: NovelAISettings;
-    signal?: AbortSignal;
-    prompt: string;
-    mode?: TachieGenerateMode;
-    workflowUuid?: string;
-    templateUuid?: string;
-    promptNodeId?: number;
-    negativePrompt?: string;
-    negativePromptNodeId?: number;
+  source: TachieSource;
+  accessKey?: string;
+  secretKey?: string;
+  modelscopeToken?: string;
+  modelscopeModel?: string;
+  modelscopeSize?: string;
+  novelaiToken?: string;
+  novelaiSettings?: NovelAISettings;
+  signal?: AbortSignal;
+  resumeTaskId?: string;
+  prompt: string;
+  mode?: TachieGenerateMode;
+  workflowUuid?: string;
+  templateUuid?: string;
+  promptNodeId?: number;
+  negativePrompt?: string;
+  negativePromptNodeId?: number;
 }
 
-export interface TachieGenerationResult {
-    success: boolean;
-    prompt?: string;
-    imageUrl?: string;
-    error?: string;
-    seed?: number;
-    auditStatus?: number;
-    generateUuid?: string;
-    generateStatus?: number;
-    statusDescription?: string;
-    percentCompleted?: number;
-}
-
-const calculateModelScopeProgress = (taskStatus: string, attempts: number): number => {
-    switch (taskStatus) {
-        case "PENDING":
-            return Math.min(10 + attempts * 3, 35);
-        case "RUNNING":
-            return Math.min(35 + attempts * 5, 90);
-        case "SUCCEED":
-            return 100;
-        case "FAILED":
-            return Math.min(35 + attempts * 4, 95);
-        default:
-            return Math.min(15 + attempts * 4, 88);
-    }
+// Additive client result: existing callbacks and local validation results stay compatible.
+export type TachieGenerationResult = Omit<ImageGenerationResult, 'outcome'> & {
+  outcome?: ImageGenerationResult['outcome'];
+  prompt?: string;
 };
 
-/**
- * 带实时进度监听的立绘生成管理器
- * @param request 生成请求参数
- * @param onProgress 进度回调函数
- * @returns 生成结果
- */
-export const generateTachieWithProgress = async (
-    request: TachieGenerationRequest,
-    onProgress?: (progress: number, status: string) => void
-): Promise<TachieGenerationResult> => {
-    try {
-        switch (request.source) {
-            case 'novelai': {
-                onProgress?.(0, '正在等待 NovelAI 返回图片…');
-                const image = await generateNovelAIImage(
-                    request.novelaiToken ?? '',
-                    request.prompt,
-                    request.novelaiSettings ?? { ...DEFAULT_NOVELAI_SETTINGS, negativePrompt: request.negativePrompt ?? '' },
-                    request.signal,
-                );
-                onProgress?.(100, '生成完成！');
-                return { success: true, ...image, prompt: request.prompt.trim(), percentCompleted: 100, statusDescription: '生成完成！' };
-            }
-            case "liblib": {
-                const accessKey = request.accessKey?.trim();
-                const secretKey = request.secretKey?.trim();
-                if (!accessKey || !secretKey) {
-                    throw new Error("请填写 LibLib Access Key 和 Secret Key");
-                }
+const calculateModelScopeProgress = (status: string, attempts: number): number => {
+  if (status === 'PENDING') return Math.min(10 + attempts * 3, 35);
+  if (status === 'RUNNING') return Math.min(35 + attempts * 5, 90);
+  if (status === 'SUCCEED') return 100;
+  if (status === 'FAILED') return Math.min(35 + attempts * 4, 95);
+  return Math.min(15 + attempts * 4, 88);
+};
 
-                // 提交生图任务
-                onProgress?.(5, "正在提交生成任务...");
-                const generateUuid = await generateText2Image(
-                    accessKey,
-                    secretKey,
-                    request.prompt,
-                    {
-                        mode: request.mode,
-                        workflowUuid: request.workflowUuid,
-                        templateUuid: request.templateUuid,
-                        promptNodeId: request.promptNodeId,
-                        negativePrompt: request.negativePrompt,
-                        negativePromptNodeId: request.negativePromptNodeId,
-                    }
-                );
-
-                onProgress?.(10, "任务已提交，开始生成...");
-                let attempts = 0;
-                const maxAttempts = 30;
-                const interval = 12000; // 12秒轮询
-
-                // 实时轮询状态并更新进度
-                while (attempts < maxAttempts) {
-                    const status = await getGenerateStatus(accessKey, secretKey, generateUuid);
-                    const progress = calculateProgress(status.generateStatus, attempts);
-                    const statusText = getStatusDescription(status.generateStatus);
-
-                    onProgress?.(progress, statusText);
-
-                    // 检查完成状态
-                    switch (status.generateStatus) {
-                        case GenerateStatus.SUCCESS:
-                            onProgress?.(100, "生成完成！");
-                            if (status.images && status.images.length > 0) {
-                                const firstImage = status.images[0];
-                                return {
-                                    success: true,
-                                    imageUrl: firstImage.imageUrl,
-                                    seed: firstImage.seed,
-                                    auditStatus: firstImage.auditStatus,
-                                    generateUuid,
-                                    generateStatus: status.generateStatus,
-                                    statusDescription: getStatusDescription(status.generateStatus),
-                                    percentCompleted: 100
-                                };
-                            } else {
-                                return {
-                                    success: false,
-                                    error: "没有生成的图片",
-                                    generateUuid,
-                                    generateStatus: status.generateStatus,
-                                    statusDescription: getStatusDescription(status.generateStatus),
-                                    percentCompleted: 100
-                                };
-                            }
-
-                        case GenerateStatus.FAILED:
-                            throw new Error(`生成失败: ${status.generateMsg || getStatusDescription(status.generateStatus)}`);
-
-                        case GenerateStatus.TIMEOUT:
-                            throw new Error(`生成超时: ${status.generateMsg || "任务创建30分钟后超时"}`);
-                    }
-
-                    attempts++;
-                    if (attempts < maxAttempts) {
-                        await new Promise(resolve => setTimeout(resolve, interval));
-                    }
-                }
-
-                throw new Error("生成超时: 达到最大轮询次数");
-            }
-            case "modelscope": {
-                const modelscopeToken = request.modelscopeToken?.trim();
-                if (!modelscopeToken) {
-                    throw new Error("请填写 ModelScope Token");
-                }
-
-                onProgress?.(5, "正在提交 ModelScope 任务...");
-                const taskId = await generateModelScopeText2Image(
-                    modelscopeToken,
-                    request.prompt,
-                    {
-                        model: request.modelscopeModel,
-                        size: request.modelscopeSize,
-                    },
-                );
-
-                onProgress?.(10, "任务已提交，开始轮询状态...");
-                let attempts = 0;
-                const maxAttempts = 60;
-                const interval = 10000;
-
-                while (attempts < maxAttempts) {
-                    const status = await getModelScopeTaskStatus(modelscopeToken, taskId);
-                    const progress = calculateModelScopeProgress(status.taskStatus, attempts);
-                    onProgress?.(progress, `ModelScope ${status.taskStatus}`);
-
-                    if (status.taskStatus === "SUCCEED") {
-                        if (status.outputImages.length > 0) {
-                            onProgress?.(100, "生成完成！");
-                            return {
-                                success: true,
-                                imageUrl: status.outputImages[0],
-                                generateUuid: taskId,
-                                statusDescription: `ModelScope ${status.taskStatus}`,
-                                percentCompleted: 100,
-                            };
-                        }
-                        throw new Error("ModelScope 返回成功状态，但没有生成图片");
-                    }
-
-                    if (status.taskStatus === "FAILED") {
-                        throw new Error(`生成失败: ${status.errorMessage || "ModelScope 任务失败"}`);
-                    }
-
-                    attempts++;
-                    if (attempts < maxAttempts) {
-                        await new Promise(resolve => setTimeout(resolve, interval));
-                    }
-                }
-
-                throw new Error("生成超时: ModelScope 达到最大轮询次数");
-            }
-            default:
-                return {
-                    success: false,
-                    error: `不支持的生成源: ${request.source}`,
-                };
-        }
-    } catch (error) {
+/** Host adapter only: routes and secrets stay here; create/query/stop ownership is shared. */
+export async function generateTachieWithProgress(
+  input: TachieGenerationRequest,
+  onProgress?: (progress: number, status: string) => void,
+): Promise<TachieGenerationResult> {
+  const request = { ...input, novelaiSettings: input.novelaiSettings ? { ...input.novelaiSettings } : undefined };
+  let attempts = 0;
+  let port: ImageGenerationPort;
+  if (request.source === 'liblib') {
+    const accessKey = request.accessKey?.trim();
+    const secretKey = request.secretKey?.trim();
+    if (!accessKey || !secretKey) return { success: false, outcome: 'failed', error: '请填写 LibLib Access Key 和 Secret Key' };
+    port = {
+      submit: async (signal) => ({ kind: 'task', taskId: await generateText2Image(accessKey, secretKey, request.prompt, {
+        mode: request.mode, workflowUuid: request.workflowUuid, templateUuid: request.templateUuid,
+        promptNodeId: request.promptNodeId, negativePrompt: request.negativePrompt, negativePromptNodeId: request.negativePromptNodeId,
+      }, signal) }),
+      query: async (taskId, signal) => {
+        const status = await getGenerateStatus(accessKey, secretKey, taskId, signal);
+        const failed = status.generateStatus === GenerateStatus.FAILED || status.generateStatus === GenerateStatus.TIMEOUT;
         return {
-            success: false,
-            error: error instanceof Error ? error.message : "生成失败",
+          state: status.generateStatus === GenerateStatus.SUCCESS ? 'succeeded' : failed ? 'failed' : 'pending',
+          progress: calculateProgress(status.generateStatus, attempts++),
+          statusDescription: getStatusDescription(status.generateStatus), providerStatus: status.generateStatus,
+          image: status.images?.[0], error: failed ? `生成失败: ${status.generateMsg || getStatusDescription(status.generateStatus)}` : undefined,
         };
+      },
+    };
+  } else if (request.source === 'modelscope') {
+    const token = normalizeModelScopeToken(request.modelscopeToken ?? '');
+    if (!token) return { success: false, outcome: 'failed', error: '请填写 ModelScope Token' };
+    port = {
+      submit: async (signal) => ({ kind: 'task', taskId: await generateModelScopeText2Image(token, request.prompt, {
+        model: request.modelscopeModel, size: request.modelscopeSize,
+      }, signal) }),
+      query: async (taskId, signal) => {
+        const status = await getModelScopeTaskStatus(token, taskId, signal);
+        return {
+          state: status.taskStatus === 'SUCCEED' ? 'succeeded' : status.taskStatus === 'FAILED' ? 'failed' : 'pending',
+          progress: calculateModelScopeProgress(status.taskStatus, attempts++), statusDescription: `ModelScope ${status.taskStatus}`,
+          image: status.outputImages[0] ? { imageUrl: status.outputImages[0] } : undefined,
+          error: status.taskStatus === 'FAILED' ? `生成失败: ${status.errorMessage || 'ModelScope 任务失败'}` : undefined,
+        };
+      },
+    };
+  } else if (request.source === 'novelai') {
+    try {
+      const generate = createNovelAIImageGenerator(
+        request.novelaiToken ?? '', request.prompt,
+        request.novelaiSettings ?? { ...DEFAULT_NOVELAI_SETTINGS, negativePrompt: request.negativePrompt ?? '' },
+      );
+      port = { submit: async (signal) => ({ kind: 'complete', image: await generate(signal) }) };
+    } catch (error) {
+      return { success: false, outcome: 'failed', error: error instanceof Error ? error.message : '图片参数无效，未提交请求' };
     }
-};
+  } else {
+    return { success: false, outcome: 'failed', error: `不支持的生成源: ${request.source}` };
+  }
+  const result = await runImageGeneration(port, {
+    signal: request.signal, resumeTaskId: request.resumeTaskId, onProgress,
+    // Existing Web polling budgets; Desktop chooses its own policy at its adapter.
+    pollIntervalMs: request.source === 'liblib' ? 12_000 : 10_000,
+    maxPollAttempts: request.source === 'liblib' ? 30 : 60,
+  });
+  return result.success ? { ...result, prompt: request.prompt.trim() } : result;
+}

@@ -237,6 +237,7 @@
     "./ranking": "./src/ranking/index.ts",
     "./card-details": "./src/card-details/index.ts",
     "./name-generation": "./src/name-generation/index.ts",
+    "./image-generation": "./src/image-generation/index.tsx",
     "./cooldown": "./src/cooldown/index.ts",
     "./error-help": {
       "types": "./src/details-controls/error-help.ts",

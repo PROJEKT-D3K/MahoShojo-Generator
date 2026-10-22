@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ChangeEventHandler } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEventHandler } from 'react';
 
 import TachieGenerator from '@/components/TachieGenerator';
 import type { BattleReportIllustrationAsset } from '@/components/BattleReportCard';
@@ -13,6 +13,7 @@ import type { BattleAiImpact, CombatantData } from '../types';
 type IllustrationChoice = 'none' | 'generated' | 'uploaded';
 
 interface BattleIllustrationPanelProps {
+  ownerKey?: unknown;
   headline?: string | null;
   reportBody?: string | null;
   reportMarkdown?: string | null;
@@ -64,7 +65,15 @@ const getFileExtensionFromMime = (mime: string): string => {
   return 'png';
 };
 
-export function BattleIllustrationPanel({
+export function BattleIllustrationPanel(props: BattleIllustrationPanelProps) {
+  const ownerKey = props.ownerKey ?? props.reportMarkdown ?? props.reportBody ?? props.headline;
+  const [owner, setOwner] = useState({ key: ownerKey, epoch: 0 });
+  if (!Object.is(owner.key, ownerKey)) setOwner({ key: ownerKey, epoch: owner.epoch + 1 });
+  return <OwnedBattleIllustrationPanel key={owner.epoch} {...props} ownerKey={ownerKey} />;
+}
+
+function OwnedBattleIllustrationPanel({
+  ownerKey,
   headline,
   reportBody,
   reportMarkdown,
@@ -81,6 +90,9 @@ export function BattleIllustrationPanel({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloadingKind, setDownloadingKind] = useState<'generated' | 'uploaded' | null>(null);
+  const active = useRef(true);
+  const uploadEpoch = useRef(0);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
 
   const suggested = useMemo(
     () =>
@@ -140,6 +152,8 @@ export function BattleIllustrationPanel({
   };
 
   const handleUploadFile: ChangeEventHandler<HTMLInputElement> = async (event) => {
+    const input = event.currentTarget;
+    const epoch = ++uploadEpoch.current;
     setUploadError(null);
     const file = event.target.files?.[0];
     if (!file) return;
@@ -149,12 +163,14 @@ export function BattleIllustrationPanel({
     }
     try {
       const dataUrl = await readFileAsDataUrl(file);
+      if (!active.current || epoch !== uploadEpoch.current) return;
       setUploadedImageUrl(dataUrl);
       setChoice('uploaded');
     } catch (error) {
+      if (!active.current || epoch !== uploadEpoch.current) return;
       setUploadError(error instanceof Error ? error.message : '上传失败，请重试。');
     } finally {
-      event.target.value = '';
+      if (active.current && epoch === uploadEpoch.current) input.value = '';
     }
   };
 
@@ -183,12 +199,14 @@ export function BattleIllustrationPanel({
         throw new Error(`下载失败（HTTP ${response.status}）`);
       }
       const blob = await response.blob();
+      if (!active.current) return;
       const extension = getFileExtensionFromMime(blob.type || '');
       const titlePart = headline ? sanitizeFilename(headline) : '未命名战报';
       const suffix = kind === 'generated' ? '生成插图' : '上传插图';
       const filename = `战报_${titlePart}_${suffix}.${extension}`;
       downloadBlob(blob, filename);
     } catch (error) {
+      if (!active.current) return;
       const message = error instanceof Error ? error.message : '下载失败，请重试。';
       setDownloadError(message);
       try {
@@ -351,11 +369,13 @@ export function BattleIllustrationPanel({
 
           <div className="pt-1">
             <TachieGenerator
+              ownerKey={ownerKey}
               prompt={prompt}
               recommendedPrompt={suggested.prompt}
               onUseRecommendedPrompt={handleResetPrompt}
               mode="illustration"
               onImageUrlChange={(imageUrl) => {
+                if (!active.current) return;
                 setGeneratedImageUrl(imageUrl);
                 setChoice((prev) => {
                   if (imageUrl) return 'generated';

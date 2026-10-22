@@ -215,7 +215,7 @@ export function NamePage() {
         onSaveJson={(result) => downloadBlob(new Blob([serializeNameGenerationResult(result)], { type: 'application/json' }), `魔法少女_${result.name}.json`)}
         afterResult={magicalGirl && <div className="text-center w-full" style={{ marginTop: '2rem' }}>
           <h3 className="text-lg font-medium text-gray-900" style={{ marginBottom: '1rem' }}>立绘生成</h3>
-          <TachieGenerator prompt={`${JSON.stringify(magicalGirl.appearance)} , Xiabanmo, 二次元, 魔法少女`} />
+          <TachieGenerator ownerKey={magicalGirl} prompt={`${JSON.stringify(magicalGirl.appearance)} , Xiabanmo, 二次元, 魔法少女`} />
         </div>}
         footer={<Footer />}
       />

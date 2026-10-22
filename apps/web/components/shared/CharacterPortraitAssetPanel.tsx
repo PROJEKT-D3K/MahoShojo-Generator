@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ChangeEventHandler } from 'react';
+import { useEffect, useRef, useState, type ChangeEventHandler } from 'react';
 
 import TachieGenerator from '@/components/TachieGenerator';
 import { readImageFileAsDataUrl, resolveProxyImageUrl } from '@/lib/client/visualAsset';
@@ -10,14 +10,24 @@ type PortraitChoice = 'none' | 'generated' | 'uploaded';
 
 interface CharacterPortraitAssetPanelProps {
   prompt: string;
+  ownerKey?: unknown;
   onPortraitAssetChange?: (asset: CharacterCardPortraitAsset | null) => void;
 }
 
-export function CharacterPortraitAssetPanel({ prompt, onPortraitAssetChange }: CharacterPortraitAssetPanelProps) {
+export function CharacterPortraitAssetPanel(props: CharacterPortraitAssetPanelProps) {
+  const [owner, setOwner] = useState({ key: props.ownerKey, epoch: 0 });
+  if (!Object.is(owner.key, props.ownerKey)) setOwner({ key: props.ownerKey, epoch: owner.epoch + 1 });
+  return <OwnedCharacterPortraitAssetPanel key={owner.epoch} {...props} />;
+}
+
+function OwnedCharacterPortraitAssetPanel({ prompt, ownerKey, onPortraitAssetChange }: CharacterPortraitAssetPanelProps) {
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [choice, setChoice] = useState<PortraitChoice>('none');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const active = useRef(true);
+  const uploadEpoch = useRef(0);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
 
   useEffect(() => {
     const asset = (() => {
@@ -40,6 +50,8 @@ export function CharacterPortraitAssetPanel({ prompt, onPortraitAssetChange }: C
   }, [choice, generatedImageUrl, uploadedImageUrl, onPortraitAssetChange]);
 
   const handleUploadFile: ChangeEventHandler<HTMLInputElement> = async (event) => {
+    const input = event.currentTarget;
+    const epoch = ++uploadEpoch.current;
     setUploadError(null);
     const file = event.target.files?.[0];
     if (!file) return;
@@ -49,12 +61,14 @@ export function CharacterPortraitAssetPanel({ prompt, onPortraitAssetChange }: C
     }
     try {
       const dataUrl = await readImageFileAsDataUrl(file);
+      if (!active.current || epoch !== uploadEpoch.current) return;
       setUploadedImageUrl(dataUrl);
       setChoice('uploaded');
     } catch (error) {
+      if (!active.current || epoch !== uploadEpoch.current) return;
       setUploadError(error instanceof Error ? error.message : '上传失败，请重试。');
     } finally {
-      event.target.value = '';
+      if (active.current && epoch === uploadEpoch.current) input.value = '';
     }
   };
 
@@ -135,9 +149,11 @@ export function CharacterPortraitAssetPanel({ prompt, onPortraitAssetChange }: C
       </p>
 
       <TachieGenerator
+        ownerKey={ownerKey}
         prompt={prompt}
         mode="tachie"
         onImageUrlChange={(imageUrl) => {
+          if (!active.current) return;
           setGeneratedImageUrl(imageUrl);
           setChoice((prev) => {
             if (imageUrl) return 'generated';

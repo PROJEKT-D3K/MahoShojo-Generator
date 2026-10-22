@@ -24,6 +24,7 @@ export const generateModelScopeText2Image = async (
   modelscopeToken: string,
   prompt: string,
   options?: ModelScopeGenerateOptions,
+  signal?: AbortSignal,
 ): Promise<string> => {
   const token = normalizeModelScopeToken(modelscopeToken);
   if (!token) {
@@ -32,6 +33,7 @@ export const generateModelScopeText2Image = async (
 
   const response = await fetch("/api/tachie/generate", {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
     },
@@ -73,6 +75,7 @@ export const generateModelScopeText2Image = async (
 export const getModelScopeTaskStatus = async (
   modelscopeToken: string,
   taskId: string,
+  signal?: AbortSignal,
 ): Promise<ModelScopeTaskStatus> => {
   const token = normalizeModelScopeToken(modelscopeToken);
   if (!token) {
@@ -81,6 +84,7 @@ export const getModelScopeTaskStatus = async (
 
   const response = await fetch("/api/tachie/status", {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
     },

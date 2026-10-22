@@ -16,6 +16,7 @@ import { AdvancedArenaPageView } from '../arena/AdvancedArenaPageView';
 import { BattleLitePageView } from '../arena/BattleLitePageView';
 import { GenerationModeSwitcher, type GenerationMode } from '../details-controls/GenerationModeSwitcher';
 import { generationActionClassNames } from '../generation-actions';
+import { ImageGenerationFeedback, ImageGenerationResultView } from '../image-generation';
 import type { HomeAssetSource } from '../home/feature-catalog';
 import { BaseModal } from '../modal';
 import { ProductFooter } from '../shell';
@@ -335,6 +336,7 @@ function ResultSurfacesSection() {
       <WebViewerSample />
       <WindowReportSample />
       <StoryReadErrorsSample />
+      <ImageGenerationSample />
       <div className="grid min-w-0 gap-3 md:grid-cols-2" aria-label="竞技场操作反馈样板">
         {(['full', 'lite'] as const).map(appearance => <div key={appearance} className={appearance === 'lite' ? 'battle-lite-shell min-w-0' : 'min-w-0'}>
           <h3 className="text-sm font-medium text-(--app-text-muted)">{appearance === 'lite' ? '简化版' : '完整版'}操作反馈</h3>
@@ -354,6 +356,24 @@ function ResultSurfacesSection() {
             </div>
           </ErrorMessageBox>
         </div>)}
+      </div>
+    </div>
+  );
+}
+
+function ImageGenerationSample() {
+  const [busy, setBusy] = useState(true);
+  return (
+    <div className={PANEL_CLASS} aria-label="图片生成任务与结果样板">
+      <h3 className="text-sm font-medium text-(--app-text-muted)">图片生成：等待、结果未知与原任务查询</h3>
+      <ImageGenerationFeedback busy={busy} progress={35} statusText="示例：供应商正在生成图片"
+        outcome={busy ? undefined : 'stopped'} taskId={busy ? undefined : 'showroom-existing-image-task'}
+        onStop={() => setBusy(false)} onResume={() => setBusy(true)} />
+      <ImageGenerationFeedback busy progress={null} statusText="示例：等待同步图片响应" />
+      <ImageGenerationFeedback busy={false} progress={null} outcome="unresolved" error="示例：创建响应未能确认。" />
+      <div className="max-w-xs">
+        <ImageGenerationResultView imageUrl="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+          seed={0} download={{ filename: 'showroom-image.png' }} />
       </div>
     </div>
   );

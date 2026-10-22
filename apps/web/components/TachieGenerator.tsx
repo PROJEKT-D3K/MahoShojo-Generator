@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { generateTachieWithProgress, type TachieGenerationResult, type TachieSource } from "@/lib/tachie/manager";
-import { ErrorMessage } from "@/components/ErrorMessage";
+import { generateTachieWithProgress, type TachieGenerationRequest, type TachieGenerationResult, type TachieSource } from "@/lib/tachie/manager";
+import { ImageGenerationFeedback, ImageGenerationResultView } from '@mahoshojo/ui-web/image-generation';
 import { normalizeModelScopeToken } from "@/lib/tachie/modelscope/error";
 import { DEFAULT_NOVELAI_SETTINGS, normalizeNovelAIToken } from '@/lib/tachie/novelai';
 import { NovelAISettingsFields } from '@/components/tachie/NovelAISettings';
@@ -25,6 +25,8 @@ const isModelScopePresetSize = (value: unknown): value is ModelScopePresetSize =
 
 interface TachieGeneratorProps {
   prompt: string;
+  /** Stable result/role/session identity; changing prompt or parameters does not change the owner. */
+  ownerKey?: unknown;
   textProviderStorageNamespace?: string;
   recommendedPrompt?: string;
   onUseRecommendedPrompt?: () => void;
@@ -40,6 +42,7 @@ interface TachieGeneratorProps {
 
 export default function TachieGenerator({
   prompt,
+  ownerKey,
   textProviderStorageNamespace,
   recommendedPrompt,
   onUseRecommendedPrompt,
@@ -67,6 +70,20 @@ export default function TachieGenerator({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isOptimizingPrompt, setIsOptimizingPrompt] = useState(false);
   const [result, setResult] = useState<TachieGenerationResult | null>(null);
+  const [completedImage, setCompletedImage] = useState<TachieGenerationResult | null>(null);
+  const pendingRequest = useRef<TachieGenerationRequest | null>(null);
+  const pendingCallbacks = useRef<Pick<TachieGeneratorProps, 'onResult' | 'onImageUrlChange'> | null>(null);
+  const previousOwner = useRef(ownerKey);
+  useEffect(() => {
+    if (Object.is(previousOwner.current, ownerKey)) return;
+    previousOwner.current = ownerKey;
+    generationRef.current?.abort(); generationRef.current = null;
+    pendingRequest.current = null;
+    pendingCallbacks.current = null;
+    setIsGenerating(false); setResult(null); setCompletedImage(null);
+    setProgress(0); setProgressStatus('');
+    onImageUrlChange?.(null);
+  }, [ownerKey, onImageUrlChange]);
   const [rememberCredentials, setRememberCredentials] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressStatus, setProgressStatus] = useState("");
@@ -165,98 +182,55 @@ export default function TachieGenerator({
     ? Boolean(accessKey.trim() && secretKey.trim())
     : source === 'novelai' ? Boolean(normalizeNovelAIToken(novelaiToken)) : Boolean(normalizedModelScopeToken);
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (resume = false) => {
     if (generationRef.current || isOptimizingPrompt) return;
-    if (source === 'liblib' && (!accessKey.trim() || !secretKey.trim())) {
-      const nextResult = {
-        success: false,
-        error: "请填写 LibLib Access Key 和 Secret Key",
-      } satisfies TachieGenerationResult;
-      setResult(nextResult);
-      onResult?.(nextResult);
-      onImageUrlChange?.(null);
+    const frozen = resume ? pendingRequest.current : {
+      source, accessKey: accessKey.trim(), secretKey: secretKey.trim(),
+      modelscopeToken: normalizedModelScopeToken, modelscopeModel: modelscopeModel.trim() || undefined, modelscopeSize,
+      novelaiToken,
+      novelaiSettings: novelaiCustomMode ? { ...novelaiSettings } : {
+        ...DEFAULT_NOVELAI_SETTINGS, model: novelaiSettings.model, baseUrl: novelaiSettings.baseUrl,
+      },
+      prompt: (source === 'novelai' ? novelaiPrompt : prompt).trim(),
+      mode, workflowUuid, templateUuid, promptNodeId, negativePrompt, negativePromptNodeId,
+    } satisfies TachieGenerationRequest;
+    if (!frozen || (resume && !result?.generateUuid)) return;
+    if (!resume && !frozen.prompt) {
+      setResult({ success: false, error: '立绘提示词为空：请先补全角色外观/正文，或手动填写提示词后再生成。' });
       return;
     }
-
-    if (source === 'modelscope' && !normalizedModelScopeToken) {
-      const nextResult = {
-        success: false,
-        error: "请填写 ModelScope Token",
-      } satisfies TachieGenerationResult;
-      setResult(nextResult);
-      onResult?.(nextResult);
-      onImageUrlChange?.(null);
-      return;
-    }
-
-    const normalizedPrompt = (source === 'novelai' ? novelaiPrompt : prompt).trim();
-    if (!normalizedPrompt) {
-      const nextResult = {
-        success: false,
-        error: "立绘提示词为空：请先补全角色外观/正文，或手动填写提示词后再生成。",
-      } satisfies TachieGenerationResult;
-      setResult(nextResult);
-      onResult?.(nextResult);
-      onImageUrlChange?.(null);
-      return;
-    }
-
-    // 保存凭据（如果用户选择记住）
-    saveCredentials();
-
     const controller = new AbortController();
     generationRef.current = controller;
-
-    setIsGenerating(true);
-    setResult(null);
-    onImageUrlChange?.(null);
-    setProgress(0);
-    setProgressStatus("正在提交生成任务...");
-
+    pendingRequest.current = frozen;
+    if (!resume) pendingCallbacks.current = { onResult, onImageUrlChange };
+    const callbacks = pendingCallbacks.current;
+    const resumeTaskId = resume ? result?.generateUuid : undefined;
+    setIsGenerating(true); setResult(null); setProgress(0);
+    setProgressStatus(resume ? '正在查询原任务…' : '正在提交生成任务…');
     try {
-      const generationResult = await generateTachieWithProgress({
-        source,
-        accessKey: accessKey.trim(),
-        secretKey: secretKey.trim(),
-        modelscopeToken: normalizedModelScopeToken,
-        modelscopeModel: modelscopeModel.trim() || undefined,
-        modelscopeSize,
-        novelaiToken,
-        novelaiSettings: novelaiCustomMode ? novelaiSettings : {
-          ...DEFAULT_NOVELAI_SETTINGS, model: novelaiSettings.model, baseUrl: novelaiSettings.baseUrl,
-        },
-        signal: controller.signal,
-        prompt: normalizedPrompt,
-        mode,
-        workflowUuid,
-        templateUuid,
-        promptNodeId,
-        negativePrompt,
-        negativePromptNodeId,
-      }, (progress, status) => {
+      if (!resume) saveCredentials();
+      const generationResult = await generateTachieWithProgress({ ...frozen, signal: controller.signal, resumeTaskId }, (progress, status) => {
         if (generationRef.current !== controller) return;
-        setProgress(progress);
-        setProgressStatus(status);
+        setProgress(progress); setProgressStatus(status);
       });
       if (generationRef.current !== controller) return;
       setResult(generationResult);
-      onResult?.(generationResult);
-      onImageUrlChange?.(generationResult.success ? (generationResult.imageUrl ?? null) : null);
+      callbacks?.onResult?.(generationResult);
+      if (generationResult.success && generationResult.imageUrl) {
+        setCompletedImage(generationResult);
+        callbacks?.onImageUrlChange?.(generationResult.imageUrl);
+      }
+      if (generationResult.outcome !== 'unresolved' && generationResult.outcome !== 'stopped') {
+        pendingRequest.current = null;
+        pendingCallbacks.current = null;
+      }
     } catch (error) {
       if (generationRef.current !== controller) return;
-      const nextResult = {
-        success: false,
-        error: error instanceof Error ? error.message : "生成失败",
-      } satisfies TachieGenerationResult;
-      setResult(nextResult);
-      onResult?.(nextResult);
-      onImageUrlChange?.(null);
+      setResult({ success: false, error: error instanceof Error ? error.message : '生成失败' });
     } finally {
       if (generationRef.current === controller) {
-        generationRef.current = null;
-        setIsGenerating(false);
-        setProgress(0);
-        setProgressStatus("");
+        generationRef.current = null; setIsGenerating(false);
+        setProgress(0); setProgressStatus('');
       }
     }
   };
@@ -284,7 +258,7 @@ export default function TachieGenerator({
         <p className="mt-1">请自行编写适合所选模型的提示词，或导入角色与剧情后使用「LLM 优化提示词」。仅提供 V4.5 Curated 和 V5 Curated。</p>
       </div>}
 
-      <div style={{ marginBottom: '1.5rem' }}>
+      <div className="mb-6">
         <p className="text-center text-sm text-gray-500 mt-4 leading-relaxed">
           请前往
           {source === 'liblib' ? (
@@ -324,7 +298,7 @@ export default function TachieGenerator({
         </p>
       </div>
 
-      <div style={{ marginBottom: '1.5rem' }}>
+      <div className="mb-6">
         {source === 'liblib' ? (
           <>
             <div className="input-group">
@@ -423,7 +397,7 @@ export default function TachieGenerator({
             type="checkbox"
             checked={rememberCredentials}
             onChange={(e) => setRememberCredentials(e.target.checked)}
-            style={{ marginRight: '0.5rem' }}
+            className="mr-2"
           />
           在本地记住我的凭据，方便下次使用
         </label>
@@ -440,106 +414,21 @@ export default function TachieGenerator({
 
       <button
         type="button"
-        onClick={handleGenerate}
+        onClick={() => void handleGenerate()}
         disabled={isGenerating || isOptimizingPrompt || !requiredCredentialsReady || !(source === 'novelai' ? novelaiPrompt : prompt).trim()}
         className="generate-button"
       >
         {isGenerating ? "立绘生成中，请稍后捏 (≖ᴗ≖)✧✨" : `✨ 使用 ${source === 'liblib' ? 'LibLib' : source === 'novelai' ? 'NovelAI' : 'ModelScope'} 生成立绘 ✨`}
       </button>
 
-      {isGenerating && source === 'novelai' && (
-        <button type="button" className="text-sm text-pink-700 underline" onClick={() => generationRef.current?.abort()}>
-          取消等待（已提交的任务可能仍会计费）
-        </button>
-      )}
-
-      {isGenerating && (
-        <div role="status" className="mt-4 p-4 rounded-2xl border border-pink-200 bg-white/90 text-center">
-          <div style={{ marginBottom: '0.75rem' }}>
-            <span className="text-sm font-semibold text-pink-600">
-              {progressStatus || "立绘生成中，请稍后捏 (≖ᴗ≖)✧"}
-            </span>
-          </div>
-
-          {/* 进度条 */}
-          <div className="w-full h-2 rounded bg-pink-100/60 overflow-hidden mb-2">
-            <div style={{
-              width: `${Math.max(progress, 5)}%`, // 最小显示5%，让用户看到有进度
-              height: '100%',
-              background: 'linear-gradient(90deg, #ff6b6b, #ff8787)',
-              borderRadius: '4px',
-              transition: 'width 0.3s ease',
-              animation: progress === 0 ? 'shimmer 2s infinite' : 'none'
-            }}></div>
-          </div>
-
-          {/* 进度百分比 */}
-          <div className="text-xs text-gray-500">
-            {source === 'novelai' ? '等待图片返回，暂无进度百分比' : progress > 0 ? `${progress}%` : "准备中..."}
-          </div>
-        </div>
-      )}
-
-      {result && !isGenerating && (
-        <div style={{ marginTop: '1rem' }}>
-          {result.success ? (
-            <div>
-              <div style={{
-                padding: '0.75rem',
-                background: 'linear-gradient(45deg, #51cf66, #8ce99a)',
-                borderRadius: '12px',
-                marginBottom: '1rem',
-                textAlign: 'center'
-              }}>
-                <p style={{ fontSize: '0.875rem', color: 'white', fontWeight: '600', margin: 0 }}>
-                  ✨ 生成成功！
-                </p>
-                {result.seed !== undefined && (
-                  <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.9)', margin: '0.25rem 0 0 0' }}>
-                    种子值: {result.seed}
-                  </p>
-                )}
-              </div>
-              {result.imageUrl && (
-                <div style={{
-                  border: '2px solid rgba(255, 107, 107, 0.3)',
-                  borderRadius: '12px',
-                  overflow: 'hidden',
-                  boxShadow: '0 8px 32px rgba(255, 107, 107, 0.2)'
-                }}>
-                  <img
-                    src={result.imageUrl}
-                    alt="生成的立绘"
-                    style={{ width: '100%', height: 'auto', display: 'block' }}
-                    onError={(e) => {
-                      e.currentTarget.src = "";
-                      e.currentTarget.alt = "图片加载失败";
-                    }}
-                  />
-                </div>
-              )}
-              {result.imageUrl?.startsWith('data:image/png;base64,') && (
-                <a href={result.imageUrl} download={`novelai-${result.seed ?? 'image'}.png`} className="mt-3 inline-block text-sm text-pink-700 underline">下载 PNG</a>
-              )}
-            </div>
-          ) : (
-            <ErrorMessage message={result.error ?? "生成失败"} />
-          )}
-        </div>
-      )}
-
-      <style jsx>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-        
-        @keyframes shimmer {
-          0% { opacity: 0.6; }
-          50% { opacity: 1; }
-          100% { opacity: 0.6; }
-        }
-      `}</style>
+      <ImageGenerationFeedback busy={isGenerating} progress={source === 'novelai' ? null : progress}
+        statusText={progressStatus} error={result?.success ? undefined : result?.error}
+        taskId={result?.generateUuid} outcome={result?.outcome}
+        onStop={() => generationRef.current?.abort()}
+        onResume={!isGenerating && result?.generateUuid && pendingRequest.current && (result.outcome === 'stopped' || result.outcome === 'unresolved')
+          ? () => void handleGenerate(true) : undefined} />
+      {completedImage?.imageUrl && <ImageGenerationResultView imageUrl={completedImage.imageUrl} seed={completedImage.seed}
+        download={completedImage.imageUrl.startsWith('data:image/png;base64,') ? { filename: `novelai-${completedImage.seed ?? 'image'}.png` } : undefined} />}
     </div>
   );
 }

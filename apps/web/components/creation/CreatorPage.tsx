@@ -2809,6 +2809,7 @@ export const CreatorPage: React.FC = () => {
                       <div className="text-center">
                         <h3 className="text-lg font-medium text-blue-900" style={{ marginBottom: '1rem' }}>生成立绘</h3>
                         <CharacterPortraitAssetPanel
+                          ownerKey={creatorResultSnapshot ?? streamedGeneralCard}
                           prompt={streamPortraitPrompt}
                           onPortraitAssetChange={setCharacterPortraitAsset}
                         />
@@ -2892,6 +2893,7 @@ export const CreatorPage: React.FC = () => {
                 <div className="text-center">
                   <h3 className="text-lg font-medium text-blue-900" style={{ marginBottom: '1rem' }}>生成立绘</h3>
                   <CharacterPortraitAssetPanel
+                    ownerKey={magicalGirlDetails}
                     prompt={nonStreamResultFollowUp?.portraitPrompt ?? ''}
                     onPortraitAssetChange={setCharacterPortraitAsset}
                   />

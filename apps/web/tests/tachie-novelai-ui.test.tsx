@@ -66,11 +66,37 @@ it('取消等待传递 AbortSignal，恢复按钮且不重发请求', async () =
   await setInput('NovelAI Persistent API Token', 'token');
   if (!container.querySelector<HTMLTextAreaElement>('textarea')!.value) await setInput('提示词', '1girl');
   await act(async () => button('使用 NovelAI').click());
-  await act(async () => button('取消等待').click());
+  await act(async () => button('停止等待').click());
   expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
   expect(fetchMock).toHaveBeenCalledTimes(1);
-  expect(container.textContent).toContain('已取消等待 NovelAI');
+  expect(container.textContent).toContain('已停止等待');
+  expect(container.textContent).toContain('计费');
   expect(button('使用 NovelAI').disabled).toBe(false);
+});
+
+it('同 owner 编辑提示词后恢复原任务，保留原请求与首次提交的结果回调', async () => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(Response.json({ data: { generateUuid: 'original-task' } }))
+    .mockRejectedValueOnce(new Error('查询暂时断开'))
+    .mockResolvedValueOnce(Response.json({ taskStatus: 'SUCCEED', outputImages: ['https://example.test/original.png'] }));
+  vi.stubGlobal('fetch', fetchMock);
+  const originalResult = vi.fn(); const editedResult = vi.fn();
+  const originalImage = vi.fn(); const editedImage = vi.fn();
+  await act(async () => root.render(<TachieGenerator ownerKey="same-role" prompt="提交时的提示词"
+    onResult={originalResult} onImageUrlChange={originalImage} />));
+  await act(async () => button('使用 ModelScope').click());
+  expect(originalResult).toHaveBeenLastCalledWith(expect.objectContaining({ outcome: 'unresolved', generateUuid: 'original-task' }));
+  await act(async () => root.render(<TachieGenerator ownerKey="same-role" prompt="下次生成的新提示词"
+    onResult={editedResult} onImageUrlChange={editedImage} />));
+  await act(async () => button('继续查询原任务').click());
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/tachie/generate', '/api/tachie/status', '/api/tachie/status']);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ prompt: '提交时的提示词' });
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({ generateUuid: 'original-task' });
+  expect(originalResult).toHaveBeenLastCalledWith(expect.objectContaining({
+    success: true, prompt: '提交时的提示词', imageUrl: 'https://example.test/original.png',
+  }));
+  expect(originalImage).toHaveBeenLastCalledWith('https://example.test/original.png');
+  expect(editedResult).not.toHaveBeenCalled(); expect(editedImage).not.toHaveBeenCalled();
 });
 
 it('默认简单模式；自定义参数仅在开启时生效，切回简单模式恢复默认请求', async () => {

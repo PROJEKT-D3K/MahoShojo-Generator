@@ -689,19 +689,11 @@ export function TavernExportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
     return `${name ? `${name}, ` : ''}${head}, Xiabanmo, 二次元, 角色立绘`;
   }, [state.dataCard, state.template]);
 
-  const tachiePromptKey = useMemo(() => {
-    const text = tachiePrompt.trim();
-    if (!text) return '';
-    let hash = 0;
-    for (let i = 0; i < text.length; i += 1) {
-      hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
-    }
-    return `${state.template}-${hash}`;
-  }, [tachiePrompt, state.template]);
+  const tachieOwner = sourceToken.current;
 
   useEffect(() => {
     setTachieImageUrl(null);
-  }, [tachiePrompt]);
+  }, [tachieOwner]);
 
   const blobToPngBytes = async (blob: Blob): Promise<Uint8Array> => {
     if (blob.size > MAX_TAVERN_FILE_BYTES) throw new Error('立绘文件超过 32 MiB 上限。');
@@ -1270,7 +1262,7 @@ export function TavernExportPanel({ onBusyChange }: { onBusyChange?: (busy: bool
                   <div className="mt-1 text-xs text-gray-600">生成完成后可一键设为底图（会自动转为 PNG）。</div>
                   <div className="mt-3">
                     <TachieGenerator
-                      key={`tavern-export-tachie-${tachiePromptKey}`}
+                      ownerKey={tachieOwner}
                       prompt={tachiePrompt}
                       onImageUrlChange={(url) => { if (sourceSelection.isCurrent(renderedSourceToken)) setTachieImageUrl(url); }}
                     />
