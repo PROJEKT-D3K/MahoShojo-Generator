@@ -64,6 +64,25 @@ it('renders production full and lite Arena frames with result cards in their rea
   expect(sample.querySelector('.battle-lite-shell .card')).not.toBeNull();
 });
 
+it('uses the shared Web display selector and immersive toolbar without interpreting generated content', () => {
+  act(() => root.render(<ShowroomView />));
+  const sample = container.querySelector('[aria-label="Web 战报显示与沉浸工具栏样板"]')!;
+  const button = (label: string) => [...sample.querySelectorAll('button')].find(node => node.textContent === label)!;
+  const input = sample.querySelector<HTMLInputElement>('[aria-label="沉浸切换保留内容"]')!;
+  input.value = '样板交互保留';
+  act(() => button('沉浸体验').click());
+  expect(sample.querySelector('[data-testid="arena-web-immersive"]')).not.toBeNull();
+  expect(sample.querySelector('input')).toBe(input);
+  act(() => button('退出沉浸').click());
+  expect(input.value).toBe('样板交互保留');
+  act(() => button('普通显示').click());
+  expect(sample.querySelector('[data-testid="arena-web-header"]')).toBeNull();
+  expect(sample.querySelector('.result-card')?.textContent).toContain('同一战报的普通卡片样板');
+  act(() => button('Web 显示').click());
+  expect(sample.querySelector('[data-testid="arena-web-header"]')).not.toBeNull();
+  expect(sample.querySelector('iframe,script')).toBeNull();
+});
+
 it('uses production story error views with multiline copy, an explicit read action and the real branch modal', () => {
   act(() => root.render(<ShowroomView />));
   const sample = container.querySelector('[aria-label="故事读取错误样板"]')!;

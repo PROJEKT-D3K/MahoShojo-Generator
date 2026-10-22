@@ -1,13 +1,9 @@
 'use client';
 
-import { getVisibleOutputTokens } from '@mahoshojo/ai-core/token-usage';
-
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { ChevronDown, FileText, Maximize, Minimize, PanelsTopLeft } from 'lucide-react';
 import type { NewsReport } from '@/components/BattleReportCard';
-import { SegmentedControl, type SegmentedOption } from '@/components/shared/SegmentedControl';
 import { MarkdownBlock } from './DeferredArenaRenderers';
-import { ArenaReportFormatSelectorView, ArenaWebNotes, ArenaWebSourceView, ArenaWebReportActions, ArenaWebReplayControlsView, WebReportConsentDialogView, type ArenaWebReportAction } from '@mahoshojo/ui-web/arena-report-views';
+import { ArenaWebDisplayModeSelectorView, ArenaWebViewer, ARENA_WEB_FRAME_CLASS_NAME, useArenaWebImmersive, type ArenaWebDisplayMode, ArenaReportFormatSelectorView, ArenaWebNotes, ArenaWebSourceView, ArenaWebReportActions, ArenaWebReplayControlsView, WebReportConsentDialogView, type ArenaWebReportAction } from '@mahoshojo/ui-web/arena-report-views';
 import { resolveWebDisplayTitle } from '@/lib/arena/battle-report-display-title';
 import { normalizeArenaWebOutput } from '@/lib/arena/web-output';
 import { downloadBlob } from '@/lib/client/blobUrl';
@@ -18,7 +14,6 @@ import { useWebPackageTrust } from '@/lib/web-package/trust';
 import { WebPackageFrame } from './WebPackageFrame';
 import { WebPackageRiskSummary, WebPackageTrustDialog } from './WebPackageSafety';
 import { scanWebPackageInstance, type WebPackageRiskProfile } from '@mahoshojo/web-package/security';
-import styles from './ArenaWebReport.module.css';
 import type { WebPackageArtifact, WebPackageRef } from '@mahoshojo/contracts/web-package';
 import {
   formatWebPackageFallback,
@@ -60,11 +55,6 @@ const PREVIEW_SCROLLBAR_STYLE = `<style data-arena-web-scrollbars>
   }
 }
 </style>`;
-type ArenaWebDisplayMode = 'ordinary' | 'web';
-const DISPLAY_OPTIONS: readonly SegmentedOption<ArenaWebDisplayMode>[] = [
-  { value: 'ordinary', label: '普通显示', icon: <FileText />, description: '使用普通战报卡片展示正文，适合阅读、保存图片和下载战斗记录。' },
-  { value: 'web', label: 'Web 显示', icon: <PanelsTopLeft />, description: '在浏览器隔离框架中展示生成的网页战报，保留自定义排版和交互。' },
-];
 const sessionConsents = new Set<string>();
 const consentListeners = new Set<() => void>();
 const consentKey = (roomId?: string) => roomId ? `${CONSENT_KEY}.room.${roomId}` : CONSENT_KEY;
@@ -127,131 +117,23 @@ function ArenaWebDocument({ location, prelude, epilogue, reload, immersive, aiMo
   packageIdentity?: string;
   onToggleImmersive: (viewer: HTMLDivElement | null) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
-  const [hovered, setHovered] = useState(false);
-  const [keyboardFocus, setKeyboardFocus] = useState(false);
   const previewDocument = useMemo(
     () => (location.kind === 'srcdoc' ? location.html + PREVIEW_SCROLLBAR_STYLE : ''),
     [location],
   );
-  const viewerRef = useRef<HTMLDivElement>(null);
-  const immersiveButtonRef = useRef<HTMLButtonElement>(null);
-  const focusOnExpandRef = useRef(false);
-  const model = aiModel?.trim();
-  const hasTokens = [aiUsage?.promptTokens, aiUsage?.reasoningTokens, aiUsage?.completionTokens, aiUsage?.textTokens]
-    .some((value) => typeof value === 'number' && Number.isFinite(value));
-  const formatToken = (value: number | null | undefined) =>
-    typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '-';
-
-  useEffect(() => {
-    setExpanded(true);
-  }, [location, reload, immersive]);
-
-  useEffect(() => {
-    if (!expanded || hovered || keyboardFocus) return;
-    const timer = window.setTimeout(() => {
-      immersiveButtonRef.current?.blur();
-      setExpanded(false);
-    }, 3000);
-    return () => window.clearTimeout(timer);
-  }, [expanded, hovered, keyboardFocus, location, reload, immersive]);
-
-  useEffect(() => {
-    if (expanded && focusOnExpandRef.current) {
-      focusOnExpandRef.current = false;
-      immersiveButtonRef.current?.focus({ preventScroll: true });
-    }
-  }, [expanded]);
-
-  // 两种模式保持同一组 DOM 层级，只切换布局 class，避免 iframe browsing context 被重建。
-  return (
-    <>
-      <div
-        ref={viewerRef}
-        role={immersive ? 'dialog' : undefined}
-        aria-modal={immersive ? true : undefined}
-        aria-label={immersive ? '沉浸式 Web 战报' : undefined}
-        data-testid={immersive ? 'arena-web-immersive' : undefined}
-        className={`${styles.viewer} ${immersive ? styles.immersive : ''}`}
-      >
-        <header
-          className={styles.header}
-          data-testid="arena-web-header"
-          aria-hidden={!expanded}
-          inert={!expanded}
-        >
-          <div
-            className={styles.controls}
-            onPointerEnter={(event) => { if (event.pointerType === 'mouse') setHovered(true); }}
-            onPointerLeave={() => setHovered(false)}
-            onPointerDownCapture={() => setKeyboardFocus(false)}
-            onKeyDownCapture={() => setKeyboardFocus(true)}
-            onFocusCapture={(event) => {
-              const focusVisible = event.target.matches(':focus-visible');
-              setKeyboardFocus((current) => current || focusVisible);
-            }}
-            onBlurCapture={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) setKeyboardFocus(false);
-            }}
-          >
-            <div className={styles.identity}>
-              <img src="/arena-white.svg" alt="魔法少女竞技场" width={140} height={45} className={styles.logo} />
-              {model || hasTokens ? <div className={styles.metadata}>
-                {model ? <span className={styles.model}>模型：{model}{hasTokens ? ' · ' : ''}</span> : null}
-                {hasTokens ? <>
-                  <span className={styles.token}>tokens：输入 {formatToken(aiUsage?.promptTokens)}</span>
-                  <span className={styles.token}>｜推理 {formatToken(aiUsage?.reasoningTokens)}</span>
-                  <span className={styles.token}>｜输出 {formatToken(getVisibleOutputTokens(aiUsage))}</span>
-                </> : null}
-              </div> : null}
-            </div>
-            <button
-              ref={immersiveButtonRef}
-              type="button"
-              onClick={() => onToggleImmersive(viewerRef.current)}
-              className={styles.immersiveButton}
-            >
-              {immersive ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
-              {immersive ? '退出沉浸' : '沉浸体验'}
-            </button>
-          </div>
-        </header>
-        <button
-          type="button"
-          className={styles.expandButton}
-          hidden={expanded}
-          aria-label="展开 Web 战报工具栏"
-          aria-expanded={expanded}
-          onClick={(event) => {
-            focusOnExpandRef.current = event.detail === 0;
-            setKeyboardFocus(event.detail === 0);
-            setExpanded(true);
-          }}
-        >
-          <ChevronDown size={20} aria-hidden="true" />
-        </button>
-        {packageMode && location.kind === 'srcdoc' ? <WebPackageFrame
-          key={`${reload}:${packageMode}:${packageIdentity}`}
-          html={previewDocument}
-          trusted={packageMode === 'trusted'}
-          className={styles.frame}
-        /> : <iframe
-          key={reload}
-          title="AI Web 战报"
-          sandbox="allow-scripts"
-          referrerPolicy="no-referrer"
-          {...(location.kind === 'url' ? { src: location.url } : { srcDoc: previewDocument })}
-          data-testid="arena-web-document"
-          className={styles.frame}
-        />}
-      </div>
-      {prelude || epilogue ? <div className="px-4 pt-4" hidden={immersive}>
-        <ArenaWebNotes prelude={prelude} epilogue={epilogue} renderNote={(note) => <MarkdownBlock content={note} variant="dark" mode="article" />} />
-      </div> : null}
-    </>
-  );
+  return <>
+    <ArenaWebViewer immersive={immersive} onToggleImmersive={onToggleImmersive} contentIdentity={location} reload={reload} aiModel={aiModel} aiUsage={aiUsage}>
+      {packageMode && location.kind === 'srcdoc' ? <WebPackageFrame
+        key={`${reload}:${packageMode}:${packageIdentity}`} html={previewDocument} trusted={packageMode === 'trusted'} className={ARENA_WEB_FRAME_CLASS_NAME}
+      /> : <iframe key={reload} title="AI Web 战报" sandbox="allow-scripts" referrerPolicy="no-referrer"
+        {...(location.kind === 'url' ? { src: location.url } : { srcDoc: previewDocument })}
+        data-testid="arena-web-document" className={ARENA_WEB_FRAME_CLASS_NAME} />}
+    </ArenaWebViewer>
+    {prelude || epilogue ? <div className="px-4 pt-4" hidden={immersive}>
+      <ArenaWebNotes prelude={prelude} epilogue={epilogue} renderNote={note => <MarkdownBlock content={note} variant="dark" mode="article" />} />
+    </div> : null}
+  </>;
 }
-
 export function ArenaReportFormatSelector({ value, onChange, disabled = false, roomId, children }: {
   value: 'markdown' | 'web';
   onChange: (format: 'markdown' | 'web') => void;
@@ -296,8 +178,6 @@ export function ArenaWebReport({ content, ready, roomId, aiModel, aiUsage, displ
   const [confirming, setConfirming] = useState(false);
   const [asked, setAsked] = useState(false);
   const [reload, setReload] = useState(0);
-  const [immersive, setImmersive] = useState(false);
-  const nativeFullscreenRequestedRef = useRef(false);
   const normalizedOutput = useMemo(() => normalizeArenaWebOutput(content), [content]);
   const [compatChoice, setCompatChoice] = useState<{ key: string; ref: WebPackageRef } | null>(null);
   const [candidateChoice, setCandidateChoice] = useState<{ key: string; digest: string } | null>(null);
@@ -449,77 +329,14 @@ export function ArenaWebReport({ content, ready, roomId, aiModel, aiUsage, displ
       setConfirming(true);
     }
   }, [ready, webDocument, accepted, asked]);
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement && nativeFullscreenRequestedRef.current) {
-        nativeFullscreenRequestedRef.current = false;
-        setImmersive(false);
-      }
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-  useEffect(() => {
-    if (!immersive) return;
-    const previousOverflow = document.body.style.overflow;
-    const previousRootOverflow = document.documentElement.style.overflow;
-    document.body.style.overflow = 'hidden';
-    document.documentElement.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.documentElement.style.overflow = previousRootOverflow;
-    };
-  }, [immersive]);
-  useEffect(() => () => {
-    if (nativeFullscreenRequestedRef.current && document.fullscreenElement && document.exitFullscreen) {
-      nativeFullscreenRequestedRef.current = false;
-      void document.exitFullscreen().catch(() => undefined);
-    }
-  }, []);
   const showingWeb = ready && accepted && displayMode === 'web' && webDocument !== null;
+  const { immersive, enterImmersive, exitImmersive } = useArenaWebImmersive({ active: showingWeb });
   // Memoized so ordinary srcdoc transport does not recreate the location identity every render.
   const documentLocation = useMemo<{ kind: 'srcdoc'; html: string } | { kind: 'url'; url: string }>(() => {
     if (packageLocation) return packageLocation;
     if (!webPackage && typeof documentSource === 'string') return { kind: 'srcdoc', html: documentSource };
     return { kind: 'srcdoc', html: '' };
   }, [packageLocation, documentSource, webPackage]);
-  const enterImmersive = useCallback((viewer: HTMLDivElement | null) => {
-    setImmersive(true);
-    if (!viewer || typeof viewer.requestFullscreen !== 'function') return;
-
-    nativeFullscreenRequestedRef.current = true;
-    // 让作品容器进入浏览器顶层，避免宿主页/弹窗的滚动结构继续参与全屏交互。
-    void viewer.requestFullscreen().catch(() => {
-      nativeFullscreenRequestedRef.current = false;
-    });
-  }, []);
-  const exitImmersive = useCallback(() => {
-    setImmersive(false);
-    if (!nativeFullscreenRequestedRef.current) return;
-
-    nativeFullscreenRequestedRef.current = false;
-    if (document.fullscreenElement && document.exitFullscreen) {
-      void document.exitFullscreen().catch(() => undefined);
-    }
-  }, []);
-  useEffect(() => {
-    if (!immersive) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      // 历史战报可能位于弹窗中，Escape 优先退出作品，避免外层弹窗关闭并销毁 iframe。
-      event.stopPropagation();
-      // 原生 fullscreen 由浏览器处理 Escape，避免阻止其退出默认行为。
-      if (nativeFullscreenRequestedRef.current && document.fullscreenElement) return;
-      event.preventDefault();
-      exitImmersive();
-    };
-    document.addEventListener('keydown', handleKeyDown, true);
-    return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [exitImmersive, immersive]);
-  useEffect(() => {
-    if (immersive && !showingWeb) exitImmersive();
-  }, [exitImmersive, immersive, showingWeb]);
   const handleDisplayModeChange = (nextMode: ArenaWebDisplayMode) => {
     if (nextMode === 'ordinary') {
       if (immersive) exitImmersive();
@@ -570,10 +387,9 @@ export function ArenaWebReport({ content, ready, roomId, aiModel, aiUsage, displ
   return (
     <>
       <div className="mb-4 flex flex-wrap items-end gap-3 text-sm">
-        <SegmentedControl
-          label="显示方式"
+        <ArenaWebDisplayModeSelectorView
+          webDescription="在浏览器隔离框架中展示生成的网页战报，保留自定义排版和交互。"
           value={showingWeb ? 'web' : 'ordinary'}
-          options={DISPLAY_OPTIONS}
           disabled={!ready}
           onChange={handleDisplayModeChange}
         />

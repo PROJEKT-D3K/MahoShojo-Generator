@@ -5,7 +5,7 @@ import { CardForgeThemeEditor } from '../card-forge';
 import { BattleReportCardWidthSettings } from '../arena/BattleReportCardWidthSettings';
 import { resolveBattleReportCardManualWidthPx, type BattleReportCardWidthSettingsValue } from '../arena/battle-report-card-width';
 import { CombatantUpdatesPresentation, GeneratedByUserBadgeView, StreamingBattleReportCard } from '../arena-report';
-import { ArenaWebResultView } from '../arena-report/views';
+import { ArenaWebResultView, ArenaWebDisplayModeSelectorView, ArenaWebViewer, ARENA_WEB_FRAME_CLASS_NAME, useArenaWebImmersive, type ArenaWebDisplayMode } from '../arena-report/views';
 import { BattleStoryBranchChainModal, BattleStoryChapterReader, BattleStorySessionDirectory } from '../arena-story-session';
 import { COLOR_MODE_OPTIONS, useColorModePreference } from '../color-mode';
 import { ResultJsonCopyButton } from '../details-controls/ResultJsonCopyButton';
@@ -72,6 +72,21 @@ const RADIUS_TOKENS = ['--app-radius-sm', '--app-radius-md', '--app-radius-lg', 
 const SHADOW_TOKENS = ['--app-shadow-sm', '--app-shadow-md', '--app-shadow-lg'] as const;
 const Z_TOKENS = ['--app-z-overlay', '--app-z-modal', '--app-z-toast'] as const;
 const TEXT_TOKENS = ['--app-text-xs', '--app-text-sm', '--app-text-base', '--app-text-lg', '--app-text-xl', '--app-text-2xl'] as const;
+
+function WebViewerSample() {
+  const [displayMode, setDisplayMode] = useState<ArenaWebDisplayMode>('web');
+  const { immersive, enterImmersive, exitImmersive } = useArenaWebImmersive({ active: displayMode === 'web' });
+  return <section className={`${PANEL_CLASS} space-y-3`} aria-label="Web 战报显示与沉浸工具栏样板">
+    <ArenaWebDisplayModeSelectorView value={displayMode} onChange={setDisplayMode} />
+    {displayMode === 'web' ? <ArenaWebViewer immersive={immersive} onToggleImmersive={immersive ? exitImmersive : enterImmersive}
+      aiModel="样板模型" aiUsage={{ promptTokens: 1200, reasoningTokens: 300, completionTokens: 800 }}>
+      <div className={`${ARENA_WEB_FRAME_CLASS_NAME} overflow-auto p-6 pt-32 text-gray-900`}>
+        <p>可信静态样板，用于检查真实工具栏的自动收起、键盘焦点及沉浸切换；不执行生成内容。</p>
+        <label className="input-group"><span className="input-label">沉浸切换保留内容</span><input aria-label="沉浸切换保留内容" className="input-field" defaultValue="进出沉浸后仍保留" /></label>
+      </div>
+    </ArenaWebViewer> : <StreamingBattleReportCard content="# 普通显示\n\n同一战报的普通卡片样板。" />}
+  </section>;
+}
 
 function SemanticColorsSection() {
   return (
@@ -295,6 +310,7 @@ function ResultSurfacesSection() {
         <ResultJsonCopyButton data={SHOWROOM_MAGICAL_GIRL} className={generationActionClassNames.secondary} onResult={setCopyResult} />
         {copyResult !== null && <p role="status">{copyResult ? '完整结果 JSON 已复制到剪贴板' : '复制失败，请检查剪贴板权限。'}</p>}
       </div>
+      <WebViewerSample />
       <StoryReadErrorsSample />
       <div className="grid min-w-0 gap-3 md:grid-cols-2" aria-label="竞技场操作反馈样板">
         {(['full', 'lite'] as const).map(appearance => <div key={appearance} className={appearance === 'lite' ? 'battle-lite-shell min-w-0' : 'min-w-0'}>

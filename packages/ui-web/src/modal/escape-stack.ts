@@ -6,9 +6,9 @@ import { useEffect, useMemo, useRef } from 'react';
  * 页面上的可关闭层（模态框、抽屉、下拉、原生 <dialog> 的协调登记）都注册进同一个
  * 模块级栈，由这里唯一的 document 级 keydown 分发器按下述不变量派发 Escape：
  *
- * - 自上而下逐层询问，第一层返回 `true`（已关闭或明确阻断）即停——一次 Escape
+ * - 自上而下逐层询问，第一层返回 `true`（已关闭或明确阻断）或 `browser` 即停——一次 Escape
  *   至多消费一层，嵌套弹窗不会连锁关闭；
- * - 只有消费/阻断才 `preventDefault`；没有层接住时落到宿主兜底（Desktop 的
+ * - `true` 才 `preventDefault`；`browser` 保留原生全屏的默认退出。没有层接住时落到宿主兜底（Desktop 的
  *   Esc 快捷菜单），兜底也接不住则事件原样放行；
  * - 只分发干净的一次按键：`event.repeat`（长按）、`event.isComposing`（IME
  *   组词）、`event.defaultPrevented`（上游已处理）一律不进入层级判定。
@@ -21,13 +21,12 @@ import { useEffect, useMemo, useRef } from 'react';
  * `isTopmostFocusTrapLayer`——各层的 Tab 循环实现据此判断「现在该由谁圈住焦点」，
  * 避免两个 focus trap 互拽。普通弹出层（下拉/选择器）保持默认 `false`。
  *
- * 元素级局部键盘行为（输入框、listbox 内导航）不经过这里；`stopPropagation`
- * 的捕获监听（如 Web 竞技场沉浸态）会在事件冒泡到 document 前先行收口，
- * 与本栈天然隔离。
+ * 元素级局部键盘行为（输入框、listbox 内导航）不经过这里；Web 竞技场沉浸态
+ * 同样登记本栈，原生全屏使用 `browser` 阻断外层关闭且不阻止浏览器默认动作。
  */
 
-/** 层的 Escape 应答：`true` = 已消费或明确阻断（立即停发）；`false` = 让给下一层。 */
-export type EscapeLayerHandler = () => boolean;
+/** `true` 消费并阻止默认行为；`false` 让给下一层；`browser` 阻断外层但由浏览器完成默认动作（原生全屏）。 */
+export type EscapeLayerHandler = () => boolean | 'browser';
 
 interface RegisteredEscapeLayer {
   readonly id: symbol;
@@ -60,7 +59,10 @@ const dispatchKeydown = (event: KeyboardEvent): void => {
     return;
   }
   for (let index = layers.length - 1; index >= 0; index -= 1) {
-    if (layers[index]!.onEscape()) {
+    const result = layers[index]!.onEscape();
+    // Native fullscreen owns Escape's default action, but outer modal layers must not close too.
+    if (result === 'browser') return;
+    if (result) {
       event.preventDefault();
       return;
     }

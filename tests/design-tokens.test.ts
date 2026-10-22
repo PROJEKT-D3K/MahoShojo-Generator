@@ -86,10 +86,9 @@ const OPTIONAL_VAR_PREFIXES: ReadonlyArray<{ prefix: string; reason: string }> =
  * 收割方式见文件头注释（BASELINE=print）。
  */
 const FILE_BASELINE: Record<string, { literals: number; appTokenFallbacks: number; offGridSpacing: number }> = {
-  // 2026-10-19 首次收割。Web 端唯一 CSS Module 的沉浸查看器配色、产品壳闭包（顶栏/blue-theme/
+  // 2026-10-19 首次收割。产品壳闭包（顶栏/blue-theme/
   // 危险操作色系）、卡牌工坊宝石装饰常量均为已登记存量；styles.css 的兜底写法是问卷/结果
   // 共享类从 Web globals 上移时逐字保留的历史防御，随接触清理。
-  'apps/web/components/arena/components/ArenaWebReport.module.css': { literals: 12, appTokenFallbacks: 0, offGridSpacing: 2 },
   'apps/web/styles/globals.css': { literals: 8, appTokenFallbacks: 0, offGridSpacing: 1 },
   'packages/ui-web/src/arena/styles.css': { literals: 2, appTokenFallbacks: 0, offGridSpacing: 0 },
   'packages/ui-web/src/card-forge/styles.css': { literals: 85, appTokenFallbacks: 0, offGridSpacing: 22 },
