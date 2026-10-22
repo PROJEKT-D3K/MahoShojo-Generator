@@ -1,5 +1,7 @@
 # 文档导航
 
+2026-10-22 Web 战报共源：[Windows 隔离运行验收](./reports/2026-10-22_180900_Web战报共源与Windows隔离运行验收.md)记录双端共用显示切换/沉浸控件、Desktop 自由 HTML 与精确包运行、Native 窄控窗及 Windows 实机证据。Windows 对应能力准入已启用；工作区测试/lint、双端构建及 Native 检查通过，全仓 CI 的范围外阻塞与其他平台待验范围见报告。
+
 2026-10-19 视觉治理体系：[双端视觉治理体系 ADR](./decisions/2026-10-19_215000_双端视觉治理体系决策.md)与[双端视觉基线与工程契约规格](./specs/2026-10-19_215200_双端视觉基线与工程契约规格.md)已接受。采纳五层治理——成文规范 → token 单源 → 契约门禁（`var()` 可解析、token 所有权、字面量基线、对比度矩阵，进 `workspace:checks`）→ ui-web 单源样板间挂两端 dev 路由 → 本地显式巡检留证据；门禁验「规则未被破坏」不验外观，无像素 diff/CI 截图门禁，延续 DESK-PROD-009 口径。共源样板间优先于 Storybook（保留显式再评估触发条件），组件原语按需渐进抽取；范围限 Web/Desktop/ui-web，admin 不纳入。本轮为 ADR+spec 落地，各层实现按批次推进。
 
 2026-10-19 D5.2-A 开工：[Desktop 安装包构建与内部验收](./runbooks/2026-10-19_201500_Desktop安装包构建与内部验收.md)确立版本契约（`apps/desktop/package.json` 权威 + `sync-desktop-version.mjs` 三处派生）、NSIS currentUser/中英双语安装器与 `desktop-package.yml` 内部打包流水线（无发布私钥、不签名、不建 Release）；维护者确认内部测试先行、OS 签名 Alpha 暂缓、identifier 保持不变，首个内部版本 `0.1.0-alpha.1`。updater、受保护 Release workflow 与公开发行仍属 D5.2-C/D/E 后继。
