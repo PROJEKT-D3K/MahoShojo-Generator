@@ -34,7 +34,7 @@ log = { version = "0.4.34", default-features = false, features = ["max_level_inf
 percent-encoding = "2.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "http2", "charset"] }
 rusqlite = { version = "0.37", features = ["bundled", "blob"] }
-rustls = { version = "0.23.45", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
+rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
 rustls-platform-verifier = { version = "0.7.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
 # raw_value 让本地卡 document 的自由载荷以原始文本保留，而不是实例化成 String。
