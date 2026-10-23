@@ -33,6 +33,8 @@ fn main() {
             "get_provider_profile",
             "delete_provider_profile",
             "validate_provider_execution_profile",
+            "discover_local_ai",
+            "cancel_local_ai_discovery",
             "stream_direct_ai",
             "stream_target_ai",
             "cancel_direct_ai",

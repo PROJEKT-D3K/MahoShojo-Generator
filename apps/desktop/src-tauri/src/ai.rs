@@ -720,7 +720,7 @@ fn build_headers(
     build_headers_for_purpose(profile, secrets, &CredentialPurpose::Custom)
 }
 
-fn build_headers_for_purpose(
+pub(crate) fn build_headers_for_purpose(
     profile: &DirectProviderExecutionProfile,
     secrets: &dyn SecretStore,
     purpose: &CredentialPurpose,

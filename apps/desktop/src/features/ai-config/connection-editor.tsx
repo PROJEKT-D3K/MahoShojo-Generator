@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { requiresExplicitPublicHttpConfirmation } from '@mahoshojo/contracts/provider-profile';
 import type { DirectProviderProfileV1 } from '@mahoshojo/contracts/provider-profile';
+import { ProviderModelIdSchema } from '@mahoshojo/contracts/provider-target';
 import type { AIModelOption } from '@mahoshojo/ai-core/provider-catalog';
 
 import { ProfileDraftError, type ProfileDraft } from '../providers/profile-draft';
@@ -46,8 +47,13 @@ export const draftFromProfile = (profile: DirectProviderProfileV1): ProfileDraft
 export const saveConnectionDraft = async (
   store: DesktopAiConfigStore,
   draft: ProfileDraft,
-  options: { activate?: boolean } = {},
+  options: { activate?: boolean; activateModelId?: string } = {},
 ): Promise<void> => {
+  if (options.activateModelId !== undefined &&
+    (!ProviderModelIdSchema.safeParse(options.activateModelId).success ||
+      options.activateModelId.trim() !== options.activateModelId || options.activateModelId !== draft.modelId)) {
+    throw new ProfileDraftError('modelId', '启用模型必须是本次保存的有效模型 ID');
+  }
   // 阶段一：native 提交事务。只有提交阶段的失败才需要核验候选是否已落盘
   // （DesktopSaveConnectionCommitError 携带本次候选文档）；草稿校验、单飞
   // 互斥拒绝等从未触达持久化的错误原样透传。
@@ -84,7 +90,7 @@ export const saveConnectionDraft = async (
   }
   if (options.activate === true) {
     try {
-      store.activateConnection(draft.id);
+      store.activateConnection(draft.id, options.activateModelId);
     } catch (cause) {
       throw new Error(
         `连接已保存，但启用为当前连接失败：${
@@ -97,7 +103,8 @@ export const saveConnectionDraft = async (
     const selection = store.getSnapshot().selection;
     if (
       selection.executionPreference !== 'client' ||
-      selection.clientConnectionId !== draft.id
+      selection.clientConnectionId !== draft.id ||
+      (options.activateModelId !== undefined && store.getSnapshot().modelsByProfileId[draft.id]?.selectedModelId !== options.activateModelId)
     ) {
       throw new Error(
         '连接已保存，但启用为当前连接失败：配置写入未生效。可在连接列表中对该连接「设为当前」。',

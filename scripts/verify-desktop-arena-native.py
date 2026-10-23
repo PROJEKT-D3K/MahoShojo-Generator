@@ -14,7 +14,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = ROOT / "apps/desktop/src-tauri"
-MODULES = ["ai", "blob", "cloud", "library", "local_card", "maintenance", "provider_profile",
+MODULES = ["local_ai_discovery", "ai", "blob", "cloud", "library", "local_card", "maintenance", "provider_profile",
            "provider_target", "public_cache", "secret", "sse", "store", "web_package",
            "package_path", "arena_hosted", "arena_story", "backup", "restore", "export", "external_link", "arena_room_protocol", "arena_room_state", "arena_room_http",
            "arena_room_socket", "arena_room", "magic_tea_party", "image_asset", "audit", "gc", "hosted_preset", "arena_room_generation"]
@@ -44,6 +44,7 @@ def lock_packages(text):
 
 def source_hashes():
     paths = [PRODUCT / "src" / f"{name}.rs" for name in MODULES + TEST_MODULES + ["arena_hosted_tests", "arena_hosted_json", "arena_hosted_json_tests"]]
+    paths += [PRODUCT / "src/local_ai_discovery_tests.rs", ROOT / "fixtures/local-ai-discovery.json"]
     paths += sorted((PRODUCT / "src").glob("arena_hosted_*.rs"))
     paths += sorted((PRODUCT / "src").glob("arena_story_*.rs"))
     paths += [PRODUCT / "src/magic_tea_party_tests.rs", PRODUCT / "src/magic_tea_party_journey_tests.rs", ROOT / "packages/contracts/fixtures/desktop-magic-tea-party.json"]

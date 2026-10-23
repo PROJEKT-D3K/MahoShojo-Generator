@@ -1,0 +1,177 @@
+{
+  "requests": [
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-ollama",
+      "target": {
+        "kind": "candidate",
+        "candidateId": "ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-lm",
+      "target": {
+        "kind": "candidate",
+        "candidateId": "lm-studio"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "requestId": "profile_1",
+      "target": {
+        "kind": "profile",
+        "profileId": "conn_1"
+      }
+    }
+  ],
+  "responses": [
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-ollama",
+      "outcome": "completed",
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": "qwen3:8b",
+            "label": "Qwen 3",
+            "kind": "unknown",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ],
+        "version": "0.6.0"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "requestId": "cancel_1",
+      "outcome": "cancelled"
+    }
+  ],
+  "invalidRequests": [
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-ollama",
+      "target": {
+        "kind": "candidate",
+        "candidateId": "ollama"
+      },
+      "endpoint": "http://example.com"
+    },
+    {
+      "contractVersion": 1,
+      "requestId": " invalid",
+      "target": {
+        "kind": "candidate",
+        "candidateId": "ollama"
+      }
+    },
+    {
+      "contractVersion": 2,
+      "requestId": "candidate-ollama",
+      "target": {
+        "kind": "candidate",
+        "candidateId": "ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-ollama",
+      "target": {
+        "kind": "candidate",
+        "candidateId": "other"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "requestId": "profile_1",
+      "target": {
+        "kind": "profile",
+        "profileId": "x",
+        "secretRef": "secret"
+      }
+    }
+  ],
+  "invalidResponses": [
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-ollama",
+      "outcome": "completed",
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": "qwen3:8b",
+            "label": "Qwen 3",
+            "kind": "unknown",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ],
+        "version": "0.6.0"
+      },
+      "secret": "leak"
+    },
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-ollama",
+      "outcome": "completed",
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": " qwen3",
+            "label": "Qwen 3",
+            "kind": "unknown",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ],
+        "version": "0.6.0"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-ollama",
+      "outcome": "completed",
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "label": "Qwen 3",
+            "kind": "unknown",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ],
+        "version": "0.6.0"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "requestId": "candidate-ollama",
+      "outcome": "completed",
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": "qwen3:8b",
+            "label": "bad\ntext",
+            "kind": "unknown",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ],
+        "version": "0.6.0"
+      }
+    }
+  ]
+}

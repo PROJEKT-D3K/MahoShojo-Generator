@@ -16,6 +16,8 @@
     "allow-get-provider-profile",
     "allow-delete-provider-profile",
     "allow-validate-provider-execution-profile",
+    "allow-discover-local-ai",
+    "allow-cancel-local-ai-discovery",
     "allow-stream-direct-ai",
     "allow-stream-target-ai",
     "allow-cancel-direct-ai",

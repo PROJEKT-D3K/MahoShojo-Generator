@@ -983,6 +983,45 @@ describe('DesktopAiConfigStore', () => {
     expect(store.getSnapshot().selection).toMatchObject(clientSelection(null));
   });
 
+  it('discovery activation explicitly selects the saved model without changing legacy defaults', async () => {
+    const native = createNativeStub([profileFixture()]);
+    const store = createStore(createStorage(), native.invoke);
+    store.init();
+    await vi.waitFor(() => expect(store.getSnapshot().profilesState).toBe('ready'));
+    store.activateConnection('p_local');
+    store.useInlineModel('remembered-inline');
+    const draft = { id: 'p_local', name: '本地模型', baseUrl: 'http://127.0.0.1:11434/v1', modelId: 'discovered' };
+    await saveConnectionDraft(store, draft, { activate: true });
+    expect(store.getSnapshot().modelsByProfileId.p_local.inlineModelId).toBe('remembered-inline');
+    await saveConnectionDraft(store, draft, { activate: true, activateModelId: 'discovered' });
+    expect(store.getSnapshot().modelsByProfileId.p_local.selectedModelId).toBe('discovered');
+    expect(store.getSnapshot().modelsByProfileId.p_local.inlineModelId).toBeUndefined();
+    const before = store.getSnapshot().selection;
+    const count = native.calls.filter(command => command === 'save_provider_profile').length;
+    await expect(saveConnectionDraft(store, draft, { activate: true, activateModelId: ' different ' })).rejects.toThrow('启用模型');
+    expect(native.calls.filter(command => command === 'save_provider_profile')).toHaveLength(count);
+    expect(store.getSnapshot().selection).toEqual(before);
+  });
+
+  it('discovery model activation failure preserves old selection and reports persisted Profile', async () => {
+    const native = createNativeStub([profileFixture()]);
+    const storage = createStorage();
+    const store = createStore(storage, native.invoke);
+    store.init();
+    await vi.waitFor(() => expect(store.getSnapshot().profilesState).toBe('ready'));
+    store.activateConnection('p_local');
+    const oldSelection = store.getSnapshot().selection;
+    const original = storage.setItem.bind(storage);
+    vi.spyOn(storage, 'setItem').mockImplementation((key, value) => {
+      if (value.includes('"clientTarget":{"kind":"custom","profileId":"discovered_connection"}')) throw new Error('quota exceeded');
+      original(key, value);
+    });
+    await expect(saveConnectionDraft(store, { id: 'discovered_connection', name: '发现连接', baseUrl: 'http://127.0.0.1:1234/v1', modelId: 'discovered' },
+      { activate: true, activateModelId: 'discovered' })).rejects.toThrow('连接已保存，但启用为当前连接失败');
+    expect(native.profiles.get('discovered_connection')?.modelId).toBe('discovered');
+    expect(store.getSnapshot().selection).toEqual(oldSelection);
+  });
+
   it('new-connection save failure leaves no orphan credential behind', async () => {
     const storage = createStorage();
     const native = createNativeStub([], { failProfileSave: true });

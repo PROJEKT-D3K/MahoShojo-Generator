@@ -1,3 +1,4 @@
+import { LocalAiDiscoverySection } from './LocalAiDiscoverySection';
 import { DesktopAiProviderPanel } from './desktop-ai-provider-panel';
 // 产品化 AI 连接面板（D5.0b，取代 D1 的 ProviderProfilesPanel 调试面板）。
 //
@@ -276,6 +277,11 @@ const ConnectionsPanelBody = ({ aiConfig }: { aiConfig: UseDesktopAiConfigResult
     <section className="flex flex-col gap-4 rounded-lg border border-(--app-border) bg-(--app-surface) p-4">
       {deleteError && <p role="alert" className="text-sm text-(--app-accent-strong)">{deleteError}</p>}
       {state.deletingConnection && <p role="status" className="text-sm">正在删除连接及其凭据…</p>}
+      <LocalAiDiscoverySection aiConfig={aiConfig} onManualConfigure={(candidate) => {
+        if (!confirmDiscardEditing()) return;
+        const preset = PROVIDER_PRESETS[candidate === 'ollama' ? 0 : 1];
+        setEditing({ draft: { ...preset, id: newConnectionId() }, presetModels: null, isExisting: false, hasKeyRef: false });
+      }} />
       <fieldset disabled={state.generationActive || state.savingCredential || state.savingConnection || state.deletingConnection} className="contents">
       <header className="flex flex-col gap-1">
         <h2 className="battle-lite-strong-text text-sm font-medium">AI 连接</h2>

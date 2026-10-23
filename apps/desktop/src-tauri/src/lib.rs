@@ -42,6 +42,7 @@ mod ipc_stream;
 #[cfg(test)]
 mod ipc_stream_tests;
 mod library;
+mod local_ai_discovery;
 mod local_card;
 #[cfg(test)]
 mod local_card_contract_tests;
@@ -197,6 +198,29 @@ fn validate_provider_execution_profile(
     document: String,
 ) -> Result<DirectProviderExecutionProfile, provider_profile::ProviderProfileError> {
     DirectProviderExecutionProfile::parse(&document)
+}
+
+/// 显式只读本机服务发现；不接受 renderer endpoint 或凭据覆盖。
+#[tauri::command]
+async fn discover_local_ai(
+    app: tauri::AppHandle,
+    registry: State<'_, local_ai_discovery::DiscoveryRegistry>,
+    request: local_ai_discovery::DiscoveryRequest,
+) -> Result<local_ai_discovery::DiscoveryResponse, local_ai_discovery::DiscoveryError> {
+    local_ai_discovery::discover_with_plan(request, &registry, move |request| {
+        let library = app.state::<LocalLibrary>();
+        let secrets = app.state::<SharedSecretStore>();
+        local_ai_discovery::plan(request, library.profiles(), secrets.inner().as_ref())
+    })
+    .await
+}
+
+#[tauri::command]
+fn cancel_local_ai_discovery(
+    registry: State<'_, local_ai_discovery::DiscoveryRegistry>,
+    request: local_ai_discovery::DiscoveryCancelRequest,
+) -> Result<bool, local_ai_discovery::DiscoveryError> {
+    registry.cancel(&request.request_id)
 }
 
 /// 对已保存的 Profile 发起一次 Direct 流式生成。
@@ -2143,6 +2167,7 @@ pub fn run() {
         .on_page_load(|webview, payload| arena_room_tauri::page_load(webview, payload.event()))
         .manage(secrets)
         .manage(ai::RequestRegistry::default())
+        .manage(local_ai_discovery::DiscoveryRegistry::default())
         .manage(config::ConfigState::default())
         .manage(PendingRestore::default())
         .manage(webpkg_instance::WebPackageInstances::default())
@@ -2256,6 +2281,8 @@ pub fn run() {
             get_provider_profile,
             delete_provider_profile,
             validate_provider_execution_profile,
+            discover_local_ai,
+            cancel_local_ai_discovery,
             stream_direct_ai,
             stream_target_ai,
             cancel_direct_ai,
