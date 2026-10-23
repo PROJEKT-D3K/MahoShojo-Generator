@@ -6,6 +6,7 @@ import {
   countPendingPublicCardsByUserId,
   countPendingPublicCardUpdatesByUserId,
   deletePendingCardUpdateIfUnchanged,
+  hasAutoReviewDecisionForContent,
   insertAutoReviewDecision,
   listLatestPendingPublicCardsByUserId,
   listLatestPendingPublicCardUpdatesByUserId,
@@ -288,14 +289,21 @@ export async function autoReviewLatestPendingPublicDataCardsForUser(
       data: row.data,
       type: row.type,
     };
+    const contentHash = await contentHashOf(row);
     const base = {
       userId,
       targetKind: 'card' as const,
       dataCardId: row.id,
       updateId: null,
-      contentHash: contentHashOf(row),
+      contentHash: Promise.resolve(contentHash),
       reviewedUpdatedAt: row.updatedAt,
     };
+    // 同内容已裁决过：跳过重复审查（并发触发与 lookback 回看都会产生重复裁决）。
+    if (await hasAutoReviewDecisionForContent(db, row.id, contentHash)) {
+      result.heldCount += 1;
+      log.info('自动审查跳过重复裁决', { userId, cardId: row.id });
+      continue;
+    }
     let run: AutoReviewRunResult;
     try {
       run = await engine.review(target);
@@ -429,14 +437,20 @@ export async function autoReviewLatestPendingPublicDataCardUpdatesForUser(
       data: row.data,
       type: row.type,
     };
+    const contentHash = await contentHashOf(row);
     const base = {
       userId,
       targetKind: 'update' as const,
       dataCardId: row.dataCardId,
       updateId: row.updateId,
-      contentHash: contentHashOf(row),
+      contentHash: Promise.resolve(contentHash),
       reviewedUpdatedAt: row.updatedAt,
     };
+    if (await hasAutoReviewDecisionForContent(db, row.dataCardId, contentHash)) {
+      result.heldCount += 1;
+      log.info('更新自动审查跳过重复裁决', { userId, cardId: row.dataCardId, updateId: row.updateId });
+      continue;
+    }
     let run: AutoReviewRunResult;
     try {
       run = await engine.review(target);

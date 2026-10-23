@@ -371,4 +371,55 @@ describe('auto-data-card-review（引擎通路）', () => {
     expect(sqlite.prepare("SELECT data v FROM data_cards WHERE id='card-cw'").get()!.v).toBe('{"text":"别的改动"}');
     expect(sqlite.prepare('SELECT COUNT(*) c FROM data_card_updates').get()!.c).toBe(1);
   });
+
+  it('同内容已裁决：重跑跳过引擎调用且不重复写审计（去重）', async () => {
+    const { sqlite, db } = setup();
+    seedCard(sqlite, 'card-dup', 1);
+    let calls = 0;
+    const deps = {
+      db: db as never,
+      engine: stubEngine({ 'card-dup': { verdict: 'uncertain', score: 0.4 } }, () => { calls += 1; }),
+      policy: basePolicy,
+    };
+    await autoReviewLatestPendingPublicDataCardsForUser(1, deps);
+    expect(calls).toBe(1);
+    const second = await autoReviewLatestPendingPublicDataCardsForUser(1, deps);
+    expect(calls).toBe(1);
+    expect(second.heldCount).toBe(1);
+    expect(sqlite.prepare('SELECT COUNT(*) c FROM auto_review_decisions').get()!.c).toBe(1);
+    expect(sqlite.prepare("SELECT review_status v FROM data_cards WHERE id='card-dup'").get()!.v).toBe('pending');
+  });
+
+  it('内容变更后指纹不同：重新审查并写新审计', async () => {
+    const { sqlite, db } = setup();
+    seedCard(sqlite, 'card-dup2', 1);
+    let calls = 0;
+    const deps = {
+      db: db as never,
+      engine: stubEngine({ 'card-dup2': { verdict: 'uncertain', score: 0.4 } }, () => { calls += 1; }),
+      policy: basePolicy,
+    };
+    await autoReviewLatestPendingPublicDataCardsForUser(1, deps);
+    sqlite.exec(`UPDATE data_cards SET data='{"text":"改过的内容"}', updated_at='2026-01-05' WHERE id='card-dup2'`);
+    await autoReviewLatestPendingPublicDataCardsForUser(1, deps);
+    expect(calls).toBe(2);
+    expect(sqlite.prepare('SELECT COUNT(*) c FROM auto_review_decisions').get()!.c).toBe(2);
+  });
+
+  it('待审更新同内容已裁决：跳过重复审查、更新行保留', async () => {
+    const { sqlite, db } = setup();
+    seedCard(sqlite, 'card-ud', 1, 'approved', 1);
+    seedUpdate(sqlite, 'upd-dup', 'card-ud', 1, '新名', '{"text":"灰区"}');
+    let calls = 0;
+    const deps = {
+      db: db as never,
+      engine: stubEngine({ 'card-ud': { verdict: 'uncertain', score: 0.4 } }, () => { calls += 1; }),
+      policy: basePolicy,
+    };
+    await autoReviewLatestPendingPublicDataCardUpdatesForUser(1, deps);
+    await autoReviewLatestPendingPublicDataCardUpdatesForUser(1, deps);
+    expect(calls).toBe(1);
+    expect(sqlite.prepare('SELECT COUNT(*) c FROM auto_review_decisions').get()!.c).toBe(1);
+    expect(sqlite.prepare('SELECT COUNT(*) c FROM data_card_updates').get()!.c).toBe(1);
+  });
 });

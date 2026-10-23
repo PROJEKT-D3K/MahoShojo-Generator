@@ -339,6 +339,30 @@ export const deletePendingCardUpdateIfUnchanged = async (
 
 /* ── 裁决审计 ────────────────────────────────────────────────────────────── */
 
+/**
+ * 同卡同内容指纹是否已有裁决记录。相同 (name, description, data, type) 重复裁决
+ * 不产生新信息——命中即跳过本次审查（幂等去重），卡保持 pending 等人工或内容变更。
+ * 注意只按内容指纹判重：并发触发与 lookback 回看产生的重复裁决都会被挡下；
+ * 若未来引入 policy_revision，需要把指纹口径一并扩展。
+ */
+export const hasAutoReviewDecisionForContent = async (
+  db: AppDrizzleDb,
+  dataCardId: string,
+  contentHash: string,
+): Promise<boolean> => {
+  const rows = await db
+    .select({ id: autoReviewDecisions.id })
+    .from(autoReviewDecisions)
+    .where(
+      and(
+        eq(autoReviewDecisions.dataCardId, dataCardId),
+        eq(autoReviewDecisions.contentHash, contentHash),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+};
+
 export type AutoReviewDecisionInsert = {
   userId: number;
   targetKind: 'card' | 'update';
