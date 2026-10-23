@@ -69,8 +69,8 @@ describe('Web 包可信同源授权 UI',()=>{
     const input=await fixture();await show(input);const original=container.querySelector('iframe');
     startClock();await click('授权本站同源权限…');await click('继续受限模式');
     expect(container.querySelector('iframe')).toBe(original);expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await click('⬇ 下载生成目标');expect(downloadBlob).toHaveBeenCalled();
-    expect(button('⬇ 下载 Web 包 ZIP').disabled).toBe(false);expect(button('🌐 下载 HTML').disabled).toBe(false);
+    await click('下载生成目标');expect(downloadBlob).toHaveBeenCalled();
+    expect(button('下载 Web 包 ZIP').disabled).toBe(false);expect(button('下载 HTML').disabled).toBe(false);
   });
   it('persistent exact revision trust is local, new behavior requires new approval, and cross-tab revoke is respected',async()=>{
     const initial=await fixture();const newRisk=await fixture('<!doctype html><script>fetch("https://new.example/report")</script>');

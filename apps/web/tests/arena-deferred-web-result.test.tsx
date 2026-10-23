@@ -39,13 +39,13 @@ test('卡片pending/失败/重试仍保留Web同意和导出；仅成功后创�
     expect(container.querySelector('iframe')).toBeNull();
     await click('继续使用 Web');
     expect(container.textContent).toContain('网页预览将在卡片加载完成后显示');
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(fixture.download).toHaveBeenCalledOnce();
     expect(container.querySelector('iframe')).toBeNull();
     await act(async () => { fixture.resolve(); await vi.dynamicImportSettled(); });
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('加载失败');
     expect(container.querySelector('iframe')).toBeNull();
-    await click('🌐 下载 HTML');
+    await click('下载 HTML');
     expect(fixture.download).toHaveBeenCalledTimes(2);
     fixture.fail = false;
     await click('重试加载');
