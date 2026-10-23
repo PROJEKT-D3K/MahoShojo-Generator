@@ -143,9 +143,71 @@ impl Gate {
         }
     }
     fn release(&self) {
-        *self.open.lock().unwrap() = true;
+        *self
+            .open
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
         self.changed.notify_all();
     }
+}
+// Owned by the test, not the blocking worker: unwinding must always release it.
+struct GateReleaseGuard(Arc<Gate>);
+impl Drop for GateReleaseGuard {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+async fn entered(gate: &Gate) {
+    tokio::time::timeout(LAUNCH_BUDGET, gate.entered.notified())
+        .await
+        .expect("cleanup did not enter test gate within the launch budget");
+}
+async fn entered_or_finished<T: std::fmt::Debug>(
+    gate: &Gate,
+    owner: &mut tokio::task::JoinHandle<T>,
+) {
+    tokio::time::timeout(LAUNCH_BUDGET, async {
+        tokio::select! {
+            biased;
+            _ = gate.entered.notified() => {},
+            result = owner => panic!("operation finished before entering test gate: {result:?}"),
+        }
+    })
+    .await
+    .expect("operation did not enter test gate within the launch budget");
+}
+#[tokio::test]
+async fn gate_guard_releases_worker_when_test_panics() {
+    let gate = Arc::new(Gate::default());
+    let _release_gate = GateReleaseGuard(gate.clone());
+    let worker_gate = gate.clone();
+    let worker = tokio::task::spawn_blocking(move || worker_gate.wait());
+    entered(&gate).await;
+    let test_gate = gate.clone();
+    let failed_test = tokio::spawn(async move {
+        let _release_gate = GateReleaseGuard(test_gate);
+        panic!("simulated test assertion failure");
+    })
+    .await;
+    let released_by_guard = *gate.open.lock().unwrap();
+    // Keep this regression test safe even if the guard itself regresses.
+    gate.release();
+    worker.await.unwrap();
+    assert!(failed_test.unwrap_err().is_panic());
+    assert!(released_by_guard);
+}
+#[tokio::test]
+async fn gate_wait_reports_an_owner_that_finished_before_entering() {
+    let result = tokio::spawn(async {
+        let gate = Arc::new(Gate::default());
+        let _release_gate = GateReleaseGuard(gate.clone());
+        let mut owner = tokio::spawn(async { "finished without entering" });
+        entered_or_finished(&gate, &mut owner).await;
+    })
+    .await;
+    let panic = result.unwrap_err().into_panic();
+    let message = panic.downcast_ref::<String>().unwrap();
+    assert!(message.contains("operation finished before entering test gate"));
 }
 struct FakeState {
     address: SocketAddr,
@@ -392,8 +454,9 @@ async fn late_prepare_cancel_and_shutdown_do_not_create_executable_permission() 
     for shutdown in [false, true] {
         let registry = LaunchRegistry::default();
         let gate = Arc::new(Gate::default());
+        let _release_gate = GateReleaseGuard(gate.clone());
         let fake = Arc::new(FakeState::new());
-        let task = {
+        let mut task = {
             let registry = registry.clone();
             let gate = gate.clone();
             let fake = fake.clone();
@@ -407,7 +470,7 @@ async fn late_prepare_cancel_and_shutdown_do_not_create_executable_permission() 
                     .unwrap()
             })
         };
-        gate.entered.notified().await;
+        entered_or_finished(&gate, &mut task).await;
         let pending = registry.status(request()).await.unwrap();
         assert_eq!(pending.state, LaunchPhase::Preparing);
         assert_eq!(
@@ -529,18 +592,19 @@ async fn no_models_and_remote_models_are_ready_not_download_requests() {
 async fn single_flight_duplicate_start_cancel_during_spawn_and_late_invoke() {
     let registry = LaunchRegistry::default();
     let gate = Arc::new(Gate::default());
+    let _release_gate = GateReleaseGuard(gate.clone());
     let fake = Arc::new(FakeState {
         spawn_gate: Some(gate.clone()),
         ..FakeState::new()
     });
     let ticket = prepare(&registry, fake.clone()).await;
-    let task = {
+    let mut task = {
         let registry = registry.clone();
         let ticket = ticket.clone();
         let fake = fake.clone();
         tokio::spawn(async move { start(&registry, &ticket, &fake).await })
     };
-    gate.entered.notified().await;
+    entered_or_finished(&gate, &mut task).await;
     assert_eq!(
         registry
             .start_with(
@@ -640,15 +704,23 @@ async fn cancelling_http_readiness_releases_owned_child_and_no_late_ready() {
         ..FakeState::new()
     });
     let ticket = prepare(&registry, fake.clone()).await;
-    let task = {
+    let mut task = {
         let registry = registry.clone();
         let ticket = ticket.clone();
         let fake = fake.clone();
         tokio::spawn(async move { start(&registry, &ticket, &fake).await })
     };
-    while fake.spawns.load(Ordering::SeqCst) == 0 {
-        tokio::task::yield_now().await;
-    }
+    tokio::time::timeout(LAUNCH_BUDGET, async {
+        while fake.spawns.load(Ordering::SeqCst) == 0 {
+            tokio::select! {
+                biased;
+                result = &mut task => panic!("launch finished before spawning: {result:?}"),
+                _ = tokio::task::yield_now() => {},
+            }
+        }
+    })
+    .await
+    .expect("launch did not spawn within the launch budget");
     registry.cancel(operation(&ticket)).unwrap();
     assert_eq!(task.await.unwrap().state, LaunchPhase::Cancelled);
     assert_eq!(
@@ -661,6 +733,7 @@ async fn cancelling_http_readiness_releases_owned_child_and_no_late_ready() {
 async fn stopping_is_queryable_and_failed_cleanup_retains_handle_until_retry() {
     let registry = LaunchRegistry::default();
     let gate = Arc::new(Gate::default());
+    let _release_gate = GateReleaseGuard(gate.clone());
     let fake = Arc::new(FakeState {
         stop_gate: Some(gate.clone()),
         ..FakeState::new()
@@ -672,7 +745,7 @@ async fn stopping_is_queryable_and_failed_cleanup_retains_handle_until_retry() {
         let request = operation(&ticket);
         tokio::spawn(async move { registry.stop(request).await.unwrap() })
     };
-    gate.entered.notified().await;
+    entered(&gate).await;
     assert_eq!(
         registry.status(request()).await.unwrap().state,
         LaunchPhase::Stopping
@@ -782,8 +855,9 @@ async fn wait_terminal(registry: &LaunchRegistry) -> LaunchSnapshot {
 async fn slow_system_verification_times_out_without_releasing_single_flight_or_spawning() {
     let registry = LaunchRegistry::default();
     let gate = Arc::new(Gate::default());
+    let _release_gate = GateReleaseGuard(gate.clone());
     let fake = Arc::new(FakeState::new());
-    let pending = {
+    let mut pending = {
         let registry = registry.clone();
         let gate = gate.clone();
         let fake = fake.clone();
@@ -797,7 +871,7 @@ async fn slow_system_verification_times_out_without_releasing_single_flight_or_s
                 .unwrap()
         })
     };
-    gate.entered.notified().await;
+    entered_or_finished(&gate, &mut pending).await;
     tokio::time::pause();
     tokio::time::advance(LAUNCH_BUDGET + Duration::from_secs(1)).await;
     let pending_snapshot = pending.await.unwrap();
@@ -821,12 +895,13 @@ async fn slow_system_verification_times_out_without_releasing_single_flight_or_s
 async fn slow_pre_spawn_revalidation_keeps_original_ticket_until_cancelled_worker_returns() {
     let registry = LaunchRegistry::default();
     let gate = Arc::new(Gate::default());
+    let _release_gate = GateReleaseGuard(gate.clone());
     let fake = Arc::new(FakeState {
         spawn_gate: Some(gate.clone()),
         ..FakeState::new()
     });
     let ticket = prepare(&registry, fake.clone()).await;
-    let pending = {
+    let mut pending = {
         let registry = registry.clone();
         let ticket = ticket.clone();
         let fake = fake.clone();
@@ -835,14 +910,17 @@ async fn slow_pre_spawn_revalidation_keeps_original_ticket_until_cancelled_worke
                 .start_with(
                     start_request(&ticket),
                     fake.probe(),
-                    Duration::from_millis(100),
+                    LAUNCH_BUDGET,
                     Duration::from_millis(5),
                 )
                 .await
                 .unwrap()
         })
     };
-    gate.entered.notified().await;
+    entered_or_finished(&gate, &mut pending).await;
+    tokio::time::pause();
+    tokio::time::advance(LAUNCH_BUDGET + Duration::from_secs(1)).await;
+    tokio::time::resume();
     assert_eq!(pending.await.unwrap().state, LaunchPhase::Stopping);
     assert_eq!(
         registry
@@ -868,11 +946,12 @@ async fn lost_waiters_still_revoke_slow_os_checks_at_owner_deadline() {
     for preparing in [true, false] {
         let registry = LaunchRegistry::default();
         let gate = Arc::new(Gate::default());
+        let _release_gate = GateReleaseGuard(gate.clone());
         let fake = Arc::new(FakeState {
             spawn_gate: if preparing { None } else { Some(gate.clone()) },
             ..FakeState::new()
         });
-        let waiter = if preparing {
+        let mut waiter = if preparing {
             let registry = registry.clone();
             let gate = gate.clone();
             let fake = fake.clone();
@@ -901,12 +980,23 @@ async fn lost_waiters_still_revoke_slow_os_checks_at_owner_deadline() {
                     .unwrap()
             })
         };
-        gate.entered.notified().await;
+        entered_or_finished(&gate, &mut waiter).await;
         waiter.abort();
         let _ = waiter.await;
+        let deadline_token = registry
+            .lock()
+            .unwrap()
+            .ticket
+            .as_ref()
+            .unwrap()
+            .token
+            .clone();
         tokio::time::pause();
         tokio::time::advance(LAUNCH_BUDGET + Duration::from_secs(1)).await;
-        tokio::task::yield_now().await;
+        tokio::time::resume();
+        tokio::time::timeout(LAUNCH_BUDGET, deadline_token.cancelled())
+            .await
+            .expect("owner did not revoke the ticket after its deadline");
         let snapshot = registry.status(request()).await;
         let cancelled = registry
             .lock()
@@ -917,7 +1007,6 @@ async fn lost_waiters_still_revoke_slow_os_checks_at_owner_deadline() {
             .token
             .is_cancelled();
         let duplicate = registry.prepare_with(request(), || Ok(None)).await;
-        tokio::time::resume();
         gate.release();
         assert_eq!(snapshot.unwrap().state, LaunchPhase::Stopping);
         assert!(cancelled);
@@ -961,18 +1050,19 @@ async fn startup_failure_keeps_owned_handle_and_first_reason_through_cleanup_ret
 async fn expired_prepare_deadline_does_not_cancel_a_later_start_phase() {
     let registry = LaunchRegistry::default();
     let gate = Arc::new(Gate::default());
+    let _release_gate = GateReleaseGuard(gate.clone());
     let fake = Arc::new(FakeState {
         spawn_gate: Some(gate.clone()),
         ..FakeState::new()
     });
     let ticket = prepare(&registry, fake.clone()).await;
-    let pending = {
+    let mut pending = {
         let registry = registry.clone();
         let ticket = ticket.clone();
         let fake = fake.clone();
         tokio::spawn(async move { start(&registry, &ticket, &fake).await })
     };
-    gate.entered.notified().await;
+    entered_or_finished(&gate, &mut pending).await;
     let snapshot = registry.timeout(
         ticket.operation_id.as_deref().unwrap(),
         LaunchPhase::Preparing,
@@ -996,6 +1086,7 @@ async fn expired_prepare_deadline_does_not_cancel_a_later_start_phase() {
 async fn ui_destroyed_during_failed_cleanup_drops_the_late_owned_job() {
     let registry = LaunchRegistry::default();
     let gate = Arc::new(Gate::default());
+    let _release_gate = GateReleaseGuard(gate.clone());
     let fake = Arc::new(FakeState {
         stop_gate: Some(gate.clone()),
         ..FakeState::new()
@@ -1011,7 +1102,7 @@ async fn ui_destroyed_during_failed_cleanup_drops_the_late_owned_job() {
         let request = operation(&ticket);
         tokio::spawn(async move { registry.stop(request).await.unwrap() })
     };
-    gate.entered.notified().await;
+    entered(&gate).await;
     registry.shutdown();
     let during_shutdown = registry.status(request()).await;
     gate.release();
