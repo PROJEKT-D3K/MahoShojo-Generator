@@ -31,6 +31,11 @@ const matchesMutation = (request: TeaWriteRequest['request'], result: TeaWriteRe
     && result.sessions.length === request.entries.length
     && new Set(result.sessions.map(row => row.instance)).size === result.sessions.length
     && result.sessions.every((row, index) => row.sessionId === request.entries[index]?.session.id && row.revision === 1);
+  if (request.action === 'delete-selected' && result.action === 'delete-selected') return result.operationId === request.operationId
+    && result.sessions.length === request.targets.length && result.sessions.every((row, index) => {
+      const target = request.targets[index]; return target && row.sessionId === target.sessionId && row.instance === target.instance && row.revision === target.expectedRevision;
+    });
+  if (request.action === 'set-pin' && result.action === 'set-pin' && (request.pinned ? result.pinnedAt <= 0 || result.pinnedOrder <= 0 : result.pinnedAt !== 0 || result.pinnedOrder !== 0)) return false;
   if (!('sessionId' in result)) return false;
   const sessionId = request.action === 'create' ? request.session.id : 'sessionId' in request ? request.sessionId : undefined;
   const revision = request.action === 'create' ? 1 : 'expectedRevision' in request

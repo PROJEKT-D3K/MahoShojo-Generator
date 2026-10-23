@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useState, type DragEvent, type ReactNode } from 'react';
+import { isMagicTeaPartyPinned } from '@mahoshojo/domain/magic-tea-party/organization';
 import type { MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
 
 /** Directory previews need names/titles, never full role cards or generation settings. */
@@ -17,6 +18,9 @@ export type MagicTeaPartySessionListProps = {
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
+  selectedSessionIds?: readonly string[];
+  onSelectionChange?: (ids: string[]) => void;
+  onSelectionViewChange?: () => void;
   onToggleSessionPin?: (id: string) => void;
   onReorderPinnedSessions?: (ids: string[]) => void;
   onMergeSession?: (id: string) => void;
@@ -36,6 +40,7 @@ export function MagicTeaPartySessionList({
   sessions, activeSessionId, onCreateSession, onSelectSession, onDeleteSession,
   onToggleSessionPin, onReorderPinnedSessions, onMergeSession, onReturnToParent,
   pinnedCollapsed, recentCollapsed, onPinnedCollapsedChange, onRecentCollapsedChange,
+  selectedSessionIds = [], onSelectionChange, onSelectionViewChange,
   busy = false, listScope = 'all', pagination, children,
 }: MagicTeaPartySessionListProps) {
   const controlId = useId();
@@ -46,8 +51,7 @@ export function MagicTeaPartySessionList({
   const [draggingSessionId, setDraggingSessionId] = useState<string | null>(null);
   const sessionMap = new Map(sessions.map((session) => [session.id, session]));
   const normalizedQuery = searchText.trim().toLowerCase();
-  const isPinned = (session: MagicTeaPartySessionListItem) =>
-    typeof session.pinnedAt === 'number' && Number.isFinite(session.pinnedAt) && session.pinnedAt > 0;
+  const isPinned = isMagicTeaPartyPinned;
   const filteredSessions = useMemo(() => {
     if (!normalizedQuery) return sessions;
     return sessions.filter((session) => {
@@ -129,6 +133,7 @@ export function MagicTeaPartySessionList({
             placeholder={searchLabel}
             value={searchText}
             onChange={(event) => {
+              onSelectionViewChange?.();
               setSearchText(event.target.value);
               setPage(1);
             }}
@@ -144,6 +149,7 @@ export function MagicTeaPartySessionList({
                 className="input-field !h-7 !py-0 !px-2 text-[11px]"
                 value={String(pageSize)}
                 onChange={(event) => {
+                  onSelectionViewChange?.();
                   const next = Number(event.target.value);
                   setPageSize(Number.isFinite(next) ? Math.max(5, Math.min(50, Math.floor(next))) : 10);
                   setPage(1);
@@ -185,6 +191,13 @@ export function MagicTeaPartySessionList({
                       onDragEnd={handleDragEnd}
                       title={allowPinReorder ? '拖拽调整置顶顺序' : undefined}
                     >
+                      {onSelectionChange ? <label className="mb-2 flex items-center gap-2 text-xs text-gray-600">
+                        <input type="checkbox" aria-label={`选择清理 ${session.title}`} checked={selectedSessionIds.includes(session.id)}
+                          disabled={busy || isPinned(session) || session.id === activeSessionId}
+                          onChange={event => { if (!busy && !isPinned(session) && session.id !== activeSessionId) onSelectionChange(event.target.checked
+                            ? [...selectedSessionIds.filter(id => id !== session.id), session.id] : selectedSessionIds.filter(id => id !== session.id)); }} />
+                        {isPinned(session) || session.id === activeSessionId ? '保护中，不参与批量清理' : '选择清理'}
+                      </label> : null}
                       <button type="button" className="block w-full text-left" onClick={() => { if (!busy) onSelectSession(session.id); }}>
                         <div className="flex items-center gap-2">
                           <div className="text-sm font-semibold text-gray-800 line-clamp-1">{session.title}</div>
@@ -272,6 +285,13 @@ export function MagicTeaPartySessionList({
                           : 'border-pink-100 bg-white hover:bg-pink-50/50'
                       }`}
                     >
+                      {onSelectionChange ? <label className="mb-2 flex items-center gap-2 text-xs text-gray-600">
+                        <input type="checkbox" aria-label={`选择清理 ${session.title}`} checked={selectedSessionIds.includes(session.id)}
+                          disabled={busy || isPinned(session) || session.id === activeSessionId}
+                          onChange={event => { if (!busy && !isPinned(session) && session.id !== activeSessionId) onSelectionChange(event.target.checked
+                            ? [...selectedSessionIds.filter(id => id !== session.id), session.id] : selectedSessionIds.filter(id => id !== session.id)); }} />
+                        {isPinned(session) || session.id === activeSessionId ? '保护中，不参与批量清理' : '选择清理'}
+                      </label> : null}
                       <button type="button" className="block w-full text-left" onClick={() => { if (!busy) onSelectSession(session.id); }}>
                         <div className="flex items-center gap-2">
                           <div className="text-sm font-semibold text-gray-800 line-clamp-1">{session.title}</div>
@@ -334,7 +354,7 @@ export function MagicTeaPartySessionList({
           <button
             type="button"
             className="rounded-md border border-gray-200 bg-white px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+            onClick={() => { onSelectionViewChange?.(); setPage((prev) => Math.max(1, prev - 1)); }}
             disabled={currentPage <= 1}
           >
             上一页
@@ -342,7 +362,7 @@ export function MagicTeaPartySessionList({
           <button
             type="button"
             className="rounded-md border border-gray-200 bg-white px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+            onClick={() => { onSelectionViewChange?.(); setPage((prev) => Math.min(totalPages, prev + 1)); }}
             disabled={currentPage >= totalPages}
           >
             下一页

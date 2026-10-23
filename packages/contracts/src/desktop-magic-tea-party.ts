@@ -95,13 +95,15 @@ const generationPlaceholder = TeaMessageDocumentSchema.refine(value => value.rol
   && Object.keys(value).length === 6 && ['id', 'sessionId', 'role', 'content', 'createdAt', 'status'].every(key => Object.hasOwn(value, key)), 'Generation placeholders contain only identity and empty content');
 
 const target = { sessionId: id, instance, expectedRevision: revision };
-const listCursor = z.object({ catalogRevision: revision, updatedAt: integer, id }).strict();
+const listCursor = z.object({ catalogRevision: revision, pinnedAt: integer, pinnedOrder: integer, updatedAt: integer, id }).strict().refine(value => value.pinnedAt > 0 || value.pinnedOrder === 0);
 const messageCursor = z.object({ ordinal: revision, id }).strict();
 const importEntry = z.object({ session: TeaSessionDocumentSchema, messages: z.array(TeaMessageDocumentSchema).max(DESKTOP_TEA_LIMITS.importMessages) }).strict();
 const writeOperation = z.discriminatedUnion('action', [
   z.object({ action: z.literal('create'), session: TeaSessionDocumentSchema }).strict(),
   z.object({ action: z.literal('update'), ...target, session: TeaSessionDocumentSchema }).strict(),
   z.object({ action: z.literal('delete'), ...target }).strict(),
+  z.object({ action: z.literal('set-pin'), ...target, operationId: id, pinned: z.boolean() }).strict(),
+  z.object({ action: z.literal('delete-selected'), operationId: id, targets: z.array(z.object(target).strict()).min(1).max(DESKTOP_TEA_LIMITS.directoryRows) }).strict(),
   z.object({ action: z.literal('import'), operationId: id, entries: z.array(importEntry).min(1).max(DESKTOP_TEA_LIMITS.importSessions) }).strict(),
   z.object({ action: z.literal('begin-generation'), ...target, operationId: id, session: TeaSessionDocumentSchema, userMessage: TeaMessageDocumentSchema.nullable(), assistantMessage: generationPlaceholder }).strict(),
   z.object({ action: z.literal('finish-generation'), ...target, operationId: id, beginOperationId: id, session: TeaSessionDocumentSchema, assistantMessage: TeaMessageDocumentSchema }).strict(),
@@ -110,6 +112,7 @@ export const TeaWriteRequestSchema = z.object({ version: z.literal(1), request: 
   .refine(value => boundedJson({ request: value }, DESKTOP_TEA_LIMITS.writeBytes, DESKTOP_TEA_LIMITS.envelopeNodes), 'Tea write exceeds the local transport boundary')
   .superRefine(({ request }, context) => {
     const invalid = () => context.addIssue({ code: 'custom', message: 'Tea record identities or generation state disagree' });
+    if (request.action === 'delete-selected' && new Set(request.targets.map(row => row.sessionId)).size !== request.targets.length) invalid();
     if (request.action === 'import') {
       const sessions = new Set<string>(); const messages = new Set<string>(); let count = 0;
       for (const entry of request.entries) {
@@ -132,27 +135,29 @@ const readOperation = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list'), cursor: listCursor.nullable(), expectedCatalogRevision: revision.nullable(), limit: integer.min(1).max(DESKTOP_TEA_LIMITS.directoryRows) }).strict(),
   z.object({ action: z.literal('session'), sessionId: id, expectedCatalogRevision: revision.nullable() }).strict(),
   z.object({ action: z.literal('messages'), ...target, cursor: messageCursor.nullable(), expectedCatalogRevision: revision.nullable(), limit: integer.min(1).max(DESKTOP_TEA_LIMITS.messageRows) }).strict(),
-  z.object({ action: z.literal('receipt'), write: TeaWriteRequestSchema.refine(value => ['import', 'begin-generation', 'finish-generation'].includes(value.request.action)) }).strict(),
+  z.object({ action: z.literal('receipt'), write: TeaWriteRequestSchema.refine(value => ['import', 'begin-generation', 'finish-generation', 'set-pin', 'delete-selected'].includes(value.request.action)) }).strict(),
 ]);
 export const TeaReadRequestSchema = z.object({ version: z.literal(1), request: readOperation }).strict()
   .refine(value => boundedJson({ request: value }, value.request.action === 'receipt' ? DESKTOP_TEA_LIMITS.receiptReadBytes : 4096, value.request.action === 'receipt' ? DESKTOP_TEA_LIMITS.envelopeNodes + 8 : 100, value.request.action === 'receipt' ? DESKTOP_TEA_LIMITS.depth + 4 : DESKTOP_TEA_LIMITS.depth), 'Tea read request exceeds the local transport boundary');
 
 export const TeaHeadSchema = z.object({
   id, instance, revision, title: preview, titleTruncated: z.boolean(), createdAt: integer, updatedAt: integer,
-  messageCount: integer, roleNames: z.array(preview).max(8), roleCount: integer, scenarioTitle: preview.nullable(),
+  pinnedAt: integer, pinnedOrder: integer, messageCount: integer, roleNames: z.array(preview).max(8), roleCount: integer, scenarioTitle: preview.nullable(),
 }).strict();
 const saved = z.object({ sessionId: id, instance, revision }).strict();
 const mutationResult = z.discriminatedUnion('action', [
   saved.extend({ action: z.literal('create'), revision: z.literal(1) }).strict(),
   saved.extend({ action: z.literal('update') }).strict(),
   saved.extend({ action: z.literal('delete') }).strict(),
+  saved.extend({ action: z.literal('set-pin'), operationId: id, pinnedAt: integer, pinnedOrder: integer }).strict(),
+  z.object({ action: z.literal('delete-selected'), operationId: id, sessions: z.array(saved).min(1).max(DESKTOP_TEA_LIMITS.directoryRows) }).strict(),
   z.object({ action: z.literal('import'), operationId: id, sessions: z.array(saved.extend({ revision: z.literal(1) })).min(1).max(DESKTOP_TEA_LIMITS.importSessions) }).strict(),
   saved.extend({ action: z.literal('begin-generation'), operationId: id, assistantMessageId: id }).strict(),
   saved.extend({ action: z.literal('finish-generation'), operationId: id, assistantMessageId: id }).strict(),
 ]);
 export const TeaReceiptSchema = z.object({ operationId: id, digest: z.string().regex(/^[a-f0-9]{64}$/u), result: mutationResult }).strict()
   .refine(value => 'operationId' in value.result && value.result.operationId === value.operationId
-    && (value.result.action !== 'import' || (new Set(value.result.sessions.map(row => row.sessionId)).size === value.result.sessions.length
+    && ((value.result.action !== 'import' && value.result.action !== 'delete-selected') || (new Set(value.result.sessions.map(row => row.sessionId)).size === value.result.sessions.length
       && new Set(value.result.sessions.map(row => row.instance)).size === value.result.sessions.length)));
 const readResult = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list'), catalogRevision: revision, rows: z.array(TeaHeadSchema).max(DESKTOP_TEA_LIMITS.directoryRows), nextCursor: listCursor.nullable() }).strict(),

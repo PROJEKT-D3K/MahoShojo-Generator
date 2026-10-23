@@ -7,10 +7,11 @@ import { MarkdownBlock } from '@mahoshojo/ui-web/markdown';
 import {
   useSessionSidebarPreference, MagicTeaPartyPageView, MagicTeaPartyHero, MagicTeaPartySessionList, MagicTeaPartySessionSetupPanel,
   MagicTeaPartyOutputPreferencesPanel, MagicTeaPartyTransferPanel, MagicTeaPartyChatTimeline,
-  MagicTeaPartyChatComposer, MagicTeaPartyChatMessage, MagicTeaPartySummaryBody, MagicTeaPartyRoleEditor,
+  MagicTeaPartyChatComposer, MagicTeaPartyChatMessage, MagicTeaPartySummaryBody, MagicTeaPartyRoleEditor, MagicTeaPartyPresetPicker,
 } from '@mahoshojo/ui-web/magic-tea-party';
 import { applyMagicTeaPartyRoleDraft, sameMagicTeaPartyRoleSource } from '@mahoshojo/domain/magic-tea-party/role-editor';
-import { DesktopTeaSession, type DesktopTeaIntent } from '../features/magic-tea-party/session';
+import { projectMagicTeaPartyPreset, type MagicTeaPartyPresetId } from '@mahoshojo/ai-core/magic-tea-party';
+import { DesktopTeaSession, type DesktopTeaIntent, type TeaCleanupSelection } from '../features/magic-tea-party/session';
 import { TEA_PREFERENCES, teaMessageView, teaSessionView } from '../features/magic-tea-party/direct';
 import { parseDesktopTeaRoles, parseDesktopTeaScenarios } from '../features/magic-tea-party/source';
 import { createIpcTeaNativePort } from '../platform/magic-tea-party-native';
@@ -34,6 +35,10 @@ export default function MagicTeaPartyPage() {
   const [providerDirty, setProviderDirty] = useState(false);
   const preparing = useRef(false); const [preparingView, setPreparingView] = useState(false); const pasteDirty = useRef(false);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; incarnation: number; instance: string; revision: number } | null>(null);
+  const [selectedSessions, setSelectedSessions] = useState<string[]>([]);
+  const [cleanup, setCleanup] = useState<TeaCleanupSelection | null>(null);
+  const [presetPreview, setPresetPreview] = useState<{ id: MagicTeaPartyPresetId; record: NonNullable<typeof state.record>; incarnation: number } | null>(null);
+  useEffect(() => { setSelectedSessions([]); setCleanup(null); }, [state.directory, state.incarnation]);
   const mounted = useRef(true);
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [roleHasDraft, setRoleHasDraft] = useState(false);
@@ -128,15 +133,35 @@ export default function MagicTeaPartyPage() {
   return <MagicTeaPartyPageView
     hero={<MagicTeaPartyHero globalError={state.error ?? guard.message} description="本地文本茶会 · 角色与情景、Direct 发送 / 停止 / 续写、事务保存与 JSON / JSONL 导入导出" homeLink={<Link to="/" className="text-sm text-pink-700 hover:underline">返回首页</Link>} />}
     sidebar={<aside className="space-y-4">
-      <MagicTeaPartySessionList sessions={state.directory.map(head => ({ id: head.id, title: head.title, updatedAt: head.updatedAt,
+      <MagicTeaPartyPresetPicker selectedPresetId={session?.settings.presetId} disabled={disabled || providerDirty || roleHasDraft}
+        onCreateSession={id => { if (!disabled && !providerDirty && !roleDirty.current && !pasteDirty.current) run(() => owner.create(id)); }}
+        onSelectPreset={state.record ? id => { if (!disabled && !providerDirty && !roleDirty.current && !pasteDirty.current && state.record) setPresetPreview({ id, record: state.record, incarnation: state.incarnation }); } : undefined}
+        preview={presetPreview && presetPreview.record === state.record && presetPreview.incarnation === state.incarnation
+          ? projectMagicTeaPartyPreset(presetPreview.record.session, presetPreview.id) : null}
+        onCancelPreset={() => setPresetPreview(null)} onConfirmPreset={() => {
+          if (disabled || providerDirty || roleDirty.current || pasteDirty.current || !presetPreview) return;
+          const preview = presetPreview; setPresetPreview(null); run(() => owner.applyPreset(preview.id, preview.record, preview.incarnation));
+        }} />
+      <MagicTeaPartySessionList sessions={state.directory.map(head => ({ id: head.id, title: head.title, updatedAt: head.updatedAt, pinnedAt: head.pinnedAt,
         roles: head.roleNames.map(name => ({ name })), ...(head.scenarioTitle ? { scenario: { title: head.scenarioTitle } } : {}) }))}
-        activeSessionId={session?.id ?? null} onCreateSession={() => run(owner.create)} onSelectSession={id => run(() => owner.select(id))}
-        onDeleteSession={deleteActive} pinnedCollapsed={pinnedCollapsed} recentCollapsed={recentCollapsed}
+        activeSessionId={session?.id ?? null} onCreateSession={() => { if (!providerDirty && !roleDirty.current && !pasteDirty.current) run(() => owner.create()); }} onSelectSession={id => { if (!providerDirty && !roleDirty.current && !pasteDirty.current) run(() => owner.select(id)); }}
+        onDeleteSession={deleteActive} onToggleSessionPin={id => { const head = state.directory.find(row => row.id === id); if (head) run(() => owner.setPin(id, head.pinnedAt === 0)); }}
+        selectedSessionIds={selectedSessions} onSelectionChange={ids => { setSelectedSessions(ids); setCleanup(null); }}
+        onSelectionViewChange={() => { setSelectedSessions([]); setCleanup(null); }} pinnedCollapsed={pinnedCollapsed} recentCollapsed={recentCollapsed}
         onPinnedCollapsedChange={setPinnedCollapsed} onRecentCollapsedChange={setRecentCollapsed} busy={disabled} listScope="loaded"
-        pagination={<div className="flex flex-wrap gap-2">
+        pagination={<div className="space-y-3">
+          <p className="text-xs text-(--app-text-muted)">清理仅限当前已加载的最多 50 个会话，默认保护置顶及当前会话。不自动清理，也不调整置顶拖拽顺序。</p>
+          <Button size="sm" disabled={disabled || !selectedSessions.length} onClick={() => setCleanup(owner.prepareCleanup(selectedSessions))}>预览清理 {selectedSessions.length} 个会话</Button>
+          {cleanup && cleanup.directory === state.directory && cleanup.incarnation === state.incarnation ? <div role="alert" className="space-y-2 rounded-lg border border-red-200 p-3 text-sm">
+            <p>将永久删除以下 {cleanup.targets.length} 个会话及全部消息，不能撤销；恢复需要已有整库备份：</p>
+            <ul>{cleanup.targets.map((target, index) => <li key={target.sessionId}>{cleanup.titles[index]}（{target.sessionId}）</li>)}</ul>
+            <Button variant="danger" size="sm" disabled={disabled} onClick={() => { const selection = cleanup; setCleanup(null); setSelectedSessions([]); run(() => owner.deleteSelected(selection)); }}>确认清理所选会话</Button>
+            <Button size="sm" onClick={() => setCleanup(null)}>取消清理</Button>
+          </div> : null}
+          <div className="flex flex-wrap gap-2">
           <Button size="sm" disabled={disabled} onClick={() => run(() => owner.refreshDirectory())}><RefreshCw className="size-4 shrink-0" aria-hidden="true" />刷新首页</Button>
           <Button size="sm" disabled={disabled || !state.directoryCursor} onClick={() => run(() => owner.refreshDirectory(true))}><ChevronRight className="size-4 shrink-0" aria-hidden="true" />下一批会话</Button>
-        </div>} />
+        </div></div>} />
       <MagicTeaPartyTransferPanel activeTitle={session?.title ?? null} busy={disabled} error={null} notice={state.notice}
         onImportFile={importArchive} onExportSession={() => exportArchive('json')} onExportSessionJsonl={() => exportArchive('jsonl')} onExportArchive={() => exportArchive('archive')} />
       <fieldset disabled={disabled} className="min-w-0"><DesktopAiProviderPanel generationMode="stream" showConnectionTest={false} onDirtyChange={setProviderDirty}
@@ -156,7 +181,7 @@ export default function MagicTeaPartyPage() {
       onEditRole={(id, trigger) => { if (!disabled) { roleTrigger.current = trigger; setEditingRoleId(id); } }}
       onUpdateRoles={roles => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ roles })); }} onUpdateScenarios={(scenario, auxScenarios) => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ scenario, auxScenarios })); }}
       onUpdatePlayerRole={playerRoleId => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ playerRoleId })); }} onUpdateTitle={title => { if (currentScope() === renderScope && !disabled) owner.stageTitle(title); }}
-      onLockTitle={() => run(() => owner.update({ titleMeta: { source: 'manual' } }))} onCreateSession={() => run(owner.create)} />}
+      onLockTitle={() => run(() => owner.update({ titleMeta: { source: 'manual' } }))} onCreateSession={() => { if (!providerDirty && !roleDirty.current && !pasteDirty.current) run(() => owner.create()); }} />}
     beforeChat={<>
       {roleHasDraft && !editingRole ? <p role="status" className="text-sm text-(--app-text-muted)">有未保存的角色修改，重新打开对应角色可继续编辑。</p> : null}
       <section hidden={!editingRole && !roleHasDraft} className="rounded-xl border border-(--app-border-strong) bg-(--app-surface) p-4 space-y-3">

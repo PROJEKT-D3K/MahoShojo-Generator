@@ -297,6 +297,7 @@ fn generation_placeholder_rejects_extensions_without_creating_unrecoverable_rows
     let before = snapshot(&c);
     assert_eq!(store.mutate(request(operation)), Err(TeaError::Invalid));
     assert_eq!(snapshot(&c), before);
+    assert!(verify_schema(&lock_connection(&c).unwrap(), 11).is_ok());
 }
 #[test]
 fn omitted_and_null_optional_user_have_same_native_receipt_normalization() {
@@ -322,6 +323,7 @@ fn omitted_and_null_optional_user_have_same_native_receipt_normalization() {
     );
     assert_eq!(store.mutate(null).unwrap(), done);
     assert_eq!(snapshot(&c), before);
+    assert!(verify_schema(&lock_connection(&c).unwrap(), 11).is_ok());
 }
 #[test]
 fn catalog_and_session_cursors_fence_every_page_and_same_id_recreation() {
@@ -407,6 +409,7 @@ fn maintenance_and_safe_integer_overflow_fail_without_partial_commit() {
     let before = snapshot(&c);
     assert_eq!(store.mutate(import("a")), Err(TeaError::TooLarge));
     assert_eq!(snapshot(&c), before);
+    assert!(verify_schema(&lock_connection(&c).unwrap(), 11).is_ok());
 }
 
 fn padded_message(sid: &str, mid: &str, bytes: usize) -> Value {
@@ -678,3 +681,251 @@ fn real_deferred_commit_failure_rolls_back_all_tables_and_allows_exact_storage_r
 
 #[path = "magic_tea_party_journey_tests.rs"]
 mod journey;
+
+fn pin_write(store: &TeaStore, sid: &str, pinned: bool, operation: &str) -> Value {
+    let mut value = target_request("set-pin", sid, &head(store, sid));
+    value["operationId"] = json!(operation);
+    value["pinned"] = json!(pinned);
+    request(value)
+}
+fn selected_write(store: &TeaStore, ids: &[&str], operation: &str) -> Value {
+    request(
+        json!({"action":"delete-selected","operationId":operation,"targets":ids.iter().map(|sid| {
+        let h = head(store, sid); json!({"sessionId":sid,"instance":h["instance"],"expectedRevision":h["revision"]})
+    }).collect::<Vec<_>>()}),
+    )
+}
+#[test]
+fn organization_pin_is_narrow_receipted_and_busy_safe() {
+    let (c, store) = setup();
+    create(&store, "a");
+    create(&store, "b");
+    let original = head(&store, "a")["session"].clone();
+    let write = pin_write(&store, "a", true, "pin-a");
+    let result = store.mutate(write.clone()).unwrap();
+    assert!(result["result"]["pinnedAt"].as_i64().unwrap() > 0);
+    let mut updated = head(&store, "a")["session"].clone();
+    updated.as_object_mut().unwrap().remove("pinnedAt");
+    updated.as_object_mut().unwrap().remove("pinnedOrder");
+    assert_eq!(updated, original);
+    assert_eq!(store.mutate(write.clone()).unwrap(), result);
+    assert_eq!(
+        receipt(&store, write.clone()).unwrap()["result"]["receipt"]["result"],
+        result["result"]
+    );
+    let mut changed = write;
+    changed["request"]["pinned"] = json!(false);
+    assert_eq!(
+        store.mutate(changed).unwrap_err(),
+        TeaError::OperationMismatch
+    );
+    store
+        .mutate(pin_write(&store, "a", false, "unpin-a"))
+        .unwrap();
+    assert_eq!(head(&store, "a")["session"], original);
+    begin(&store, "b");
+    let before = snapshot(&c);
+    assert_eq!(
+        store
+            .mutate(pin_write(&store, "b", true, "busy-pin"))
+            .unwrap_err(),
+        TeaError::Busy
+    );
+    assert_eq!(
+        store
+            .mutate(request(target_request("delete", "b", &head(&store, "b"))))
+            .unwrap_err(),
+        TeaError::Busy
+    );
+    assert_eq!(snapshot(&c), before);
+    assert!(verify_schema(&lock_connection(&c).unwrap(), 11).is_ok());
+}
+#[test]
+fn selected_cleanup_checks_entire_batch_before_writing_and_replays_only_receipt() {
+    let (c, store) = setup();
+    create(&store, "a");
+    create(&store, "b");
+    let stale = selected_write(&store, &["a", "b"], "stale");
+    store.mutate(pin_write(&store, "b", true, "pin")).unwrap();
+    let before = snapshot(&c);
+    assert_eq!(store.mutate(stale).unwrap_err(), TeaError::Stale);
+    assert_eq!(
+        store
+            .mutate(selected_write(&store, &["a", "b"], "pinned"))
+            .unwrap_err(),
+        TeaError::Invalid
+    );
+    assert_eq!(snapshot(&c), before);
+    store
+        .mutate(pin_write(&store, "b", false, "unpin"))
+        .unwrap();
+    begin(&store, "b");
+    let before = snapshot(&c);
+    assert_eq!(
+        store
+            .mutate(selected_write(&store, &["a", "b"], "busy"))
+            .unwrap_err(),
+        TeaError::Busy
+    );
+    assert_eq!(snapshot(&c), before);
+    let h = head(&store, "b");
+    store.mutate(finish("b", &h, "done")).unwrap();
+    let write = selected_write(&store, &["a", "b"], "delete-both");
+    let result = store.mutate(write.clone()).unwrap();
+    assert!(list(&store)["rows"].as_array().unwrap().is_empty());
+    create(&store, "a"); // receipt replay must not delete a new instance with the same ID.
+    assert_eq!(store.mutate(write.clone()).unwrap(), result);
+    assert!(!head(&store, "a").is_null());
+    assert_eq!(
+        receipt(&store, write).unwrap()["result"]["receipt"]["result"],
+        result["result"]
+    );
+}
+#[test]
+fn organization_keyset_spans_pinned_pages_and_preserves_legacy_json_and_preview() {
+    let (c, store) = setup();
+    for i in 0..112 {
+        let mut doc = session(&format!("s{i:03}"));
+        doc["updatedAt"] = json!(i + 1);
+        if i < 61 {
+            doc["pinnedAt"] = json!(100);
+            doc["pinnedOrder"] = json!(i + 1);
+        }
+        if i == 111 {
+            doc["pinnedAt"] = json!("legacy-invalid");
+            doc["pinnedOrder"] = json!({"keep":true});
+        }
+        store
+            .mutate(request(json!({"action":"create","session":doc})))
+            .unwrap();
+    }
+    let before = head(&store, "s111")["session"].clone();
+    let mut cursor = Value::Null;
+    let mut ids = Vec::new();
+    loop {
+        let page = store
+            .read(request(
+                json!({"action":"list","cursor":cursor,"expectedCatalogRevision":null,"limit":17}),
+            ))
+            .unwrap();
+        ids.extend(
+            page["result"]["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_owned()),
+        );
+        cursor = page["result"]["nextCursor"].clone();
+        if cursor.is_null() {
+            break;
+        }
+    }
+    let expected: Vec<_> = (0..61)
+        .rev()
+        .chain((61..112).rev())
+        .map(|i| format!("s{i:03}"))
+        .collect();
+    assert_eq!(ids, expected);
+    assert_eq!(head(&store, "s111")["session"], before);
+    assert!(verify_schema(&lock_connection(&c).unwrap(), 11).is_ok());
+    let cursor = list(&store)["nextCursor"].clone();
+    store
+        .mutate(pin_write(&store, "s111", true, "pin-last"))
+        .unwrap();
+    assert_eq!(list(&store)["rows"][0]["id"], "s111");
+    assert_eq!(
+        store
+            .read(request(
+                json!({"action":"list","cursor":cursor,"expectedCatalogRevision":null,"limit":50})
+            ))
+            .unwrap_err(),
+        TeaError::Stale
+    );
+}
+#[test]
+fn directory_matches_shared_web_organization_order_fixture() {
+    let (_, store) = setup();
+    let fixture = fixture();
+    for fields in fixture["organizationOrder"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+    {
+        let mut doc = session(fields["id"].as_str().unwrap());
+        for (key, value) in fields.as_object().unwrap() {
+            doc[key] = value.clone();
+        }
+        store
+            .mutate(request(json!({"action":"create","session":doc})))
+            .unwrap();
+    }
+    let actual: Vec<_> = list(&store)["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].clone())
+        .collect();
+    assert_eq!(json!(actual), fixture["organizationExpected"]);
+}
+
+// Explicit synthetic evaluation, not a constant-time promise or a user-library benchmark.
+#[test]
+#[ignore]
+fn organization_directory_query_cost() {
+    for (count, bytes) in [(2000, 1024), (2000, 65536), (128, 1048576)] {
+        let (c, store) = setup();
+        {
+            let c = lock_connection(&c).unwrap();
+            transaction(&c, true, || {
+                for i in 0..count {
+                    let mut doc = session(&format!("perf-{i:06}"));
+                    doc["padding"] = json!("x".repeat(bytes));
+                    doc["pinnedAt"] = json!(i % 2 * 10);
+                    doc["pinnedOrder"] = json!(i);
+                    insert_session(&c, &doc)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+            let sql = format!("EXPLAIN QUERY PLAN {}", directory_sql());
+            let mut query = c.prepare(&sql).unwrap();
+            let plan = query
+                .query_map(params![false, 0, 0, 0, "", 51], |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            eprintln!("Tea directory query plan ({count} x {bytes}): {plan:?}");
+        }
+        let start = std::time::Instant::now();
+        let first = list(&store);
+        let first_ms = start.elapsed().as_millis();
+        let start = std::time::Instant::now();
+        let second = store.read(request(json!({"action":"list","cursor":first["nextCursor"],"expectedCatalogRevision":null,"limit":50}))).unwrap();
+        eprintln!(
+            "Tea directory synthetic {count} x {bytes} bytes: first {first_ms}ms, second {}ms",
+            start.elapsed().as_millis()
+        );
+        assert_eq!(first["rows"].as_array().unwrap().len(), 50);
+        assert_eq!(second["result"]["rows"].as_array().unwrap().len(), 50);
+    }
+}
+#[test]
+fn selected_cleanup_late_sql_failure_rolls_back_first_delete_and_receipt() {
+    let (c, store) = setup();
+    create(&store, "a");
+    create(&store, "b");
+    let write = selected_write(&store, &["a", "b"], "late-cleanup");
+    let before = snapshot(&c);
+    lock_connection(&c).unwrap().execute_batch("CREATE TRIGGER fail_selected BEFORE DELETE ON magic_tea_session WHEN OLD.id='b' BEGIN SELECT RAISE(ABORT,'synthetic'); END;").unwrap();
+    assert_eq!(store.mutate(write.clone()).unwrap_err(), TeaError::Io);
+    assert_eq!(snapshot(&c), before);
+    assert!(receipt(&store, write.clone()).unwrap()["result"]["receipt"].is_null());
+    lock_connection(&c)
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_selected")
+        .unwrap();
+    store.mutate(write).unwrap();
+    assert!(list(&store)["rows"].as_array().unwrap().is_empty());
+    verify_schema(&lock_connection(&c).unwrap(), 12).unwrap();
+}

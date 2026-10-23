@@ -46,14 +46,14 @@ beforeEach(() => {
     if (command === 'list_local_cards' || command === 'list_web_packages') return { documents: [] };
     if (command === 'read_magic_tea_party') {
       const request = TeaReadRequestSchema.parse(args.request).request;
-      if (request.action === 'list') return { version: 1, result: { action: 'list', catalogRevision: revision, rows: document ? [{ id: document.id, instance, revision, title: document.title, titleTruncated: false, createdAt: document.createdAt, updatedAt: document.updatedAt, messageCount: messages.length, roleNames: document.roles.map(role => role.name), roleCount: document.roles.length, scenarioTitle: null }] : [], nextCursor: null } };
+      if (request.action === 'list') return { version: 1, result: { action: 'list', catalogRevision: revision, rows: document ? [{ id: document.id, instance, revision, title: document.title, titleTruncated: false, pinnedAt: 0, pinnedOrder: 0, createdAt: document.createdAt, updatedAt: document.updatedAt, messageCount: messages.length, roleNames: document.roles.map(role => role.name), roleCount: document.roles.length, scenarioTitle: null }] : [], nextCursor: null } };
       if (request.action === 'session') return { version: 1, result: { action: 'session', catalogRevision: revision, record: document ? { session: document, instance, revision } : null } };
       if (request.action === 'messages') return { version: 1, result: { action: 'messages', catalogRevision: revision, sessionId: document!.id, instance, revision, rows: messages.map((message, index) => ({ ordinal: index + 1, message })), nextCursor: null } };
       throw new Error('unconfigured read');
     }
     if (command === 'mutate_magic_tea_party') {
       const request = TeaWriteRequestSchema.parse(args.request).request;
-      if (request.action === 'import') throw new Error('not used by page fixture');
+      if (request.action === 'import' || request.action === 'set-pin' || request.action === 'delete-selected') throw new Error('not used by page fixture');
       revision = request.action === 'create' ? 1 : request.expectedRevision + (request.action === 'delete' ? 0 : 1);
       const sessionId = request.action === 'create' ? request.session.id : request.sessionId;
       if (request.action === 'delete') { document = null; messages = []; } else document = request.session;
@@ -660,4 +660,45 @@ it('keeps successful role receipts across name-only and cleared-notes saves usin
   expect(streams).toBe(0);
   await act(async () => { await router.navigate({ to: '/settings' }); });
   expect(container.querySelector('[data-testid="page-settings"]')).toBeTruthy();
+});
+
+
+it('previews an existing preset, cancels without writes, then applies one CAS', async () => {
+  await mount(); await click('新建会话');
+  const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  const choose = () => act(async () => container.querySelector<HTMLButtonElement>('button[title="预览并应用预设"]')!.click());
+  await choose();
+  expect(container.textContent).toContain('预览');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+  await click('返回，不更改');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+  await choose(); await click('确认应用预设');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before + 1);
+  expect(document?.settings.presetId).toBe('arena-classic');
+});
+
+it('cancels actual loaded-selection cleanup without a write and invalidates confirmation when search changes', async () => {
+  await mount(); await click('新建会话');
+  const original = native.invoke.getMockImplementation()!;
+  native.invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+    const response = await original(command, args);
+    if (command === 'read_magic_tea_party' && (args.request as { request?: { action?: string } }).request?.action === 'list') {
+      response.result.rows.push({ id: 'other', instance: 'b'.repeat(32), revision: 1, title: '其他会话', titleTruncated: false,
+        createdAt: 1, updatedAt: 1, pinnedAt: 0, pinnedOrder: 0, messageCount: 0, roleCount: 0, roleNames: [], scenarioTitle: null });
+    }
+    return response;
+  });
+  await click('刷新首页');
+  await change('textarea[placeholder^="输入你的行动"]', '未保存当前草稿');
+  const writes = () => native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  const before = writes();
+  const select = () => act(async () => container.querySelector<HTMLInputElement>('input[aria-label="选择清理 其他会话"]')!.click());
+  await select(); await click('预览清理 1 个会话');
+  expect(container.textContent).toContain('将永久删除以下 1 个会话');
+  await click('取消清理'); expect(writes()).toBe(before);
+  expect(container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!.value).toBe('未保存当前草稿');
+  await click('预览清理 1 个会话');
+  await change('input[placeholder="搜索已加载会话标题 / 角色 / 情景"]', '其他');
+  expect(container.textContent).not.toContain('将永久删除以下');
+  expect(button('预览清理 0 个会话').disabled).toBe(true); expect(writes()).toBe(before);
 });

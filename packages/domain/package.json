@@ -239,6 +239,7 @@
     "./tavern-card/recommend": "./src/tavern-card/recommend.ts",
     "./magic-tea-party/player-identity": "./src/magic-tea-party/player-identity.ts",
     "./magic-tea-party/role-editor": "./src/magic-tea-party/role-editor.ts",
+    "./magic-tea-party/organization": "./src/magic-tea-party/organization.ts",
     "./magic-tea-party/types": "./src/magic-tea-party/types.ts",
     "./magic-tea-party/transfer": "./src/magic-tea-party/transfer.ts",
     "./magic-tea-party/import-plan": "./src/magic-tea-party/import-plan.ts",

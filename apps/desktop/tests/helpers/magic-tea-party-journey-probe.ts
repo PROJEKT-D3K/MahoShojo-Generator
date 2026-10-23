@@ -34,6 +34,8 @@ export type MagicTeaPartyJourneyProbeOptions = {
   root?: string;
   timeoutMs?: number;
   keepRoot?: boolean;
+  /** Bounded synthetic process diagnostics, useful for old-reader compatibility assertions. */
+  onDiagnostic?: (_text: string) => void;
 };
 
 export async function startMagicTeaPartyJourneyProbe(options: MagicTeaPartyJourneyProbeOptions = {}): Promise<MagicTeaPartyJourneyProbe> {
@@ -80,6 +82,7 @@ export async function startMagicTeaPartyJourneyProbe(options: MagicTeaPartyJourn
   child.stderr.on('data', (chunk: Buffer) => {
     stderrBytes += chunk.byteLength;
     if (stderrBytes > 256 * 1024) kill(new Error('Native Tea journey exceeded the diagnostic budget'));
+    else options.onDiagnostic?.(chunk.toString('utf8'));
   });
   child.stdin.on('error', () => kill(new Error('Native Tea journey input pipe failed')));
   lines.on('line', line => {

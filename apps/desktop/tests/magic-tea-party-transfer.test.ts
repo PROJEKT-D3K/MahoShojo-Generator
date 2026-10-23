@@ -69,7 +69,7 @@ describe('Desktop text Tea transfer host', () => {
     const port: TeaNativePort = { mutate: vi.fn(), read: vi.fn(async (input: TeaReadRequest): Promise<TeaReadResponse> => {
       const request = input.request;
       if (request.action === 'list') return { version: 1, result: { action: 'list', catalogRevision: 1, nextCursor: null,
-        rows: ['one', 'two'].map(id => ({ id, instance, revision: 1, title: id, titleTruncated: false, createdAt: 1, updatedAt: 1, messageCount: 5001, roleCount: 0, roleNames: [], scenarioTitle: null })) } };
+        rows: ['one', 'two'].map(id => ({ id, instance, revision: 1, title: id, titleTruncated: false, pinnedAt: 0, pinnedOrder: 0, createdAt: 1, updatedAt: 1, messageCount: 5001, roleCount: 0, roleNames: [], scenarioTitle: null })) } };
       if (request.action === 'session') return { version: 1, result: { action: 'session', catalogRevision: 1, record: { instance, revision: 1, session: { ...base.session, id: request.sessionId, roles: [] } } } };
       if (request.action !== 'messages') throw new Error('unexpected');
       const start = request.cursor?.ordinal ?? 0; const count = Math.min(100, 5001 - start);

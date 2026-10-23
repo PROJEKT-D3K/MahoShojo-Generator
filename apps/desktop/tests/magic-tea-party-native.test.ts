@@ -95,3 +95,16 @@ describe('Tea exact receipt and catalog correlation', () => {
     await expect(createIpcTeaNativePort(vi.fn().mockResolvedValue(reply)).read({ version: 1, request: { action: 'receipt', write: original } })).rejects.toMatchObject({ code: 'tea-invalid' });
   });
 });
+
+it('requires organization receipts to match every frozen identity and desired pin state', async () => {
+  const target = { sessionId: 'a', instance: fixture.instance, expectedRevision: 2 };
+  const pin: TeaWriteRequest = { version: 1, request: { action: 'set-pin', ...target, operationId: 'pin', pinned: false } };
+  const pinResult = { version: 1, result: { action: 'set-pin', sessionId: 'a', instance: fixture.instance, revision: 3, operationId: 'pin', pinnedAt: 1, pinnedOrder: 1 } };
+  await expect(createIpcTeaNativePort(vi.fn().mockResolvedValue(pinResult)).mutate(pin)).rejects.toMatchObject({ writeEvidence: 'unknown' });
+  const cleanup: TeaWriteRequest = { version: 1, request: { action: 'delete-selected', operationId: 'cleanup', targets: [target] } };
+  const deleted = { version: 1, result: { action: 'delete-selected', operationId: 'cleanup', sessions: [{ sessionId: 'a', instance: fixture.instance, revision: 2 }] } };
+  expect(await createIpcTeaNativePort(vi.fn().mockResolvedValue(deleted)).mutate(cleanup)).toEqual(deleted);
+  for (const row of [{ ...deleted.result.sessions[0], instance: 'b'.repeat(32) }, { ...deleted.result.sessions[0], revision: 3 }, { ...deleted.result.sessions[0], sessionId: 'b' }]) {
+    await expect(createIpcTeaNativePort(vi.fn().mockResolvedValue({ ...deleted, result: { ...deleted.result, sessions: [row] } })).mutate(cleanup)).rejects.toMatchObject({ writeEvidence: 'unknown' });
+  }
+});

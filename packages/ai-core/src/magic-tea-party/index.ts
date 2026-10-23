@@ -80,10 +80,13 @@ export type {
 export {
   MAGIC_TEA_PARTY_PRESETS,
   getMagicTeaPartyPreset,
+  projectMagicTeaPartyPreset,
 } from './presets';
 export type {
   MagicTeaPartyPresetId,
   MagicTeaPartyPreset,
+  MagicTeaPartyPresetSource,
+  MagicTeaPartyPresetProjection,
 } from './presets';
 
 export {

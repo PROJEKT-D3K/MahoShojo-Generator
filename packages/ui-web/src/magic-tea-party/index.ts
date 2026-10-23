@@ -14,3 +14,4 @@ export { MagicTeaPartySummaryBody, type MagicTeaPartySummaryBodyProps } from './
 export { useSessionSidebarPreference, MAGIC_TEA_PARTY_SIDEBAR_PREFERENCE_KEY } from './useSessionSidebarPreference';
 
 export { MagicTeaPartyRoleEditor, type MagicTeaPartyRoleEditorProps } from './RoleEditor';
+export { MagicTeaPartyPresetPicker, type MagicTeaPartyPresetPickerProps } from './PresetPicker';

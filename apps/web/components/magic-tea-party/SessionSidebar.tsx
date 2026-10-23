@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { MagicTeaPartySessionList, MagicTeaPartyOutputPreferencesPanel, useSessionSidebarPreference } from '@mahoshojo/ui-web/magic-tea-party';
+import { useEffect, useState } from 'react';
+import { MagicTeaPartySessionList, MagicTeaPartyOutputPreferencesPanel, MagicTeaPartyPresetPicker, useSessionSidebarPreference } from '@mahoshojo/ui-web/magic-tea-party';
 
 import AiProviderSelector, { type UserAIProviderConfig } from '@/components/AiProviderSelector';
 import { MagicTeaPartyBranchChainModal } from '@/components/magic-tea-party/BranchChainModal';
@@ -7,7 +7,7 @@ import { MagicTeaPartySessionCleanupPanel } from '@/components/magic-tea-party/S
 import { MagicTeaPartyGlobalSettingsPanel } from '@/components/magic-tea-party/GlobalSettingsPanel';
 import { MagicTeaPartyImportExportPanel } from '@/components/magic-tea-party/ImportExportPanel';
 
-import { MAGIC_TEA_PARTY_PRESETS, type MagicTeaPartyPresetId } from '@/lib/magic-tea-party/presets';
+import { projectMagicTeaPartyPreset, type MagicTeaPartyPresetId, type MagicTeaPartyPresetProjection } from '@mahoshojo/ai-core/magic-tea-party';
 import type {
   MagicTeaPartyPreferences,
   MagicTeaPartySession,
@@ -52,6 +52,10 @@ export function MagicTeaPartySessionSidebar(props: MagicTeaPartySidebarProps) {
     onCleanupSessions,
   } = props;
   const [showBranchModal, setShowBranchModal] = useState(false);
+  const [presetPreview, setPresetPreview] = useState<{ source: MagicTeaPartySession; projection: MagicTeaPartyPresetProjection } | null>(null);
+  // A changed session invalidates its confirmation, including a switch away and back.
+  const currentPreview = presetPreview?.source === activeSession ? presetPreview.projection : null;
+  useEffect(() => { setPresetPreview(null); }, [activeSession]);
   const { pinnedCollapsed, setPinnedCollapsed, recentCollapsed, setRecentCollapsed } = useSessionSidebarPreference();
 
   const selectedPresetId = activeSession ? activeSession.settings.presetId : preferences.lastPresetId;
@@ -158,34 +162,21 @@ export function MagicTeaPartySessionSidebar(props: MagicTeaPartySidebarProps) {
 
       <MagicTeaPartyImportExportPanel activeSession={activeSession} preferences={preferences} onSessionImported={onSessionImported} />
 
-      <div className="rounded-xl border border-pink-100 bg-white p-4">
-        <div className="text-sm font-semibold text-gray-800">预设情景</div>
-        <div className="mt-3 grid gap-2">
-          {MAGIC_TEA_PARTY_PRESETS.map((preset) => {
-            const isSelected = selectedPresetId === preset.id;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                aria-pressed={isSelected}
-                className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                  isSelected
-                    ? 'border-pink-300 bg-pink-50 text-pink-800'
-                    : 'border-pink-200 bg-white hover:bg-pink-50'
-                }`}
-                onClick={() => onPresetSelected(preset.id)}
-                title={isSelected ? '再次点击可取消预设' : '点击选择预设'}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="text-sm font-semibold text-pink-800">{preset.title}</div>
-                  {isSelected ? <span className="text-[10px] font-semibold text-pink-600">已选</span> : null}
-                </div>
-                <div className="mt-1 text-xs text-gray-600">{preset.description}</div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <MagicTeaPartyPresetPicker
+        selectedPresetId={selectedPresetId}
+        onCreateSession={(presetId) => { setPresetPreview(null); onCreateSession(presetId); }}
+        onSelectPreset={activeSession ? (presetId) => {
+          const projection = projectMagicTeaPartyPreset(activeSession, presetId);
+          setPresetPreview(projection ? { source: activeSession, projection } : null);
+        } : undefined}
+        preview={currentPreview}
+        onConfirmPreset={() => {
+          if (!currentPreview) return;
+          setPresetPreview(null);
+          onPresetSelected(currentPreview.preset.id);
+        }}
+        onCancelPreset={() => setPresetPreview(null)}
+      />
 
       <div className="rounded-xl border border-pink-100 bg-white p-4">
         <AiProviderSelector

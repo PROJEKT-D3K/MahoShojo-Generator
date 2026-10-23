@@ -12,5 +12,15 @@
     { "id": "user-a", "sessionId": "tea-fixture", "role": "user", "content": "一起喝茶", "createdAt": 2, "status": "done" },
     { "id": "assistant-a", "sessionId": "tea-fixture", "role": "assistant", "content": "欢迎 🍵", "createdAt": 3, "status": "done", "segments": [{ "type": "narration", "text": "欢迎 🍵" }], "meta": { "completion": "provider-complete", "future": { "kept": true } } }
   ],
-  "instance": "11111111111111111111111111111111"
+  "instance": "11111111111111111111111111111111",
+  "organizationOrder": [
+    {"id": "pin-high", "updatedAt": 1, "pinnedAt": 2, "pinnedOrder": 9},
+    {"id": "pin-time", "updatedAt": 2, "pinnedAt": 8, "pinnedOrder": 2},
+    {"id": "pin-low", "updatedAt": 9, "pinnedAt": 3, "pinnedOrder": 2},
+    {"id": "pin-no-order", "updatedAt": 8, "pinnedAt": 20},
+    {"id": "recent-z", "updatedAt": 100},
+    {"id": "recent-a", "updatedAt": 100},
+    {"id": "invalid", "updatedAt": 50, "pinnedAt": "old", "pinnedOrder": 99}
+  ],
+  "organizationExpected": ["pin-high", "pin-time", "pin-low", "pin-no-order", "recent-z", "recent-a", "invalid"]
 }

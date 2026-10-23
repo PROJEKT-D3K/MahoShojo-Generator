@@ -98,6 +98,8 @@ fn from_store(error: StoreError) -> TeaError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListCursor {
     pub catalog_revision: i64,
+    pub pinned_at: i64,
+    pub pinned_order: i64,
     pub updated_at: i64,
     pub id: String,
 }
@@ -146,6 +148,13 @@ pub struct ImportEntry {
     pub messages: Vec<Value>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionTarget {
+    pub session_id: String,
+    pub instance: String,
+    pub expected_revision: i64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum WriteOperation {
     Create {
@@ -163,6 +172,19 @@ pub enum WriteOperation {
         session_id: String,
         instance: String,
         expected_revision: i64,
+    },
+    #[serde(rename_all = "camelCase")]
+    SetPin {
+        session_id: String,
+        instance: String,
+        expected_revision: i64,
+        operation_id: String,
+        pinned: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    DeleteSelected {
+        operation_id: String,
+        targets: Vec<SessionTarget>,
     },
     #[serde(rename_all = "camelCase")]
     Import {
@@ -197,6 +219,20 @@ pub struct WriteRequest {
     pub request: WriteOperation,
 }
 
+// Read-only projections: never change persisted preview or legacy archive JSON.
+const PIN_AT_SQL: &str = "CASE WHEN json_type(document,'$.pinnedAt') IN ('integer','real') AND json_extract(document,'$.pinnedAt') BETWEEN 1 AND 9007199254740991 AND CAST(json_extract(document,'$.pinnedAt') AS INTEGER)=json_extract(document,'$.pinnedAt') THEN CAST(json_extract(document,'$.pinnedAt') AS INTEGER) ELSE 0 END";
+const PIN_ORDER_SQL: &str = "CASE WHEN json_type(document,'$.pinnedOrder') IN ('integer','real') AND json_extract(document,'$.pinnedOrder') BETWEEN 1 AND 9007199254740991 AND CAST(json_extract(document,'$.pinnedOrder') AS INTEGER)=json_extract(document,'$.pinnedOrder') THEN CAST(json_extract(document,'$.pinnedOrder') AS INTEGER) ELSE 0 END";
+fn directory_sql() -> String {
+    format!("WITH projected AS MATERIALIZED (SELECT id,instance,revision,preview,created_at,updated_at,({PIN_AT_SQL}) AS pin,({PIN_ORDER_SQL}) AS pin_order FROM magic_tea_session), ordered AS (SELECT *,CASE WHEN pin>0 THEN pin_order ELSE 0 END AS sort_order FROM projected) SELECT id,instance,revision,preview,created_at,updated_at,(SELECT COUNT(*) FROM magic_tea_message m WHERE m.session_id=ordered.id),pin,sort_order FROM ordered WHERE ?1=0 OR ((pin>0),sort_order,pin,updated_at,id)<((?2>0),?3,?2,?4,?5) ORDER BY (pin>0) DESC,sort_order DESC,pin DESC,updated_at DESC,id DESC LIMIT ?6")
+}
+fn valid_pin(document: &Value, key: &str) -> i64 {
+    document
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v >= 1.0 && *v <= MAX_SAFE as f64 && v.fract() == 0.0)
+        .map(|v| v as i64)
+        .unwrap_or(0)
+}
 fn id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -458,6 +494,33 @@ fn validate_write(operation: &WriteOperation) -> Result<(), TeaError> {
             instance,
             expected_revision,
         } => validate_target_fields(session_id, instance, *expected_revision)?,
+        WriteOperation::SetPin {
+            session_id,
+            instance,
+            expected_revision,
+            operation_id,
+            ..
+        } => {
+            validate_target_fields(session_id, instance, *expected_revision)?;
+            if !id(operation_id) {
+                return Err(TeaError::Invalid);
+            }
+        }
+        WriteOperation::DeleteSelected {
+            operation_id,
+            targets,
+        } => {
+            if !id(operation_id) || targets.is_empty() || targets.len() > 50 {
+                return Err(TeaError::Invalid);
+            }
+            let mut ids = HashSet::new();
+            for row in targets {
+                validate_target_fields(&row.session_id, &row.instance, row.expected_revision)?;
+                if !ids.insert(&row.session_id) {
+                    return Err(TeaError::Invalid);
+                }
+            }
+        }
         WriteOperation::Import {
             operation_id,
             entries,
@@ -591,13 +654,36 @@ fn validate_result(value: &Value) -> Result<(), TeaError> {
             checked_id(value, "operationId")?;
             checked_id(value, "assistantMessageId")?;
         }
-        "import" => {
+        "set-pin" => {
+            if !exact_keys(
+                value,
+                &[
+                    "action",
+                    "sessionId",
+                    "instance",
+                    "revision",
+                    "operationId",
+                    "pinnedAt",
+                    "pinnedOrder",
+                ],
+            ) {
+                return Err(TeaError::Corrupt);
+            }
+            validate_saved(value)?;
+            checked_id(value, "operationId")?;
+            let pinned_at = integer(value, "pinnedAt")?;
+            let pinned_order = integer(value, "pinnedOrder")?;
+            if (pinned_at == 0) != (pinned_order == 0) {
+                return Err(TeaError::Corrupt);
+            }
+        }
+        "import" | "delete-selected" => {
             if !exact_keys(value, &["action", "operationId", "sessions"]) {
                 return Err(TeaError::Corrupt);
             }
             checked_id(value, "operationId")?;
             let rows = value["sessions"].as_array().ok_or(TeaError::Corrupt)?;
-            if rows.is_empty() || rows.len() > 128 {
+            if rows.is_empty() || rows.len() > (if action == "import" { 128 } else { 50 }) {
                 return Err(TeaError::Corrupt);
             }
             let mut ids = HashSet::new();
@@ -607,7 +693,7 @@ fn validate_result(value: &Value) -> Result<(), TeaError> {
                     return Err(TeaError::Corrupt);
                 }
                 validate_saved(row)?;
-                if row["revision"] != 1
+                if (action == "import" && row["revision"] != 1)
                     || !ids.insert(string(row, "sessionId")?)
                     || !instances.insert(string(row, "instance")?)
                 {
@@ -869,6 +955,8 @@ impl TeaStore {
                 validate_write(&write.request)?;
                 let operation_id = match &write.request {
                     WriteOperation::Import { operation_id, .. }
+                    | WriteOperation::SetPin { operation_id, .. }
+                    | WriteOperation::DeleteSelected { operation_id, .. }
                     | WriteOperation::BeginGeneration { operation_id, .. }
                     | WriteOperation::FinishGeneration { operation_id, .. } => operation_id,
                     _ => return Err(TeaError::Invalid),
@@ -915,19 +1003,33 @@ impl TeaStore {
                 }
                 let current = check_catalog(c, expected_catalog_revision)?;
                 if let Some(cursor) = &cursor {
-                    if !id(&cursor.id) || !(0..=MAX_SAFE).contains(&cursor.updated_at) {
+                    if !id(&cursor.id)
+                        || !(0..=MAX_SAFE).contains(&cursor.updated_at)
+                        || !(0..=MAX_SAFE).contains(&cursor.pinned_at)
+                        || !(0..=MAX_SAFE).contains(&cursor.pinned_order)
+                        || (cursor.pinned_at == 0 && cursor.pinned_order != 0)
+                    {
                         return Err(TeaError::Invalid);
                     }
                     if cursor.catalog_revision != current {
                         return Err(TeaError::Stale);
                     }
                 }
-                let (at, sid) = cursor
+                let (pin, order, at, sid) = cursor
                     .as_ref()
-                    .map(|v| (v.updated_at, v.id.as_str()))
-                    .unwrap_or((MAX_SAFE, ""));
-                let mut query=c.prepare("SELECT s.id,s.instance,s.revision,s.preview,s.created_at,s.updated_at,(SELECT COUNT(*) FROM magic_tea_message m WHERE m.session_id=s.id) FROM magic_tea_session s WHERE ?1=0 OR s.updated_at<?2 OR (s.updated_at=?2 AND s.id<?3) ORDER BY s.updated_at DESC,s.id DESC LIMIT ?4")?;
-                let mut data = query.query(params![cursor.is_some(), at, sid, limit as i64 + 1])?;
+                    .map(|v| (v.pinned_at, v.pinned_order, v.updated_at, v.id.as_str()))
+                    .unwrap_or((0, 0, 0, ""));
+                // Only small projections leave SQLite. LIMIT bounds output, not document parsing cost.
+                let sql = directory_sql();
+                let mut query = c.prepare(&sql)?;
+                let mut data = query.query(params![
+                    cursor.is_some(),
+                    pin,
+                    order,
+                    at,
+                    sid,
+                    limit as i64 + 1
+                ])?;
                 let mut rows = Vec::new();
                 let mut more = false;
                 while let Some(row) = data.next()? {
@@ -944,8 +1046,10 @@ impl TeaStore {
                     head.insert("createdAt".into(), json!(row.get::<_, i64>(4)?));
                     head.insert("updatedAt".into(), json!(row.get::<_, i64>(5)?));
                     head.insert("messageCount".into(), json!(row.get::<_, i64>(6)?));
+                    head.insert("pinnedAt".into(), json!(row.get::<_, i64>(7)?));
+                    head.insert("pinnedOrder".into(), json!(row.get::<_, i64>(8)?));
                     rows.push(Value::Object(head.clone()));
-                    let proposed = json!({"action":"list","catalogRevision":current,"rows":rows,"nextCursor":{"catalogRevision":current,"updatedAt":head["updatedAt"],"id":head["id"]}});
+                    let proposed = json!({"action":"list","catalogRevision":current,"rows":rows,"nextCursor":{"catalogRevision":current,"pinnedAt":head["pinnedAt"],"pinnedOrder":head["pinnedOrder"],"updatedAt":head["updatedAt"],"id":head["id"]}});
                     if let Err(error) = response(proposed, DIRECTORY_BYTES) {
                         rows.pop();
                         if rows.is_empty() {
@@ -956,7 +1060,7 @@ impl TeaStore {
                     }
                 }
                 let next_cursor = if more {
-                    rows.last().map(|r|json!({"catalogRevision":current,"updatedAt":r["updatedAt"],"id":r["id"]}))
+                    rows.last().map(|r|json!({"catalogRevision":current,"pinnedAt":r["pinnedAt"],"pinnedOrder":r["pinnedOrder"],"updatedAt":r["updatedAt"],"id":r["id"]}))
                 } else {
                     None
                 };
@@ -1034,6 +1138,8 @@ impl TeaStore {
     ) -> Result<Value, TeaError> {
         let receipt_id = match &operation {
             WriteOperation::Import { operation_id, .. }
+            | WriteOperation::SetPin { operation_id, .. }
+            | WriteOperation::DeleteSelected { operation_id, .. }
             | WriteOperation::BeginGeneration { operation_id, .. }
             | WriteOperation::FinishGeneration { operation_id, .. } => Some(operation_id.clone()),
             _ => None,
@@ -1070,8 +1176,79 @@ impl TeaStore {
                 expected_revision,
             } => {
                 let row = target(c, &session_id, &instance, expected_revision)?;
+                if row.active_begin.is_some() {
+                    return Err(TeaError::Busy);
+                }
                 c.execute("DELETE FROM magic_tea_session WHERE id=?1", [&session_id])?;
                 saved(&row, "delete")
+            }
+            WriteOperation::SetPin {
+                session_id,
+                instance,
+                expected_revision,
+                operation_id,
+                pinned,
+            } => {
+                let mut row = target(c, &session_id, &instance, expected_revision)?;
+                if row.active_begin.is_some() {
+                    return Err(TeaError::Busy);
+                }
+                let mut document = row.document.clone();
+                let object = document.as_object_mut().ok_or(TeaError::Corrupt)?;
+                let (at, order) = if pinned {
+                    let at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|_| TeaError::Io)?
+                        .as_millis();
+                    let at = i64::try_from(at).map_err(|_| TeaError::Invalid)?;
+                    if !valid_revision(at) {
+                        return Err(TeaError::Invalid);
+                    }
+                    let sql = format!("SELECT COALESCE(MAX(CASE WHEN ({PIN_AT_SQL})>0 THEN ({PIN_ORDER_SQL}) ELSE 0 END),0) FROM magic_tea_session");
+                    let max: i64 = c.query_row(&sql, [], |r| r.get(0))?;
+                    (at, next(max)?)
+                } else {
+                    (0, 0)
+                };
+                if pinned {
+                    object.insert("pinnedAt".into(), json!(at));
+                    object.insert("pinnedOrder".into(), json!(order));
+                } else {
+                    object.remove("pinnedAt");
+                    object.remove("pinnedOrder");
+                }
+                update_session(c, &mut row, &document)?;
+                let mut result = saved(&row, "set-pin");
+                result["operationId"] = json!(operation_id);
+                result["pinnedAt"] = json!(at);
+                result["pinnedOrder"] = json!(order);
+                result
+            }
+            WriteOperation::DeleteSelected {
+                operation_id,
+                targets,
+            } => {
+                // All identities, revisions and busy/protection checks precede every delete.
+                let mut sessions = Vec::new();
+                for item in &targets {
+                    let row = target(c, &item.session_id, &item.instance, item.expected_revision)?;
+                    if row.active_begin.is_some() {
+                        return Err(TeaError::Busy);
+                    }
+                    if valid_pin(&row.document, "pinnedAt") > 0 {
+                        return Err(TeaError::Invalid);
+                    }
+                    sessions.push(
+                        json!({"sessionId":row.id,"instance":row.instance,"revision":row.revision}),
+                    );
+                }
+                for item in &targets {
+                    c.execute(
+                        "DELETE FROM magic_tea_session WHERE id=?1",
+                        [&item.session_id],
+                    )?;
+                }
+                json!({"action":"delete-selected","operationId":operation_id,"sessions":sessions})
             }
             WriteOperation::Import {
                 operation_id,
@@ -1377,7 +1554,13 @@ pub(crate) fn verify_schema(c: &Connection, version: i64) -> Result<(), StoreErr
             if result["operationId"] != oid
                 || !matches!(
                     result["action"].as_str(),
-                    Some("import" | "begin-generation" | "finish-generation")
+                    Some(
+                        "import"
+                            | "begin-generation"
+                            | "finish-generation"
+                            | "set-pin"
+                            | "delete-selected"
+                    )
                 )
             {
                 return Err(TeaError::Corrupt);

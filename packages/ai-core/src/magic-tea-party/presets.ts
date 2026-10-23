@@ -1,7 +1,7 @@
 import { SYSTEM_PROMPTS } from '../arena-generation/prompt';
 import { buildArenaDefaultScenario, buildArenaWorldbook } from '@mahoshojo/domain/tavern-card/worldbook';
 import type { TavernCharacterBook } from '@mahoshojo/domain/tavern-card/worldbook';
-import type { MagicTeaPartyChoiceCount } from '@mahoshojo/domain/magic-tea-party/types';
+import type { MagicTeaPartyChoiceCount, MagicTeaPartyPreferences, MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
 
 // 茶会保留既有经典风格，不引入 Arena Direct 后加的战斗约束。
 const CLASSIC_SYSTEM_PROMPT = `
@@ -82,4 +82,70 @@ export const getMagicTeaPartyPreset = (id: string | null | undefined): MagicTeaP
   const needle = typeof id === 'string' ? id.trim() : '';
   if (!needle) return null;
   return MAGIC_TEA_PARTY_PRESETS.find((preset) => preset.id === needle) ?? null;
+};
+
+export type MagicTeaPartyPresetSource = Pick<MagicTeaPartySession, 'settings' | 'scenario' | 'auxScenarios'>;
+
+export type MagicTeaPartyPresetProjection = {
+  action: 'apply' | 'remove';
+  preset: MagicTeaPartyPreset;
+  patch: MagicTeaPartyPresetSource;
+  preferencePatch: Partial<Pick<MagicTeaPartyPreferences,
+    'lastPresetId' | 'lastWorldbookPresetId' | 'outputFormat' | 'enableChoices' | 'choiceCount'>>;
+};
+
+/** The host owns confirmation, timestamps and persistence. Selecting the active preset removes it. */
+export const projectMagicTeaPartyPreset = (
+  source: MagicTeaPartyPresetSource,
+  presetId: string,
+): MagicTeaPartyPresetProjection | null => {
+  const preset = getMagicTeaPartyPreset(presetId);
+  if (!preset) return null;
+  if (source.settings.presetId === preset.id) {
+    const scenario = source.scenario;
+    const clearScenario = scenario?.source === 'preset' || scenario?.presetId === preset.id || scenario?.id === 'preset-scenario';
+    return {
+      action: 'remove',
+      preset,
+      patch: {
+        settings: { ...source.settings, presetId: undefined, worldbookPresetId: undefined },
+        scenario: clearScenario ? undefined : scenario,
+        auxScenarios: (Array.isArray(source.auxScenarios) ? source.auxScenarios : []).filter(item => item.source !== 'preset' && item.presetId !== preset.id),
+      },
+      preferencePatch: { lastPresetId: undefined, lastWorldbookPresetId: undefined },
+    };
+  }
+  return {
+    action: 'apply',
+    preset,
+    patch: {
+      settings: {
+        ...source.settings,
+        presetId: preset.id,
+        worldbookPresetId: preset.worldbookPresetId,
+        ...preset.defaultSettings,
+        outputPlan: {
+          ...(source.settings.outputPlan ?? { summary: 'off', updates: 'off' }),
+          choices: source.settings.outputPlan?.choices === 'on' ? 'on' : 'auto',
+        },
+      },
+      scenario: {
+        id: 'preset-scenario',
+        title: preset.defaultScenario.title,
+        presetId: preset.id,
+        source: 'preset',
+        card: {
+          title: preset.defaultScenario.title,
+          content: preset.defaultScenario.content,
+          templateId: '通用情景卡（Markdown）',
+        },
+      },
+      auxScenarios: [],
+    },
+    preferencePatch: {
+      lastPresetId: preset.id,
+      lastWorldbookPresetId: preset.worldbookPresetId,
+      ...preset.defaultSettings,
+    },
+  };
 };

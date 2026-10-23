@@ -33,7 +33,7 @@ const harness = (session = baseSession()) => {
     if (command === 'mutate_magic_tea_party') {
       const write = (args?.request as TeaWriteRequest).request;
       if (fail === write.action) { fail = null; throw { code: 'tea-io', message: 'Local tea storage did not complete; retain the input or unsaved result', writeEvidence: 'not-written' }; }
-      if (write.action === 'import') throw new Error('not needed by unit fixture');
+      if (write.action === 'import' || write.action === 'set-pin' || write.action === 'delete-selected') throw new Error('organization is covered by the real Native journey, not this single-record fixture');
       const sessionId = write.action === 'create' ? write.session.id : write.sessionId;
       const instance = write.action === 'create' ? 'b'.repeat(32) : write.instance;
       const revision = write.action === 'create' ? 1 : write.expectedRevision + (write.action === 'delete' ? 0 : 1);

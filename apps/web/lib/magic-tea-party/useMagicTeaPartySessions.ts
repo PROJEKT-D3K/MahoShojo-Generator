@@ -1,3 +1,4 @@
+import { compareMagicTeaPartySessions, isMagicTeaPartyPinned as isPinnedSession, getMagicTeaPartyPinnedAt as getPinnedAt, getMagicTeaPartyPinnedOrder as getPinnedOrder } from '@mahoshojo/domain/magic-tea-party/organization';
 import { resolveMagicTeaPartyPlayerIdentity } from '@mahoshojo/domain/magic-tea-party/player-identity';
 import { sameMagicTeaPartyRoleSource } from '@mahoshojo/domain/magic-tea-party/role-editor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -19,7 +20,7 @@ import {
   readMagicTeaPartyPreferences,
   resolveMagicTeaPartyUserDisplayName,
 } from '@/lib/magic-tea-party/preferences';
-import { getMagicTeaPartyPreset, type MagicTeaPartyPresetId } from '@/lib/magic-tea-party/presets';
+import { getMagicTeaPartyPreset, projectMagicTeaPartyPreset, type MagicTeaPartyPresetId } from '@mahoshojo/ai-core/magic-tea-party';
 import {
   buildMagicTeaPartyRoleCardFromTavern,
   isTavernCardPayload,
@@ -122,32 +123,7 @@ const writeLocalStorageString = (key: string, value: string): void => {
   }
 };
 
-const isPinnedSession = (session: MagicTeaPartySession): boolean =>
-  typeof session.pinnedAt === 'number' && Number.isFinite(session.pinnedAt) && session.pinnedAt > 0;
-
-const getPinnedOrder = (session: MagicTeaPartySession): number =>
-  typeof session.pinnedOrder === 'number' && Number.isFinite(session.pinnedOrder) ? session.pinnedOrder : 0;
-
-const getPinnedAt = (session: MagicTeaPartySession): number =>
-  typeof session.pinnedAt === 'number' && Number.isFinite(session.pinnedAt) ? session.pinnedAt : 0;
-
-const sortSessionsByUpdatedAtDesc = (items: MagicTeaPartySession[]): MagicTeaPartySession[] => {
-  return [...items].sort((a, b) => {
-    const pinnedA = isPinnedSession(a);
-    const pinnedB = isPinnedSession(b);
-    if (pinnedA && !pinnedB) return -1;
-    if (!pinnedA && pinnedB) return 1;
-    if (pinnedA && pinnedB) {
-      const orderA = getPinnedOrder(a);
-      const orderB = getPinnedOrder(b);
-      if (orderA !== orderB) return orderB - orderA;
-      const pinAtA = getPinnedAt(a);
-      const pinAtB = getPinnedAt(b);
-      if (pinAtA !== pinAtB) return pinAtB - pinAtA;
-    }
-    return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-  });
-};
+const sortSessionsByUpdatedAtDesc = (items: MagicTeaPartySession[]): MagicTeaPartySession[] => [...items].sort(compareMagicTeaPartySessions);
 
 const stripMetaKeys = (payload: Record<string, unknown>): Record<string, unknown> => {
   const out: Record<string, unknown> = {};
@@ -580,7 +556,7 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
     async (presetId?: MagicTeaPartyPresetId | null) => {
       const now = Date.now();
       const id = randomUUID();
-      const preset = getMagicTeaPartyPreset(presetId ?? preferences.lastPresetId);
+      const preset = getMagicTeaPartyPreset(presetId === undefined ? preferences.lastPresetId : presetId);
 
       const baseSettings = {
         providerId: userProviderConfig?.providerId || 'unknown',
@@ -603,40 +579,18 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         writeCurrentState: preferences.writeCurrentState,
       } satisfies MagicTeaPartySession['settings'];
 
-      const session: MagicTeaPartySession = {
+      const base: MagicTeaPartySession = {
         id,
         title: '新会话',
         createdAt: now,
         updatedAt: now,
         roles: [],
-        scenario: preset
-          ? {
-              id: 'preset-scenario',
-              title: preset.defaultScenario.title,
-              presetId: preset.id,
-              source: 'preset',
-              card: {
-                title: preset.defaultScenario.title,
-                content: preset.defaultScenario.content,
-                templateId: '通用情景卡（Markdown）',
-              },
-            }
-          : undefined,
         auxScenarios: [],
         playerRoleId: null,
-        settings: {
-          ...baseSettings,
-          ...(preset
-            ? {
-                presetId: preset.id,
-                worldbookPresetId: preset.worldbookPresetId,
-                outputFormat: preset.defaultSettings.outputFormat,
-                enableChoices: preset.defaultSettings.enableChoices,
-                choiceCount: preset.defaultSettings.choiceCount,
-              }
-            : {}),
-        },
+        settings: baseSettings,
       };
+      const projection = preset ? projectMagicTeaPartyPreset(base, preset.id) : null;
+      const session: MagicTeaPartySession = projection ? { ...base, ...projection.patch } : base;
 
       await putMagicTeaPartySession(session);
       setSessions((prev) => sortSessionsByUpdatedAtDesc([session, ...prev]));
@@ -816,66 +770,14 @@ export function useMagicTeaPartySessions(options: UseMagicTeaPartySessionsOption
         return;
       }
 
-      const currentPresetId = activeSession.settings.presetId;
-      if (currentPresetId && currentPresetId === preset.id) {
-        const currentScenario = activeSession.scenario;
-        const currentAux = Array.isArray(activeSession.auxScenarios) ? activeSession.auxScenarios : [];
-        const shouldClearScenario =
-          currentScenario?.source === 'preset' ||
-          currentScenario?.presetId === preset.id ||
-          currentScenario?.id === 'preset-scenario';
-        const nextScenario = shouldClearScenario ? undefined : currentScenario;
-        const nextAux = currentAux.filter((item) => item.source !== 'preset' && item.presetId !== preset.id);
-
-        const nextSession: MagicTeaPartySession = {
-          ...activeSession,
-          updatedAt: Date.now(),
-          scenario: nextScenario,
-          auxScenarios: nextAux,
-          settings: {
-            ...activeSession.settings,
-            presetId: undefined,
-            worldbookPresetId: undefined,
-          },
-        };
-
-        void persistSession(nextSession);
-        applyPreferencePatch({ lastPresetId: undefined, lastWorldbookPresetId: undefined });
-        return;
-      }
-
-      void updateActiveSessionSettings({
-        presetId: preset.id,
-        worldbookPresetId: preset.worldbookPresetId,
-        outputFormat: preset.defaultSettings.outputFormat,
-        enableChoices: preset.defaultSettings.enableChoices,
-        choiceCount: preset.defaultSettings.choiceCount,
-      });
-
-      void updateActiveSessionScenarios(
-        {
-          id: 'preset-scenario',
-          title: preset.defaultScenario.title,
-          presetId: preset.id,
-          source: 'preset',
-          card: {
-            title: preset.defaultScenario.title,
-            content: preset.defaultScenario.content,
-            templateId: '通用情景卡（Markdown）',
-          },
-        },
-        []
-      );
-
-      applyPreferencePatch({
-        lastPresetId: preset.id,
-        lastWorldbookPresetId: preset.worldbookPresetId,
-        outputFormat: preset.defaultSettings.outputFormat,
-        enableChoices: preset.defaultSettings.enableChoices,
-        choiceCount: preset.defaultSettings.choiceCount,
-      });
+      const projection = projectMagicTeaPartyPreset(activeSession, preset.id);
+      if (!projection) return;
+      // One write keeps the selected style/worldbook and its scenarios in the same snapshot.
+      void persistSession({ ...activeSession, ...projection.patch, updatedAt: Date.now() })
+        .then(() => applyPreferencePatch(projection.preferencePatch))
+        .catch((error: unknown) => onGlobalError?.(error instanceof Error ? error.message : '应用预设失败'));
     },
-    [activeSession, applyPreferencePatch, createSession, persistSession, updateActiveSessionScenarios, updateActiveSessionSettings]
+    [activeSession, applyPreferencePatch, createSession, persistSession, onGlobalError]
   );
 
   const onToggleRoleCard = useCallback(

@@ -85,3 +85,22 @@ describe('Desktop Tea closed local storage wire', () => {
     expect(TeaStorageErrorSchema.safeParse({ code: 'tea-io', message: '/private/path', writeEvidence: 'not-written' }).success).toBe(false);
   });
 });
+
+ describe('Tea organization closed operations', () => {
+  const target = { sessionId: 'a', instance: fixture.instance, expectedRevision: 1 };
+  it('admits desired pin and frozen unique selection receipts, not toggle or arbitrary patch', () => {
+    for (const request of [{ action: 'set-pin', ...target, operationId: 'pin', pinned: true }, { action: 'delete-selected', operationId: 'delete', targets: [target] }]) {
+      const write = { version: 1, request }; expect(TeaWriteRequestSchema.safeParse(write).success).toBe(true);
+      expect(TeaReadRequestSchema.safeParse({ version: 1, request: { action: 'receipt', write } }).success).toBe(true);
+    }
+    for (const targets of [[], [target, target], Array.from({ length: 51 }, (_, i) => ({ ...target, sessionId: `s${i}` }))]) expect(TeaWriteRequestSchema.safeParse({ version: 1, request: { action: 'delete-selected', operationId: 'delete', targets } }).success).toBe(false);
+    expect(TeaWriteRequestSchema.safeParse({ version: 1, request: { action: 'set-pin', ...target, operationId: 'pin', pinned: true, updatedAt: 99 } }).success).toBe(false);
+  });
+  it('requires all keyset fields and keeps malformed archive extensions inert', () => {
+    const cursor = { catalogRevision: 1, updatedAt: 1, id: 'a', pinnedAt: 0, pinnedOrder: 0 };
+    const request = { action: 'list', limit: 50, expectedCatalogRevision: null, cursor };
+    expect(TeaReadRequestSchema.safeParse({ version: 1, request }).success).toBe(true);
+    expect(TeaReadRequestSchema.safeParse({ version: 1, request: { ...request, cursor: { ...cursor, pinnedOrder: 1 } } }).success).toBe(false);
+    for (const pinnedAt of ['legacy', {}, null, -1, 1.2]) expect(TeaSessionDocumentSchema.parse({ ...session(), pinnedAt }).pinnedAt).toEqual(pinnedAt);
+  });
+});

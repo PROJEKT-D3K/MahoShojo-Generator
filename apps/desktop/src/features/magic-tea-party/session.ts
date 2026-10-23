@@ -1,3 +1,4 @@
+import { projectMagicTeaPartyPreset, type MagicTeaPartyPresetId } from '@mahoshojo/ai-core/magic-tea-party';
 import { TeaWriteRequestSchema, type TeaHead, type TeaMessageDocument, type TeaReadResponse, type TeaSessionDocument, type TeaWriteRequest, type TeaWriteResponse } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import type { AiExecutionRequest } from '@mahoshojo/contracts/ai-execution';
 import type { MagicTeaPartySession } from '@mahoshojo/domain/magic-tea-party/types';
@@ -11,6 +12,7 @@ import { editedTeaSummary, prepareTeaSummaryRequest, prepareTeaAutoSummaryReques
 
 type DirectoryCursor = Extract<TeaReadResponse['result'], { action: 'list' }>['nextCursor'];
 type MessageCursor = Extract<TeaReadResponse['result'], { action: 'messages' }>['nextCursor'];
+export type TeaCleanupSelection = { directory: TeaHead[]; incarnation: number; targets: ReadonlyArray<Readonly<{ sessionId: string; instance: string; expectedRevision: number }>>; titles: readonly string[] };
 type Pending = { write: TeaWriteRequest; unknown: boolean; purpose: 'ordinary' | 'begin' | 'finish' | 'import' };
 type Generation = { owner: number; controller: AbortController; dispatched: boolean; request: AiExecutionRequest;
   kind: 'chat' | 'choices' | 'summary'; summaryMeta?: TeaSummaryPreparation['summaryMeta']; outputFormat: 'jsonl' | 'markdown';
@@ -108,12 +110,52 @@ export class DesktopTeaSession {
     try { await this.loadRecord(id, owner); } catch (error) { if (this.current(owner)) this.report(error); }
     finally { if (this.current(owner)) this.publish({ busy: false }); }
   };
-  create = async () => {
+  create = async (presetId: MagicTeaPartyPresetId | null = null) => {
     const owner = this.incarnation;
     if (!this.allowed() || !await this.saveDraft() || !this.current(owner) || !this.allowed()) return;
     const at = this.now();
     const session: TeaSessionDocument = { id: this.id(), title: '新茶会', createdAt: at, updatedAt: at, roles: [], settings: desktopTeaSettings(null), draft: '' };
+    if (presetId !== null) {
+      const projection = projectMagicTeaPartyPreset({ settings: desktopTeaSettings(null) }, presetId);
+      if (!projection) { this.report(new Error('未知茶会预设')); return; }
+      Object.assign(session, projection.patch);
+    }
     await this.write({ version: 1, request: { action: 'create', session } }, 'ordinary');
+  };
+  applyPreset = async (presetId: MagicTeaPartyPresetId, expected: TeaRecord, incarnation: number): Promise<boolean> => {
+    if (!this.allowed() || incarnation !== this.incarnation || this.state.record !== expected) {
+      this.report(new Error('会话已变化，请重新预览预设变更')); return false;
+    }
+    const projection = projectMagicTeaPartyPreset(expected.session, presetId);
+    if (!projection) return false;
+    return this.update(projection.patch);
+  };
+  setPin = async (id: string, pinned: boolean): Promise<boolean> => {
+    if (!this.allowed()) return false;
+    const head = this.state.directory.find(row => row.id === id);
+    if (!head) return false;
+    const active = this.state.record;
+    if (active?.session.id === id && (active.instance !== head.instance || active.revision !== head.revision)) {
+      this.report(new Error('当前会话已被其他持有者修改，请保留草稿后重新读取，不能仅凭目录修订确认旧正文')); return false;
+    }
+    return this.write({ version: 1, request: { action: 'set-pin', sessionId: id, instance: head.instance,
+      expectedRevision: head.revision, pinned, operationId: this.id() } }, 'ordinary');
+  };
+  prepareCleanup = (ids: string[]): TeaCleanupSelection | null => {
+    if (!this.allowed() || !ids.length || ids.length > 50 || new Set(ids).size !== ids.length) return null;
+    const rows = ids.map(id => this.state.directory.find(row => row.id === id));
+    if (rows.some(row => !row || row.pinnedAt > 0 || row.id === this.state.record?.session.id)) return null;
+    return Object.freeze({ directory: this.state.directory, incarnation: this.incarnation,
+      targets: Object.freeze(rows.map(row => Object.freeze({ sessionId: row!.id, instance: row!.instance, expectedRevision: row!.revision }))), titles: Object.freeze(rows.map(row => row!.title)) });
+  };
+  deleteSelected = async (selection: TeaCleanupSelection): Promise<boolean> => {
+    if (!this.allowed() || selection.directory !== this.state.directory || selection.incarnation !== this.incarnation
+      || !selection.targets.length || selection.targets.length > 50
+      || selection.targets.some(target => target.sessionId === this.state.record?.session.id || !this.state.directory.some(row => row.id === target.sessionId
+        && row.instance === target.instance && row.revision === target.expectedRevision && row.pinnedAt === 0))) {
+      this.report(new Error('清理范围已变化，请重新选择并确认')); return false;
+    }
+    return this.write({ version: 1, request: { action: 'delete-selected', operationId: this.id(), targets: selection.targets.map(row => ({ ...row })) } }, 'ordinary');
   };
   update = async (patch: Partial<MagicTeaPartySession>): Promise<boolean> => {
     if (!this.allowed() || !this.state.record) return false;
@@ -190,7 +232,18 @@ export class DesktopTeaSession {
       return;
     }
     if (result.action === 'finish-generation') { this.generation?.release(); this.generation = null; this.publish({ rawUnsaved: null, generating: false, generationKind: null, isAutoSummarizing: false }); }
-    if (result.action === 'delete') this.publish({ record: null, messages: [], messageCursor: null, input: '', notice: '会话已删除' });
+    if (result.action === 'set-pin') {
+      const record = this.state.record;
+      if (record && record.session.id === result.sessionId && record.instance === result.instance) {
+        const session = { ...record.session };
+        if (result.pinnedAt > 0) { session.pinnedAt = result.pinnedAt; session.pinnedOrder = result.pinnedOrder; }
+        else { delete session.pinnedAt; delete session.pinnedOrder; }
+        // Organization never reloads the active editor or persists/clears its drafts.
+        this.publish({ record: { ...record, revision: result.revision, session } });
+      }
+    }
+    else if (result.action === 'delete-selected') this.publish({ notice: `已删除所选 ${result.sessions.length} 个会话；当前编辑保持不变` });
+    else if (result.action === 'delete') this.publish({ record: null, messages: [], messageCursor: null, input: '', notice: '会话已删除' });
     else if ('sessionId' in result) {
       try { await this.loadRecord(result.sessionId, owner); }
       finally { if (this.current(owner) && manualSummaryDraft !== null && result.action === 'finish-generation') this.publish({ summaryDraft: manualSummaryDraft }); }
@@ -208,7 +261,7 @@ export class DesktopTeaSession {
     const owner = this.incarnation; this.publish({ busy: true, error: null });
     try {
       const write = pending.write.request;
-      if (write.action === 'import' || write.action === 'begin-generation' || write.action === 'finish-generation') {
+      if (write.action === 'import' || write.action === 'begin-generation' || write.action === 'finish-generation' || write.action === 'set-pin' || write.action === 'delete-selected') {
         const response = await this.port.read({ version: 1, request: { action: 'receipt', write: pending.write } });
         if (!this.current(owner) || this.pending !== pending) return;
         if (response.result.action !== 'receipt') throw new Error('保存回执不匹配');
@@ -242,6 +295,14 @@ export class DesktopTeaSession {
   abandonPending = async () => {
     if (this.state.busy || !this.live) return;
     if (this.pending?.unknown) { this.report(new Error('保存结果仍未知，请先核对原回执；不能把未知当作未提交而放弃')); return; }
+    if (this.pending?.write.request.action === 'set-pin' || this.pending?.write.request.action === 'delete-selected') {
+      this.pending = null;
+      const owner = this.incarnation;
+      this.publish({ pending: 'none', busy: true, error: null, notice: '已放弃未提交的组织操作；当前编辑和草稿保持不变' });
+      try { await this.loadDirectory(owner); } catch (error) { if (this.current(owner)) this.report(error); }
+      finally { if (this.current(owner)) this.publish({ busy: false }); }
+      return;
+    }
     const generation = this.generation;
     const manualSummaryDraft = generation?.automatic ? this.state.summaryDraft : null;
     if (generation && generation.dispatched && this.state.record) {
