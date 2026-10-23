@@ -2,9 +2,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { build } from 'esbuild';
-import { beforeAll } from 'vitest';
-
-import { checkWorkspaceBoundaries } from '../scripts/check-workspace-boundaries.mjs';
 
 const RUNTIME_SUBPATHS = [
   './generate-free-runtime',
@@ -27,7 +24,6 @@ const RUNTIME_SUBPATHS = [
 const ROOT_DIRECTORY = process.cwd();
 const PACKAGE_DIRECTORY = path.join(ROOT_DIRECTORY, 'packages', 'hosted-runtime');
 const PACKAGE_MANIFEST_PATH = path.join(PACKAGE_DIRECTORY, 'package.json');
-let workspaceBoundaryViolations: ReturnType<typeof checkWorkspaceBoundaries> = [];
 
 const ADAPTER_SOURCE_FILES = [
   'apps/api/src/adapters/generate-free.ts',
@@ -88,13 +84,9 @@ const expectRuntimeManifestPath = (candidate: string) => {
 
 const readPackageManifest = () => JSON.parse(readFileSync(PACKAGE_MANIFEST_PATH, 'utf8'));
 
+// 全仓源码边界（含动态加载）由 workspace:invariants 的 CLI 统一验证。
+// 本文件保留 manifest、真实 bundler 闭包和 no-selfhop 的独立约束。
 describe('hosted-runtime ownership boundary', () => {
-  beforeAll(() => {
-    workspaceBoundaryViolations = checkWorkspaceBoundaries(ROOT_DIRECTORY);
-    // 真实仓库根的边界扫描要按生成物清单逐条 shell git（check-ignore/ls-files），
-    // Windows 本机实测 ~30s——30s 超时零余量必然 flaky，放宽到 120s。
-  }, 120_000);
-
   test('hosted-runtime 持有全部新旧 composition runtime 子路径', () => {
     const manifest = readPackageManifest();
 
@@ -114,29 +106,14 @@ describe('hosted-runtime ownership boundary', () => {
     }
   });
 
-  test('apps/api adapters 生产闭包依赖不允许依赖 legacy root 或动态模块加载', async () => {
+  test('apps/api adapters 生产闭包依赖不允许依赖 legacy root', async () => {
     const adapterClosures = await Promise.all(ADAPTER_SOURCE_FILES.map((adapter) => collectAdapterClosureInputs(adapter)));
     const allClosureInputs = new Set(adapterClosures.flat());
     const forbiddenClosureInputs = [...allClosureInputs].filter(isForbiddenLegacyLocalDependency);
 
     expect(
-      workspaceBoundaryViolations.filter((violation) => violation.rule === 'MONO-009-HONO-ADAPTER-DYNAMIC' && allClosureInputs.has(violation.file)),
-    ).toEqual([]);
-
-    expect(
       forbiddenClosureInputs.map((filePath) => toPosixPath(path.relative(ROOT_DIRECTORY, filePath))),
     ).toEqual([]);
-  });
-
-  test('hosted-runtime 包源码在现有边界检查下无新增违规', () => {
-    const violations = workspaceBoundaryViolations.filter((violation) => {
-      const relativePath = toPosixPath(path.relative(ROOT_DIRECTORY, violation.file));
-      return relativePath !== ''
-        && !relativePath.startsWith('../')
-        && relativePath.startsWith('packages/hosted-runtime/src/');
-    });
-
-    expect(violations).toEqual([]);
   });
 
   test('G25H-2 preset 与 AI runtime 不经公开 Web URL self-hop', () => {

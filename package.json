@@ -48,7 +48,7 @@
     "workspace:test": "pnpm --workspace-concurrency=1 --filter \"./packages/*\" --filter \"./apps/*\" --if-present run test",
     "workspace:lint": "pnpm --filter \"./packages/*\" --filter \"./apps/*\" --if-present run lint",
     "workspace:build": "pnpm --workspace-concurrency=1 --filter \"./packages/*\" --filter \"./apps/*\" --if-present run build",
-    "workspace:checks": "pnpm run check:desktop-version && pnpm run check:desktop-provider-catalog && pnpm run check:desktop-web-execution-policies && pnpm run check:workspace:boundaries && pnpm run check:admin-boundary && pnpm run check:arena-room-origins && pnpm run check:arena-room-presets && pnpm run check:web-package-presets && pnpm run check:encyclopedia-content && pnpm run workspace:test && pnpm run workspace:lint",
+    "workspace:checks": "pnpm run workspace:invariants && pnpm run workspace:test && pnpm run workspace:lint",
     "workspace:verify": "pnpm run workspace:checks && pnpm run workspace:build",
     "ci:verify:checks": "pnpm run workspace:checks && pnpm run test:repo && pnpm run lint:repo",
     "ci:verify": "pnpm run workspace:verify && pnpm run test:repo && pnpm run lint:repo",
@@ -68,7 +68,9 @@
     "check:desktop-web-execution-policies": "node scripts/generate-desktop-web-execution-policies.mjs --check",
     "sync:desktop-version": "node scripts/sync-desktop-version.mjs",
     "check:desktop-version": "node scripts/sync-desktop-version.mjs --check",
-    "review:visual": "node scripts/review-visual.mjs"
+    "review:visual": "node scripts/review-visual.mjs",
+    "workspace:invariants": "pnpm run check:desktop-version && pnpm run check:desktop-provider-catalog && pnpm run check:desktop-web-execution-policies && pnpm run check:workspace:boundaries && pnpm run check:admin-boundary && pnpm run check:arena-room-origins && pnpm run check:arena-room-presets && pnpm run check:web-package-presets && pnpm run check:encyclopedia-content",
+    "ci:test:other": "pnpm --workspace-concurrency=1 --filter \"./packages/*\" --filter \"./apps/*\" --filter \"!@mahoshojo/desktop\" --filter \"!@mahoshojo/web\" --if-present run test"
   },
   "devDependencies": {
     "@types/node": "^20",

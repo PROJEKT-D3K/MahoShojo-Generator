@@ -23,7 +23,8 @@ describe('phase 1 workspace structure', () => {
     expect(packageJson.scripts['workspace:test']).toContain('--filter "./apps/*"');
     expect(packageJson.scripts['workspace:lint']).toContain('--filter "./packages/*"');
     expect(packageJson.scripts['workspace:build']).toContain('--filter "./apps/*"');
-    expect(packageJson.scripts['workspace:checks']).toContain('check:workspace:boundaries');
+    expect(packageJson.scripts['workspace:checks']).toContain('workspace:invariants');
+    expect(packageJson.scripts['workspace:invariants']).toContain('check:workspace:boundaries');
     expect(packageJson.scripts['workspace:verify']).toContain('workspace:checks');
     expect(packageJson.scripts['workspace:verify']).toContain('workspace:build');
     expect(packageJson.scripts['workspace:verify']).not.toContain('pnpm test');

@@ -36,11 +36,14 @@ describe('production deployment pipeline', () => {
   it('keeps complete PR/manual verification and all production tests/lint', () => {
     const scripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts;
     expect(ci.on.workflow_call.inputs.skip_build.default).toBe(false);
-    expect(ci.jobs.verify.steps.find((step: { name?: string }) => step.name === 'Verify repository').run).toBe('pnpm run ci:verify');
+    expect(ci.jobs.verify.name).toBe('Verify repository');
+    expect(ci.jobs.verify.needs).toEqual(['tests', 'static']);
+    expect(ci.jobs.static.steps.find((step: { run?: string }) => step.run === 'pnpm run workspace:build').if).toBe('${{ !inputs.skip_build }}');
     expect(scripts['ci:verify']).toContain('workspace:verify');
     expect(scripts['workspace:verify']).toBe('pnpm run workspace:checks && pnpm run workspace:build');
     expect(scripts['ci:verify:checks']).toBe('pnpm run workspace:checks && pnpm run test:repo && pnpm run lint:repo');
-    for (const command of ['check:workspace:boundaries', 'check:admin-boundary', 'check:arena-room-origins', 'check:arena-room-presets', 'workspace:test', 'workspace:lint']) expect(scripts['workspace:checks']).toContain(command);
+    for (const command of ['check:workspace:boundaries', 'check:admin-boundary', 'check:arena-room-origins', 'check:arena-room-presets']) expect(scripts['workspace:invariants']).toContain(command);
+    for (const command of ['workspace:invariants', 'workspace:test', 'workspace:lint']) expect(scripts['workspace:checks']).toContain(command);
     expect(scripts['workspace:checks']).not.toContain('workspace:build');
   });
 
@@ -54,8 +57,8 @@ describe('production deployment pipeline', () => {
     }
     expect(hono.jobs.build.concurrency['cancel-in-progress']).toBe(true);
     expect(build.jobs.build.concurrency['cancel-in-progress']).toBe(true);
-    expect(ci.concurrency).toBeUndefined();
-    expect(ci.jobs.verify.concurrency['cancel-in-progress']).toBe(true);
+    expect(ci.concurrency['cancel-in-progress']).toBe(true);
+    expect(ci.concurrency.group).toBe('repository-ci-${{ github.workflow }}-${{ github.ref }}');
     expect(publish.jobs['deploy-hono'].needs).toBe('candidate');
     expect(publish.jobs['deploy-web'].needs).toEqual(['candidate', 'deploy-hono']);
     expect(publish.jobs['deploy-web'].if).toContain("needs.deploy-hono.result == 'success'");

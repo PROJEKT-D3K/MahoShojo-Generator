@@ -16,13 +16,25 @@ on:
 permissions:
   contents: read
 
+# 整轮验证共用取消锁，matrix 各桶不能使用相同的 job 级锁。
+concurrency:
+  group: repository-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
-    name: Verify repository
+  tests:
+    name: Test ${{ matrix.suite }}
     runs-on: ubuntu-latest
-    concurrency:
-      group: repository-ci-${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: desktop
+            command: pnpm --filter @mahoshojo/desktop run test
+          - suite: web
+            command: pnpm --filter @mahoshojo/web run test
+          - suite: other-workspaces
+            command: pnpm run ci:test:other
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -41,10 +53,57 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify repository
-        if: ${{ !inputs.skip_build }}
-        run: pnpm run ci:verify
+      - name: Test workspace bucket
+        run: ${{ matrix.command }}
 
-      - name: Verify repository without duplicate builds
-        if: ${{ inputs.skip_build }}
-        run: pnpm run ci:verify:checks
+  static:
+    name: Verify static checks and builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.28.6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint workspaces
+        run: pnpm run workspace:lint
+
+      - name: Build workspaces
+        if: ${{ !inputs.skip_build }}
+        run: pnpm run workspace:build
+
+      # 保留一次完整源码边界扫描；完整构建时同时覆盖构建后的工作树。
+      - name: Verify repository invariants
+        run: pnpm run workspace:invariants
+
+      - name: Test repository tooling
+        run: pnpm run test:repo
+
+      - name: Lint repository tooling
+        run: pnpm run lint:repo
+
+  verify:
+    name: Verify repository
+    needs: [tests, static]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every verification bucket to succeed
+        env:
+          TESTS_RESULT: ${{ needs.tests.result }}
+          STATIC_RESULT: ${{ needs.static.result }}
+        run: |
+          test "$TESTS_RESULT" = success
+          test "$STATIC_RESULT" = success
