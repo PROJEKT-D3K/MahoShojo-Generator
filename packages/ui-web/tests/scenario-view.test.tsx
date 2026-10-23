@@ -81,9 +81,10 @@ it('surfaces structured output and the general editor individually without doubl
 it('uses the Web section order, compact local hint, and controlled Markdown workspace', async () => {
   const { ScenarioFormSections, ScenarioDraftNotice, GeneralScenarioEditor } = await import('../src/scenario');
   const clear = vi.fn(); const edit = vi.fn(); const create = vi.fn(); const convert = vi.fn();
+  const draft = { templateId: '通用情景', title: '钟楼', content: '# 雨夜\n\n```text\n预览代码块\n```', extra: { retained: true } };
   act(() => root.render(<>
     <ScenarioFormSections inputs={<ScenarioDraftNotice storageLabel="本机" onClear={clear} />} advanced="高级字段" provider="供应商" language="语言" mode="方式" actions="生成" tokens="Tokens" />
-    <GeneralScenarioEditor draft={{ templateId: '通用情景', title: '钟楼', content: '# 雨夜', extra: { retained: true } }} onCreate={create} onConvert={convert} canConvert onChange={edit} />
+    <GeneralScenarioEditor draft={draft} onCreate={create} onConvert={convert} canConvert onChange={edit} />
   </>));
   const text = container.textContent!;
   for (const [before, after] of [['高级字段', '供应商'], ['供应商', '语言'], ['语言', '方式'], ['方式', '生成'], ['生成', 'Tokens']]) expect(text.indexOf(before)).toBeLessThan(text.indexOf(after));
@@ -96,8 +97,13 @@ it('uses the Web section order, compact local hint, and controlled Markdown work
   const input = container.querySelector<HTMLInputElement>('#general-scenario-title')!;
   act(() => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '新标题'); input.dispatchEvent(new Event('input', { bubbles: true })); });
   expect(edit).toHaveBeenCalledWith({ title: '新标题' });
-  expect(container.querySelector('details')?.open).toBe(false);
-  expect(container.querySelector('pre')?.textContent).toContain('"retained": true');
+  const detailsBySummary = (label: string) => [...container.querySelectorAll('details')].find((details) => details.querySelector('summary')?.textContent === label);
+  const markdownPreview = detailsBySummary('Markdown 预览');
+  const technicalView = detailsBySummary('完整 JSON（技术视图）');
+  expect(markdownPreview?.open).toBe(true);
+  expect(markdownPreview?.querySelector('pre')?.textContent).toBe('预览代码块\n');
+  expect(technicalView?.open).toBe(false);
+  expect(technicalView?.querySelector('pre')?.textContent).toBe(JSON.stringify(draft, null, 2));
 });
 
 it('does not claim an old save time or successful autosave after storage fails', async () => {
