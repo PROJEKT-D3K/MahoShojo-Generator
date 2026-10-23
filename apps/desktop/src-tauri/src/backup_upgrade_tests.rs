@@ -182,7 +182,22 @@ fn pre_upgrade_failure_never_migrates_or_reclaims_pending_and_can_retry() {
         );
         assert_upgrade_pending(&c, 8, false);
         verify_backup(root, &previous).unwrap();
-        assert_eq!(list_backups(root).unwrap().invalid_count, 1);
+        assert_eq!(
+            list_backups(root).unwrap().invalid_count,
+            if fault == "journal" { 0 } else { 1 },
+            "{fault}: only failures after backup reservation retain an invalid directory"
+        );
+        if fault == "journal" {
+            let entries: Vec<_> = fs::read_dir(root.join(BACKUPS_DIRECTORY))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(
+                entries,
+                vec![std::ffi::OsString::from(&previous)],
+                "{fault}: schema rejection must not leave any backup directory entry"
+            );
+        }
         if fault == "blob-digest" {
             fs::write(&blob, b"historical blob").unwrap();
             drop(LocalLibrary::open(root).unwrap());
