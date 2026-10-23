@@ -1161,7 +1161,7 @@ fn branch_unknown_blocks_fresh_and_prebuilt_pending_save_without_losing_original
             let mut pending_token = None;
             let mut attempt = None;
             if lifecycle > 0 {
-                let token = pending::tests::upload(store, &pending, &originals);
+                let token = pending::tests::upload_large(store, &pending, &originals);
                 if lifecycle > 1 {
                     store.pending_seal(&token).unwrap();
                 }
@@ -1183,7 +1183,7 @@ fn branch_unknown_blocks_fresh_and_prebuilt_pending_save_without_losing_original
                 delete(store, "target", 2);
             }
             let pending_token = pending_token
-                .unwrap_or_else(|| pending::tests::upload(store, &pending, &originals));
+                .unwrap_or_else(|| pending::tests::upload_large(store, &pending, &originals));
             store.pending_seal(&pending_token).unwrap();
             let attempt = attempt
                 .unwrap_or_else(|| store.pending_prepare_save(&pending.key(), &wire).unwrap());
@@ -1227,7 +1227,7 @@ fn branch_unknown_blocks_fresh_and_prebuilt_pending_save_without_losing_original
             assert_fence_resources(store, 1);
             // Another product's unrelated operation remains a normal pending save.
             let (other, other_parts) = pending::tests::candidate(pending::Product::Arena, true);
-            let t = pending::tests::upload(store, &other, &other_parts);
+            let t = pending::tests::upload_large(store, &other, &other_parts);
             store.pending_seal(&t).unwrap();
             let wire = other
                 .commit_manifest

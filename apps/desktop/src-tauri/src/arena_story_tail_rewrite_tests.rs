@@ -917,7 +917,7 @@ fn unknown_fence_blocks_all_pending_lifecycles_without_losing_originals() {
                 let mut pending_token = None;
                 let mut attempt = None;
                 if lifecycle > 0 {
-                    let token = pending::tests::upload(store, &pending, &originals);
+                    let token = pending::tests::upload_large(store, &pending, &originals);
                     if lifecycle > 1 {
                         store.pending_seal(&token).unwrap();
                     }
@@ -929,7 +929,7 @@ fn unknown_fence_blocks_all_pending_lifecycles_without_losing_originals() {
                 let token = upload(store, &manifest, &parts);
                 force_unknown(store, &token, "cp-new-tail", fault);
                 let pending_token = pending_token
-                    .unwrap_or_else(|| pending::tests::upload(store, &pending, &originals));
+                    .unwrap_or_else(|| pending::tests::upload_large(store, &pending, &originals));
                 store.pending_seal(&pending_token).unwrap();
                 let attempt = attempt
                     .unwrap_or_else(|| store.pending_prepare_save(&pending.key(), &wire).unwrap());

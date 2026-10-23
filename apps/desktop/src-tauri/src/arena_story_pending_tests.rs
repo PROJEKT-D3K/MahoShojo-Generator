@@ -720,7 +720,7 @@ fn refresh(m: &mut PendingManifest, parts: &[(PendingKind, String)]) {
             .collect();
     }
 }
-fn upload_large(
+pub(in crate::arena_story) fn upload_large(
     store: &StoryStore,
     m: &PendingManifest,
     parts: &[(PendingKind, String)],
