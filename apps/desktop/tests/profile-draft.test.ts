@@ -59,6 +59,16 @@ const draft = (overrides: Partial<ProfileDraft> = {}): ProfileDraft => ({
 });
 
 describe('buildProfile', () => {
+  it('keeps Responses explicit through new, edited and copied drafts', () => {
+    const original = buildProfile(draft({ adapter: 'openai-responses' }), now);
+    expect(original.adapter).toBe('openai-responses');
+    expect(buildProfile(draft(), now, original).adapter).toBe('openai-responses');
+    expect(buildProfile(draft({ adapter: 'openai-compatible' }), now, original).adapter).toBe('openai-compatible');
+    for (const adapter of ['anthropic', 'google'] as const) {
+      expect(() => buildProfile(draft({ adapter }), now)).toThrow(ProfileDraftError);
+    }
+  });
+
   it('produces a schema-valid profile with a derived secret reference', () => {
     const profile = buildProfile(draft(), now);
 

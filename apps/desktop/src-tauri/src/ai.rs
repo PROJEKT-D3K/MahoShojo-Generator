@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
 
-use crate::provider_profile::DirectProviderExecutionProfile;
+use crate::ai_responses::ResponsesStreamState;
+use crate::provider_profile::{DirectProviderExecutionProfile, ProviderAdapter};
 use crate::provider_target::{validate_credential_purpose, CredentialPurpose};
 use crate::secret::SecretStore;
 use crate::sse::{SseFrame, SseFrameParser};
@@ -385,7 +386,7 @@ pub struct DirectAiError {
 }
 
 impl DirectAiError {
-    fn new(code: DirectAiErrorCode, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: DirectAiErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -543,6 +544,7 @@ struct UpstreamError {
 
 /// 正常完整帧与 EOF 尾帧必须共用折叠逻辑，避免尾部漏掉错误、usage 或推理。
 struct UpstreamStreamState {
+    responses: Option<ResponsesStreamState>,
     text: String,
     reasoning: String,
     pending_text: String,
@@ -560,6 +562,33 @@ impl UpstreamStreamState {
         on_event: &dyn EventSink,
     ) -> Result<(), DirectAiError> {
         let SseFrame::Data(payload) = frame;
+        if let Some(responses) = &mut self.responses {
+            let budget = (request.request_kind == Some(AiRequestKind::Arena))
+                .then_some(ARENA_OUTPUT_CONTENT_BYTES);
+            let delta = responses.consume(&payload, budget)?;
+            self.text.push_str(&delta.text);
+            self.pending_text.push_str(&delta.text);
+            self.reasoning.push_str(&delta.reasoning);
+            self.pending_reasoning.push_str(&delta.reasoning);
+            if let Some(usage) = delta.usage {
+                emit_event(
+                    on_event,
+                    AiStreamEvent::Usage {
+                        request_id: request.request_id.clone(),
+                        contract_version: request.contract_version,
+                        mode: request.mode,
+                        sequence: *sequence,
+                        usage: usage.clone(),
+                    },
+                )?;
+                *sequence += 1;
+                self.usage = Some(usage);
+            }
+            if responses.is_completed() {
+                self.finish_reason = AiExecutionFinishReason::Stop;
+            }
+            return Ok(());
+        }
         let chunk: UpstreamChunk = serde_json::from_str(&payload).map_err(|_| {
             // serde invalid-type 错误可能引用任意上游值，包括回显的凭据。
             DirectAiError::new(
@@ -625,7 +654,7 @@ impl UpstreamStreamState {
 }
 
 /// 对齐 TS 权威 schema 的 `String.trim()` 空白判定，不改写有效输出。
-fn is_blank_output(value: &str) -> bool {
+pub(crate) fn is_blank_output(value: &str) -> bool {
     value.chars().all(|c| {
         matches!(c,
             '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
@@ -668,6 +697,26 @@ fn build_request_body(
     profile: &DirectProviderExecutionProfile,
     request: &AiExecutionRequest,
 ) -> serde_json::Value {
+    if profile.adapter == ProviderAdapter::OpenaiResponses {
+        let mut body = serde_json::json!({
+            "model": request.model_id.as_deref().unwrap_or(&profile.model_id),
+            "input": request.messages.iter()
+                .map(|message| serde_json::json!({ "role": message.role, "content": message.content }))
+                .collect::<Vec<_>>(),
+            "stream": true,
+            "store": false,
+        });
+        if let Some(max_tokens) = request.max_output_tokens {
+            body["max_output_tokens"] = serde_json::json!(max_tokens);
+        }
+        if let Some(temperature) = request.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
+        if request.response_format.as_deref() == Some("json") {
+            body["text"] = serde_json::json!({ "format": { "type": "json_object" } });
+        }
+        return body;
+    }
     let mut body = serde_json::json!({
         "model": request.model_id.as_deref().unwrap_or(&profile.model_id),
         "messages": request
@@ -701,7 +750,12 @@ fn build_endpoint(profile: &DirectProviderExecutionProfile) -> Result<url::Url, 
     // 必须按路径**追加**而不是用 Url::join：base 形如 `.../v1` 时，join 会把 `v1`
     // 当成文件名替换掉，得到 `/chat/completions`，从而丢掉 OpenAI-compatible 根路径。
     let base_path = endpoint.path().trim_end_matches('/');
-    endpoint.set_path(&format!("{base_path}/chat/completions"));
+    let path = if profile.adapter == ProviderAdapter::OpenaiResponses {
+        "responses"
+    } else {
+        "chat/completions"
+    };
+    endpoint.set_path(&format!("{base_path}/{path}"));
     // Profile 的 baseUrl 是 API 根。显式清空 query 与 fragment，避免用户误配的查询参数
     // 把凭据带到意料之外的位置。
     endpoint.set_query(None);
@@ -961,6 +1015,17 @@ pub async fn run_stream(
     token: CancellationToken,
     on_event: &dyn EventSink,
 ) -> Result<(), DirectAiError> {
+    run_stream_with_protocol(upstream, request, resolved_model_id, token, on_event, false).await
+}
+
+async fn run_stream_with_protocol(
+    upstream: reqwest::Response,
+    request: &AiExecutionRequest,
+    resolved_model_id: &str,
+    token: CancellationToken,
+    on_event: &dyn EventSink,
+    responses: bool,
+) -> Result<(), DirectAiError> {
     let request_id = request.request_id.clone();
     let contract_version = request.contract_version;
     let mode = request.mode;
@@ -974,8 +1039,12 @@ pub async fn run_stream(
     } else {
         SseFrameParser::new()
     };
+    if responses {
+        parser = parser.with_typed_events();
+    }
     let mut decoder = Utf8StreamDecoder::default();
     let mut state = UpstreamStreamState {
+        responses: responses.then(ResponsesStreamState::default),
         text: String::new(),
         reasoning: String::new(),
         pending_text: String::new(),
@@ -1093,7 +1162,10 @@ pub async fn run_stream(
                 break;
             }
         }
-        saw_done = parser.is_done();
+        saw_done = state
+            .responses
+            .as_ref()
+            .map_or_else(|| parser.is_done(), ResponsesStreamState::is_completed);
 
         if failure.is_some() {
             break;
@@ -1143,8 +1215,19 @@ pub async fn run_stream(
             }
         }
     }
-    saw_done = saw_done || parser.is_done();
+    saw_done = saw_done
+        || state
+            .responses
+            .as_ref()
+            .map_or_else(|| parser.is_done(), ResponsesStreamState::is_completed);
     drop(stream);
+    // Cancellation wins even if it races with the terminal provider frame.
+    if token.is_cancelled() {
+        failure = Some(DirectAiError::new(
+            DirectAiErrorCode::Cancelled,
+            "cancelled by the client",
+        ));
+    }
 
     if failure.is_none() && saw_done && is_blank_output(&state.text) {
         let (code, message) = match state.finish_reason {
@@ -1224,7 +1307,12 @@ pub async fn run_stream(
             contract_version,
             mode,
             error: AiExecutionErrorPayload {
-                code: "internal-error".to_string(),
+                code: if responses {
+                    "invalid-response"
+                } else {
+                    "internal-error"
+                }
+                .to_string(),
                 message: Some("upstream stream ended without a terminal marker".to_string()),
                 retryable: None,
                 retry_after_ms: None,
@@ -1567,21 +1655,33 @@ async fn stream_direct_ai_inner(
         // 不回显上游响应体：它可能包含供应商侧的内部标识，且对用户排障无帮助。
         return emit_pre_stream_error_terminal(
             request,
-            DirectAiError::new(
-                map_http_status(upstream.status()),
-                format!(
+            DirectAiError {
+                code: map_http_status(upstream.status()),
+                message: format!(
                     "provider endpoint returned HTTP {}",
                     upstream.status().as_u16()
                 ),
-            ),
+                contract_code: if profile.adapter == ProviderAdapter::OpenaiResponses {
+                    match upstream.status().as_u16() {
+                        401 => Some("authentication-failed".into()),
+                        403 => Some("permission-denied".into()),
+                        429 => Some("rate-limited".into()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                },
+            },
             on_event,
         );
     }
 
     let resolved_model_id = request.model_id.as_deref().unwrap_or(&profile.model_id);
-    run_stream(upstream, request, resolved_model_id, token, on_event)
-        .await
-        .map(|_| ())
+    if profile.adapter == ProviderAdapter::OpenaiResponses {
+        run_stream_with_protocol(upstream, request, resolved_model_id, token, on_event, true).await
+    } else {
+        run_stream(upstream, request, resolved_model_id, token, on_event).await
+    }
 }
 
 #[cfg(test)]

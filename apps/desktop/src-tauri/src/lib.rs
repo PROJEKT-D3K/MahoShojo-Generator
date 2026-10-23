@@ -14,6 +14,7 @@ mod ai;
 mod ai_contract_tests;
 #[cfg(test)]
 mod ai_e2e_tests;
+mod ai_responses;
 mod announcements;
 mod arena_hosted;
 mod arena_room;

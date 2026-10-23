@@ -106,6 +106,7 @@ impl serde::Serialize for ProviderProfileError {
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderAdapter {
     OpenaiCompatible,
+    OpenaiResponses,
     Anthropic,
     Google,
 }
@@ -247,9 +248,11 @@ impl DirectProviderExecutionProfile {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ProviderProfileError> {
-        // D1 只实现 OpenAI-compatible。其余 adapter 显式失败，而不是悄悄按 OpenAI 语义
-        // 发起请求 —— 那会产生难以排查的行为差异。
-        if self.adapter != ProviderAdapter::OpenaiCompatible {
+        // 已实现的协议独立执行；其余 adapter 显式失败，不冒用 Chat Completions。
+        if !matches!(
+            self.adapter,
+            ProviderAdapter::OpenaiCompatible | ProviderAdapter::OpenaiResponses
+        ) {
             return Err(ProviderProfileError::UnsupportedAdapter);
         }
 
@@ -435,9 +438,7 @@ impl StoredProviderProfileIdentity {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_stored_profile, DirectProviderExecutionProfile, ProviderAdapter, ProviderProfileError,
-    };
+    use super::{parse_stored_profile, DirectProviderExecutionProfile, ProviderProfileError};
 
     const FIXTURE: &str =
         include_str!("../../../../packages/contracts/fixtures/provider-execution-profiles.json");
@@ -524,7 +525,14 @@ mod tests {
                 .unwrap_or_else(|error| {
                     panic!("fixture marks {entry} valid but Rust rejected it: {error:?}")
                 });
-            assert_eq!(parsed.adapter, ProviderAdapter::OpenaiCompatible);
+            assert_eq!(
+                serde_json::to_value(parsed.adapter).unwrap(),
+                entry["adapter"]
+            );
+            let stored = parse_stored_profile(&document(entry.clone())).unwrap();
+            assert_eq!(stored.adapter, parsed.adapter);
+            assert_eq!(stored.base_url, parsed.base_url);
+            assert_eq!(stored.api_key_ref, parsed.api_key_ref);
         }
     }
 

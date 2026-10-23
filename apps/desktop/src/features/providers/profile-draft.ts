@@ -5,6 +5,7 @@ import {
   DirectProviderProfileV1Schema,
   MAX_DIRECT_PROVIDER_PROFILE_BYTES,
   type DirectProviderProfileV1,
+  type DirectProviderAdapter,
 } from '@mahoshojo/contracts/provider-profile';
 import { isDesktopSecretRef } from '@mahoshojo/contracts/desktop-ipc';
 
@@ -55,6 +56,8 @@ const tauriInvoke: InvokeFn = (command, args) => invoke(command, args);
 export interface ProfileDraft {
   id: string;
   name: string;
+  /** 缺省新连接沿用 Chat Completions；编辑时保留已有协议。 */
+  adapter?: DirectProviderAdapter;
   baseUrl: string;
   modelId: string;
   /**
@@ -89,7 +92,7 @@ export const deriveApiKeyRef = (profileId: string): string => `provider:${profil
  * 把草稿装配成完整 Profile。
  *
  * 刻意不接受 `endpoint` 以外的任何出站参数，也不接受 secret header：V1 只支持
- * OpenAI-compatible + 单个 API Key。多一个字段就多一条能影响出站请求的通道。
+ * Chat Completions / Responses + 单个 API Key。多一个字段就多一条能影响出站请求的通道。
  */
 export const buildProfile = (
   draft: ProfileDraft,
@@ -110,12 +113,16 @@ export const buildProfile = (
     throw new ProfileDraftError('id', 'derived secret reference is not a valid credential target');
   }
 
+  const adapter = draft.adapter ?? existing?.adapter ?? 'openai-compatible';
+  if (adapter !== 'openai-compatible' && adapter !== 'openai-responses') {
+    throw new ProfileDraftError('adapter', `当前版本的连接编辑器不支持 ${adapter}`);
+  }
   const timestamp = now();
   const candidate = {
     version: 1 as const,
     id: draft.id,
     name: draft.name.trim() || '未命名 Endpoint',
-    adapter: 'openai-compatible' as const,
+    adapter,
     baseUrl: draft.baseUrl.trim(),
     modelId: draft.modelId.trim(),
     ...(draft.allowPublicHttp === true ? { transport: { allowPublicHttp: true as const } } : {}),

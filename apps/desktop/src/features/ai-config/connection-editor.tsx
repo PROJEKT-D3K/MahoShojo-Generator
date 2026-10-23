@@ -32,6 +32,7 @@ export interface EditingState {
 export const draftFromProfile = (profile: DirectProviderProfileV1): ProfileDraft => ({
   id: profile.id,
   name: profile.name,
+  adapter: profile.adapter,
   baseUrl: profile.baseUrl,
   modelId: profile.modelId,
   allowPublicHttp: profile.transport?.allowPublicHttp === true,
@@ -160,6 +161,7 @@ export const ConnectionEditor = ({
   // 确认放弃后明文只随 React state 丢弃，不进入任何持久化草稿。
   const isDirty =
     draft.name !== editing.draft.name ||
+    (draft.adapter ?? 'openai-compatible') !== (editing.draft.adapter ?? 'openai-compatible') ||
     draft.baseUrl !== editing.draft.baseUrl ||
     draft.modelId !== editing.draft.modelId ||
     (draft.apiKey ?? '') !== '' ||
@@ -218,7 +220,21 @@ export const ConnectionEditor = ({
         />
       </label>
       <label className="flex flex-col gap-1 text-xs">
-        <span className="battle-lite-muted-text">Endpoint（OpenAI-compatible 根路径）</span>
+        <span className="battle-lite-muted-text">API 协议</span>
+        <select
+          className="input-field"
+          value={draft.adapter ?? 'openai-compatible'}
+          onChange={(event) => {
+            const adapter = event.target.value;
+            if (adapter === 'openai-compatible' || adapter === 'openai-responses') patch({ adapter });
+          }}
+        >
+          <option value="openai-compatible">OpenAI Chat Completions</option>
+          <option value="openai-responses">OpenAI Responses</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-xs">
+        <span className="battle-lite-muted-text">Endpoint（API 根路径）</span>
         <input
           className="input-field font-mono"
           value={draft.baseUrl}

@@ -465,6 +465,24 @@ describe('DesktopAiProviderPanel', () => {
     ).toBeUndefined();
   });
 
+  it('runs a saved Responses connection through the actual generation panel', async () => {
+    const original = profiles.p1!;
+    profiles.p1 = { ...original, adapter: 'openai-responses' };
+    mocks.execute.mockResolvedValue({ status: 'completed', requestId: 'responses-panel', contractVersion: 1,
+      mode: 'direct-local', output: { text: 'Responses 输出' }, finishReason: 'stop' } satisfies AiExecutionResult);
+    try {
+      await mount();
+      expect(container.textContent).not.toContain('尚未实现 openai-responses');
+      await act(async () => button('测试当前连接')!.click());
+      await settle();
+      expect(mocks.execute).toHaveBeenCalledOnce();
+      expect(mocks.execute.mock.calls[0]![0]).toMatchObject({ mode: 'direct-local', modelId: original.modelId });
+      expect(container.textContent).toContain('测试输出：Responses 输出');
+    } finally {
+      profiles.p1 = original;
+    }
+  });
+
   it('runs the shared connection test against the resolved target', async () => {
     mocks.execute.mockResolvedValue({
       status: 'completed',

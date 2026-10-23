@@ -13,6 +13,7 @@ export const MAX_DIRECT_PROVIDER_GENERATION_DEFAULTS = 64;
 
 export const DirectProviderAdapterSchema = z.enum([
   'openai-compatible',
+  'openai-responses',
   'anthropic',
   'google',
 ]);

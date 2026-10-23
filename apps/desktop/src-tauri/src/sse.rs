@@ -65,6 +65,7 @@ pub struct SseFrameParser {
     saw_any_field: bool,
     /// 是否已收到 `[DONE]`。
     done: bool,
+    chat_done_marker: bool,
 }
 
 impl Default for SseFrameParser {
@@ -83,11 +84,18 @@ impl SseFrameParser {
             data_bytes: 0,
             saw_any_field: false,
             done: false,
+            chat_done_marker: true,
         }
     }
 
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Responses owns its typed terminal events; `[DONE]` remains ordinary data.
+    pub(crate) fn with_typed_events(mut self) -> Self {
+        self.chat_done_marker = false;
+        self
     }
 
     /// 是否已经收到 `[DONE]`。收到之后的任何字节都必须被忽略。
@@ -166,7 +174,7 @@ impl SseFrameParser {
         }
         // SSE 规定 data 值的第一个空格是分隔符，需要去掉。
         let value = value.strip_prefix(' ').unwrap_or(value);
-        if value.trim() == "[DONE]" {
+        if self.chat_done_marker && value.trim() == "[DONE]" {
             self.done = true;
             return Ok(());
         }
@@ -201,6 +209,22 @@ mod tests {
     use super::{
         SseFrame, SseFrameParser, SseParseError, MAX_SSE_FRAME_DATA_BYTES, MAX_SSE_LINE_BYTES,
     };
+
+    #[test]
+    fn typed_events_preserve_done_and_subsequent_frames() {
+        let mut parser = SseFrameParser::new().with_typed_events();
+        let frames = parser
+            .push("data: [DONE]\n\ndata: {\"type\":\"response.completed\"}\n\n")
+            .unwrap();
+        assert_eq!(
+            frames,
+            vec![
+                SseFrame::Data("[DONE]".into()),
+                SseFrame::Data("{\"type\":\"response.completed\"}".into())
+            ]
+        );
+        assert!(!parser.is_done());
+    }
 
     fn parse_all(chunks: &[&str]) -> (Vec<SseFrame>, bool) {
         let mut parser = SseFrameParser::new();

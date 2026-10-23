@@ -33,12 +33,13 @@ import {
 /**
  * 当前 Desktop native 已实现的 Direct adapter 集合。
  *
- * 这是 D5.0a 约定的宿主能力注入点：Rust 侧只有 openai-compatible 通路，因此
+ * 这是 D5.0a 约定的宿主能力注入点：Rust 已提供 Chat Completions 与 Responses 独立通路；
  * `anthropic` / `google` 的已核验 wire 也只能显示为「暂不支持的协议」。
  * native 增加 adapter 时改这一个集合即可，UI 自动跟进。
  */
 export const DESKTOP_DIRECT_ADAPTERS: ReadonlySet<DirectProviderAdapter> = new Set([
   'openai-compatible',
+  'openai-responses',
 ]);
 
 /**
@@ -48,6 +49,7 @@ export const DESKTOP_DIRECT_ADAPTERS: ReadonlySet<DirectProviderAdapter> = new S
  */
 export const DESKTOP_EDITABLE_PROFILE_ADAPTERS: ReadonlySet<DirectProviderAdapter> = new Set([
   'openai-compatible',
+  'openai-responses',
 ]);
 
 /**

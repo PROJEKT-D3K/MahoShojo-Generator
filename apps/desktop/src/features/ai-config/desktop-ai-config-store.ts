@@ -832,12 +832,12 @@ export class DesktopAiConfigStore {
       }
       const existing = this.state.profiles.find((item) => item.id === draft.id);
       // 编辑器 capability 独立于执行 capability：简化编辑器只表达
-      // openai-compatible，其他 adapter 的旧 Profile 只读展示，不得借保存把
+      // Chat Completions / Responses，其他 adapter 的旧 Profile 只读展示，不得借保存把
       // adapter 静默改写（DESK-ONLINE-003/004）。
       if (existing && !DESKTOP_EDITABLE_PROFILE_ADAPTERS.has(existing.adapter)) {
         throw new ProfileDraftError(
           'adapter',
-          `当前版本的连接编辑器仅支持 openai-compatible；该连接为 ${existing.adapter}`,
+          `当前版本的连接编辑器仅支持 openai-compatible / openai-responses；该连接为 ${existing.adapter}`,
         );
       }
 
@@ -866,7 +866,7 @@ export class DesktopAiConfigStore {
             name: built.name,
             baseUrl: built.baseUrl,
             modelId: built.modelId,
-            adapter: existing.adapter,
+            adapter: built.adapter,
             transport,
             apiKeyRef: stagedApiKeyRef ?? existing.apiKeyRef,
             updatedAt: built.updatedAt,

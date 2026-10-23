@@ -67,7 +67,7 @@ const ConnectionRow = ({
 }) => {
   const [confirming, setConfirming] = useState(false);
   // 编辑器 capability 独立于执行 capability：简化编辑器只表达
-  // openai-compatible，其他 adapter 的旧 Profile 只读展示，避免保存时把
+  // Chat Completions / Responses，其他 adapter 的旧 Profile 只读展示，避免保存时把
   // adapter 静默改写（DESK-ONLINE-003/004）。
   const editable = DESKTOP_EDITABLE_PROFILE_ADAPTERS.has(profile.adapter);
   return (
@@ -208,6 +208,7 @@ const newDraftFromPreset = (entry: DesktopPresetEntry, modelId: string): Profile
   return {
     id: newConnectionId(),
     name: `${entry.preset.name}`,
+    adapter: support.adapter,
     // 用该模型已核验 Direct wire 的端点，可能与 preset.baseUrl 分属不同协议面。
     baseUrl: resolveAiPresetModelDirectBaseUrl(entry.preset, modelId) ?? entry.preset.baseUrl,
     modelId,

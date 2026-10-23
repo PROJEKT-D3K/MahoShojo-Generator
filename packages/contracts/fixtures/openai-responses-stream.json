@@ -1,0 +1,1734 @@
+{
+  "provenance": "Synthetic official-shaped OpenAI Responses lifecycle events; not a recording or real provider validation.",
+  "sources": [
+    "https://developers.openai.com/api/docs/guides/streaming-responses",
+    "https://github.com/openai/openai-python/tree/main/src/openai/types/responses"
+  ],
+  "cases": [
+    {
+      "name": "unicode",
+      "request": {
+        "requestId": "responses-unicode",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "type": "response.created",
+          "sequence_number": 0,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.in_progress",
+          "sequence_number": 1,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 2,
+          "output_index": 0,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "in_progress",
+            "content": []
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "sequence_number": 3,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 4,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "delta": "魔法少女",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 5,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "delta": "・かなé🪄",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.done",
+          "sequence_number": 6,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "text": "魔法少女・かなé🪄",
+          "logprobs": []
+        },
+        {
+          "type": "response.content_part.done",
+          "sequence_number": 7,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "魔法少女・かなé🪄",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 8,
+          "output_index": 0,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "魔法少女・かなé🪄",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.completed",
+          "sequence_number": 9,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [
+              {
+                "id": "msg_fixture_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "魔法少女・かなé🪄",
+                    "annotations": [],
+                    "logprobs": []
+                  }
+                ]
+              }
+            ],
+            "usage": null
+          }
+        }
+      ],
+      "events": [
+        {
+          "requestId": "responses-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "responses-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "魔法少女・かなé🪄"
+        },
+        {
+          "requestId": "responses-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 2,
+          "result": {
+            "requestId": "responses-unicode",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "魔法少女・かなé🪄"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "json",
+      "request": {
+        "requestId": "responses-json",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25,
+        "responseFormat": "json"
+      },
+      "upstreamEvents": [
+        {
+          "type": "response.created",
+          "sequence_number": 0,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.in_progress",
+          "sequence_number": 1,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 2,
+          "output_index": 0,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "in_progress",
+            "content": []
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "sequence_number": 3,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 4,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "delta": "{\"answe",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 5,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "delta": "r\":\"魔法\"}",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.done",
+          "sequence_number": 6,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "text": "{\"answer\":\"魔法\"}",
+          "logprobs": []
+        },
+        {
+          "type": "response.content_part.done",
+          "sequence_number": 7,
+          "item_id": "msg_fixture_0",
+          "output_index": 0,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "{\"answer\":\"魔法\"}",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 8,
+          "output_index": 0,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "{\"answer\":\"魔法\"}",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.completed",
+          "sequence_number": 9,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [
+              {
+                "id": "msg_fixture_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "{\"answer\":\"魔法\"}",
+                    "annotations": [],
+                    "logprobs": []
+                  }
+                ]
+              }
+            ],
+            "usage": null
+          }
+        }
+      ],
+      "events": [
+        {
+          "requestId": "responses-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "responses-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "{\"answer\":\"魔法\"}"
+        },
+        {
+          "requestId": "responses-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 2,
+          "result": {
+            "requestId": "responses-json",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "{\"answer\":\"魔法\"}"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reasoning-multi-item",
+      "request": {
+        "requestId": "responses-reasoning-multi-item",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "type": "response.created",
+          "sequence_number": 0,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.in_progress",
+          "sequence_number": 1,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 2,
+          "output_index": 0,
+          "item": {
+            "id": "rs_fixture",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "synthetic-opaque-not-replayed"
+          }
+        },
+        {
+          "type": "response.reasoning_summary_part.added",
+          "sequence_number": 3,
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "part": {
+            "type": "summary_text",
+            "text": ""
+          }
+        },
+        {
+          "type": "response.reasoning_summary_text.delta",
+          "sequence_number": 4,
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "delta": "先检查，再回答。"
+        },
+        {
+          "type": "response.reasoning_summary_text.done",
+          "sequence_number": 5,
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "text": "先检查，再回答。"
+        },
+        {
+          "type": "response.reasoning_summary_part.done",
+          "sequence_number": 6,
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "part": {
+            "type": "summary_text",
+            "text": "先检查，再回答。"
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 7,
+          "output_index": 0,
+          "item": {
+            "id": "rs_fixture",
+            "type": "reasoning",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "先检查，再回答。"
+              }
+            ],
+            "encrypted_content": "synthetic-opaque-not-replayed"
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 8,
+          "output_index": 1,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "in_progress",
+            "content": []
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "sequence_number": 9,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 10,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "delta": "第一",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 11,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "delta": "段。",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.done",
+          "sequence_number": 12,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "text": "第一段。",
+          "logprobs": []
+        },
+        {
+          "type": "response.content_part.done",
+          "sequence_number": 13,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "第一段。",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 14,
+          "output_index": 1,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "第一段。",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 15,
+          "output_index": 2,
+          "item": {
+            "id": "msg_fixture_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "in_progress",
+            "content": []
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "sequence_number": 16,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 17,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "delta": "第二",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 18,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "delta": "段🪄。",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.done",
+          "sequence_number": 19,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "text": "第二段🪄。",
+          "logprobs": []
+        },
+        {
+          "type": "response.content_part.done",
+          "sequence_number": 20,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "第二段🪄。",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 21,
+          "output_index": 2,
+          "item": {
+            "id": "msg_fixture_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "第二段🪄。",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.completed",
+          "sequence_number": 22,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [
+              {
+                "id": "rs_fixture",
+                "type": "reasoning",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text": "先检查，再回答。"
+                  }
+                ],
+                "encrypted_content": "synthetic-opaque-not-replayed"
+              },
+              {
+                "id": "msg_fixture_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "第一段。",
+                    "annotations": [],
+                    "logprobs": []
+                  }
+                ]
+              },
+              {
+                "id": "msg_fixture_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "第二段🪄。",
+                    "annotations": [],
+                    "logprobs": []
+                  }
+                ]
+              }
+            ],
+            "usage": {
+              "input_tokens": 17,
+              "output_tokens": 12,
+              "total_tokens": 29,
+              "input_tokens_details": {
+                "cached_tokens": 5
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 4
+              }
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "requestId": "responses-reasoning-multi-item",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "responses-reasoning-multi-item",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "先检查，再回答。"
+        },
+        {
+          "requestId": "responses-reasoning-multi-item",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "第一段。第二段🪄。"
+        },
+        {
+          "requestId": "responses-reasoning-multi-item",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "usage",
+          "sequence": 3,
+          "usage": {
+            "inputTokens": 17,
+            "outputTokens": 12,
+            "totalTokens": 29,
+            "cachedInputTokens": 5,
+            "reasoningTokens": 4
+          }
+        },
+        {
+          "requestId": "responses-reasoning-multi-item",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 4,
+          "result": {
+            "requestId": "responses-reasoning-multi-item",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "第一段。第二段🪄。",
+              "reasoning": "先检查，再回答。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model",
+            "usage": {
+              "inputTokens": 17,
+              "outputTokens": 12,
+              "totalTokens": 29,
+              "cachedInputTokens": 5,
+              "reasoningTokens": 4
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reasoning-dual-summary-first",
+      "request": {
+        "requestId": "responses-reasoning-dual-summary-first",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "type": "response.created",
+          "sequence_number": 0,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.in_progress",
+          "sequence_number": 1,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 2,
+          "output_index": 0,
+          "item": {
+            "id": "rs_fixture",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "synthetic-opaque-not-replayed"
+          }
+        },
+        {
+          "type": "response.reasoning_text.delta",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "content_index": 0,
+          "delta": "",
+          "sequence_number": 3
+        },
+        {
+          "type": "response.reasoning_summary_part.added",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "part": {
+            "type": "summary_text",
+            "text": ""
+          },
+          "sequence_number": 4
+        },
+        {
+          "type": "response.reasoning_summary_text.delta",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "delta": "摘要视图。",
+          "sequence_number": 5
+        },
+        {
+          "type": "response.reasoning_summary_text.done",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "text": "摘要视图。",
+          "sequence_number": 6
+        },
+        {
+          "type": "response.reasoning_summary_part.done",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "part": {
+            "type": "summary_text",
+            "text": "摘要视图。"
+          },
+          "sequence_number": 7
+        },
+        {
+          "type": "response.reasoning_text.delta",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "content_index": 0,
+          "delta": "完整推理视图。",
+          "sequence_number": 8
+        },
+        {
+          "type": "response.reasoning_text.done",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "content_index": 0,
+          "text": "完整推理视图。",
+          "sequence_number": 9
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 10,
+          "output_index": 0,
+          "item": {
+            "id": "rs_fixture",
+            "type": "reasoning",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "摘要视图。"
+              }
+            ],
+            "encrypted_content": "synthetic-opaque-not-replayed",
+            "content": [
+              {
+                "type": "reasoning_text",
+                "text": "完整推理视图。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 11,
+          "output_index": 1,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "in_progress",
+            "content": []
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "sequence_number": 12,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 13,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "delta": "第一",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 14,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "delta": "段。",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.done",
+          "sequence_number": 15,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "text": "第一段。",
+          "logprobs": []
+        },
+        {
+          "type": "response.content_part.done",
+          "sequence_number": 16,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "第一段。",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 17,
+          "output_index": 1,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "第一段。",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 18,
+          "output_index": 2,
+          "item": {
+            "id": "msg_fixture_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "in_progress",
+            "content": []
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "sequence_number": 19,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 20,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "delta": "第二",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 21,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "delta": "段🪄。",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.done",
+          "sequence_number": 22,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "text": "第二段🪄。",
+          "logprobs": []
+        },
+        {
+          "type": "response.content_part.done",
+          "sequence_number": 23,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "第二段🪄。",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 24,
+          "output_index": 2,
+          "item": {
+            "id": "msg_fixture_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "第二段🪄。",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.completed",
+          "sequence_number": 25,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [
+              {
+                "id": "rs_fixture",
+                "type": "reasoning",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text": "摘要视图。"
+                  }
+                ],
+                "encrypted_content": "synthetic-opaque-not-replayed",
+                "content": [
+                  {
+                    "type": "reasoning_text",
+                    "text": "完整推理视图。"
+                  }
+                ]
+              },
+              {
+                "id": "msg_fixture_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "第一段。",
+                    "annotations": [],
+                    "logprobs": []
+                  }
+                ]
+              },
+              {
+                "id": "msg_fixture_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "第二段🪄。",
+                    "annotations": [],
+                    "logprobs": []
+                  }
+                ]
+              }
+            ],
+            "usage": {
+              "input_tokens": 17,
+              "output_tokens": 12,
+              "total_tokens": 29,
+              "input_tokens_details": {
+                "cached_tokens": 5
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 4
+              }
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "requestId": "responses-reasoning-dual-summary-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "responses-reasoning-dual-summary-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "摘要视图。"
+        },
+        {
+          "requestId": "responses-reasoning-dual-summary-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "第一段。第二段🪄。"
+        },
+        {
+          "requestId": "responses-reasoning-dual-summary-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "usage",
+          "sequence": 3,
+          "usage": {
+            "inputTokens": 17,
+            "outputTokens": 12,
+            "totalTokens": 29,
+            "cachedInputTokens": 5,
+            "reasoningTokens": 4
+          }
+        },
+        {
+          "requestId": "responses-reasoning-dual-summary-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 4,
+          "result": {
+            "requestId": "responses-reasoning-dual-summary-first",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "第一段。第二段🪄。",
+              "reasoning": "摘要视图。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model",
+            "usage": {
+              "inputTokens": 17,
+              "outputTokens": 12,
+              "totalTokens": 29,
+              "cachedInputTokens": 5,
+              "reasoningTokens": 4
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reasoning-dual-raw-first",
+      "request": {
+        "requestId": "responses-reasoning-dual-raw-first",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "type": "response.created",
+          "sequence_number": 0,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.in_progress",
+          "sequence_number": 1,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "in_progress",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [],
+            "usage": null
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 2,
+          "output_index": 0,
+          "item": {
+            "id": "rs_fixture",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "synthetic-opaque-not-replayed"
+          }
+        },
+        {
+          "type": "response.reasoning_summary_part.added",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "part": {
+            "type": "summary_text",
+            "text": ""
+          },
+          "sequence_number": 3
+        },
+        {
+          "type": "response.reasoning_summary_text.delta",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "delta": "",
+          "sequence_number": 4
+        },
+        {
+          "type": "response.reasoning_text.delta",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "content_index": 0,
+          "delta": "完整推理视图。",
+          "sequence_number": 5
+        },
+        {
+          "type": "response.reasoning_text.done",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "content_index": 0,
+          "text": "完整推理视图。",
+          "sequence_number": 6
+        },
+        {
+          "type": "response.reasoning_summary_text.delta",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "delta": "摘要视图。",
+          "sequence_number": 7
+        },
+        {
+          "type": "response.reasoning_summary_text.done",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "text": "摘要视图。",
+          "sequence_number": 8
+        },
+        {
+          "type": "response.reasoning_summary_part.done",
+          "item_id": "rs_fixture",
+          "output_index": 0,
+          "summary_index": 0,
+          "part": {
+            "type": "summary_text",
+            "text": "摘要视图。"
+          },
+          "sequence_number": 9
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 10,
+          "output_index": 0,
+          "item": {
+            "id": "rs_fixture",
+            "type": "reasoning",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "摘要视图。"
+              }
+            ],
+            "encrypted_content": "synthetic-opaque-not-replayed",
+            "content": [
+              {
+                "type": "reasoning_text",
+                "text": "完整推理视图。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 11,
+          "output_index": 1,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "in_progress",
+            "content": []
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "sequence_number": 12,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 13,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "delta": "第一",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 14,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "delta": "段。",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.done",
+          "sequence_number": 15,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "text": "第一段。",
+          "logprobs": []
+        },
+        {
+          "type": "response.content_part.done",
+          "sequence_number": 16,
+          "item_id": "msg_fixture_0",
+          "output_index": 1,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "第一段。",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 17,
+          "output_index": 1,
+          "item": {
+            "id": "msg_fixture_0",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "第一段。",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "sequence_number": 18,
+          "output_index": 2,
+          "item": {
+            "id": "msg_fixture_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "in_progress",
+            "content": []
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "sequence_number": 19,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 20,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "delta": "第二",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.delta",
+          "sequence_number": 21,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "delta": "段🪄。",
+          "logprobs": []
+        },
+        {
+          "type": "response.output_text.done",
+          "sequence_number": 22,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "text": "第二段🪄。",
+          "logprobs": []
+        },
+        {
+          "type": "response.content_part.done",
+          "sequence_number": 23,
+          "item_id": "msg_fixture_1",
+          "output_index": 2,
+          "content_index": 0,
+          "part": {
+            "type": "output_text",
+            "text": "第二段🪄。",
+            "annotations": [],
+            "logprobs": []
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "sequence_number": 24,
+          "output_index": 2,
+          "item": {
+            "id": "msg_fixture_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "第二段🪄。",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        },
+        {
+          "type": "response.completed",
+          "sequence_number": 25,
+          "response": {
+            "id": "resp_fixture",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "error": null,
+            "incomplete_details": null,
+            "model": "fixture-model",
+            "output": [
+              {
+                "id": "rs_fixture",
+                "type": "reasoning",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text": "摘要视图。"
+                  }
+                ],
+                "encrypted_content": "synthetic-opaque-not-replayed",
+                "content": [
+                  {
+                    "type": "reasoning_text",
+                    "text": "完整推理视图。"
+                  }
+                ]
+              },
+              {
+                "id": "msg_fixture_0",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "第一段。",
+                    "annotations": [],
+                    "logprobs": []
+                  }
+                ]
+              },
+              {
+                "id": "msg_fixture_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "第二段🪄。",
+                    "annotations": [],
+                    "logprobs": []
+                  }
+                ]
+              }
+            ],
+            "usage": {
+              "input_tokens": 17,
+              "output_tokens": 12,
+              "total_tokens": 29,
+              "input_tokens_details": {
+                "cached_tokens": 5
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 4
+              }
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "requestId": "responses-reasoning-dual-raw-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "responses-reasoning-dual-raw-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "完整推理视图。"
+        },
+        {
+          "requestId": "responses-reasoning-dual-raw-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "第一段。第二段🪄。"
+        },
+        {
+          "requestId": "responses-reasoning-dual-raw-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "usage",
+          "sequence": 3,
+          "usage": {
+            "inputTokens": 17,
+            "outputTokens": 12,
+            "totalTokens": 29,
+            "cachedInputTokens": 5,
+            "reasoningTokens": 4
+          }
+        },
+        {
+          "requestId": "responses-reasoning-dual-raw-first",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 4,
+          "result": {
+            "requestId": "responses-reasoning-dual-raw-first",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "第一段。第二段🪄。",
+              "reasoning": "完整推理视图。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model",
+            "usage": {
+              "inputTokens": 17,
+              "outputTokens": 12,
+              "totalTokens": 29,
+              "cachedInputTokens": 5,
+              "reasoningTokens": 4
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

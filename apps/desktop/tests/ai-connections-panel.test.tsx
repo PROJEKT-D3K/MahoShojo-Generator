@@ -12,7 +12,7 @@ import { DESKTOP_AI_CONFIG_STORAGE_KEY } from '../src/features/ai-config/desktop
 import { getDesktopAiConfigStore, resetDesktopAiConfigStoreForTests } from '../src/features/ai-config/use-desktop-ai-config';
 import { AiConnectionsPanel } from '../src/features/ai-config/AiConnectionsPanel';
 
-const mocks = vi.hoisted(() => ({ execute: vi.fn() }));
+const mocks = vi.hoisted(() => ({ execute: vi.fn(), responsesPreset: false }));
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (command: string) => {
     if (command === 'has_provider_secret') return false;
@@ -51,6 +51,24 @@ vi.mock('../src/platform/provider-profile-bridge', () => ({
   validateProviderExecutionProfile: async (_invoke: unknown, doc: unknown) => doc,
 }));
 
+// 只替换测试目录输入；实际能力判定、复制 mapper 和连接编辑器保持真实实现。
+vi.mock('../src/features/ai-config/desktop-ai-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/features/ai-config/desktop-ai-config')>();
+  return {
+    ...actual,
+    listDesktopPresetEntries: (hidden: ReadonlySet<string>) => {
+      if (!mocks.responsesPreset) return actual.listDesktopPresetEntries(hidden);
+      return [actual.describeDesktopPresetEntry({
+        id: 'fixture-responses-preset', name: '合成 Responses 预设', description: '仅测试目录输入',
+        docsUrl: 'https://example.com/protocol', baseUrl: 'https://legacy.example/v1', type: 'openai',
+        endpointKind: 'provider-public',
+        direct: { adapter: 'openai-responses', baseUrl: 'https://responses.example/v1', reviewedAt: '2026-10-23' },
+        models: [{ value: 'fixture-response-model', label: '合成模型', description: '仅测试模型' }],
+      }, false)];
+    },
+  };
+});
+
 vi.mock('../src/platform/desktop-ai-execution', () => ({
   createDesktopAiExecutionPort: () => ({ execute: mocks.execute }),
 }));
@@ -82,6 +100,7 @@ const selectConnection = async (profileId: string) => {
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
+  mocks.responsesPreset = false;
   window.localStorage.clear();
   window.localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({
     version: 2,
@@ -105,6 +124,23 @@ const mount = async () => {
 };
 
 describe('AiConnectionsPanel connection test', () => {
+  it('copies a Responses preset into the actual editor without downgrading its protocol', async () => {
+    mocks.responsesPreset = true;
+    await mount();
+    await act(async () => button('复制为自定义连接')!.click());
+    const protocol = [...container.querySelectorAll('label')]
+      .find((label) => label.textContent?.includes('API 协议'))?.querySelector('select');
+    expect(protocol?.value).toBe('openai-responses');
+    const values = [...container.querySelectorAll<HTMLInputElement>('input')].map((input) => input.value);
+    expect(values).toContain('https://responses.example/v1');
+    expect(values).toContain('fixture-response-model');
+    expect(values).not.toContain('https://legacy.example/v1');
+    // 复制只创建草稿，不隐式保存或更换当前连接。
+    expect(getDesktopAiConfigStore().getSnapshot().selection.clientConnectionId).toBe('p1');
+    expect(getDesktopAiConfigStore().getSnapshot().profiles).toHaveLength(2);
+  });
+
+
   it('cancels a running test via the cancel button', async () => {
     let finish!: (result: AiExecutionResult) => void;
     mocks.execute.mockImplementation(

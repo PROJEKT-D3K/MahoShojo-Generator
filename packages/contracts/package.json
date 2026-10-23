@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./fixtures/openai-responses-stream.json": "./fixtures/openai-responses-stream.json",
     "./local-ai-discovery": "./src/local-ai-discovery.ts",
     "./local-image-assets": "./src/local-image-assets.ts",
     "./admin": {

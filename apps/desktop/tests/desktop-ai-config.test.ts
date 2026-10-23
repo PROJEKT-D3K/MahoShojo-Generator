@@ -45,7 +45,7 @@ import {
   type DesktopAiConfigKvStorage,
   type DesktopAiConfigInvokeFn,
 } from '../src/features/ai-config/desktop-ai-config-store';
-import { saveConnectionDraft } from '../src/features/ai-config/connection-editor';
+import { draftFromProfile, saveConnectionDraft } from '../src/features/ai-config/connection-editor';
 
 const NOW = '2026-10-05T00:00:00.000Z';
 const now = () => NOW;
@@ -411,7 +411,7 @@ describe('resolveDesktopAiTarget', () => {
   });
 });
 
-describe('preset layering (DESKTOP_DIRECT_ADAPTERS = openai-compatible)', () => {
+describe('preset layering preserves verified preset protocols', () => {
   it('never offers the system entry as a client connection', () => {
     expect(AI_PROVIDER_PRESETS.some((preset) => preset.id === 'system')).toBe(false);
     expect(listDesktopPresetEntries(new Set()).every((entry) => entry.preset.id !== 'system')).toBe(
@@ -456,6 +456,29 @@ describe('preset layering (DESKTOP_DIRECT_ADAPTERS = openai-compatible)', () => 
 });
 
 describe('DesktopAiConfigStore', () => {
+  it('saves, activates, reopens and copies a Responses connection without changing protocol', async () => {
+    const native = createNativeStub();
+    const storage = createStorage();
+    const store = createStore(storage, native.invoke);
+    store.init();
+    await vi.waitFor(() => expect(store.getSnapshot().profilesState).toBe('ready'));
+    const draft = { id: 'responses', name: 'Responses', adapter: 'openai-responses' as const, baseUrl: 'https://api.example.com/v1', modelId: 'responses-model' };
+    await saveConnectionDraft(store, draft, { activate: true });
+    expect(native.profiles.get(draft.id)?.adapter).toBe('openai-responses');
+    const reopened = createStore(storage, native.invoke);
+    reopened.init();
+    await vi.waitFor(() => expect(reopened.getSnapshot().profilesState).toBe('ready'));
+    const profile = reopened.getSnapshot().profiles.find((item) => item.id === draft.id)!;
+    const target = resolveDesktopAiTarget(reopened.getSnapshot().selection, [profile], {}, {});
+    expect(target.unavailableReason).toBeNull();
+    expect(target.mode).toBe('direct-remote');
+    expect(target.profile?.adapter).toBe('openai-responses');
+    await saveConnectionDraft(reopened, { ...draftFromProfile(profile), id: 'responses-copy' }, { activate: true });
+    expect(native.profiles.get('responses-copy')?.adapter).toBe('openai-responses');
+    await reopened.saveConnection({ ...draftFromProfile(profile), adapter: 'openai-compatible' });
+    expect(native.profiles.get(draft.id)?.adapter).toBe('openai-compatible');
+  });
+
   it('keeps client+null on fresh profiles load instead of auto-selecting the first', async () => {
     const storage = createStorage();
     const native = createNativeStub([profileFixture()]);

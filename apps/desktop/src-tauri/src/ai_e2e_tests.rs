@@ -2076,3 +2076,6 @@ async fn a_custom_profile_named_like_a_prompt_json_preset_keeps_its_own_policy()
     ));
     assert_eq!(server.observation.await.unwrap().request_count, 1);
 }
+
+#[path = "ai_responses_e2e_tests.rs"]
+mod responses;
