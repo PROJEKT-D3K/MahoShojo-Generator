@@ -22,6 +22,7 @@ use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
 
 use crate::ai_anthropic::AnthropicStreamState;
+use crate::ai_google::GoogleStreamState;
 use crate::ai_responses::ResponsesStreamState;
 use crate::provider_profile::{DirectProviderExecutionProfile, ProviderAdapter};
 use crate::provider_target::{validate_credential_purpose, CredentialPurpose};
@@ -286,7 +287,7 @@ pub struct AiExecutionRequest {
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
     #[serde(default)]
-    pub temperature: Option<f32>,
+    pub temperature: Option<f64>,
     #[serde(default)]
     pub response_format: Option<String>,
 }
@@ -549,12 +550,14 @@ enum StreamProtocol {
     Chat,
     Responses,
     Anthropic,
+    Google,
 }
 
 enum StreamProtocolState {
     Chat,
     Responses(ResponsesStreamState),
     Anthropic(AnthropicStreamState),
+    Google(GoogleStreamState),
 }
 impl StreamProtocolState {
     fn is_completed(&self, parser: &SseFrameParser) -> bool {
@@ -562,6 +565,8 @@ impl StreamProtocolState {
             Self::Chat => parser.is_done(),
             Self::Responses(state) => state.is_completed(),
             Self::Anthropic(state) => state.is_completed(),
+            // GenerateContent must keep reading through normal EOF, including tail usage.
+            Self::Google(_) => false,
         }
     }
 }
@@ -606,6 +611,10 @@ impl UpstreamStreamState {
                     delta.usage,
                     state.is_completed(),
                 ))
+            }
+            StreamProtocolState::Google(state) => {
+                let delta = state.consume(&payload, budget)?;
+                Some((delta.text, delta.reasoning, delta.usage, false))
             }
         };
         if let Some((text, reasoning, usage, completed)) = delta {
@@ -743,6 +752,60 @@ fn build_request_body(
     profile: &DirectProviderExecutionProfile,
     request: &AiExecutionRequest,
 ) -> Result<serde_json::Value, DirectAiError> {
+    if profile.adapter == ProviderAdapter::Google {
+        let invalid = || {
+            DirectAiError::new(DirectAiErrorCode::UnsupportedRequest,
+            "GenerateContent requires leading system instructions followed by text user/model turns and supported generation settings")
+        };
+        let first_turn = request
+            .messages
+            .iter()
+            .position(|message| message.role != "system")
+            .ok_or_else(invalid)?;
+        let turns = &request.messages[first_turn..];
+        if turns
+            .iter()
+            .any(|message| !matches!(message.role.as_str(), "user" | "assistant"))
+            || request.max_output_tokens == Some(0)
+            || request
+                .temperature
+                .is_some_and(|value| !value.is_finite() || !(0.0..=2.0).contains(&value))
+            || request
+                .response_format
+                .as_deref()
+                .is_some_and(|value| !matches!(value, "text" | "json"))
+        {
+            return Err(invalid());
+        }
+        let mut system = request.messages[..first_turn]
+            .iter()
+            .map(|message| serde_json::json!({"text":message.content}))
+            .collect::<Vec<_>>();
+        let mut config = serde_json::Map::new();
+        if let Some(value) = request.max_output_tokens {
+            config.insert("maxOutputTokens".into(), serde_json::json!(value));
+        }
+        if let Some(value) = request.temperature {
+            config.insert("temperature".into(), serde_json::json!(value));
+        }
+        if request.response_format.as_deref() == Some("json") {
+            config.insert(
+                "responseMimeType".into(),
+                serde_json::json!("application/json"),
+            );
+            system.push(serde_json::json!({"text":"Return only valid JSON matching the requested structure. Do not include Markdown fences or commentary."}));
+        }
+        let mut body = serde_json::json!({"contents":turns.iter().map(|message|
+            serde_json::json!({"role":if message.role == "assistant" {"model"} else {"user"}, "parts":[{"text":message.content}]})).collect::<Vec<_>>()});
+        if !system.is_empty() {
+            body["systemInstruction"] = serde_json::json!({"parts":system});
+        }
+        if !config.is_empty() {
+            body["generationConfig"] = serde_json::Value::Object(config);
+        }
+        // Thinking controls are deliberately not guessed from arbitrary custom model names.
+        return Ok(body);
+    }
     if profile.adapter == ProviderAdapter::Anthropic {
         let invalid = || {
             DirectAiError::new(
@@ -851,13 +914,45 @@ fn build_request_body(
     Ok(body)
 }
 
-fn build_endpoint(profile: &DirectProviderExecutionProfile) -> Result<url::Url, DirectAiError> {
+fn build_endpoint(
+    profile: &DirectProviderExecutionProfile,
+    model_id: &str,
+) -> Result<url::Url, DirectAiError> {
     let mut endpoint = url::Url::parse(&profile.base_url).map_err(|_| {
         DirectAiError::new(
             DirectAiErrorCode::ProfileRejected,
             "profile base URL is invalid",
         )
     })?;
+    if profile.adapter == ProviderAdapter::Google {
+        let model_id = model_id.strip_prefix("models/").unwrap_or(model_id);
+        if model_id.trim().is_empty()
+            || matches!(model_id, "." | "..")
+            || model_id.contains(['/', '\\', '?', '#'])
+            || model_id.chars().any(char::is_control)
+        {
+            return Err(DirectAiError::new(
+                DirectAiErrorCode::UnsupportedRequest,
+                "GenerateContent model ID must be one model resource component",
+            ));
+        }
+        // Encode the entire component, including ':' and '%', so custom identifiers
+        // cannot inject another action, URL query or resource path.
+        const COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+            .remove(b'-')
+            .remove(b'_')
+            .remove(b'.')
+            .remove(b'~');
+        let model = percent_encoding::utf8_percent_encode(model_id, COMPONENT);
+        let path = format!(
+            "{}/models/{model}:streamGenerateContent",
+            endpoint.path().trim_end_matches('/')
+        );
+        endpoint.set_path(&path);
+        endpoint.set_query(Some("alt=sse"));
+        endpoint.set_fragment(None);
+        return Ok(endpoint);
+    }
     // 必须按路径**追加**而不是用 Url::join：base 形如 `.../v1` 时，join 会把 `v1`
     // 当成文件名替换掉，得到 `/chat/completions`，从而丢掉 OpenAI-compatible 根路径。
     let base_path = endpoint.path().trim_end_matches('/');
@@ -897,6 +992,15 @@ pub(crate) fn build_headers_for_purpose(
         )
     })?;
     let anthropic = profile.adapter == ProviderAdapter::Anthropic;
+    let google = profile.adapter == ProviderAdapter::Google;
+    if google {
+        crate::provider_profile::validate_google_headers(profile).map_err(|_| {
+            DirectAiError::new(
+                DirectAiErrorCode::ProfileRejected,
+                "GenerateContent headers conflict with protocol policy or API key authentication",
+            )
+        })?;
+    }
     if anthropic {
         for (name, value) in profile.public_headers.iter().flatten() {
             let required = match name.to_ascii_lowercase().as_str() {
@@ -984,10 +1088,12 @@ pub(crate) fn build_headers_for_purpose(
         headers.insert(
             if anthropic {
                 reqwest::header::HeaderName::from_static("x-api-key")
+            } else if google {
+                reqwest::header::HeaderName::from_static("x-goog-api-key")
             } else {
                 reqwest::header::AUTHORIZATION
             },
-            reqwest::header::HeaderValue::from_str(&if anthropic {
+            reqwest::header::HeaderValue::from_str(&if anthropic || google {
                 value
             } else {
                 format!("Bearer {value}")
@@ -1206,7 +1312,7 @@ async fn run_stream_with_protocol(
     let mut sequence: u32 = 1;
 
     let mut parser = if request.request_kind == Some(AiRequestKind::Arena)
-        || protocol == StreamProtocol::Anthropic
+        || matches!(protocol, StreamProtocol::Anthropic | StreamProtocol::Google)
     {
         // Opaque thinking is encrypted content, not a tiny signature. Permit a
         // bounded complete value plus JSON escaping; the reducer limits decoded
@@ -1228,6 +1334,7 @@ async fn run_stream_with_protocol(
             StreamProtocol::Anthropic => {
                 StreamProtocolState::Anthropic(AnthropicStreamState::default())
             }
+            StreamProtocol::Google => StreamProtocolState::Google(GoogleStreamState::default()),
         },
         text: String::new(),
         reasoning: String::new(),
@@ -1322,12 +1429,12 @@ async fn run_stream_with_protocol(
             }
         };
 
-        if protocol == StreamProtocol::Anthropic {
+        if matches!(protocol, StreamProtocol::Anthropic | StreamProtocol::Google) {
             wire_bytes = wire_bytes.saturating_add(chunk.len());
             if wire_bytes > ARENA_MAX_WIRE_BYTES {
                 failure = Some(DirectAiError {
                     code: DirectAiErrorCode::StreamProtocol,
-                    message: "Messages stream exceeded the fixed wire budget".into(),
+                    message: "provider stream exceeded the fixed wire budget".into(),
                     contract_code: Some("output-too-large".into()),
                 });
                 break;
@@ -1423,6 +1530,19 @@ async fn run_stream_with_protocol(
         }
     }
     saw_done = saw_done || state.protocol.is_completed(&parser);
+    if failure.is_none() {
+        if let StreamProtocolState::Google(google) = &state.protocol {
+            match google.finish() {
+                Ok(()) => {
+                    saw_done = true;
+                    state.finish_reason = AiExecutionFinishReason::Stop;
+                }
+                Err(error) => {
+                    failure = Some(error);
+                }
+            }
+        }
+    }
     drop(stream);
     // Cancellation wins even if it races with the terminal provider frame.
     if token.is_cancelled() {
@@ -1565,8 +1685,13 @@ async fn run_stream_with_protocol(
         resolved_model_id: Some(resolved_model_id.to_string()),
         usage: state.usage.clone(),
     });
-    let exceeded = request.request_kind == Some(AiRequestKind::Arena)
-        && !arena_result_within_budget(&completed);
+    let exceeded = if request.request_kind == Some(AiRequestKind::Arena) {
+        !arena_result_within_budget(&completed)
+    } else {
+        // Mirror the shared ordinary result envelope; do not emit known-invalid success.
+        protocol == StreamProtocol::Google
+            && serde_json::to_vec(&completed).map_or(true, |value| value.len() > 1_000_000)
+    };
     let completed = if exceeded {
         AiExecutionResult::Failed(AiExecutionFailedResult {
             request_id: request_id.clone(),
@@ -1839,7 +1964,8 @@ async fn stream_direct_ai_inner(
         Ok(client) => client,
         Err(error) => return emit_pre_stream_error_terminal(request, error, on_event),
     };
-    let endpoint = match build_endpoint(profile) {
+    let resolved_model_id = request.model_id.as_deref().unwrap_or(&profile.model_id);
+    let endpoint = match build_endpoint(profile, resolved_model_id) {
         Ok(endpoint) => endpoint,
         Err(error) => return emit_pre_stream_error_terminal(request, error, on_event),
     };
@@ -1891,13 +2017,23 @@ async fn stream_direct_ai_inner(
                 ),
                 contract_code: if matches!(
                     profile.adapter,
-                    ProviderAdapter::OpenaiResponses | ProviderAdapter::Anthropic
+                    ProviderAdapter::OpenaiResponses
+                        | ProviderAdapter::Anthropic
+                        | ProviderAdapter::Google
                 ) {
                     match upstream.status().as_u16() {
-                        400 if profile.adapter == ProviderAdapter::Anthropic => {
+                        400 if matches!(
+                            profile.adapter,
+                            ProviderAdapter::Anthropic | ProviderAdapter::Google
+                        ) =>
+                        {
                             Some("invalid-request".into())
                         }
-                        413 if profile.adapter == ProviderAdapter::Anthropic => {
+                        413 if matches!(
+                            profile.adapter,
+                            ProviderAdapter::Anthropic | ProviderAdapter::Google
+                        ) =>
+                        {
                             Some("output-too-large".into())
                         }
                         401 => Some("authentication-failed".into()),
@@ -1913,31 +2049,33 @@ async fn stream_direct_ai_inner(
         );
     }
 
-    if profile.adapter == ProviderAdapter::Anthropic
-        && !upstream
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| {
-                value
-                    .split(';')
-                    .next()
-                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
-            })
+    if matches!(
+        profile.adapter,
+        ProviderAdapter::Anthropic | ProviderAdapter::Google
+    ) && !upstream
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
+        })
     {
         return emit_pre_stream_error_terminal(
             request,
             DirectAiError::new(
                 DirectAiErrorCode::StreamProtocol,
-                "Messages endpoint did not return an event stream",
+                "provider endpoint did not return an event stream",
             ),
             on_event,
         );
     }
-    let resolved_model_id = request.model_id.as_deref().unwrap_or(&profile.model_id);
     let protocol = match profile.adapter {
         ProviderAdapter::OpenaiResponses => StreamProtocol::Responses,
         ProviderAdapter::Anthropic => StreamProtocol::Anthropic,
+        ProviderAdapter::Google => StreamProtocol::Google,
         _ => StreamProtocol::Chat,
     };
     if protocol == StreamProtocol::Chat {
@@ -2175,6 +2313,44 @@ mod credential_snapshot_tests {
 #[cfg(test)]
 mod request_body_tests {
     use super::*;
+
+    #[test]
+    fn json_temperature_keeps_javascript_number_precision_without_protocol_guesses() {
+        let request: AiExecutionRequest = serde_json::from_value(serde_json::json!({
+            "requestId":"precise-temperature", "contractVersion":1, "mode":"direct-local",
+            "messages":[{"role":"user","content":"hello"}], "temperature":0.65
+        }))
+        .unwrap();
+        for adapter in [
+            ProviderAdapter::OpenaiCompatible,
+            ProviderAdapter::OpenaiResponses,
+            ProviderAdapter::Google,
+            ProviderAdapter::Anthropic,
+        ] {
+            let profile = DirectProviderExecutionProfile {
+                id: "custom".into(),
+                name: "custom".into(),
+                adapter,
+                base_url: "https://api.example.invalid/v1".into(),
+                model_id: "gemini-custom".into(),
+                api_key_ref: None,
+                secret_header_refs: None,
+                public_headers: None,
+                transport: None,
+            };
+            let body = build_request_body(&profile, &request).unwrap();
+            if adapter == ProviderAdapter::Anthropic {
+                assert!(body.get("temperature").is_none());
+            } else if adapter == ProviderAdapter::Google {
+                assert_eq!(
+                    body["generationConfig"]["temperature"],
+                    serde_json::json!(0.65)
+                );
+            } else {
+                assert_eq!(body["temperature"], serde_json::json!(0.65));
+            }
+        }
+    }
 
     #[test]
     fn trusted_preset_omits_only_explicitly_unsupported_temperature() {

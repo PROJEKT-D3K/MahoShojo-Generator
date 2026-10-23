@@ -234,6 +234,42 @@ fn is_project_owned_host(host: &str) -> bool {
         .any(|suffix| normalized == *suffix || normalized.ends_with(&format!(".{suffix}")))
 }
 
+/// Protocol-controlled headers are checked at save and again when credentials are resolved.
+pub(crate) fn validate_google_headers(
+    profile: &DirectProviderExecutionProfile,
+) -> Result<(), ProviderProfileError> {
+    let mut names = std::collections::HashSet::new();
+    for (name, value) in profile.public_headers.iter().flatten() {
+        let name = name.to_ascii_lowercase();
+        let required = match name.as_str() {
+            "accept" => Some("text/event-stream"),
+            "content-type" => Some("application/json"),
+            _ => None,
+        };
+        if !names.insert(name.clone())
+            || name == "x-goog-api-key"
+            || required.is_some_and(|required| value != required)
+        {
+            return Err(ProviderProfileError::InvalidHeader);
+        }
+    }
+    for name in profile
+        .secret_header_refs
+        .iter()
+        .flatten()
+        .map(|(name, _)| name)
+    {
+        let name = name.to_ascii_lowercase();
+        if !names.insert(name.clone())
+            || matches!(name.as_str(), "accept" | "content-type")
+            || (name == "x-goog-api-key" && profile.api_key_ref.is_some())
+        {
+            return Err(ProviderProfileError::SecretHeaderOverlap);
+        }
+    }
+    Ok(())
+}
+
 impl DirectProviderExecutionProfile {
     /// 从 opaque JSON 文档解析并**重新校验**安全子集。
     pub fn parse(document: &str) -> Result<Self, ProviderProfileError> {
@@ -254,6 +290,7 @@ impl DirectProviderExecutionProfile {
             ProviderAdapter::OpenaiCompatible
                 | ProviderAdapter::OpenaiResponses
                 | ProviderAdapter::Anthropic
+                | ProviderAdapter::Google
         ) {
             return Err(ProviderProfileError::UnsupportedAdapter);
         }
@@ -269,6 +306,21 @@ impl DirectProviderExecutionProfile {
         }
         if !url.username().is_empty() || url.password().is_some() {
             return Err(ProviderProfileError::InvalidBaseUrl);
+        }
+        if self.adapter == ProviderAdapter::Google {
+            let path = percent_encoding::percent_decode_str(url.path())
+                .decode_utf8()
+                .map_err(|_| ProviderProfileError::InvalidBaseUrl)?;
+            let path = path.trim_end_matches('/');
+            if url.query().is_some()
+                || url.fragment().is_some()
+                || path.ends_with("/models")
+                || path.contains(":generateContent")
+                || path.contains(":streamGenerateContent")
+            {
+                return Err(ProviderProfileError::InvalidBaseUrl);
+            }
+            validate_google_headers(self)?;
         }
         let host = url.host_str().ok_or(ProviderProfileError::InvalidBaseUrl)?;
 
@@ -655,15 +707,33 @@ mod tests {
     }
 
     #[test]
-    fn refuses_google_until_its_adapter_is_implemented() {
-        let profile = serde_json::json!({
-            "id": "p", "name": "n", "adapter": "google",
-            "baseUrl": "https://api.example.com/v1", "modelId": "m"
-        });
-        assert_eq!(
-            DirectProviderExecutionProfile::parse(&document(profile)).expect_err("must be refused"),
-            ProviderProfileError::UnsupportedAdapter
-        );
+    fn google_accepts_api_roots_but_rejects_credentials_or_complete_actions_in_urls() {
+        for base_url in [
+            "https://api.example.com/proxy/v1beta/",
+            "http://localhost:8080/v1",
+        ] {
+            let profile = serde_json::json!({
+                "id": "p", "name": "n", "adapter": "google", "baseUrl": base_url, "modelId": "m"
+            });
+            assert!(DirectProviderExecutionProfile::parse(&document(profile)).is_ok());
+        }
+        for suffix in [
+            "?key=synthetic-secret",
+            "#fragment",
+            "/models",
+            "/models/",
+            "/models/m:generateContent",
+            "/models/m:streamGenerateContent",
+        ] {
+            let profile = serde_json::json!({
+                "id": "p", "name": "n", "adapter": "google",
+                "baseUrl": format!("https://api.example.com/v1beta{suffix}"), "modelId": "m"
+            });
+            assert_eq!(
+                DirectProviderExecutionProfile::parse(&document(profile)).unwrap_err(),
+                ProviderProfileError::InvalidBaseUrl
+            );
+        }
     }
 
     #[test]

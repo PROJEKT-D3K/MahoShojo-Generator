@@ -2082,3 +2082,6 @@ mod responses;
 
 #[path = "ai_anthropic_e2e_tests.rs"]
 mod anthropic;
+
+#[path = "ai_google_e2e_tests.rs"]
+mod google;

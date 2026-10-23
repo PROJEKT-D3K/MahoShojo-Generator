@@ -330,12 +330,12 @@ describe('resolveDesktopAiTarget', () => {
     );
   });
 
-  it('supports saved Messages profiles while still rejecting Google', () => {
+  it('supports saved Messages and GenerateContent custom profiles', () => {
     for (const adapter of ['anthropic', 'google'] as const) {
       const profile = profileFixture({ adapter, baseUrl: 'https://model.example/v1' });
       const target = resolveDesktopAiTarget(clientSelection('p_local'), [profile], {}, {});
-      expect(target.mode).toBe(adapter === 'anthropic' ? 'direct-remote' : null);
-      expect(target.unavailableReason).toBe(adapter === 'anthropic' ? null : '当前客户端尚未实现 google 适配器，请改用 OpenAI-compatible 连接');
+      expect(target.mode).toBe('direct-remote');
+      expect(target.unavailableReason).toBeNull();
     }
   });
 
@@ -447,12 +447,12 @@ describe('preset layering preserves verified preset protocols', () => {
     expect(DESKTOP_DIRECT_ADAPTERS.has('openai-compatible')).toBe(true);
   });
 
-  it('does not expand preset eligibility when Messages becomes executable for custom profiles', () => {
+  it.each(['anthropic', 'google'] as const)('does not expand preset eligibility when %s becomes executable for custom profiles', (adapter) => {
     const synthetic: AiProviderPreset = { ...presetById('kourichat'),
-      direct: { adapter: 'anthropic', reviewedAt: '2026-10-21' },
+      direct: { adapter, reviewedAt: '2026-10-21' },
       models: [{ value: 'custom-claude', label: 'Claude', description: 'synthetic wire evidence' }] };
     expect(DESKTOP_DIRECT_ADAPTERS.has('anthropic')).toBe(true);
-    expect(DESKTOP_DIRECT_ADAPTERS.has('google')).toBe(false);
+    expect(DESKTOP_DIRECT_ADAPTERS.has('google')).toBe(true);
     expect(describeDesktopPresetEntry(synthetic, false).directCapableModels).toEqual([]);
     expect(describeDesktopPresetModelSupport(synthetic, 'custom-claude').supported).toBe(false);
   });
@@ -465,7 +465,7 @@ describe('preset layering preserves verified preset protocols', () => {
 });
 
 describe('DesktopAiConfigStore', () => {
-  it.each(['openai-responses', 'anthropic'] as const)('saves, activates, reopens and copies a %s connection without changing protocol', async (adapter) => {
+  it.each(['openai-responses', 'anthropic', 'google'] as const)('saves, activates, reopens and copies a %s connection without changing protocol', async (adapter) => {
     const native = createNativeStub();
     const storage = createStorage();
     const store = createStore(storage, native.invoke);
@@ -1075,7 +1075,7 @@ describe('DesktopAiConfigStore', () => {
     expect(native.secrets.size).toBe(0);
   });
 
-  it('refuses to edit a legacy profile whose adapter the editor cannot express', async () => {
+  it('edits an existing Google profile without silently replacing its protocol', async () => {
     const legacy = profileFixture({
       id: 'p_google',
       adapter: 'google',
@@ -1093,11 +1093,11 @@ describe('DesktopAiConfigStore', () => {
         baseUrl: 'https://model.example/v1',
         modelId: 'gemini',
       }),
-    ).rejects.toThrow(/openai-compatible/u);
-    // 原 Profile 完全未被触碰，adapter 没被静默改写成 openai-compatible。
+    ).resolves.toMatchObject({ persisted: true });
+    // 省略 adapter 的旧调用也必须保留既有协议，不静默切回 Chat。
     expect(native.profiles.get('p_google')?.adapter).toBe('google');
-    expect(native.profiles.get('p_google')?.name).toBe('本地模型');
-    expect(native.calls).not.toContain('save_provider_profile');
+    expect(native.profiles.get('p_google')?.name).toBe('改名而已');
+    expect(native.calls).toContain('save_provider_profile');
   });
 
   it('clearApiKey removes the apiKeyRef and deletes the old credential after save', async () => {

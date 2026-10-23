@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // DesktopAiProviderPanel（D5.1-AIP-4）回归：
 // 五个生成页共用同一份「执行位置 + 连接 + 生效模型 + 高级参数 + 连接测试」
-// 装配。钉住分组下拉语义、原子激活、未实现 adapter 提示、多模型选择与
+// 装配。钉住分组下拉语义、原子激活、协议能力提示、多模型选择与
 // 内嵌连接编辑器入口，防止各页再长出私有副本。
 
 import { act, StrictMode, type ReactNode } from 'react';
@@ -260,7 +260,7 @@ describe('DesktopAiProviderPanel', () => {
     ).toBe(true);
   });
 
-  it('shows the unavailable reason for an unimplemented adapter without hiding the connection', async () => {
+  it('makes a saved Google custom connection available without changing its identity', async () => {
     seedOverlay({
       version: 3,
       selection: { executionPreference: 'client', clientConnectionId: 'google' },
@@ -271,8 +271,8 @@ describe('DesktopAiProviderPanel', () => {
     mocks.profileIds = ['p1', 'p2', 'google'];
     await mount();
     expect(container.textContent).toContain('三号');
-    expect(container.textContent).toContain('当前客户端尚未实现 google 适配器');
-    expect(button('测试当前连接')).toBeUndefined();
+    expect(container.textContent).not.toContain('当前客户端尚未实现 google 适配器');
+    expect(button('测试当前连接')).toBeTruthy();
   });
 
   it('opens the shared connection editor from the action area and navigates to settings', async () => {
@@ -483,10 +483,10 @@ describe('DesktopAiProviderPanel', () => {
     }
   });
 
-  it('projects Messages controls for any custom model and retains stored preferences across protocol changes', async () => {
+  it.each(['anthropic', 'google'] as const)('projects %s controls for any custom model and retains stored preferences across protocol changes', async (adapter) => {
     const original = profiles.p1!;
     const savedOverrides = { temperature: 0.8, thinking: { mode: 'enabled' as const, effort: 'high' as const }, maxOutputTokens: 7000 };
-    profiles.p1 = { ...original, adapter: 'anthropic' };
+    profiles.p1 = { ...original, adapter };
     seedOverlay({ version: 3, selection: { executionPreference: 'client', clientConnectionId: 'p1' }, hiddenPresetIds: [],
       generationOverrides: { p1: { m1: savedOverrides, 'arbitrary-model': savedOverrides } },
       modelsByProfileId: { p1: { selectedModelId: 'arbitrary-model', customModelIds: ['arbitrary-model'] } } });
@@ -498,11 +498,20 @@ describe('DesktopAiProviderPanel', () => {
       const [maxTokens, temperature] = [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')];
       expect(maxTokens?.disabled).toBe(false);
       expect(maxTokens?.value).toBe('7000');
-      expect(temperature?.disabled).toBe(true);
+      expect(temperature?.disabled).toBe(adapter === 'anthropic');
       expect(temperature?.value).toBe('0.8');
-      expect(container.textContent).toContain('输出上限 4096');
-      expect(container.textContent).toContain('本协议不发送 temperature');
-      expect(container.textContent).toContain('Thinking 开关或 effort 强度设置');
+      if (adapter === 'anthropic') {
+        expect(container.textContent).toContain('输出上限 4096');
+        expect(container.textContent).toContain('本协议不发送 temperature');
+        expect(container.textContent).toContain('Thinking 开关或 effort 强度设置');
+      } else {
+        expect(temperature?.max).toBe('2');
+        expect(container.textContent).toContain('留空时不发送输出上限');
+        expect(container.textContent).toContain('temperature 在 0–2 范围内原值发送');
+        expect(container.textContent).toContain('暂不发送 Thinking 开关或强度');
+        expect(container.textContent).toContain('不能保证关闭或返回摘要');
+        expect(container.textContent).not.toContain('4096');
+      }
       expect(container.querySelector('input[name="thinking-mode"]')).toBeNull();
       await act(async () => button('测试当前连接')!.click());
       await settle();

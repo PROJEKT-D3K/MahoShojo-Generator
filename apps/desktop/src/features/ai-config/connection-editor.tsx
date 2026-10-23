@@ -12,7 +12,7 @@ import { ProviderModelIdSchema } from '@mahoshojo/contracts/provider-target';
 import type { AIModelOption } from '@mahoshojo/ai-core/provider-catalog';
 
 import { ProfileDraftError, type ProfileDraft } from '../providers/profile-draft';
-import { DESKTOP_ANTHROPIC_POLICY } from '../providers/protocol-capabilities';
+import { DESKTOP_ANTHROPIC_POLICY, DESKTOP_GOOGLE_POLICY } from '../providers/protocol-capabilities';
 import {
   DesktopSaveConnectionCommitError,
   type DesktopAiConfigStore,
@@ -227,12 +227,13 @@ export const ConnectionEditor = ({
           value={draft.adapter ?? 'openai-compatible'}
           onChange={(event) => {
             const adapter = event.target.value;
-            if (adapter === 'openai-compatible' || adapter === 'openai-responses' || adapter === 'anthropic') patch({ adapter });
+            if (adapter === 'openai-compatible' || adapter === 'openai-responses' || adapter === 'anthropic' || adapter === 'google') patch({ adapter });
           }}
         >
           <option value="openai-compatible">OpenAI Chat Completions</option>
           <option value="openai-responses">OpenAI Responses</option>
           <option value="anthropic">Anthropic Messages</option>
+          <option value="google">Google Gemini GenerateContent</option>
         </select>
       </label>
       <label className="flex flex-col gap-1 text-xs">
@@ -240,7 +241,7 @@ export const ConnectionEditor = ({
         <input
           className="input-field font-mono"
           value={draft.baseUrl}
-          placeholder={draft.adapter === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.example.com/v1'}
+          placeholder={draft.adapter === 'anthropic' ? 'https://api.anthropic.com/v1' : draft.adapter === 'google' ? 'https://generativelanguage.googleapis.com/v1beta' : 'https://api.example.com/v1'}
           onChange={(event) => patch({ baseUrl: event.target.value })}
         />
       </label>
@@ -248,6 +249,14 @@ export const ConnectionEditor = ({
         <p>{DESKTOP_ANTHROPIC_POLICY.endpointHint}</p>
         <p>固定 anthropic-version：{DESKTOP_ANTHROPIC_POLICY.version} · API Key 使用 x-api-key · 默认输出上限 {DESKTOP_ANTHROPIC_POLICY.defaultMaxOutputTokens} Tokens（可在高级设置覆盖，并非模型上限）。</p>
         <p>不发送 temperature，暂不支持 Thinking / effort 设置；旧偏好保留但不生效。JSON 使用文本指令与本地校验，非供应商结构化输出保证。</p>
+      </div>}
+      {draft.adapter === 'google' && <div className="battle-lite-subtle-text space-y-1 text-xs" role="note">
+        <p>{DESKTOP_GOOGLE_POLICY.endpointHint}</p>
+        <p>API Key 使用 x-goog-api-key；仅接文本，不包含工具或多模态。模型 ID 可使用裸 ID 或 models/ 前缀。</p>
+        <p>{DESKTOP_GOOGLE_POLICY.temperatureHint}</p>
+        <p>{DESKTOP_GOOGLE_POLICY.thinkingHint}</p>
+        <p>{DESKTOP_GOOGLE_POLICY.maxOutputTokensHint}</p>
+        <p>数据卡继续使用文本指令与本地 JSON/schema 校验，不保证供应商结构化输出；显式 JSON 模式也不保证业务 schema。</p>
       </div>}
       <label className="flex flex-col gap-1 text-xs">
         <span className="battle-lite-muted-text">默认模型 id</span>

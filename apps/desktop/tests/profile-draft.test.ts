@@ -59,12 +59,39 @@ const draft = (overrides: Partial<ProfileDraft> = {}): ProfileDraft => ({
 });
 
 describe('buildProfile', () => {
-  it.each(['openai-responses', 'anthropic'] as const)('keeps %s explicit through new, edited and copied drafts', (adapter) => {
+  it.each(['openai-responses', 'anthropic', 'google'] as const)('keeps %s explicit through new, edited and copied drafts', (adapter) => {
     const original = buildProfile(draft({ adapter }), now);
     expect(original.adapter).toBe(adapter);
     expect(buildProfile(draft(), now, original).adapter).toBe(adapter);
     expect(buildProfile(draft({ adapter: 'openai-compatible' }), now, original).adapter).toBe('openai-compatible');
-    expect(() => buildProfile(draft({ adapter: 'google' }), now)).toThrow(ProfileDraftError);
+  });
+
+  it.each([
+    'https://model.example/v1beta?key=synthetic-key',
+    'https://model.example/v1beta?',
+    'https://model.example/v1beta#fragment',
+    'https://model.example/v1beta/models/',
+    'https://model.example/v1beta/models/model:generateContent',
+    'https://model.example/v1beta/models/model:streamGenerateContent',
+    'https://model.example/v1beta/models/model%3AstreamGenerateContent',
+  ])('rejects a Google non-root endpoint before saving: %s', (baseUrl) => {
+    expect(() => buildProfile(draft({ adapter: 'google', baseUrl }), now)).toThrow(/Google 连接/u);
+    // 不扩张 Chat / Responses 存量 API 根规则。
+    expect(() => buildProfile(draft({ adapter: 'openai-compatible', baseUrl }), now)).not.toThrow();
+  });
+
+  it.each(['models/', '.', '..', 'model/child', 'models/model/child', 'model\\child', 'model?key', 'model#part'])('rejects Google model path injection: %s', (modelId) => {
+    expect(() => buildProfile(draft({ adapter: 'google', modelId }), now)).toThrow(/Google 模型 ID/u);
+  });
+
+  it.each(['custom:model', 'models/custom:model', 'literal%2Fmodel'])('retains the saved Google model form and proxy prefix: %s', (modelId) => {
+    expect(buildProfile(draft({ adapter: 'google', baseUrl: 'https://model.example/proxy/v1beta/', modelId }), now))
+      .toMatchObject({ modelId, baseUrl: 'https://model.example/proxy/v1beta/' });
+  });
+
+  it('retains literal percent signs in Google proxy paths while rejecting invalid UTF-8 escapes', () => {
+    expect(() => buildProfile(draft({ adapter: 'google', baseUrl: 'https://model.example/proxy%/v1beta' }), now)).not.toThrow();
+    expect(() => buildProfile(draft({ adapter: 'google', baseUrl: 'https://model.example/%FF/v1beta' }), now)).toThrow(ProfileDraftError);
   });
 
   it('produces a schema-valid profile with a derived secret reference', () => {

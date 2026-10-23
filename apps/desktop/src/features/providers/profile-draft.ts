@@ -93,7 +93,7 @@ export const deriveApiKeyRef = (profileId: string): string => `provider:${profil
  * 把草稿装配成完整 Profile。
  *
  * 刻意不接受 `endpoint` 以外的任何出站参数，也不接受 secret header：V1 只支持
- * Chat Completions / Responses / Messages + 单个 API Key。多一个字段就多一条能影响出站请求的通道。
+ * Chat Completions / Responses / Messages / GenerateContent + 单个 API Key。多一个字段就多一条能影响出站请求的通道。
  */
 export const buildProfile = (
   draft: ProfileDraft,
@@ -141,6 +141,22 @@ export const buildProfile = (
       first?.path.join('.') || 'baseUrl',
       first?.message || 'provider profile failed validation',
     );
+  }
+  if (adapter === 'google') {
+    const url = new URL(parsed.data.baseUrl);
+    let path: string;
+    // 与 Native percent_decode_str 一致：无效的 % 转义按字面量保留。
+    try { path = decodeURIComponent(url.pathname.replace(/%(?![0-9a-f]{2})/giu, '%25')).replace(/\/+$/u, ''); }
+    catch { throw new ProfileDraftError('baseUrl', 'Google API 根路径包含无效的 URL 编码'); }
+    if (parsed.data.baseUrl.includes('?') || parsed.data.baseUrl.includes('#') ||
+      path.endsWith('/models') || /:(?:streamGenerateContent|generateContent)/u.test(path)) {
+      throw new ProfileDraftError('baseUrl', 'Google 连接需填写含版本路径的 API 根地址，不含查询、片段、末尾 /models 或完整生成方法地址');
+    }
+    const model = modelId.startsWith('models/') ? modelId.slice('models/'.length) : modelId;
+    if (!model || model === '.' || model === '..' || /[/\\?#]/u.test(model) ||
+      [...model].some((character) => character.charCodeAt(0) <= 0x1f || (character.charCodeAt(0) >= 0x7f && character.charCodeAt(0) <= 0x9f))) {
+      throw new ProfileDraftError('modelId', 'Google 模型 ID 需为单个资源名称，可带 models/ 前缀，不含路径层级、查询或片段');
+    }
   }
   return parsed.data;
 };

@@ -819,14 +819,19 @@ describe('Desktop Details real route and session UI (native adapter mock)', () =
     expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'hosted-json' });
   });
 
-  it('loads and shows unsupported adapters instead of hiding them', async () => {
-    mocks.profiles.mockResolvedValue({ id: 'local', name: 'Google profile', adapter: 'google', baseUrl: 'https://model.example/v1', modelId: 'model' });
-    await mount(); await click('开始回答问卷');
-    // 自定义连接选择器（非原生 select）：已选连接名展示在 trigger 上。
+  it('loads and enables a saved Google custom connection for the existing generation entry', async () => {
+    mocks.profiles.mockResolvedValue({ id: 'local', name: 'Google profile', adapter: 'google', baseUrl: 'https://model.example/v1beta', modelId: 'model' });
+    window.localStorage.setItem(DETAILS_DRAFT_KEY, JSON.stringify(draft()));
+    await mount();
+    // 自定义连接保持自己的身份，复用原生成入口而非独立 Gemini 页面。
     expect(container.textContent).toContain('Google profile');
-    expect(container.textContent).toContain('当前客户端尚未实现 google 适配器');
+    expect(container.textContent).not.toContain('当前客户端尚未实现 google 适配器');
     await goToFinalQuestion();
-    expect(finalSubmitButton().disabled).toBe(true);
+    expect(finalSubmitButton().disabled).toBe(false);
+    await submitQuestionnaire();
+    expect(mocks.execute).toHaveBeenCalledOnce();
+    expect(mocks.execute.mock.calls[0]![0]).toMatchObject({ profileId: 'local', providerTarget: { kind: 'custom', profileId: 'local' } });
+    expect(mocks.execute.mock.calls[0]![2]).toMatchObject({ mode: 'direct-remote', modelId: 'model' });
   });
 
   it('preserves corrupt drafts and permits leaving until new content becomes dirty', async () => {

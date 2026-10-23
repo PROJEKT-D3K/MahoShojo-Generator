@@ -92,7 +92,7 @@ impl SseFrameParser {
         Self::default()
     }
 
-    /// Responses owns its typed terminal events; `[DONE]` remains ordinary data.
+    /// Non-Chat adapters own completion semantics; `[DONE]` remains ordinary data.
     pub(crate) fn with_typed_events(mut self) -> Self {
         self.chat_done_marker = false;
         self

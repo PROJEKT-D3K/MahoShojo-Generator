@@ -1,0 +1,1555 @@
+{
+  "provenance": "Synthetic official-shaped Gemini GenerateContent events, not recordings or real-provider validation. Native Rust reduces upstreamEvents over loopback HTTP; TypeScript consumes only normalized events.",
+  "sources": [
+    "https://ai.google.dev/api/generate-content",
+    "https://ai.google.dev/gemini-api/docs/generate-content/text-generation#streaming-responses",
+    "https://ai.google.dev/gemini-api/docs/generate-content/thinking"
+  ],
+  "usageSemantics": "Usage fields are cumulative snapshots. Missing fields retain prior values; explicit zero replaces them. Input includes cache reads, output excludes thoughts, and total is only the reported value. Usage can cover unselected candidates. Thought signatures are neither displayed nor persisted. STOP requires normal HTTP EOF, including bounded trailing usage.",
+  "cases": [
+    {
+      "name": "unicode",
+      "request": {
+        "requestId": "gemini-unicode",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {},
+        {
+          "candidates": []
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "魔法"
+                  },
+                  {
+                    "text": "少女"
+                  },
+                  {
+                    "text": ""
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "・かな"
+                  },
+                  {
+                    "text": "é🪄"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        },
+        {
+          "modelVersion": "fixture-version",
+          "futureMetadata": {
+            "ignored": true
+          }
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "魔法少女・かなé🪄"
+        },
+        {
+          "requestId": "gemini-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 2,
+          "result": {
+            "requestId": "gemini-unicode",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "魔法少女・かなé🪄"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "json",
+      "request": {
+        "requestId": "gemini-json",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25,
+        "responseFormat": "json"
+      },
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "{\"answer\":"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "\"魔法\"}"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        },
+        {
+          "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 7
+          }
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "{\"answer\":\"魔法\"}"
+        },
+        {
+          "requestId": "gemini-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "usage",
+          "sequence": 2,
+          "usage": {
+            "inputTokens": 9,
+            "outputTokens": 7
+          }
+        },
+        {
+          "requestId": "gemini-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 3,
+          "result": {
+            "requestId": "gemini-json",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "{\"answer\":\"魔法\"}"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model",
+            "usage": {
+              "inputTokens": 9,
+              "outputTokens": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "card-json",
+      "request": {
+        "requestId": "gemini-card-json",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25,
+        "responseFormat": "text"
+      },
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "检查字段。",
+                    "thought": true,
+                    "thoughtSignature": "synthetic-opaque-thought-signature"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "{\"codename\":\"焰汐\",\"appearance\":{\"outfit\":\"红裙\",\"accessories\":\"焰环\",\"colorScheme\":\"红\",\"overallLook\":\"明亮\"},\"magicConstruct\":{\"name\":\"焰杖\",\"form\":\"杖\",\"basicAbilities\":[\"点火\"],\"description\":\"召焰\"},\"wonderlandRule\":{\"name\":\"焰间\",\"description\":\"燃而不烫\",\"tende"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "ncy\":\"守护\",\"activation\":\"握杖\"},\"blooming\":{\"name\":\"焰华\",\"evolvedAbilities\":[\"燎原\"],\"evolvedForm\":\"焰翼\",\"evolvedOutfit\":\"礼裙\",\"powerLevel\":\"中花\"},\"analysis\":{\"personalityAnalysis\":\"外向\",\"abilityReasoning\":\"控火\",\"coreTraits\":[\"勇\"],\"predictionBasis\":\"提示词\"}}",
+                    "thoughtSignature": "synthetic-opaque-answer-signature"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-card-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-card-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "检查字段。"
+        },
+        {
+          "requestId": "gemini-card-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "{\"codename\":\"焰汐\",\"appearance\":{\"outfit\":\"红裙\",\"accessories\":\"焰环\",\"colorScheme\":\"红\",\"overallLook\":\"明亮\"},\"magicConstruct\":{\"name\":\"焰杖\",\"form\":\"杖\",\"basicAbilities\":[\"点火\"],\"description\":\"召焰\"},\"wonderlandRule\":{\"name\":\"焰间\",\"description\":\"燃而不烫\",\"tendency\":\"守护\",\"activation\":\"握杖\"},\"blooming\":{\"name\":\"焰华\",\"evolvedAbilities\":[\"燎原\"],\"evolvedForm\":\"焰翼\",\"evolvedOutfit\":\"礼裙\",\"powerLevel\":\"中花\"},\"analysis\":{\"personalityAnalysis\":\"外向\",\"abilityReasoning\":\"控火\",\"coreTraits\":[\"勇\"],\"predictionBasis\":\"提示词\"}}"
+        },
+        {
+          "requestId": "gemini-card-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 3,
+          "result": {
+            "requestId": "gemini-card-json",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "{\"codename\":\"焰汐\",\"appearance\":{\"outfit\":\"红裙\",\"accessories\":\"焰环\",\"colorScheme\":\"红\",\"overallLook\":\"明亮\"},\"magicConstruct\":{\"name\":\"焰杖\",\"form\":\"杖\",\"basicAbilities\":[\"点火\"],\"description\":\"召焰\"},\"wonderlandRule\":{\"name\":\"焰间\",\"description\":\"燃而不烫\",\"tendency\":\"守护\",\"activation\":\"握杖\"},\"blooming\":{\"name\":\"焰华\",\"evolvedAbilities\":[\"燎原\"],\"evolvedForm\":\"焰翼\",\"evolvedOutfit\":\"礼裙\",\"powerLevel\":\"中花\"},\"analysis\":{\"personalityAnalysis\":\"外向\",\"abilityReasoning\":\"控火\",\"coreTraits\":[\"勇\"],\"predictionBasis\":\"提示词\"}}",
+              "reasoning": "检查字段。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "incomplete-card-json",
+      "request": {
+        "requestId": "gemini-incomplete-card-json",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25,
+        "responseFormat": "text"
+      },
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "{\"codename\":\"未完成\"}"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-incomplete-card-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-incomplete-card-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "{\"codename\":\"未完成\"}"
+        },
+        {
+          "requestId": "gemini-incomplete-card-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 2,
+          "result": {
+            "requestId": "gemini-incomplete-card-json",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "{\"codename\":\"未完成\"}"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reasoning-and-cache",
+      "request": {
+        "requestId": "gemini-reasoning-and-cache",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "usageMetadata": {
+            "promptTokenCount": 17,
+            "candidatesTokenCount": 1,
+            "thoughtsTokenCount": 2,
+            "cachedContentTokenCount": 6,
+            "totalTokenCount": 20
+          }
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "先检查，",
+                    "thought": true,
+                    "thoughtSignature": "synthetic-opaque-thought-signature"
+                  },
+                  {
+                    "thoughtSignature": "synthetic-opaque-signature-only"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "再回答。",
+                    "thought": true
+                  },
+                  {
+                    "text": "第一段。",
+                    "thoughtSignature": "synthetic-opaque-normal-signature"
+                  },
+                  {
+                    "text": "第二段🪄。"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        },
+        {
+          "usageMetadata": {
+            "candidatesTokenCount": 12,
+            "thoughtsTokenCount": 7,
+            "totalTokenCount": 41
+          }
+        },
+        {
+          "usageMetadata": {
+            "cachedContentTokenCount": 0
+          }
+        },
+        {
+          "usageMetadata": {}
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "先检查，再回答。"
+        },
+        {
+          "requestId": "gemini-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "第一段。第二段🪄。"
+        },
+        {
+          "requestId": "gemini-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "usage",
+          "sequence": 3,
+          "usage": {
+            "inputTokens": 17,
+            "outputTokens": 12,
+            "reasoningTokens": 7,
+            "cachedInputTokens": 0,
+            "totalTokens": 41
+          }
+        },
+        {
+          "requestId": "gemini-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 4,
+          "result": {
+            "requestId": "gemini-reasoning-and-cache",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "第一段。第二段🪄。",
+              "reasoning": "先检查，再回答。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model",
+            "usage": {
+              "inputTokens": 17,
+              "outputTokens": 12,
+              "reasoningTokens": 7,
+              "cachedInputTokens": 0,
+              "totalTokens": 41
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "empty-usage",
+      "request": {
+        "requestId": "gemini-empty-usage",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "usageMetadata": {}
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "role": "",
+                "parts": [
+                  {
+                    "text": "空用量仍可完成。"
+                  }
+                ]
+              },
+              "finishReason": "FINISH_REASON_UNSPECIFIED"
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "STOP"
+            }
+          ]
+        },
+        {
+          "usageMetadata": {}
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-empty-usage",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-empty-usage",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "空用量仍可完成。"
+        },
+        {
+          "requestId": "gemini-empty-usage",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 2,
+          "result": {
+            "requestId": "gemini-empty-usage",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "空用量仍可完成。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "candidate-selection",
+      "request": {
+        "requestId": "gemini-candidate-selection",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "index": 1,
+              "content": {
+                "parts": [
+                  {
+                    "text": "synthetic-unselected-one"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "index": 1,
+              "content": {
+                "parts": [
+                  {
+                    "text": "synthetic-unselected-two"
+                  }
+                ]
+              }
+            },
+            {
+              "index": 0,
+              "content": {
+                "role": "ignored-metadata",
+                "parts": [
+                  {
+                    "text": "选择零号。"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "index": 0,
+              "content": {
+                "parts": [
+                  {
+                    "text": "不混候选。"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            },
+            {
+              "index": 1,
+              "content": {
+                "parts": [
+                  {
+                    "text": "synthetic-unselected-three"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-candidate-selection",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-candidate-selection",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "选择零号。不混候选。"
+        },
+        {
+          "requestId": "gemini-candidate-selection",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 2,
+          "result": {
+            "requestId": "gemini-candidate-selection",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "选择零号。不混候选。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tea-text",
+      "request": {
+        "requestId": "gemini-tea-text",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25,
+        "responseFormat": "text"
+      },
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "只生成茶会正文。",
+                    "thought": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "# 茶会来客\n\n巡夜人端起茶杯。\n\n“请进，魔法少女🪄。”"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-tea-text",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-tea-text",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "只生成茶会正文。"
+        },
+        {
+          "requestId": "gemini-tea-text",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "# 茶会来客\n\n巡夜人端起茶杯。\n\n“请进，魔法少女🪄。”"
+        },
+        {
+          "requestId": "gemini-tea-text",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 3,
+          "result": {
+            "requestId": "gemini-tea-text",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "# 茶会来客\n\n巡夜人端起茶杯。\n\n“请进，魔法少女🪄。”",
+              "reasoning": "只生成茶会正文。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tea-jsonl",
+      "request": {
+        "requestId": "gemini-tea-jsonl",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25,
+        "responseFormat": "text"
+      },
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "检查说话人。",
+                    "thought": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "{\"type\":\"narration\",\"text\":\"茶香升起。\"}"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "\n{\"type\":\"dialogue\",\"speakerId\":\"r1\",\"speakerName\":\"巡夜人\",\"text\":\"请进🪄\"}\n{\"type\":\"options\",\"items\":[\"坐下喝茶\",\"望向窗外\"]}"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-tea-jsonl",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-tea-jsonl",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "检查说话人。"
+        },
+        {
+          "requestId": "gemini-tea-jsonl",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "{\"type\":\"narration\",\"text\":\"茶香升起。\"}\n{\"type\":\"dialogue\",\"speakerId\":\"r1\",\"speakerName\":\"巡夜人\",\"text\":\"请进🪄\"}\n{\"type\":\"options\",\"items\":[\"坐下喝茶\",\"望向窗外\"]}"
+        },
+        {
+          "requestId": "gemini-tea-jsonl",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 3,
+          "result": {
+            "requestId": "gemini-tea-jsonl",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "{\"type\":\"narration\",\"text\":\"茶香升起。\"}\n{\"type\":\"dialogue\",\"speakerId\":\"r1\",\"speakerName\":\"巡夜人\",\"text\":\"请进🪄\"}\n{\"type\":\"options\",\"items\":[\"坐下喝茶\",\"望向窗外\"]}",
+              "reasoning": "检查说话人。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "arena-story",
+      "request": {
+        "requestId": "gemini-arena-story",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return the requested text. Keep any reasoning separate from the answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25,
+        "responseFormat": "text",
+        "requestKind": "arena",
+        "arenaInputJson": "{\"mode\":\"classic\",\"combatants\":[{},{}]}"
+      },
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "继续锚点之后的故事。",
+                    "thought": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "# 分支新章\n\n魔法少女向北出发。\n<!-- MAHOSHOJO_ARENA_META {\"version\":1,\"report\":{\"headline\":\"分支新章\",\"winner\":\"甲\"},\"impacts\":[]} -->"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "requestId": "gemini-arena-story",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "gemini-arena-story",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "继续锚点之后的故事。"
+        },
+        {
+          "requestId": "gemini-arena-story",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "# 分支新章\n\n魔法少女向北出发。\n<!-- MAHOSHOJO_ARENA_META {\"version\":1,\"report\":{\"headline\":\"分支新章\",\"winner\":\"甲\"},\"impacts\":[]} -->"
+        },
+        {
+          "requestId": "gemini-arena-story",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 3,
+          "result": {
+            "requestId": "gemini-arena-story",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "# 分支新章\n\n魔法少女向北出发。\n<!-- MAHOSHOJO_ARENA_META {\"version\":1,\"report\":{\"headline\":\"分支新章\",\"winner\":\"甲\"},\"impacts\":[]} -->",
+              "reasoning": "继续锚点之后的故事。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    }
+  ],
+  "failureCases": [
+    {
+      "name": "max-tokens",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "MAX_TOKENS"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "output-too-large"
+    },
+    {
+      "name": "continuation",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "CONTINUATION",
+              "continuationToken": "synthetic-opaque-continuation"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "output-too-large"
+    },
+    {
+      "name": "safety",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "SAFETY",
+              "finishMessage": "synthetic-secret-finish-message"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "content-filtered"
+    },
+    {
+      "name": "prompt-block",
+      "upstreamEvents": [
+        {
+          "promptFeedback": {
+            "blockReason": "SAFETY",
+            "blockReasonMessage": "synthetic-secret-block-message"
+          }
+        }
+      ],
+      "expectedCode": "content-filtered"
+    },
+    {
+      "name": "missing-finish-reason",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "unspecified-finish-reason",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "FINISH_REASON_UNSPECIFIED"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "unknown-finish-reason",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "FUTURE_REASON"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "tool",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "not a complete text answer"
+                  },
+                  {
+                    "functionCall": {
+                      "name": "synthetic-tool",
+                      "args": {}
+                    }
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "multimodal",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "inlineData": {
+                      "mimeType": "image/png",
+                      "data": "synthetic-opaque-image"
+                    }
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "thinking-only",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "只有思考。",
+                    "thought": true,
+                    "thoughtSignature": "synthetic-opaque-signature"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "empty-text",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": ""
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "whitespace-text",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": " \n\t"
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "malformed-text",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": 4
+                  }
+                ]
+              },
+              "finishReason": "STOP"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "stop-then-error",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "STOP"
+            }
+          ]
+        },
+        {
+          "error": {
+            "code": 429,
+            "status": "RESOURCE_EXHAUSTED",
+            "message": "synthetic-secret-stream-error",
+            "details": [
+              {
+                "synthetic": "synthetic-secret-details"
+              }
+            ]
+          }
+        }
+      ],
+      "expectedCode": "rate-limited"
+    },
+    {
+      "name": "conflicting-finish-reason",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "STOP"
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "MAX_TOKENS"
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "text-after-stop",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "finishReason": "STOP"
+            }
+          ]
+        },
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "must not be accepted"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "error-authentication",
+      "upstreamEvents": [
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "partial"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "error": {
+            "code": 401,
+            "status": "UNAUTHENTICATED",
+            "message": "synthetic-secret-auth-error"
+          }
+        }
+      ],
+      "expectedCode": "authentication-failed"
+    }
+  ]
+}

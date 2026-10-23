@@ -59,7 +59,7 @@ describe('Messages shared connection editor and capabilities', () => {
     await vi.waitFor(() => expect(store.getSnapshot().profilesState).toBe('ready'));
     await render((draft) => saveConnectionDraft(store, draft, { activate: true }));
     expect(container.querySelector('select')!.value).toBe('openai-compatible');
-    expect([...container.querySelectorAll('option')].map(option => option.value)).not.toContain('google');
+    expect([...container.querySelectorAll('option')].map(option => option.value)).toContain('google');
     await select('anthropic');
     for (const hint of ['API 根路径', '/messages', '2026-10-21', '4096', 'x-api-key', 'temperature', 'Thinking / effort', '非供应商结构化输出保证']) {
       expect(container.textContent).toContain(hint);
