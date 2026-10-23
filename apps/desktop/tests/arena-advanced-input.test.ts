@@ -1,3 +1,4 @@
+import { requireArenaRealCombatants } from '../src/features/arena/roster-types';
 import { describe, expect, it } from 'vitest';
 import { addAdvancedAuxScenario, addAdvancedCombatants, addAdvancedLore, importAdvancedHistory, removeAdvancedAuxScenarios, removeAdvancedCombatants, setAdvancedMainScenario } from '../src/features/arena/advanced-input';
 import { arenaReferenceCount, buildDesktopArenaInput, createInitialArenaDraft, validateArenaDraft, type ArenaDraft } from '../src/features/arena/session';
@@ -47,7 +48,7 @@ describe('advanced Arena source and history host projections', () => {
     const initial = { ...createInitialArenaDraft(), combatants: Array.from({ length: 32 }, (_, index) => ({ ...character(`${index}`), filename: `${index}.json` })) };
     const warning: string[] = [];
     const repeated = addAdvancedCombatants(initial, [{ ...character('new'), filename: '0.json' }], (value) => warning.push(value), true);
-    expect(repeated.combatants).toHaveLength(32); expect(repeated.combatants[0]?.data.name).toBe('0'); expect(repeated.adjudicationEvents).toMatchObject([{ description: 'new' }]); expect(warning).toHaveLength(1);
+    expect(repeated.combatants).toHaveLength(32); expect(requireArenaRealCombatants(repeated.combatants)[0]?.data.name).toBe('0'); expect(repeated.adjudicationEvents).toMatchObject([{ description: 'new' }]); expect(warning).toHaveLength(1);
     const batch = addAdvancedCombatants(createInitialArenaDraft(), [character('one'), character('two')], undefined, true); expect(batch.combatants).toHaveLength(2);
     expect(() => validateArenaDraft({ ...initial, auxScenarios: [{ content: {}, fileName: [] }] }, 'arena')).toThrow('资源');
   });

@@ -1,3 +1,4 @@
+import { requireArenaRealCombatants } from '../src/features/arena/roster-types';
 import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 /** Real session + Hosted adapters + role bridge, using synthetic Native-shaped IPC; no production credentials. */
 import { describe, expect, it, vi } from 'vitest';
@@ -74,15 +75,15 @@ describe('new Hosted roles freeze original policy and preserve independent repor
     if (roles.length) {
       expect(roles[0]).toMatchObject({ actor: create.actor, requestId, generationId }); expect(roles[0]).not.toHaveProperty('presetConfig'); expect(roles[0]).not.toHaveProperty('systemConfig'); expect(roles[0]).not.toHaveProperty('url');
       expect(f.session.getSnapshot().roleUpdates.status).toBe('completed');
-      expect(f.session.getSnapshot().draft.combatants[0]!.data).toHaveProperty('signature', 'fresh-server-signature');
+      expect(requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data).toHaveProperty('signature', 'fresh-server-signature');
       expect(f.records.size).toBe(0); expect(await f.session.save('characters')).toBe(true);
       expect([...f.records.values()][0]!.provenance).toEqual({ kind: 'official-signed', signature: 'fresh-server-signature', execution: 'hosted' });
-    } else expect(f.session.getSnapshot().draft.combatants[0]!.data).toEqual(card);
-    expect(input.combatants[0]!.data).toEqual(card); expect(f.requests.filter(request => request.operation.startsWith('create'))).toHaveLength(1); f.session.dispose();
+    } else expect(requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data).toEqual(card);
+    expect(requireArenaRealCombatants(input.combatants)[0]!.data).toEqual(card); expect(f.requests.filter(request => request.operation.startsWith('create'))).toHaveLength(1); f.session.dispose();
   });
   it.each(['ARENA_RECONCILIATION_MANIFEST_UNAVAILABLE', 'ARENA_RECONCILIATION_FINALIZATION_PENDING', 'ARENA_RECONCILIATION_RESPONSE_TOO_LARGE'])('keeps report/card after %s and retries only existing generation', async code => {
     const f = fixture(); f.fail(code); await f.run(); expect(f.session.getSnapshot()).toMatchObject({ phase: 'completed', roleUpdates: { status: 'unavailable' } });
-    expect(f.session.getSnapshot().draft.combatants[0]!.data).toEqual(card); expect(f.session.getSnapshot().rawText).toBe('报告原文');
+    expect(requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data).toEqual(card); expect(f.session.getSnapshot().rawText).toBe('报告原文');
     f.fail(); await f.session.retryHostedRoleUpdates({ invoke: f.invoke }); expect(f.session.getSnapshot().roleUpdates.status).toBe('completed');
     expect(f.requests.filter(request => request.operation === 'reconcile')).toHaveLength(2); expect(f.requests.filter(request => request.operation.startsWith('create'))).toHaveLength(1); f.session.dispose();
   });
@@ -90,7 +91,7 @@ describe('new Hosted roles freeze original policy and preserve independent repor
     const f = fixture(); f.hold(); const running = f.run(); await vi.waitFor(() => expect(f.session.getSnapshot().roleUpdates.status).toBe('updating'));
     await f.session.retryHostedRoleUpdates({ invoke: f.invoke }); expect(f.requests.filter(request => request.operation === 'reconcile')).toHaveLength(1);
     if (action === 'scope') f.session.setScope('account-B:epoch-2'); else f.session[action](); f.release(); await running;
-    expect(f.session.getSnapshot().phase).toBe('completed'); expect(f.session.getSnapshot().rawText).toBe('报告原文'); expect(f.session.getSnapshot().draft.combatants[0]!.data).toEqual(card);
+    expect(f.session.getSnapshot().phase).toBe('completed'); expect(f.session.getSnapshot().rawText).toBe('报告原文'); expect(requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data).toEqual(card);
     expect(f.requests.some(request => request.operation === 'stop')).toBe(false); expect(f.requests.filter(request => request.operation.startsWith('create'))).toHaveLength(1); f.session.dispose();
   });
   it.each(['stream', 'non-stream'] as const)('waits for actual %s Native invocation settlement after terminal IPC before automatic reconciliation', async delivery => {
@@ -110,7 +111,7 @@ describe('new Hosted roles freeze original policy and preserve independent repor
   it('keeps the report and original card when Native rejects after a complete role envelope', async () => {
     const f = fixture(); f.failAfterRoleEnd(); await f.run();
     expect(f.session.getSnapshot()).toMatchObject({ phase: 'completed', roleUpdates: { status: 'unavailable' }, rawText: '报告原文' });
-    expect(f.session.getSnapshot().draft.combatants[0]!.data).toEqual(card); expect(await f.session.save('characters')).toBe(false);
+    expect(requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data).toEqual(card); expect(await f.session.save('characters')).toBe(false);
     expect(f.requests.filter(request => request.operation.startsWith('create'))).toHaveLength(1); f.session.dispose();
   });
   it('cancel while waiting for the final Native SSE guard preserves originals without granting completion', async () => {
@@ -186,17 +187,17 @@ describe('new Hosted roles freeze original policy and preserve independent repor
   it('discards a role reply after roster reorder/edit instead of applying by a changed index', async () => {
     const f = fixture(); f.hold(); const running = f.run(); await vi.waitFor(() => expect(f.session.getSnapshot().roleUpdates.status).toBe('updating'));
     // Deliberately simulate an external store mutation; ordinary UI edits are already disabled during this flight.
-    f.session.getSnapshot().draft.combatants[0]!.data.name = '后来角色'; f.release(); await running;
+    requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data.name = '后来角色'; f.release(); await running;
     expect(f.session.getSnapshot().phase).toBe('completed'); expect(f.session.getSnapshot().roleUpdates.message).toContain('上下文已变化');
-    expect(f.session.getSnapshot().draft.combatants[0]!.data.name).toBe('后来角色'); expect(await f.session.save('characters')).toBe(false); f.session.dispose();
+    expect(requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data.name).toBe('后来角色'); expect(await f.session.save('characters')).toBe(false); f.session.dispose();
   });
   it('rejects invalid response indices atomically and preserves originals', async () => {
-    const f = fixture(); f.invalid(); await f.run(); expect(f.session.getSnapshot().roleUpdates.status).toBe('unavailable'); expect(f.session.getSnapshot().draft.combatants[0]!.data).toEqual(card); expect(f.session.getSnapshot().phase).toBe('completed'); f.session.dispose();
+    const f = fixture(); f.invalid(); await f.run(); expect(f.session.getSnapshot().roleUpdates.status).toBe('unavailable'); expect(requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data).toEqual(card); expect(f.session.getSnapshot().phase).toBe('completed'); f.session.dispose();
   });
   it('restored editable drafts cannot regain official signature trust; recovery never auto-syncs', async () => {
     const first = fixture(); await first.run(); first.session.dispose();
     const restored = fixture('battle', 'stream', first.values); restored.session.restoreDraft();
-    expect(restored.session.getSnapshot().draft.combatants[0]!.isValid).toBe(false); expect(restored.session.getSnapshot().roleUpdates.status).toBe('restored'); expect(await restored.session.save('characters')).toBe(false);
+    expect(requireArenaRealCombatants(restored.session.getSnapshot().draft.combatants)[0]!.isValid).toBe(false); expect(restored.session.getSnapshot().roleUpdates.status).toBe('restored'); expect(await restored.session.save('characters')).toBe(false);
     await restored.session.restoreHosted({ invoke: restored.invoke }, requestId); expect(restored.requests.map(request => request.operation)).toEqual(['lookup-request', 'resume']);
     expect(restored.session.canRetryHostedRoleUpdates()).toBe(true); restored.session.dispose();
   });
@@ -254,7 +255,7 @@ it('手工修复服务器角色后仅另存 unsigned 副本，不允许旧权威
   expect(f.session.canRetryHostedRoleUpdates()).toBe(false);
   await f.session.retryHostedRoleUpdates({ invoke: f.invoke });
   expect(f.invoke).toHaveBeenCalledTimes(calls);
-  expect(f.session.getSnapshot().draft.combatants[0]!.data).not.toHaveProperty('signature');
+  expect(requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data).not.toHaveProperty('signature');
   expect(await f.session.saveRepairedCharacters()).toBe(true);
   expect([...f.records.values()][0]!.provenance).toEqual({ kind: 'unsigned', execution: 'edited' });
   f.session.dispose();

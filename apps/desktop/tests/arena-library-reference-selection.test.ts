@@ -8,7 +8,7 @@ const scenario = { templateId: '通用情景', title: '同名情景', content: '
   adjudicationEvents: [{ id: 'event', type: 'binary', description: '来源事件', probability: 100 }] };
 const initial = (): ArenaDraft => ({ ...createInitialArenaDraft(), battleMode: 'scenario', scenario: { content: scenario, fileName: null } });
 const options = { advanced: true, createId: () => 'reference-id', onWarning: () => {} };
-const context = (location: 'local' | 'cache' | 'cloud', raw: unknown = scenario): CardLibrarySelectionContext => ({
+const context = (location: 'local' | 'cache' | 'cloud', raw: CardLibrarySelectionContext['rawSourceData'] = scenario): CardLibrarySelectionContext => ({
   storageLocation: location, selectionId: `${location}:same-id`, rawSourceData: raw,
   ...(location === 'cloud' ? { cloudCardId: 'same-id', cloudCardUpdatedAt: 'current-version' } : {}),
 });
@@ -26,7 +26,7 @@ describe('Arena reference library admission', () => {
     expect(items(draft).map(getArenaReferenceSelectionId)).toEqual(['local:same-id', 'cloud:same-id']);
     if (purpose === 'auxScenario') {
       expect(draft.adjudicationEvents).toHaveLength(2);
-      expect(draft.adjudicationEvents.map(event => event.sourceKey)).toEqual(['data_card:local:same-id', 'data_card:same-id']);
+      expect(draft.adjudicationEvents).toMatchObject([{ sourceKey: 'data_card:local:same-id' }, { sourceKey: 'data_card:same-id' }]);
     }
     expect(validateArenaDraft(draft, 'arena')).toEqual(draft);
     const input = buildArenaGenerationInputSnapshot(buildDesktopArenaInput(draft, 'arena'));

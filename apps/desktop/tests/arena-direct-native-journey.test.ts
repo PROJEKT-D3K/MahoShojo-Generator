@@ -4,7 +4,7 @@ import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { AiExecutionRequest, AiExecutionErrorCode } from '@mahoshojo/contracts/ai-execution';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import { executeArenaDirect } from '../src/features/arena/direct';
-import { DesktopArenaSession, createInitialArenaDraft, type ArenaDraft } from '../src/features/arena/session';
+import { DesktopArenaSession, buildDesktopArenaInput, createInitialArenaDraft, type ArenaDraft } from '../src/features/arena/session';
 import { startMagicTeaPartyJourneyProbe } from './helpers/magic-tea-party-journey-probe';
 
 const storage = () => {
@@ -172,7 +172,7 @@ describe('Arena page owners through real Native Direct loopback', () => {
   it.skipIf(!process.env.MAHO_TEA_JOURNEY_BINARY)('explains a real Native request rejection before HTTP dispatch', async () => {
     const probe = await startMagicTeaPartyJourneyProbe();
     try {
-      const outcome = await executeArenaDirect(probe.aiOptions, draft('classic', 'non-stream'), {
+      const outcome = await executeArenaDirect(probe.aiOptions, buildDesktopArenaInput(draft('classic', 'non-stream')), {
         requestId: 'arena-native-rejected', mode: 'direct-local', generationMode: 'non-stream', modelId: 'x'.repeat(257),
       }, { scopeKey: 'local:battle', reporterInfo: { name: '记者', publication: '速报' }, adjudicationResults: [] }, new AbortController().signal);
       expect(outcome).toMatchObject({ status: 'failed', code: 'unsupported-request', rawText: '', terminal: null });
@@ -192,7 +192,7 @@ describe('Arena Direct safe failure diagnostics', () => {
 
   it('retains only the opaque native invoke category and stage', async () => {
     const invoke = vi.fn(async () => { throw 'PRIVATE-MACRO-ERROR-CANARY'; });
-    const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, draft('classic', 'stream'), intent, context, new AbortController().signal);
+    const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, buildDesktopArenaInput(draft('classic', 'stream')), intent, context, new AbortController().signal);
     expect(outcome).toMatchObject({ status: 'failed', code: 'native-invoke-rejected', rawText: '',
       failureDiagnostic: { source: 'client', stage: 'native-stream', code: 'native-invoke-rejected' } });
     expect(JSON.stringify(outcome)).not.toContain('PRIVATE'); expect(invoke).toHaveBeenCalledOnce();
@@ -201,7 +201,7 @@ describe('Arena Direct safe failure diagnostics', () => {
   it.each(['profile-not-found', 'profile-rejected', 'missing-secret', 'unsupported-request', 'upstream-unavailable', 'upstream-rejected', 'stream-protocol', 'failed', 'internal-error'])(
     'preserves the recognized %s code without exposing the Native error message', async code => {
       const invoke = vi.fn(async () => { throw { code, message: 'PRIVATE-UPSTREAM-VALUE', extra: 'PRIVATE-EXTRA' }; });
-      const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, draft('classic', 'stream'), intent, context, new AbortController().signal);
+      const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, buildDesktopArenaInput(draft('classic', 'stream')), intent, context, new AbortController().signal);
       expect(outcome).toMatchObject({ status: 'failed', code, rawText: '' });
       if (outcome.status !== 'failed') throw new Error('expected Native failure');
       expect(outcome.message).toContain(code);
@@ -214,7 +214,7 @@ describe('Arena Direct safe failure diagnostics', () => {
 
   it.each(['unrecognized-PRIVATE-code', 'constructor', '__proto__'])('never echoes the unrecognized source code %s', async code => {
     const invoke = vi.fn(async () => { throw { code, message: 'PRIVATE-UPSTREAM-VALUE' }; });
-    const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, draft('classic', 'stream'), intent, context, new AbortController().signal);
+    const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, buildDesktopArenaInput(draft('classic', 'stream')), intent, context, new AbortController().signal);
     expect(outcome).toMatchObject({ status: 'failed', code: 'invalid-response' });
     expect(JSON.stringify(outcome)).not.toContain('PRIVATE');
     if (outcome.status !== 'failed') throw new Error('expected Native failure');
@@ -233,7 +233,7 @@ describe('Arena Direct safe failure diagnostics', () => {
       if (delivery === 'invalid-event') channel.onmessage({ ...identity, type: 'text-delta', sequence: 99, delta: '不得接受' });
       throw { code: 'missing-secret', message: 'PRIVATE-UPSTREAM-VALUE' };
     }));
-    const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, draft('classic', 'stream'), intent, context, new AbortController().signal);
+    const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, buildDesktopArenaInput(draft('classic', 'stream')), intent, context, new AbortController().signal);
     expect(outcome).toMatchObject({ status: 'failed', rawText: '已接受的正文', code: delivery === 'invalid-event' ? 'invalid-response' : 'missing-secret' });
     expect(outcome).not.toHaveProperty('draftCompletion');
     expect(outcome).not.toHaveProperty('historyCandidate');
@@ -252,7 +252,7 @@ describe('Arena Direct safe failure diagnostics', () => {
         channel.onmessage({ ...identity, type: 'result', sequence: 2,
           result: { ...identity, status: 'failed', error: { code, message: 'PRIVATE-UPSTREAM-VALUE' } } });
       }));
-      const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, draft('classic', 'stream'), intent, context, new AbortController().signal);
+      const outcome = await executeArenaDirect({ invoke, profileId: 'synthetic', createChannel: () => ({}) }, buildDesktopArenaInput(draft('classic', 'stream')), intent, context, new AbortController().signal);
       expect(outcome).toMatchObject({ status: 'failed', code, rawText: '已接受的正文' });
       if (outcome.status !== 'failed') throw new Error('expected failed terminal');
       expect(outcome.message).toContain(code);

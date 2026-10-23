@@ -1,3 +1,4 @@
+import { requireArenaRealCombatants } from '../src/features/arena/roster-types';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import type { LocalCardRecordV1 } from '@mahoshojo/local-library/record';
@@ -75,7 +76,7 @@ describe('Desktop explicit unsigned manual repair', () => {
   });
   it('no-op preserves references and trust, actual edits clear only touched Desktop source', async () => {
     const f = await fixture(), state = f.session.getSnapshot();
-    f.session.updateDraft({ ...state.draft, combatants: state.draft.combatants.map((item, index) => index ? item : {
+    f.session.updateDraft({ ...state.draft, combatants: requireArenaRealCombatants(state.draft.combatants).map((item, index) => index ? item : {
       ...item, isValid: true, isPreset: true, desktopSource: 'preset' as const, sourceDataCardId: 'source', data: { ...item.data, signature: 'native' },
     }) });
     const before = f.session.getSnapshot().draft.combatants, confirm = ports();
@@ -83,7 +84,7 @@ describe('Desktop explicit unsigned manual repair', () => {
     expect(f.session.getSnapshot().draft.combatants).toBe(before); expect(confirm.confirmTrustDowngrade).not.toHaveBeenCalled();
     await f.session.applyManualRepair(patch(), confirm);
     expect(confirm.confirmTrustDowngrade).toHaveBeenCalledOnce();
-    const changed = f.session.getSnapshot().draft.combatants[0]!;
+    const changed = requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!;
     expect(changed).not.toHaveProperty('desktopSource'); expect(changed).not.toHaveProperty('sourceDataCardId'); expect(changed.isValid).toBe(false);
     f.session.dispose();
   });
@@ -94,7 +95,7 @@ describe('Desktop explicit unsigned manual repair', () => {
     const confirmed = ports(); await f.session.applyManualRepair(patch(), confirmed);
     expect(confirmed.confirmCreateMissingEffects).toHaveBeenCalledOnce();
     await f.session.applyManualRepair(patch('再次修正'), ports());
-    expect((f.session.getSnapshot().draft.combatants[0]!.data.arena_history as { entries: unknown[] }).entries).toHaveLength(1);
+    expect((requireArenaRealCombatants(f.session.getSnapshot().draft.combatants)[0]!.data.arena_history as { entries: unknown[] }).entries).toHaveLength(1);
     f.session.dispose();
   });
   it('source lock and changed account reject; delayed confirmation cannot publish', async () => {

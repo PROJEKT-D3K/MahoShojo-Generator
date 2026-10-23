@@ -1,3 +1,4 @@
+import { requireArenaRealCombatants } from '../src/features/arena/roster-types';
 import { projectDesktopArenaReport } from '../src/features/arena/report-presentation';
 import { withFixtureStreamReceipt } from './helpers/stream-receipt-fixture';
 import { describe, expect, it, vi } from 'vitest';
@@ -150,7 +151,7 @@ describe('Desktop Arena independent session', () => {
       expect(session.getSnapshot().phase).toBe('completed'); expect(options.invoke).toHaveBeenCalledTimes(1);
       expect(records.size).toBe(0);
       expect(session.getSnapshot().draft.narrativeHistoryEntries).toHaveLength(1);
-      expect(session.getSnapshot().draft.combatants[0]!.data).not.toHaveProperty('signature');
+      expect(requireArenaRealCombatants(session.getSnapshot().draft.combatants)[0]!.data).not.toHaveProperty('signature');
       expect(draft.combatants).toEqual(source);
       expect(session.getSnapshot().markdown).not.toContain('MAHOSHOJO'); expect(session.getSnapshot().markdown).not.toContain('独立思考');
       expect(session.exportDocument()).toContain('独立思考');
@@ -166,7 +167,7 @@ describe('Desktop Arena independent session', () => {
     const repo = repository(), storage = memory(), random = vi.fn(() => 0);
     const session = new DesktopArenaSession({ repository: repo.port, storage, random, requestId: () => 'roll-once' }); session.setScope('A');
     const base = makeDraft('scenario', 'stream');
-    const draft: ArenaDraft = { ...base, combatants: base.combatants.map((item, index) => ({ ...item, data: { ...item.data, ...(index === 0 ? { adjudicationEvents: [{ type: 'binary', description: '角色判定', probability: 0 }] } : {}) } })),
+    const draft: ArenaDraft = { ...base, combatants: requireArenaRealCombatants(base.combatants).map((item, index) => ({ ...item, data: { ...item.data, ...(index === 0 ? { adjudicationEvents: [{ type: 'binary', description: '角色判定', probability: 0 }] } : {}) } })),
       scenario: { ...base.scenario, content: { ...base.scenario.content, adjudicationEvents: [{ type: 'binary', description: '情景判定', probability: 100 }] } },
       materials: [{ id: 'material-1', name: '仅参考', sourceType: 'raw-json', sourceKind: 'raw-json', fileName: null, content: { adjudicationEvents: [{ type: 'binary', description: '不得执行', probability: 100 }] } }] };
     session.updateDraft(draft); const options = native(valid(true)); const run = session.generate(options, draft, intent('stream')); await session.generate(options, draft, intent('stream')); await run;
@@ -301,7 +302,7 @@ describe('Desktop Arena independent session', () => {
     const session = new DesktopArenaSession({ repository: repo.port, storage, product: 'arena', random, requestId: () => 'advanced-roll', now: () => '2026-10-10T00:00:00Z' }); session.setScope('A');
     const event = (description: string) => ({ type: 'binary' as const, description, probability: 100 });
     const base = makeDraft('scenario', 'stream'); let draft: ArenaDraft = { ...base, combatants: [], adjudicationEvents: [event('手动')], historyUpdatedAt: '2000-01-01T00:00:00Z' };
-    draft = addAdvancedCombatants(draft, base.combatants.map((item) => ({ ...item, data: { ...item.data, adjudicationEvents: [event(item.filename)] } })));
+    draft = addAdvancedCombatants(draft, requireArenaRealCombatants(base.combatants).map((item) => ({ ...item, data: { ...item.data, adjudicationEvents: [event(item.filename)] } })));
     draft = setAdvancedMainScenario(draft, { title: '主', adjudicationEvents: [event('主')] }, 'main');
     draft = addAdvancedAuxScenario(draft, { title: '辅', adjudicationEvents: [event('辅')] }, 'aux', 'aux');
     draft = { ...draft, adjudicationEvents: draft.adjudicationEvents.filter((item) => (item as { description: string }).description !== '甲.json') };

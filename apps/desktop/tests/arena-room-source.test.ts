@@ -1,3 +1,4 @@
+import { requireArenaRealCombatants } from '../src/features/arena/roster-types';
 import { createHash, webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
@@ -44,7 +45,7 @@ describe('Desktop Room current-source adapter', () => {
   it('freezes complete local source before the first asynchronous hash, with no provider selection', async () => {
     const input = draft({ battleMode: 'daily', combatants: [local()], materials: [material('full')] });
     const preparing = prepareDesktopRoomStartSource(input);
-    (input.combatants[0]!.data as Record<string, unknown>).content = 'CHANGED-AFTER-CONFIRM';
+    (requireArenaRealCombatants(input.combatants)[0]!.data as Record<string, unknown>).content = 'CHANGED-AFTER-CONFIRM';
     const frozen = await preparing;
     const wire = JSON.stringify(frozen);
     expect(wire).toContain('private-local-body'); expect(wire).toContain('private-material-body'); expect(wire).not.toContain('CHANGED-AFTER-CONFIRM');
@@ -127,7 +128,7 @@ describe('Desktop Room current-source adapter', () => {
     ]);
     expect(JSON.stringify(result)).not.toContain('private-history-body');
     expect(JSON.stringify(result)).not.toContain('body-metadata');
-    expect(input.combatants[0]!.data).toEqual(presetBody);
+    expect(requireArenaRealCombatants(input.combatants)[0]!.data).toEqual(presetBody);
   });
 
   it('uses recursive canonical full-body hashing rather than a local-library dedupe digest', async () => {

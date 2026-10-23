@@ -1,3 +1,4 @@
+import { requireArenaRealCombatants } from '../src/features/arena/roster-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import { PRESET_LIST } from '@mahoshojo/domain/presets';
@@ -30,30 +31,30 @@ describe('Desktop Strict preparation source and dispatch projection', () => {
     expect(advisory.combatants[0]).not.toHaveProperty('data'); expect(input).toEqual(before);
   });
   it('strips forged/restored/uploaded/cache IDs and same-name scenario files from every new dispatch', () => {
-    const input: ArenaDraft = { ...draft(), battleMode: 'scenario' }; input.combatants = input.combatants.map(card => ({ ...clearDesktopArenaSource(card), data: { ...card.data, cloudRef: { id: 'forged' }, _cardId: 'forged' } }));
+    const input: ArenaDraft = { ...draft(), battleMode: 'scenario' }; input.combatants = requireArenaRealCombatants(input.combatants).map(card => ({ ...clearDesktopArenaSource(card), data: { ...card.data, cloudRef: { id: 'forged' }, _cardId: 'forged' } }));
     input.scenario = { content: { title: '上传' }, fileName: SCENARIO_PRESET_LIST[0]!.filename };
     const generated = buildArenaGenerationInputSnapshot(buildDesktopArenaInput(input));
     expect(generated.combatants.every(card => !card.isPreset && card.sourceDataCardId === undefined)).toBe(true);
     expect(generated.scenarioFileName).toBeNull(); expect(buildDesktopStrictPreflightInput(input, target, 0).combatants.every(card => !card.isPreset && card.sourceDataCardId === null)).toBe(true);
-    expect(input.combatants[0]!.sourceDataCardId).toBe('online-id'); // historical reference retained in draft only
+    expect(requireArenaRealCombatants(input.combatants)[0]!.sourceDataCardId).toBe('online-id'); // historical reference retained in draft only
   });
   it('restoring persisted provenance cannot restore active selection identity', () => {
     const input = draft(); input.scenario = { content: null, fileName: SCENARIO_PRESET_LIST[0]!.filename, isPreset: true };
     const saved = new Map([[ARENA_DRAFT_KEY, JSON.stringify({ version: 1, draft: input })]]);
     const session = new DesktopArenaSession({ repository: {} as CardRepository, storage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => { saved.set(key, value); }, removeItem: key => { saved.delete(key); } } });
     session.restoreDraft(); const restored = session.getSnapshot().draft;
-    expect(restored.combatants.every(card => card.desktopSource === undefined)).toBe(true); expect(restored.scenario.isPreset).toBe(false);
+    expect(requireArenaRealCombatants(restored.combatants).every(card => card.desktopSource === undefined)).toBe(true); expect(restored.scenario.isPreset).toBe(false);
     expect(buildArenaGenerationInputSnapshot(buildDesktopArenaInput(restored)).combatants.every(card => !card.isPreset && !card.sourceDataCardId)).toBe(true);
     session.dispose();
   });
   it('applies shared settings without touching ordinary write flags, free ranking or signed bodies', async () => {
-    const input = draft(); input.combatants = input.combatants.map(card => ({ ...card, characterGuidance: '行动', data: { ...card.data, adjudicationEvents: [{ type: 'binary', description: '原事件', probability: 50 }] } }));
+    const input = draft(); input.combatants = requireArenaRealCombatants(input.combatants).map(card => ({ ...card, characterGuidance: '行动', data: { ...card.data, adjudicationEvents: [{ type: 'binary', description: '原事件', probability: 50 }] } }));
     const before = structuredClone(input);
     const prepared = await prepareDesktopStrictDraft(input, season, new AbortController().signal);
-    expect(input).toEqual(before); expect(prepared.combatants.map(card => card.data)).toEqual(input.combatants.map(card => card.data));
+    expect(input).toEqual(before); expect(requireArenaRealCombatants(prepared.combatants).map(card => card.data)).toEqual(requireArenaRealCombatants(input.combatants).map(card => card.data));
     expect(prepared.settings).toMatchObject({ userGuidance: '', readArenaHistory: false, readCurrentState: false, readNarrativeHistory: false,
       writeArenaHistory: input.settings.writeArenaHistory, writeCurrentState: input.settings.writeCurrentState });
-    expect(prepared.arenaFreeRankingEnabled).toBe(false); expect(prepared.combatants.every(card => card.characterGuidance === '')).toBe(true);
+    expect(prepared.arenaFreeRankingEnabled).toBe(false); expect(requireArenaRealCombatants(prepared.combatants).every(card => card.characterGuidance === '')).toBe(true);
     expect(inheritedArenaAdjudication(prepared, 'battle').events).toHaveLength(2);
     expect(describeDesktopStrictSetup({ draft: prepared, isAuthenticated: true, executionLocation: 'server', modelId: 'default', modelUnavailable: false, adjudicationEventCount: 2 }, season).reasons).toContain('需清空「随机判定器事件」');
   });

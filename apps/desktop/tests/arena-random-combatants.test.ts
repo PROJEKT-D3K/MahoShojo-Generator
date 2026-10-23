@@ -1,3 +1,4 @@
+import type { CombatantData } from '@mahoshojo/domain/arena-file-parser';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardRepository } from '@mahoshojo/local-library/repository';
 import { materializeArenaRandomCombatants, type ArenaRandomCombatantPlaceholder } from '@mahoshojo/domain/arena-random-combatants';
@@ -13,7 +14,7 @@ const memory = () => {
     getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
 };
 const placeholder = (id = 'random-1', type: ArenaRandomCombatantPlaceholder['type'] = 'random-magical-girl'): ArenaRandomCombatantPlaceholder => ({ id, type, filename: type === 'random-magical-girl' ? '随机魔法少女' : '随机残兽', teamId: 2 });
-const real = (name = '已有角色') => ({ type: 'general-character', data: { templateId: '通用角色', name, content: '完整设定' }, isValid: false, isPreset: false, filename: `${name}.json`, teamId: 1 });
+const real = (name = '已有角色'): CombatantData => ({ type: 'general-character', data: { templateId: '通用角色', name, content: '完整设定' }, isValid: false, isPreset: false, filename: `${name}.json`, teamId: 1 });
 const draft = (): ArenaDraft => ({ ...createInitialArenaDraft(), combatants: [placeholder(), real(), placeholder('random-2', 'random-canshou')], teams: [{ id: 1, name: '一队' }, { id: 2, name: '二队' }] });
 const factory = () => vi.fn<typeof materializeArenaRandomCombatants>(items => items.map((item, index) => ({ ...real(`生成${index}`), teamId: item.teamId })));
 const setup = (materialize = factory(), storage = memory(), extra = {}) => {
@@ -103,17 +104,18 @@ describe('桌面随机占位符草稿与一次物化', () => {
 
   it.each(['direct', 'hosted'] as const)('%s 只能收到物化实卡，生成失败后再次提交不重新抽取', async mode => {
     const execute = vi.fn(async () => { throw new Error('合成生成失败'); });
+    const invoke = vi.fn(async () => { throw new Error('不应越过注入的执行器调用 Native'); });
     const f = setup(factory(), memory(), mode === 'direct' ? { execute } : { executeHosted: execute });
     f.session.updateDraft(draft());
     const send = async (input: ArenaDraft) => mode === 'direct'
-      ? f.session.generate({ profileId: 'fixture' }, input, { mode: 'direct-local', generationMode: 'non-stream', modelId: 'fixture' })
-      : f.session.generateHosted({}, input, { mode: 'hosted', generationMode: 'non-stream', modelId: 'default', systemConfig: {} }, { kind: 'anonymous' });
+      ? f.session.generate({ invoke, profileId: 'fixture' }, input, { mode: 'direct-local', generationMode: 'non-stream', modelId: 'fixture' })
+      : f.session.generateHosted({ invoke }, input, { mode: 'hosted', generationMode: 'non-stream', modelId: 'default', systemConfig: {} }, { kind: 'anonymous' });
     await send(f.session.getSnapshot().draft); expect(execute).not.toHaveBeenCalled();
     const next = f.session.materializeRandomPlaceholders(f.session.getSnapshot().draft);
     await send(next); expect(execute).toHaveBeenCalledTimes(1);
     const sent = execute.mock.calls[0] as unknown as unknown[];
     expect((sent[1] as { combatants: unknown[] }).combatants).toEqual(buildDesktopArenaInput(next).combatants);
     await send(f.session.materializeRandomPlaceholders(f.session.getSnapshot().draft));
-    expect(execute).toHaveBeenCalledTimes(2); expect(f.materialize).toHaveBeenCalledTimes(1); f.session.dispose();
+    expect(execute).toHaveBeenCalledTimes(2); expect(invoke).not.toHaveBeenCalled(); expect(f.materialize).toHaveBeenCalledTimes(1); f.session.dispose();
   });
 });
