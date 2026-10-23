@@ -33,6 +33,26 @@ afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: tr
 
 // These exercise isolation and process contracts, never a real Windows/Tauri pass.
 describe('disposable Tavern Hosted stream acceptance', () => {
+  it('replaces only the build context and preserves owned-session cleanup on window destruction and exit', () => {
+    const parent = temporary(), paths = acceptancePaths(path.join(parent, 'tree'), path.join(parent, 'state'), id);
+    const key = PATCH_FILES[0], source = original[key];
+    const anchor = '.build(tauri::generate_context!())';
+    const replacement = '.build(acceptance_context)';
+    const lib = patchSources(original, paths, origin)[key];
+    expect(source.split(anchor)).toHaveLength(2);
+    expect(lib.split(replacement)).toHaveLength(2);
+    const lifecycle = lib.slice(lib.indexOf(replacement));
+    expect(lifecycle).toBe(source.slice(source.indexOf(anchor)).replace(anchor, replacement));
+    expect(lifecycle).toContain('.expect("error while building MahoShojo Generator desktop app")');
+    expect(lifecycle).toContain('.run(|app, event| {');
+    expect(lifecycle).toContain('tauri::WindowEvent::Destroyed');
+    expect(lifecycle).toContain('label == "main-ui"');
+    expect(lifecycle).toContain('tauri::RunEvent::Exit');
+    expect(lifecycle).toContain('app.state::<local_ai_launch::LaunchRegistry>().shutdown();');
+    for (const changed of [source.replace(anchor, '.run(tauri::generate_context!())'), source + '\n' + anchor]) {
+      expect(() => patchSources({ ...original, [key]: changed }, paths, origin)).toThrow('patch anchor changed or duplicated: lib.rs');
+    }
+  });
   it('preserves Story exports and uses the existing shared origin and port checks', () => {
     expect(story.loopbackOrigin).toBe(common.loopbackOrigin);
     expect(story.checkPorts).toBe(common.checkPorts);
@@ -46,7 +66,7 @@ describe('disposable Tavern Hosted stream acceptance', () => {
     expect(lib).toContain('compile_error!("Disposable Tavern acceptance checkout cannot build release")');
     expect(lib).toContain('MAHOSHOJO_TAVERN_ACCEPTANCE');
     expect(lib).toContain('unexpected app data namespace');
-    expect(lib.slice(lib.indexOf('.invoke_handler('), lib.indexOf('.run(acceptance_context)'))).toEqual(original[PATCH_FILES[0]].slice(original[PATCH_FILES[0]].indexOf('.invoke_handler('), original[PATCH_FILES[0]].indexOf('.run(tauri::generate_context!())')));
+    expect(lib.slice(lib.indexOf('.invoke_handler('), lib.indexOf('.build(acceptance_context)'))).toEqual(original[PATCH_FILES[0]].slice(original[PATCH_FILES[0]].indexOf('.invoke_handler('), original[PATCH_FILES[0]].indexOf('.build(tauri::generate_context!())')));
     expect(patched[PATCH_FILES[2]]).not.toContain('option_env!("MAHOSHOJO_CLOUD_ORIGIN")');
     expect(patched[PATCH_FILES[2]]).toContain(`const CLOUD_ORIGIN_PRODUCTION: &str = "${origin}"`);
     expect(patched[PATCH_FILES[3]]).toContain(`pub const SECRET_STORE_SERVICE: &str = "${id}"`);

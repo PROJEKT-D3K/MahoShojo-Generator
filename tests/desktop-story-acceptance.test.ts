@@ -26,6 +26,26 @@ afterEach(() => { for (const directory of roots.splice(0)) rmSync(directory, { r
 
 // These are script/transform and real loopback contracts, never Tauri/Windows passes.
 describe('disposable Hosted story acceptance adapter', () => {
+  it('replaces only the build context and preserves owned-session cleanup on window destruction and exit', () => {
+    const parent = temporary(), paths = acceptancePaths(path.join(parent, 'tree'), path.join(parent, 'state'), id);
+    const key = PATCH_FILES[0], source = original[key];
+    const anchor = '.build(tauri::generate_context!())';
+    const replacement = '.build(acceptance_context)';
+    const lib = patchSources(original, paths, 'http://127.0.0.1:24181', 'http://127.0.0.1:24182')[key];
+    expect(source.split(anchor)).toHaveLength(2);
+    expect(lib.split(replacement)).toHaveLength(2);
+    const lifecycle = lib.slice(lib.indexOf(replacement));
+    expect(lifecycle).toBe(source.slice(source.indexOf(anchor)).replace(anchor, replacement));
+    expect(lifecycle).toContain('.expect("error while building MahoShojo Generator desktop app")');
+    expect(lifecycle).toContain('.run(|app, event| {');
+    expect(lifecycle).toContain('tauri::WindowEvent::Destroyed');
+    expect(lifecycle).toContain('label == "main-ui"');
+    expect(lifecycle).toContain('tauri::RunEvent::Exit');
+    expect(lifecycle).toContain('app.state::<local_ai_launch::LaunchRegistry>().shutdown();');
+    for (const changed of [source.replace(anchor, '.run(tauri::generate_context!())'), source + '\n' + anchor]) {
+      expect(() => patchSources({ ...original, [key]: changed }, paths, 'http://127.0.0.1:24181', 'http://127.0.0.1:24182')).toThrow('patch anchor changed or duplicated: lib.rs');
+    }
+  });
   it('preserves the public Story helpers while sharing the same isolation checks', () => {
     expect(replaceOnce).toBe(common.replaceOnce);
     expect(checkPorts).toBe(common.checkPorts);
@@ -50,8 +70,8 @@ describe('disposable Hosted story acceptance adapter', () => {
     expect(lib).toContain('with_story_loopback_origins(library.shared_stories(), "http://127.0.0.1:24181", "http://127.0.0.1:24182")');
     expect(lib.indexOf('acceptance_context.config().identifier')).toBeLessThan(lib.indexOf('tauri::Builder::default()'));
     expect(lib).toContain('compile_error!("Disposable story acceptance checkout cannot build release")');
-    expect(lib).toContain('.run(acceptance_context)');
-    expect(lib.slice(lib.indexOf('.invoke_handler('), lib.indexOf('.run(acceptance_context)'))).toEqual(original[PATCH_FILES[0]].slice(original[PATCH_FILES[0]].indexOf('.invoke_handler('), original[PATCH_FILES[0]].indexOf('.run(tauri::generate_context!())')));
+    expect(lib).toContain('.build(acceptance_context)');
+    expect(lib.slice(lib.indexOf('.invoke_handler('), lib.indexOf('.build(acceptance_context)'))).toEqual(original[PATCH_FILES[0]].slice(original[PATCH_FILES[0]].indexOf('.invoke_handler('), original[PATCH_FILES[0]].indexOf('.build(tauri::generate_context!())')));
     expect(patched[PATCH_FILES[2]]).not.toContain('option_env!("MAHOSHOJO_CLOUD_ORIGIN")');
     expect(patched[PATCH_FILES[2]]).toContain('const CLOUD_ORIGIN_PRODUCTION: &str = "http://127.0.0.1:24182"');
     expect(patched[PATCH_FILES[3]]).toContain(`pub const SECRET_STORE_SERVICE: &str = "${id}"`);

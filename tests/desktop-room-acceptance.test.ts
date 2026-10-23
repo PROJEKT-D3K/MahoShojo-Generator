@@ -69,13 +69,33 @@ afterEach(() => {
 
 // Source transforms and process supervision only; these are not Windows/Tauri passes.
 describe('disposable Room acceptance source adapter', () => {
+  it('replaces only the build context and preserves owned-session cleanup on window destruction and exit', () => {
+    const paths = isolated();
+    const key = PATCH_FILES[0], source = original[key];
+    const anchor = '.build(tauri::generate_context!())';
+    const replacement = '.build(acceptance_context)';
+    const lib = patchSources(original, paths, pki)[key];
+    expect(source.split(anchor)).toHaveLength(2);
+    expect(lib.split(replacement)).toHaveLength(2);
+    const lifecycle = lib.slice(lib.indexOf(replacement));
+    expect(lifecycle).toBe(source.slice(source.indexOf(anchor)).replace(anchor, replacement));
+    expect(lifecycle).toContain('.expect("error while building MahoShojo Generator desktop app")');
+    expect(lifecycle).toContain('.run(|app, event| {');
+    expect(lifecycle).toContain('tauri::WindowEvent::Destroyed');
+    expect(lifecycle).toContain('label == "main-ui"');
+    expect(lifecycle).toContain('tauri::RunEvent::Exit');
+    expect(lifecycle).toContain('app.state::<local_ai_launch::LaunchRegistry>().shutdown();');
+    for (const changed of [source.replace(anchor, '.run(tauri::generate_context!())'), source + '\n' + anchor]) {
+      expect(() => patchSources({ ...original, [key]: changed }, paths, pki)).toThrow('patch anchor changed or duplicated: lib.rs');
+    }
+  });
   it('changes only six disposable native files and preserves the production sources and command ACL slice', () => {
     const instance = isolated(), patched = patchSources(original, instance, pki);
     expect(PATCH_FILES).toEqual(['lib.rs', 'secret.rs', 'cloud.rs', 'arena_room_http.rs', 'arena_room_socket.rs', 'arena_hosted.rs'].map(file => native + file));
     expect(Object.keys(patched)).toEqual(PATCH_FILES);
     const lib = patched[native + 'lib.rs'], sourceLib = original[native + 'lib.rs'];
-    expect(lib.slice(lib.indexOf('.invoke_handler('), lib.indexOf('.run(acceptance_context)')))
-      .toBe(sourceLib.slice(sourceLib.indexOf('.invoke_handler('), sourceLib.indexOf('.run(tauri::generate_context!())')));
+    expect(lib.slice(lib.indexOf('.invoke_handler('), lib.indexOf('.build(acceptance_context)')))
+      .toBe(sourceLib.slice(sourceLib.indexOf('.invoke_handler('), sourceLib.indexOf('.build(tauri::generate_context!())')));
     expect(lib).toContain('.append_invoke_initialization_script(arena_room_tauri::DOCUMENT_SCRIPT)');
     expect(lib).toContain('.on_page_load(|webview, payload| arena_room_tauri::page_load(webview, payload.event()))');
     expect(lib).toContain('compile_error!("Disposable Room acceptance checkout cannot build release")');
