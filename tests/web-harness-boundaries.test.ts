@@ -8,16 +8,17 @@ import { MOCK_MODULE_PATHS } from '../scripts/fixtures/web-arena-report.mjs';
 
 it('只注册精确文件加载替换，不跨 JS 重复解析整个依赖图', () => {
   const loads: { filter: RegExp; namespace: string }[] = [];
-  createHarnessBoundaryPlugin('/synthetic/app.with+[metacharacters]').setup({
+  const appRoot = path.join(path.parse(process.cwd()).root, 'synthetic', 'app.with+[metacharacters]');
+  createHarnessBoundaryPlugin(appRoot).setup({
     onLoad(options: { filter: RegExp; namespace: string }) { loads.push(options); },
     onResolve() { throw new Error('Must use native resolution'); },
   });
   expect(loads).toHaveLength(1);
   expect(loads[0].namespace).toBe('file');
   for (const name of MOCK_MODULE_PATHS) {
-    expect(loads[0].filter.test('/synthetic/app.with+[metacharacters]/' + name)).toBe(true);
-    expect(loads[0].filter.test('/synthetic/app.with+[metacharacters]/' + name + '.extra')).toBe(false);
-    expect(loads[0].filter.test('/synthetic/appXwith+[metacharacters]/' + name)).toBe(false);
+    expect(loads[0].filter.test(path.join(appRoot, name))).toBe(true);
+    expect(loads[0].filter.test(path.join(appRoot, name) + '.extra')).toBe(false);
+    expect(loads[0].filter.test(path.join(path.dirname(appRoot), 'appXwith+[metacharacters]', name))).toBe(false);
   }
 });
 
