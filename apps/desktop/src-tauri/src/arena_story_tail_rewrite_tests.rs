@@ -4,7 +4,7 @@ use crate::arena_story::{
     StoryStore, STAGE_LIFETIME,
 };
 use crate::library::LocalLibrary;
-use crate::store::{lock_connection, with_history_schema_for_test};
+use crate::store::{lock_connection, with_history_schema_for_test, SCHEMA_VERSION};
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -1025,7 +1025,7 @@ fn restart_reads_exact_success_but_rejects_old_instance_for_absent_receipt() {
 }
 
 #[test]
-fn schema11_and_maintenance_keep_rewrite_admission_closed() {
+fn production_schema_and_maintenance_keep_rewrite_admission_closed() {
     let (manifest, parts) = with_history_schema_for_test(|| {
         let (_root, lib) = library();
         commit(lib.stories(), "source", 1);
@@ -1036,9 +1036,9 @@ fn schema11_and_maintenance_keep_rewrite_admission_closed() {
     assert_eq!(
         lock_connection(&lib.stories().connection)
             .unwrap()
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, u64>(0))
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        SCHEMA_VERSION
     );
     assert!(lib
         .stories()
