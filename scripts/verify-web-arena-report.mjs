@@ -36,22 +36,28 @@ export function classifyRequest(rawUrl, method, origin, staticPaths) {
   return 'denied';
 }
 
+// Let esbuild resolve the graph natively; only replace the exact external-port files.
+// Re-exporting one module preserves shared instances, default exports and relative imports.
+export function createHarnessBoundaryPlugin(appRoot = APP) {
+  const replacements = fixture.MOCK_MODULE_PATHS.map(name => path.join(appRoot, name));
+  const filter = new RegExp('^(?:' + replacements.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')$');
+  const ports = JSON.stringify(path.join(appRoot, 'tests/browser/arena-report-ports.tsx'));
+  return { name: 'test-only-boundaries', setup(builder) {
+    builder.onLoad({ filter, namespace: 'file' }, () => ({
+      contents: `export * from ${ports}; export { default } from ${ports};`,
+      loader: 'js', resolveDir: appRoot,
+    }));
+  } };
+}
+
 export async function buildHarness(outputDir) {
   await mkdir(outputDir, { recursive: true });
-  const replacements = new Set(fixture.MOCK_MODULE_PATHS.map(name => path.join(APP, name)));
   const result = await build({
     absWorkingDir: ROOT, entryPoints: [path.join(APP, 'tests/browser/arena-report-harness.tsx')],
     outfile: path.join(outputDir, 'app.js'), bundle: true, write: false, platform: 'browser', format: 'esm',
     jsx: 'automatic', tsconfig: path.join(APP, 'tsconfig.json'), target: ['chrome111'],
     define: { 'process.env.NODE_ENV': '"development"', 'process.env': '{}' }, metafile: true,
-    plugins: [{ name: 'test-only-boundaries', setup(builder) {
-      builder.onResolve({ filter: /.*/ }, async args => {
-        if (args.pluginData?.resolved) return;
-        const resolved = await builder.resolve(args.path, { resolveDir: args.resolveDir, kind: args.kind, importer: args.importer, pluginData: { resolved: true } });
-        if (replacements.has(resolved.path)) return { path: path.join(APP, 'tests/browser/arena-report-ports.tsx') };
-        return resolved;
-      });
-    } }],
+    plugins: [createHarnessBoundaryPlugin()],
   });
   const pluginPath = requireWeb.resolve('@tailwindcss/postcss');
   const postcss = createRequire(pluginPath)('postcss');
