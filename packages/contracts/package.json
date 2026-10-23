@@ -164,7 +164,8 @@
     "./fixtures/arena-room-proposal-reconciliation.json": "./fixtures/arena-room-proposal-reconciliation.json",
     "./fixtures/desktop-room-generation-start.json": "./fixtures/desktop-room-generation-start.json",
     "./fixtures/desktop-room-starting-cancel.json": "./fixtures/desktop-room-starting-cancel.json",
-    "./fixtures/desktop-room-generation-read.json": "./fixtures/desktop-room-generation-read.json"
+    "./fixtures/desktop-room-generation-read.json": "./fixtures/desktop-room-generation-read.json",
+    "./local-ai-launch": "./src/local-ai-launch.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

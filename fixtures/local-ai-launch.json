@@ -1,0 +1,604 @@
+{
+  "runtimeRequests": [
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama"
+    }
+  ],
+  "startRequests": [
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": "install:1"
+    }
+  ],
+  "operationRequests": [
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1"
+    }
+  ],
+  "snapshots": [
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "state": "idle"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "preparing"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "prepared",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "starting",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "ready",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": "qwen3:8b",
+            "kind": "llm",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ]
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "external",
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": "qwen3:8b",
+            "kind": "llm",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ]
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "stopping",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "stopped"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "cancelled"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "failed",
+      "errorCode": "installation-not-found"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "stopping"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "failed",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "errorCode": "process-exited"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "prepared",
+      "installation": {
+        "installationId": "install:1",
+        "source": "registered-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "ready",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "service": {
+        "protocol": "ollama-native",
+        "state": "no-models",
+        "models": []
+      }
+    }
+  ],
+  "invalidRuntimeRequests": [
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "path": "C:\\Ollama\\ollama.exe"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "argv": [
+        "serve"
+      ]
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "env": {
+        "OLLAMA_HOST": "0.0.0.0"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "pid": 123
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "unknown": true
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "lm-studio"
+    },
+    {
+      "contractVersion": 2,
+      "runtimeId": "ollama"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "unexpected"
+    }
+  ],
+  "invalidStartRequests": [
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": "install:1",
+      "path": "C:\\Ollama\\ollama.exe"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": "install:1",
+      "argv": [
+        "serve"
+      ]
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": "install:1",
+      "env": {
+        "OLLAMA_HOST": "0.0.0.0"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": "install:1",
+      "pid": 123
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": "install:1",
+      "unknown": true
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "lm-studio",
+      "operationId": "launch:1",
+      "installationId": "install:1"
+    },
+    {
+      "contractVersion": 2,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": "install:1"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "../bad",
+      "installationId": "install:1"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": ""
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "installationId": "install:1"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1"
+    }
+  ],
+  "invalidOperationRequests": [
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "path": "C:\\Ollama\\ollama.exe"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "argv": [
+        "serve"
+      ]
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "env": {
+        "OLLAMA_HOST": "0.0.0.0"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "pid": 123
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "unknown": true
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "lm-studio",
+      "operationId": "launch:1"
+    },
+    {
+      "contractVersion": 2,
+      "runtimeId": "ollama",
+      "operationId": "launch:1"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": " "
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "installationId": "unexpected"
+    }
+  ],
+  "invalidSnapshots": [
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "starting",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "path": "C:\\Ollama\\ollama.exe"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "starting",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "argv": [
+        "serve"
+      ]
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "starting",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "env": {
+        "OLLAMA_HOST": "0.0.0.0"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "starting",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "pid": 123
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "starting",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "unknown": true
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "lm-studio",
+      "operationId": "launch:1",
+      "state": "starting",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 2,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "starting",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "state": "idle",
+      "operationId": "launch:1"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "state": "preparing"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "prepared"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "ready",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "external"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "external",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": "qwen3:8b",
+            "kind": "llm",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ]
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "preparing",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "cancelled",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "stopped",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "failed"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "prepared",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama"
+      },
+      "errorCode": "failed"
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "stopping",
+      "service": {
+        "protocol": "ollama-native",
+        "state": "reachable",
+        "models": [
+          {
+            "id": "qwen3:8b",
+            "kind": "llm",
+            "loaded": "unknown",
+            "execution": "unknown"
+          }
+        ]
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "prepared",
+      "installation": {
+        "installationId": "install:1",
+        "source": "default-location",
+        "product": "Ollama",
+        "path": "C:\\bad"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "prepared",
+      "installation": {
+        "installationId": "../bad",
+        "source": "default-location",
+        "product": "Ollama"
+      }
+    },
+    {
+      "contractVersion": 1,
+      "runtimeId": "ollama",
+      "operationId": "launch:1",
+      "state": "failed",
+      "errorCode": "native-secret-message"
+    }
+  ]
+}

@@ -96,14 +96,14 @@ pub enum DiscoveryResponse {
         request_id: String,
     },
 }
-#[derive(Debug, Serialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "kebab-case")]
 pub enum Protocol {
     OllamaNative,
     LmStudioNative,
     OpenaiCompatible,
 }
-#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ServiceState {
     Reachable,
@@ -117,8 +117,8 @@ pub enum ServiceState {
     UnsupportedResponse,
     Failed,
 }
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Service {
     pub protocol: Protocol,
     pub state: ServiceState,
@@ -126,16 +126,17 @@ pub struct Service {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_code: Option<&'static str>,
+    pub error_code: Option<String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Model {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    pub kind: &'static str,
-    pub loaded: &'static str,
-    pub execution: &'static str,
+    pub kind: String,
+    pub loaded: String,
+    pub execution: String,
 }
 impl Service {
     fn new(protocol: Protocol, state: ServiceState) -> Self {
@@ -398,6 +399,45 @@ where
     }
 }
 
+/// LOCAL-2 reuses exactly the LOCAL-1 fixed Ollama GET/parser/transport budgets.
+/// It owns its own launch deadline, never changes the public discovery contract.
+pub(crate) struct OllamaProbe {
+    client: Client,
+    plan: Plan,
+}
+impl OllamaProbe {
+    pub(crate) fn new() -> Result<Self, DiscoveryError> {
+        Self::at("http://127.0.0.1:11434".into())
+    }
+    fn at(base: String) -> Result<Self, DiscoveryError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        Ok(Self {
+            client: client()?,
+            plan: Plan {
+                protocol: Protocol::OllamaNative,
+                base,
+                headers,
+                authenticated: false,
+            },
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(base: String) -> Self {
+        Self::at(base).unwrap()
+    }
+    pub(crate) async fn probe(&self) -> Service {
+        tokio::time::timeout(Duration::from_secs(6), execute(&self.client, &self.plan))
+            .await
+            .unwrap_or_else(|_| {
+                failed(
+                    Protocol::OllamaNative,
+                    ReadError(ServiceState::TimedOut, "timed-out"),
+                )
+            })
+    }
+}
+
 struct HttpReply {
     status: u16,
     value: Option<Value>,
@@ -463,7 +503,7 @@ fn network_error(error: reqwest::Error) -> ReadError {
 }
 fn failed(protocol: Protocol, error: ReadError) -> Service {
     let mut service = Service::new(protocol, error.0);
-    service.error_code = Some(error.1);
+    service.error_code = Some(error.1.to_owned());
     service
 }
 fn status_error(status: u16, authenticated: bool) -> Option<ReadError> {
@@ -628,26 +668,27 @@ fn project(protocol: Protocol, value: &Value) -> Result<Service, ReadError> {
         if let Some(index) = positions.get(id) {
             let existing = &mut models[*index];
             if remote {
-                existing.execution = "remote-indicated";
+                existing.execution = "remote-indicated".into();
             }
             if existing.kind != kind {
-                existing.kind = "unknown";
+                existing.kind = "unknown".into();
             }
             if existing.loaded != loaded {
-                existing.loaded = "unknown";
+                existing.loaded = "unknown".into();
             }
         } else {
             positions.insert(id.to_owned(), models.len());
             models.push(Model {
                 id: id.to_owned(),
                 label,
-                kind,
-                loaded,
+                kind: kind.into(),
+                loaded: loaded.into(),
                 execution: if remote {
                     "remote-indicated"
                 } else {
                     "unknown"
-                },
+                }
+                .into(),
             });
         }
     }

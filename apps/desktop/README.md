@@ -217,6 +217,17 @@ D5.0a 起，预设/连接语义在 `@mahoshojo/ai-core`：`provider-catalog` 区
   OpenAI-compatible SSE 服务（含"取消真正中止上游 body"的断连观测）。这是 D1 退出门禁
   唯一未闭合的一条，且只能由人在真实 Provider 上确认。
 
+### 本机 AI 发现与会话启动（LOCAL-1 / LOCAL-2 首片）
+
+设置页可显式检查 Ollama / LM Studio、选择模型并保存连接。Windows 官方已安装 Ollama CLI
+另提供“为本次使用启动 Ollama”：不安装软件或下载模型，仅开放本机接口；已有服务只接入，
+由生成器启动的服务可显式停止，或在退出生成器时清理。关闭设置不停止已就绪服务。
+未识别的安装、LM Studio 与其他平台继续提供手动指引。
+
+实现边界见 [DESK-035](../../docs/specs/2026-09-30_160000_Desktop客户端实施规格.md#desk-035-本次会话启动已安装-ollamalocal-2-首片)。
+合成进程与 HTTP / DOM 自动化不代表真实 Windows 系统信任、安装更新、Job / GPU 子进程和
+GUI 关闭旅程已验收；整体 LOCAL-2 和后继安装/下载引导仍未完成。
+
 ## 本地库（D2.0 / D2.1 / D2.2a）
 
 ### 并发模型（D2.2a）

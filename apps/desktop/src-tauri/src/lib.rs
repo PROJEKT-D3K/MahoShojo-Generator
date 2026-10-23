@@ -46,6 +46,9 @@ mod ipc_stream;
 mod ipc_stream_tests;
 mod library;
 mod local_ai_discovery;
+mod local_ai_launch;
+#[cfg(test)]
+mod local_ai_launch_ipc_tests;
 mod local_card;
 #[cfg(test)]
 mod local_card_contract_tests;
@@ -224,6 +227,43 @@ fn cancel_local_ai_discovery(
     request: local_ai_discovery::DiscoveryCancelRequest,
 ) -> Result<bool, local_ai_discovery::DiscoveryError> {
     registry.cancel(&request.request_id)
+}
+
+// LOCAL-2 exposes only fixed Ollama/session identities, never native paths or commands.
+#[tauri::command]
+async fn prepare_local_ai_launch(
+    registry: State<'_, local_ai_launch::LaunchRegistry>,
+    request: local_ai_launch::RuntimeRequest,
+) -> Result<local_ai_launch::LaunchSnapshot, local_ai_launch::LaunchError> {
+    registry.prepare(request).await
+}
+#[tauri::command]
+async fn start_local_ai(
+    registry: State<'_, local_ai_launch::LaunchRegistry>,
+    request: local_ai_launch::LaunchRequest,
+) -> Result<local_ai_launch::LaunchSnapshot, local_ai_launch::LaunchError> {
+    registry.start(request).await
+}
+#[tauri::command]
+async fn get_local_ai_launch_status(
+    registry: State<'_, local_ai_launch::LaunchRegistry>,
+    request: local_ai_launch::RuntimeRequest,
+) -> Result<local_ai_launch::LaunchSnapshot, local_ai_launch::LaunchError> {
+    registry.status(request).await
+}
+#[tauri::command]
+fn cancel_local_ai_launch(
+    registry: State<'_, local_ai_launch::LaunchRegistry>,
+    request: local_ai_launch::OperationRequest,
+) -> Result<local_ai_launch::LaunchSnapshot, local_ai_launch::LaunchError> {
+    registry.cancel(request)
+}
+#[tauri::command]
+async fn stop_local_ai(
+    registry: State<'_, local_ai_launch::LaunchRegistry>,
+    request: local_ai_launch::OperationRequest,
+) -> Result<local_ai_launch::LaunchSnapshot, local_ai_launch::LaunchError> {
+    registry.stop(request).await
 }
 
 /// 对已保存的 Profile 发起一次 Direct 流式生成。
@@ -2171,6 +2211,7 @@ pub fn run() {
         .manage(secrets)
         .manage(ai::RequestRegistry::default())
         .manage(local_ai_discovery::DiscoveryRegistry::default())
+        .manage(local_ai_launch::LaunchRegistry::default())
         .manage(config::ConfigState::default())
         .manage(PendingRestore::default())
         .manage(webpkg_instance::WebPackageInstances::default())
@@ -2286,6 +2327,11 @@ pub fn run() {
             validate_provider_execution_profile,
             discover_local_ai,
             cancel_local_ai_discovery,
+            prepare_local_ai_launch,
+            start_local_ai,
+            get_local_ai_launch_status,
+            cancel_local_ai_launch,
+            stop_local_ai,
             stream_direct_ai,
             stream_target_ai,
             cancel_direct_ai,
@@ -2401,8 +2447,18 @@ pub fn run() {
             public_read_cache_query,
             public_read_cache_card
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running MahoShojo Generator desktop app");
+        .build(tauri::generate_context!())
+        .expect("error while building MahoShojo Generator desktop app")
+        .run(|app, event| {
+            // CloseRequested can still be rejected by useLeaveGuard. Only actual
+            // destruction of main-ui (even with content windows left) or final Exit
+            // ends the owned session. No automatic restart on the next app run.
+            if matches!(&event, tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } if label == "main-ui")
+                || matches!(event, tauri::RunEvent::Exit)
+            {
+                app.state::<local_ai_launch::LaunchRegistry>().shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

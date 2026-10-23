@@ -353,7 +353,7 @@ async fn oversized_response_fails_instead_of_truncating() {
         },
     )
     .await;
-    assert_eq!(service.error_code, Some("response-too-large"));
+    assert_eq!(service.error_code.as_deref(), Some("response-too-large"));
     // Client may close before the fixture finishes writing the rejected oversized body.
     let _ = task.await;
 }

@@ -14,7 +14,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = ROOT / "apps/desktop/src-tauri"
-MODULES = ["local_ai_discovery", "ai", "ai_responses", "ai_anthropic", "ai_google", "blob", "cloud", "library", "local_card", "maintenance", "provider_profile",
+MODULES = ["local_ai_discovery", "local_ai_launch", "ai", "ai_responses", "ai_anthropic", "ai_google", "blob", "cloud", "library", "local_card", "maintenance", "provider_profile",
            "provider_target", "public_cache", "secret", "sse", "store", "web_package",
            "package_path", "arena_hosted", "arena_story", "backup", "restore", "export", "external_link", "arena_room_protocol", "arena_room_state", "arena_room_http",
            "arena_room_socket", "arena_room", "magic_tea_party", "image_asset", "audit", "gc", "hosted_preset", "arena_room_generation"]

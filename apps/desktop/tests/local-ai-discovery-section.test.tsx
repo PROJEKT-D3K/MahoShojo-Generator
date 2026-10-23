@@ -24,6 +24,7 @@ const model = (id = 'new-model', remote = false) => ({ id, kind: 'unknown', load
 const complete = (requestId: string, models = [model()], state = 'reachable') => ({
   contractVersion: 1, requestId, outcome: 'completed', service: { protocol: 'ollama-native', state, models },
 });
+const cached = (command: string) => command === 'get_local_ai_launch_status' ? { contractVersion: 1, runtimeId: 'ollama', state: 'idle' } : false;
 let root: Root; let container: HTMLDivElement;
 const settle = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
 const button = (text: string) => [...container.querySelectorAll('button')].find(el => el.textContent === text)!;
@@ -39,7 +40,7 @@ beforeEach(() => {
   mocks.invoke.mockImplementation(async (command: string, args?: { request?: { requestId: string } }) => {
     if (command === 'has_provider_secret') return false;
     if (command === 'discover_local_ai') return complete(args!.request!.requestId);
-    return false;
+    return cached(command);
   });
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
@@ -78,7 +79,7 @@ describe('settings local discovery actual consumer', () => {
     let finish!: (value: unknown) => void; let requestId = '';
     mocks.invoke.mockImplementation((cmd: string, args: { request: { requestId: string } }) => {
       if (cmd === 'discover_local_ai') { requestId = args.request.requestId; return new Promise(resolve => { finish = resolve; }); }
-      return Promise.resolve(false);
+      return Promise.resolve(cached(cmd));
     });
     await mount(); await click('检查本机 AI 服务'); await click('检查所选服务');
     await select('本机服务检查目标', 'candidate:lm-studio');
@@ -94,7 +95,7 @@ describe('settings local discovery actual consumer', () => {
     mocks.documents.p1 = profile(); let finish!: (value: unknown) => void; let requestId = '';
     mocks.invoke.mockImplementation((cmd: string, args: { request: { requestId: string } }) => {
       if (cmd === 'discover_local_ai') { requestId = args.request.requestId; return new Promise(resolve => { finish = resolve; }); }
-      return Promise.resolve(false);
+      return Promise.resolve(cached(cmd));
     });
     await mount(); await click('检查本机 AI 服务'); await select('本机服务检查目标', 'profile:p1'); await click('检查所选服务');
     await act(async () => { await getDesktopAiConfigStore().saveConnection({ id: 'p1', name: '已修改', baseUrl: profile().baseUrl, modelId: 'changed' }); });
@@ -114,7 +115,7 @@ describe('settings local discovery actual consumer', () => {
 
   it('does not offer remote-only/empty models or pretend auth onboarding is automatic', async () => {
     let next = complete('unused', [model('cloud:cloud', true)], 'no-compatible-models');
-    mocks.invoke.mockImplementation(async (cmd: string, args: { request: { requestId: string } }) => cmd === 'discover_local_ai' ? { ...next, requestId: args.request.requestId } : false);
+    mocks.invoke.mockImplementation(async (cmd: string, args: { request: { requestId: string } }) => cmd === 'discover_local_ai' ? { ...next, requestId: args.request.requestId } : cached(cmd));
     await mount(); await click('检查本机 AI 服务'); await click('检查所选服务');
     expect(button('保存所选模型并使用')).toBeUndefined();
     expect(container.querySelector<HTMLOptionElement>('option[value="cloud:cloud"]')!.disabled).toBe(true);
