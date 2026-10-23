@@ -8,6 +8,8 @@ import { readLocalForgeDocument, exportLocalForgeDocument, type LocalForgeSource
 import { FORGE_IMAGE_MAX_BYTES, validateForgeImage } from '../features/card-forge/local-media';
 import { captureLocalForgeImage, downloadForgeBlob } from '../features/card-forge/export';
 import { useExternalLinks } from '../features/external-links/external-links-provider';
+import { ForgeGenerationPanel } from '../features/card-forge/generation-panel';
+import { DEFAULT_GAME_CARD_IMAGE_ASPECT_RATIO } from '@mahoshojo/domain/game-card-image-crop';
 import { useLeaveGuard } from './useLeaveGuard';
 import { navigateByProductHref, resolveInternalHrefForHashHistory } from './hash-history-fragment';
 
@@ -18,6 +20,9 @@ export function DesktopCardForge() {
   const [state, setState] = useState<GameCardForgeRuntimeState | null>(null);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
+  const inputDirtyRef = useRef(false);
+  const providerDirtyRef = useRef(false);
+  const onProviderDirtyChange = useCallback((value: boolean) => { providerDirtyRef.current = value; }, []);
   const busyRef = useRef(false);
   const alive = useRef(true);
   const [busy, setBusy] = useState(false);
@@ -27,7 +32,7 @@ export function DesktopCardForge() {
   const markDirty = (value: boolean) => { dirtyRef.current = value; setDirty(value); };
   const setWorking = useCallback((value: boolean) => { busyRef.current = value; if (alive.current) setBusy(value); }, []);
   const guard = useLeaveGuard(
-    () => busyRef.current || dirtyRef.current,
+    () => busyRef.current || dirtyRef.current || inputDirtyRef.current || providerDirtyRef.current,
     '工坊有未导出的编辑或操作仍在进行，请完成操作或确认放弃后再离开。',
     '窗口关闭保护初始化失败，卡牌工坊暂不可用，请重新打开页面。',
     () => !busyRef.current && window.confirm('工坊编辑尚未导出，确认放弃并离开？'),
@@ -70,11 +75,16 @@ export function DesktopCardForge() {
     downloadForgeBlob(new Blob([json], { type: 'application/json' }), buildSafeFileName(state.faceData.cardName, 'json', '卡牌工坊'));
     setNotice('已发起工坊 JSON 下载，请确认系统保存完成；无法获知系统保存或取消结果，离开时仍会提醒未保存的编辑。');
   });
-  return <CardForgePageView description="本地卡面预览、主题色与插图裁剪"
+  return <CardForgePageView description="源卡 Direct 生成、本地卡面预览、主题色与插图裁剪"
     homeLink={<Link to="/" className="text-sm text-[var(--app-accent-strong)] hover:underline">返回首页</Link>}
     footer={<ProductFooter className="footer" assetSource={{ baseUrl: '/' }} onNavigateInternal={(href) => navigateByProductHref(router, href)} resolveInternalHref={resolveInternalHrefForHashHistory} onNavigateExternal={openFixed} />}>
     <CardForgeWorkspace>
     <div className="space-y-4 min-w-0">
+    <ForgeGenerationPanel disabled={busy || !guard.ready} onBusyChange={setWorking} onProviderDirtyChange={onProviderDirtyChange} onBeforeGenerate={() => !state || !dirtyRef.current || window.confirm('当前工坊作品有未导出的编辑。新卡面生成成功后会替换当前作品并清除旧插图，确认继续？可先取消并导出旧作品。')} onInputDirty={() => { inputDirtyRef.current = true; }} onGenerated={(faceData, sourceJson) => {
+      const next: GameCardForgeRuntimeState = { faceData, imageUrl: null, imageSource: null, imageAspectRatio: DEFAULT_GAME_CARD_IMAGE_ASPECT_RATIO, imageTransform: DEFAULT_IMAGE_TRANSFORM };
+      inputDirtyRef.current = false;
+      setState(next); setSource({ name: '源数据卡.json', original: new TextEncoder().encode(sourceJson), state: next, warning: '' }); markDirty(true);
+    }} />
     <section className="card-forge-panel rounded-2xl p-5 space-y-3">
       <label className="block">导入工坊存档 / 卡面 / 旧版元数据 JSON（最大 32 MiB）
         <input aria-label="导入卡牌 JSON" type="file" accept=".json,application/json" disabled={busy || !guard.ready}
@@ -84,7 +94,7 @@ export function DesktopCardForge() {
       {source ? <p className="text-sm">当前来源：{source.name} · {dirty ? '有未导出的编辑' : '无未导出的编辑'}</p> : null}
       {source?.warning ? <p role="status" className="text-sm text-amber-700">{source.warning}</p> : null}
       {source ? <p className="text-sm text-amber-700">工坊 JSON 是规范化编辑存档，不是原件：原存档 createdAt、旧版外层元数据（如 sourceCardData、sourceCardType）、插图/裁剪对象的额外字段，以及效果条目中 type / description 以外的扩展字段不写入存档；导出原始 JSON 可完整保留原始字节和未知字段。未加载的图片不会写入新存档。</p> : null}
-      {busy ? <p role="status">正在处理本地文件…</p> : null}
+      {busy ? <p role="status">正在处理工坊操作…</p> : null}
       {error ? <p role="alert" className="text-red-700">{error}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
       {guard.message ? <p role="alert">{guard.message}</p> : null}

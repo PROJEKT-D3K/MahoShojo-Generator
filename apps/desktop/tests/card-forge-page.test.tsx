@@ -3,8 +3,10 @@ import { act, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Blob as NodeBlob } from 'node:buffer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ForgeGenerationPanelProps } from '../src/features/card-forge/generation-panel';
 import { DesktopCardForge } from '../src/app/card-forge-page';
-const mocks = vi.hoisted(() => ({ blocker: (() => false) as () => boolean, close: ((_event: { preventDefault: () => void }) => {}) as (event: { preventDefault: () => void }) => void, capture: vi.fn(), download: vi.fn() }));
+const mocks = vi.hoisted(() => ({ blocker: (() => false) as () => boolean, close: ((_event: { preventDefault: () => void }) => {}) as (event: { preventDefault: () => void }) => void, capture: vi.fn(), download: vi.fn(), generation: null as ForgeGenerationPanelProps | null }));
+vi.mock('../src/features/card-forge/generation-panel', () => ({ ForgeGenerationPanel: (props: ForgeGenerationPanelProps) => { mocks.generation = props; return null; } }));
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: async (handler: typeof mocks.close) => { mocks.close = handler; return () => {}; } }) }));
 vi.mock('@tanstack/react-router', () => ({ useBlocker: ({ shouldBlockFn }: { shouldBlockFn: () => boolean }) => { mocks.blocker = shouldBlockFn; }, useRouter: () => ({ navigate: vi.fn() }), Link: ({ children }: { children: ReactNode }) => <a>{children}</a> }));
@@ -15,6 +17,31 @@ const inputFile = (text: string, name = '原件.json') => { const bytes = new Te
 const choose = (input: HTMLInputElement, file: unknown) => { Object.defineProperty(input, 'files', { configurable: true, value: [file] }); input.dispatchEvent(new Event('change', { bubbles: true })); };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); mocks.capture.mockReset(); mocks.download.mockReset(); });
 describe('Desktop local forge host journey', () => {
+  it('protects provider drafts through route/native close and clears only their own guard', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const container = document.createElement('div'); const root = createRoot(container);
+    const blocked = () => { act(() => expect(mocks.blocker()).toBe(true)); const preventDefault = vi.fn(); act(() => mocks.close({ preventDefault })); expect(preventDefault).toHaveBeenCalledOnce(); };
+    const allowed = () => { act(() => expect(mocks.blocker()).toBe(false)); const preventDefault = vi.fn(); act(() => mocks.close({ preventDefault })); expect(preventDefault).not.toHaveBeenCalled(); };
+    try {
+      await act(async () => root.render(<DesktopCardForge />));
+      const onProviderDirtyChange = mocks.generation!.onProviderDirtyChange;
+      allowed();
+      act(() => onProviderDirtyChange(true)); blocked();
+      const unload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(unload); expect(unload.defaultPrevented).toBe(true);
+      expect(mocks.generation!.onProviderDirtyChange).toBe(onProviderDirtyChange);
+      act(() => onProviderDirtyChange(false)); allowed();
+      act(() => onProviderDirtyChange(true));
+      act(() => mocks.generation!.onGenerated({ ...face, cardType: 'character', rarity: 'epic', element: 'dark' }, '{"name":"源"}'));
+      // Import clears the generated canvas dirty flag, but must not erase provider edits.
+      confirm.mockReturnValueOnce(true);
+      await act(async () => choose(container.querySelector<HTMLInputElement>('[aria-label="导入卡牌 JSON"]')!, inputFile(JSON.stringify(face))));
+      blocked();
+      act(() => onProviderDirtyChange(false)); allowed();
+      act(() => { mocks.generation!.onInputDirty(); onProviderDirtyChange(true); onProviderDirtyChange(false); });
+      blocked();
+    } finally { act(() => root.unmount()); }
+  });
   it('exposes the shared theme preset names and selected state after import and edits', async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
@@ -132,4 +159,31 @@ describe('Desktop local forge host journey', () => {
     await act(async () => finish(new TextEncoder().encode(JSON.stringify(face)).buffer));
     expect(container.textContent).toBe(''); expect(mocks.download).not.toHaveBeenCalled();
   });
+  it('protects dirty work before successful generation and keeps source-input guard independent from canvas import', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.stubGlobal('Blob', NodeBlob);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const container = document.createElement('div'); const root = createRoot(container);
+    try {
+      await act(async () => root.render(<DesktopCardForge />));
+      const input = container.querySelector<HTMLInputElement>('[aria-label="导入卡牌 JSON"]')!;
+      act(() => mocks.generation!.onInputDirty());
+      await act(async () => choose(input, inputFile(JSON.stringify(face))));
+      act(() => expect(mocks.blocker()).toBe(true));
+      const color = container.querySelector<HTMLButtonElement>('[aria-label="主题色 #3b82f6"]')!;
+      act(() => color.click());
+      expect(mocks.generation!.onBeforeGenerate()).toBe(false);
+      expect(container.querySelector('.gc-name-text')?.textContent).toBe('原卡');
+      confirm.mockReturnValue(true);
+      expect(mocks.generation!.onBeforeGenerate()).toBe(true);
+      const source = '\ufeff{"name":"生成源","unknown":true}';
+      act(() => mocks.generation!.onGenerated({ ...face, cardType: 'character', rarity: 'epic', element: 'dark', cardName: '生成新卡' }, source));
+      expect(container.querySelector('.gc-name-text')?.textContent).toBe('生成新卡');
+      confirm.mockReturnValue(false);
+      act(() => expect(mocks.blocker()).toBe(true));
+      await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === '导出原始 JSON（完整原件）')!.click());
+      expect(new TextDecoder('utf-8', { ignoreBOM: true }).decode(await mocks.download.mock.calls[0][0].arrayBuffer())).toBe(source);
+    } finally { act(() => root.unmount()); container.remove(); }
+  });
+
 });

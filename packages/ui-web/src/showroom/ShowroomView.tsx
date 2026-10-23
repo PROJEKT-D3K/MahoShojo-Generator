@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Download, ExternalLink, RefreshCw, RotateCw, X } from 'lucide-react';
 
 import { CHARACTER_CARD_EXPORTER_LABEL, MAGICAL_GIRL_CARD_GRADIENT, MagicalGirlCard } from '../character-card';
-import { CardForgeThemeEditor } from '../card-forge';
+import { CardForgeThemeEditor, CardForgeSourceFields } from '../card-forge';
 import { BattleReportCardWidthSettings } from '../arena/BattleReportCardWidthSettings';
 import { resolveBattleReportCardManualWidthPx, type BattleReportCardWidthSettingsValue } from '../arena/battle-report-card-width';
 import { CombatantUpdatesPresentation, GeneratedByUserBadgeView, StreamingBattleReportCard } from '../arena-report';
@@ -220,6 +220,8 @@ function ControlsSection() {
 }
 
 function FormsSection() {
+  const [forgeSource, setForgeSource] = useState('{"name":"蔷薇"}');
+  const [forgeInstructions, setForgeInstructions] = useState('');
   const [forgeColor, setForgeColor] = useState('#ff6b9d');
   const [generationMode, setGenerationMode] = useState<GenerationMode>('non-stream');
   return (
@@ -235,6 +237,7 @@ function FormsSection() {
         </div>
       </div>
       <div role="group" aria-label="卡牌工坊主题色样板">
+        <CardForgeSourceFields sourceCardJson={forgeSource} customInstructions={forgeInstructions} onSourceCardJsonChange={setForgeSource} onCustomInstructionsChange={setForgeInstructions} />
         <CardForgeThemeEditor color={forgeColor} onChange={setForgeColor} />
       </div>
       <div className="grid gap-4 md:grid-cols-2" aria-label="生成方式说明样板">

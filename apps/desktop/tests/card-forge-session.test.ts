@@ -1,0 +1,43 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { GameCardGenerationInput } from '@mahoshojo/ai-core/game-card-generation';
+import type { CardRepository } from '@mahoshojo/local-library/repository';
+import { type GenerationExecutor } from '../src/features/generation/session';
+import type { DesktopDirectGenerationIntent, DesktopGenerationOutcome } from '../src/features/generation/executor';
+import { ForgeGenerationSession } from '../src/features/card-forge/session';
+const input = { sourceCardJson: '{"name":"原卡"}' };
+const face = { cardName: '蔷薇', cardType: 'character', rarity: 'epic', cost: 3, element: 'dark', attack: 2, defense: 1, hp: 3, effects: [{ type: '被动', description: '效果' }], traits: [], flavorText: '', powerLevel: 'A', description: '', themeColor: '#ef4444' };
+const result: DesktopGenerationOutcome<'game-card'> = { status: 'completed', mode: 'direct-local', cardKind: 'game-card', card: face, rawText: JSON.stringify(face) };
+afterEach(() => vi.unstubAllGlobals());
+describe('forge reuses the existing request owner without source-card writes', () => {
+  it('never persists a completed game card to the source library or browser storage', async () => {
+    const storage = { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() };
+    vi.stubGlobal('localStorage', storage);
+    const repository = { put: vi.fn(), putIfAbsent: vi.fn() } as unknown as CardRepository;
+    const owner = new ForgeGenerationSession(repository, async () => result);
+    await owner.generate({ invoke: vi.fn(), profileId: 'original' }, input, { mode: 'direct-local' }, true);
+    expect(owner.getSnapshot()).toMatchObject({ phase: 'completed', card: face });
+    owner.dispose();
+    expect(repository.put).not.toHaveBeenCalled(); expect(repository.putIfAbsent).not.toHaveBeenCalled();
+    expect(storage.getItem).not.toHaveBeenCalled(); expect(storage.setItem).not.toHaveBeenCalled(); expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(owner).not.toHaveProperty('saveResult');
+  });
+  it.each(['cancel', 'dispose'] as const)('single-flights, freezes source/model and ignores a completed result after %s', async action => {
+    let finish!: (value: typeof result) => void;
+    const execute = vi.fn<GenerationExecutor<GameCardGenerationInput, DesktopDirectGenerationIntent, 'game-card'>>(async () => new Promise(resolve => { finish = resolve; }));
+    const repository = { put: vi.fn(), putIfAbsent: vi.fn() } as unknown as CardRepository;
+    const owner = new ForgeGenerationSession(repository, execute);
+    expect(owner).not.toHaveProperty('saveResult');
+    expect(owner).not.toHaveProperty('restoreDraft');
+    const source = { ...input };
+    const first = owner.generate({ invoke: vi.fn(), profileId: 'original' }, source, { mode: 'direct-local', modelId: 'frozen' }, true);
+    source.sourceCardJson = '{"name":"changed"}';
+    await owner.generate({ invoke: vi.fn(), profileId: 'new' }, source, { mode: 'direct-remote', modelId: 'new' }, true);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]![1]).toEqual(input);
+    expect(execute.mock.calls[0]![2]).toMatchObject({ modelId: 'frozen' });
+    owner[action](); finish(result); await first;
+    expect(owner.getSnapshot().card).toBeNull();
+    expect(repository.put).not.toHaveBeenCalled();
+    expect(repository.putIfAbsent).not.toHaveBeenCalled();
+  });
+});

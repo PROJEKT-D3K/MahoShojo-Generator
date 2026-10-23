@@ -2,11 +2,30 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GameCardFace, CardForgeThemeEditor, ImageCropEditor } from '../src/card-forge';
+import { GameCardFace, CardForgeThemeEditor, ImageCropEditor, CardForgeSourceFields } from '../src/card-forge';
 import { DENY_SNAPDOM_MEDIA, type capturePngBlob } from '../src/client/snapdomCapture';
 const face = { cardName: '蔷薇', cardType: 'character' as const, rarity: 'epic' as const, cost: 3, element: 'dark' as const, attack: 2, defense: 1, hp: 3, effects: [{ type: '被动', description: '效果' }], traits: [], flavorText: '', powerLevel: 'A', description: '', themeColor: '#ef4444' };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe('shared forge real controls and capture lifecycle', () => {
+  it('shares accessible controlled source and instruction fields, including the disabled gate', async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div'); const root = createRoot(container);
+    const onSourceCardJsonChange = vi.fn(); const onCustomInstructionsChange = vi.fn();
+    const props = { sourceCardJson: '{"name":"原卡"}', customInstructions: '控制型', onSourceCardJsonChange, onCustomInstructionsChange };
+    try {
+      await act(async () => root.render(<CardForgeSourceFields {...props} />));
+      const source = container.querySelector<HTMLTextAreaElement>('[aria-label="源数据卡 JSON"]')!;
+      const instructions = container.querySelector<HTMLTextAreaElement>('[aria-label="附加要求（可选）"]')!;
+      expect(source.value).toBe(props.sourceCardJson); expect(instructions.value).toBe(props.customInstructions);
+      for (const [field, value] of [[source, '{"name":"新卡"}'], [instructions, '史诗']] as const) {
+        act(() => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); });
+      }
+      expect(onSourceCardJsonChange).toHaveBeenCalledWith('{"name":"新卡"}'); expect(onCustomInstructionsChange).toHaveBeenCalledWith('史诗');
+      await act(async () => root.render(<CardForgeSourceFields {...props} disabled />));
+      expect(container.querySelector('fieldset')?.disabled).toBe(true);
+      expect(source.value).toBe(props.sourceCardJson);
+    } finally { act(() => root.unmount()); }
+  });
   it('keeps the named native custom picker focusable with a visible wrapper focus treatment', async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement('div'); document.body.append(container); const root = createRoot(container);

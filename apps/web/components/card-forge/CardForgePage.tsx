@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { CardForgeThemeEditor, CardForgePageView, CardForgeWorkspace } from '@mahoshojo/ui-web/card-forge';
+import { CardForgeThemeEditor, CardForgePageView, CardForgeWorkspace, CardForgeSourceFields } from '@mahoshojo/ui-web/card-forge';
 import { ImageGenerationFeedback } from '@mahoshojo/ui-web/image-generation';
 import { generateTachieWithProgress, type TachieGenerationRequest, type TachieGenerationResult } from '@/lib/tachie/manager';
 import { useGeneratedResultAutoScroll } from '@mahoshojo/ui-web/details-controls';
@@ -566,26 +566,8 @@ export function CardForgePage() {
                   </button>
                 </div>
               </div>
-              <textarea
-                value={sourceCardJson}
-                onChange={(e) => setSourceCardJson(e.target.value)}
-                placeholder="可直接粘贴角色卡 / 情景卡 JSON，也可从本地文件或线上数据卡填入"
-                className="input-field w-full font-mono text-xs"
-                rows={10}
-                style={{ resize: 'vertical', minHeight: '200px' }}
-              />
-
-              <div>
-                <label className="input-label text-xs">附加要求（可选）</label>
-                <textarea
-                  value={customInstructions}
-                  onChange={(e) => setCustomInstructions(e.target.value)}
-                  placeholder="例如：希望这张卡偏向控制型、稀有度至少为史诗…"
-                  className="input-field w-full text-sm"
-                  rows={2}
-                  style={{ resize: 'vertical' }}
-                />
-              </div>
+              <CardForgeSourceFields sourceCardJson={sourceCardJson} customInstructions={customInstructions}
+                onSourceCardJsonChange={setSourceCardJson} onCustomInstructionsChange={setCustomInstructions} />
 
               <TokenIndicator
                 text={tokenEstimateText}
