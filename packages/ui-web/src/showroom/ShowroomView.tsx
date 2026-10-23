@@ -20,6 +20,7 @@ import { ImageGenerationFeedback, ImageGenerationResultView } from '../image-gen
 import type { HomeAssetSource } from '../home/feature-catalog';
 import { BaseModal } from '../modal';
 import { ProductFooter } from '../shell';
+import { ScenarioResultContent } from '../scenario';
 import { SHOWROOM_MAGICAL_GIRL } from './fixtures';
 import { LocalImagesSample } from './LocalImagesSample';
 import { SHOWROOM_SECTIONS, type ShowroomSectionId } from './sections';
@@ -297,6 +298,13 @@ function ResultSurfacesSection() {
   const [width, setWidth] = useState<BattleReportCardWidthSettingsValue>({ battleReportCardWidthMode: 'manual', battleReportCardWidthPx: 760 });
   return (
     <div className="flex flex-col gap-3">
+      <div className={PANEL_CLASS} aria-label="情景 Markdown 预览样板">
+        <ScenarioResultContent data={{
+          description: '## 场景概览\n\n**钟楼**中的一次调查。\n\n- 寻找线索\n- 观察星空',
+          elements: { events: '# 简报\\n\\n---\\n\\n## 任务\\n记录星轨。' },
+          extension: { preserved: true },
+        }} />
+      </div>
       <div aria-label="竞技场结果布局样板">
         <AdvancedArenaPageView header={<h3>完整版竞技场</h3>} result={<section className="card"><h4>结果状态</h4><p>结果卡随页面展开，使用共源 Arena 布局。</p></section>}>
           <p className="text-sm text-(--app-text-muted)">共享页框的实际结果插槽</p>
