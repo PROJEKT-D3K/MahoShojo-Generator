@@ -109,6 +109,10 @@ describe('resolveAutoReviewThresholds', () => {
     expect(t.useOverallVeto).toBe(true);
     expect(t.catVetoAt).toBe(0.7);
   });
+  it('span-01-lite 登记收窄后的 pass-veto 阈值', () => {
+    const t = resolveAutoReviewThresholds(jevEntry({ model: 'respan/span-01-lite' }));
+    expect(t).toMatchObject({ usePassVeto: true, passRejectAt: 0.25, catVetoAt: 0.7 });
+  });
 });
 
 describe('resolveUncertainAction', () => {
@@ -190,6 +194,40 @@ describe('jev-decisions backend', () => {
     await backend.review(target, { signal: controller.signal });
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.signal).toBe(controller.signal);
+  });
+
+  it('span-01-lite：完整输入下 should_pass 极低仍触发 pass-veto reject', async () => {
+    const engine = createAutoReviewEngine([jevEntry({ model: 'respan/span-01-lite' })], {
+      fetch: vi.fn(async () => jevResponse(fullAnswers({ should_pass: 0.1 }))),
+    });
+    expect((await engine.review(target)).outcome.verdict).toBe('reject');
+  });
+
+  it('span-01-lite：截断输入禁用 pass-veto——低 should_pass 不再硬拒', async () => {
+    const bigTarget = { ...target, data: JSON.stringify({ f: 'x'.repeat(500) }) };
+    const engine = createAutoReviewEngine([jevEntry({ model: 'respan/span-01-lite' })], {
+      fetch: vi.fn(async () => jevResponse(fullAnswers({ should_pass: 0.05 }))),
+    });
+    const r = await engine.review(bigTarget);
+    expect(r.inputCoverage.truncated).toBe(true);
+    expect(r.outcome.verdict).toBe('uncertain');
+  });
+
+  it('span-01-lite：截断输入下类目否决（正向证据）仍可 reject', async () => {
+    const bigTarget = { ...target, data: JSON.stringify({ f: 'x'.repeat(500) }) };
+    const engine = createAutoReviewEngine([jevEntry({ model: 'respan/span-01-lite' })], {
+      fetch: vi.fn(async () => jevResponse(fullAnswers({ v_gore: 0.95, should_pass: 0.05 }))),
+    });
+    const r = await engine.review(bigTarget);
+    expect(r.inputCoverage.truncated).toBe(true);
+    expect(r.outcome.verdict).toBe('reject');
+  });
+
+  it('span-01-lite：should_pass 高于收窄阈值且类目干净 → approve', async () => {
+    const backend = createAutoReviewBackend(jevEntry({ model: 'respan/span-01-lite' }), {
+      fetch: vi.fn(async () => jevResponse(fullAnswers({ should_pass: 0.3 }))),
+    });
+    expect((await backend.review(target)).verdict).toBe('approve');
   });
 });
 

@@ -95,7 +95,9 @@ const TUNED_DEFAULTS: Record<string, AutoReviewThresholds> = {
     approveBelow: 0.3,
     catVetoAt: 0.7,
     usePassVeto: true,
-    passRejectAt: 0.5,
+    // 2026-10 复审：pass-veto 0.5 在真实流量上误拒率过高（should_pass 0.29–0.49
+    // 全为干净卡），收窄到"模型明确倾向拒绝"才触发；截断输入已在裁决层豁免。
+    passRejectAt: 0.25,
   },
   'jev-decisions:*': { rejectAt: 0.5, approveBelow: 0.2 },
   'omni-moderation:*': { useFlagged: true, approveBelow: 0.5 },

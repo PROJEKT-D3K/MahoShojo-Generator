@@ -8,6 +8,7 @@ import type {
   AutoReviewBackend,
   AutoReviewBackendKind,
   AutoReviewCategory,
+  ReviewInputCoverage,
   ReviewTarget,
   ReviewVerdict,
 } from './types';
@@ -98,6 +99,7 @@ const parseJevAnswers = (raw: unknown): JevAnswers => {
 const deriveJevVerdict = (
   p: JevAnswers,
   th: AutoReviewThresholds,
+  coverage?: ReviewInputCoverage,
 ): { verdict: ReviewVerdict; score: number; category?: AutoReviewCategory } => {
   let score = 0;
   let category: AutoReviewCategory | undefined;
@@ -108,16 +110,20 @@ const deriveJevVerdict = (
       category = cat;
     }
   }
+  // pass-veto 是"模型没把握放行"的负证据：截断输入下模型未看全内容，
+  // 信心不足不构成拒绝依据（与覆盖门禁"截断禁止 approve"对称——证据不足只产出 uncertain）。
+  // 类目/整体否决是正向证据，截断输入下仍然有效。
+  const passVetoApplies = th.usePassVeto === true && coverage?.truncated !== true;
   const reject =
     (th.rejectAt !== undefined && score >= th.rejectAt) ||
     (th.useOverallVeto === true && (p.v_overall ?? 0) >= (th.overallVetoAt ?? th.rejectAt ?? 0.5)) ||
     (th.catVetoAt !== undefined && score >= th.catVetoAt) ||
-    (th.usePassVeto === true && (p.should_pass ?? 1) <= (th.passRejectAt ?? 0.5));
+    (passVetoApplies && (p.should_pass ?? 1) <= (th.passRejectAt ?? 0.5));
   if (reject) return { verdict: 'reject', score, category };
   const clean =
     score < (th.approveBelow ?? 0.2) &&
     (th.useOverallVeto !== true || (p.v_overall ?? 0) < (th.overallVetoAt ?? th.rejectAt ?? 0.5)) &&
-    (th.usePassVeto !== true || (p.should_pass ?? 1) > (th.passRejectAt ?? 0.5));
+    (!passVetoApplies || (p.should_pass ?? 1) > (th.passRejectAt ?? 0.5));
   return { verdict: clean ? 'approve' : 'uncertain', score, category };
 };
 
@@ -153,7 +159,7 @@ const createJevBackend = (
       const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
       if (!res.ok) throw new Error(`jev-decisions ${res.status}: ${JSON.stringify(json ?? {}).slice(0, 200)}`);
       const p = parseJevAnswers(json);
-      const { verdict, score, category } = deriveJevVerdict(p, thresholds);
+      const { verdict, score, category } = deriveJevVerdict(p, thresholds, state.coverage);
       return {
         verdict,
         score,
