@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -99,6 +100,38 @@ describe('repository CI workflow', () => {
     const text = read('.github/workflows/ci.yml');
     for (const forbidden of ['services:', 'verify:hosted-dr:redis', 'wrangler deploy', 'scp ', 'ssh ']) {
       expect(text).not.toContain(forbidden);
+    }
+  });
+
+  it('Linux 仅优先使用既有官方 archive 镜像，保留 Azure 后备及 security 配置', () => {
+    const desktop = parse(read('.github/workflows/desktop-ci.yml'));
+    const desktopSteps = desktop.jobs['verify-rust'].steps;
+    const preference = desktopSteps.find((step: { name: string }) => step.name === 'Prefer Ubuntu archive for Linux dependencies');
+    const install = desktopSteps.find((step: { name: string }) => step.name === 'Install Linux Tauri system dependencies');
+    expect(preference.if).toBe("runner.os == 'Linux'");
+    expect(desktopSteps.indexOf(preference)).toBeLessThan(desktopSteps.indexOf(install));
+    expect(install.run).toContain('sudo apt-get update');
+    expect(install.run).toContain('sudo apt-get install -y');
+    expect(preference.run).not.toMatch(/sources\.list|trusted=|AllowUnauthenticated|Verify-Peer|security\.ubuntu\.com/);
+    // 生产步骤仅在 Linux 执行；其他平台只验证结构，避免 BSD sed/Git Bash 路径差异。
+    if (process.platform !== 'linux' || !hasBash) return;
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'ci-apt-mirrors-'));
+    const file = path.join(directory, 'apt-mirrors.txt');
+    const script = preference.run.replaceAll('/etc/apt/apt-mirrors.txt', file).replace('sudo sed', 'sed');
+    const original = 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n';
+    try {
+      for (const fixture of [original, '# unknown future runner layout\nhttps://archive.ubuntu.com/ubuntu/\tpriority:7\n']) {
+        writeFileSync(file, fixture);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          expect(spawnSync('bash', ['-e', '-c', script]).status).toBe(0);
+          expect(readFileSync(file, 'utf8')).toBe(fixture === original ? original.replace('priority:2', 'priority:0') : fixture);
+        }
+      }
+      rmSync(file);
+      expect(spawnSync('bash', ['-e', '-c', script]).status).toBe(0);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });

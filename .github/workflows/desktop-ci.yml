@@ -59,6 +59,15 @@ jobs:
           node-version: 22.23.4
           cache: pnpm
 
+      - name: Prefer Ubuntu archive for Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          # 保留 runner 自带的 Azure 后备、security 源及签名校验，仅调整已知官方镜像的优先级。
+          # https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/configure-apt-sources.sh
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i -E 's|^(https://archive\.ubuntu\.com/ubuntu/[[:blank:]]+)priority:2$|\1priority:0|' /etc/apt/apt-mirrors.txt
+          fi
+
       - name: Install Linux Tauri system dependencies
         if: runner.os == 'Linux'
         run: |
