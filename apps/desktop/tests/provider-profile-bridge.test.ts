@@ -50,6 +50,20 @@ describe('provider profile bridge', () => {
     });
   });
 
+  it('preserves Messages identity and dormant generation defaults without widening the execution projection', async () => {
+    const messages: DirectProviderProfileV1 = { ...profile, adapter: 'anthropic',
+      publicHeaders: { 'anthropic-version': '2026-10-21' }, generationDefaults: { temperature: 0.6, max_tokens: 8000 } };
+    const invoke = nativeAccepting();
+    await saveProviderProfile(invoke, messages);
+    const projected = JSON.parse(invoke.mock.calls.find(([command]) => command === VALIDATE_PROVIDER_EXECUTION_PROFILE_COMMAND)![1]!.document as string);
+    expect(projected.adapter).toBe('anthropic');
+    expect(projected.publicHeaders).toEqual({ 'anthropic-version': '2026-10-21' });
+    expect(projected).not.toHaveProperty('generationDefaults');
+    const saved = invoke.mock.calls.find(([command]) => command === SAVE_PROVIDER_PROFILE_COMMAND)![1]!;
+    expect(JSON.parse(saved.document as string)).toEqual(messages);
+    expect(saved.updatedAt).toBe(messages.updatedAt);
+  });
+
   it('persists the full profile rather than the narrow projection', async () => {
     // native 侧执行时要自己从完整文档解析 endpoint 与 secret 引用，因此落盘的必须是完整文档。
     const invoke = nativeAccepting();

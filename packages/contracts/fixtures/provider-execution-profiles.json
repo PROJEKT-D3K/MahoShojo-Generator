@@ -38,6 +38,15 @@
       "modelId": "local-model"
     },
     {
+      "id": "profile-anthropic",
+      "name": "Anthropic Messages",
+      "adapter": "anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "modelId": "messages-model",
+      "apiKeyRef": "provider:profile-anthropic:api-key",
+      "publicHeaders": { "anthropic-version": "2026-10-21" }
+    },
+    {
       "id": "profile-responses",
       "name": "OpenAI Responses",
       "adapter": "openai-responses",

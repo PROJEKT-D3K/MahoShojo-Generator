@@ -4,7 +4,7 @@
 // - overlay fail-closed；损坏即 blocked，显式重置前拒绝一切写入；
 // - 执行位置与客户端连接正交：默认 client+null；悬空保留原 ID 由解析层诊断；
 //   删除当前连接显式解除引用，绝不自动换供应商；
-// - 预设目录不含 `system`；Direct 候选 = 已核验 wire ∩ `DESKTOP_DIRECT_ADAPTERS`；
+// - 预设目录不含 `system`；Direct 候选 = 已核验 wire ∩ `DESKTOP_PRESET_DIRECT_ADAPTERS`；
 // - secret 只有 set/has/delete 三个调用面，明文永不进 overlay/Profile；
 // - Profile native 校验先于凭据写入，Profile 落盘在凭据之后；
 // - 编辑连接时不提供新明文则保留既有 `apiKeyRef` 与 `createdAt`，adapter 不被改写。
@@ -330,14 +330,13 @@ describe('resolveDesktopAiTarget', () => {
     );
   });
 
-  it('rejects adapters the native side has not implemented', () => {
-    const anthropic = profileFixture({
-      adapter: 'anthropic',
-      baseUrl: 'https://api.anthropic.com/v1',
-    });
-    const target = resolveDesktopAiTarget(clientSelection('p_local'), [anthropic], {}, {});
-    expect(target.mode).toBeNull();
-    expect(target.unavailableReason).toContain('anthropic');
+  it('supports saved Messages profiles while still rejecting Google', () => {
+    for (const adapter of ['anthropic', 'google'] as const) {
+      const profile = profileFixture({ adapter, baseUrl: 'https://model.example/v1' });
+      const target = resolveDesktopAiTarget(clientSelection('p_local'), [profile], {}, {});
+      expect(target.mode).toBe(adapter === 'anthropic' ? 'direct-remote' : null);
+      expect(target.unavailableReason).toBe(adapter === 'anthropic' ? null : '当前客户端尚未实现 google 适配器，请改用 OpenAI-compatible 连接');
+    }
   });
 
   it('scopes generation overrides by profile id and model id', () => {
@@ -448,6 +447,16 @@ describe('preset layering preserves verified preset protocols', () => {
     expect(DESKTOP_DIRECT_ADAPTERS.has('openai-compatible')).toBe(true);
   });
 
+  it('does not expand preset eligibility when Messages becomes executable for custom profiles', () => {
+    const synthetic: AiProviderPreset = { ...presetById('kourichat'),
+      direct: { adapter: 'anthropic', reviewedAt: '2026-10-21' },
+      models: [{ value: 'custom-claude', label: 'Claude', description: 'synthetic wire evidence' }] };
+    expect(DESKTOP_DIRECT_ADAPTERS.has('anthropic')).toBe(true);
+    expect(DESKTOP_DIRECT_ADAPTERS.has('google')).toBe(false);
+    expect(describeDesktopPresetEntry(synthetic, false).directCapableModels).toEqual([]);
+    expect(describeDesktopPresetModelSupport(synthetic, 'custom-claude').supported).toBe(false);
+  });
+
   it('tracks hidden preset ids', () => {
     const entries = listDesktopPresetEntries(new Set(['kourichat']));
     expect(entries.find((entry) => entry.preset.id === 'kourichat')?.hidden).toBe(true);
@@ -456,15 +465,15 @@ describe('preset layering preserves verified preset protocols', () => {
 });
 
 describe('DesktopAiConfigStore', () => {
-  it('saves, activates, reopens and copies a Responses connection without changing protocol', async () => {
+  it.each(['openai-responses', 'anthropic'] as const)('saves, activates, reopens and copies a %s connection without changing protocol', async (adapter) => {
     const native = createNativeStub();
     const storage = createStorage();
     const store = createStore(storage, native.invoke);
     store.init();
     await vi.waitFor(() => expect(store.getSnapshot().profilesState).toBe('ready'));
-    const draft = { id: 'responses', name: 'Responses', adapter: 'openai-responses' as const, baseUrl: 'https://api.example.com/v1', modelId: 'responses-model' };
+    const draft = { id: 'responses', name: 'Responses', adapter, baseUrl: 'https://api.example.com/v1', modelId: 'responses-model' };
     await saveConnectionDraft(store, draft, { activate: true });
-    expect(native.profiles.get(draft.id)?.adapter).toBe('openai-responses');
+    expect(native.profiles.get(draft.id)?.adapter).toBe(adapter);
     const reopened = createStore(storage, native.invoke);
     reopened.init();
     await vi.waitFor(() => expect(reopened.getSnapshot().profilesState).toBe('ready'));
@@ -472,9 +481,9 @@ describe('DesktopAiConfigStore', () => {
     const target = resolveDesktopAiTarget(reopened.getSnapshot().selection, [profile], {}, {});
     expect(target.unavailableReason).toBeNull();
     expect(target.mode).toBe('direct-remote');
-    expect(target.profile?.adapter).toBe('openai-responses');
+    expect(target.profile?.adapter).toBe(adapter);
     await saveConnectionDraft(reopened, { ...draftFromProfile(profile), id: 'responses-copy' }, { activate: true });
-    expect(native.profiles.get('responses-copy')?.adapter).toBe('openai-responses');
+    expect(native.profiles.get('responses-copy')?.adapter).toBe(adapter);
     await reopened.saveConnection({ ...draftFromProfile(profile), adapter: 'openai-compatible' });
     expect(native.profiles.get(draft.id)?.adapter).toBe('openai-compatible');
   });
@@ -1068,9 +1077,9 @@ describe('DesktopAiConfigStore', () => {
 
   it('refuses to edit a legacy profile whose adapter the editor cannot express', async () => {
     const legacy = profileFixture({
-      id: 'p_anthropic',
-      adapter: 'anthropic',
-      baseUrl: 'https://api.anthropic.com/v1',
+      id: 'p_google',
+      adapter: 'google',
+      baseUrl: 'https://model.example/v1',
     });
     const native = createNativeStub([legacy]);
     const store = createStore(createStorage(), native.invoke);
@@ -1079,15 +1088,15 @@ describe('DesktopAiConfigStore', () => {
 
     await expect(
       store.saveConnection({
-        id: 'p_anthropic',
+        id: 'p_google',
         name: '改名而已',
-        baseUrl: 'https://api.anthropic.com/v1',
-        modelId: 'claude',
+        baseUrl: 'https://model.example/v1',
+        modelId: 'gemini',
       }),
     ).rejects.toThrow(/openai-compatible/u);
     // 原 Profile 完全未被触碰，adapter 没被静默改写成 openai-compatible。
-    expect(native.profiles.get('p_anthropic')?.adapter).toBe('anthropic');
-    expect(native.profiles.get('p_anthropic')?.name).toBe('本地模型');
+    expect(native.profiles.get('p_google')?.adapter).toBe('google');
+    expect(native.profiles.get('p_google')?.name).toBe('本地模型');
     expect(native.calls).not.toContain('save_provider_profile');
   });
 

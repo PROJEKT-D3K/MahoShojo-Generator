@@ -59,11 +59,11 @@ const profiles: Record<string, DirectProviderProfileV1> = {
     createdAt: '2026-10-05T00:00:00.000Z',
     updatedAt: '2026-10-05T00:00:00.000Z',
   },
-  anth: {
+  google: {
     version: 1,
-    id: 'anth',
+    id: 'google',
     name: '三号',
-    adapter: 'anthropic',
+    adapter: 'google',
     baseUrl: 'https://model.example/v1',
     modelId: 'm3',
     createdAt: '2026-10-05T00:00:00.000Z',
@@ -263,15 +263,15 @@ describe('DesktopAiProviderPanel', () => {
   it('shows the unavailable reason for an unimplemented adapter without hiding the connection', async () => {
     seedOverlay({
       version: 3,
-      selection: { executionPreference: 'client', clientConnectionId: 'anth' },
+      selection: { executionPreference: 'client', clientConnectionId: 'google' },
       hiddenPresetIds: [],
       generationOverrides: {},
       modelsByProfileId: {},
     });
-    mocks.profileIds = ['p1', 'p2', 'anth'];
+    mocks.profileIds = ['p1', 'p2', 'google'];
     await mount();
     expect(container.textContent).toContain('三号');
-    expect(container.textContent).toContain('当前客户端尚未实现 anthropic 适配器');
+    expect(container.textContent).toContain('当前客户端尚未实现 google 适配器');
     expect(button('测试当前连接')).toBeUndefined();
   });
 
@@ -481,6 +481,42 @@ describe('DesktopAiProviderPanel', () => {
     } finally {
       profiles.p1 = original;
     }
+  });
+
+  it('projects Messages controls for any custom model and retains stored preferences across protocol changes', async () => {
+    const original = profiles.p1!;
+    const savedOverrides = { temperature: 0.8, thinking: { mode: 'enabled' as const, effort: 'high' as const }, maxOutputTokens: 7000 };
+    profiles.p1 = { ...original, adapter: 'anthropic' };
+    seedOverlay({ version: 3, selection: { executionPreference: 'client', clientConnectionId: 'p1' }, hiddenPresetIds: [],
+      generationOverrides: { p1: { m1: savedOverrides, 'arbitrary-model': savedOverrides } },
+      modelsByProfileId: { p1: { selectedModelId: 'arbitrary-model', customModelIds: ['arbitrary-model'] } } });
+    mocks.execute.mockResolvedValue({ status: 'completed', requestId: 'messages-panel', contractVersion: 1,
+      mode: 'direct-local', output: { text: 'Messages 输出' }, finishReason: 'stop' } satisfies AiExecutionResult);
+    try {
+      await mount();
+      await act(async () => button('高级生成设置')!.click());
+      const [maxTokens, temperature] = [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')];
+      expect(maxTokens?.disabled).toBe(false);
+      expect(maxTokens?.value).toBe('7000');
+      expect(temperature?.disabled).toBe(true);
+      expect(temperature?.value).toBe('0.8');
+      expect(container.textContent).toContain('输出上限 4096');
+      expect(container.textContent).toContain('本协议不发送 temperature');
+      expect(container.textContent).toContain('Thinking 开关或 effort 强度设置');
+      expect(container.querySelector('input[name="thinking-mode"]')).toBeNull();
+      await act(async () => button('测试当前连接')!.click());
+      await settle();
+      expect(mocks.execute).toHaveBeenCalledOnce();
+      expect(mocks.execute.mock.calls[0]![0]).toMatchObject({ modelId: 'arbitrary-model', maxOutputTokens: 32 });
+      expect(container.textContent).toContain('测试输出：Messages 输出');
+      const store = getDesktopAiConfigStore();
+      expect(store.getSnapshot().generationOverrides.p1?.['arbitrary-model']).toEqual(savedOverrides);
+      profiles.p1 = original;
+      await act(async () => store.refreshProfiles());
+      await settle();
+      expect(container.querySelectorAll<HTMLInputElement>('input[type="number"]')[1]?.disabled).toBe(false);
+      expect(store.getSnapshot().generationOverrides.p1?.['arbitrary-model']).toEqual(savedOverrides);
+    } finally { profiles.p1 = original; }
   });
 
   it('runs the shared connection test against the resolved target', async () => {

@@ -62,7 +62,7 @@ describe('Responses shared connection editor', () => {
     store.init();
     await vi.waitFor(() => expect(store.getSnapshot().profilesState).toBe('ready'));
     await renderEditor((draft) => saveConnectionDraft(store, draft, { activate: true }));
-    expect([...container.querySelectorAll('option')].map((option) => option.value)).toEqual(['openai-compatible', 'openai-responses']);
+    expect([...container.querySelectorAll('option')].map((option) => option.value)).toEqual(['openai-compatible', 'openai-responses', 'anthropic']);
     await selectResponses();
     await act(async () => button('保存并使用').click());
     const profile = DirectProviderProfileV1Schema.parse(JSON.parse(documents.get('responses-ui')!));

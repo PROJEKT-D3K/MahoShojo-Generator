@@ -251,7 +251,9 @@ impl DirectProviderExecutionProfile {
         // 已实现的协议独立执行；其余 adapter 显式失败，不冒用 Chat Completions。
         if !matches!(
             self.adapter,
-            ProviderAdapter::OpenaiCompatible | ProviderAdapter::OpenaiResponses
+            ProviderAdapter::OpenaiCompatible
+                | ProviderAdapter::OpenaiResponses
+                | ProviderAdapter::Anthropic
         ) {
             return Err(ProviderProfileError::UnsupportedAdapter);
         }
@@ -653,21 +655,15 @@ mod tests {
     }
 
     #[test]
-    fn refuses_adapters_that_are_not_implemented_yet() {
-        for adapter in ["anthropic", "google"] {
-            let profile = serde_json::json!({
-                "id": "p",
-                "name": "n",
-                "adapter": adapter,
-                "baseUrl": "https://api.example.com/v1",
-                "modelId": "m"
-            });
-            assert_eq!(
-                DirectProviderExecutionProfile::parse(&document(profile))
-                    .expect_err("must be refused"),
-                ProviderProfileError::UnsupportedAdapter
-            );
-        }
+    fn refuses_google_until_its_adapter_is_implemented() {
+        let profile = serde_json::json!({
+            "id": "p", "name": "n", "adapter": "google",
+            "baseUrl": "https://api.example.com/v1", "modelId": "m"
+        });
+        assert_eq!(
+            DirectProviderExecutionProfile::parse(&document(profile)).expect_err("must be refused"),
+            ProviderProfileError::UnsupportedAdapter
+        );
     }
 
     #[test]

@@ -107,7 +107,7 @@
 ## DESK-AIP-008 Provider/模型/生成参数能力门禁
 
 1. `supported` 必须同时符合：供应商 Direct wire 核验、当前 Native adapter 已实现、相应模型或自定义模型路径允许实际调用；不以 Web 列表或 `provider.type` 推测。
-2. 当前 Native 主力仅支持 OpenAI-compatible Direct；Anthropic/Google 等协议未实现时不可假装通用 `/chat/completions` 支持；系统默认和项目转发端点不提供 Direct 快捷调用。
+2. Native Direct 按已实现的独立 adapter 执行 Chat Completions、Responses 与自定义 Profile Messages（DESK-030a/b）；未实现的 Google 等协议不可假装通用 `/chat/completions` 支持；系统默认和项目转发端点不提供 Direct 快捷调用。
 3. Web 端“供应商/模型成功率”来自项目服务器统计，**不能**直接当作用户 Direct 连接可用性。Desktop 如显示服务器侧数据必须标注“仅供参考”；本地连接只用有来源、有时间的测试结果展示，不自动测试。
 4. `temperature`、输出 Tokens、`thinking` 等高级参数要经模型、adapter 与**实际请求映射**三重判断：本期 Native Direct `thinking` 虽然可保存但尚未真实下发，UI 不能显示成已生效。可禁用并解释，原保存值仍要保留；Web 现有能力不退化。
 5. 客户端现有“非流式/结构化”生成约束维持；切到 server 时允许其已有 Hosted 流式业务路径。不可将切执行位置实现为对其他页面或服务器模式偏好的不可见覆盖。

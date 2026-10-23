@@ -10,6 +10,7 @@
 //! （见 `PLAN-desktop-client-v1`）。
 
 mod ai;
+mod ai_anthropic;
 #[cfg(test)]
 mod ai_contract_tests;
 #[cfg(test)]

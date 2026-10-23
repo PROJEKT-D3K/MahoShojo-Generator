@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
 
+use crate::ai_anthropic::AnthropicStreamState;
 use crate::ai_responses::ResponsesStreamState;
 use crate::provider_profile::{DirectProviderExecutionProfile, ProviderAdapter};
 use crate::provider_target::{validate_credential_purpose, CredentialPurpose};
@@ -543,8 +544,30 @@ struct UpstreamError {
 }
 
 /// 正常完整帧与 EOF 尾帧必须共用折叠逻辑，避免尾部漏掉错误、usage 或推理。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamProtocol {
+    Chat,
+    Responses,
+    Anthropic,
+}
+
+enum StreamProtocolState {
+    Chat,
+    Responses(ResponsesStreamState),
+    Anthropic(AnthropicStreamState),
+}
+impl StreamProtocolState {
+    fn is_completed(&self, parser: &SseFrameParser) -> bool {
+        match self {
+            Self::Chat => parser.is_done(),
+            Self::Responses(state) => state.is_completed(),
+            Self::Anthropic(state) => state.is_completed(),
+        }
+    }
+}
+
 struct UpstreamStreamState {
-    responses: Option<ResponsesStreamState>,
+    protocol: StreamProtocolState,
     text: String,
     reasoning: String,
     pending_text: String,
@@ -562,15 +585,35 @@ impl UpstreamStreamState {
         on_event: &dyn EventSink,
     ) -> Result<(), DirectAiError> {
         let SseFrame::Data(payload) = frame;
-        if let Some(responses) = &mut self.responses {
-            let budget = (request.request_kind == Some(AiRequestKind::Arena))
-                .then_some(ARENA_OUTPUT_CONTENT_BYTES);
-            let delta = responses.consume(&payload, budget)?;
-            self.text.push_str(&delta.text);
-            self.pending_text.push_str(&delta.text);
-            self.reasoning.push_str(&delta.reasoning);
-            self.pending_reasoning.push_str(&delta.reasoning);
-            if let Some(usage) = delta.usage {
+        let budget = (request.request_kind == Some(AiRequestKind::Arena))
+            .then_some(ARENA_OUTPUT_CONTENT_BYTES);
+        let delta = match &mut self.protocol {
+            StreamProtocolState::Chat => None,
+            StreamProtocolState::Responses(state) => {
+                let delta = state.consume(&payload, budget)?;
+                Some((
+                    delta.text,
+                    delta.reasoning,
+                    delta.usage,
+                    state.is_completed(),
+                ))
+            }
+            StreamProtocolState::Anthropic(state) => {
+                let delta = state.consume(&payload, budget)?;
+                Some((
+                    delta.text,
+                    delta.reasoning,
+                    delta.usage,
+                    state.is_completed(),
+                ))
+            }
+        };
+        if let Some((text, reasoning, usage, completed)) = delta {
+            self.text.push_str(&text);
+            self.pending_text.push_str(&text);
+            self.reasoning.push_str(&reasoning);
+            self.pending_reasoning.push_str(&reasoning);
+            if let Some(usage) = usage {
                 emit_event(
                     on_event,
                     AiStreamEvent::Usage {
@@ -584,7 +627,7 @@ impl UpstreamStreamState {
                 *sequence += 1;
                 self.usage = Some(usage);
             }
-            if responses.is_completed() {
+            if completed {
                 self.finish_reason = AiExecutionFinishReason::Stop;
             }
             return Ok(());
@@ -692,11 +735,79 @@ fn map_error_code(value: Option<&str>) -> String {
 // 出站执行
 // ---------------------------------------------------------------------------
 
-/// 构造 OpenAI-compatible 的 chat completions 请求体。
+const ANTHROPIC_VERSION: &str = "2026-10-21";
+const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// 按保存的 Profile 选择无状态协议，不透传 renderer 自定义协议字段。
 fn build_request_body(
     profile: &DirectProviderExecutionProfile,
     request: &AiExecutionRequest,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, DirectAiError> {
+    if profile.adapter == ProviderAdapter::Anthropic {
+        let invalid = || {
+            DirectAiError::new(
+            DirectAiErrorCode::UnsupportedRequest,
+            "Messages requires leading system instructions followed by user/assistant turns, starting and ending with user",
+        )
+        };
+        let first_turn = request
+            .messages
+            .iter()
+            .position(|message| message.role != "system")
+            .ok_or_else(invalid)?;
+        let turns = &request.messages[first_turn..];
+        if turns.first().is_none_or(|message| message.role != "user")
+            || turns.last().is_none_or(|message| message.role != "user")
+            || turns
+                .iter()
+                .any(|message| !matches!(message.role.as_str(), "user" | "assistant"))
+        {
+            return Err(invalid());
+        }
+        let max_tokens = request
+            .max_output_tokens
+            .unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS);
+        if max_tokens == 0 {
+            return Err(DirectAiError::new(
+                DirectAiErrorCode::UnsupportedRequest,
+                "Messages max output tokens must be positive",
+            ));
+        }
+        if request
+            .response_format
+            .as_deref()
+            .is_some_and(|format| !matches!(format, "text" | "json"))
+        {
+            return Err(DirectAiError::new(
+                DirectAiErrorCode::UnsupportedRequest,
+                "Messages supports text or locally validated JSON output",
+            ));
+        }
+        let mut system = request.messages[..first_turn]
+            .iter()
+            .map(|message| serde_json::json!({ "type": "text", "text": message.content }))
+            .collect::<Vec<_>>();
+        if request.response_format.as_deref() == Some("json") {
+            // A text instruction, not a provider structured-output guarantee. The existing
+            // consumer must still validate JSON/schema before committing the generated card.
+            system.push(serde_json::json!({ "type": "text", "text":
+                "Return only valid JSON matching the requested structure. Do not include Markdown fences or commentary." }));
+        }
+        let mut body = serde_json::json!({
+            "model": request.model_id.as_deref().unwrap_or(&profile.model_id),
+            "messages": turns.iter().map(|message|
+                serde_json::json!({ "role": message.role, "content": message.content }))
+                .collect::<Vec<_>>(),
+            "stream": true,
+            "max_tokens": max_tokens,
+        });
+        if !system.is_empty() {
+            body["system"] = serde_json::json!(system);
+        }
+        // API version 2026-10-21 rejects temperature/top_p/top_k on every model.
+        // This declared adapter policy applies before the first request, never as a retry.
+        return Ok(body);
+    }
     if profile.adapter == ProviderAdapter::OpenaiResponses {
         let mut body = serde_json::json!({
             "model": request.model_id.as_deref().unwrap_or(&profile.model_id),
@@ -715,7 +826,7 @@ fn build_request_body(
         if request.response_format.as_deref() == Some("json") {
             body["text"] = serde_json::json!({ "format": { "type": "json_object" } });
         }
-        return body;
+        return Ok(body);
     }
     let mut body = serde_json::json!({
         "model": request.model_id.as_deref().unwrap_or(&profile.model_id),
@@ -737,7 +848,7 @@ fn build_request_body(
     if request.response_format.as_deref() == Some("json") {
         body["response_format"] = serde_json::json!({ "type": "json_object" });
     }
-    body
+    Ok(body)
 }
 
 fn build_endpoint(profile: &DirectProviderExecutionProfile) -> Result<url::Url, DirectAiError> {
@@ -750,10 +861,10 @@ fn build_endpoint(profile: &DirectProviderExecutionProfile) -> Result<url::Url, 
     // 必须按路径**追加**而不是用 Url::join：base 形如 `.../v1` 时，join 会把 `v1`
     // 当成文件名替换掉，得到 `/chat/completions`，从而丢掉 OpenAI-compatible 根路径。
     let base_path = endpoint.path().trim_end_matches('/');
-    let path = if profile.adapter == ProviderAdapter::OpenaiResponses {
-        "responses"
-    } else {
-        "chat/completions"
+    let path = match profile.adapter {
+        ProviderAdapter::OpenaiResponses => "responses",
+        ProviderAdapter::Anthropic => "messages",
+        _ => "chat/completions",
     };
     endpoint.set_path(&format!("{base_path}/{path}"));
     // Profile 的 baseUrl 是 API 根。显式清空 query 与 fragment，避免用户误配的查询参数
@@ -785,6 +896,42 @@ pub(crate) fn build_headers_for_purpose(
             "credential purpose does not match provider target",
         )
     })?;
+    let anthropic = profile.adapter == ProviderAdapter::Anthropic;
+    if anthropic {
+        for (name, value) in profile.public_headers.iter().flatten() {
+            let required = match name.to_ascii_lowercase().as_str() {
+                "anthropic-version" => Some(ANTHROPIC_VERSION),
+                "accept" => Some("text/event-stream"),
+                "content-type" => Some("application/json"),
+                _ => None,
+            };
+            if required.is_some_and(|required| value != required) {
+                return Err(DirectAiError::new(
+                    DirectAiErrorCode::ProfileRejected,
+                    "Messages protocol headers conflict with the fixed adapter policy",
+                ));
+            }
+        }
+        let mut names = std::collections::HashSet::new();
+        for name in profile
+            .secret_header_refs
+            .iter()
+            .flatten()
+            .map(|(name, _)| name)
+        {
+            let name = name.to_ascii_lowercase();
+            if !names.insert(name.clone())
+                || matches!(
+                    name.as_str(),
+                    "anthropic-version" | "accept" | "content-type"
+                )
+                || (name == "x-api-key" && profile.api_key_ref.is_some())
+            {
+                return Err(DirectAiError::new(DirectAiErrorCode::ProfileRejected,
+                    "Messages secret headers conflict with protocol headers or API key authentication"));
+            }
+        }
+    }
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::ACCEPT,
@@ -812,6 +959,13 @@ pub(crate) fn build_headers_for_purpose(
         headers.insert(header_name, header_value);
     }
 
+    if anthropic {
+        headers.insert(
+            "anthropic-version",
+            reqwest::header::HeaderValue::from_static(ANTHROPIC_VERSION),
+        );
+    }
+
     if let Some(secret_ref) = &profile.api_key_ref {
         let value = secrets
             .resolve(secret_ref)
@@ -828,8 +982,17 @@ pub(crate) fn build_headers_for_purpose(
                 )
             })?;
         headers.insert(
-            reqwest::header::AUTHORIZATION,
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {value}")).map_err(|_| {
+            if anthropic {
+                reqwest::header::HeaderName::from_static("x-api-key")
+            } else {
+                reqwest::header::AUTHORIZATION
+            },
+            reqwest::header::HeaderValue::from_str(&if anthropic {
+                value
+            } else {
+                format!("Bearer {value}")
+            })
+            .map_err(|_| {
                 DirectAiError::new(
                     DirectAiErrorCode::ProfileRejected,
                     "stored API key is not a valid header value",
@@ -1015,7 +1178,15 @@ pub async fn run_stream(
     token: CancellationToken,
     on_event: &dyn EventSink,
 ) -> Result<(), DirectAiError> {
-    run_stream_with_protocol(upstream, request, resolved_model_id, token, on_event, false).await
+    run_stream_with_protocol(
+        upstream,
+        request,
+        resolved_model_id,
+        token,
+        on_event,
+        StreamProtocol::Chat,
+    )
+    .await
 }
 
 async fn run_stream_with_protocol(
@@ -1024,7 +1195,7 @@ async fn run_stream_with_protocol(
     resolved_model_id: &str,
     token: CancellationToken,
     on_event: &dyn EventSink,
-    responses: bool,
+    protocol: StreamProtocol,
 ) -> Result<(), DirectAiError> {
     let request_id = request.request_id.clone();
     let contract_version = request.contract_version;
@@ -1034,17 +1205,30 @@ async fn run_stream_with_protocol(
     // cancellation token, before request preparation or network dispatch.
     let mut sequence: u32 = 1;
 
-    let mut parser = if request.request_kind == Some(AiRequestKind::Arena) {
+    let mut parser = if request.request_kind == Some(AiRequestKind::Arena)
+        || protocol == StreamProtocol::Anthropic
+    {
+        // Opaque thinking is encrypted content, not a tiny signature. Permit a
+        // bounded complete value plus JSON escaping; the reducer limits decoded
+        // content/opaque separately, and raw wire remains cumulatively bounded.
         SseFrameParser::with_max_bytes(ARENA_MAX_WIRE_BYTES)
     } else {
         SseFrameParser::new()
     };
-    if responses {
+    if protocol != StreamProtocol::Chat {
         parser = parser.with_typed_events();
     }
     let mut decoder = Utf8StreamDecoder::default();
     let mut state = UpstreamStreamState {
-        responses: responses.then(ResponsesStreamState::default),
+        protocol: match protocol {
+            StreamProtocol::Chat => StreamProtocolState::Chat,
+            StreamProtocol::Responses => {
+                StreamProtocolState::Responses(ResponsesStreamState::default())
+            }
+            StreamProtocol::Anthropic => {
+                StreamProtocolState::Anthropic(AnthropicStreamState::default())
+            }
+        },
         text: String::new(),
         reasoning: String::new(),
         pending_text: String::new(),
@@ -1107,6 +1291,7 @@ async fn run_stream_with_protocol(
 
     let mut stream = upstream.bytes_stream();
     let mut failure: Option<DirectAiError> = None;
+    let mut wire_bytes = 0_usize;
 
     loop {
         let chunk = tokio::select! {
@@ -1137,6 +1322,17 @@ async fn run_stream_with_protocol(
             }
         };
 
+        if protocol == StreamProtocol::Anthropic {
+            wire_bytes = wire_bytes.saturating_add(chunk.len());
+            if wire_bytes > ARENA_MAX_WIRE_BYTES {
+                failure = Some(DirectAiError {
+                    code: DirectAiErrorCode::StreamProtocol,
+                    message: "Messages stream exceeded the fixed wire budget".into(),
+                    contract_code: Some("output-too-large".into()),
+                });
+                break;
+            }
+        }
         let text_chunk = match decoder.push(&chunk) {
             Ok(value) => value,
             Err(error) => {
@@ -1161,11 +1357,13 @@ async fn run_stream_with_protocol(
                 failure = Some(error);
                 break;
             }
+            // Once Messages accepts its terminal marker, framed late events
+            // cannot change the result based on the HTTP chunk boundary.
+            if protocol == StreamProtocol::Anthropic && state.protocol.is_completed(&parser) {
+                break;
+            }
         }
-        saw_done = state
-            .responses
-            .as_ref()
-            .map_or_else(|| parser.is_done(), ResponsesStreamState::is_completed);
+        saw_done = state.protocol.is_completed(&parser);
 
         if failure.is_some() {
             break;
@@ -1195,16 +1393,20 @@ async fn run_stream_with_protocol(
 
     // 冲刷没有空行收尾的最后一帧，再收掉 body。
     // drop body 是"取消真正中止上游"的关键：只停止投递不算取消。
-    let tail = match parser.finish() {
-        Ok(frames) => frames,
-        Err(error) => {
-            if failure.is_none() {
-                failure = Some(DirectAiError::new(
-                    DirectAiErrorCode::StreamProtocol,
-                    format!("upstream stream exceeded parser limits: {error}"),
-                ));
+    let tail = if protocol == StreamProtocol::Anthropic && saw_done {
+        Vec::new()
+    } else {
+        match parser.finish() {
+            Ok(frames) => frames,
+            Err(error) => {
+                if failure.is_none() {
+                    failure = Some(DirectAiError::new(
+                        DirectAiErrorCode::StreamProtocol,
+                        format!("upstream stream exceeded parser limits: {error}"),
+                    ));
+                }
+                Vec::new()
             }
-            Vec::new()
         }
     };
     if failure.is_none() {
@@ -1213,13 +1415,14 @@ async fn run_stream_with_protocol(
                 failure = Some(error);
                 break;
             }
+            // Once Messages accepts its terminal marker, framed late events
+            // cannot change the result based on the HTTP chunk boundary.
+            if protocol == StreamProtocol::Anthropic && state.protocol.is_completed(&parser) {
+                break;
+            }
         }
     }
-    saw_done = saw_done
-        || state
-            .responses
-            .as_ref()
-            .map_or_else(|| parser.is_done(), ResponsesStreamState::is_completed);
+    saw_done = saw_done || state.protocol.is_completed(&parser);
     drop(stream);
     // Cancellation wins even if it races with the terminal provider frame.
     if token.is_cancelled() {
@@ -1262,7 +1465,12 @@ async fn run_stream_with_protocol(
             &mut sequence,
         )
         .ok();
-        let result = match error.code {
+        let terminal_code = if token.is_cancelled() {
+            DirectAiErrorCode::Cancelled
+        } else {
+            error.code
+        };
+        let result = match terminal_code {
             DirectAiErrorCode::Cancelled => {
                 AiExecutionResult::Cancelled(AiExecutionCancelledResult {
                     request_id: request_id.clone(),
@@ -1300,6 +1508,23 @@ async fn run_stream_with_protocol(
         &mut state.pending_reasoning,
         &mut sequence,
     )?;
+    // A sink can synchronously cancel while the final pending text is flushed.
+    // Recheck before publishing success, not just before flushing that text.
+    if token.is_cancelled() {
+        return emit_terminal(
+            on_event,
+            &request_id,
+            contract_version,
+            mode,
+            sequence,
+            AiExecutionResult::Cancelled(AiExecutionCancelledResult {
+                request_id: request_id.clone(),
+                contract_version,
+                mode,
+                reason: Some("aborted".into()),
+            }),
+        );
+    }
     if !saw_done {
         // 上游没有 `[DONE]` 就断流：按"缺少终态"处理，而不是把半截正文当成功。
         let failed = AiExecutionResult::Failed(AiExecutionFailedResult {
@@ -1307,7 +1532,7 @@ async fn run_stream_with_protocol(
             contract_version,
             mode,
             error: AiExecutionErrorPayload {
-                code: if responses {
+                code: if protocol != StreamProtocol::Chat {
                     "invalid-response"
                 } else {
                     "internal-error"
@@ -1622,7 +1847,10 @@ async fn stream_direct_ai_inner(
         Ok(headers) => headers,
         Err(error) => return emit_pre_stream_error_terminal(request, error, on_event),
     };
-    let body = build_request_body(profile, request);
+    let body = match build_request_body(profile, request) {
+        Ok(body) => body,
+        Err(error) => return emit_pre_stream_error_terminal(request, error, on_event),
+    };
 
     let upstream = tokio::select! {
         biased;
@@ -1661,8 +1889,17 @@ async fn stream_direct_ai_inner(
                     "provider endpoint returned HTTP {}",
                     upstream.status().as_u16()
                 ),
-                contract_code: if profile.adapter == ProviderAdapter::OpenaiResponses {
+                contract_code: if matches!(
+                    profile.adapter,
+                    ProviderAdapter::OpenaiResponses | ProviderAdapter::Anthropic
+                ) {
                     match upstream.status().as_u16() {
+                        400 if profile.adapter == ProviderAdapter::Anthropic => {
+                            Some("invalid-request".into())
+                        }
+                        413 if profile.adapter == ProviderAdapter::Anthropic => {
+                            Some("output-too-large".into())
+                        }
                         401 => Some("authentication-failed".into()),
                         403 => Some("permission-denied".into()),
                         429 => Some("rate-limited".into()),
@@ -1676,11 +1913,45 @@ async fn stream_direct_ai_inner(
         );
     }
 
+    if profile.adapter == ProviderAdapter::Anthropic
+        && !upstream
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
+            })
+    {
+        return emit_pre_stream_error_terminal(
+            request,
+            DirectAiError::new(
+                DirectAiErrorCode::StreamProtocol,
+                "Messages endpoint did not return an event stream",
+            ),
+            on_event,
+        );
+    }
     let resolved_model_id = request.model_id.as_deref().unwrap_or(&profile.model_id);
-    if profile.adapter == ProviderAdapter::OpenaiResponses {
-        run_stream_with_protocol(upstream, request, resolved_model_id, token, on_event, true).await
-    } else {
+    let protocol = match profile.adapter {
+        ProviderAdapter::OpenaiResponses => StreamProtocol::Responses,
+        ProviderAdapter::Anthropic => StreamProtocol::Anthropic,
+        _ => StreamProtocol::Chat,
+    };
+    if protocol == StreamProtocol::Chat {
         run_stream(upstream, request, resolved_model_id, token, on_event).await
+    } else {
+        run_stream_with_protocol(
+            upstream,
+            request,
+            resolved_model_id,
+            token,
+            on_event,
+            protocol,
+        )
+        .await
     }
 }
 
@@ -1930,11 +2201,13 @@ mod request_body_tests {
                 })).unwrap();
                 // Raw custom/Profile body construction keeps its prior semantics, even for the same ID.
                 assert!(build_request_body(&profile, &request)
+                    .unwrap()
                     .get("temperature")
                     .is_some());
                 apply_preset_request_policy(&preset, &profile.model_id, &mut request).unwrap();
                 assert_eq!(
                     build_request_body(&profile, &request)
+                        .unwrap()
                         .get("temperature")
                         .is_none(),
                     omitted
@@ -1958,11 +2231,12 @@ mod request_body_tests {
         }))
         .unwrap();
         assert_eq!(
-            build_request_body(&profile, &request)["response_format"],
+            build_request_body(&profile, &request).unwrap()["response_format"],
             serde_json::json!({"type": "json_object"})
         );
         request.response_format = Some("text".into());
         assert!(build_request_body(&profile, &request)
+            .unwrap()
             .get("response_format")
             .is_none());
     }

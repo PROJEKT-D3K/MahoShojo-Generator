@@ -2079,3 +2079,6 @@ async fn a_custom_profile_named_like_a_prompt_json_preset_keeps_its_own_policy()
 
 #[path = "ai_responses_e2e_tests.rs"]
 mod responses;
+
+#[path = "ai_anthropic_e2e_tests.rs"]
+mod anthropic;

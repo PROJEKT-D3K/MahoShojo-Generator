@@ -1,0 +1,2510 @@
+{
+  "provenance": "Synthetic official-shaped Anthropic Messages events, not recordings or real-provider validation. Native Rust reduces upstreamEvents; TypeScript consumes only normalized events.",
+  "sources": [
+    "https://platform.claude.com/docs/en/build-with-claude/streaming",
+    "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons",
+    "https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/src/resources/messages/messages.ts"
+  ],
+  "usageSemantics": "inputTokens preserves provider input_tokens and excludes cache reads and writes. Cumulative fields replace prior values; missing fields retain known values. Unknown totalTokens and reasoningTokens remain absent. Opaque signatures and redacted thinking are neither output nor persisted.",
+  "cases": [
+    {
+      "name": "unicode",
+      "request": {
+        "requestId": "anthropic-unicode",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "ping"
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "魔法"
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "少女"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "future_progress",
+          "metadata": {
+            "hint": "synthetic-opaque-unknown"
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "text",
+            "text": "・かな"
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "text_delta",
+            "text": "é🪄"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 1
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "events": [
+        {
+          "requestId": "anthropic-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "anthropic-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "魔法少女・かなé🪄"
+        },
+        {
+          "requestId": "anthropic-unicode",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 2,
+          "result": {
+            "requestId": "anthropic-unicode",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "魔法少女・かなé🪄"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "json",
+      "request": {
+        "requestId": "anthropic-json",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "Return a JSON object with an answer string."
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25,
+        "responseFormat": "json"
+      },
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 9,
+              "output_tokens": 1
+            }
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "{\"answer\":"
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "\"魔法\"}"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 7
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "events": [
+        {
+          "requestId": "anthropic-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "anthropic-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "{\"answer\":\"魔法\"}"
+        },
+        {
+          "requestId": "anthropic-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "usage",
+          "sequence": 2,
+          "usage": {
+            "inputTokens": 9,
+            "outputTokens": 7
+          }
+        },
+        {
+          "requestId": "anthropic-json",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 3,
+          "result": {
+            "requestId": "anthropic-json",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "{\"answer\":\"魔法\"}"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model",
+            "usage": {
+              "inputTokens": 9,
+              "outputTokens": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reasoning-and-cache",
+      "request": {
+        "requestId": "anthropic-reasoning-and-cache",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 17,
+              "output_tokens": 1,
+              "cache_read_input_tokens": 5,
+              "cache_creation_input_tokens": 3
+            }
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": "先检查",
+            "signature": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "thinking_delta",
+            "thinking": "，再回答。"
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "signature_delta",
+            "signature": "synthetic-opaque-signature-a"
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "signature_delta",
+            "signature": "synthetic-opaque-signature-b"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "redacted_thinking",
+            "data": "synthetic-opaque-redacted"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 1
+        },
+        {
+          "type": "content_block_start",
+          "index": 2,
+          "content_block": {
+            "type": "text",
+            "text": "第一段。"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 2
+        },
+        {
+          "type": "content_block_start",
+          "index": 3,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 3,
+          "delta": {
+            "type": "text_delta",
+            "text": "第二段🪄。"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 3
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": null
+          },
+          "usage": {
+            "output_tokens": 8
+          }
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn"
+          },
+          "usage": {
+            "output_tokens": 12
+          }
+        },
+        {
+          "type": "message_delta",
+          "delta": {},
+          "usage": {
+            "cache_read_input_tokens": 6
+          }
+        },
+        {
+          "type": "message_delta",
+          "delta": {},
+          "usage": {}
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "events": [
+        {
+          "requestId": "anthropic-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "anthropic-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "reasoning-delta",
+          "sequence": 1,
+          "delta": "先检查，再回答。"
+        },
+        {
+          "requestId": "anthropic-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 2,
+          "delta": "第一段。第二段🪄。"
+        },
+        {
+          "requestId": "anthropic-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "usage",
+          "sequence": 3,
+          "usage": {
+            "inputTokens": 17,
+            "outputTokens": 12,
+            "cachedInputTokens": 6
+          }
+        },
+        {
+          "requestId": "anthropic-reasoning-and-cache",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 4,
+          "result": {
+            "requestId": "anthropic-reasoning-and-cache",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "第一段。第二段🪄。",
+              "reasoning": "先检查，再回答。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model",
+            "usage": {
+              "inputTokens": 17,
+              "outputTokens": 12,
+              "cachedInputTokens": 6
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "empty-usage",
+      "request": {
+        "requestId": "anthropic-empty-usage",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {}
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "没有可用计数。"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "usage": {}
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "events": [
+        {
+          "requestId": "anthropic-empty-usage",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "anthropic-empty-usage",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "没有可用计数。"
+        },
+        {
+          "requestId": "anthropic-empty-usage",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 2,
+          "result": {
+            "requestId": "anthropic-empty-usage",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "没有可用计数。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "stop-sequence",
+      "request": {
+        "requestId": "anthropic-stop-sequence",
+        "contractVersion": 1,
+        "mode": "direct-local",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Return a concise answer."
+          },
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "modelId": "fixture-model",
+        "maxOutputTokens": 256,
+        "temperature": 0.25
+      },
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            }
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "到这里。"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "stop_sequence",
+            "stop_sequence": "STOP"
+          },
+          "usage": {
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "events": [
+        {
+          "requestId": "anthropic-stop-sequence",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "started",
+          "sequence": 0
+        },
+        {
+          "requestId": "anthropic-stop-sequence",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "text-delta",
+          "sequence": 1,
+          "delta": "到这里。"
+        },
+        {
+          "requestId": "anthropic-stop-sequence",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "usage",
+          "sequence": 2,
+          "usage": {
+            "inputTokens": 0,
+            "outputTokens": 0
+          }
+        },
+        {
+          "requestId": "anthropic-stop-sequence",
+          "contractVersion": 1,
+          "mode": "direct-local",
+          "type": "result",
+          "sequence": 3,
+          "result": {
+            "requestId": "anthropic-stop-sequence",
+            "contractVersion": 1,
+            "mode": "direct-local",
+            "status": "completed",
+            "output": {
+              "text": "到这里。"
+            },
+            "finishReason": "stop",
+            "resolvedModelId": "fixture-model",
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "failureCases": [
+    {
+      "name": "stop-max_tokens",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "max_tokens",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "output-too-large"
+    },
+    {
+      "name": "stop-model_context_window_exceeded",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "model_context_window_exceeded",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "output-too-large"
+    },
+    {
+      "name": "stop-refusal",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "refusal",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "content-filtered"
+    },
+    {
+      "name": "stop-tool_use",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "stop-pause_turn",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "pause_turn",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "stop-future_reason",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "future_reason",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "stop-None",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "eof",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "done",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "[DONE]"
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "missing-message-start",
+      "upstreamEvents": [
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "duplicate-message-start",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "invalid-start-role",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "user",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "invalid-start-type",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "not-message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "invalid-start-content",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [
+              {
+                "type": "text",
+                "text": "unexpected"
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "invalid-start-stop_reason",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "invalid-start-id",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "invalid-start-model",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "skipped-block-index",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "repeated-block-index",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "overlapping-blocks",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "delta-before-block",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "bad"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "delta-after-block",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "bad"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "delta-wrong-index",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "text_delta",
+            "text": "bad"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "mismatched-delta",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "thinking_delta",
+            "thinking": "bad"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "signature-on-text",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "signature_delta",
+            "signature": "secret"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "thinking-after-signature",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": "",
+            "signature": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "signature_delta",
+            "signature": "opaque"
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "thinking_delta",
+            "thinking": "bad"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "redacted-delta",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "redacted_thinking",
+            "data": "opaque"
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "thinking_delta",
+            "thinking": "bad"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "duplicate-block-stop",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "stop-before-block",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "message-delta-before-block-stop",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "message-stop-before-block-stop",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "message-stop-before-delta",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "block-after-message-delta",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "text",
+            "text": "late"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "conflicting-stop-reason",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "refusal",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "duplicate-message-stop",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "blank-text",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": " \t﻿"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "reasoning-only",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": "思考",
+            "signature": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "signature_delta",
+            "signature": "opaque"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "unsupported-tool_use",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "tool_use"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "unsupported-image",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "image"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "unsupported-fallback",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "fallback"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "unsupported-future_block",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "future_block"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "unknown-delta",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "future_delta",
+            "data": "bad"
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "malformed-usage-input_tokens",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": -1
+            }
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "malformed-usage-output_tokens",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "output_tokens": "4"
+            }
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "malformed-usage-cache_creation_input_tokens",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "cache_creation_input_tokens": -1
+            }
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "malformed-usage-cache_read_input_tokens",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "cache_read_input_tokens": 1.5
+            }
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "error-authentication_error",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "error",
+          "error": {
+            "type": "authentication_error",
+            "message": "synthetic-secret-upstream-message"
+          }
+        }
+      ],
+      "expectedCode": "authentication-failed"
+    },
+    {
+      "name": "error-permission_error",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "error",
+          "error": {
+            "type": "permission_error",
+            "message": "synthetic-secret-upstream-message"
+          }
+        }
+      ],
+      "expectedCode": "permission-denied"
+    },
+    {
+      "name": "error-rate_limit_error",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "error",
+          "error": {
+            "type": "rate_limit_error",
+            "message": "synthetic-secret-upstream-message"
+          }
+        }
+      ],
+      "expectedCode": "rate-limited"
+    },
+    {
+      "name": "error-overloaded_error",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "error",
+          "error": {
+            "type": "overloaded_error",
+            "message": "synthetic-secret-upstream-message"
+          }
+        }
+      ],
+      "expectedCode": "service-unavailable"
+    },
+    {
+      "name": "error-invalid_request_error",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "error",
+          "error": {
+            "type": "invalid_request_error",
+            "message": "synthetic-secret-upstream-message"
+          }
+        }
+      ],
+      "expectedCode": "invalid-request"
+    },
+    {
+      "name": "error-api_error",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "error",
+          "error": {
+            "type": "api_error",
+            "message": "synthetic-secret-upstream-message"
+          }
+        }
+      ],
+      "expectedCode": "internal-error"
+    },
+    {
+      "name": "error-future_error",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": "partial"
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "error",
+          "error": {
+            "type": "future_error",
+            "message": "synthetic-secret-upstream-message"
+          }
+        }
+      ],
+      "expectedCode": "internal-error"
+    },
+    {
+      "name": "bad-signature",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": "",
+            "signature": 4
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "bad-redacted",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "redacted_thinking",
+            "data": 4
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    },
+    {
+      "name": "bad-text",
+      "upstreamEvents": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": "fixture-model",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": 4
+          }
+        }
+      ],
+      "expectedCode": "invalid-response"
+    }
+  ]
+}

@@ -78,7 +78,9 @@ const toAiError = (command: string, cause: unknown): DesktopAiError => {
  * 打开一次 Direct 流。
  *
  * `profileId` 是唯一的选择器：endpoint、header 与凭据都由 native 侧从本地库与凭据存储解析，
- * 这里不传、也无法传任何 endpoint 或 secret。
+ * 这里不传、也无法传任何 endpoint 或 secret。请求里的 temperature 仍可表达业务默认，
+ * Native 按保存 Profile 的协议能力在首次构造时投影：Messages 不发送 temperature，
+ * 不因上游失败删参重试。thinking 暂无 Direct wire；旧偏好由配置层保留。
  */
 export const openDirectAiStream = (
   options: DesktopAiExecutionOptions,

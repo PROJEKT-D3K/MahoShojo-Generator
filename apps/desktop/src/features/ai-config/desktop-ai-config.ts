@@ -4,7 +4,7 @@
 //
 // - 预设连接目录只来自 `@mahoshojo/ai-core` 的 `AI_PROVIDER_PRESETS`；`system` 是服务器
 //   策略展示项，永不进入客户端连接候选。
-// - Direct 支持度一律经由 `describeAiPreset*DirectSupport(preset, DESKTOP_DIRECT_ADAPTERS)`
+// - Direct 支持度一律经由 `describeAiPreset*DirectSupport(preset, DESKTOP_PRESET_DIRECT_ADAPTERS)`
 //   判定：显式核验的 wire ∩ native 已实现的 adapter。不从 `provider.type` 或端点外观推断。
 // - 预设由稳定 providerId 绑定安全存储；只有用户主动新建/复制才产生 Profile。
 //   两种身份按执行位置独立选择，native 从受检目录或既有 Profile 解析真实目标。
@@ -22,7 +22,6 @@ import {
 } from '@mahoshojo/ai-core/provider-catalog';
 import {
   isLoopbackHost,
-  type DirectProviderAdapter,
   type DirectProviderProfileV1,
 } from '@mahoshojo/contracts/provider-profile';
 import {
@@ -30,27 +29,8 @@ import {
   type UserGenerationOverrides,
 } from '@mahoshojo/ai-core/generation-settings';
 
-/**
- * 当前 Desktop native 已实现的 Direct adapter 集合。
- *
- * 这是 D5.0a 约定的宿主能力注入点：Rust 已提供 Chat Completions 与 Responses 独立通路；
- * `anthropic` / `google` 的已核验 wire 也只能显示为「暂不支持的协议」。
- * native 增加 adapter 时改这一个集合即可，UI 自动跟进。
- */
-export const DESKTOP_DIRECT_ADAPTERS: ReadonlySet<DirectProviderAdapter> = new Set([
-  'openai-compatible',
-  'openai-responses',
-]);
-
-/**
- * 简化连接编辑器能表达的 adapter 集合——**独立于** `DESKTOP_DIRECT_ADAPTERS`。
- * 「native 能执行什么」与「编辑器能编辑什么」是两件事：native 将来新增 adapter 后
- * 不能让旧 Profile 自动变成可编辑（编辑器会静默改写 adapter 字段）。
- */
-export const DESKTOP_EDITABLE_PROFILE_ADAPTERS: ReadonlySet<DirectProviderAdapter> = new Set([
-  'openai-compatible',
-  'openai-responses',
-]);
+import { DESKTOP_DIRECT_ADAPTERS, DESKTOP_PRESET_DIRECT_ADAPTERS } from '../providers/protocol-capabilities';
+export { DESKTOP_DIRECT_ADAPTERS, DESKTOP_EDITABLE_PROFILE_ADAPTERS } from '../providers/protocol-capabilities';
 
 /**
  * 用户当前的 AI 执行偏好。
@@ -312,8 +292,8 @@ export const describeDesktopPresetEntry = (
 ): DesktopPresetEntry => ({
   preset,
   hidden,
-  presetSupport: describeAiPresetDirectSupport(preset, DESKTOP_DIRECT_ADAPTERS),
-  directCapableModels: listDirectCapableAiPresetModels(preset, DESKTOP_DIRECT_ADAPTERS),
+  presetSupport: describeAiPresetDirectSupport(preset, DESKTOP_PRESET_DIRECT_ADAPTERS),
+  directCapableModels: listDirectCapableAiPresetModels(preset, DESKTOP_PRESET_DIRECT_ADAPTERS),
 });
 
 export const listDesktopPresetEntries = (
@@ -326,7 +306,7 @@ export const describeDesktopPresetModelSupport = (
   preset: AiProviderPreset,
   modelId: string,
 ): AiPresetDirectSupport =>
-  describeAiPresetModelDirectSupport(preset, modelId, DESKTOP_DIRECT_ADAPTERS);
+  describeAiPresetModelDirectSupport(preset, modelId, DESKTOP_PRESET_DIRECT_ADAPTERS);
 
 /** 一次客户端执行目标的完整解析。设置页与生成入口都必须消费同一份结果。 */
 export interface ResolvedDesktopAiTarget {
@@ -366,7 +346,7 @@ export const resolveDesktopAiTarget = (
   if (providerTarget?.kind === 'preset') {
     const preset = AI_PROVIDER_PRESETS.find((entry) => entry.id === providerTarget.providerId);
     const preference = ownEntry(presetsByProviderId, providerTarget.providerId);
-    const models = preset ? (selection.executionPreference === 'client' ? listDirectCapableAiPresetModels(preset, DESKTOP_DIRECT_ADAPTERS) : preset.models) : [];
+    const models = preset ? (selection.executionPreference === 'client' ? listDirectCapableAiPresetModels(preset, DESKTOP_PRESET_DIRECT_ADAPTERS) : preset.models) : [];
     const modelId = preference?.selectedModelId ?? models[0]?.value ?? null;
     const support = preset && modelId ? describeDesktopPresetModelSupport(preset, modelId) : null;
     return {

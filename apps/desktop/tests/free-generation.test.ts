@@ -12,6 +12,8 @@ import {
   FreeGenerationError,
   type FreeGenerationInput,
 } from '../src/features/free/generation';
+import { resolveDesktopAiTarget } from '../src/features/ai-config/desktop-ai-config';
+import { DirectProviderProfileV1Schema } from '@mahoshojo/contracts/provider-profile';
 import { STREAM_DIRECT_AI_COMMAND } from '../src/platform/direct-ai-bridge';
 import { HOSTED_AI_REQUEST_COMMAND, STREAM_HOSTED_AI_COMMAND } from '../src/platform/cloud-bridge';
 
@@ -59,6 +61,34 @@ describe('Desktop Free generation seam', () => {
     expect(outcome.card.templateId).toBe('魔法少女/心之花/魔法少女（自由生成）');
     expect(outcome.card).not.toHaveProperty('signature');
     expect(outcome.card).not.toHaveProperty('userAnswers');
+  });
+
+  it('consumes local JSON cards through a resolved Messages profile without losing built-in temperature intent or skipping local validation', async () => {
+    const profile = DirectProviderProfileV1Schema.parse({ version: 1, id: 'messages', name: 'Messages', adapter: 'anthropic',
+      baseUrl: 'https://model.example/v1', modelId: 'default-model', createdAt: '2026-10-21T00:00:00Z', updatedAt: '2026-10-21T00:00:00Z' });
+    const target = resolveDesktopAiTarget({ executionPreference: 'client', clientConnectionId: profile.id }, [profile],
+      { messages: { 'selected-model': { temperature: 0.5, maxOutputTokens: 6000, thinking: { mode: 'enabled', effort: 'high' } } } },
+      { messages: { selectedModelId: 'selected-model', customModelIds: ['selected-model'] } });
+    expect(target.unavailableReason).toBeNull();
+    if (!target.mode || !target.modelId) throw new Error('Messages target should be executable');
+    for (const valid of [true, false]) {
+      const native = directHarness(JSON.stringify(valid ? magicalGirlCard : { invalid: 'not a card' }));
+      const outcome = await executeFreeGeneration({ ...native.options, profileId: profile.id }, input,
+        { requestId: 'messages-card', mode: target.mode, modelId: target.modelId, overrides: target.generationOverrides }, new AbortController().signal);
+      expect(native.request).toMatchObject({ modelId: 'selected-model', temperature: 0.5, maxOutputTokens: 6000, responseFormat: 'text' });
+      // 温度是现有业务意图，Messages Native 首构时不发送；这里不伪装成 HTTP reducer 测试。
+      expect(native.request).not.toHaveProperty('thinking');
+      expect(native.request!.messages.map(message => message.role)).toEqual(['system', 'user']);
+      expect(native.request!.messages[0]!.content).toContain('JSON');
+      expect(native.invoke).toHaveBeenCalledOnce();
+      if (valid) {
+        expect(outcome).toMatchObject({ status: 'completed', cardKind: 'magical-girl', card: magicalGirlCard });
+      } else {
+        expect(outcome.status).toBe('invalid-output');
+        expect(outcome).not.toHaveProperty('card');
+      }
+    }
+    expect(target.generationOverrides?.thinking).toEqual({ mode: 'enabled', effort: 'high' });
   });
 
   it.each(['scenario'] as const)('direct %s schema 在 metadata.created_at 缺省时按本机时刻补齐', async (schema) => {

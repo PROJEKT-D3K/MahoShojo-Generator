@@ -1,7 +1,7 @@
 // Web / Desktop 共用展示骨架；执行位置与稳定目标身份独立，预设不创建 Profile。
 import { useEffect, useState, type ReactNode } from 'react';
 import { useRouter } from '@tanstack/react-router';
-import { getModelGenerationCapabilities } from '@mahoshojo/ai-core/generation-settings';
+import { getDesktopGenerationCapabilities } from '../providers/protocol-capabilities';
 import {
   resolveAiPresetModelDirectBaseUrl,
   SYSTEM_PROVIDER_OPTION,
@@ -102,7 +102,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
     setCustomModel(false);
   });
   const scope = preset?.id ?? (isSystem ? DESKTOP_SYSTEM_OVERRIDES_SCOPE : profile?.id);
-  const capabilities = scope && target.modelId ? getModelGenerationCapabilities(scope, target.modelId) : undefined;
+  const capabilities = scope && target.modelId ? getDesktopGenerationCapabilities(scope, target.modelId, target.location === 'client' ? profile?.adapter : undefined) : undefined;
   const status = presetId ? state.presetSecretStatus[presetId] : profile ? state.secretStatus[profile.id] : undefined;
   const statusLabel = status === 'present' ? '已配置 API Key' : status === 'error' ? '凭据状态读取失败' : status === 'absent' ? '尚未配置 API Key' : '正在确认凭据状态';
   const asyncAct = (fn: () => Promise<void>) => { if (disabled) return; void fn().then(() => setError(null)).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : '凭据操作失败')); };
@@ -169,7 +169,7 @@ export const DesktopAiProviderPanel = ({ controlsSlot, management = false, onDir
         if (!target.modelId) return;
         if (presetId) store.setPresetGenerationOverrides(presetId, target.modelId, next);
         else if (scope) store.setGenerationOverrides(scope, target.modelId, next);
-      })} temperatureSupported={capabilities ? capabilities.temperature.support !== 'unsupported' : true} temperatureMax={capabilities?.temperature.max} maxOutputTokensMax={capabilities?.maxOutputTokens.max} thinkingSupport={capabilities?.thinking.support ?? 'unknown'} thinkingEfforts={capabilities?.thinking.efforts} canDisableThinking={capabilities ? capabilities.thinking.support === 'supported' && capabilities.thinking.canDisable !== false : true} />}
+      })} temperatureSupported={capabilities ? capabilities.temperature.support !== 'unsupported' : true} temperatureMax={capabilities?.temperature.max} temperatureDisabled={capabilities?.temperature.disabled} temperatureHint={capabilities?.temperature.hint} maxOutputTokensHint={capabilities?.maxOutputTokens.hint} thinkingHint={capabilities?.thinking.hint} maxOutputTokensMax={capabilities?.maxOutputTokens.max} thinkingSupport={capabilities?.thinking.support ?? 'unknown'} thinkingEfforts={capabilities?.thinking.efforts} canDisableThinking={capabilities ? capabilities.thinking.support === 'supported' && capabilities.thinking.canDisable !== false : true} />}
     >
       {showConnectionTest && profile && target.mode && <ConnectionTestSection target={target} />}
     </AiProviderSelectorForm>

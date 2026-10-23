@@ -15,6 +15,11 @@ export interface AdvancedGenerationSettingsProps {
   onChange: (value: UserGenerationOverrides | undefined) => void;
   /** 当前模型 temperature 支持状态。 */
   temperatureSupported?: boolean;
+  /** 宿主协议明确禁用温度控件，不丢弃已保存的偏好；默认保留旧模型提示行为。 */
+  temperatureDisabled?: boolean;
+  temperatureHint?: string;
+  maxOutputTokensHint?: string;
+  thinkingHint?: string;
   /** 当前模型 temperature 上限（由 capability 决定，未提供则不限制）。 */
   temperatureMax?: number;
   /** 当前模型 maxOutputTokens 上限（由 capability 决定，未提供则用全局上限）。 */
@@ -31,6 +36,10 @@ export const AdvancedGenerationSettings = ({
   value,
   onChange,
   temperatureSupported = true,
+  temperatureDisabled = false,
+  temperatureHint,
+  maxOutputTokensHint,
+  thinkingHint,
   temperatureMax,
   maxOutputTokensMax,
   thinkingSupport = 'supported',
@@ -166,7 +175,7 @@ export const AdvancedGenerationSettings = ({
               }}
             />
             <p className="battle-lite-subtle-text mt-1 text-xs">
-              留空则使用模型 / 供应商默认。
+              {maxOutputTokensHint ?? '留空则使用模型 / 供应商默认。'}
               {typeof maxOutputTokensMax === 'number' && `当前模型上限 ${maxOutputTokensMax}。`}
             </p>
           </div>
@@ -185,6 +194,7 @@ export const AdvancedGenerationSettings = ({
               placeholder="自动"
               value={typeof temperature === 'number' ? String(temperature) : ''}
               inputMode="decimal"
+              disabled={temperatureDisabled}
               onChange={(event) => {
                 const raw = event.target.value.trim();
                 if (!raw) {
@@ -205,8 +215,8 @@ export const AdvancedGenerationSettings = ({
               }}
             />
             <p className="battle-lite-subtle-text mt-1 text-xs">
-              留空则使用模型 / 供应商默认。
-              {!temperatureSupported && ' 当前模型可能不支持 temperature，超出的设置会被忽略。'}
+              {temperatureHint ?? <>留空则使用模型 / 供应商默认。
+                {!temperatureSupported && ' 当前模型可能不支持 temperature，超出的设置会被忽略。'}</>}
             </p>
           </div>
 
@@ -217,9 +227,9 @@ export const AdvancedGenerationSettings = ({
             </label>
             {thinkingUncontrollable ? (
               <p className="battle-lite-subtle-text text-xs">
-                {thinkingSupport === 'unsupported'
+                {thinkingHint ?? (thinkingSupport === 'unsupported'
                   ? '当前模型不支持自定义推理设置。'
-                  : '未知模型，无法确定推理参数格式，将跟随模型默认。'}
+                  : '未知模型，无法确定推理参数格式，将跟随模型默认。')}
               </p>
             ) : (
               <>

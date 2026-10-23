@@ -8,6 +8,7 @@ import {
   type DirectProviderAdapter,
 } from '@mahoshojo/contracts/provider-profile';
 import { isDesktopSecretRef } from '@mahoshojo/contracts/desktop-ipc';
+import { DESKTOP_EDITABLE_PROFILE_ADAPTERS } from './protocol-capabilities';
 
 import {
   deleteProviderProfile,
@@ -92,7 +93,7 @@ export const deriveApiKeyRef = (profileId: string): string => `provider:${profil
  * 把草稿装配成完整 Profile。
  *
  * 刻意不接受 `endpoint` 以外的任何出站参数，也不接受 secret header：V1 只支持
- * Chat Completions / Responses + 单个 API Key。多一个字段就多一条能影响出站请求的通道。
+ * Chat Completions / Responses / Messages + 单个 API Key。多一个字段就多一条能影响出站请求的通道。
  */
 export const buildProfile = (
   draft: ProfileDraft,
@@ -114,7 +115,7 @@ export const buildProfile = (
   }
 
   const adapter = draft.adapter ?? existing?.adapter ?? 'openai-compatible';
-  if (adapter !== 'openai-compatible' && adapter !== 'openai-responses') {
+  if (!DESKTOP_EDITABLE_PROFILE_ADAPTERS.has(adapter)) {
     throw new ProfileDraftError('adapter', `当前版本的连接编辑器不支持 ${adapter}`);
   }
   const timestamp = now();
