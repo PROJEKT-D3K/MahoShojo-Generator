@@ -1,5 +1,5 @@
 //! Device-owned text Tea storage. Documents are inert JSON; no AI, path or network authority.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -190,6 +190,16 @@ pub enum WriteOperation {
     Import {
         operation_id: String,
         entries: Vec<ImportEntry>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Fork {
+        operation_id: String,
+        session_id: String,
+        instance: String,
+        expected_revision: i64,
+        anchor_message_id: String,
+        edited_content: String,
+        target_session_id: String,
     },
     #[serde(rename_all = "camelCase")]
     BeginGeneration {
@@ -472,6 +482,10 @@ fn validate_target_fields(sid: &str, inst: &str, revision: i64) -> Result<(), Te
         Err(TeaError::Invalid)
     }
 }
+// ECMAScript String.trim whitespace, including BOM but excluding NEL.
+fn branch_trim(value: &str) -> &str {
+    value.trim_matches(|c: char| matches!(c, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}'))
+}
 fn validate_write(operation: &WriteOperation) -> Result<(), TeaError> {
     match operation {
         WriteOperation::Create { session } => {
@@ -549,6 +563,28 @@ fn validate_write(operation: &WriteOperation) -> Result<(), TeaError> {
                         return Err(TeaError::Invalid);
                     }
                 }
+            }
+        }
+        WriteOperation::Fork {
+            operation_id,
+            session_id,
+            instance,
+            expected_revision,
+            anchor_message_id,
+            edited_content,
+            target_session_id,
+        } => {
+            validate_target_fields(session_id, instance, *expected_revision)?;
+            if !id(operation_id)
+                || !id(anchor_message_id)
+                || !id(target_session_id)
+                || target_session_id == session_id
+                || branch_trim(edited_content).is_empty()
+            {
+                return Err(TeaError::Invalid);
+            }
+            if edited_content.len() > MESSAGE_BYTES {
+                return Err(TeaError::TooLarge);
             }
         }
         WriteOperation::BeginGeneration {
@@ -636,6 +672,17 @@ fn validate_result(value: &Value) -> Result<(), TeaError> {
             }
             validate_saved(value)?;
         }
+        "fork" => {
+            if !exact_keys(
+                value,
+                &["action", "sessionId", "instance", "revision", "operationId"],
+            ) || value["revision"] != 1
+            {
+                return Err(TeaError::Corrupt);
+            }
+            validate_saved(value)?;
+            checked_id(value, "operationId")?;
+        }
         "begin-generation" | "finish-generation" => {
             if !exact_keys(
                 value,
@@ -702,6 +749,63 @@ fn validate_result(value: &Value) -> Result<(), TeaError> {
             }
         }
         _ => return Err(TeaError::Corrupt),
+    }
+    Ok(())
+}
+// Mirrors the Web branch-summary helper: coverage must be provably retained;
+// an unknown legacy watermark alone does not invalidate a summary.
+fn fork_summary(
+    c: &Connection,
+    document: &mut Value,
+    sid: &str,
+    ordinal: i64,
+    ids: &HashMap<String, String>,
+) -> Result<(), TeaError> {
+    let mut clear = false;
+    if let Some(to) = document["summaryMeta"]["toMessageId"].as_str() {
+        let at: Option<i64> = c
+            .query_row(
+                "SELECT ordinal FROM magic_tea_message WHERE session_id=?1 AND id=?2",
+                params![sid, to],
+                |r| r.get(0),
+            )
+            .optional()?;
+        clear = at.is_some_and(|at| at >= ordinal);
+    }
+    if let Some(meta) = document
+        .get_mut("summaryMeta")
+        .and_then(Value::as_object_mut)
+    {
+        for field in ["fromMessageId", "toMessageId"] {
+            if let Some(new_id) = meta
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(|id| ids.get(id))
+            {
+                meta.insert(field.into(), json!(new_id));
+            }
+        }
+        if let Some(coverage) = meta.get_mut("coverage") {
+            for field in ["selectedMessageIds", "clippedMessageIds"] {
+                match coverage.get_mut(field).and_then(Value::as_array_mut) {
+                    Some(values) => {
+                        for value in values {
+                            match value.as_str().and_then(|id| ids.get(id)) {
+                                Some(new_id) => *value = json!(new_id),
+                                None => clear = true,
+                            }
+                        }
+                    }
+                    None => clear = true,
+                }
+            }
+        }
+    }
+    if clear {
+        let object = document.as_object_mut().ok_or(TeaError::Corrupt)?;
+        for field in ["summary", "summarySections", "summaryMeta"] {
+            object.remove(field);
+        }
     }
     Ok(())
 }
@@ -954,7 +1058,8 @@ impl TeaStore {
                 }
                 validate_write(&write.request)?;
                 let operation_id = match &write.request {
-                    WriteOperation::Import { operation_id, .. }
+                    WriteOperation::Fork { operation_id, .. }
+                    | WriteOperation::Import { operation_id, .. }
                     | WriteOperation::SetPin { operation_id, .. }
                     | WriteOperation::DeleteSelected { operation_id, .. }
                     | WriteOperation::BeginGeneration { operation_id, .. }
@@ -1137,7 +1242,8 @@ impl TeaStore {
         hash: &str,
     ) -> Result<Value, TeaError> {
         let receipt_id = match &operation {
-            WriteOperation::Import { operation_id, .. }
+            WriteOperation::Fork { operation_id, .. }
+            | WriteOperation::Import { operation_id, .. }
             | WriteOperation::SetPin { operation_id, .. }
             | WriteOperation::DeleteSelected { operation_id, .. }
             | WriteOperation::BeginGeneration { operation_id, .. }
@@ -1289,6 +1395,154 @@ impl TeaStore {
                     );
                 }
                 json!({"action":"import","operationId":operation_id,"sessions":sessions})
+            }
+            WriteOperation::Fork {
+                operation_id,
+                session_id,
+                instance,
+                expected_revision,
+                anchor_message_id,
+                edited_content,
+                target_session_id,
+            } => {
+                let source = target(c, &session_id, &instance, expected_revision)?;
+                if source.active_begin.is_some() {
+                    return Err(TeaError::Busy);
+                }
+                if load_session(c, &target_session_id)?.is_some() {
+                    return Err(TeaError::Stale);
+                }
+                let anchor: Option<(i64, String, i64, String)> = c.query_row(
+                    "SELECT ordinal,document,document_bytes,document_digest FROM magic_tea_message WHERE session_id=?1 AND id=?2",
+                    params![session_id, anchor_message_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+                let (ordinal, text, bytes, hash) = anchor.ok_or(TeaError::Missing)?;
+                let anchor = read_document(text, bytes, hash)?;
+                validate_message(&anchor, &session_id)?;
+                if anchor["role"] != "user" {
+                    return Err(TeaError::Invalid);
+                }
+                let (count, bytes): (i64, i64) = c.query_row(
+                    "SELECT COUNT(*),COALESCE(SUM(document_bytes),0) FROM magic_tea_message WHERE session_id=?1 AND ordinal<?2",
+                    params![session_id, ordinal], |r| Ok((r.get(0)?,r.get(1)?)))?;
+                // Reject oversized prefixes before loading them, then apply the exact import envelope budget.
+                if count >= 10_000 || bytes > WRITE_BYTES as i64 {
+                    return Err(TeaError::TooLarge);
+                }
+                let mut query = c.prepare("SELECT document,document_bytes,document_digest FROM magic_tea_message WHERE session_id=?1 AND ordinal<?2 ORDER BY ordinal,id")?;
+                let mut rows = query.query(params![session_id, ordinal])?;
+                let mut messages = Vec::new();
+                let mut ids = HashMap::new();
+                let mut rounds = 1;
+                while let Some(row) = rows.next()? {
+                    let mut message = read_document(row.get(0)?, row.get(1)?, row.get(2)?)?;
+                    validate_message(&message, &session_id)?;
+                    if message["status"] == "streaming" {
+                        return Err(TeaError::Corrupt);
+                    }
+                    if message["role"] == "user" {
+                        rounds += 1;
+                    }
+                    let new_id = nonce()?;
+                    ids.insert(checked_id(&message, "id")?.to_owned(), new_id.clone());
+                    message["id"] = json!(new_id);
+                    message["sessionId"] = json!(target_session_id);
+                    messages.push(message);
+                }
+                for message in &mut messages {
+                    for field in ["sourceMessageId", "revisionOf"] {
+                        if let Some(replacement) =
+                            message[field].as_str().and_then(|id| ids.get(id))
+                        {
+                            message[field] = json!(replacement);
+                        }
+                    }
+                }
+                let now = i64::try_from(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|_| TeaError::Io)?
+                        .as_millis(),
+                )
+                .map_err(|_| TeaError::TooLarge)?;
+                let mut document = source.document.clone();
+                fork_summary(c, &mut document, &session_id, ordinal, &ids)?;
+                document["id"] = json!(target_session_id);
+                document["createdAt"] = json!(now);
+                document["updatedAt"] = json!(now);
+                document["forkedFrom"] =
+                    json!({"sessionId":session_id,"messageId":anchor_message_id,"createdAt":now});
+                document["branchLabel"] = json!(format!("从第 {rounds} 轮分支"));
+                document["settings"]["autoSummaryEnabled"] = json!(false);
+                document
+                    .as_object_mut()
+                    .ok_or(TeaError::Corrupt)?
+                    .remove("autoSummaryState");
+                let display = branch_trim(
+                    document["settings"]["userDisplayName"]
+                        .as_str()
+                        .unwrap_or(""),
+                );
+                let display = if display.is_empty() {
+                    "旅人"
+                } else {
+                    display
+                };
+                let mut units = 0;
+                let display: String = display
+                    .chars()
+                    .take_while(|c| {
+                        units += c.len_utf16();
+                        units <= 20
+                    })
+                    .collect();
+                let player = document["roles"]
+                    .as_array()
+                    .ok_or(TeaError::Corrupt)?
+                    .iter()
+                    .find(|r| {
+                        document["playerRoleId"].is_string() && r["id"] == document["playerRoleId"]
+                    });
+                let (player_id, speaker) = match player {
+                    Some(role) => {
+                        let id = string(role, "id")?.to_owned();
+                        let name = branch_trim(string(role, "name")?);
+                        (
+                            Some(id.clone()),
+                            if name.is_empty() { id } else { name.to_owned() },
+                        )
+                    }
+                    None => (None, display.clone()),
+                };
+                document["playerRoleId"] = json!(player_id);
+                document["settings"]["userDisplayName"] = json!(display);
+                let mut edited = json!({"id":nonce()?,"sessionId":target_session_id,"role":"user",
+                    "content":branch_trim(&edited_content),"createdAt":next(now)?,"status":"done",
+                    "meta":{"speakerName":speaker},"revisionOf":anchor_message_id});
+                if let Some(id) = player_id {
+                    edited["speakerId"] = json!(id);
+                }
+                messages.push(edited);
+                let import = WriteOperation::Import {
+                    operation_id: operation_id.clone(),
+                    entries: vec![ImportEntry {
+                        session: document,
+                        messages,
+                    }],
+                };
+                validate_write(&import)?;
+                let wire = json!({"version":1,"request":&import});
+                json_boundary(&json!({"request":wire}), WRITE_BYTES, ENVELOPE_NODES)?;
+                let WriteOperation::Import { entries, .. } = import else {
+                    unreachable!()
+                };
+                let entry = &entries[0];
+                let row = insert_session(c, &entry.session)?;
+                for (index, message) in entry.messages.iter().enumerate() {
+                    insert_message(c, &row.id, index as i64 + 1, message)?;
+                }
+                let mut result = saved(&row, "fork");
+                result["operationId"] = json!(operation_id);
+                result
             }
             WriteOperation::BeginGeneration {
                 session_id,
@@ -1556,6 +1810,7 @@ pub(crate) fn verify_schema(c: &Connection, version: i64) -> Result<(), StoreErr
                     result["action"].as_str(),
                     Some(
                         "import"
+                            | "fork"
                             | "begin-generation"
                             | "finish-generation"
                             | "set-pin"

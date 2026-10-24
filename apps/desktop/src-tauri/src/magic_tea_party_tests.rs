@@ -929,3 +929,320 @@ fn selected_cleanup_late_sql_failure_rolls_back_first_delete_and_receipt() {
     assert!(list(&store)["rows"].as_array().unwrap().is_empty());
     verify_schema(&lock_connection(&c).unwrap(), 12).unwrap();
 }
+
+fn fork_request(store: &TeaStore, sid: &str, anchor: &str, target: &str) -> Value {
+    let mut fork = target_request("fork", sid, &head(store, sid));
+    fork["operationId"] = json!(format!("fork-{target}"));
+    fork["anchorMessageId"] = json!(anchor);
+    fork["editedContent"] = json!("  编辑后的内容  ");
+    fork["targetSessionId"] = json!(target);
+    request(fork)
+}
+fn fork_source(store: &TeaStore, count: usize) {
+    let mut doc = session("source");
+    doc["draft"] = json!("未发送草稿");
+    doc["autoSummaryState"] = json!({"pending":true});
+    doc["settings"]["autoSummaryEnabled"] = json!(true);
+    doc["pinnedAt"] = json!(7);
+    doc["pinnedOrder"] = json!(9);
+    let messages: Vec<_> = (0..count)
+        .map(|i| {
+            let mut m = message(
+                "source",
+                &format!("m-{i}"),
+                if i % 2 == 0 { "user" } else { "assistant" },
+                "原文",
+            );
+            // All timestamps tie, IDs do not sort like ordinals.
+            if i > 0 {
+                m["sourceMessageId"] = json!(format!("m-{}", i - 1));
+                m["revisionOf"] = json!("external");
+            }
+            m
+        })
+        .collect();
+    store.mutate(request(json!({"action":"import","operationId":"seed","entries":[{"session":doc,"messages":messages}]}))).unwrap();
+}
+fn session_bytes(c: &SharedConnection, sid: &str) -> Vec<String> {
+    let c = lock_connection(c).unwrap();
+    let mut q = c.prepare("SELECT document FROM magic_tea_session WHERE id=?1 UNION ALL SELECT document FROM magic_tea_message WHERE session_id=?1 ORDER BY document").unwrap();
+    q.query_map([sid], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+#[test]
+fn fork_first_middle_and_long_prefix_are_atomic_ordinal_branches() {
+    for anchor in [0, 4, 104] {
+        let (c, store) = setup();
+        fork_source(&store, 108);
+        let before = session_bytes(&c, "source");
+        let source_head = head(&store, "source");
+        let catalog_before = catalog(&lock_connection(&c).unwrap()).unwrap();
+        let wire = fork_request(&store, "source", &format!("m-{anchor}"), "branch");
+        let result = store.mutate(wire.clone()).unwrap();
+        assert_eq!(result["result"]["action"], "fork");
+        assert_eq!(result["result"]["revision"], 1);
+        assert_ne!(result["result"]["instance"], source_head["instance"]);
+        assert_eq!(store.mutate(wire.clone()).unwrap(), result);
+        assert_eq!(
+            receipt(&store, wire).unwrap()["result"]["receipt"]["result"],
+            result["result"]
+        );
+        assert_eq!(session_bytes(&c, "source"), before);
+        assert_eq!(head(&store, "source"), source_head);
+        let branch = head(&store, "branch");
+        assert_eq!(branch["session"]["draft"], "未发送草稿");
+        assert_eq!(branch["session"]["pinnedOrder"], 9);
+        assert_eq!(branch["session"]["settings"]["autoSummaryEnabled"], false);
+        assert!(branch["session"].get("autoSummaryState").is_none());
+        let c = lock_connection(&c).unwrap();
+        assert_eq!(catalog(&c).unwrap(), catalog_before + 1);
+        let mut q = c
+            .prepare(
+                "SELECT document FROM magic_tea_message WHERE session_id='branch' ORDER BY ordinal",
+            )
+            .unwrap();
+        let messages: Vec<Value> = q
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| serde_json::from_str(&r.unwrap()).unwrap())
+            .collect();
+        assert_eq!(messages.len(), anchor + 1);
+        for i in 0..anchor {
+            assert_ne!(messages[i]["id"], format!("m-{i}"));
+            if i > 0 {
+                assert_eq!(messages[i]["sourceMessageId"], messages[i - 1]["id"]);
+                assert_eq!(messages[i]["revisionOf"], "external");
+            }
+        }
+        assert_eq!(messages[anchor]["revisionOf"], format!("m-{anchor}"));
+        assert_eq!(messages[anchor]["content"], "编辑后的内容");
+        verify_schema(&c, 11).unwrap();
+    }
+}
+#[test]
+fn fork_rejects_invalid_stale_busy_duplicate_and_mismatched_receipts_without_writes() {
+    let (c, store) = setup();
+    fork_source(&store, 6);
+    let base = fork_request(&store, "source", "m-2", "branch");
+    for (field, value, error) in [
+        ("anchorMessageId", json!("missing"), TeaError::Missing),
+        ("anchorMessageId", json!("m-1"), TeaError::Invalid),
+        ("editedContent", json!(" \n "), TeaError::Invalid),
+        ("expectedRevision", json!(99), TeaError::Stale),
+        (
+            "instance",
+            json!("00000000000000000000000000000000"),
+            TeaError::Stale,
+        ),
+        ("targetSessionId", json!("source"), TeaError::Invalid),
+    ] {
+        let before = snapshot(&c);
+        let mut bad = base.clone();
+        bad["request"][field] = value;
+        assert_eq!(store.mutate(bad).unwrap_err(), error);
+        assert_eq!(snapshot(&c), before);
+    }
+    store.mutate(base.clone()).unwrap();
+    let before = snapshot(&c);
+    let mut duplicate = base.clone();
+    duplicate["request"]["operationId"] = json!("duplicate");
+    assert_eq!(store.mutate(duplicate).unwrap_err(), TeaError::Stale);
+    let mut mismatch = base;
+    mismatch["request"]["editedContent"] = json!("changed");
+    assert_eq!(
+        store.mutate(mismatch.clone()).unwrap_err(),
+        TeaError::OperationMismatch
+    );
+    assert_eq!(
+        receipt(&store, mismatch).unwrap_err(),
+        TeaError::OperationMismatch
+    );
+    assert_eq!(snapshot(&c), before);
+    begin(&store, "source");
+    let busy = fork_request(&store, "source", "m-2", "busy");
+    let before = snapshot(&c);
+    assert_eq!(store.mutate(busy).unwrap_err(), TeaError::Busy);
+    assert_eq!(snapshot(&c), before);
+}
+#[test]
+fn fork_failure_after_partial_insert_rolls_back_catalog_receipt_and_target() {
+    let (c, store) = setup();
+    fork_source(&store, 6);
+    lock_connection(&c).unwrap().execute_batch("CREATE TRIGGER fail_fork BEFORE INSERT ON magic_tea_message WHEN NEW.session_id='branch' AND NEW.ordinal=2 BEGIN SELECT RAISE(ABORT,'fault'); END;").unwrap();
+    let before = snapshot(&c);
+    let wire = fork_request(&store, "source", "m-4", "branch");
+    assert_eq!(store.mutate(wire.clone()).unwrap_err(), TeaError::Io);
+    assert_eq!(snapshot(&c), before);
+    assert!(receipt(&store, wire.clone()).unwrap()["result"]["receipt"].is_null());
+    lock_connection(&c)
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_fork")
+        .unwrap();
+    store.mutate(wire).unwrap();
+}
+#[test]
+fn fork_summary_coverage_remaps_or_clears_all_summary_fields() {
+    for (to, selected, retained) in [
+        ("m-1", "m-0", true),
+        ("m-4", "m-0", false),
+        ("m-1", "m-4", false),
+        ("missing", "m-0", true),
+        ("m-1", "missing", false),
+    ] {
+        let (c, store) = setup();
+        fork_source(&store, 6);
+        let h = head(&store, "source");
+        let mut doc = h["session"].clone();
+        doc["summary"] = json!("summary");
+        doc["summarySections"] = json!({"plot":"plot"});
+        doc["summaryMeta"] = json!({"fromMessageId":"m-0","toMessageId":to,"coverage":{"selectedMessageIds":[selected],"clippedMessageIds":["m-1"],"other":"preserve"}});
+        let mut update = target_request("update", "source", &h);
+        update["session"] = doc;
+        store.mutate(request(update)).unwrap();
+        store
+            .mutate(fork_request(&store, "source", "m-2", "branch"))
+            .unwrap();
+        let branch = head(&store, "branch");
+        let doc = &branch["session"];
+        if retained {
+            assert_eq!(doc["summary"], "summary");
+            let c = lock_connection(&c).unwrap();
+            let text: String = c.query_row("SELECT document FROM magic_tea_message WHERE session_id='branch' AND ordinal=1",[],|r|r.get(0)).unwrap();
+            let first: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(doc["summaryMeta"]["fromMessageId"], first["id"]);
+            assert_eq!(
+                doc["summaryMeta"]["coverage"]["selectedMessageIds"][0],
+                first["id"]
+            );
+            assert_eq!(doc["summaryMeta"]["coverage"]["other"], "preserve");
+        } else {
+            for key in ["summary", "summaryMeta", "summarySections"] {
+                assert!(doc.get(key).is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn fork_shared_web_summary_golden_vectors() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../packages/contracts/fixtures/desktop-tea-branch-summary.json"
+    ))
+    .unwrap();
+    let (c, store) = setup();
+    create(&store, "source");
+    let c = lock_connection(&c).unwrap();
+    for (index, id) in fixture["messageIds"].as_array().unwrap().iter().enumerate() {
+        insert_message(
+            &c,
+            "source",
+            index as i64 + 1,
+            &message("source", id.as_str().unwrap(), "user", "x"),
+        )
+        .unwrap();
+    }
+    let ids: HashMap<String, String> =
+        serde_json::from_value(fixture["clonedMessageIds"].clone()).unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let mut doc = case["session"].clone();
+        fork_summary(
+            &c,
+            &mut doc,
+            "source",
+            case["replaceFromIndex"].as_i64().unwrap() + 1,
+            &ids,
+        )
+        .unwrap();
+        assert_eq!(doc, case["expected"], "{}", case["name"]);
+    }
+}
+#[test]
+fn fork_count_and_total_import_budget_reject_before_target_creation() {
+    for huge in [false, true] {
+        let (c, store) = setup();
+        create(&store, "source");
+        {
+            let c = lock_connection(&c).unwrap();
+            let count = if huge { 9 } else { 10_001 };
+            let body = if huge {
+                "x".repeat(8 * 1024 * 1024)
+            } else {
+                "x".to_owned()
+            };
+            c.execute_batch("BEGIN").unwrap();
+            for i in 0..count {
+                insert_message(
+                    &c,
+                    "source",
+                    i + 1,
+                    &message("source", &format!("m-{i}"), "user", &body),
+                )
+                .unwrap();
+            }
+            c.execute_batch("COMMIT").unwrap();
+        }
+        let wire = fork_request(
+            &store,
+            "source",
+            if huge { "m-8" } else { "m-10000" },
+            "branch",
+        );
+        let before = catalog(&lock_connection(&c).unwrap()).unwrap();
+        assert_eq!(store.mutate(wire.clone()).unwrap_err(), TeaError::TooLarge);
+        assert!(head(&store, "branch").is_null());
+        assert_eq!(catalog(&lock_connection(&c).unwrap()).unwrap(), before);
+        assert!(receipt(&store, wire).unwrap()["result"]["receipt"].is_null());
+    }
+}
+
+#[test]
+fn fork_commit_failure_is_reconcilable_and_aba_replacement_is_stale() {
+    let (c, store) = setup();
+    fork_source(&store, 4);
+    let wire = fork_request(&store, "source", "m-2", "branch");
+    lock_connection(&c).unwrap().execute_batch("CREATE TABLE fork_fault_parent(id INTEGER PRIMARY KEY); CREATE TABLE fork_fault_child(parent INTEGER REFERENCES fork_fault_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fork_fault_commit AFTER INSERT ON magic_tea_session WHEN NEW.id='branch' BEGIN INSERT INTO fork_fault_child(parent) VALUES(999); END;").unwrap();
+    let before = snapshot(&c);
+    assert_eq!(
+        store.mutate(wire.clone()).unwrap_err(),
+        TeaError::CommitUnknown
+    );
+    assert_eq!(snapshot(&c), before);
+    assert!(receipt(&store, wire.clone()).unwrap()["result"]["receipt"].is_null());
+    lock_connection(&c).unwrap().execute_batch("DROP TRIGGER fork_fault_commit; DROP TABLE fork_fault_child; DROP TABLE fork_fault_parent;").unwrap();
+    let source = head(&store, "source");
+    store
+        .mutate(request(target_request("delete", "source", &source)))
+        .unwrap();
+    create(&store, "source");
+    assert_eq!(head(&store, "source")["revision"], source["revision"]);
+    let before = snapshot(&c);
+    assert_eq!(store.mutate(wire).unwrap_err(), TeaError::Stale);
+    assert_eq!(snapshot(&c), before);
+}
+
+#[test]
+fn fork_uses_web_unicode_trim_and_player_identity() {
+    assert_eq!(branch_trim("\u{feff} x \u{feff}"), "x");
+    assert_eq!(branch_trim("\u{0085}"), "\u{0085}");
+    let (_c, store) = setup();
+    fork_source(&store, 4);
+    let h = head(&store, "source");
+    let mut doc = h["session"].clone();
+    doc["roles"] =
+        json!([{"id":"player","name":"\u{feff} 玩家 \u{feff}","card":{},"source":"local"}]);
+    doc["playerRoleId"] = json!("player");
+    let mut update = target_request("update", "source", &h);
+    update["session"] = doc;
+    store.mutate(request(update)).unwrap();
+    let mut fork = fork_request(&store, "source", "m-0", "branch");
+    fork["request"]["editedContent"] = json!("\u{feff} 改写 \u{feff}");
+    store.mutate(fork).unwrap();
+    let h = head(&store, "branch");
+    let page = pages(&store, "branch", &h, Value::Null, 10).unwrap();
+    let m = &page["result"]["rows"][0]["message"];
+    assert_eq!(m["content"], "改写");
+    assert_eq!(m["speakerId"], "player");
+    assert_eq!(m["meta"]["speakerName"], "玩家");
+}

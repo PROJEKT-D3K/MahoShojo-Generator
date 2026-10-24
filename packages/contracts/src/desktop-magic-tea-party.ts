@@ -102,6 +102,7 @@ const writeOperation = z.discriminatedUnion('action', [
   z.object({ action: z.literal('create'), session: TeaSessionDocumentSchema }).strict(),
   z.object({ action: z.literal('update'), ...target, session: TeaSessionDocumentSchema }).strict(),
   z.object({ action: z.literal('delete'), ...target }).strict(),
+  z.object({ action: z.literal('fork'), ...target, operationId: id, anchorMessageId: id, editedContent: z.string().refine(value => value.trim().length > 0 && scalarText(value) && utf8ByteLength(value) <= DESKTOP_TEA_LIMITS.messageBytes), targetSessionId: id }).strict(),
   z.object({ action: z.literal('set-pin'), ...target, operationId: id, pinned: z.boolean() }).strict(),
   z.object({ action: z.literal('delete-selected'), operationId: id, targets: z.array(z.object(target).strict()).min(1).max(DESKTOP_TEA_LIMITS.directoryRows) }).strict(),
   z.object({ action: z.literal('import'), operationId: id, entries: z.array(importEntry).min(1).max(DESKTOP_TEA_LIMITS.importSessions) }).strict(),
@@ -112,6 +113,7 @@ export const TeaWriteRequestSchema = z.object({ version: z.literal(1), request: 
   .refine(value => boundedJson({ request: value }, DESKTOP_TEA_LIMITS.writeBytes, DESKTOP_TEA_LIMITS.envelopeNodes), 'Tea write exceeds the local transport boundary')
   .superRefine(({ request }, context) => {
     const invalid = () => context.addIssue({ code: 'custom', message: 'Tea record identities or generation state disagree' });
+    if (request.action === 'fork' && request.sessionId === request.targetSessionId) invalid();
     if (request.action === 'delete-selected' && new Set(request.targets.map(row => row.sessionId)).size !== request.targets.length) invalid();
     if (request.action === 'import') {
       const sessions = new Set<string>(); const messages = new Set<string>(); let count = 0;
@@ -135,7 +137,7 @@ const readOperation = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list'), cursor: listCursor.nullable(), expectedCatalogRevision: revision.nullable(), limit: integer.min(1).max(DESKTOP_TEA_LIMITS.directoryRows) }).strict(),
   z.object({ action: z.literal('session'), sessionId: id, expectedCatalogRevision: revision.nullable() }).strict(),
   z.object({ action: z.literal('messages'), ...target, cursor: messageCursor.nullable(), expectedCatalogRevision: revision.nullable(), limit: integer.min(1).max(DESKTOP_TEA_LIMITS.messageRows) }).strict(),
-  z.object({ action: z.literal('receipt'), write: TeaWriteRequestSchema.refine(value => ['import', 'begin-generation', 'finish-generation', 'set-pin', 'delete-selected'].includes(value.request.action)) }).strict(),
+  z.object({ action: z.literal('receipt'), write: TeaWriteRequestSchema.refine(value => ['import', 'begin-generation', 'finish-generation', 'set-pin', 'delete-selected', 'fork'].includes(value.request.action)) }).strict(),
 ]);
 export const TeaReadRequestSchema = z.object({ version: z.literal(1), request: readOperation }).strict()
   .refine(value => boundedJson({ request: value }, value.request.action === 'receipt' ? DESKTOP_TEA_LIMITS.receiptReadBytes : 4096, value.request.action === 'receipt' ? DESKTOP_TEA_LIMITS.envelopeNodes + 8 : 100, value.request.action === 'receipt' ? DESKTOP_TEA_LIMITS.depth + 4 : DESKTOP_TEA_LIMITS.depth), 'Tea read request exceeds the local transport boundary');
@@ -149,6 +151,7 @@ const mutationResult = z.discriminatedUnion('action', [
   saved.extend({ action: z.literal('create'), revision: z.literal(1) }).strict(),
   saved.extend({ action: z.literal('update') }).strict(),
   saved.extend({ action: z.literal('delete') }).strict(),
+  saved.extend({ action: z.literal('fork'), operationId: id, revision: z.literal(1) }).strict(),
   saved.extend({ action: z.literal('set-pin'), operationId: id, pinnedAt: integer, pinnedOrder: integer }).strict(),
   z.object({ action: z.literal('delete-selected'), operationId: id, sessions: z.array(saved).min(1).max(DESKTOP_TEA_LIMITS.directoryRows) }).strict(),
   z.object({ action: z.literal('import'), operationId: id, sessions: z.array(saved.extend({ revision: z.literal(1) })).min(1).max(DESKTOP_TEA_LIMITS.importSessions) }).strict(),

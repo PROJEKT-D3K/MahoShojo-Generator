@@ -33,6 +33,15 @@ const harness = (session = baseSession()) => {
     if (command === 'mutate_magic_tea_party') {
       const write = (args?.request as TeaWriteRequest).request;
       if (fail === write.action) { fail = null; throw { code: 'tea-io', message: 'Local tea storage did not complete; retain the input or unsaved result', writeEvidence: 'not-written' }; }
+      if (write.action === 'fork') {
+        const result = { action: 'fork' as const, operationId: write.operationId, sessionId: write.targetSessionId, instance: 'b'.repeat(32), revision: 1 as const };
+        const anchor = messages.findIndex(message => message.id === write.anchorMessageId);
+        messages = messages.slice(0, anchor + 1).map((message, index) => ({ ...message, sessionId: write.targetSessionId, ...(index === anchor ? { content: write.editedContent } : {}) }));
+        record = { session: { ...record!.session, id: write.targetSessionId }, instance: result.instance, revision: 1 };
+        receipts.set(write.operationId, result);
+        if (drop === 'fork') { drop = null; throw new Error('synthetic reply loss after commit'); }
+        return { version: 1, result };
+      }
       if (write.action === 'import' || write.action === 'set-pin' || write.action === 'delete-selected') throw new Error('organization is covered by the real Native journey, not this single-record fixture');
       const sessionId = write.action === 'create' ? write.session.id : write.sessionId;
       const instance = write.action === 'create' ? 'b'.repeat(32) : write.instance;
@@ -931,4 +940,80 @@ it('honors a manual edit received synchronously before an automatic terminal wri
   expect(changed).toBe(true); expect(h.record?.session.summary).toBe('旧摘要');
   expect(h.owner.getSnapshot().summaryDraft).toBe('终态前的手工稿');
   expect(h.messages.at(-1)).toMatchObject({ status: 'error', meta: { kind: 'summary', completion: 'stopped' } });
+});
+
+
+describe('user-message fork editor owner', () => {
+  const ready = async () => {
+    const h = harness(); await h.owner.select('s'); h.owner.setInput('原消息');
+    await h.owner.start(target, h.options, () => true);
+    h.invoke.mockClear();
+    return h;
+  };
+  const writes = (h: ReturnType<typeof harness>) => h.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party');
+  it('cancels and rejects whitespace without writes; only user messages are editable', async () => {
+    const h = await ready(); h.owner.startMessageEdit(h.messages[1]!.id); expect(h.owner.getSnapshot().editingMessageId).toBeNull();
+    h.owner.startMessageEdit(h.messages[0]!.id); h.owner.setMessageEditDraft('  ');
+    expect(await h.owner.forkMessageEdit()).toBe(false); h.owner.cancelMessageEdit();
+    expect(h.owner.getSnapshot().editingMessageId).toBeNull(); expect(writes(h)).toHaveLength(0);
+  });
+  it.each(['input', 'title', 'name', 'summary'] as const)('protects unsaved %s before starting an edit without implicit saves', async field => {
+    const h = await ready();
+    if (field === 'input') h.owner.setInput('未保存');
+    if (field === 'title') h.owner.stageTitle('未保存');
+    if (field === 'name') h.owner.stageName('未保存');
+    if (field === 'summary') h.owner.stageSummary('未保存');
+    const before = h.owner.getSnapshot(); h.owner.startMessageEdit(h.messages[0]!.id);
+    expect(h.owner.getSnapshot()).toMatchObject({ input: before.input, titleDraft: before.titleDraft, nameDraft: before.nameDraft, summaryDraft: before.summaryDraft, editingMessageId: null });
+    expect(writes(h)).toHaveLength(0);
+  });
+  it('double confirmation creates one branch and opens it without calling the model or updating source', async () => {
+    const h = await ready(); const original = structuredClone(h.record); const source = h.owner.getSnapshot().record!;
+    h.owner.startMessageEdit(h.messages[0]!.id); h.owner.setMessageEditDraft('改写😀');
+    await Promise.all([h.owner.forkMessageEdit(), h.owner.forkMessageEdit()]);
+    expect(writes(h)).toHaveLength(1); expect((writes(h)[0]![1]!.request as TeaWriteRequest).request).toMatchObject({ action: 'fork', sessionId: 's', expectedRevision: original!.revision, editedContent: '改写😀' });
+    expect(source).toEqual(original); expect(h.owner.getSnapshot().record?.session.id).not.toBe('s');
+    expect(h.owner.getSnapshot().messages).toHaveLength(1); expect(h.owner.getSnapshot().editingMessageId).toBeNull(); expect(h.count()).toBe(1);
+  });
+  it('keeps the failed edit on abandon and queries the original receipt for an unknown save', async () => {
+    const h = await ready(); h.owner.startMessageEdit(h.messages[0]!.id); h.owner.setMessageEditDraft('保留编辑');
+    h.fail('fork'); await h.owner.forkMessageEdit(); expect(h.owner.getSnapshot().pending).toBe('save');
+    await h.owner.abandonPending(); expect(h.owner.getSnapshot()).toMatchObject({ editingDraft: '保留编辑', record: { session: { id: 's' } }, pending: 'none' });
+    h.drop('fork'); await h.owner.forkMessageEdit(); expect(h.owner.getSnapshot().pending).toBe('unknown');
+    await h.owner.retryPending(); expect(writes(h)).toHaveLength(2);
+    await h.owner.abandonPending(); expect(h.owner.getSnapshot().pending).toBe('unknown');
+    await h.owner.resolvePending(); expect(writes(h)).toHaveLength(2); expect(h.count()).toBe(1);
+    expect(h.owner.getSnapshot()).toMatchObject({ pending: 'none', editingMessageId: null });
+    expect(h.invoke.mock.calls.some(([command, args]) => command === 'read_magic_tea_party' && (args?.request as { request: { action: string } }).request.action === 'receipt')).toBe(true);
+  });
+  it('retries the same frozen fork only after the original receipt proves no commit', async () => {
+    const h = await ready(); const originalInvoke = h.invoke.getMockImplementation()!; let lose = true;
+    h.invoke.mockImplementation(async (...args) => {
+      if (args[0] === 'mutate_magic_tea_party' && lose) { lose = false; throw new Error('transport lost before write'); }
+      return originalInvoke(...args);
+    });
+    h.owner.startMessageEdit(h.messages[0]!.id); h.owner.setMessageEditDraft('冻结编辑'); await h.owner.forkMessageEdit();
+    expect(h.owner.getSnapshot().pending).toBe('unknown'); await h.owner.retryPending(); expect(writes(h)).toHaveLength(1);
+    await h.owner.resolvePending(); expect(h.owner.getSnapshot().pending).toBe('save');
+    h.owner.setMessageEditDraft('不能修改待保存请求'); h.owner.cancelMessageEdit();
+    expect(h.owner.getSnapshot().editingDraft).toBe('冻结编辑');
+    await h.owner.retryPending(); expect(writes(h)).toHaveLength(2); expect(writes(h)[0]![1]).toEqual(writes(h)[1]![1]);
+    expect(h.owner.getSnapshot().pending).toBe('none'); expect(h.count()).toBe(1);
+  });
+  it('exports the exact edit and source when validation rejects it before any write', async () => {
+    const h = await ready(); const anchor = h.messages[0]!.id; const edit = '保留无效标量\ud800原件';
+    h.owner.startMessageEdit(anchor); h.owner.setMessageEditDraft(edit);
+    expect(await h.owner.forkMessageEdit()).toBe(false); expect(writes(h)).toHaveLength(0);
+    expect(h.owner.getSnapshot()).toMatchObject({ pending: 'none', editingDraft: edit, editingMessageId: anchor });
+    expect(JSON.parse(h.owner.unsavedText())).toMatchObject({ sessionId: 's', instance: h.record!.instance,
+      expectedRevision: h.record!.revision, anchorMessageId: anchor, editedContent: edit });
+  });
+  it('fences a late fork reply from a disposed and reactivated owner', async () => {
+    const h = await ready(); const originalInvoke = h.invoke.getMockImplementation()!; let release!: () => void;
+    h.invoke.mockImplementation(async (...args) => { const response = await originalInvoke(...args); if (args[0] === 'mutate_magic_tea_party') await new Promise<void>(resolve => { release = resolve; }); return response; });
+    h.owner.startMessageEdit(h.messages[0]!.id); h.owner.setMessageEditDraft('旧编辑'); const saving = h.owner.forkMessageEdit();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    h.owner.dispose(); h.owner.activate(); const replacement = h.owner.getSnapshot(); release(); await saving;
+    expect(h.owner.getSnapshot()).toBe(replacement); expect(h.count()).toBe(1);
+  });
 });

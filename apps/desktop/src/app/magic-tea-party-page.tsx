@@ -54,7 +54,8 @@ export default function MagicTeaPartyPage() {
   const session = state.record ? teaSessionView({ ...state.record.session, ...(state.titleDraft === null ? {} : { title: state.titleDraft }),
     settings: { ...state.record.session.settings, ...(state.nameDraft === null ? {} : { userDisplayName: state.nameDraft }) } }) : null;
   const editingRole = session?.roles.find(role => role.id === editingRoleId) ?? null;
-  const disabled = !guard.ready || state.busy || state.pending !== 'none' || importBusy || preparingView;
+  const editDisabled = !guard.ready || state.busy || state.pending !== 'none' || importBusy || preparingView;
+  const disabled = editDisabled || state.editingMessageId !== null;
   const run = (work: () => Promise<unknown>) => { void work().catch(error => owner.report(error)); };
   const renderScope = `${state.incarnation}:${state.record?.session.id ?? ''}`;
   const currentScope = () => `${owner.getSnapshot().incarnation}:${owner.getSnapshot().record?.session.id ?? ''}`;
@@ -183,6 +184,9 @@ export default function MagicTeaPartyPage() {
       onUpdatePlayerRole={playerRoleId => { if (currentScope() === renderScope && !disabled) run(() => owner.update({ playerRoleId })); }} onUpdateTitle={title => { if (currentScope() === renderScope && !disabled) owner.stageTitle(title); }}
       onLockTitle={() => run(() => owner.update({ titleMeta: { source: 'manual' } }))} onCreateSession={() => { if (!providerDirty && !roleDirty.current && !pasteDirty.current) run(() => owner.create()); }} />}
     beforeChat={<>
+      {session?.forkedFrom ? <p className="break-all text-xs text-(--app-text-muted)">
+        分支来源{session.branchLabel ? `（${session.branchLabel}）` : ''}：会话 {session.forkedFrom.sessionId} · 消息 {session.forkedFrom.messageId}。原会话保持独立，不会合并。
+      </p> : null}
       {roleHasDraft && !editingRole ? <p role="status" className="text-sm text-(--app-text-muted)">有未保存的角色修改，重新打开对应角色可继续编辑。</p> : null}
       <section hidden={!editingRole && !roleHasDraft} className="rounded-xl border border-(--app-border-strong) bg-(--app-surface) p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 ref={roleHeading} tabIndex={-1} className="text-sm font-semibold text-(--app-text)">会话角色编辑</h2>
@@ -245,10 +249,23 @@ export default function MagicTeaPartyPage() {
     </>}
     chat={<>
       <MagicTeaPartyChatTimeline activeSession={session} preferences={TEA_PREFERENCES} messages={state.messages.map(teaMessageView)}
-        isGenerating={state.generating || preparingView} outputView={outputView} onOutputViewChange={setOutputView}
+        isGenerating={state.generating || preparingView}
+        editingMessageId={state.editingMessageId} editingDraft={state.editingDraft}
+        onStartEdit={message => {
+          if (editDisabled || preparing.current || currentScope() !== renderScope) return;
+          if (providerDirty || roleDirty.current || roleSaving.current || pasteDirty.current) { owner.report(new Error('请先保存或取消连接、角色和粘贴导入草稿，再编辑消息创建分支')); return; }
+          owner.startMessageEdit(message.id);
+        }}
+        onEditDraftChange={owner.setMessageEditDraft} onCancelEdit={owner.cancelMessageEdit}
+        onConfirmEdit={message => {
+          if (editDisabled || preparing.current || currentScope() !== renderScope || message.id !== owner.getSnapshot().editingMessageId) return;
+          if (providerDirty || roleDirty.current || roleSaving.current || pasteDirty.current) { owner.report(new Error('请先保存或取消连接、角色和粘贴导入草稿，再创建分支')); return; }
+          run(owner.forkMessageEdit);
+        }} outputView={outputView} onOutputViewChange={setOutputView}
         onStopGenerating={() => { aiStore.cancelPreparingGeneration(); owner.stop(); }} onSelectChoice={text => start({ kind: 'selected-choice', text })}
         renderMessage={props => <MagicTeaPartyChatMessage {...props} renderBudget={{ segments: 2000, characters: 100_000, rawPreviewCharacters: 100_000 }}
           renderMarkdown={markdown => <MarkdownBlock {...markdown} onNavigateExternal={openContent} renderInternalLink={({ children }) => <span>{children}</span>} />} />} />
+      {state.editingMessageId !== null ? <Button size="sm" onClick={() => downloadTextFile('magic-tea-party.unsaved-edit.txt', owner.unsavedText(), 'text/plain')}><Download className="size-4 shrink-0" aria-hidden="true" />导出消息编辑草稿</Button> : null}
       <MagicTeaPartyChatComposer activeSession={session} preferences={TEA_PREFERENCES} draft={state.input} onDraftChange={value => { if (!preparing.current) owner.setInput(value); }}
         onSend={text => start({ kind: 'reply', text })} onContinue={() => start({ kind: 'continue' })} onGenerateChoices={() => start({ kind: 'choices' })}
         isGenerating={state.generating || preparingView} hasMessages={state.messages.length > 0} disabled={disabled}

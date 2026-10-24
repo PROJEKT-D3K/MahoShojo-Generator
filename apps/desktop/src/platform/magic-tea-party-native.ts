@@ -27,6 +27,8 @@ export type TeaNativePort = {
 
 const matchesMutation = (request: TeaWriteRequest['request'], result: TeaWriteResponse['result']): boolean => {
   if (request.action !== result.action) return false;
+  if (request.action === 'fork' && result.action === 'fork') return result.operationId === request.operationId
+    && result.sessionId === request.targetSessionId && result.instance !== request.instance && result.revision === 1;
   if (request.action === 'import' && result.action === 'import') return result.operationId === request.operationId
     && result.sessions.length === request.entries.length
     && new Set(result.sessions.map(row => row.instance)).size === result.sessions.length

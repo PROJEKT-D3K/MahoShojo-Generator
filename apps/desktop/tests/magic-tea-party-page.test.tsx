@@ -19,7 +19,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseReq
 const profile = { version: 1, id: 'tea-page', name: '合成测试连接', adapter: 'openai-compatible', baseUrl: 'http://127.0.0.1:18080/v1', modelId: 'synthetic', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' };
 let root: Root; let container: HTMLDivElement; let document: TeaSessionDocument | null; let revision: number; let messages: TeaMessageDocument[]; let streams: number;
 let streamOutput: string; let streamReasoning: string;
-const instance = 'a'.repeat(32);
+let instance = 'a'.repeat(32);
 const button = (text: string) => { const node = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === text); expect(node, text).toBeTruthy(); return node!; };
 const click = (text: string) => act(async () => button(text).click());
 const openSession = (title: string) => act(async () => { const node = [...container.querySelectorAll('button')].find(item => item.querySelector('.line-clamp-1')?.textContent === title); expect(node).toBeTruthy(); node!.click(); });
@@ -33,7 +33,7 @@ beforeEach(() => {
   vi.clearAllMocks(); localStorage.clear(); resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
   resetDesktopAnnouncementsStoreForTests();
   vi.stubGlobal('crypto', webcrypto); native.listen.mockResolvedValue(vi.fn());
-  document = null; revision = 1; messages = []; streams = 0;
+  document = null; revision = 1; messages = []; streams = 0; instance = 'a'.repeat(32);
   streamOutput = '{"type":"narration","text":"共源茶会正文😀"}\n';
   streamReasoning = '';
   localStorage.setItem(DESKTOP_AI_CONFIG_STORAGE_KEY, JSON.stringify({ version: 5, selection: { executionPreference: 'client', clientTarget: { kind: 'custom', profileId: profile.id }, serverTarget: { kind: 'system' }, systemModelId: 'default' }, hiddenPresetIds: [], modelsByProfileId: {}, presetsByProviderId: {} }));
@@ -53,6 +53,12 @@ beforeEach(() => {
     }
     if (command === 'mutate_magic_tea_party') {
       const request = TeaWriteRequestSchema.parse(args.request).request;
+      if (request.action === 'fork') {
+        document = { ...document!, id: request.targetSessionId, branchLabel: '改写分支', forkedFrom: { sessionId: request.sessionId, messageId: request.anchorMessageId, createdAt: 10 } }; revision = 1; instance = 'b'.repeat(32);
+        const anchor = messages.findIndex(message => message.id === request.anchorMessageId);
+        messages = messages.slice(0, anchor + 1).map((message, index) => ({ ...message, sessionId: request.targetSessionId, ...(index === anchor ? { content: request.editedContent } : {}) }));
+        return { version: 1, result: { action: 'fork', operationId: request.operationId, sessionId: request.targetSessionId, instance, revision } };
+      }
       if (request.action === 'import' || request.action === 'set-pin' || request.action === 'delete-selected') throw new Error('not used by page fixture');
       revision = request.action === 'create' ? 1 : request.expectedRevision + (request.action === 'delete' ? 0 : 1);
       const sessionId = request.action === 'create' ? request.session.id : request.sessionId;
@@ -701,4 +707,69 @@ it('cancels actual loaded-selection cleanup without a write and invalidates conf
   await change('input[placeholder="搜索已加载会话标题 / 角色 / 情景"]', '其他');
   expect(container.textContent).not.toContain('将永久删除以下');
   expect(button('预览清理 0 个会话').disabled).toBe(true); expect(writes()).toBe(before);
+});
+
+it('uses the shared user editor for cancel, empty and single-write fork; continuation stays manual', async () => {
+  await mount(); await click('新建会话'); await change('textarea[placeholder^="输入你的行动"]', '原输入'); await click('发送');
+  const original = structuredClone(document); const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  const generated = streams;
+  await click('编辑并分支'); await change('textarea[placeholder="编辑后将创建新会话分支"]', ' ');
+  expect(button('创建分支').disabled).toBe(true);
+  expect(button('导出消息编辑草稿').disabled).toBe(false);
+  const editor = container.querySelector('textarea[placeholder="编辑后将创建新会话分支"]')!.parentElement!;
+  await act(async () => [...editor.querySelectorAll('button')].find(node => node.textContent?.trim() === '取消')!.click());
+  expect(container.querySelector('textarea[placeholder="编辑后将创建新会话分支"]')).toBeNull();
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+  await click('编辑并分支'); await change('textarea[placeholder="编辑后将创建新会话分支"]', '分支输入😀');
+  await act(async () => { button('创建分支').click(); button('创建分支').click(); });
+  const writes = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party');
+  expect(writes).toHaveLength(before + 1);
+  expect(TeaWriteRequestSchema.parse(writes.at(-1)![1]!.request).request).toMatchObject({ action: 'fork', sessionId: original!.id, editedContent: '分支输入😀' });
+  expect(document!.id).not.toBe(original!.id); expect(messages).toHaveLength(1); expect(messages[0]!.content).toBe('分支输入😀');
+  expect(container.querySelector('textarea[placeholder="编辑后将创建新会话分支"]')).toBeNull(); expect(streams).toBe(generated);
+  expect(container.textContent).toContain('可手动续写');
+  expect(container.textContent).toContain(`分支来源（改写分支）：会话 ${original!.id}`);
+  expect(container.textContent).toContain('原会话保持独立，不会合并');
+  expect([...container.querySelectorAll('button')].some(node => node.textContent?.includes('合并'))).toBe(false);
+});
+
+it('refuses inline fork editing while composer or pasted card drafts are unsaved', async () => {
+  await mount(); await click('新建会话'); await change('textarea[placeholder^="输入你的行动"]', '原输入'); await click('发送');
+  const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  await change('textarea[placeholder^="输入你的行动"]', '未保存输入'); await click('编辑并分支');
+  expect(container.querySelector('textarea[placeholder="编辑后将创建新会话分支"]')).toBeNull();
+  expect(container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="输入你的行动"]')!.value).toBe('未保存输入');
+  await change('textarea[placeholder^="输入你的行动"]', '');
+  await change('textarea[placeholder^="粘贴角色"]', '未导入角色'); await click('编辑并分支');
+  expect(container.querySelector('textarea[placeholder="编辑后将创建新会话分支"]')).toBeNull();
+  expect(container.querySelector<HTMLTextAreaElement>('textarea[placeholder^="粘贴角色"]')!.value).toBe('未导入角色');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+});
+
+
+it('preserves a role form draft rather than forking or saving it implicitly', async () => {
+  await mount(); await click('新建会话');
+  await change('textarea[placeholder^="粘贴角色"]', JSON.stringify({ templateId: '通用角色', name: '原角色', content: '设定' })); await click('导入');
+  await change('textarea[placeholder^="输入你的行动"]', '原输入'); await click('发送');
+  await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label^="编辑角色："]')!.click());
+  await change('input[aria-label="角色名称"]', '未保存角色');
+  const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  await click('编辑并分支');
+  expect(container.querySelector('textarea[placeholder="编辑后将创建新会话分支"]')).toBeNull();
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="角色名称"]')!.value).toBe('未保存角色');
+  expect(document!.roles[0]!.name).toBe('原角色');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+});
+
+it('preserves a provider connection draft and does not fork or save it implicitly', async () => {
+  await mount(); await click('新建会话'); await change('textarea[placeholder^="输入你的行动"]', '原输入'); await click('发送');
+  await click('更新凭据');
+  const heading = [...container.querySelectorAll('h3')].find(node => node.textContent?.trim() === '编辑连接')!;
+  const name = heading.parentElement!.querySelector('input')!;
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, '未保存连接'); name.dispatchEvent(new Event('input', { bubbles: true })); });
+  const before = native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party').length;
+  await click('编辑并分支');
+  expect(container.querySelector('textarea[placeholder="编辑后将创建新会话分支"]')).toBeNull(); expect(name.value).toBe('未保存连接');
+  expect(native.invoke.mock.calls.filter(([command]) => command === 'mutate_magic_tea_party')).toHaveLength(before);
+  expect(native.invoke.mock.calls.some(([command]) => command === 'save_provider_profile')).toBe(false);
 });

@@ -108,3 +108,20 @@ it('requires organization receipts to match every frozen identity and desired pi
     await expect(createIpcTeaNativePort(vi.fn().mockResolvedValue({ ...deleted, result: { ...deleted.result, sessions: [row] } })).mutate(cleanup)).rejects.toMatchObject({ writeEvidence: 'unknown' });
   }
 });
+
+describe('Tea fork result relationship', () => {
+  const request: TeaWriteRequest = { version: 1, request: { action: 'fork', operationId: 'fork', sessionId: 'source', instance: fixture.instance,
+    expectedRevision: 7, anchorMessageId: 'anchor', editedContent: '分支', targetSessionId: 'child' } };
+  const result = { action: 'fork', operationId: 'fork', sessionId: 'child', instance: 'a'.repeat(32), revision: 1 };
+  it('accepts only the new child identity, including on original receipt reads', async () => {
+    const invoke = vi.fn().mockResolvedValueOnce({ version: 1, result }).mockResolvedValueOnce({ version: 1,
+      result: { action: 'receipt', receipt: { operationId: 'fork', digest: 'b'.repeat(64), result } } });
+    const port = createIpcTeaNativePort(invoke);
+    expect((await port.mutate(request)).result).toEqual(result);
+    expect((await port.read({ version: 1, request: { action: 'receipt', write: request } })).result.action).toBe('receipt');
+  });
+  it.each([{ sessionId: 'source' }, { instance: fixture.instance }, { operationId: 'other' }, { revision: 8 }])('rejects unrelated child receipts: %j', async patch => {
+    const invoke = vi.fn().mockResolvedValue({ version: 1, result: { ...result, ...patch } });
+    await expect(createIpcTeaNativePort(invoke).mutate(request)).rejects.toMatchObject({ writeEvidence: 'unknown' });
+  });
+});

@@ -104,3 +104,18 @@ describe('Desktop Tea closed local storage wire', () => {
     for (const pinnedAt of ['legacy', {}, null, -1, 1.2]) expect(TeaSessionDocumentSchema.parse({ ...session(), pinnedAt }).pinnedAt).toEqual(pinnedAt);
   });
 });
+
+describe('Desktop Tea user-message fork wire', () => {
+  const fork = () => ({ version: 1, request: { action: 'fork', operationId: 'fork-1', sessionId: fixture.session.id,
+    instance: fixture.instance, expectedRevision: 1, anchorMessageId: 'user-a', editedContent: '新话题 🍵', targetSessionId: 'child' } });
+  it('accepts the narrow command and original-operation receipt query', () => {
+    expect(TeaWriteRequestSchema.parse(fork())).toEqual(fork());
+    expect(TeaReadRequestSchema.parse({ version: 1, request: { action: 'receipt', write: fork() } }).request.action).toBe('receipt');
+  });
+  it('rejects empty edits, same target, client-selected IDs/timestamps and invalid CAS', () => {
+    for (const patch of [{ editedContent: ' \n\t' }, { editedContent: '\ud800' }, { targetSessionId: fixture.session.id },
+      { expectedRevision: 0 }, { instance: 'old' }, { messages: [] }, { createdAt: 1 }, { newMessageId: 'new' }]) {
+      expect(TeaWriteRequestSchema.safeParse({ ...fork(), request: { ...fork().request, ...patch } }).success).toBe(false);
+    }
+  });
+});
