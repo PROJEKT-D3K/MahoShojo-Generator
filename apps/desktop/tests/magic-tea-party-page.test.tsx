@@ -4,7 +4,7 @@ import { webcrypto } from 'node:crypto';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { RouterProvider } from '@tanstack/react-router';
-import { beforeEach, afterEach, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { TeaReadRequestSchema, TeaWriteRequestSchema, type TeaSessionDocument, type TeaMessageDocument } from '@mahoshojo/contracts/desktop-magic-tea-party';
 import type { AiStreamEvent } from '@mahoshojo/ai-core/stream-events';
 import * as downloads from '../src/platform/download-text-file';
@@ -19,6 +19,9 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseReq
 const profile = { version: 1, id: 'tea-page', name: '合成测试连接', adapter: 'openai-compatible', baseUrl: 'http://127.0.0.1:18080/v1', modelId: 'synthetic', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' };
 let root: Root; let container: HTMLDivElement; let document: TeaSessionDocument | null; let revision: number; let messages: TeaMessageDocument[]; let streams: number;
 let streamOutput: string; let streamReasoning: string;
+let mountedRouter: ReturnType<typeof createDesktopRouter> | undefined;
+const originalPushState = window.history.pushState;
+const originalReplaceState = window.history.replaceState;
 let instance = 'a'.repeat(32);
 const button = (text: string) => { const node = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === text); expect(node, text).toBeTruthy(); return node!; };
 const click = (text: string) => act(async () => button(text).click());
@@ -28,6 +31,10 @@ const change = async (selector: string, value: string) => {
   expect(input, selector).toBeTruthy();
   await act(async () => { Object.getOwnPropertyDescriptor(input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); });
 };
+// 冷模块编译属于夹具准备，不应挤占首个交互用例的预算；仍通过真实 lazy route 挂载。
+beforeAll(async () => {
+  await Promise.all([import('../src/app/magic-tea-party-page'), import('../src/app/settings-page')]);
+});
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks(); localStorage.clear(); resetDesktopAiConfigStoreForTests(); resetDesktopCloudSessionStoreForTests();
@@ -87,9 +94,17 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.open = true; }; HTMLDialogElement.prototype.close = function () { this.open = false; };
   container = window.document.createElement('div'); window.document.body.append(container); root = createRoot(container);
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+// RouterProvider 卸载只取消订阅；夹具拥有的 history 还需释放监听器和 History API 包装。
+const unmount = async () => {
+  await act(async () => root.unmount());
+  mountedRouter?.history.destroy();
+  mountedRouter = undefined;
+  expect(window.history.pushState).toBe(originalPushState);
+  expect(window.history.replaceState).toBe(originalReplaceState);
+};
+afterEach(async () => { await unmount(); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const mount = async (href = '#/magic-tea-party') => {
-  window.location.hash = href; const router = createDesktopRouter(); await router.load();
+  window.location.hash = href; const router = createDesktopRouter(); mountedRouter = router; await router.load();
   await act(async () => root.render(<StrictMode><RouterProvider router={router} /></StrictMode>));
   await act(async () => getDesktopAiConfigStore().refreshProfiles());
   return router;
@@ -474,7 +489,7 @@ it('runs the real page manual summary controls, preserves draft and persists ful
   const calls = native.invoke.mock.calls.filter(([command]) => command === 'stream_target_ai');
   const summaryRequest = calls.at(-1)![1]!.request as { messages: Array<{ content: string }> };
   expect(summaryRequest.messages[0]!.content).toContain('【任务】生成会话摘要'); expect(summaryRequest.messages[0]!.content).not.toContain('不能发出的草稿');
-  await act(async () => root.unmount()); root = createRoot(container); await mount(); await openSession('新茶会');
+  await unmount(); root = createRoot(container); await mount(); await openSession('新茶会');
   expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="会话摘要正文"]')!.value).toBe('成功的摘要正文😀');
   const panel = container.querySelector('textarea[aria-label="会话摘要正文"]')!.closest('.rounded-xl')!;
   await act(async () => [...panel.querySelectorAll('button')].find(node => node.textContent === '清空')!.click());
@@ -543,7 +558,7 @@ it('restores sidebar folding and persists toggles without mutating tea sessions'
   expect(recent()?.textContent).toContain('展开');
   await act(async () => recent()!.click());
   expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ pinnedCollapsed: true, recentCollapsed: false });
-  await act(async () => root.unmount()); root = createRoot(container); await mount();
+  await unmount(); root = createRoot(container); await mount();
   expect(recent()?.textContent).toContain('收起');
   expect(native.invoke.mock.calls.some(([command]) => command === 'mutate_magic_tea_party')).toBe(false);
 });
@@ -572,7 +587,7 @@ it('edits a session role through the shared form and actual owner/bridge receipt
   expect(document!.roles[0]).toMatchObject({ name: '新星見', notes: '会话备注', card: { ...card, name: '新星見', current_state: { ...card.current_state, summary: '新状态' } } });
   expect(streams).toBe(0);
   await click('收起角色编辑'); expect(window.document.activeElement?.getAttribute('aria-label')).toBe('编辑角色：新星見');
-  await act(async () => root.unmount()); root = createRoot(container); native.invoke.mockImplementation(original);
+  await unmount(); root = createRoot(container); native.invoke.mockImplementation(original);
   await mount(); await openSession('新茶会'); await openEditor();
   expect(container.querySelector<HTMLInputElement>('input[aria-label="角色名称"]')!.value).toBe('新星見');
   expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="当前状态摘要"]')!.value).toBe('新状态');
