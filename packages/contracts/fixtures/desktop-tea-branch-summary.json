@@ -1,0 +1,186 @@
+{
+  "messageIds": [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+  ],
+  "clonedMessageIds": {
+    "a": "new-a",
+    "b": "new-b",
+    "c": "new-c"
+  },
+  "cases": [
+    {
+      "name": "sparse-watermark",
+      "session": {
+        "summary": "已有摘要",
+        "summarySections": {
+          "recap": "摘要段落"
+        },
+        "summaryMeta": {
+          "updatedAt": 1,
+          "fromMessageId": "a",
+          "toMessageId": "c",
+          "coverage": {
+            "version": 1,
+            "sourceMessageCount": 3,
+            "selectedMessageIds": [
+              "b",
+              "c"
+            ],
+            "clippedMessageIds": [
+              "c"
+            ],
+            "omittedMessageCount": 1
+          }
+        }
+      },
+      "replaceFromIndex": 3,
+      "expected": {
+        "summary": "已有摘要",
+        "summarySections": {
+          "recap": "摘要段落"
+        },
+        "summaryMeta": {
+          "updatedAt": 1,
+          "fromMessageId": "new-a",
+          "toMessageId": "new-c",
+          "coverage": {
+            "version": 1,
+            "sourceMessageCount": 3,
+            "selectedMessageIds": [
+              "new-b",
+              "new-c"
+            ],
+            "clippedMessageIds": [
+              "new-c"
+            ],
+            "omittedMessageCount": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "replace-watermark",
+      "session": {
+        "summary": "已有摘要",
+        "summarySections": {
+          "recap": "摘要段落"
+        },
+        "summaryMeta": {
+          "updatedAt": 1,
+          "fromMessageId": "a",
+          "toMessageId": "c",
+          "coverage": {
+            "version": 1,
+            "sourceMessageCount": 3,
+            "selectedMessageIds": [
+              "b",
+              "c"
+            ],
+            "clippedMessageIds": [
+              "c"
+            ],
+            "omittedMessageCount": 1
+          }
+        }
+      },
+      "replaceFromIndex": 2,
+      "expected": {}
+    },
+    {
+      "name": "tail-coverage",
+      "session": {
+        "summary": "已有摘要",
+        "summarySections": {
+          "recap": "摘要段落"
+        },
+        "summaryMeta": {
+          "updatedAt": 1,
+          "fromMessageId": "a",
+          "toMessageId": "c",
+          "coverage": {
+            "version": 1,
+            "sourceMessageCount": 3,
+            "selectedMessageIds": [
+              "b",
+              "d"
+            ],
+            "clippedMessageIds": [
+              "c"
+            ],
+            "omittedMessageCount": 1
+          }
+        }
+      },
+      "replaceFromIndex": 3,
+      "expected": {}
+    },
+    {
+      "name": "missing-coverage",
+      "session": {
+        "summary": "已有摘要",
+        "summarySections": {
+          "recap": "摘要段落"
+        },
+        "summaryMeta": {
+          "updatedAt": 1,
+          "fromMessageId": "a",
+          "toMessageId": "c",
+          "coverage": {
+            "version": 1,
+            "sourceMessageCount": 3,
+            "selectedMessageIds": [
+              "b",
+              "missing"
+            ],
+            "clippedMessageIds": [
+              "c"
+            ],
+            "omittedMessageCount": 1
+          }
+        }
+      },
+      "replaceFromIndex": 3,
+      "expected": {}
+    },
+    {
+      "name": "legacy-unknown",
+      "session": {
+        "summary": "已有摘要",
+        "summarySections": {
+          "recap": "摘要段落"
+        },
+        "summaryMeta": {
+          "updatedAt": 1,
+          "fromMessageId": "missing-from",
+          "toMessageId": "missing-to"
+        }
+      },
+      "replaceFromIndex": 3,
+      "expected": {
+        "summary": "已有摘要",
+        "summarySections": {
+          "recap": "摘要段落"
+        },
+        "summaryMeta": {
+          "updatedAt": 1,
+          "fromMessageId": "missing-from",
+          "toMessageId": "missing-to"
+        }
+      }
+    },
+    {
+      "name": "legacy-unanchored",
+      "session": {
+        "summary": "旧摘要"
+      },
+      "replaceFromIndex": 0,
+      "expected": {
+        "summary": "旧摘要"
+      }
+    }
+  ]
+}

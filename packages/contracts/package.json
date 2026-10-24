@@ -158,6 +158,7 @@
     "./desktop-room-ipc": "./src/desktop-room-ipc.ts",
     "./fixtures/desktop-room-ipc.json": "./fixtures/desktop-room-ipc.json",
     "./fixtures/desktop-cloud.json": "./fixtures/desktop-cloud.json",
+    "./fixtures/desktop-tea-branch-summary.json": "./fixtures/desktop-tea-branch-summary.json",
     "./fixtures/desktop-magic-tea-party.json": "./fixtures/desktop-magic-tea-party.json",
     "./tavern-completion": "./src/tavern-completion.ts",
     "./fixtures/desktop-room-proposals.json": "./fixtures/desktop-room-proposals.json",
