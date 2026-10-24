@@ -166,10 +166,16 @@ async fn entered_or_finished<T: std::fmt::Debug>(
     gate: &Gate,
     owner: &mut tokio::task::JoinHandle<T>,
 ) {
+    notified_or_finished(&gate.entered, owner).await;
+}
+async fn notified_or_finished<T: std::fmt::Debug>(
+    entered: &tokio::sync::Notify,
+    owner: &mut tokio::task::JoinHandle<T>,
+) {
     tokio::time::timeout(LAUNCH_BUDGET, async {
         tokio::select! {
             biased;
-            _ = gate.entered.notified() => {},
+            _ = entered.notified() => {},
             result = owner => panic!("operation finished before entering test gate: {result:?}"),
         }
     })
@@ -217,6 +223,7 @@ struct FakeState {
     owns: AtomicBool,
     exited: AtomicBool,
     stop_fails: AtomicBool,
+    readiness_entered: tokio::sync::Notify,
     spawn_gate: Option<Arc<Gate>>,
     stop_gate: Option<Arc<Gate>>,
     serve: bool,
@@ -238,6 +245,7 @@ impl FakeState {
             owns: AtomicBool::new(true),
             exited: AtomicBool::new(false),
             stop_fails: AtomicBool::new(false),
+            readiness_entered: tokio::sync::Notify::new(),
             spawn_gate: None,
             stop_gate: None,
             serve: true,
@@ -293,6 +301,8 @@ impl OwnedRuntime for FakeProcess {
         self.state.startup_error
     }
     fn exited(&mut self) -> Result<bool, LaunchErrorCode> {
+        // launch_worker only checks this after registering its owned process.
+        self.state.readiness_entered.notify_one();
         Ok(self.state.exited.load(Ordering::SeqCst))
     }
     fn owns_listener(&self) -> Result<bool, LaunchErrorCode> {
@@ -368,7 +378,7 @@ async fn start(
         .start_with(
             start_request(ticket),
             fake.probe(),
-            Duration::from_secs(2),
+            LAUNCH_BUDGET,
             Duration::from_millis(5),
         )
         .await
@@ -531,6 +541,34 @@ async fn production_http_ready_reuses_models_and_stop_is_owned_idempotent() {
     assert_eq!(fake.stops.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
+async fn closed_loopback_is_unreachable_with_production_probe_budget() {
+    // Reserve the port without listening, so parallel fixtures cannot take it.
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let probe = OllamaProbe::fixture(format!("http://{}", socket.local_addr().unwrap()));
+    let service = probe.probe().await;
+    assert_eq!(service.state, ServiceState::Unreachable, "{service:?}");
+    assert_eq!(service.error_code.as_deref(), Some("unreachable"));
+    drop(socket);
+}
+#[tokio::test]
+async fn silent_occupied_listener_never_authorizes_spawn() {
+    // Keep the socket listening throughout: absence of HTTP is not an empty port.
+    let listener = StdListener::bind("127.0.0.1:0").unwrap();
+    let fake = Arc::new(FakeState {
+        address: listener.local_addr().unwrap(),
+        ..FakeState::new()
+    });
+    let registry = LaunchRegistry::default();
+    let ticket = prepare(&registry, fake.clone()).await;
+    let result = start(&registry, &ticket, &fake).await;
+    assert_eq!(result.state, LaunchPhase::Failed, "{result:?}");
+    assert_eq!(result.error_code, Some(LaunchErrorCode::PortInUse));
+    assert_eq!(fake.spawns.load(Ordering::SeqCst), 0);
+    assert_eq!(fake.stops.load(Ordering::SeqCst), 0);
+    drop(listener);
+}
+#[tokio::test]
 async fn existing_external_http_never_spawns_or_exposes_owned_stop() {
     for (status, body, state) in [
         (200, r#"{"models":[]}"#, ServiceState::NoModels),
@@ -638,7 +676,7 @@ async fn single_flight_duplicate_start_cancel_during_spawn_and_late_invoke() {
         tokio::task::yield_now().await;
     }
     waiter.abort();
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(LAUNCH_BUDGET, async {
         while registry.status(request()).await.unwrap().state != LaunchPhase::Ready {
             tokio::task::yield_now().await;
         }
@@ -673,21 +711,27 @@ async fn timeout_child_exit_identity_error_and_unowned_listener_only_cleanup_own
         };
         let fake = Arc::new(fake);
         let ticket = prepare(&registry, fake.clone()).await;
-        let mut result = registry
-            .start_with(
-                start_request(&ticket),
-                fake.probe(),
-                // Only the timeout case has an artificial short budget. The other
-                // cases assert failure causes, not scheduler speed under CPU load.
-                if mode == 0 {
-                    Duration::from_millis(50)
-                } else {
-                    Duration::from_secs(2)
-                },
-                Duration::from_millis(5),
-            )
-            .await
-            .unwrap();
+        let mut pending = {
+            let registry = registry.clone();
+            let ticket = ticket.clone();
+            let fake = fake.clone();
+            tokio::spawn(async move { start(&registry, &ticket, &fake).await })
+        };
+        if mode == 0 {
+            notified_or_finished(&fake.readiness_entered, &mut pending).await;
+            assert!(registry
+                .lock()
+                .unwrap()
+                .ticket
+                .as_ref()
+                .unwrap()
+                .process
+                .is_some());
+            tokio::time::pause();
+            tokio::time::advance(LAUNCH_BUDGET + Duration::from_secs(1)).await;
+            tokio::time::resume();
+        }
+        let mut result = pending.await.unwrap();
         if result.state == LaunchPhase::Stopping {
             result = wait_terminal(&registry).await;
         }
@@ -710,24 +754,14 @@ async fn cancelling_http_readiness_releases_owned_child_and_no_late_ready() {
         let fake = fake.clone();
         tokio::spawn(async move { start(&registry, &ticket, &fake).await })
     };
-    tokio::time::timeout(LAUNCH_BUDGET, async {
-        while fake.spawns.load(Ordering::SeqCst) == 0 {
-            tokio::select! {
-                biased;
-                result = &mut task => panic!("launch finished before spawning: {result:?}"),
-                _ = tokio::task::yield_now() => {},
-            }
-        }
-    })
-    .await
-    .expect("launch did not spawn within the launch budget");
+    notified_or_finished(&fake.readiness_entered, &mut task).await;
     registry.cancel(operation(&ticket)).unwrap();
     assert_eq!(task.await.unwrap().state, LaunchPhase::Cancelled);
     assert_eq!(
         registry.status(request()).await.unwrap().state,
         LaunchPhase::Cancelled
     );
-    assert!(fake.stops.load(Ordering::SeqCst) <= 1);
+    assert_eq!(fake.stops.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
 async fn stopping_is_queryable_and_failed_cleanup_retains_handle_until_retry() {

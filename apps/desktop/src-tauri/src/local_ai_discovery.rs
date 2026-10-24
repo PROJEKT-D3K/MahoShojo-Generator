@@ -343,7 +343,8 @@ fn client() -> Result<Client, DiscoveryError> {
         .no_proxy()
         .retry(reqwest::retry::never())
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(1))
+        // Windows may defer a refused loopback connect. Keep connection work
+        // inside the whole GET budget, without an earlier false timeout.
         .timeout(Duration::from_secs(3))
         .build()
         .map_err(|_| DiscoveryErrorCode::Failed.into())
